@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
@@ -8,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
 
 import {
+  REPOSITORY_ROOTS,
   checkEvidenceAnchors,
   extractAnchors,
   extractSymbols,
@@ -715,6 +717,64 @@ test('root CI runs the anchor check on every pull request and gates the branch o
   );
   // A job the aggregate does not wait on can fail without blocking the branch.
   assert.ok(workflow.jobs['ci-result'].needs.includes(jobId));
+});
+
+test('names every top-level directory the repository tracks as a citation root', () => {
+  // A citation root the list does not name parses as no citation at all, so the anchor
+  // carrying it is checked against nothing. Git is what says which directories the
+  // repository keeps: a listing of the checkout also carries build output and local
+  // tooling, and which of those are present differs between a clean CI checkout and a
+  // working machine, so a listing would fail for reasons that are not drift.
+  const tracked = execFileSync('git', ['ls-tree', '-d', '--name-only', 'HEAD'], {
+    cwd: repositoryRoot,
+    encoding: 'utf8',
+  })
+    .split('\n')
+    .filter((name) => name !== '');
+  assert.ok(tracked.length > 0);
+  // The roots are regular expression source, so a dot-directory carries its escape.
+  const named = new Set(REPOSITORY_ROOTS.map((root) => root.replaceAll('\\', '')));
+  assert.deepEqual(
+    tracked.filter((name) => !named.has(name)),
+    [],
+  );
+});
+
+test('reads a citation into a top-level directory beside the crates and products', (t) => {
+  const root = repository(t);
+  write(root, 'editors/vscode/package.json', '{ "contributes": { "packageRevision": 1 } }\n');
+  write(root, 'docker/compose/docker-compose.yaml', 'services:\n  evidence: {}\n');
+  write(root, '.cargo/config.toml', '[build]\nrustflags = ["--cfg", "source_neutral"]\n');
+  const passing = check(
+    root,
+    '{/* Evidence: editors/vscode/package.json, packageRevision; docker/compose/docker-compose.yaml; .cargo/config.toml, source_neutral. */}',
+  );
+  assert.deepEqual(passing.errors, []);
+  assert.equal(passing.paths, 3);
+
+  const failing = check(root, '{/* Evidence: editors/vscode/absent.json carries it. */}');
+  assert.equal(failing.errors.length, 1);
+  assert.match(failing.errors[0], /editors\/vscode\/absent\.json/);
+  assert.match(failing.errors[0], /does not exist/);
+});
+
+test('reads a citation that starts at a shared root nearest first', (t) => {
+  const root = repository(t);
+  write(root, 'crates/demo/schemas/authoring/registry.schema.json', '{ "title": "authoring_form" }\n');
+  write(root, 'schemas/registry-notary.config.schema.json', '{ "title": "notary_config" }\n');
+  const nearer = check(
+    root,
+    '{/* Evidence: crates/demo/src/lib.rs, then schemas/authoring/registry.schema.json, authoring_form. */}',
+  );
+  assert.deepEqual(nearer.errors, []);
+  assert.equal(nearer.paths, 2);
+
+  const atTheRoot = check(
+    root,
+    '{/* Evidence: schemas/registry-notary.config.schema.json, notary_config. */}',
+  );
+  assert.deepEqual(atTheRoot.errors, []);
+  assert.equal(atTheRoot.paths, 1);
 });
 
 test('reads a one-word name only where the anchor spells it qualified', (t) => {

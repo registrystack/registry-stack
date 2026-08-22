@@ -21,11 +21,30 @@ export const PROSE_SYMBOL_ALLOWLIST = new Set([
   'TypeScript',
 ]);
 
-// Directories a repository-relative citation may start from.
-const REPOSITORY_ROOTS = ['crates', 'products', 'release', 'docs', 'external', '\\.github'];
+// Directories a repository-relative citation may start from: every top-level directory the
+// repository keeps, because a citation into one this list omits parses as no citation at
+// all and leaves its anchor checked against nothing. The entries are regular expression
+// source, so a dot-directory carries its escape.
+export const REPOSITORY_ROOTS = [
+  'crates',
+  'products',
+  'release',
+  'docs',
+  'docker',
+  'editors',
+  'external',
+  'schemas',
+  '\\.cargo',
+  '\\.github',
+];
 // Directories a continuation citation may start from, resolved against the crate or
 // product root of the most recently cited path in the same anchor.
 const CONTINUATION_ROOTS = ['src', 'tests', 'examples', 'benches', 'schemas', 'scripts'];
+// The roots both lists name: a crate or product keeps a schemas/ directory of its own and
+// so does the repository. A citation that starts at one is read against the unit cited
+// before it first and against the repository root last, so the nearer directory wins, the
+// way it does for a bare filename that may name a file kept at the root.
+const SHARED_ROOTS = new Set(REPOSITORY_ROOTS.filter((root) => CONTINUATION_ROOTS.includes(root)));
 // Extensions that make a bare token a sibling filename rather than ordinary prose.
 const SOURCE_EXTENSIONS = [
   'rs',
@@ -210,22 +229,26 @@ export function parseAnchor(body, { siteRoot = DOCS_SITE_ROOT } = {}) {
     for (const cited of expandBraceLists(trimmed)) {
       const parentOfLastCitedPath =
         lastCitedPath === undefined || dirname(lastCitedPath) === '.' ? '' : dirname(lastCitedPath);
+      // A path that starts at a shared root is read as a continuation, and carries the
+      // repository reading of the same token as its last candidate.
+      const shared = full !== undefined && SHARED_ROOTS.has(cited.split('/')[0]);
       /** @type {Citation} */
       let citation;
-      if (full !== undefined) {
+      if (full !== undefined && !shared) {
         citation = { form: 'full', candidates: [cited], reportMissing: true };
-      } else if (continuation !== undefined && lastCitedPath === undefined) {
+      } else if ((continuation !== undefined || shared) && lastCitedPath === undefined) {
         citation = {
           form: 'continuation',
-          candidates: [joinPath(siteRoot, cited)],
+          candidates: [joinPath(siteRoot, cited), ...(shared ? [cited] : [])],
           reportMissing: true,
         };
-      } else if (continuation !== undefined) {
+      } else if (continuation !== undefined || shared) {
         citation = {
           form: 'continuation',
           candidates: [
             joinPath(citationRoot(lastCitedPath), cited),
             joinPath(parentOfLastCitedPath, cited),
+            ...(shared ? [cited] : []),
           ],
           reportMissing: true,
         };
