@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-07"
+last_reviewed: "2026-08-22"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -223,7 +223,7 @@ does not otherwise touch.
 
 Owner-only key files. Each secret file below the configured
 `secretProviders.file.root` must be a regular, non-symlink file owned by the
-service identity with mode `0600`; the file provider rejects anything else.
+service identity with mode `0400` or `0600`; the file provider rejects anything else.
 Audit and subject-binding secret files must contain independently generated
 raw key bytes and be at least 32 bytes. The runtime derives separated audit-chain and identifier
 subkeys from each master, but Evidence Gateway also requires the two secret references and resolved

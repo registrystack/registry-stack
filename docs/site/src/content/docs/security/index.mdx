@@ -9,7 +9,7 @@ source_repos:
   - registry-platform
   - registry-evidence
   - registry-mint
-last_reviewed: "2026-08-11"
+last_reviewed: "2026-08-22"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -184,8 +184,8 @@ process does not serve. Those checks are the security surface worth reviewing:
   issuer, and a contract that declares any lookup requires quotas. Neither is a warning.
 - Secrets are referenced, never inlined. The runtime file accepts exactly two reference grammars,
   `secret:env/<NAME>` and `secret:file/<name>`, and nothing else. A file secret must be a single
-  flat filename, owned by the running user, with mode exactly `0600` and a link count of one, and
-  no secret may exceed 64 KiB.
+  flat filename, owned by the running user, with mode `0400` or `0600` and a link count of one,
+  and no secret may exceed 64 KiB.
 - The source is opened read-only and pinned. Relay opens SQLite with
   `SQLITE_OPEN_READ_ONLY | SQLITE_OPEN_URI | SQLITE_OPEN_NO_MUTEX`, refuses a symlink, refuses a
   `-wal` or `-journal` sidecar beside a snapshot, and requires a snapshot to sit on a read-only
@@ -204,9 +204,9 @@ process does not serve. Those checks are the security surface worth reviewing:
      lookups, and #[cfg(not(unix))] validate_runtime_path returns StartupError::RuntimeInvalid,
      crates/registry-relay-v2/src/startup.rs:96-104 and :469-492; RelayRuntime is a closed
      deny_unknown_fields schema, crates/registry-relay-v2/src/contract.rs:1062-1079; the two secret
-     grammars, the 64 KiB bound, and the uid/0600/nlink==1 file checks with their tests
-     references_use_only_the_two_exact_contract_grammars and
-     file_secret_uses_open_file_owner_and_exact_mode_checks,
+     grammars, the 64 KiB bound, and the uid, 0400-or-0600 mode, and nlink==1 file checks with
+     their tests references_use_only_the_two_exact_contract_grammars and
+     file_secret_accepts_only_owner_read_and_optional_owner_write_modes,
      crates/registry-platform-config/src/secrets.rs; the open flags,
      crates/registry-platform-sqlite/src/schema.rs:131-133 and src/statement.rs:494-496; sidecar
      and symlink refusal and the read-only-or-non-writable requirement,

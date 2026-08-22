@@ -8,7 +8,7 @@ source_repos:
   - registry-evidence
   - registry-mint
   - registry-platform
-last_reviewed: "2026-08-11"
+last_reviewed: "2026-08-22"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -80,7 +80,8 @@ Relay package. It assumes you have already configured your services per
   filename with no directory component, so a nested or traversing path is rejected rather than
   resolved. No secret may exceed 64 KiB.
 - Relay: on Unix, a `secret:file/<name>` target must be a regular file owned by the running user
-  with mode exactly `0600` and a link count of one; a hard-linked file is refused under every name.
+  with mode `0400` or `0600` and a link count of one; a hard-linked file is refused under every
+  name.
   Relay refuses to start at all on a non-Unix target, because the runtime file's own path-trust
   check fails closed where Unix ownership and sticky-directory semantics are unavailable, so do not
   treat a non-Unix host as a degraded-but-working option.
