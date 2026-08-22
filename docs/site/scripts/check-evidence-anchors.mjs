@@ -88,6 +88,13 @@ const DOTTED_KEY_PATH = /(?<![\w./-])[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_*]+)+
 const SCREAMING_SNAKE_CASE = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/;
 const SNAKE_CASE = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/;
 const UPPER_CAMEL_CASE = /^(?:[A-Z][a-z0-9]+){2,}$/;
+// The same name with an initialism run into it, OAuthErrorCode or HTTPRedirectHandler,
+// whose capitals leave no [A-Z][a-z]+ boundary for the shape above to read. Two lower-case
+// runs and one capital run of two or more are what hold it apart from the acronyms the
+// prose is full of: OpenAPI, SQLite, OpenCRVS, and EdDSA carry one lower-case run each, and
+// SDMX or JWKS carry none, so none of them is read as a name to look for.
+const UPPER_CAMEL_CASE_WITH_INITIALISM =
+  /^(?=[^a-z]*[a-z]+[^a-z]+[a-z])(?=[A-Za-z0-9]*[A-Z]{2})[A-Z][A-Za-z0-9]*$/;
 // A configuration or wire key: the internal capital is what holds it apart from prose.
 const LOWER_CAMEL_CASE = /^[a-z][a-z0-9]*(?:[A-Z][a-z0-9]*)+$/;
 // An exact wire value spelled in capitals: ES256, RS256, CRS84. Uppercase letters and
@@ -259,12 +266,13 @@ export function parseAnchor(body, { siteRoot = DOCS_SITE_ROOT } = {}) {
   return { citations, symbols: extractSymbols(strippedParts.join('')) };
 }
 
-// The five shapes that hold a name apart from the prose around it.
+// The shapes that hold a name apart from the prose around it.
 function carriesSymbolShape(candidate) {
   return (
     SCREAMING_SNAKE_CASE.test(candidate) ||
     SNAKE_CASE.test(candidate) ||
     UPPER_CAMEL_CASE.test(candidate) ||
+    UPPER_CAMEL_CASE_WITH_INITIALISM.test(candidate) ||
     LOWER_CAMEL_CASE.test(candidate) ||
     UPPER_CASE_WIRE_VALUE.test(candidate)
   );

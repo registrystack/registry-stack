@@ -45,21 +45,25 @@ names a directory the package writes, not one the repo holds.
 
 The check reads a symbol by its shape: `snake_case`, `SCREAMING_SNAKE_CASE`,
 `UpperCamelCase`, `lowerCamelCase`, a name spelled with empty parentheses such as
-`router()`, and an all-capital wire value carrying a digit such as `ES256`. A
+`router()`, and an all-capital wire value carrying a digit such as `ES256`.
+`UpperCamelCase` covers a name with an initialism run into it, `OAuthErrorCode`,
+once that name carries two lower-case runs and one capital run of two or more. A
 qualified name is checked segment by segment, so a typo in the type that
 qualifies it is caught too. A dotted configuration or wire key path is read the
 same way, segment by segment, once one of its segments carries a shape:
 `evidence_data_request.transport_absences.credentials` is checked down to its
 leaf, and a `*` standing for any key is skipped rather than looked up.
 
-Anything outside those shapes is prose, which leaves two gaps worth knowing. An
-all-capital wire value with no digit, `EdDSA`, is not checked, because the only
-shape that reaches it also pulls in `OpenAPI`, `OpenCRVS`, and every acronym the
-prose spells, which would fire on correct anchors. A key path no segment of
-which carries a shape, `sources.*.authentication.kind`, is not read either: its
-segments are among the commonest words in the tree, so a check on them would
-pass on any file that happens to mention them. Both gaps are deliberate. Spell
-such a value or key beside a symbol the check can see.
+Anything outside those shapes is prose, which leaves two gaps worth knowing. A
+name nothing separates from an acronym the prose spells is not checked: an
+all-capital wire value with no digit, `EdDSA`, and a capitalized name carrying
+one lower-case run, `SDMXProfile`. The only shape that reaches either also pulls
+in `OpenAPI`, `SQLite`, `OpenCRVS`, and every other acronym the prose spells,
+which would fire on correct anchors. A key path no segment of which carries a
+shape, `sources.*.authentication.kind`, is not read either: its segments are
+among the commonest words in the tree, so a check on them would pass on any file
+that happens to mention them. Both gaps are deliberate. Spell such a value or
+key beside a symbol the check can see.
 
 Two things the check deliberately allows. Bare `path:start-end` citations still
 pass: `--strict-line-refs` rejects them, but it stays off while a backlog of

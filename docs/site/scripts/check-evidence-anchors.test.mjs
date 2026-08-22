@@ -173,6 +173,25 @@ test('leaves a version word and an acronym the prose spells in capitals unchecke
   assert.deepEqual(extractSymbols('the profile allows ES256 and RS256'), ['ES256', 'RS256']);
 });
 
+test('checks an upper camel case name that runs an initialism into it', (t) => {
+  const root = repository(t);
+  write(root, 'crates/demo/src/token.rs', 'pub enum OAuthErrorCode {\n    InvalidClient,\n}\n');
+  const passing = check(root, '{/* Evidence: crates/demo/src/token.rs, OAuthErrorCode. */}');
+  assert.deepEqual(passing.errors, []);
+  assert.equal(passing.symbols, 1);
+
+  const failing = check(root, '{/* Evidence: crates/demo/src/token.rs, OAuthErrorKind. */}');
+  assert.equal(failing.errors.length, 1);
+  assert.match(failing.errors[0], /OAuthErrorKind/);
+});
+
+test('leaves an acronym the prose spells with one lower-case run unchecked', () => {
+  assert.deepEqual(extractSymbols('the OpenAPI description of the SQLite source'), []);
+  assert.deepEqual(extractSymbols('the SDMX profile, the JWKS endpoint, and EdDSA'), []);
+  assert.deepEqual(extractSymbols('the OpenCRVS demo signs with SHA'), []);
+  assert.deepEqual(extractSymbols('it reads HTTPRedirectHandler'), ['HTTPRedirectHandler']);
+});
+
 test('accepts a symbol that appears in the second of two cited paths', (t) => {
   const root = repository(t);
   const result = check(
