@@ -155,7 +155,22 @@ function joinPath(base, tail) {
 // a miss is drift and is reported. A bare sibling filename is only a reading of the
 // prose: when nothing resolves, it names a file the repository does not own (an
 // adopter's configuration file, or a path inside a generated package) and is left alone.
+/**
+ * @typedef {object} Citation
+ * @property {string} form which reading produced it, and so which fallbacks apply
+ * @property {string[]} candidates the paths it may resolve to, tried in order
+ * @property {boolean} reportMissing whether resolving nothing is drift or prose
+ * @property {string} [raw] the token as the anchor spelled it
+ * @property {number} [start] first line of a line reference
+ * @property {number} [end] last line of a line reference
+ * @property {boolean} [malformedLines] set when a line suffix was cut short
+ * @property {string} [basename] bare filename to search for when no candidate resolves
+ * @property {string} [searchRoot] where that search runs, the empty string for the whole tree
+ * @property {string} [rootCandidate] the same name as a file kept at the repository root
+ */
+
 export function parseAnchor(body, { siteRoot = DOCS_SITE_ROOT } = {}) {
+  /** @type {Citation[]} */
   const citations = [];
   const strippedParts = [];
   let cursor = 0;
@@ -188,6 +203,7 @@ export function parseAnchor(body, { siteRoot = DOCS_SITE_ROOT } = {}) {
     for (const cited of expandBraceLists(trimmed)) {
       const parentOfLastCitedPath =
         lastCitedPath === undefined || dirname(lastCitedPath) === '.' ? '' : dirname(lastCitedPath);
+      /** @type {Citation} */
       let citation;
       if (full !== undefined) {
         citation = { form: 'full', candidates: [cited], reportMissing: true };
