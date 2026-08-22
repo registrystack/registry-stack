@@ -1545,7 +1545,7 @@
                 },
                 {
                   "display": "--explain",
-                  "description": "Ask `evidence` to explain each evaluation, and relay the trace it prints. The trace can name what a source returned, so it is relayed only when it is asked for. For the structured form, run `evidence evaluate --explain --explain-format json` against the fixture directly.",
+                  "description": "Ask `evidence` for each structured value-free evaluation diagnostic and relay it without interpreting Evidence semantics",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -1554,7 +1554,7 @@
                 },
                 {
                   "display": "-h, --help",
-                  "description": "Print help (see a summary with '-h')",
+                  "description": "Print help",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
