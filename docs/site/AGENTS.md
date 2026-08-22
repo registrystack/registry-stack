@@ -30,24 +30,35 @@ level, rather than deleting the claim or asserting it.
 
 `npm run check` resolves those anchors and fails when one does not. A cited
 path must exist, a cited line reference must fall inside its file, and a cited
-symbol must occur in at least one path the same anchor cites. A citation that
-has drifted is a merge blocker, not a wart, so check an anchor when you move
-the code it points at. Run `npm run check:evidence-anchors` alone for the fast
-version. Root CI runs it twice: once inside the docs job, and once in a job of
-its own that runs on every pull request, because the anchors cite source all
-over the workspace and the docs job only runs for a changed path it recognizes.
-A bare filename beside a cited path is read as prose when nothing resolves, so
-naming a file the repo does not own, an adopter's `origins.yaml` or a path a
-generated package writes, is still fine. A bare `.rs` sibling is the exception:
-only this repository writes Rust into the stack, so a Rust filename has to
-resolve, and deleting the file one names fails the check. Several files in
-one directory may be cited in the compact brace form,
+symbol must occur in at least one path the same anchor cites. Every anchor has
+to cite at least one path this repository holds, since one that resolves none
+has nothing to read its symbols against; pair an upstream standard with the
+file that implements it rather than citing the standard alone. A citation may
+start at any top-level directory the repository keeps, and `schemas/` is read
+against the crate or product cited before it first and against the repository
+root last, because both keep one. A path a symlink leads out of the checkout is
+refused rather than read. A line reference is spelled `:12` or `:12-14` and
+nothing else, so `:abc` and `:1foo` are reported rather than thrown away. A
+citation that has drifted is a merge blocker, not a wart, so check an anchor
+when you move the code it points at. Run `npm run check:evidence-anchors` alone
+for the fast version. Root CI runs it twice: once inside the docs job, and once
+in a job of its own that runs on every pull request, because the anchors cite
+source all over the workspace and the docs job only runs for a changed path it
+recognizes. A bare filename beside a cited path is read as prose when nothing
+resolves, so naming a file the repo does not own, an adopter's `origins.yaml`
+or a path a generated package writes, is still fine wherever the anchor
+resolves some other path. A bare `.rs` sibling is the exception: only this
+repository writes Rust into the stack, so a Rust filename has to resolve, and
+deleting the file one names fails the check. Several files in one directory may
+be cited in the compact brace form,
 `crates/registry-relay-v2/src/{api,startup}.rs`, which is read as one citation
 per entry, so each file it names has to exist on its own. A bare name ending in
 a slash continues the directory cited before it, `deployment-projects/ then
-protected-read-evidence/`, and has to exist under it. After a filename there is
-no directory to continue, so `governed/` beside `package.rs` stays prose: it
-names a directory the package writes, not one the repo holds.
+protected-read-evidence/`, and has to exist under it. It continues that path
+only where the repo holds it as a directory, so beside a file the name stays
+prose: `governed/` after `package.rs`, and `output/` after the extensionless
+`release/scripts/registry-release`, name directories the program writes, not
+ones the repo holds.
 
 The check reads a symbol by its shape: `snake_case`, `SCREAMING_SNAKE_CASE`,
 `UpperCamelCase`, `lowerCamelCase`, a name spelled with empty parentheses such as
