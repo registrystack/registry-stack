@@ -38,9 +38,10 @@ start at any top-level directory the repository keeps, and `schemas/` is read
 against the crate or product cited before it first and against the repository
 root last, because both keep one. A path a symlink leads out of the checkout is
 refused rather than read. A line reference is spelled `:12` or `:12-14` and
-nothing else, so `:abc` and `:1foo` are reported rather than thrown away. A
-citation that has drifted is a merge blocker, not a wart, so check an anchor
-when you move the code it points at. Run `npm run check:evidence-anchors` alone
+nothing else, so `:abc`, `:1foo`, and `:1.5` are reported rather than thrown
+away; the full stop that ends a sentence on a path is punctuation and is left
+alone. A citation that has drifted is a merge blocker, not a wart, so check an
+anchor when you move the code it points at. Run `npm run check:evidence-anchors` alone
 for the fast version. Root CI runs it twice: once inside the docs job, and once
 in a job of its own that runs on every pull request, because the anchors cite
 source all over the workspace and the docs job only runs for a changed path it

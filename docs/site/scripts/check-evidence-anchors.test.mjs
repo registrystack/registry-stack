@@ -490,6 +490,55 @@ test('reads one bare child directory against the last, so a chain resolves', (t)
   assert.equal(result.paths, 3);
 });
 
+test('reports a line reference the anchor continued with a dot', (t) => {
+  const root = repository(t);
+  const continued = check(root, '{/* Evidence: crates/demo/src/lib.rs:1.5 holds it. */}');
+  assert.equal(continued.errors.length, 1);
+  assert.match(continued.errors[0], /a line reference names a line or a first and last line/);
+
+  // A full stop that ends the sentence is punctuation the prose wrote, not a reference the
+  // anchor carried on, so it leaves the line it does name alone.
+  const ended = check(root, '{/* Evidence: crates/demo/src/lib.rs:1. It holds the shape. */}');
+  assert.deepEqual(ended.errors, []);
+  assert.equal(ended.lineRefs, 1);
+});
+
+test('reads a JavaScript or TypeScript sibling as a citation, not a dotted key path', (t) => {
+  const root = repository(t);
+  write(root, 'editors/vscode/src/extension.ts', 'export const activateEditor = 1;\n');
+  write(root, 'editors/vscode/src/projectRoot.ts', 'export const rootOf = 2;\n');
+  write(root, 'crates/demo/client.js', 'export const requestShape = 3;\n');
+  write(root, 'crates/demo/index.js', 'export const entryShape = 4;\n');
+  // Read as a dotted key path instead, the name would demand a symbol spelled `ts`.
+  assert.deepEqual(
+    parseAnchor('editors/vscode/src/extension.ts and projectRoot.ts hold it.').symbols,
+    [],
+  );
+  const typescript = check(
+    root,
+    '{/* Evidence: editors/vscode/src/extension.ts and projectRoot.ts, rootOf. */}',
+  );
+  assert.deepEqual(typescript.errors, []);
+  assert.equal(typescript.paths, 2);
+
+  const javascript = check(root, '{/* Evidence: crates/demo/client.js and index.js, entryShape. */}');
+  assert.deepEqual(javascript.errors, []);
+  assert.equal(javascript.paths, 2);
+});
+
+test('reads an extensionless script under a cited directory', (t) => {
+  const root = repository(t);
+  write(
+    root,
+    'release/scripts/registry-release',
+    '#!/usr/bin/env python3\nartifact_inventory_errors = []\n',
+  );
+  const result = check(root, '{/* Evidence: release/scripts/ reports artifact_inventory_errors. */}');
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.paths, 1);
+  assert.equal(result.symbols, 1);
+});
+
 test('reads a bare child against the directory the anchor resolved, not the first guess', (t) => {
   const root = repository(t);
   write(root, 'schemas/registry/profile/registry.schema.json', '{ "title": "profile_form" }\n');

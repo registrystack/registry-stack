@@ -58,12 +58,12 @@ const SOURCE_EXTENSIONS = [
   'yml',
   'jsonld',
   'json',
+  'js',
+  'ts',
 ];
 // Extensions read when a symbol has to be looked for inside a cited directory.
 const TEXT_EXTENSIONS = new Set([
   ...SOURCE_EXTENSIONS,
-  'js',
-  'ts',
   'txt',
   'sql',
   'snap',
@@ -106,6 +106,12 @@ const LINE_SUFFIX = /^(?<path>.*?)(?::(?<start>\d+)(?:-(?<end>\d+))?)?$/;
 // by a space, and a reference the prose punctuates is followed by the punctuation, so
 // neither leaves anything this reads.
 const UNREAD_LINE_REFERENCE = /^:?[\w-][\w:-]*/;
+// The same reference carried on past the line the pattern did read, the `.5` of `:1.5`,
+// which would otherwise be thrown away and leave the citation checked against line 1. It is
+// read only where the token carried a reference, so the full stop that ends a sentence on a
+// path stays punctuation, and it needs a character after the dot, so a sentence ending on a
+// line reference leaves nothing this reads either.
+const CONTINUED_LINE_REFERENCE = /^\.[\w:.-]+/;
 const WORD_PATTERN = /[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)+|[A-Za-z_][A-Za-z0-9_]*/g;
 // A dotted configuration or wire key path, sources.*.authentication.kind. The word pass reads
 // its segments one by one and keeps only the ones that carry a symbol shape, so this pattern is
@@ -228,7 +234,10 @@ export function parseAnchor(body, { siteRoot = DOCS_SITE_ROOT } = {}) {
     // outside the token: the hyphen of a range cut short in `:5-`, the word run into the
     // number in `:1foo`, the whole suffix in `:abc`. Each would otherwise be thrown away,
     // leaving the citation checked as the bare file or as a line the anchor never meant.
-    const malformedLines = UNREAD_LINE_REFERENCE.exec(body.slice(cursor))?.[0];
+    const unread = body.slice(cursor);
+    const malformedLines =
+      UNREAD_LINE_REFERENCE.exec(unread)?.[0] ??
+      (start === undefined ? undefined : CONTINUED_LINE_REFERENCE.exec(unread)?.[0]);
 
     // A brace list stands for one citation per entry, so each file it names is resolved and
     // counted on its own, and each entry reads against the path the entry before it set.
@@ -457,7 +466,11 @@ function filesUnder(directory) {
 }
 
 function isTextFile(path) {
-  return TEXT_EXTENSIONS.has(path.split('.').at(-1));
+  // A name with no extension at all is a script the repository keeps, `registry-release` or
+  // `justfile`, and reading it is how a symbol an anchor cites from one is found. The
+  // directories that hold anything else are skipped before the walk reaches them.
+  const name = path.split('/').at(-1);
+  return name.includes('.') ? TEXT_EXTENSIONS.has(name.split('.').at(-1)) : true;
 }
 
 function wholeWordPattern(symbol) {
