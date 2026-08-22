@@ -34,7 +34,10 @@ symbol must occur in at least one path the same anchor cites. A citation that
 has drifted is a merge blocker, not a wart, so check an anchor when you move
 the code it points at. Run `npm run check:evidence-anchors` alone for the fast
 version. A token that resolves to no repository path is read as prose and
-skipped, so naming a file the repo does not own is still fine.
+skipped, so naming a file the repo does not own is still fine. Several files in
+one directory may be cited in the compact brace form,
+`crates/registry-relay-v2/src/{api,startup}.rs`, which is read as one citation
+per entry, so each file it names has to exist on its own.
 
 The check reads a symbol by its shape: `snake_case`, `SCREAMING_SNAKE_CASE`,
 `UpperCamelCase`, `lowerCamelCase`, a name spelled with empty parentheses such as

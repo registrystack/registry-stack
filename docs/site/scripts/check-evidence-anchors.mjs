@@ -58,10 +58,17 @@ const SKIPPED_DIRECTORIES = new Set(['target', 'node_modules', '.git', 'dist', '
 const DOCS_SITE_ROOT = 'docs/site';
 
 const ANCHOR_PATTERN = /\{\/\*\s*Evidence:([\s\S]*?)\*\/\}/g;
+// A compact list of files that share a directory, `src/{api,startup}.rs`. It is read only
+// where a path segment can start, so a brace group the prose itself writes, `{ claim,
+// allowed }`, stays prose.
+const BRACE_LIST = '\\{[A-Za-z0-9._-]+(?:,[A-Za-z0-9._-]+)+\\}';
+// What follows a citation root: path segments, any of which may be a brace list carrying the
+// suffix its entries share, then an optional trailing slash and line reference.
+const PATH_BODY = `(?:/(?:[A-Za-z0-9._-]+|${BRACE_LIST}[A-Za-z0-9._-]*))+/?(?::\\d+(?:-\\d+)?)?`;
 const CITATION_PATTERN = new RegExp(
   [
-    `(?<full>(?<![\\w/.-])(?:${REPOSITORY_ROOTS.join('|')})(?:/[A-Za-z0-9._-]+)+/?(?::\\d+(?:-\\d+)?)?)`,
-    `(?<relative>(?<![\\w/.-])(?:${CONTINUATION_ROOTS.join('|')})(?:/[A-Za-z0-9._-]+)+/?(?::\\d+(?:-\\d+)?)?)`,
+    `(?<full>(?<![\\w/.-])(?:${REPOSITORY_ROOTS.join('|')})${PATH_BODY})`,
+    `(?<relative>(?<![\\w/.-])(?:${CONTINUATION_ROOTS.join('|')})${PATH_BODY})`,
     `(?<sibling>(?<![\\w/.-])[A-Za-z0-9_-]+\\.(?:${SOURCE_EXTENSIONS.join('|')})(?![\\w/-])(?::\\d+(?:-\\d+)?)?)`,
     `(?<lines>(?<=[\\s(]):\\d+(?:-\\d+)?(?![\\w-]))`,
   ].join('|'),
@@ -100,6 +107,18 @@ function splitLineReference(token) {
   const end = groups.end === undefined ? start : Number(groups.end);
   // A sentence that ends on a path leaves its full stop inside the token.
   return { path: groups.path.replace(/\.+$/, ''), start, end };
+}
+
+// One path per brace-list entry: `src/{api,startup}.rs` names two files, so a rename of
+// either is drift, and a path with no brace list stands alone as it always did.
+function expandBraceLists(path) {
+  const match = /\{([A-Za-z0-9._-]+(?:,[A-Za-z0-9._-]+)+)\}/.exec(path);
+  if (!match) {
+    return [path];
+  }
+  const before = path.slice(0, match.index);
+  const after = path.slice(match.index + match[0].length);
+  return match[1].split(',').flatMap((entry) => expandBraceLists(`${before}${entry}${after}`));
 }
 
 // The crate, product, or top-level unit a continuation citation is resolved against.
@@ -147,56 +166,61 @@ export function parseAnchor(body, { siteRoot = DOCS_SITE_ROOT } = {}) {
     // A line suffix the anchor cut short, `:5-`, leaves its hyphen outside the token and
     // would otherwise read as the single line 5 rather than the range it was meant to be.
     const malformedLines = start !== undefined && body.startsWith('-', cursor);
-    const parentOfLastCitedPath =
-      lastCitedPath === undefined || dirname(lastCitedPath) === '.' ? '' : dirname(lastCitedPath);
-    let citation;
-    if (full !== undefined) {
-      citation = { form: 'full', candidates: [trimmed], reportMissing: true };
-    } else if (continuation !== undefined && lastCitedPath === undefined) {
-      citation = {
-        form: 'continuation',
-        candidates: [joinPath(siteRoot, trimmed)],
-        reportMissing: true,
-      };
-    } else if (continuation !== undefined) {
-      citation = {
-        form: 'continuation',
-        candidates: [
-          joinPath(citationRoot(lastCitedPath), trimmed),
-          joinPath(parentOfLastCitedPath, trimmed),
-        ],
-        reportMissing: true,
-      };
-    } else if (lastCitedPath === undefined) {
-      // A sibling filename with no path before it has nothing to sit beside.
-      continue;
-    } else {
-      citation = {
-        form: 'sibling',
-        candidates: [
-          joinPath(parentOfLastCitedPath, trimmed),
-          joinPath(citationRoot(lastCitedPath), trimmed),
-          joinPath(lastCitedPath, trimmed),
-        ],
-        reportMissing: false,
-        basename: trimmed,
-        // A bare filename may name a file the repository keeps at its root, Cargo.toml
-        // or deny.toml, which sits beside no cited path at all. It is tried only after
-        // the search inside the cited unit, so a nearer file always wins.
-        rootCandidate: trimmed,
-        searchRoot: citationRoot(lastCitedPath),
-      };
-    }
 
-    citation.candidates = [...new Set(citation.candidates)];
-    // What follows reads against the path cited last, whichever form carried it: a
-    // continuation moves the anchor on just as a second full path does. A sibling is a
-    // reading of the prose rather than a path claim, so it leaves the anchor where it is.
-    if (citation.reportMissing) {
-      lastCitedPath = citation.candidates[0];
+    // A brace list stands for one citation per entry, so each file it names is resolved and
+    // counted on its own, and each entry reads against the path the entry before it set.
+    for (const cited of expandBraceLists(trimmed)) {
+      const parentOfLastCitedPath =
+        lastCitedPath === undefined || dirname(lastCitedPath) === '.' ? '' : dirname(lastCitedPath);
+      let citation;
+      if (full !== undefined) {
+        citation = { form: 'full', candidates: [cited], reportMissing: true };
+      } else if (continuation !== undefined && lastCitedPath === undefined) {
+        citation = {
+          form: 'continuation',
+          candidates: [joinPath(siteRoot, cited)],
+          reportMissing: true,
+        };
+      } else if (continuation !== undefined) {
+        citation = {
+          form: 'continuation',
+          candidates: [
+            joinPath(citationRoot(lastCitedPath), cited),
+            joinPath(parentOfLastCitedPath, cited),
+          ],
+          reportMissing: true,
+        };
+      } else if (lastCitedPath === undefined) {
+        // A sibling filename with no path before it has nothing to sit beside.
+        continue;
+      } else {
+        citation = {
+          form: 'sibling',
+          candidates: [
+            joinPath(parentOfLastCitedPath, cited),
+            joinPath(citationRoot(lastCitedPath), cited),
+            joinPath(lastCitedPath, cited),
+          ],
+          reportMissing: false,
+          basename: cited,
+          // A bare filename may name a file the repository keeps at its root, Cargo.toml
+          // or deny.toml, which sits beside no cited path at all. It is tried only after
+          // the search inside the cited unit, so a nearer file always wins.
+          rootCandidate: cited,
+          searchRoot: citationRoot(lastCitedPath),
+        };
+      }
+
+      citation.candidates = [...new Set(citation.candidates)];
+      // What follows reads against the path cited last, whichever form carried it: a
+      // continuation moves the anchor on just as a second full path does. A sibling is a
+      // reading of the prose rather than a path claim, so it leaves the anchor where it is.
+      if (citation.reportMissing) {
+        lastCitedPath = citation.candidates[0];
+      }
+      previous = citation;
+      citations.push({ ...citation, raw: token, start, end, malformedLines });
     }
-    previous = citation;
-    citations.push({ ...citation, raw: token, start, end, malformedLines });
   }
 
   strippedParts.push(body.slice(cursor));

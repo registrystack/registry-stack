@@ -197,6 +197,71 @@ test('resolves a relative continuation against the crate root of the last full p
   assert.match(failing.errors[0], /crates\/demo\/src\/absent\.rs/);
 });
 
+test('expands a brace list into one citation per entry', () => {
+  const parsed = parseAnchor('crates/demo/src/{lib,other}.rs carry it.');
+  assert.deepEqual(
+    parsed.citations.map((citation) => [citation.form, citation.candidates[0]]),
+    [
+      ['full', 'crates/demo/src/lib.rs'],
+      ['full', 'crates/demo/src/other.rs'],
+    ],
+  );
+  assert.ok(parsed.citations.every((citation) => citation.reportMissing));
+});
+
+test('reports the entry of a brace list that does not exist', (t) => {
+  const root = repository(t);
+  const passing = check(root, '{/* Evidence: crates/demo/src/{lib,other}.rs carry it. */}');
+  assert.deepEqual(passing.errors, []);
+  assert.equal(passing.paths, 2);
+
+  const failing = check(root, '{/* Evidence: crates/demo/src/{lib,absent}.rs carry it. */}');
+  assert.equal(failing.errors.length, 1);
+  assert.match(failing.errors[0], /crates\/demo\/src\/absent\.rs/);
+  assert.match(failing.errors[0], /does not exist/);
+  assert.equal(failing.paths, 2);
+});
+
+test('expands a brace list a sentence ends on', (t) => {
+  const root = repository(t);
+  const result = check(
+    root,
+    '{/* Evidence: the surfaces sit in crates/demo/src/{lib,other}.rs. */}',
+  );
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.paths, 2);
+});
+
+test('carries a line reference into every entry of a brace list', (t) => {
+  const root = repository(t);
+  const result = check(root, '{/* Evidence: crates/demo/src/{lib,other}.rs:40 carry it. */}');
+  assert.equal(result.errors.length, 2);
+  assert.match(result.errors[0], /crates\/demo\/src\/lib\.rs:40/);
+  assert.match(result.errors[1], /crates\/demo\/src\/other\.rs:40/);
+  assert.equal(result.lineRefs, 2);
+});
+
+test('expands a brace list a continuation carries', (t) => {
+  const root = repository(t);
+  const result = check(
+    root,
+    '{/* Evidence: crates/demo/src/lib.rs, then src/{other,absent}.rs. */}',
+  );
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0], /crates\/demo\/src\/absent\.rs/);
+  assert.equal(result.paths, 3);
+});
+
+test('leaves a brace group the prose writes out of the citations', (t) => {
+  const root = repository(t);
+  const result = check(
+    root,
+    '{/* Evidence: crates/demo/src/lib.rs returns { claim, allowed }. */}',
+  );
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.paths, 1);
+});
+
 test('resolves a bare sibling filename against the directory of the last full path', (t) => {
   const root = repository(t);
   const passing = check(
