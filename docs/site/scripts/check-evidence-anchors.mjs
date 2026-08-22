@@ -521,6 +521,7 @@ export function checkEvidenceAnchors({
       anchors += 1;
       const { citations, symbols: cited } = parseAnchor(anchor.body);
       const at = `${location}:${anchor.line}`;
+      const reportedBefore = errors.length;
       const citedFiles = [];
       const citedDirectories = [];
       let lastResolvedFile;
@@ -625,6 +626,17 @@ export function checkEvidenceAnchors({
       }
 
       if (citedFiles.length === 0 && citedDirectories.length === 0) {
+        // An anchor that resolves no path has nothing to read its symbols against, so
+        // letting it pass would state a guarantee the check never made for it. An anchor
+        // whose citations were reported already fails, and naming it twice names no
+        // further drift.
+        if (errors.length === reportedBefore) {
+          errors.push(
+            citations.length === 0
+              ? `${at} cites no path in this repository, so nothing it claims was checked`
+              : `${at} resolves none of the paths it cites, so nothing it claims was checked`,
+          );
+        }
         continue;
       }
 

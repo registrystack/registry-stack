@@ -538,12 +538,31 @@ test('skips prose words that carry a symbol shape but are on the allowlist', (t)
   assert.equal(result.symbols, 0);
 });
 
-test('skips the symbol check when an anchor cites no path', (t) => {
+test('reports an anchor that cites no path at all', (t) => {
   const root = repository(t);
   const result = check(root, '{/* Evidence: the operator contract states does_not_own. */}');
-  assert.deepEqual(result.errors, []);
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0], /^page\.mdx:5 /);
+  assert.match(result.errors[0], /cites no path in this repository/);
   assert.equal(result.paths, 0);
   assert.equal(result.symbols, 0);
+});
+
+test('reports an anchor none of whose citations resolve', (t) => {
+  const root = repository(t);
+  const result = check(root, '{/* Evidence: origins.yaml carries the source_kind an adopter sets. */}');
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0], /resolves none of the paths it cites/);
+  assert.equal(result.paths, 0);
+  assert.equal(result.symbols, 0);
+});
+
+test('leaves an anchor whose citations were reported to report itself again', (t) => {
+  const root = repository(t);
+  const result = check(root, '{/* Evidence: crates/demo/src/absent.rs holds does_not_own. */}');
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0], /crates\/demo\/src\/absent\.rs/);
+  assert.match(result.errors[0], /does not exist/);
 });
 
 test('reads a continuation with no full path before it against the docs site', (t) => {
