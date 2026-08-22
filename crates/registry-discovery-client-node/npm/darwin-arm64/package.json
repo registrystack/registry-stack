@@ -1,6 +1,6 @@
 {
   "name": "@registrystack/discovery-client-darwin-arm64",
-  "version": "0.24.0",
+  "version": "0.25.0",
   "cpu": ["arm64"],
   "main": "discovery-client.darwin-arm64.node",
   "files": ["discovery-client.darwin-arm64.node"],
