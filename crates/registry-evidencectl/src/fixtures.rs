@@ -468,7 +468,11 @@ fn print_diagnostics(report: &RunReport, to_stderr: bool) {
         // The trace comes before the diagnostic, the order `evidence` itself
         // prints them in: how far the run got, then what stopped it.
         if let Some(trace) = &fixture.trace {
-            let rendered = serde_json::to_string_pretty(trace).unwrap_or_default();
+            // The trace was parsed out of `evidence` standard output, so it is
+            // already a valid document; rendering it back cannot fail. An empty
+            // default here would read as "no trace", which is a different fact.
+            let rendered = serde_json::to_string_pretty(trace)
+                .expect("a trace parsed from JSON renders back to JSON");
             lines.extend(indented(Some(&rendered)));
         }
         if !fixture.passed {
