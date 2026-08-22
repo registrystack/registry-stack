@@ -195,8 +195,8 @@ function joinPath(base, tail) {
  * @property {string} [basename] bare filename to search for when no candidate resolves
  * @property {string} [searchRoot] where that search runs, the empty string for the whole tree
  * @property {string} [rootCandidate] the same name as a file kept at the repository root
- * @property {string} [parentDirectory] the path a bare child continues, which the
- *   repository has to hold as a directory for the child to name one
+ * @property {string} [childName] the bare name a child continues the last resolved
+ *   directory with, which the repository has to hold as a directory for it to name one
  */
 
 export function parseAnchor(body, { siteRoot = DOCS_SITE_ROOT } = {}) {
@@ -264,7 +264,8 @@ export function parseAnchor(body, { siteRoot = DOCS_SITE_ROOT } = {}) {
         // to continue and the name is prose: `governed/` beside package.rs names a
         // directory the package writes, not one the repository holds. Which of the two the
         // path before it is, is a fact about the repository rather than about the token, so
-        // the parse records that path and the resolution reads its kind.
+        // the parse records the name alone and the resolution reads the kind of the path
+        // the anchor reached.
         if (lastCitedPath === undefined) {
           continue;
         }
@@ -272,7 +273,7 @@ export function parseAnchor(body, { siteRoot = DOCS_SITE_ROOT } = {}) {
           form: 'child',
           candidates: [joinPath(lastCitedPath, cited)],
           reportMissing: true,
-          parentDirectory: lastCitedPath,
+          childName: cited,
         };
       } else if (lastCitedPath === undefined) {
         // A bare filename that opens an anchor has no path to sit beside, so the
@@ -534,6 +535,10 @@ export function checkEvidenceAnchors({
       const citedFiles = [];
       const citedDirectories = [];
       let lastResolvedFile;
+      // Where the anchor stands: the path the citation before this one resolved to, which
+      // a bare child continues. It is not the parse's first candidate, because a citation
+      // that resolved through a fallback left that guess naming nothing.
+      let lastResolvedPath;
 
       for (const citation of citations) {
         const range =
@@ -544,20 +549,24 @@ export function checkEvidenceAnchors({
         // nothing the repository holds at all, the name is prose rather than a citation:
         // it names a directory that file writes at runtime, not a path the repository
         // keeps, and an extensionless script is a file like any other.
-        if (
-          citation.parentDirectory !== undefined &&
-          entryKind(resolve(repoRoot, citation.parentDirectory)) !== 'directory'
-        ) {
-          continue;
+        let candidates = citation.candidates;
+        if (citation.form === 'child') {
+          if (
+            lastResolvedPath === undefined ||
+            entryKind(resolve(repoRoot, lastResolvedPath)) !== 'directory'
+          ) {
+            lastResolvedPath = undefined;
+            continue;
+          }
+          candidates = [joinPath(lastResolvedPath, citation.childName)];
         }
-        const escaping = citation.candidates.find((candidate) =>
-          escapesRepository(repoRoot, candidate),
-        );
+        const escaping = candidates.find((candidate) => escapesRepository(repoRoot, candidate));
         if (escaping !== undefined) {
           paths += 1;
           if (range !== '') {
             lineRefs += 1;
           }
+          lastResolvedPath = undefined;
           errors.push(`${at} cites ${escaping}${range}, which leaves the repository`);
           continue;
         }
@@ -566,12 +575,13 @@ export function checkEvidenceAnchors({
         if (citation.malformedLines !== undefined) {
           paths += 1;
           lineRefs += 1;
+          lastResolvedPath = undefined;
           errors.push(
             `${at} cites ${citation.raw}${citation.malformedLines}, but a line reference names a line or a first and last line`,
           );
           continue;
         }
-        let resolved = citation.candidates.find(
+        let resolved = candidates.find(
           (candidate) => entryKind(resolve(repoRoot, candidate)) !== 'missing',
         );
         if (resolved === undefined && citation.basename !== undefined) {
@@ -592,6 +602,7 @@ export function checkEvidenceAnchors({
             if (range !== '') {
               lineRefs += 1;
             }
+            lastResolvedPath = undefined;
             errors.push(
               `${at} cites ${citation.rootCandidate}${range}, which leaves the repository`,
             );
@@ -612,8 +623,14 @@ export function checkEvidenceAnchors({
           lineRefs += 1;
         }
         if (resolved === undefined) {
-          errors.push(`${at} cites ${citation.candidates[0]}${range}, which does not exist`);
+          lastResolvedPath = undefined;
+          errors.push(`${at} cites ${candidates[0]}${range}, which does not exist`);
           continue;
+        }
+        // A sibling names no directory to read the next citation against, so it leaves the
+        // anchor where it is, the same rule the parse applies to the candidate chain.
+        if (citation.form !== 'sibling') {
+          lastResolvedPath = resolved;
         }
         if (strictLineRefs && range !== '') {
           errors.push(

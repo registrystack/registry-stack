@@ -490,6 +490,27 @@ test('reads one bare child directory against the last, so a chain resolves', (t)
   assert.equal(result.paths, 3);
 });
 
+test('reads a bare child against the directory the anchor resolved, not the first guess', (t) => {
+  const root = repository(t);
+  write(root, 'schemas/registry/profile/registry.schema.json', '{ "title": "profile_form" }\n');
+  // The shared root resolves at the repository, the third candidate, because the crate
+  // cited before it keeps no schemas/ of its own. A child read against the first candidate
+  // instead would find no directory there and drop the citation unchecked.
+  const held = check(
+    root,
+    '{/* Evidence: crates/demo/src/lib.rs, then schemas/registry/ profile/, profile_form. */}',
+  );
+  assert.deepEqual(held.errors, []);
+  assert.equal(held.paths, 3);
+
+  const renamed = check(
+    root,
+    '{/* Evidence: crates/demo/src/lib.rs, then schemas/registry/ absent/. */}',
+  );
+  assert.equal(renamed.errors.length, 1);
+  assert.match(renamed.errors[0], /schemas\/registry\/absent/);
+});
+
 test('reads a trailing-slash name that follows an extensionless file as prose', (t) => {
   const root = repository(t);
   write(root, 'release/scripts/registry-release', '#!/usr/bin/env python3\nprint("pack")\n');
