@@ -91,6 +91,37 @@ test('reports a citation whose real path leaves the repository through a symlink
   assert.match(result.errors[0], /leaves the repository/);
 });
 
+test('refuses a repository-root file a symlink leads out of', (t) => {
+  const root = repository(t);
+  const outside = resolve(root, '..', 'registry-evidence-anchors-root-linked.toml');
+  writeFileSync(outside, '[bans]\nmultiple_versions = "deny"\n');
+  t.after(() => rmSync(outside, { force: true }));
+  symlinkSync(outside, resolve(root, 'deny.toml'));
+  const result = check(
+    root,
+    '{/* Evidence: crates/demo/src/lib.rs, and deny.toml, multiple_versions. */}',
+  );
+  assert.equal(result.errors.length, 2);
+  assert.match(result.errors[0], /deny\.toml/);
+  assert.match(result.errors[0], /leaves the repository/);
+  // The file outside the checkout is never read, so the symbol it holds stays unfound.
+  assert.match(result.errors[1], /multiple_versions/);
+});
+
+test('resolves a sibling beside its cited path though the root file of that name escapes', (t) => {
+  const root = repository(t);
+  const outside = resolve(root, '..', 'registry-evidence-anchors-root-shadow.rs');
+  writeFileSync(outside, 'pub const SOURCE_LIMIT: usize = 9;\n');
+  t.after(() => rmSync(outside, { force: true }));
+  symlinkSync(outside, resolve(root, 'other.rs'));
+  const result = check(
+    root,
+    '{/* Evidence: crates/demo/src/lib.rs, and other.rs, SOURCE_LIMIT. */}',
+  );
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.paths, 2);
+});
+
 test('reports a line reference past the end of the file with the real line count', (t) => {
   const root = repository(t);
   const result = check(root, '{/* Evidence: crates/demo/src/lib.rs:40-42 holds it. */}');

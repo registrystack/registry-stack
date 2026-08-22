@@ -528,20 +528,39 @@ export function checkEvidenceAnchors({
           );
           continue;
         }
-        const resolved =
-          citation.candidates.find(
-            (candidate) => entryKind(resolve(repoRoot, candidate)) !== 'missing',
-          ) ??
-          (citation.basename === undefined
-            ? undefined
-            : uniqueFileNamed(citation.searchRoot, citation.basename)) ??
-          (citation.rootCandidate !== undefined &&
+        let resolved = citation.candidates.find(
+          (candidate) => entryKind(resolve(repoRoot, candidate)) !== 'missing',
+        );
+        if (resolved === undefined && citation.basename !== undefined) {
+          resolved = uniqueFileNamed(citation.searchRoot, citation.basename);
+        }
+        // The file kept at the repository root is the last place a bare filename is looked
+        // for, and the one resolution the escape check above cannot have seen, because the
+        // root candidate is no member of the candidate list. A root file that a symlink
+        // leads out of the checkout is refused here rather than read, and refusing it is
+        // reported: it is the only thing that would have resolved.
+        if (
+          resolved === undefined &&
+          citation.rootCandidate !== undefined &&
           entryKind(resolve(repoRoot, citation.rootCandidate)) !== 'missing'
-            ? citation.rootCandidate
-            : undefined) ??
+        ) {
+          if (escapesRepository(repoRoot, citation.rootCandidate)) {
+            paths += 1;
+            if (range !== '') {
+              lineRefs += 1;
+            }
+            errors.push(
+              `${at} cites ${citation.rootCandidate}${range}, which leaves the repository`,
+            );
+            continue;
+          }
+          resolved = citation.rootCandidate;
+        }
+        if (resolved === undefined && citation.form === 'lines') {
           // A bare line reference that follows a filename the repository does not own
           // still belongs to the last file the anchor resolved.
-          (citation.form === 'lines' ? lastResolvedFile : undefined);
+          resolved = lastResolvedFile;
+        }
         if (resolved === undefined && !citation.reportMissing) {
           continue;
         }
