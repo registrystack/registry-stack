@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { test } from 'node:test';
@@ -68,6 +68,21 @@ test('reports a citation whose path climbs out of the repository', (t) => {
   );
   assert.equal(result.errors.length, 1);
   assert.match(result.errors[0], /crates\/\.\.\/\.\.\/registry-evidence-anchors-outside\.txt/);
+  assert.match(result.errors[0], /leaves the repository/);
+});
+
+test('reports a citation whose real path leaves the repository through a symlink', (t) => {
+  const root = repository(t);
+  const outside = resolve(root, '..', 'registry-evidence-anchors-linked.rs');
+  writeFileSync(outside, 'pub fn held_outside_the_repository() {}\n');
+  t.after(() => rmSync(outside, { force: true }));
+  symlinkSync(outside, resolve(root, 'crates/demo/src/linked.rs'));
+  const result = check(
+    root,
+    '{/* Evidence: crates/demo/src/linked.rs, held_outside_the_repository(). */}',
+  );
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0], /crates\/demo\/src\/linked\.rs/);
   assert.match(result.errors[0], /leaves the repository/);
 });
 

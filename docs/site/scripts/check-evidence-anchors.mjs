@@ -5,7 +5,7 @@
 // line references they carry are inside those files, and the symbols they name are
 // present in at least one path the same anchor cites.
 
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -241,6 +241,19 @@ export function extractSymbols(prose) {
   return symbols;
 }
 
+// The path a read would really open. A path the repository does not hold has none, and
+// stays the missing citation it already was rather than becoming an escape.
+function realPath(absolute) {
+  try {
+    return realpathSync(absolute);
+  } catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
 // A citation that climbs above the repository, by a `..` segment or by resolving outside
 // the root, names nothing the documentation can cite, so it is refused before it is read.
 function escapesRepository(repoRoot, path) {
@@ -249,7 +262,19 @@ function escapesRepository(repoRoot, path) {
   }
   const root = resolve(repoRoot);
   const absolute = resolve(root, path);
-  return absolute !== root && !absolute.startsWith(`${root}${sep}`);
+  if (absolute !== root && !absolute.startsWith(`${root}${sep}`)) {
+    return true;
+  }
+  // A symlink passes the check above and is then followed by both the stat and the read,
+  // so the real path is what decides. The root is resolved too: a macOS temporary
+  // directory is itself reached through a symlink, and an unresolved root would call
+  // every path beneath it an escape.
+  const realRoot = realPath(root);
+  const realAbsolute = realPath(absolute);
+  if (realRoot === undefined || realAbsolute === undefined) {
+    return false;
+  }
+  return realAbsolute !== realRoot && !realAbsolute.startsWith(`${realRoot}${sep}`);
 }
 
 function entryKind(absolute) {
