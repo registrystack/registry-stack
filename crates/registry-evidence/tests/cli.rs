@@ -916,15 +916,22 @@ fn explaining_a_failing_fixture_as_json_keeps_its_exit_code_and_keeps_its_messag
     let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
     let report: Value = serde_json::from_str(stdout).expect("stdout is one JSON document");
     assert_eq!(report["passed"], json!(false));
+    // `no-match` is the ninth case in the fixture's `cases.yaml`, so the run
+    // reaches nine cases before the mutation stops it. A reader counts what the
+    // run got through, whether or not it got through all of them.
     assert_eq!(
-        report.get("evaluatedCases"),
-        None,
-        "a failed run reported an evaluated-case count"
+        report["evaluatedCases"],
+        json!(9),
+        "a failed run lost its evaluated-case count"
     );
 
-    let failed = report["cases"]
-        .as_array()
-        .expect("cases is an array")
+    let cases = report["cases"].as_array().expect("cases is an array");
+    assert_eq!(
+        report["evaluatedCases"],
+        json!(cases.len()),
+        "the count and the traced cases disagree"
+    );
+    let failed = cases
         .iter()
         .find(|case| case.get("failure").is_some())
         .expect("the document names the case that failed");

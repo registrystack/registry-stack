@@ -10,6 +10,7 @@ use std::{
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand};
 use serde::Serialize;
+use serde_json::Value as JsonValue;
 use serde_norway::Value as YamlValue;
 
 use crate::authoring::{compile_fixture_project, CompiledFixtureProject};
@@ -31,28 +32,32 @@ pub struct RunArgs {
     #[arg(long)]
     pub evidence_bin: Option<PathBuf>,
 
+    /// Run only the exact bundle-relative fixture path named here.
+    #[arg(long)]
+    pub fixture: Option<String>,
+
+    /// Run only the exact case identifier in the selected fixture.
+    #[arg(long, requires = "fixture")]
+    pub case: Option<String>,
+
     /// Emit one machine-readable JSON report on standard output.
     #[arg(long)]
     pub json: bool,
 
-    /// Ask `evidence` to explain each evaluation, and relay the trace it prints.
-    ///
-    /// The trace can name what a source returned, so it is relayed only when it
-    /// is asked for. For the structured form, run `evidence evaluate --explain
-    /// --explain-format json` against the fixture directly.
+    /// Ask `evidence` for each structured value-free evaluation diagnostic and
+    /// relay it without interpreting Evidence semantics.
     #[arg(long)]
     pub explain: bool,
 }
 
-/// The result of one `evidence` invocation: whether it exited zero, what it
-/// printed on standard output, when it failed its captured stderr for the
-/// operator to read, and, for a fixture run, how many cases that fixture
-/// evaluated.
+/// The result of one `evidence` invocation: whether it exited zero, when it
+/// failed its captured stderr for the operator to read, and, for a fixture run,
+/// how many cases that fixture evaluated.
 struct StepOutcome {
     passed: bool,
-    stdout: String,
     stderr: Option<String>,
     evaluated_cases: Option<usize>,
+    trace: Option<JsonValue>,
 }
 
 #[derive(Debug, Serialize)]
@@ -74,7 +79,7 @@ struct FixtureReport {
     /// What `evidence evaluate --explain` printed, verbatim, and only when a
     /// trace was asked for.
     #[serde(skip_serializing_if = "Option::is_none")]
-    trace: Option<String>,
+    trace: Option<JsonValue>,
 }
 
 #[derive(Debug, Serialize)]
@@ -130,7 +135,7 @@ fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
             _staging: staging,
         }
     };
-    let fixture_paths = target.fixture_paths();
+    let fixture_paths = select_fixture_paths(target.fixture_paths(), args.fixture.as_deref())?;
 
     let check_outcome = target.check(&evidence_bin);
     let check_passed = check_outcome.passed;
@@ -140,13 +145,18 @@ fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
     let mut fixtures = Vec::new();
     if check_passed {
         for fixture_path in fixture_paths {
-            let outcome = target.evaluate(&evidence_bin, fixture_path, args.explain);
+            let outcome = target.evaluate(
+                &evidence_bin,
+                fixture_path,
+                args.case.as_deref(),
+                args.explain,
+            );
             fixtures.push(FixtureReport {
                 path: fixture_path.to_owned(),
                 passed: outcome.passed,
                 stderr: outcome.stderr,
                 evaluated_cases: outcome.evaluated_cases,
-                trace: args.explain.then_some(outcome.stdout),
+                trace: outcome.trace,
             });
         }
     }
@@ -179,6 +189,23 @@ fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
     } else {
         ExitCode::FAILURE
     })
+}
+
+/// Preserve the bundle's declared order for a full run, or select one exact
+/// referenced path. The rejected value is deliberately absent from the error:
+/// fixture selectors are operator input and diagnostics stay value-free.
+fn select_fixture_paths<'a>(
+    fixture_paths: &'a [String],
+    selected: Option<&str>,
+) -> Result<Vec<&'a str>> {
+    match selected {
+        None => Ok(fixture_paths.iter().map(String::as_str).collect()),
+        Some(selected) => fixture_paths
+            .iter()
+            .find(|fixture| fixture.as_str() == selected)
+            .map(|fixture| vec![fixture.as_str()])
+            .ok_or_else(|| anyhow!("selected fixture is not referenced by the project")),
+    }
 }
 
 /// The two project shapes adopters work with. Deployment projects carry a
@@ -219,19 +246,31 @@ impl FixtureTarget {
         }
     }
 
-    fn evaluate(&self, evidence_bin: &Path, fixture: &str, explain: bool) -> StepOutcome {
+    fn evaluate(
+        &self,
+        evidence_bin: &Path,
+        fixture: &str,
+        case: Option<&str>,
+        explain: bool,
+    ) -> StepOutcome {
         match self {
             Self::Deployment { runtime_path, .. } => {
                 let mut args = vec!["evaluate", "--fixture", fixture];
+                if let Some(case) = case {
+                    args.extend(["--case", case]);
+                }
                 if explain {
-                    args.push("--explain");
+                    args.extend(["--explain", "--explain-format", "json"]);
                 }
                 run_evidence_step(evidence_bin, &["--runtime"], Some(runtime_path), &args)
             }
             Self::Editable { compilation, .. } => {
                 let mut args = vec!["--fixture", fixture];
+                if let Some(case) = case {
+                    args.extend(["--case", case]);
+                }
                 if explain {
-                    args.push("--explain");
+                    args.extend(["--explain", "--explain-format", "json"]);
                 }
                 run_evidence_step(
                     evidence_bin,
@@ -350,26 +389,49 @@ fn run_evidence_step(
     match command.output() {
         Ok(output) if output.status.success() => {
             let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+            let trace = structured_trace(&stdout);
             StepOutcome {
                 passed: true,
-                evaluated_cases: evaluated_cases(&stdout),
-                stdout,
+                evaluated_cases: structured_evaluated_cases(trace.as_ref())
+                    .or_else(|| evaluated_cases(&stdout)),
                 stderr: None,
+                trace,
             }
         }
-        Ok(output) => StepOutcome {
-            passed: false,
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: Some(String::from_utf8_lossy(&output.stderr).into_owned()),
-            evaluated_cases: None,
-        },
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+            let trace = structured_trace(&stdout);
+            StepOutcome {
+                passed: false,
+                evaluated_cases: structured_evaluated_cases(trace.as_ref())
+                    .or_else(|| evaluated_cases(&stdout)),
+                trace,
+                stderr: Some(String::from_utf8_lossy(&output.stderr).into_owned()),
+            }
+        }
         Err(error) => StepOutcome {
             passed: false,
-            stdout: String::new(),
             stderr: Some(format!("failed to run {}: {error}", evidence_bin.display())),
             evaluated_cases: None,
+            trace: None,
         },
     }
+}
+
+fn structured_evaluated_cases(trace: Option<&JsonValue>) -> Option<usize> {
+    trace
+        .and_then(|trace| trace.get("evaluatedCases"))
+        .and_then(JsonValue::as_u64)
+        .and_then(|count| usize::try_from(count).ok())
+}
+
+fn structured_trace(stdout: &str) -> Option<JsonValue> {
+    serde_json::from_str(stdout.trim())
+        .ok()
+        .filter(|value: &JsonValue| {
+            value.get("passed").is_some_and(JsonValue::is_boolean)
+                && value.get("cases").is_some_and(JsonValue::is_array)
+        })
 }
 
 /// Read the case count out of `Evidence fixture passed (N evaluated cases)`.
@@ -405,8 +467,13 @@ fn print_diagnostics(report: &RunReport, to_stderr: bool) {
         lines.push(line);
         // The trace comes before the diagnostic, the order `evidence` itself
         // prints them in: how far the run got, then what stopped it.
-        if let Some(trace) = fixture.trace.as_deref() {
-            lines.extend(indented(Some(trace)));
+        if let Some(trace) = &fixture.trace {
+            // The trace was parsed out of `evidence` standard output, so it is
+            // already a valid document; rendering it back cannot fail. An empty
+            // default here would read as "no trace", which is a different fact.
+            let rendered = serde_json::to_string_pretty(trace)
+                .expect("a trace parsed from JSON renders back to JSON");
+            lines.extend(indented(Some(&rendered)));
         }
         if !fixture.passed {
             lines.extend(indented(fixture.stderr.as_deref()));

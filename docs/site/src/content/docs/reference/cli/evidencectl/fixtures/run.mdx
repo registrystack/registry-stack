@@ -18,7 +18,7 @@ Run `evidence check` and every bundle fixture through `evidence evaluate`.
 
 ## Contract status
 
-This page is generated from the public Clap command tree for Registry Stack source version `0.24.0` and catalog SHA-256 `20feac3bc5b4f456c6d11ce0a6da4ff04a781a4faabb558b55a648c894774ff4`. Hidden implementation commands are omitted.
+This page is generated from the public Clap command tree for Registry Stack source version `0.24.0` and catalog SHA-256 `603a0b0e6c8d110f8d37f9c6ac4725f2b4bec299c1a6eb018120c969ccd39392`. Hidden implementation commands are omitted.
 
 ## Usage
 
@@ -26,15 +26,23 @@ This page is generated from the public Clap command tree for Registry Stack sour
 evidencectl fixtures run [OPTIONS] --project <PROJECT>
 ```
 
+## Constraints
+
+| Condition | Requirement |
+| --- | --- |
+| `--case <CASE>` is present | `--fixture <FIXTURE>` is required. |
+
 ## Options
 
 | Option | Always required | Default | Values | Environment | Description |
 | --- | --- | --- | --- | --- | --- |
 | `--project <PROJECT>` | Yes | n/a | n/a | n/a | Deployment project directory containing runtime.yaml and bundle/ |
 | `--evidence-bin <EVIDENCE_BIN>` | No | n/a | n/a | n/a | Path to the evidence binary; defaults to `evidence` on PATH |
+| `--fixture <FIXTURE>` | No | n/a | n/a | n/a | Run only the exact bundle-relative fixture path named here |
+| `--case <CASE>` | No | n/a | n/a | n/a | Run only the exact case identifier in the selected fixture |
 | `--json` | No | n/a | n/a | n/a | Emit one machine-readable JSON report on standard output |
-| `--explain` | No | n/a | n/a | n/a | Ask `evidence` to explain each evaluation, and relay the trace it prints. The trace can name what a source returned, so it is relayed only when it is asked for. For the structured form, run `evidence evaluate --explain --explain-format json` against the fixture directly. |
-| `-h, --help` | No | n/a | n/a | n/a | Print help (see a summary with '-h') |
+| `--explain` | No | n/a | n/a | n/a | Ask `evidence` for each structured value-free evaluation diagnostic and relay it without interpreting Evidence semantics |
+| `-h, --help` | No | n/a | n/a | n/a | Print help |
 
 ## Generation contract
 

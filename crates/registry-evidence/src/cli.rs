@@ -41,6 +41,9 @@ pub enum Command {
         /// Bundle-relative fixture path referenced by exactly one requirement.
         #[arg(long)]
         fixture: PathBuf,
+        /// Evaluate only the case with this exact identifier.
+        #[arg(long)]
+        case: Option<String>,
         /// Print the per-stage trace of what each case actually did.
         ///
         /// A failure names the contract that broke and nothing else, which says
@@ -71,9 +74,15 @@ pub enum Command {
         bundle: PathBuf,
         #[arg(long)]
         fixture: PathBuf,
+        #[arg(long)]
+        case: Option<String>,
         /// Print the same value-free per-stage trace as deployment evaluation.
         #[arg(long)]
         explain: bool,
+        /// Render the trace as the same single machine-readable document as
+        /// deployment evaluation.
+        #[arg(long, value_enum, requires = "explain")]
+        explain_format: Option<ExplainFormat>,
     },
     /// Internal Evidencectl seam for deterministic provider-publication compilation.
     #[command(hide = true)]

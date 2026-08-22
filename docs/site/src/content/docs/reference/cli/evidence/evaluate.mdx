@@ -18,7 +18,7 @@ Evaluate one bundle-owned fixture without source or credential access.
 
 ## Contract status
 
-This page is generated from the public Clap command tree for Registry Stack source version `0.24.0` and catalog SHA-256 `20feac3bc5b4f456c6d11ce0a6da4ff04a781a4faabb558b55a648c894774ff4`. Hidden implementation commands are omitted.
+This page is generated from the public Clap command tree for Registry Stack source version `0.24.0` and catalog SHA-256 `603a0b0e6c8d110f8d37f9c6ac4725f2b4bec299c1a6eb018120c969ccd39392`. Hidden implementation commands are omitted.
 
 ## Usage
 
@@ -37,6 +37,7 @@ evidence evaluate [OPTIONS] --fixture <FIXTURE>
 | Option | Always required | Default | Values | Environment | Description |
 | --- | --- | --- | --- | --- | --- |
 | `--fixture <FIXTURE>` | Yes | n/a | n/a | n/a | Bundle-relative fixture path referenced by exactly one requirement |
+| `--case <CASE>` | No | n/a | n/a | n/a | Evaluate only the case with this exact identifier |
 | `--explain` | No | n/a | n/a | n/a | Print the per-stage trace of what each case actually did. A failure names the contract that broke and nothing else, which says that a case failed but never why. The trace says how far each case got, what shape the response and facts had, and which declared concept the output gate was checking. It reports shapes, counts, and identifiers, never document values, and it never changes an outcome, an exit code, or a message. |
 | `--explain-format <EXPLAIN_FORMAT>` | No | n/a | `text`, `json` | n/a | Render the `--explain` trace for a machine reader instead of a person. The JSON form is the whole of standard output, so the summary line's verdict and evaluated-case count move inside the document rather than trailing it |
 | `--runtime <RUNTIME>` | No | `/etc/registry-evidence/runtime.yaml` | n/a | `REGISTRY_EVIDENCE_RUNTIME` | One closed operator runtime file that binds the governed bundle |
