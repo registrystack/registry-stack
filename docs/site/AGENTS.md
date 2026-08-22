@@ -33,7 +33,9 @@ path must exist, a cited line reference must fall inside its file, and a cited
 symbol must occur in at least one path the same anchor cites. A citation that
 has drifted is a merge blocker, not a wart, so check an anchor when you move
 the code it points at. Run `npm run check:evidence-anchors` alone for the fast
-version. A token that resolves to no repository path is read as prose and
+version. Root CI runs it twice: once inside the docs job, and once in a job of
+its own that runs on every pull request, because the anchors cite source all
+over the workspace and the docs job only runs for a changed path it recognizes. A token that resolves to no repository path is read as prose and
 skipped, so naming a file the repo does not own is still fine. Several files in
 one directory may be cited in the compact brace form,
 `crates/registry-relay-v2/src/{api,startup}.rs`, which is read as one citation

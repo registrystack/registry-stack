@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
+
+import YAML from 'yaml';
 
 import {
   checkEvidenceAnchors,
@@ -11,6 +14,8 @@ import {
   parseAnchor,
   parseArguments,
 } from './check-evidence-anchors.mjs';
+
+const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 
 function write(root, path, contents) {
   const target = resolve(root, path);
@@ -637,4 +642,28 @@ test('parses citations and symbols without touching the filesystem', () => {
   assert.deepEqual(parsed.citations[0].start, 12);
   assert.deepEqual(parsed.citations[0].end, 14);
   assert.deepEqual(parsed.symbols, ['verify_source_shape', 'SOURCE_LIMIT']);
+});
+
+test('root CI runs the anchor check on every pull request and gates the branch on it', () => {
+  const workflow = YAML.parse(
+    readFileSync(resolve(repositoryRoot, '.github/workflows/ci.yml'), 'utf8'),
+  );
+  const command = 'node docs/site/scripts/check-evidence-anchors.mjs';
+  const running = Object.entries(workflow.jobs).filter(([, job]) =>
+    (job.steps ?? []).some((step) => (step.run ?? '').includes(command)),
+  );
+  assert.equal(running.length, 1);
+  const [jobId, job] = running[0];
+
+  // The anchors cite source across the whole workspace, so a job the changed-path
+  // classifier can skip is a gate that misses the renames it exists to catch.
+  assert.equal(job.if, undefined);
+  assert.deepEqual(job.needs ?? [], []);
+  // No install and no build: the checker imports only node:fs, node:path, and node:url.
+  assert.equal(
+    (job.steps ?? []).some((step) => (step.run ?? '').includes('npm ci')),
+    false,
+  );
+  // A job the aggregate does not wait on can fail without blocking the branch.
+  assert.ok(workflow.jobs['ci-result'].needs.includes(jobId));
 });
