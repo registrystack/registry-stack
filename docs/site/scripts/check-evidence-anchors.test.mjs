@@ -346,6 +346,35 @@ test('leaves a bare filename the repository does not own out of the path check',
   assert.equal(result.paths, 1);
 });
 
+test('resolves a bare filename that opens an anchor against the repository root', (t) => {
+  const root = repository(t);
+  write(root, 'deny.toml', '[bans]\nmultiple_versions = "deny"\n');
+  const result = check(
+    root,
+    '{/* Evidence: deny.toml, multiple_versions, and crates/demo/src/lib.rs. */}',
+  );
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.paths, 2);
+});
+
+test('searches the tree for a bare filename that opens an anchor', (t) => {
+  const root = repository(t);
+  write(root, 'products/demo/reference/CONFIG.md', 'The reference names bundle_signing_key.\n');
+  const result = check(root, '{/* Evidence: CONFIG.md, bundle_signing_key. */}');
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.paths, 1);
+});
+
+test('leaves a bare filename that opens an anchor and names nothing out of the path check', (t) => {
+  const root = repository(t);
+  const result = check(
+    root,
+    '{/* Evidence: origins.yaml is the adopter file, crates/demo/src/lib.rs reads it. */}',
+  );
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.paths, 1);
+});
+
 test('resolves a bare line range against the most recently cited path', (t) => {
   const root = repository(t);
   const result = check(root, '{/* Evidence: crates/demo/src/other.rs:1, and :305-309. */}');

@@ -108,8 +108,8 @@ Registry Manifest is a pure library and CLI with no runtime data dependencies.
 - Production source configuration. Source file paths, source view and column names, scopes, and
   other deployment details belong in the Registry Relay registry contract and runtime file, not in
   a portable manifest. Relay does not read a manifest to find them.
-  {/* Evidence: contracts.yaml, registry-manifest.metadata-yaml consumer note; the V2 registry
-       contract and runtime schemas carry no manifest reference,
+  {/* Evidence: docs/site/src/data/contracts.yaml, registry-manifest.metadata-yaml consumer
+       note; the V2 registry contract and runtime schemas carry no manifest reference,
        crates/registry-relay-v2/src/contract.rs. */}
 - Evidence Gateway deployment configuration. An Evidence Gateway process loads one immutable governed bundle and
   one closed runtime file mounted read-only at startup, and reads no portable manifest.

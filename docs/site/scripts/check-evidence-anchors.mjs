@@ -195,8 +195,18 @@ export function parseAnchor(body, { siteRoot = DOCS_SITE_ROOT } = {}) {
           reportMissing: true,
         };
       } else if (lastCitedPath === undefined) {
-        // A sibling filename with no path before it has nothing to sit beside.
-        continue;
+        // A bare filename that opens an anchor has no path to sit beside, so the
+        // repository itself is what it is read against: the file kept at the root, then a
+        // single unambiguous file of that name anywhere in the tree. It stays a reading of
+        // the prose for the same reason a sibling does, and the missing path before it is
+        // one more reason: nothing at all says the repository owns the name.
+        citation = {
+          form: 'sibling',
+          candidates: [cited],
+          reportMissing: false,
+          basename: cited,
+          searchRoot: '',
+        };
       } else {
         citation = {
           form: 'sibling',
@@ -424,7 +434,9 @@ export function checkEvidenceAnchors({
   };
 
   // A bare sibling filename may name a file that sits elsewhere in the crate or product
-  // the anchor already named, so fall back to a single unambiguous match under it.
+  // the anchor already named, so fall back to a single unambiguous match under it. The
+  // root is the repository itself when the filename opened the anchor and named no unit
+  // to search inside.
   const uniqueFileNamed = (root, basename) => {
     const matches = listFiles(root).filter((path) => path.endsWith(`/${basename}`));
     return matches.length === 1 ? matches[0] : undefined;
