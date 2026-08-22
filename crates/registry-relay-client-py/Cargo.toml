@@ -21,7 +21,7 @@ extension-module = ["pyo3/extension-module"]
 [dependencies]
 pyo3.workspace = true
 registry-platform-crypto.workspace = true
-relay-client-sdk = { package = "registry-relay-client", path = "../registry-relay-client", version = "0.24.0" }
+relay-client-sdk = { package = "registry-relay-client", path = "../registry-relay-client", version = "0.25.0" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
