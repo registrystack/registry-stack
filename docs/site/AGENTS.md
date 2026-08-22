@@ -36,6 +36,16 @@ the code it points at. Run `npm run check:evidence-anchors` alone for the fast
 version. A token that resolves to no repository path is read as prose and
 skipped, so naming a file the repo does not own is still fine.
 
+The check reads a symbol by its shape: `snake_case`, `SCREAMING_SNAKE_CASE`,
+`UpperCamelCase`, `lowerCamelCase`, a name spelled with empty parentheses such as
+`router()`, and an all-capital wire value carrying a digit such as `ES256`. A
+qualified name is checked segment by segment, so a typo in the type that
+qualifies it is caught too. Anything outside those shapes is prose, which leaves
+one gap worth knowing: an all-capital wire value with no digit, `EdDSA`, is not
+checked. The only shape that reaches it also pulls in `OpenAPI`, `OpenCRVS`, and
+every acronym the prose spells, which would fire on correct anchors, so the gap
+is deliberate. Spell such a value beside a symbol the check can see.
+
 Two things the check deliberately allows. Bare `path:start-end` citations still
 pass: `--strict-line-refs` rejects them, but it stays off while a backlog of
 them remains, and the check prints how many are left. Prefer citing a symbol
