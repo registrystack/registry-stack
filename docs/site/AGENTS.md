@@ -50,22 +50,30 @@ The check reads a symbol by its shape: `snake_case`, `SCREAMING_SNAKE_CASE`,
 `router()`, and an all-capital wire value carrying a digit such as `ES256`.
 `UpperCamelCase` covers a name with an initialism run into it, `OAuthErrorCode`,
 once that name carries two lower-case runs and one capital run of two or more. A
-qualified name is checked segment by segment, so a typo in the type that
-qualifies it is caught too. A dotted configuration or wire key path is read the
-same way, segment by segment, once one of its segments carries a shape:
+qualified name is read segment by segment: the last segment is read whatever its
+shape, and each segment that qualifies it is read once it carries a shape of its
+own. A dotted configuration or wire key path is read the same way, segment by
+segment, once one of its segments carries a shape:
 `evidence_data_request.transport_absences.credentials` is checked down to its
 leaf, and a `*` standing for any key is skipped rather than looked up.
 
-Anything outside those shapes is prose, which leaves two gaps worth knowing. A
-name nothing separates from an acronym the prose spells is not checked: an
+Anything outside those shapes is prose, which leaves three gaps worth knowing. A
+one-word name is not checked, because `UpperCamelCase` asks for two capitalized
+chunks: the only shape that would reach `Visibility` also reaches every
+sentence-initial word an anchor writes, `Evidence`, `Relay`, and `The` among
+them. Spell a one-word type or variant qualified when you want it checked,
+`AccessRule::Public` or `contract::Visibility`, since the last segment of a
+qualified name is read whatever its shape. A qualifier is still read by shape, so
+`Command::Check` puts `Check` under the check and leaves `Command` outside it. A
+name nothing separates from an acronym the prose spells is not checked either: an
 all-capital wire value with no digit, `EdDSA`, and a capitalized name carrying
 one lower-case run, `SDMXProfile`. The only shape that reaches either also pulls
 in `OpenAPI`, `SQLite`, `OpenCRVS`, and every other acronym the prose spells,
 which would fire on correct anchors. A key path no segment of which carries a
-shape, `sources.*.authentication.kind`, is not read either: its segments are
+shape, `sources.*.authentication.kind`, is not read at all: its segments are
 among the commonest words in the tree, so a check on them would pass on any file
-that happens to mention them. Both gaps are deliberate. Spell such a value or
-key beside a symbol the check can see.
+that happens to mention them. All three gaps are deliberate. Spell such a value
+or key beside a symbol the check can see.
 
 Two things the check deliberately allows. Bare `path:start-end` citations still
 pass: `--strict-line-refs` rejects them, but it stays off while a backlog of

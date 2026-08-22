@@ -170,8 +170,9 @@ the caller's own authority through a bound `:row_authority` parameter derived fr
 or from the token's principal identifier. Two fixed transforms can narrow a property further: a
 partial string reveal (`***`) and a date reduced to year or year-month. Relay signs nothing; its
 responses carry no assertion.
-{/* Evidence: AccessRule is Public | Protected{scope, purpose, authorityRowBinding} and
-     AuthorityRowBinding has a claim variant and a principal variant,
+{/* Evidence: an access profile is AccessRule::Public or AccessRule::Protected, whose
+     ProtectedAccess carries scope, purpose, and authorityRowBinding, and a row binding is
+     AuthorityRowBinding::Claim or AuthorityRowBinding::Principal,
      crates/registry-relay-v2/src/contract.rs; the authorityRowBinding key is spelled that way in
      crates/registry-relayctl/schemas/authoring/registry.schema.json; row authority is injected as a bound
      parameter with an exact-equality COLLATE BINARY predicate, never string concatenation,

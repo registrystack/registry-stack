@@ -142,8 +142,8 @@ It does not own:
   speaks no source protocol, holds no source credential, and makes no outbound call to a source, so
   a CSV, spreadsheet, Parquet, PostgreSQL, or HTTP registry has to be turned into SQLite by
   something else before Relay can serve it.
-  {/* Evidence: the SourceProfile enum has exactly two variants, Snapshot and LiveReadOnly,
-       crates/registry-relay-v2/src/contract.rs. */}
+  {/* Evidence: the SourceProfile enum has exactly two variants, SourceProfile::Snapshot and
+       SourceProfile::LiveReadOnly, crates/registry-relay-v2/src/contract.rs. */}
 - Portable metadata schema ownership. The `metadata.yaml` manifest format and its renderers are
   owned by Registry Manifest. Relay does not consume a manifest and does not emit one: its artifact
   generator produces no `registry-manifest.yaml`, and a test holds that.

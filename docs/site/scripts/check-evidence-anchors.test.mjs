@@ -667,3 +667,21 @@ test('root CI runs the anchor check on every pull request and gates the branch o
   // A job the aggregate does not wait on can fail without blocking the branch.
   assert.ok(workflow.jobs['ci-result'].needs.includes(jobId));
 });
+
+test('reads a one-word name only where the anchor spells it qualified', (t) => {
+  const root = repository(t);
+  write(root, 'crates/demo/src/rule.rs', 'pub enum AccessRule {\n    Public(String),\n}\n');
+  // A one-word name carries no shape holding it apart from a capitalized prose word,
+  // and every sentence an anchor opens starts with one.
+  assert.deepEqual(extractSymbols('AccessRule is Public or Protected'), ['AccessRule']);
+  // The last segment of a qualified name is read whatever its shape; a qualifier is
+  // read by shape, so a one-word type that only ever qualifies stays outside the check.
+  assert.deepEqual(extractSymbols('AccessRule::Public reads it'), ['AccessRule', 'Public']);
+  assert.deepEqual(extractSymbols('Command::run() reads it'), ['run']);
+
+  const bare = check(root, '{/* Evidence: crates/demo/src/rule.rs, AccessRule is Protectd. */}');
+  assert.deepEqual(bare.errors, []);
+  const qualified = check(root, '{/* Evidence: crates/demo/src/rule.rs, AccessRule::Protectd. */}');
+  assert.equal(qualified.errors.length, 1);
+  assert.match(qualified.errors[0], /Protectd/);
+});
