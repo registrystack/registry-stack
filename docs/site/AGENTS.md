@@ -28,6 +28,22 @@ fixtures, OpenAPI, or an upstream standard. When evidence is missing, mark the
 claim inline with a `TODO[evidence]` MDX comment and propose a weaker claim
 level, rather than deleting the claim or asserting it.
 
+`npm run check` resolves those anchors and fails when one does not. A cited
+path must exist, a cited line reference must fall inside its file, and a cited
+symbol must occur in at least one path the same anchor cites. A citation that
+has drifted is a merge blocker, not a wart, so check an anchor when you move
+the code it points at. Run `npm run check:evidence-anchors` alone for the fast
+version. A token that resolves to no repository path is read as prose and
+skipped, so naming a file the repo does not own is still fine.
+
+Two things the check deliberately allows. Bare `path:start-end` citations still
+pass: `--strict-line-refs` rejects them, but it stays off while a backlog of
+them remains, and the check prints how many are left. Prefer citing a symbol
+over a line range in new writing, because a symbol survives the next edit above
+it. Prescriptive guidance that tells an operator to set a value is also
+untouched, since the check reasons about claims describing what code does, not
+about advice.
+
 A procedure carries more than its commands: the reason for a step whose reason is
 not visible in the command, what an irreversible step forecloses, what failure
 looks like and the next move, and a `caution` or `danger` at every action that
