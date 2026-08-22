@@ -455,6 +455,50 @@ test('leaves the segments of a qualified path that name no symbol unchecked', ()
   ]);
 });
 
+test('checks every segment of a dotted key path one segment gives a shape', (t) => {
+  const root = repository(t);
+  write(root, 'crates/demo/src/keys.rs', 'const KEY: &str = "transport_absences.credentials";\n');
+  const passing = check(
+    root,
+    '{/* Evidence: crates/demo/src/keys.rs holds transport_absences.credentials. */}',
+  );
+  assert.deepEqual(passing.errors, []);
+  assert.equal(passing.symbols, 2);
+
+  const failing = check(
+    root,
+    '{/* Evidence: crates/demo/src/keys.rs holds transport_absences.credntials. */}',
+  );
+  assert.equal(failing.errors.length, 1);
+  assert.match(failing.errors[0], /credntials/);
+});
+
+test('leaves a dotted token no segment gives a shape out of the symbols', (t) => {
+  const root = repository(t);
+  const result = check(
+    root,
+    '{/* Evidence: crates/demo/src/lib.rs is served from id.registrystack.org. */}',
+  );
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.symbols, 0);
+});
+
+test('reads a dotted key path segment by segment and a domain name not at all', () => {
+  assert.deepEqual(extractSymbols('the request sets transport_absences.credentials'), [
+    'transport_absences',
+    'credentials',
+  ]);
+  assert.deepEqual(extractSymbols('published at id.registrystack.org since v0.9.0'), []);
+});
+
+test('skips the wildcard segment of a dotted key path', () => {
+  assert.deepEqual(extractSymbols('sources.*.authentication.source_kind names it'), [
+    'sources',
+    'authentication',
+    'source_kind',
+  ]);
+});
+
 test('reads an identifier spelled with empty parentheses as a symbol', (t) => {
   const root = repository(t);
   write(root, 'crates/demo/src/app.rs', 'pub fn router() -> Router {}\n');

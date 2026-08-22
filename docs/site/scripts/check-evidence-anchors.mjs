@@ -76,6 +76,10 @@ const CITATION_PATTERN = new RegExp(
 );
 const LINE_SUFFIX = /^(?<path>.*?)(?::(?<start>\d+)(?:-(?<end>\d+))?)?$/;
 const WORD_PATTERN = /[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)+|[A-Za-z_][A-Za-z0-9_]*/g;
+// A dotted configuration or wire key path, sources.*.authentication.kind. The word pass reads
+// its segments one by one and keeps only the ones that carry a symbol shape, so this pattern is
+// what puts the whole path back together before that decision is made.
+const DOTTED_KEY_PATH = /(?<![\w./-])[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_*]+)+/g;
 const SCREAMING_SNAKE_CASE = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/;
 const SNAKE_CASE = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/;
 const UPPER_CAMEL_CASE = /^(?:[A-Z][a-z0-9]+){2,}$/;
@@ -248,6 +252,24 @@ export function extractSymbols(prose) {
       symbols.push(candidate);
     }
   };
+
+  // A dotted key path names one key per segment, and a segment such as the credentials of
+  // evidence_data_request.transport_absences.credentials carries no shape of its own, so the
+  // word pass below drops it and a typo there goes unreported. One segment already carrying a
+  // symbol shape is what holds a key path apart from a domain name, id.registrystack.org, or a
+  // version string, v0.9.0, whose segments name nothing to look for.
+  for (const match of prose.matchAll(DOTTED_KEY_PATH)) {
+    const segments = match[0].split('.');
+    if (!segments.some(carriesSymbolShape)) {
+      continue;
+    }
+    for (const segment of segments) {
+      // A wildcard segment stands for any key rather than naming one.
+      if (segment !== '*') {
+        record(segment);
+      }
+    }
+  }
 
   for (const match of prose.matchAll(WORD_PATTERN)) {
     const token = match[0];
