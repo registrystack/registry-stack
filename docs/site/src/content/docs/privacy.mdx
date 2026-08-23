@@ -3,7 +3,8 @@ title: Privacy
 description: Data collected when you use Registry Docs and how Registry Stack uses it.
 status: current
 owner: registry-docs
-source_repos: []
+source_repos:
+  - registry-stack
 last_reviewed: "2026-08-23"
 doc_type: reference
 locale: en
@@ -13,6 +14,11 @@ standards_referenced: []
 Registry Docs uses self-hosted, cookie-free analytics to understand which documentation pages
 help readers and where the documentation needs attention.
 This page describes that processing and the choices available to you.
+
+{/* Evidence: `docs/site/src/lib/analytics.mjs`, `DOCS_UMAMI_SCRIPT_SRC`, fixes the self-hosted
+    tracker endpoint; `docs/site/src/components/RegistryHead.astro`, `docsAnalyticsConfig()`,
+    includes that tracker in the canonical released tree. Umami's official FAQ documents
+    cookie-free collection in the [Umami FAQ](https://docs.umami.is/docs/faq). */}
 
 ## Who operates Registry Docs
 
@@ -24,11 +30,17 @@ You can contact Aubex at [contact@registrystack.org](mailto:contact@registrystac
 ## Analytics data
 
 Registry Docs loads self-hosted Umami analytics from `stats.registrystack.org`.
-Umami records page views, referral sources, general browser and device information, approximate
-location, documentation feedback, and selected outbound-link clicks.
-Page URLs may include query parameters.
+Umami records page views, including URL query parameters, referral sources, general browser and
+device information, approximate location, and selected outbound-link clicks.
 The tracker does not set cookies or use a persistent visitor identifier.
 Umami uses the request IP address to estimate location but does not store the address.
+
+{/* Evidence: `docs/site/src/components/RegistryHead.astro`, `docsJourneyTargets`, implements the
+    selected outbound-link events; `docs/site/src/components/RegistryFooter.astro`, `showFeedback`,
+    contains the only other Umami call; neither component assigns a custom visitor identity.
+    Umami's official metric definitions document its page, query, referrer, browser, device,
+    location, IP-address, and rotating-session behavior in the
+    [Umami metric definitions](https://docs.umami.is/docs/metric-definitions). */}
 
 Registry Stack uses these records to understand page use, improve navigation, and prioritize
 documentation work.
@@ -39,8 +51,9 @@ The analytics records are not sold, used for advertising, or shared with adverti
 Registry Docs is hosted on GitHub Pages.
 GitHub processes request and server-log data to deliver and protect the site under the
 [GitHub Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
-Registry Stack does not configure or query GitHub's underlying server logs beyond information
-GitHub makes available to repository operators.
+
+{/* Evidence: `.github/workflows/docs-pages.yml` uploads and deploys the static site through the
+    Pages deployment. */}
 
 ## Legal basis and retention
 
