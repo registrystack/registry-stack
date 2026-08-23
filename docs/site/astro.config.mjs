@@ -584,6 +584,7 @@ export default defineConfig({
               ],
             },
             { label: 'Changelog', slug: 'changelog' },
+            { label: 'Privacy', slug: 'privacy' },
             { label: 'Accessibility', slug: 'accessibility' },
           ],
         },

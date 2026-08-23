@@ -1,0 +1,78 @@
+---
+title: Privacy
+description: Data collected when you use Registry Docs and how Registry Stack uses it.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-23"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+Registry Docs uses self-hosted, cookie-free analytics to understand which documentation pages
+help readers and where the documentation needs attention.
+This page describes that processing and the choices available to you.
+
+{/* Evidence: `docs/site/src/lib/analytics.mjs`, `DOCS_UMAMI_SCRIPT_SRC`, fixes the self-hosted
+    tracker endpoint; `docs/site/src/components/RegistryHead.astro`, `docsAnalyticsConfig()`,
+    includes that tracker in the canonical released tree; `docs/site/scripts/build-archives.mjs`,
+    `verifyAnalytics`, enforces the disabled versioned tree. Umami's official FAQ documents
+    cookie-free collection in the [Umami FAQ](https://docs.umami.is/docs/faq). */}
+
+## Who operates Registry Docs
+
+Aubex Consulting LLC, 28 Geary St, Ste 650 #189, San Francisco, CA 94108,
+United States, publishes Registry Stack and operates Registry Docs.
+Aubex is the controller responsible for this site.
+You can contact Aubex at [contact@registrystack.org](mailto:contact@registrystack.org).
+
+## Analytics data
+
+Registry Docs loads self-hosted Umami analytics from `stats.registrystack.org` only on the
+canonical documentation at `docs.registrystack.org/`.
+The `/dev/` tree and versioned `/v/<version>/` archives do not load analytics.
+Umami records page views, including URL query parameters, referral sources, general browser and
+device information, approximate location, and selected outbound-link clicks.
+The tracker does not set cookies or use a persistent visitor identifier.
+Umami uses the request IP address to estimate location but does not store the address.
+
+{/* Evidence: `docs/site/src/components/RegistryHead.astro`, `docsJourneyTargets`, implements the
+    selected outbound-link events; `docs/site/src/components/RegistryFooter.astro`, `showFeedback`,
+    contains the only other Umami call; neither component assigns a custom visitor identity.
+    Umami's official metric definitions document its page, query, referrer, browser, device,
+    location, IP-address, and rotating-session behavior in the
+    [Umami metric definitions](https://docs.umami.is/docs/metric-definitions). */}
+
+Registry Stack uses these records to understand page use, improve navigation, and prioritize
+documentation work.
+The analytics records are not sold, used for advertising, or shared with advertising networks.
+
+## Hosting data
+
+Registry Docs is hosted on GitHub Pages.
+GitHub processes request and server-log data to deliver and protect the site under the
+[GitHub Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
+
+{/* Evidence: `.github/workflows/docs-pages.yml` uploads and deploys the static site through the
+    Pages deployment. */}
+
+## Legal basis and retention
+
+Where the General Data Protection Regulation or UK General Data Protection Regulation applies,
+Aubex relies on legitimate interests to operate aggregate documentation analytics.
+Analytics records remain in the self-hosted Umami database while they are useful for improving
+Registry Docs and are removed when they are no longer needed for that purpose.
+
+## Your choices and rights
+
+You can block the analytics script with browser controls or a content blocker without losing access
+to the documentation.
+Email [contact@registrystack.org](mailto:contact@registrystack.org) to request access to,
+correction of, deletion of, or restriction of personal data, or to object to its processing.
+Umami analytics are not connected to a name or email address, so Aubex may not be able to identify
+records associated with a particular visitor.
+You can also complain to the data protection supervisory authority in your country.
+
+Effective date: August 23, 2026.

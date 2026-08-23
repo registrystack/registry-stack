@@ -365,6 +365,7 @@ test('archived docset builds use isolated generation with release-bound environm
   const calls = [];
   const normalizationCalls = [];
   const seoCalls = [];
+  const analyticsCalls = [];
   const environment = {
     BASE_URL: '/mutable-deployment/',
     CI: 'false',
@@ -403,6 +404,9 @@ test('archived docset builds use isolated generation with release-bound environm
     },
     applySeo: async (path, options) => {
       seoCalls.push([path, options]);
+    },
+    verifyAnalytics: async (path, options) => {
+      analyticsCalls.push([path, options]);
     },
   });
 
@@ -479,12 +483,17 @@ test('archived docset builds use isolated generation with release-bound environm
     ],
     [resolve(root, 'dist/v/1.2.3'), { indexable: false }],
   ]);
+  assert.deepEqual(analyticsCalls, [
+    [resolve(root, '.release-docsets/v1.2.3/root'), { enabled: false }],
+    [resolve(root, 'dist/v/1.2.3'), { enabled: false }],
+  ]);
 });
 
 test('selected released archive builds at the canonical root with release discovery', async (t) => {
   const root = await mkdtemp(resolve(tmpdir(), 'registry-docs-released-build-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const calls = [];
+  const analyticsCalls = [];
   const rootOutDir = resolve(root, '.release-docsets/v1.2.3/root');
   const stalePagefind = resolve(rootOutDir, 'pagefind/stale-index');
 
@@ -503,6 +512,9 @@ test('selected released archive builds at the canonical root with release discov
       }
     },
     applySeo: async () => {},
+    verifyAnalytics: async (path, options) => {
+      analyticsCalls.push([path, options]);
+    },
   });
 
   assert.equal(calls.length, 5);
@@ -523,6 +535,10 @@ test('selected released archive builds at the canonical root with release discov
   }
   assert.equal(calls.at(-1).env.DOCS_BASE, '/v/1.2.3/');
   assert.equal(calls.at(-1).env.DOCS_RELEASED_ARCHIVE, '');
+  assert.deepEqual(analyticsCalls, [
+    [rootOutDir, { enabled: true }],
+    [resolve(root, 'dist/v/1.2.3'), { enabled: false }],
+  ]);
 });
 
 test('archive output uses pinned generated artifacts and restores current files', async (t) => {
@@ -574,6 +590,7 @@ test('archive output uses pinned generated artifacts and restores current files'
         }
       },
       applySeo: async () => {},
+      verifyAnalytics: async () => {},
     },
   );
 
