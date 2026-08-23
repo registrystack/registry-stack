@@ -2,6 +2,7 @@
 import docsetsManifest from '../data/generated/docsets.json';
 import { mdHrefForPath } from '../lib/md-href';
 import { isGeneratedApiPath } from '../lib/generated-api-bases.mjs';
+import { docsAnalyticsConfig } from '../lib/analytics.mjs';
 
 const activeDocsetId = process.env.DOCS_DOCSET || docsetsManifest.current;
 const activeDocset =
@@ -31,22 +32,27 @@ const is404 = path === '/404/' || path === '/404';
 // twin, so they must not advertise a (broken) Markdown alternate link.
 const isGeneratedApi = isGeneratedApiPath(path);
 const mdHref = mdHrefForPath(Astro.url.pathname, import.meta.env.BASE_URL);
-const umamiWebsiteId = isSearchExcluded ? '' : import.meta.env.PUBLIC_UMAMI_WEBSITE_ID?.trim();
-const umamiScriptSrc =
-  import.meta.env.PUBLIC_UMAMI_SCRIPT_SRC?.trim() || 'https://stats.registrystack.org/script.js';
-const umamiDomains = import.meta.env.PUBLIC_UMAMI_DOMAINS?.trim() || 'docs.registrystack.org';
+const analytics = docsAnalyticsConfig({
+  // Only the exact released tree promoted to the canonical root is measured.
+  // The public website ID and defaults are source inputs so release archives
+  // stay reproducible when the hermetic builder clears deployment variables.
+  enabled: isReleasedArchiveBuild,
+  websiteId: import.meta.env.PUBLIC_UMAMI_WEBSITE_ID,
+  scriptSrc: import.meta.env.PUBLIC_UMAMI_SCRIPT_SRC,
+  domains: import.meta.env.PUBLIC_UMAMI_DOMAINS,
+});
 ---
 
 {head.map(({ tag: Tag, attrs, content }) => <Tag {...attrs} set:html={content} />)}
 {isSearchExcluded && <meta name="robots" content="noindex,follow" />}
 {!is404 && !isGeneratedApi && <link rel="alternate" type="text/markdown" href={mdHref} />}
 {
-  umamiWebsiteId && (
-    <script is:inline defer src={umamiScriptSrc} data-website-id={umamiWebsiteId} data-domains={umamiDomains}></script>
+  analytics && (
+    <script is:inline defer src={analytics.scriptSrc} data-website-id={analytics.websiteId} data-domains={analytics.domains}></script>
   )
 }
 {
-  umamiWebsiteId && (
+  analytics && (
     <script is:inline>
       {`
         const docsJourneyTargets = new Map([

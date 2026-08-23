@@ -12,6 +12,7 @@ import {
   gunzipSync,
 } from 'node:zlib';
 import { applyArchiveSeo } from './apply-archive-seo.mjs';
+import { checkBuiltAnalytics } from './check-built-analytics.mjs';
 import {
   archiveOutputDirectory,
   releaseRootOutputDirectory,
@@ -376,6 +377,7 @@ export async function buildDocsetArchive(docset, {
   environment = process.env,
   runCommand = run,
   applySeo = applyArchiveSeo,
+  verifyAnalytics = checkBuiltAnalytics,
   normalizePagefind = normalizePagefindGzipMetadata,
   stageGeneratedArtifacts = stagePinnedGeneratedArtifacts,
   allowUnpublishedCandidate = false,
@@ -444,6 +446,8 @@ export async function buildDocsetArchive(docset, {
     await normalizePagefind(versionOutDir);
     await applySeo(rootOutDir, { indexable });
     await applySeo(versionOutDir, { indexable: false });
+    await verifyAnalytics(rootOutDir, { enabled: indexable });
+    await verifyAnalytics(versionOutDir, { enabled: false });
   } finally {
     try {
       await restoreGeneratedArtifacts();
