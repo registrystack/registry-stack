@@ -8,6 +8,7 @@ const MAX_REQUEST_JSON_NODES = 100_000;
 // A valid 16 MiB result can contain far more collection nodes than a request.
 const MAX_RESPONSE_JSON_NODES = 3_000_000;
 const MAX_JSON_STRING_BYTES = 16 * 1024 * 1024;
+const ACCEPTED_CONSTRUCTION = Symbol('accepted-service-selection');
 
 class DiscoveryClientError extends Error {
   constructor(envelope) {
@@ -50,6 +51,30 @@ function inputError(kind) {
       ? 'the Discovery client configuration is invalid'
       : 'the Discovery query is invalid',
   });
+}
+
+function localAcceptanceError() {
+  return new DiscoveryClientError({
+    kind: 'local_acceptance_refused',
+    message: 'the relying application refused the advertised service',
+  });
+}
+
+class AcceptedServiceSelection {
+  #selection;
+
+  constructor(construction, selection) {
+    if (construction !== ACCEPTED_CONSTRUCTION) throw inputError('query');
+    this.#selection = selection;
+  }
+
+  get endpointUrl() {
+    return this.#selection.endpointUrl;
+  }
+
+  get selection() {
+    return responseValue(this.#selection);
+  }
 }
 
 function cloneJson(value, budget, depth) {
@@ -261,20 +286,44 @@ function selectRelayService(response, request) {
   }
 }
 
-function validateSelection(selection) {
+function validateSelectionStructure(selection) {
   try {
-    return native.validateSelection(requestValue(selection));
+    return native.validateSelectionStructure(requestValue(selection));
+  } catch (error) {
+    throw normalize(error, 'query');
+  }
+}
+
+function validateSelection(selection) {
+  return validateSelectionStructure(selection);
+}
+
+function acceptSelection(selection, accepts) {
+  const checked = validateSelectionStructure(selection);
+  if (typeof accepts !== 'function') throw inputError('query');
+  const accepted = accepts(responseValue(checked));
+  if (accepted !== true) throw localAcceptanceError();
+  return new AcceptedServiceSelection(ACCEPTED_CONSTRUCTION, checked);
+}
+
+function renewUnchangedSelection(previous, current) {
+  try {
+    return native.renewUnchangedSelection(requestValue(previous), requestValue(current));
   } catch (error) {
     throw normalize(error, 'query');
   }
 }
 
 module.exports = {
+  AcceptedServiceSelection,
   DiscoveryClient,
   DiscoveryClientError,
+  acceptSelection,
+  renewUnchangedSelection,
   selectEvidenceAlternative,
   selectEvidenceService,
   selectExact,
   selectRelayService,
   validateSelection,
+  validateSelectionStructure,
 };

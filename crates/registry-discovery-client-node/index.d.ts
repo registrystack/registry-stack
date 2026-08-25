@@ -20,6 +20,8 @@ export interface DiscoveryClientOptions {
   trustedRootCertificates?: Buffer
 }
 
+export declare function renewUnchangedSelection(previous: any, current: any): any
+
 export declare function selectEvidenceAlternative(response: any, evidenceTypeListId?: string | undefined | null): any
 
 export declare function selectEvidenceService(response: any, request: any): any
@@ -29,3 +31,5 @@ export declare function selectExact(response: any, request: any): any
 export declare function selectRelayService(response: any, request: any): any
 
 export declare function validateSelection(selection: any): any
+
+export declare function validateSelectionStructure(selection: any): any
