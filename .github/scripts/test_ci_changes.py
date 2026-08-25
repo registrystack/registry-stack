@@ -851,6 +851,24 @@ class CiChangesTest(unittest.TestCase):
         self.assertIn("\n      - relay-client-contracts\n", rust_result)
         self.assertNotIn("\n      - notary-contracts\n", rust_result)
 
+    def test_discovery_contracts_pins_node_for_adopter_binding_tests(self) -> None:
+        workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+        discovery_job = workflow.split("\n  discovery-contracts:\n", 1)[1].split(
+            "\n  relay-v2-contracts:\n", 1
+        )[0]
+
+        self.assertIn(
+            "uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+            discovery_job,
+        )
+        self.assertIn("node-version: 22.12.0", discovery_job)
+        self.assertIn("cache: npm", discovery_job)
+        self.assertIn(
+            "cache-dependency-path: "
+            "crates/registry-discovery-client-node/package-lock.json",
+            discovery_job,
+        )
+
     def test_archive_content_is_immutable_during_routine_docs_changes(self) -> None:
         current_content = classify(
             self.workspace,
