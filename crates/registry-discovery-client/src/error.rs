@@ -41,6 +41,10 @@ pub enum DiscoveryClientError {
     AmbiguousAlternative,
     #[error("the selected advertised capability does not match the service")]
     CapabilityMismatch,
+    #[error("the relying application refused the advertised service")]
+    LocalAcceptanceRefused,
+    #[error("the current advertised service changed and requires new acceptance")]
+    SelectionChanged,
     #[error("the Discovery exchange did not complete: {kind}")]
     Transport { kind: TransportKind },
     #[error("Discovery returned {problem}: status {status}")]
@@ -75,6 +79,8 @@ mod tests {
             DiscoveryClientError::NoMatchingAlternative,
             DiscoveryClientError::AmbiguousAlternative,
             DiscoveryClientError::CapabilityMismatch,
+            DiscoveryClientError::LocalAcceptanceRefused,
+            DiscoveryClientError::SelectionChanged,
             DiscoveryClientError::transport(TransportKind::Connect),
             DiscoveryClientError::Problem {
                 status: 503,

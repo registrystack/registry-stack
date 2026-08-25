@@ -21,10 +21,10 @@ use registry_discovery::{
     ServiceKind,
 };
 use registry_discovery_client::{
-    validate_service_selection, DiscoveryClient, DiscoveryClientConfig, EvidenceResolutionContext,
-    EvidenceSelectionRequest, EvidenceTypeResolveSelectionExt, MatchedCapability,
-    RelayCapabilityMatch, RelaySelectionRequest, RelayServiceQuery, ServiceSearchSelectionExt,
-    ServiceSelection,
+    accept_service_selection, validate_service_selection_structure, DiscoveryClient,
+    DiscoveryClientConfig, EvidenceResolutionContext, EvidenceSelectionRequest,
+    EvidenceTypeResolveSelectionExt, MatchedCapability, RelayCapabilityMatch,
+    RelaySelectionRequest, RelayServiceQuery, ServiceSearchSelectionExt, ServiceSelection,
 };
 use registry_discoveryctl::{build_project_at, BuildError};
 use registry_evidence::config::EvidenceConfig;
@@ -654,18 +654,11 @@ fn evidence_client_if_trusted(
     credentials: &CredentialFactory,
     trusted_jwks: JwksDocument,
 ) -> Option<EvidenceClient> {
-    if !trust.accepts(selection) {
-        return None;
-    }
+    let accepted =
+        accept_service_selection(selection, |candidate| trust.accepts(candidate)).ok()?;
     let token = credentials.evidence();
-    let config = EvidenceClientConfig::new(
-        selection
-            .advertised_base_url()
-            .expect("the trusted Evidence selection carries a valid native base URL"),
-        token,
-        trusted_jwks,
-        Vec::new(),
-    );
+    let config =
+        EvidenceClientConfig::new(accepted.base_url().clone(), token, trusted_jwks, Vec::new());
     Some(EvidenceClient::new(config).expect("the trusted Evidence client builds"))
 }
 
@@ -674,16 +667,10 @@ fn relay_client_if_trusted(
     selection: &ServiceSelection,
     credentials: &CredentialFactory,
 ) -> Option<RelayClient> {
-    if !trust.accepts(selection) {
-        return None;
-    }
+    let accepted =
+        accept_service_selection(selection, |candidate| trust.accepts(candidate)).ok()?;
     let token = credentials.relay();
-    let config = RelayClientConfig::new(
-        selection
-            .advertised_base_url()
-            .expect("the trusted Relay selection carries a valid native base URL"),
-    )
-    .with_token_provider(token);
+    let config = RelayClientConfig::new(accepted.base_url().clone()).with_token_provider(token);
     Some(RelayClient::new(config).expect("the trusted Relay client builds"))
 }
 
@@ -868,10 +855,10 @@ async fn complete_evidence_and_relay_journeys_build_select_trust_and_invoke_nati
     ) = serde_json::from_slice(&saved).expect("saved selections reload without Discovery");
     let evidence_selection = evidence_selection.into_selection();
     let relay_selection = relay_selection.into_selection();
-    validate_service_selection(&evidence_selection)
-        .expect("the persisted Evidence selection revalidates before trust");
-    validate_service_selection(&relay_selection)
-        .expect("the persisted Relay selection revalidates before trust");
+    validate_service_selection_structure(&evidence_selection)
+        .expect("the persisted Evidence selection revalidates structurally before trust");
+    validate_service_selection_structure(&relay_selection)
+        .expect("the persisted Relay selection revalidates structurally before trust");
     assert_eq!(
         evidence_selection.binding_id,
         provider.evidence_binding.binding_id

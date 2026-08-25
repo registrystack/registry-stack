@@ -1,9 +1,13 @@
 import {
+  AcceptedServiceSelection,
   DiscoveryClient,
+  acceptSelection,
+  renewUnchangedSelection,
   selectEvidenceAlternative,
   selectEvidenceService,
   selectRelayService,
   validateSelection,
+  validateSelectionStructure,
   type EvidenceServiceSelection,
   type RelayServiceSelection,
   type ServiceRecord,
@@ -25,7 +29,20 @@ async function useDiscoveryClient(): Promise<void> {
     resolution: context,
   });
   expectType<string>(selection.originContentDigest);
+  expectType<EvidenceServiceSelection>(validateSelectionStructure(selection));
   expectType<EvidenceServiceSelection>(validateSelection(selection));
+  const accepted = acceptSelection(selection, (candidate) => candidate.serviceKind === 'evidence');
+  expectType<AcceptedServiceSelection<EvidenceServiceSelection>>(accepted);
+  expectType<string>(accepted.endpointUrl);
+  expectType<EvidenceServiceSelection>(accepted.selection);
+  expectType<EvidenceServiceSelection>(renewUnchangedSelection(selection, selection));
+
+  // @ts-expect-error Only acceptSelection can construct the accepted handoff.
+  const forged: AcceptedServiceSelection<EvidenceServiceSelection> = {
+    endpointUrl: selection.endpointUrl,
+    selection,
+  };
+  void forged;
 
   const relayResponse = await client.searchRelayServices({
     semanticClassId: 'urn:example:business',

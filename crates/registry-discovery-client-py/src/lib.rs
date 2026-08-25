@@ -4,11 +4,12 @@
 use std::{collections::HashSet, time::Duration};
 
 use discovery_client_sdk::{
-    validate_service_selection, DiscoveryClient as CoreClient, DiscoveryClientConfig,
-    DiscoveryClientError, DiscoveryProblem, EvidenceSelectionRequest, EvidenceServiceQuery,
-    EvidenceTypeResolveRequest, EvidenceTypeResolveResponse, EvidenceTypeResolveSelectionExt,
-    RelaySelectionRequest, RelayServiceQuery, SelectionRequest, ServiceFilters,
-    ServiceSearchResponse, ServiceSearchSelectionExt, ServiceSelection,
+    renew_unchanged_service_selection, validate_service_selection_structure,
+    DiscoveryClient as CoreClient, DiscoveryClientConfig, DiscoveryClientError, DiscoveryProblem,
+    EvidenceSelectionRequest, EvidenceServiceQuery, EvidenceTypeResolveRequest,
+    EvidenceTypeResolveResponse, EvidenceTypeResolveSelectionExt, RelaySelectionRequest,
+    RelayServiceQuery, SelectionRequest, ServiceFilters, ServiceSearchResponse,
+    ServiceSearchSelectionExt, ServiceSelection,
 };
 use pyo3::{
     exceptions::{PyException, PyRuntimeError},
@@ -43,6 +44,8 @@ fn kind(error: &DiscoveryClientError) -> &'static str {
         DiscoveryClientError::NoMatchingAlternative => "no_matching_alternative",
         DiscoveryClientError::AmbiguousAlternative => "ambiguous_alternative",
         DiscoveryClientError::CapabilityMismatch => "capability_mismatch",
+        DiscoveryClientError::LocalAcceptanceRefused => "local_acceptance_refused",
+        DiscoveryClientError::SelectionChanged => "selection_changed",
         DiscoveryClientError::Transport { .. } => "transport",
         DiscoveryClientError::Problem { .. } => "problem",
         DiscoveryClientError::Protocol => "protocol",
@@ -410,14 +413,87 @@ fn select_relay_service<'py>(
 }
 
 #[pyfunction]
-fn validate_selection<'py>(
+fn validate_selection_structure<'py>(
     py: Python<'py>,
     selection: &Bound<'_, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let selection: ServiceSelection =
         python_response_to_rust(selection).map_err(|_| query_error(py))?;
-    validate_service_selection(&selection).map_err(|error| client_error(py, error))?;
+    validate_service_selection_structure(&selection).map_err(|error| client_error(py, error))?;
     rust_to_python(py, &selection)
+}
+
+/// Deprecated compatibility alias for structural validation.
+#[pyfunction]
+fn validate_selection<'py>(
+    py: Python<'py>,
+    selection: &Bound<'_, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    validate_selection_structure(py, selection)
+}
+
+#[pyfunction]
+fn renew_unchanged_selection<'py>(
+    py: Python<'py>,
+    previous: &Bound<'_, PyAny>,
+    current: &Bound<'_, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let previous: ServiceSelection =
+        python_response_to_rust(previous).map_err(|_| query_error(py))?;
+    let current: ServiceSelection =
+        python_response_to_rust(current).map_err(|_| query_error(py))?;
+    let renewed = renew_unchanged_service_selection(&previous, &current)
+        .map_err(|error| client_error(py, error))?;
+    rust_to_python(py, &renewed)
+}
+
+#[pyclass(
+    name = "AcceptedServiceSelection",
+    module = "registry_discovery_client",
+    frozen,
+    generic
+)]
+struct AcceptedServiceSelection {
+    selection: ServiceSelection,
+}
+
+#[pymethods]
+impl AcceptedServiceSelection {
+    #[getter]
+    fn endpoint_url(&self) -> &str {
+        &self.selection.endpoint_url
+    }
+
+    #[getter]
+    fn selection<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        rust_to_python(py, &self.selection)
+    }
+}
+
+#[pyfunction]
+fn accept_selection(
+    py: Python<'_>,
+    selection: &Bound<'_, PyAny>,
+    accepts: &Bound<'_, PyAny>,
+) -> PyResult<AcceptedServiceSelection> {
+    let selection: ServiceSelection =
+        python_response_to_rust(selection).map_err(|_| query_error(py))?;
+    validate_service_selection_structure(&selection).map_err(|error| client_error(py, error))?;
+    if !accepts.is_callable() {
+        return Err(query_error(py));
+    }
+    let candidate = rust_to_python(py, &selection)?;
+    let accepted = accepts.call1((candidate,))?;
+    if !accepted.is_exact_instance_of::<PyBool>() {
+        return Err(query_error(py));
+    }
+    if !accepted.extract::<bool>()? {
+        return Err(client_error(
+            py,
+            DiscoveryClientError::LocalAcceptanceRefused,
+        ));
+    }
+    Ok(AcceptedServiceSelection { selection })
 }
 
 #[pyclass(name = "DiscoveryClient", module = "registry_discovery_client")]
@@ -585,11 +661,15 @@ impl DiscoveryClient {
 #[pymodule]
 pub fn registry_discovery_client(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<DiscoveryClient>()?;
+    module.add_class::<AcceptedServiceSelection>()?;
     module.add_function(wrap_pyfunction!(select_exact, module)?)?;
     module.add_function(wrap_pyfunction!(select_evidence_alternative, module)?)?;
     module.add_function(wrap_pyfunction!(select_evidence_service, module)?)?;
     module.add_function(wrap_pyfunction!(select_relay_service, module)?)?;
+    module.add_function(wrap_pyfunction!(validate_selection_structure, module)?)?;
     module.add_function(wrap_pyfunction!(validate_selection, module)?)?;
+    module.add_function(wrap_pyfunction!(renew_unchanged_selection, module)?)?;
+    module.add_function(wrap_pyfunction!(accept_selection, module)?)?;
     module.add(
         "DiscoveryClientError",
         module.py().get_type::<DiscoveryClientErrorBase>(),

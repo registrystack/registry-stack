@@ -149,6 +149,8 @@ export type DiscoveryClientErrorKind =
   | 'no_matching_alternative'
   | 'ambiguous_alternative'
   | 'capability_mismatch'
+  | 'local_acceptance_refused'
+  | 'selection_changed'
   | 'transport'
   | 'problem'
   | 'protocol'
@@ -202,4 +204,35 @@ export function selectRelayService(
   request: RelaySelectionRequest,
 ): RelayServiceSelection;
 
+/**
+ * Validate closed shape and capability binding only.
+ *
+ * This does not prove origin authenticity, catalog currentness, mapping
+ * currency, authorization, or adopter trust.
+ */
+export function validateSelectionStructure<T extends CommonServiceSelection>(selection: T): T;
+
+/** @deprecated Use validateSelectionStructure. This operation is structural, not trust. */
 export function validateSelection<T extends CommonServiceSelection>(selection: T): T;
+
+export class AcceptedServiceSelection<T extends CommonServiceSelection> {
+  private constructor();
+  private readonly __acceptedServiceSelectionBrand: void;
+  readonly endpointUrl: string;
+  readonly selection: T;
+}
+
+/** Apply a synchronous adopter-owned local policy after structural validation. */
+export function acceptSelection<T extends CommonServiceSelection>(
+  selection: T,
+  accepts: (selection: T) => boolean,
+): AcceptedServiceSelection<T>;
+
+/**
+ * Return a freshly reselected service only when its trust-relevant semantics
+ * are unchanged. The current selection must come from a new online lookup.
+ */
+export function renewUnchangedSelection<T extends CommonServiceSelection>(
+  previous: T,
+  current: T,
+): T;

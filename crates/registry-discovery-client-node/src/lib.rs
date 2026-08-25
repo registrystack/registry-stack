@@ -11,11 +11,12 @@ use napi::{
 };
 use napi_derive::napi;
 use registry_discovery_client::{
-    validate_service_selection, DiscoveryClient as CoreClient, DiscoveryClientConfig,
-    DiscoveryClientError, DiscoveryProblem, EvidenceSelectionRequest, EvidenceServiceQuery,
-    EvidenceTypeResolveRequest, EvidenceTypeResolveResponse, EvidenceTypeResolveSelectionExt,
-    RelaySelectionRequest, RelayServiceQuery, SelectionRequest, ServiceFilters,
-    ServiceSearchResponse, ServiceSearchSelectionExt, ServiceSelection,
+    renew_unchanged_service_selection, validate_service_selection_structure,
+    DiscoveryClient as CoreClient, DiscoveryClientConfig, DiscoveryClientError, DiscoveryProblem,
+    EvidenceSelectionRequest, EvidenceServiceQuery, EvidenceTypeResolveRequest,
+    EvidenceTypeResolveResponse, EvidenceTypeResolveSelectionExt, RelaySelectionRequest,
+    RelayServiceQuery, SelectionRequest, ServiceFilters, ServiceSearchResponse,
+    ServiceSearchSelectionExt, ServiceSelection,
 };
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{json, Value};
@@ -60,6 +61,14 @@ fn error(source: DiscoveryClientError) -> Error {
         DiscoveryClientError::CapabilityMismatch => json!({
             "kind": "capability_mismatch",
             "message": "the selected advertised capability does not match the service"
+        }),
+        DiscoveryClientError::LocalAcceptanceRefused => json!({
+            "kind": "local_acceptance_refused",
+            "message": "the relying application refused the advertised service"
+        }),
+        DiscoveryClientError::SelectionChanged => json!({
+            "kind": "selection_changed",
+            "message": "the current advertised service changed and requires new acceptance"
         }),
         DiscoveryClientError::Transport { kind } => json!({
             "kind": "transport",
@@ -143,10 +152,22 @@ pub fn select_relay_service(response: Value, request: Value) -> Result<Value> {
 }
 
 #[napi]
-pub fn validate_selection(selection: Value) -> Result<Value> {
+pub fn validate_selection_structure(selection: Value) -> Result<Value> {
     let selection: ServiceSelection = decode(selection)?;
-    validate_service_selection(&selection).map_err(error)?;
+    validate_service_selection_structure(&selection).map_err(error)?;
     encode(&selection)
+}
+
+#[napi]
+pub fn validate_selection(selection: Value) -> Result<Value> {
+    validate_selection_structure(selection)
+}
+
+#[napi]
+pub fn renew_unchanged_selection(previous: Value, current: Value) -> Result<Value> {
+    let previous: ServiceSelection = decode(previous)?;
+    let current: ServiceSelection = decode(current)?;
+    encode(&renew_unchanged_service_selection(&previous, &current).map_err(error)?)
 }
 
 #[napi]

@@ -241,8 +241,31 @@ impl ServiceSelection {
     /// Parse the advertised native base URL after the application has applied
     /// its own trust policy. Calling this method is not a trust decision.
     pub fn advertised_base_url(&self) -> Result<Url, DiscoveryClientError> {
-        validate_service_selection(self)?;
+        validate_service_selection_structure(self)?;
         parsed_base_url(&self.endpoint_url)
+    }
+}
+
+/// An ephemeral handoff created only after adopter-owned local acceptance.
+///
+/// This wrapper is deliberately not serializable. Persist the inert
+/// [`ServiceSelection`] and apply current local policy again before native
+/// credentials or input and output.
+#[derive(Debug)]
+pub struct AcceptedServiceSelection<'a> {
+    selection: &'a ServiceSelection,
+    base_url: Url,
+}
+
+impl AcceptedServiceSelection<'_> {
+    #[must_use]
+    pub fn selection(&self) -> &ServiceSelection {
+        self.selection
+    }
+
+    #[must_use]
+    pub fn base_url(&self) -> &Url {
+        &self.base_url
     }
 }
 
@@ -565,8 +588,12 @@ fn capability_matches(service: &ServiceRecord, capability: &MatchedCapability) -
     }
 }
 
-/// Revalidate a persisted or foreign selection before applying local trust.
-pub fn validate_service_selection(
+/// Validate the closed shape and capability binding of a persisted or foreign
+/// selection.
+///
+/// This does not prove origin authenticity, catalog currentness, mapping
+/// currency, authorization, or adopter trust.
+pub fn validate_service_selection_structure(
     selection: &ServiceSelection,
 ) -> Result<(), DiscoveryClientError> {
     let record = ServiceRecord {
@@ -667,6 +694,76 @@ pub fn validate_service_selection(
     Ok(())
 }
 
+/// Compatibility alias for the original structural-validation name.
+#[deprecated(
+    note = "use validate_service_selection_structure; validation is structural, not trust"
+)]
+pub fn validate_service_selection(
+    selection: &ServiceSelection,
+) -> Result<(), DiscoveryClientError> {
+    validate_service_selection_structure(selection)
+}
+
+/// Apply adopter-owned local policy and create an ephemeral native handoff.
+///
+/// The callback owns the trust decision. Discovery supplies no trust policy,
+/// trust-store schema, credentials, or native client behavior.
+pub fn accept_service_selection<'a>(
+    selection: &'a ServiceSelection,
+    accepts: impl FnOnce(&ServiceSelection) -> bool,
+) -> Result<AcceptedServiceSelection<'a>, DiscoveryClientError> {
+    validate_service_selection_structure(selection)?;
+    if !accepts(selection) {
+        return Err(DiscoveryClientError::LocalAcceptanceRefused);
+    }
+    Ok(AcceptedServiceSelection {
+        selection,
+        base_url: parsed_base_url(&selection.endpoint_url)?,
+    })
+}
+
+/// Renew a selection only when a caller has freshly reselected the same
+/// trust-relevant service semantics from an online Discovery lookup.
+///
+/// Fetch provenance and the global catalog revision may advance without
+/// changing this service. Every service, role, jurisdiction, capability,
+/// mapping, or resolution change requires explicit new local acceptance.
+pub fn renew_unchanged_service_selection(
+    previous: &ServiceSelection,
+    current: &ServiceSelection,
+) -> Result<ServiceSelection, DiscoveryClientError> {
+    validate_service_selection_structure(previous)?;
+    validate_service_selection_structure(current)?;
+    if !same_acceptance_subject(previous, current) {
+        return Err(DiscoveryClientError::SelectionChanged);
+    }
+    Ok(current.clone())
+}
+
+fn same_acceptance_subject(left: &ServiceSelection, right: &ServiceSelection) -> bool {
+    left.record_id == right.record_id
+        && left.binding_id == right.binding_id
+        && left.service_id == right.service_id
+        && left.service_kind == right.service_kind
+        && left.endpoint_url == right.endpoint_url
+        && left.publisher_id == right.publisher_id
+        && left.operator_id == right.operator_id
+        && left.registry_authority_id == right.registry_authority_id
+        && left.legal_issuer_id == right.legal_issuer_id
+        && left.technical_provider_id == right.technical_provider_id
+        && left.jurisdictions == right.jurisdictions
+        && left.conforms_to == right.conforms_to
+        && left.evidence_type_ids == right.evidence_type_ids
+        && left.semantic_class_ids == right.semantic_class_ids
+        && left.operation_family_ids == right.operation_family_ids
+        && left.matched_capability == right.matched_capability
+        && left.evidence_resolution == right.evidence_resolution
+        && left.relay_capability_match == right.relay_capability_match
+        && left.origin_id == right.origin_id
+        && left.origin_url == right.origin_url
+        && left.mapping_revision == right.mapping_revision
+}
+
 #[cfg(test)]
 mod tests {
     use registry_discovery::{
@@ -713,6 +810,19 @@ mod tests {
             &service.evidence_type_ids,
             &service.semantic_class_ids,
             &service.operation_family_ids,
+        )
+        .unwrap();
+    }
+
+    fn refresh_selection_binding_id(selection: &mut ServiceSelection) {
+        selection.binding_id = derive_binding_id(
+            &selection.service_id,
+            selection.service_kind,
+            &selection.endpoint_url,
+            &selection.conforms_to,
+            &selection.evidence_type_ids,
+            &selection.semantic_class_ids,
+            &selection.operation_family_ids,
         )
         .unwrap();
     }
@@ -843,7 +953,8 @@ mod tests {
             selection.selection().evidence_resolution,
             Some(context.clone())
         );
-        validate_service_selection(selection.selection()).expect("the saved selection revalidates");
+        validate_service_selection_structure(selection.selection())
+            .expect("the saved selection revalidates structurally");
 
         let mut persisted = selection.into_selection();
         persisted
@@ -852,7 +963,7 @@ mod tests {
             .expect("the selection retains its resolution")
             .jurisdiction = Some("urn:jurisdiction:other".into());
         assert_eq!(
-            validate_service_selection(&persisted),
+            validate_service_selection_structure(&persisted),
             Err(DiscoveryClientError::Protocol)
         );
     }
@@ -909,7 +1020,7 @@ mod tests {
             .into_selection();
         persisted.evidence_resolution = Some(oversized);
         assert_eq!(
-            validate_service_selection(&persisted),
+            validate_service_selection_structure(&persisted),
             Err(DiscoveryClientError::Protocol)
         );
     }
@@ -986,13 +1097,14 @@ mod tests {
                 operation_family_id: Some("urn:operation:list".into()),
             })
         );
-        validate_service_selection(selection.selection()).expect("the Relay tuple revalidates");
+        validate_service_selection_structure(selection.selection())
+            .expect("the Relay tuple revalidates structurally");
 
         let mut persisted = selection.into_selection();
         persisted.matched_capability =
             MatchedCapability::SemanticClass("urn:semantic:person".into());
         assert_eq!(
-            validate_service_selection(&persisted),
+            validate_service_selection_structure(&persisted),
             Err(DiscoveryClientError::Protocol)
         );
     }
@@ -1029,10 +1141,146 @@ mod tests {
             let mut drifted = selection.clone();
             mutate(&mut drifted);
             assert_eq!(
-                validate_service_selection(&drifted),
+                validate_service_selection_structure(&drifted),
                 Err(DiscoveryClientError::Protocol)
             );
         }
+    }
+
+    #[test]
+    fn structural_validation_does_not_turn_descriptive_metadata_into_binding_authority() {
+        let record = service();
+        let response = ServiceSearchResponse {
+            catalog_revision: catalog_revision(std::slice::from_ref(&record)).unwrap(),
+            items: vec![record],
+        };
+        let selection = response
+            .select_only(MatchedCapability::EvidenceType("urn:evidence".into()))
+            .expect("valid exact selection");
+
+        let mut descriptive_change = selection.clone();
+        descriptive_change.publisher_id = Some("urn:publisher:other".into());
+        descriptive_change.jurisdictions = vec!["urn:jurisdiction:other".into()];
+        validate_service_selection_structure(&descriptive_change)
+            .expect("roles and jurisdictions remain outside capability binding");
+
+        let accepted = accept_service_selection(&selection, |candidate| candidate == &selection)
+            .expect("the exact local pin accepts");
+        assert_eq!(accepted.selection(), &selection);
+        assert_eq!(
+            accepted.base_url().as_str(),
+            "https://provider.example/evidence"
+        );
+        assert_eq!(
+            accept_service_selection(&descriptive_change, |candidate| candidate == &selection)
+                .map(|_| ()),
+            Err(DiscoveryClientError::LocalAcceptanceRefused)
+        );
+    }
+
+    #[test]
+    fn unchanged_renewal_refreshes_provenance_but_requires_new_acceptance_for_semantic_change() {
+        let record = service();
+        let response = ServiceSearchResponse {
+            catalog_revision: catalog_revision(std::slice::from_ref(&record)).unwrap(),
+            items: vec![record],
+        };
+        let previous = response
+            .select_only(MatchedCapability::EvidenceType("urn:evidence".into()))
+            .expect("valid exact selection");
+        let mut current = previous.clone();
+        current.origin_content_digest = format!("sha256:{}", "3".repeat(64));
+        current.origin_fetched_at = "2026-08-20T00:00:00Z".into();
+        current.catalog_revision = format!("sha256:{}", "4".repeat(64));
+
+        let renewed = renew_unchanged_service_selection(&previous, &current)
+            .expect("fresh provenance for unchanged semantics renews");
+        assert_eq!(renewed.origin_fetched_at, "2026-08-20T00:00:00Z");
+        assert_eq!(renewed.catalog_revision, current.catalog_revision);
+
+        let semantic_changes: [fn(&mut ServiceSelection); 3] = [
+            |selection| selection.legal_issuer_id = Some("urn:issuer:other".into()),
+            |selection| {
+                selection.conforms_to = vec!["urn:profile:other".into()];
+                refresh_selection_binding_id(selection);
+            },
+            |selection| {
+                selection.evidence_type_ids = vec!["urn:evidence:other".into()];
+                selection.matched_capability =
+                    MatchedCapability::EvidenceType("urn:evidence:other".into());
+                refresh_selection_binding_id(selection);
+            },
+        ];
+        for mutate in semantic_changes {
+            let mut changed = current.clone();
+            mutate(&mut changed);
+            validate_service_selection_structure(&changed)
+                .expect("the changed selection remains structurally valid");
+
+            let mut credentials_constructed = 0;
+            let mut native_calls = 0;
+            let result = renew_unchanged_service_selection(&previous, &changed).inspect(|_| {
+                credentials_constructed += 1;
+                native_calls += 1;
+            });
+            assert_eq!(result, Err(DiscoveryClientError::SelectionChanged));
+            assert_eq!(credentials_constructed, 0);
+            assert_eq!(native_calls, 0);
+        }
+
+        let mut relay = service();
+        relay.service_kind = ServiceKind::Relay;
+        relay.legal_issuer_id = None;
+        relay.technical_provider_id = None;
+        relay.registry_authority_id = Some("urn:registry-authority".into());
+        relay.evidence_type_ids.clear();
+        relay.semantic_class_ids = vec!["urn:semantic:business".into()];
+        relay.operation_family_ids =
+            vec!["urn:operation:list".into(), "urn:operation:search".into()];
+        refresh_binding_id(&mut relay);
+        let relay_response = ServiceSearchResponse {
+            catalog_revision: catalog_revision(std::slice::from_ref(&relay)).unwrap(),
+            items: vec![relay],
+        };
+        let relay_previous = relay_response
+            .select_relay(RelaySelectionRequest::new(
+                "record-a",
+                RelayCapabilityMatch::for_semantic_class("urn:semantic:business")
+                    .with_operation_family("urn:operation:list"),
+            ))
+            .expect("valid Relay tuple")
+            .into_selection();
+        let relay_current = relay_response
+            .select_relay(RelaySelectionRequest::new(
+                "record-a",
+                RelayCapabilityMatch::for_semantic_class("urn:semantic:business")
+                    .with_operation_family("urn:operation:search"),
+            ))
+            .expect("a changed Relay tuple remains structurally valid")
+            .into_selection();
+        assert_eq!(relay_previous.binding_id, relay_current.binding_id);
+        assert_eq!(
+            relay_previous.matched_capability,
+            relay_current.matched_capability
+        );
+        assert_eq!(
+            renew_unchanged_service_selection(&relay_previous, &relay_current),
+            Err(DiscoveryClientError::SelectionChanged)
+        );
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn legacy_validation_name_remains_a_structural_compatibility_alias() {
+        let record = service();
+        let response = ServiceSearchResponse {
+            catalog_revision: catalog_revision(std::slice::from_ref(&record)).unwrap(),
+            items: vec![record],
+        };
+        let selection = response
+            .select_only(MatchedCapability::EvidenceType("urn:evidence".into()))
+            .expect("valid exact selection");
+        validate_service_selection(&selection).expect("the compatibility alias remains available");
     }
 
     #[test]

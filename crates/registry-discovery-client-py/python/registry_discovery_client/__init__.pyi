@@ -1,4 +1,4 @@
-from typing import Literal, TypedDict
+from typing import Callable, Generic, Literal, TypeVar, TypedDict
 
 ServiceKind = Literal["evidence", "relay"]
 
@@ -191,6 +191,13 @@ class RelayServiceSelection(
     relayCapabilityMatch: RelayCapabilityMatch
 
 ServiceSelection = CommonServiceSelection | EvidenceServiceSelection | RelayServiceSelection
+_SelectionT = TypeVar("_SelectionT", bound=ServiceSelection)
+
+class AcceptedServiceSelection(Generic[_SelectionT]):
+    @property
+    def endpoint_url(self) -> str: ...
+    @property
+    def selection(self) -> _SelectionT: ...
 
 class DiscoveryClientError(Exception):
     """A stable, value-free Discovery client failure."""
@@ -202,6 +209,8 @@ class DiscoveryClientError(Exception):
         "no_matching_alternative",
         "ambiguous_alternative",
         "capability_mismatch",
+        "local_acceptance_refused",
+        "selection_changed",
         "transport",
         "problem",
         "protocol",
@@ -254,4 +263,14 @@ def select_relay_service(
     response: ServiceSearchResponse,
     request: RelaySelectionRequest,
 ) -> RelayServiceSelection: ...
-def validate_selection(selection: ServiceSelection) -> ServiceSelection: ...
+def validate_selection_structure(selection: _SelectionT) -> _SelectionT:
+    """Validate closed shape and capability binding, not trust or currentness."""
+    ...
+def validate_selection(selection: _SelectionT) -> _SelectionT:
+    """Deprecated compatibility alias for validate_selection_structure."""
+    ...
+def accept_selection(
+    selection: _SelectionT,
+    accepts: Callable[[_SelectionT], bool],
+) -> AcceptedServiceSelection[_SelectionT]: ...
+def renew_unchanged_selection(previous: _SelectionT, current: _SelectionT) -> _SelectionT: ...
