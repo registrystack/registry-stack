@@ -31,7 +31,7 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' HUP INT TERM
 
-for tool in cargo curl python3; do
+for tool in cargo curl node npm python3; do
 	if ! command -v "$tool" >/dev/null 2>&1; then
 		printf 'required tool not on PATH: %s\n' "$tool" >&2
 		exit 1
@@ -188,3 +188,29 @@ if ! (
 fi
 printf '%s\n' '[handoff] adopter-owned Evidence trust accepted; native assertion verified'
 printf '%s\n' '[handoff] adopter-owned Relay trust accepted; native list response verified'
+
+node_log="$work_root/node-handoff.log"
+if ! (
+	cd "$repository/crates/registry-discovery-client-node"
+	npm ci --ignore-scripts --no-audit --no-fund
+	CARGO_BUILD_RUSTC_WRAPPER='' CARGO_INCREMENTAL=0 \
+		CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
+		npm run build:debug
+	npm test
+) >"$node_log" 2>&1; then
+	printf '%s\n' 'the Node.js structural validation, acceptance, and renewal tests failed' >&2
+	sed -n '1,200p' "$node_log" >&2
+	exit 1
+fi
+
+python_log="$work_root/python-handoff.log"
+if ! (
+	cd "$repository/crates/registry-discovery-client-py"
+	CARGO_BUILD_RUSTC_WRAPPER='' CARGO_INCREMENTAL=0 \
+		CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
+		python3 -m unittest discover -s tests/python -v
+) >"$python_log" 2>&1; then
+	printf '%s\n' 'the Python structural validation, acceptance, and renewal tests failed' >&2
+	sed -n '1,200p' "$python_log" >&2
+	exit 1
+fi

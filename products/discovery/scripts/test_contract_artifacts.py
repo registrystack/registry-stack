@@ -41,6 +41,15 @@ class ContractArtifactsTest(unittest.TestCase):
                 without_test_name, "test_bound_refusal", "fixture.py"
             )
 
+    def test_javascript_binding_without_discoverable_test_name_is_refused(self) -> None:
+        source = "test('bound refusal', () => {});\n"
+        VALIDATOR.require_executable_test(source, "bound refusal", "fixture.js")
+        without_test_name = source.replace("bound refusal", "other refusal")
+        with self.assertRaisesRegex(ValueError, "is not discoverable"):
+            VALIDATOR.require_executable_test(
+                without_test_name, "bound refusal", "fixture.js"
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
