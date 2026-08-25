@@ -2,6 +2,7 @@
 """Offline smoke for an installed Registry Discovery Python client wheel."""
 
 import json
+import typing
 
 import registry_discovery_client as client_module
 
@@ -106,6 +107,9 @@ def main() -> None:
         raise SystemExit("explicit local acceptance changed the selection")
     if local_acceptance_calls != 1:
         raise SystemExit("explicit local acceptance did not run exactly once")
+    accepted_type = client_module.AcceptedServiceSelection[dict[str, object]]
+    if typing.get_origin(accepted_type) is not client_module.AcceptedServiceSelection:
+        raise SystemExit("the accepted handoff is not subscriptable at runtime")
 
     current = {
         **selection,
