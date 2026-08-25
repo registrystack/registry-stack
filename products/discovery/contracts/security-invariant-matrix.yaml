@@ -60,9 +60,9 @@
     {
       "id": "sec-discovery-not-trust",
       "status": "enforced",
-      "threat": "Catalog metadata becomes native trust configuration or causes credentials and provider I/O before local acceptance.",
-      "enforcementPoint": "Discovery client selection boundary and adopter-owned native trust configuration.",
-      "requiredNegativeBehavior": "Refuse local trust mismatch before credential construction or provider traffic.",
+      "threat": "Catalog metadata or structural validation becomes native trust configuration, a persisted selection bypasses current local acceptance, or renewal silently accepts changed service semantics and causes credentials or provider I/O.",
+      "enforcementPoint": "Discovery client structural validator, ephemeral AcceptedServiceSelection handoff after adopter-owned acceptance, and unchanged-semantic renewal comparison.",
+      "requiredNegativeBehavior": "Keep structural validation distinct from trust, refuse local trust mismatch before credential construction or provider traffic, and renew provenance only when trust-relevant service semantics are unchanged; otherwise require new acceptance.",
       "negativeTest": "discovery-selection-cannot-create-trust-or-native-io",
       "binding": {"path": "crates/registry-discovery-client/src/selection.rs", "name": "discovery_metadata_has_no_trust_or_native_io_capability"}
     },

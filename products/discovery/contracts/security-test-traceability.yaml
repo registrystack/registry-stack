@@ -93,6 +93,12 @@
         {"path": "crates/registry-discovery-client/src/selection.rs", "name": "discovery_metadata_has_no_trust_or_native_io_capability"},
         {"path": "crates/registry-discovery-client/src/selection.rs", "name": "exact_selection_refuses_binding_identity_drift"},
         {"path": "crates/registry-discovery-client/src/selection.rs", "name": "persisted_selection_refuses_binding_identity_drift"},
+        {"path": "crates/registry-discovery-client/src/selection.rs", "name": "structural_validation_does_not_turn_descriptive_metadata_into_binding_authority"},
+        {"path": "crates/registry-discovery-client/src/selection.rs", "name": "unchanged_renewal_refreshes_provenance_but_requires_new_acceptance_for_semantic_change"},
+        {"path": "crates/registry-discovery-client-node/__test__/surface.test.js", "name": "adopter acceptance is explicit and precedes credentials or native traffic"},
+        {"path": "crates/registry-discovery-client-node/__test__/surface.test.js", "name": "renewal refreshes provenance but never silently accepts semantic drift"},
+        {"path": "crates/registry-discovery-client-py/tests/python/test_client.py", "name": "test_exact_local_acceptance_precedes_credentials_and_native_io"},
+        {"path": "crates/registry-discovery-client-py/tests/python/test_client.py", "name": "test_renewal_only_updates_provenance_for_the_same_accepted_subject"},
         {"path": "crates/registry-discovery-client/tests/native_journey.rs", "name": "complete_evidence_and_relay_journeys_build_select_trust_and_invoke_natively"}
       ]
     },

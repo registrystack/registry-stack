@@ -59,6 +59,14 @@ def require_executable_test(source: str, name: str, binding: str) -> None:
         ) is None:
             fail(f"executable Python test binding is not discoverable: {binding}::{name}")
         return
+    if binding.endswith(".js"):
+        function = re.search(
+            rf"(?m)^[ \t]*test\([ \t]*(['\"]){re.escape(name)}\1[ \t]*,",
+            source,
+        )
+        if function is None:
+            fail(f"executable JavaScript test binding is not discoverable: {binding}::{name}")
+        return
     function = re.compile(
         rf"(?m)(?P<attributes>(?:^[ \t]*#\[[^\n]+\]\n)+)"
         rf"^[ \t]*(?:async[ \t]+)?fn[ \t]+{re.escape(name)}\b"
