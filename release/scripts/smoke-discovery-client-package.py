@@ -7,6 +7,7 @@ import registry_discovery_client as client_module
 
 
 DIGEST = "sha256:" + "1" * 64
+NEXT_DIGEST = "sha256:" + "2" * 64
 RESPONSE = {
     "catalogRevision": DIGEST,
     "items": [
@@ -18,6 +19,8 @@ RESPONSE = {
             "title": "Evidence service",
             "description": "Issues minimum-disclosure evidence",
             "endpointUrl": "https://provider.example/evidence",
+            "legalIssuerId": "urn:example:legal-issuer",
+            "technicalProviderId": "urn:example:technical-provider",
             "jurisdictions": ["urn:example:jurisdiction"],
             "conformsTo": ["urn:example:profile"],
             "evidenceTypeIds": ["urn:example:evidence-type"],
@@ -40,6 +43,19 @@ REQUEST = {
 
 
 def main() -> None:
+    for name in {
+        "AcceptedServiceSelection",
+        "DiscoveryClient",
+        "DiscoveryClientError",
+        "accept_selection",
+        "renew_unchanged_selection",
+        "select_exact",
+        "validate_selection",
+        "validate_selection_structure",
+    }:
+        if not callable(getattr(client_module, name, None)):
+            raise SystemExit(f"the package must export {name}")
+
     # This reserved host makes the smoke fail closed if construction regresses
     # into network I/O. Exact selection is local and returns inert metadata.
     client = client_module.DiscoveryClient("https://discovery.invalid/")
@@ -50,6 +66,69 @@ def main() -> None:
         raise SystemExit("the standalone selector changed")
     if json.loads(json.dumps(selection))["originContentDigest"] != DIGEST:
         raise SystemExit("the selection did not remain serializable")
+
+    structurally_valid = client_module.validate_selection_structure(selection)
+    if client_module.validate_selection(selection) != structurally_valid:
+        raise SystemExit(
+            "the legacy validation name is not a structural compatibility alias"
+        )
+
+    local_acceptance_calls = 0
+
+    def accepts_expected_service(candidate: dict[str, object]) -> bool:
+        nonlocal local_acceptance_calls
+        local_acceptance_calls += 1
+        return (
+            candidate["serviceKind"] == "evidence"
+            and candidate["serviceId"] == "urn:example:service:a"
+            and candidate["endpointUrl"] == "https://provider.example/evidence"
+            and candidate["legalIssuerId"] == "urn:example:legal-issuer"
+            and candidate["technicalProviderId"]
+            == "urn:example:technical-provider"
+            and candidate["jurisdictions"] == ["urn:example:jurisdiction"]
+            and candidate["conformsTo"] == ["urn:example:profile"]
+            and candidate["matchedCapability"]
+            == {
+                "kind": "evidence-type",
+                "id": "urn:example:evidence-type",
+            }
+        )
+
+    accepted = client_module.accept_selection(
+        structurally_valid,
+        accepts_expected_service,
+    )
+    if not isinstance(accepted, client_module.AcceptedServiceSelection):
+        raise SystemExit("explicit local acceptance returned the wrong type")
+    if accepted.endpoint_url != RESPONSE["items"][0]["endpointUrl"]:
+        raise SystemExit("explicit local acceptance returned the wrong endpoint")
+    if accepted.selection != structurally_valid:
+        raise SystemExit("explicit local acceptance changed the selection")
+    if local_acceptance_calls != 1:
+        raise SystemExit("explicit local acceptance did not run exactly once")
+
+    current = {
+        **selection,
+        "catalogRevision": NEXT_DIGEST,
+        "originContentDigest": NEXT_DIGEST,
+        "originFetchedAt": "2026-08-25T00:00:00Z",
+    }
+    if client_module.renew_unchanged_selection(selection, current) != current:
+        raise SystemExit("fresh provenance did not renew an unchanged selection")
+    try:
+        client_module.renew_unchanged_selection(
+            selection,
+            {
+                **current,
+                "legalIssuerId": "urn:example:legal-issuer:other",
+            },
+        )
+    except client_module.DiscoveryClientError as error:
+        if error.kind != "selection_changed":
+            raise SystemExit(f"unexpected renewal error kind {error.kind!r}") from error
+    else:
+        raise SystemExit("trust-relevant selection drift must require new acceptance")
+
     try:
         client_module.DiscoveryClient("http://discovery.invalid/")
     except client_module.DiscoveryClientError as error:
