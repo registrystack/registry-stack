@@ -99,29 +99,94 @@ complete Evidence resolution context, Relay tuple, catalog revision, and origin 
     `EvidenceTypeResolveSelectionExt`, `ServiceSearchSelectionExt::select_evidence()`,
     `ServiceSearchSelectionExt::select_relay()`, and the typed selection fields. */}
 
-After selection, the application makes a local native trust decision and calls the advertised endpoint
-directly with its Evidence Gateway or Registry Relay client. Discovery selection contains public
-metadata only. It cannot carry a trust anchor, credential, request, or response into that native call.
+After selection, the application validates the selection's closed structure and capability binding,
+then applies a synchronous local acceptance policy. Structural validation does not authenticate the
+origin, establish currentness, or trust the selected service. Successful local acceptance creates an
+ephemeral accepted service that exposes the native endpoint. The application creates credentials and
+performs native input and output only after that acceptance.
 
 {/* Evidence: `crates/registry-discovery-client/src/selection.rs`,
-    `discovery_metadata_has_no_trust_or_native_io_capability`; `products/discovery/DECISIONS.md`,
-    ADR-001. */}
+    `validate_service_selection_structure()`, `accept_service_selection()`, and
+    `AcceptedServiceSelection`; test `discovery_metadata_has_no_trust_or_native_io_capability`;
+    `crates/registry-discovery-client/tests/native_journey.rs`, test
+    `complete_evidence_and_relay_journeys_build_select_trust_and_invoke_natively`;
+    `products/discovery/DECISIONS.md`, ADR-001. */}
 
 ## The same client workflow in Rust, Node.js, and Python
 
-The maintained clients expose the same three steps in each language: resolve an Evidence requirement
-when needed, search with exact filters, then convert one exact record into a serializable selection.
+The maintained clients expose the same boundary in each language: resolve an Evidence requirement
+when needed, search with exact filters, convert one exact record into a serializable selection,
+validate its structure, then apply synchronous adopter-owned acceptance.
 Node.js applications use `@registrystack/discovery-client`; Python applications use
 `registry-discovery-client`; Rust applications use `registry-discovery-client`.
 
 ```js
 const {
   DiscoveryClient,
+  acceptSelection,
+  renewUnchangedSelection,
   selectEvidenceAlternative,
   selectEvidenceService,
-  validateSelection,
+  validateSelectionStructure,
 } = require('@registrystack/discovery-client');
-const { EvidenceClient } = require('@registrystack/evidence-client');
+
+const expectedEvidence = {
+  serviceKind: 'evidence',
+  serviceId: 'urn:example:service:evidence',
+  endpointUrl: 'https://evidence.example/',
+  legalIssuerId: 'urn:example:issuer',
+  technicalProviderId: 'urn:example:provider',
+  jurisdictions: ['urn:example:jurisdiction'],
+  conformsTo: ['urn:example:evidence-profile'],
+  evidenceTypeIds: ['urn:example:evidence-type'],
+  matchedCapability: { kind: 'evidence-type', id: 'urn:example:evidence-type' },
+  evidenceResolution: {
+    requirementId: 'urn:example:requirement',
+    jurisdiction: 'urn:example:jurisdiction',
+    mappingRevision: `sha256:${'a'.repeat(64)}`,
+    evidenceTypeListId: 'urn:example:evidence-type-list',
+    evidenceTypeIds: ['urn:example:evidence-type'],
+    mappingId: 'urn:example:mapping',
+    mappingAuthorityId: 'urn:example:mapping-authority',
+  },
+};
+
+function sameOrderedStrings(actual, expected) {
+  return Array.isArray(actual)
+    && actual.length === expected.length
+    && actual.every((value, index) => value === expected[index]);
+}
+
+function acceptsExpectedEvidence(candidate) {
+  const actualResolution = candidate.evidenceResolution;
+  const expectedResolution = expectedEvidence.evidenceResolution;
+  return candidate.serviceKind === expectedEvidence.serviceKind
+    && candidate.serviceId === expectedEvidence.serviceId
+    && candidate.endpointUrl === expectedEvidence.endpointUrl
+    && candidate.legalIssuerId === expectedEvidence.legalIssuerId
+    && candidate.technicalProviderId === expectedEvidence.technicalProviderId
+    && sameOrderedStrings(candidate.jurisdictions, expectedEvidence.jurisdictions)
+    && sameOrderedStrings(candidate.conformsTo, expectedEvidence.conformsTo)
+    && sameOrderedStrings(candidate.evidenceTypeIds, expectedEvidence.evidenceTypeIds)
+    && candidate.matchedCapability.kind === expectedEvidence.matchedCapability.kind
+    && candidate.matchedCapability.id === expectedEvidence.matchedCapability.id
+    && actualResolution !== undefined
+    && actualResolution.requirementId === expectedResolution.requirementId
+    && actualResolution.jurisdiction === expectedResolution.jurisdiction
+    && actualResolution.mappingRevision === expectedResolution.mappingRevision
+    && actualResolution.evidenceTypeListId === expectedResolution.evidenceTypeListId
+    && sameOrderedStrings(actualResolution.evidenceTypeIds, expectedResolution.evidenceTypeIds)
+    && actualResolution.mappingId === expectedResolution.mappingId
+    && actualResolution.mappingAuthorityId === expectedResolution.mappingAuthorityId;
+}
+
+function acceptFreshEvidence(previous, fresh) {
+  const checkedFresh = validateSelectionStructure(fresh);
+  const candidate = previous === undefined
+    ? checkedFresh
+    : renewUnchangedSelection(validateSelectionStructure(previous), checkedFresh);
+  return acceptSelection(candidate, acceptsExpectedEvidence);
+}
 
 const discovery = new DiscoveryClient('https://discovery.example/');
 const resolved = await discovery.resolveEvidenceTypes({
@@ -135,81 +200,141 @@ for (const evidenceTypeId of context.evidenceTypeIds) {
     evidenceTypeId,
     ...(context.jurisdiction ? { jurisdiction: context.jurisdiction } : {}),
   });
-  const record = await adopterChooseRecord(results.items);
+  if (results.items.length !== 1) {
+    throw new Error('select one reviewed provider explicitly');
+  }
   const selection = selectEvidenceService(results, {
-    recordId: record.recordId,
+    recordId: results.items[0].recordId,
     evidenceTypeId,
     resolution: context,
   });
-  const checked = validateSelection(selection);
-  adopterTrust.requireEvidence(checked);
-  const evidence = new EvidenceClient({ baseUrl: checked.endpointUrl, ...nativeConfig });
-  if (!checked.evidenceResolution) throw new Error('missing Evidence resolution');
-  const prepared = evidence.prepare({
-    ...localEvidencePolicy,
-    requirement: checked.evidenceResolution.requirementId,
-    evidenceType: checked.matchedCapability.id,
-  });
-  const verified = await evidence.requestAndVerify(prepared);
-  for (const claim of verified.evidence.supportedValues) {
-    console.log(claim.providesValueFor, claim.value);
-  }
+  const accepted = acceptFreshEvidence(undefined, selection);
+
+  // Construct the native Evidence client, credentials, and request only now,
+  // using accepted.endpointUrl and adopter-owned native configuration.
+  console.log(accepted.selection.matchedCapability.id, accepted.endpointUrl);
 }
 ```
 
 ```python
 from registry_discovery_client import (
     DiscoveryClient,
+    accept_selection,
+    renew_unchanged_selection,
     select_relay_service,
-    validate_selection,
+    validate_selection_structure,
 )
 from registry_relay_client import RelayClient
+
+EXPECTED_RELAY = {
+    "serviceKind": "relay",
+    "serviceId": "urn:example:service:relay",
+    "endpointUrl": "https://relay.example/",
+    "operatorId": "urn:example:operator",
+    "registryAuthorityId": "urn:example:registry-authority",
+    "jurisdictions": ["urn:example:jurisdiction"],
+    "conformsTo": ["urn:example:relay-profile"],
+    "semanticClassIds": ["urn:example:registered-business"],
+    "operationFamilyIds": ["urn:example:consultation-list"],
+    "relayCapabilityMatch": {
+        "semanticClassId": "urn:example:registered-business",
+        "operationFamilyId": "urn:example:consultation-list",
+    },
+}
+
+def relay_acceptance_subject(candidate):
+    return {key: candidate.get(key) for key in EXPECTED_RELAY}
+
+def accepts_expected_relay(candidate):
+    return relay_acceptance_subject(candidate) == EXPECTED_RELAY
+
+def accept_fresh_relay(previous, fresh):
+    checked_fresh = validate_selection_structure(fresh)
+    candidate = (
+        checked_fresh
+        if previous is None
+        else renew_unchanged_selection(
+            validate_selection_structure(previous), checked_fresh
+        )
+    )
+    return accept_selection(candidate, accepts_expected_relay)
 
 discovery = DiscoveryClient("https://discovery.example/")
 results = discovery.search_relay_services({
     "semanticClassId": "urn:example:registered-business",
     "operationFamilyId": "urn:example:consultation-list",
 })
-record = adopter_choose_record(results["items"])
+if len(results["items"]) != 1:
+    raise RuntimeError("select one reviewed provider explicitly")
 selection = select_relay_service(results, {
-    "recordId": record["recordId"],
+    "recordId": results["items"][0]["recordId"],
     "capabilityMatch": {
         "semanticClassId": "urn:example:registered-business",
         "operationFamilyId": "urn:example:consultation-list",
     },
 })
-checked = validate_selection(selection)
-resource = adopter_trust.require_relay(checked)
-relay = RelayClient(checked["endpointUrl"], authorization=native_authorization)
-page = relay.list_records(resource, page_size=1)
+accepted = accept_fresh_relay(None, selection)
+
+# For a protected surface, add native authorization only after acceptance.
+relay = RelayClient(base_url=accepted.endpoint_url)
+page = relay.list_records("businesses", page_size=1)
 if page["kind"] != "complete" or not page["value"]["items"]:
     raise RuntimeError("Relay returned no records")
 record = page["value"]["items"][0]
 print(record["recordIdentifier"], record["domainData"])
 ```
 
-The chooser is application-owned because Discovery does not rank results. The libraries validate the
-server response, complete Evidence alternative or Relay tuple, exact capability match, and any loaded
-selection before returning the native base URL. They do not decide whether the selected origin,
-issuer, operator, endpoint, or capability is trusted. Keep that decision in the application's native
-Evidence or Relay trust configuration. Native definitions and local policy still supply Evidence
-purpose, audience, issuer and provider identity, configuration revision, selectors, and expected
-outputs. The JavaScript example reads values only from the payload that the native Evidence client
-has verified. Native Relay metadata supplies the concrete resource and operation. In the Python
-example, the adopter-owned trust mapping returns that reviewed resource identifier, and
-`list_records` performs the native Relay request. The returned record remains a Relay response, not
-Discovery metadata.
+The application owns the choice because Discovery does not rank results. The structural validator
+checks the closed response, complete Evidence alternative or Relay tuple, and capability binding.
+It does not decide whether the selected origin, issuer, operator, endpoint, or capability is trusted
+or current. The acceptance callback is synchronous, supplied by the application, and receives no
+credential or native client. A successful callback creates the ephemeral accepted service used by
+native client configuration. Native definitions and local policy still supply Evidence purpose,
+audience, issuer and provider identity, configuration revision, selectors, expected outputs, and
+Relay resource and operation identifiers.
 
 {/* Evidence: `crates/registry-discovery-client-node/src/lib.rs` and
     `crates/registry-discovery-client-py/src/lib.rs` are thin bindings over
-    `registry-discovery-client`. Their language-level loopback tests exercise typed search, complete
-    resolution context, correlated Relay selection, and persisted-selection validation.
+    `registry-discovery-client`. `crates/registry-discovery-client-node/client.js`,
+    `acceptSelection()` and `renewUnchangedSelection()`, and
+    `crates/registry-discovery-client-py/src/lib.rs`, `accept_selection()` and
+    `renew_unchanged_selection()`, expose the same acceptance and renewal boundary.
+    Their language-level tests exercise typed search, complete resolution context, correlated Relay
+    selection, structural validation, synchronous local acceptance, and unchanged renewal.
     `crates/registry-discovery-client/src/selection.rs`,
     test `discovery_metadata_has_no_trust_or_native_io_capability`, binds the shared trust boundary.
-    `crates/registry-evidence-client-node/src/lib.rs`, `EvidenceClient::request_and_verify`, returns
-    the verified Evidence payload used by the JavaScript example.
     `crates/registry-relay-client-py/src/lib.rs`, `RelayClient::list_records`, performs the bounded
     native exchange and returns the decoded record collection. */}
+
+## A saved selection is not current trust
+
+Persist the plain selection when an application needs an offline handoff. The accepted wrapper is
+ephemeral and is not a persistence format. Loading a selection and passing structural validation
+proves only that the saved data still has the closed shape and capability binding. The saved data
+remains inert until the application applies its current local acceptance policy. Neither loading nor
+local acceptance establishes that the provider still advertises the service.
+
+Currentness requires an online renewal. For Evidence Gateway, the application re-resolves the
+requirement and jurisdiction, explicitly chooses an alternative, re-searches every Evidence Type,
+and explicitly reselects each provider. For Registry Relay, it re-searches the correlated semantic
+class and operation family, then explicitly reselects the provider. Node.js then compares the old
+and freshly selected values with `renewUnchangedSelection`; Python uses
+`renew_unchanged_selection`; Rust uses `renew_unchanged_service_selection`. The comparison allows
+new fetch provenance and a new global catalog revision for an otherwise unchanged service. It
+refuses a changed identity, endpoint, role, jurisdiction, profile, capability, origin, mapping, or
+resolution context. A refusal requires a new explicit local decision rather than automatic
+acceptance. An unchanged renewal still passes through local acceptance before credentials or native
+input and output.
+
+{/* Tier-C evidence: `crates/registry-discovery-client/src/selection.rs`,
+    `renew_unchanged_service_selection()` and `same_acceptance_subject()`, define the unchanged
+    comparison; tests `unchanged_renewal_refreshes_provenance_but_requires_new_acceptance_for_semantic_change`
+    and `structural_validation_does_not_turn_descriptive_metadata_into_binding_authority` cover the
+    comparison and local acceptance. `crates/registry-discovery-client-node/__test__/surface.test.js`,
+    tests `adopter acceptance is explicit and precedes credentials or native traffic` and
+    `renewal refreshes provenance but never silently accepts semantic drift`, cover the Node.js
+    surface. `crates/registry-discovery-client-py/tests/python/test_client.py`, test
+    `test_exact_local_acceptance_precedes_credentials_and_native_io`, covers the Python surface. */}
 
 ## Why the split reduces maintenance
 
