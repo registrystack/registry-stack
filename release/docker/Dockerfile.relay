@@ -23,7 +23,7 @@ RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \
     && chmod 0700 /workspace/runtime-root/var/lib/relay/audit \
     && find /workspace/runtime-root -exec touch -h --date="@${SOURCE_DATE_EPOCH}" {} +
 
-FROM gcr.io/distroless/cc-debian13:nonroot@sha256:d97bc0a941b8d4be647dc0ee75b264ddbb772f1ac5ba690a4309c00723b23775 AS runtime
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:a77defd6fedbb3392b175ba8ea3d1c22be963c1597c248c3ba987ddd80bfb512 AS runtime
 
 LABEL org.registrystack.runtime.uid="65532" \
       org.registrystack.runtime.gid="65532"
