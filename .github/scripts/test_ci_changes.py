@@ -937,6 +937,11 @@ class CiChangesTest(unittest.TestCase):
             "TLS_CA_PEM_PATH: ${{ runner.temp }}/registry-server-postgres-trusted-ca.pem",
             registry_server_job,
         )
+        self.assertIn(
+            "uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d",
+            registry_server_job,
+        )
+        self.assertIn('version: "0.11.16"', registry_server_job)
         for entry_point in (
             "products/registry-server/scripts/check-contracts.sh",
             "products/registry-server/scripts/test-postgres.sh",
