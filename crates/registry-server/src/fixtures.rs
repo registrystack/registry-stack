@@ -17,6 +17,7 @@ use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, ETAG, IF_MATCH};
 use axum::http::{Method, Request, Response, StatusCode};
 use axum::Router;
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
+use registry_platform_httpsec::{response_trace_id, TraceId};
 use registry_platform_oidc::{JwksFetcher, TokenVerifier};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -1815,6 +1816,13 @@ async fn accept_response(
         .map_err(|_| FixtureError::ResponseTooLarge)?;
     let document = parse_json_strict(&bytes).map_err(|_| FixtureError::ResponseShapeRefused)?;
     assert_response(step, status, &document)?;
+    if matches!(step.expect.outcome, ExpectedOutcome::Refusal) {
+        let header_trace =
+            response_trace_id(&headers).map_err(|_| FixtureError::ResponseShapeRefused)?;
+        if document.get("traceId").and_then(Value::as_str) != Some(header_trace.as_str()) {
+            return Err(FixtureError::ResponseShapeRefused);
+        }
+    }
     if let Some(capture) = step.capture.as_ref() {
         let record_id = document
             .get("id")
@@ -1855,7 +1863,15 @@ fn assert_response(
                 .problem_code
                 .as_deref()
                 .ok_or(FixtureError::ResponseShapeRefused)?;
-            let object = exact_object(document, &["type", "title", "status", "detail", "code"])?;
+            let object = exact_object(
+                document,
+                &["type", "title", "status", "detail", "code", "traceId"],
+            )?;
+            let trace_id = object
+                .get("traceId")
+                .and_then(Value::as_str)
+                .ok_or(FixtureError::ResponseShapeRefused)?;
+            TraceId::parse(trace_id).map_err(|_| FixtureError::ResponseShapeRefused)?;
             let expected_type = format!("urn:registry-server:problem:{code}");
             if object.get("type").and_then(Value::as_str) != Some(expected_type.as_str())
                 || object.get("title").and_then(Value::as_str) != Some(title)
@@ -3339,6 +3355,7 @@ mod tests {
             "status": 404,
             "detail": "The requested resource was not found.",
             "code": "resource.not_found",
+            "traceId": "11111111111111111111111111111111",
             "canaryDetail": "protected"
         });
         assert_eq!(
@@ -3350,11 +3367,36 @@ mod tests {
             "title": "Not Found",
             "status": 404,
             "detail": "protected canary",
-            "code": "resource.not_found"
+            "code": "resource.not_found",
+            "traceId": "11111111111111111111111111111111"
         });
         assert_eq!(
             assert_response(refusal, StatusCode::NOT_FOUND, &changed_detail),
             Err(FixtureError::ExpectationMismatch)
+        );
+        let correlated_refusal = json!({
+            "type": "urn:registry-server:problem:resource.not_found",
+            "title": "Not Found",
+            "status": 404,
+            "detail": "The requested resource was not found.",
+            "code": "resource.not_found",
+            "traceId": "11111111111111111111111111111111"
+        });
+        let mismatched_trace = Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .header(
+                "traceparent",
+                "00-22222222222222222222222222222222-3333333333333333-01",
+            )
+            .body(Body::from(
+                serde_json::to_vec(&correlated_refusal).expect("problem response serializes"),
+            ))
+            .expect("problem response builds");
+        let mut observations = BTreeMap::new();
+        assert_eq!(
+            accept_response(refusal, mismatched_trace, &mut observations).await,
+            Err(FixtureError::ResponseShapeRefused),
+            "the fixture executor refuses disagreement between body and header trace IDs"
         );
 
         let malformed_list = json!({
@@ -3664,7 +3706,8 @@ mod tests {
                         "query.invalid"
                     } else {
                         "resource.not_found"
-                    }
+                    },
+                    "traceId":"11111111111111111111111111111111"
                 }),
                 None,
             ),
