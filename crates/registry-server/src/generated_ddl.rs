@@ -317,7 +317,12 @@ pub(crate) fn generate_ddl(
             name: entity.source_relation.sql_name.clone(),
             runtime_privileges: BTreeSet::from([TablePrivilege::Select]),
         });
+    }
 
+    // Every trusted SQL fragment may join any declared source relation. Build
+    // the complete source layer before creating derived views so entity sort
+    // order cannot turn a valid cross-entity dependency into invalid DDL.
+    for entity in entities.values() {
         for relation in entity.derived_relations.values() {
             let derived_view_name =
                 derived_view_name(&entity.source_relation.sql_name, &relation.id);
@@ -635,6 +640,7 @@ fn read_path_target_policy(
 ) -> DdlPolicy {
     let through_source_ref = format!("path_edge.{}", field_name(through, &path.source_ref));
     let through_target_ref = format!("path_edge.{}", field_name(through, &path.target_ref));
+    let target_record_id = format!("{}.record_id", quote_identifier(&target.physical_table));
     let root_id = "NULLIF(current_setting('registry.read_path_root_id', true), '')::uuid";
     let source_authority =
         policy_authority_expression_for_alias(source, profile, Some("path_source"));
@@ -649,7 +655,7 @@ fn read_path_target_policy(
                    FROM registry_data.{} AS path_edge
                    JOIN registry_data.{} AS path_source
                      ON path_source.record_id = {through_source_ref}
-                  WHERE {through_target_ref} = record_id
+                  WHERE {through_target_ref} = {target_record_id}
                     AND {through_source_ref} = {root_id}
                     AND path_edge.record_lifecycle = 'active'
                     AND path_source.record_lifecycle = 'active'
@@ -1172,7 +1178,7 @@ fn field_list(entity: &CompiledEntity, fields: &[String]) -> String {
 
 fn field_name(entity: &CompiledEntity, field: &str) -> String {
     if field == "id" {
-        return quote_identifier(&entity.canonical_id.sql_name);
+        return "record_id".to_owned();
     }
     quote_identifier(&entity.fields[field].physical_name)
 }

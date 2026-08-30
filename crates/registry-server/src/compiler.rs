@@ -769,15 +769,14 @@ pub fn module_digest_with_assets(module: &RegistryModule, assets: &[ModuleAssetS
     format!("sha256:{}", hex_prefix(&digest, digest.len()))
 }
 
+type DerivedOriginMap = BTreeMap<(String, String), Option<String>>;
+
 fn collect_entities(
     project: &RegistryProject,
     module_order: &[String],
     modules: &BTreeMap<String, RegistryModule>,
     errors: &mut Vec<Diagnostic>,
-) -> (
-    BTreeMap<String, EntitySource>,
-    BTreeMap<(String, String), Option<String>>,
-) {
+) -> (BTreeMap<String, EntitySource>, DerivedOriginMap) {
     let mut entities = BTreeMap::new();
     let mut derived_origins = BTreeMap::new();
     for entity in &project.entities {
@@ -2019,7 +2018,7 @@ fn validate_read_path_cycles(
         })
         .collect::<Vec<_>>();
     for (source, target) in &edges {
-        if reaches(*target, *source, &edges, &mut BTreeSet::new()) {
+        if reaches(target, source, &edges, &mut BTreeSet::new()) {
             errors.push(Diagnostic::error(
                 "read_path.cycle",
                 "entities[].readPaths[]",
@@ -3249,18 +3248,9 @@ fn compile_metadata_inventory(
             let Some(profile) = entity.access_profiles.get(profile_id) else {
                 return Err(inconsistent_metadata_inventory());
             };
-            let readable_fields = profile
-                .readable_fields
-                .iter()
-                .filter(|field| {
-                    !profile.anonymous
-                        || entity
-                            .fields
-                            .get(*field)
-                            .is_some_and(|field| field.classification == Classification::Public)
-                })
-                .cloned()
-                .collect();
+            let (response_entity, readable_fields) =
+                metadata_response_surface(entity, profile, route, entities)
+                    .ok_or_else(inconsistent_metadata_inventory)?;
             entries_by_entity
                 .entry(entity.id.clone())
                 .or_default()
@@ -3268,6 +3258,7 @@ fn compile_metadata_inventory(
                     route_id: route.id.clone(),
                     operation: route.operation,
                     access_profile: profile_id.clone(),
+                    response_entity_id: response_entity.id.clone(),
                     readable_fields,
                 });
         }
@@ -3296,6 +3287,40 @@ fn compile_metadata_inventory(
         version: version.to_owned(),
         entities,
     })
+}
+
+fn metadata_response_surface<'a>(
+    entity: &'a CompiledEntity,
+    profile: &AccessProfileSource,
+    route: &CompiledRoute,
+    entities: &'a BTreeMap<String, CompiledEntity>,
+) -> Option<(&'a CompiledEntity, BTreeSet<String>)> {
+    let read_path = entity.read_paths.values().find(|path| {
+        route.id == format!("records.{}.path.{}", entity.id, path.id)
+            && route.path == format!("/v1/records/{}/{{record_id}}/{}", entity.route, path.route)
+    });
+    let (response_entity, configured_fields) = match read_path {
+        Some(path) => {
+            let grant = profile
+                .read_paths
+                .iter()
+                .find(|grant| grant.path == path.id)?;
+            (entities.get(&path.to)?, &grant.readable_fields)
+        }
+        None => (entity, &profile.readable_fields),
+    };
+    let readable_fields = configured_fields
+        .iter()
+        .filter(|field| {
+            !profile.anonymous
+                || response_entity
+                    .fields
+                    .get(*field)
+                    .is_some_and(|field| field.classification == Classification::Public)
+        })
+        .cloned()
+        .collect();
+    Some((response_entity, readable_fields))
 }
 
 fn inconsistent_metadata_inventory() -> Diagnostic {
@@ -3331,14 +3356,16 @@ fn compile_query_inventory(
         for profile in entity.access_profiles.values() {
             if profile.operations.contains(&Operation::List) {
                 if let Some(operation) = query_operation(
-                    entity,
-                    profile,
-                    &route_ids[&(entity.id.clone(), CompiledQueryKind::List)],
-                    CompiledQueryKind::List,
-                    None,
-                    profile.allow_count,
-                    Vec::new(),
-                    None,
+                    QueryOperationInput {
+                        entity,
+                        profile,
+                        route_id: &route_ids[&(entity.id.clone(), CompiledQueryKind::List)],
+                        kind: CompiledQueryKind::List,
+                        temporal: None,
+                        allow_count: profile.allow_count,
+                        selector_fields: Vec::new(),
+                        read_path: None,
+                    },
                     errors,
                 ) {
                     operations.push(operation);
@@ -3346,27 +3373,31 @@ fn compile_query_inventory(
                 if let Some(temporal) = &entity.temporal {
                     let binding = temporal_binding(temporal);
                     if let Some(operation) = query_operation(
-                        entity,
-                        profile,
-                        &route_ids[&(entity.id.clone(), CompiledQueryKind::Current)],
-                        CompiledQueryKind::Current,
-                        Some(binding.clone()),
-                        profile.allow_count,
-                        Vec::new(),
-                        None,
+                        QueryOperationInput {
+                            entity,
+                            profile,
+                            route_id: &route_ids[&(entity.id.clone(), CompiledQueryKind::Current)],
+                            kind: CompiledQueryKind::Current,
+                            temporal: Some(binding.clone()),
+                            allow_count: profile.allow_count,
+                            selector_fields: Vec::new(),
+                            read_path: None,
+                        },
                         errors,
                     ) {
                         operations.push(operation);
                     }
                     if let Some(operation) = query_operation(
-                        entity,
-                        profile,
-                        &route_ids[&(entity.id.clone(), CompiledQueryKind::AsOf)],
-                        CompiledQueryKind::AsOf,
-                        Some(binding),
-                        profile.allow_count,
-                        Vec::new(),
-                        None,
+                        QueryOperationInput {
+                            entity,
+                            profile,
+                            route_id: &route_ids[&(entity.id.clone(), CompiledQueryKind::AsOf)],
+                            kind: CompiledQueryKind::AsOf,
+                            temporal: Some(binding),
+                            allow_count: profile.allow_count,
+                            selector_fields: Vec::new(),
+                            read_path: None,
+                        },
                         errors,
                     ) {
                         operations.push(operation);
@@ -3378,14 +3409,16 @@ fn compile_query_inventory(
                     if let Some(selector) = entity.selector_profiles.get(&lookup.selector) {
                         let route_id = format!("records.{}.lookup", entity.id);
                         if let Some(operation) = query_operation(
-                            entity,
-                            profile,
-                            &route_id,
-                            CompiledQueryKind::List,
-                            None,
-                            false,
-                            selector.fields.clone(),
-                            None,
+                            QueryOperationInput {
+                                entity,
+                                profile,
+                                route_id: &route_id,
+                                kind: CompiledQueryKind::List,
+                                temporal: None,
+                                allow_count: false,
+                                selector_fields: selector.fields.clone(),
+                                read_path: None,
+                            },
                             errors,
                         ) {
                             operations.push(operation);
@@ -3466,17 +3499,31 @@ fn read_path_query_operation(
     })
 }
 
-fn query_operation(
-    entity: &CompiledEntity,
-    profile: &AccessProfileSource,
-    route_id: &str,
+struct QueryOperationInput<'a> {
+    entity: &'a CompiledEntity,
+    profile: &'a AccessProfileSource,
+    route_id: &'a str,
     kind: CompiledQueryKind,
     temporal: Option<CompiledQueryTemporalBinding>,
     allow_count: bool,
     selector_fields: Vec<String>,
     read_path: Option<String>,
+}
+
+fn query_operation(
+    input: QueryOperationInput<'_>,
     errors: &mut Vec<Diagnostic>,
 ) -> Option<CompiledQueryOperation> {
+    let QueryOperationInput {
+        entity,
+        profile,
+        route_id,
+        kind,
+        temporal,
+        allow_count,
+        selector_fields,
+        read_path,
+    } = input;
     if let Some(binding) = &temporal {
         let temporal_fields = [&binding.start_field, &binding.end_field];
         if temporal_fields
@@ -3586,6 +3633,7 @@ fn query_filter_field(
         | FieldTypeSource::Text { .. }
         | FieldTypeSource::VocabularyCode { .. } => {
             operators.push(CompiledQueryFilterOperator::Prefix);
+            operators.push(CompiledQueryFilterOperator::Contains);
         }
         FieldTypeSource::Int64
         | FieldTypeSource::Decimal { .. }

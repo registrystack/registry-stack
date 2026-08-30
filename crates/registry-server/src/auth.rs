@@ -318,12 +318,8 @@ fn validate_claim_mapping(
             }
             purpose_required |= !profile.required_purposes.is_empty();
             for boundary in &profile.row_boundaries {
-                let field_type = entity
-                    .fields
-                    .get(&boundary.field)
-                    .ok_or(AuthenticationConfigError::CompiledAuthorityMismatch)?
-                    .field_type
-                    .clone();
+                let field_type = compiled_authority_field_type(entity, &boundary.field)
+                    .ok_or(AuthenticationConfigError::CompiledAuthorityMismatch)?;
                 let expectation = DirectClaimExpectation {
                     field_type,
                     multi_value: boundary.operator == BoundaryOperator::In,
@@ -378,6 +374,20 @@ fn validate_claim_mapping(
         return Err(AuthenticationConfigError::CompiledAuthorityMismatch);
     }
     Ok(expected_direct_claims)
+}
+
+fn compiled_authority_field_type(
+    entity: &crate::model::CompiledEntity,
+    field_id: &str,
+) -> Option<crate::contract::FieldTypeSource> {
+    if field_id == entity.canonical_id.id {
+        Some(entity.canonical_id.field_type.clone())
+    } else {
+        entity
+            .fields
+            .get(field_id)
+            .map(|field| field.field_type.clone())
+    }
 }
 
 fn insert_direct_claim_expectation(

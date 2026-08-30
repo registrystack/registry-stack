@@ -1695,7 +1695,7 @@ fn validate_export_response(
     let object = value.as_object().ok_or(DataError::InvalidResponse)?;
     if !(object.len() == 2 || object.len() == 3)
         || !object.contains_key("items")
-        || !object.contains_key("nextCursor")
+        || !object.contains_key("pageInfo")
         || (object.len() == 3 && !object.contains_key("count"))
     {
         return Err(DataError::InvalidResponse);
@@ -1713,7 +1713,11 @@ fn validate_export_response(
     }) {
         return Err(DataError::InvalidResponse);
     }
-    let next_cursor = match &object["nextCursor"] {
+    let page_info = object["pageInfo"]
+        .as_object()
+        .ok_or(DataError::InvalidResponse)?;
+    require_exact_keys(page_info, &["nextCursor"]).map_err(|_| DataError::InvalidResponse)?;
+    let next_cursor = match &page_info["nextCursor"] {
         Value::Null => None,
         Value::String(value) if !invalid_cursor(Some(value)) => Some(value.clone()),
         _ => return Err(DataError::InvalidResponse),

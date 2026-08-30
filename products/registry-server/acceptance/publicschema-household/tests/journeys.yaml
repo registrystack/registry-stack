@@ -219,6 +219,30 @@ journeys:
             household-code: HOUSEHOLD-SYNTH-003
             local-household-number: 1003
         capture: isolation-household
+      - id: lookup-single-headed-household
+        entity: household
+        accessProfile: household-operator
+        claims: *household_operator_claims
+        request:
+          operation: lookup
+          selector: by-local-reference
+          values: {administrative-area: demonstration-north, local-household-number: 1001}
+        expect:
+          outcome: success
+          status: 200
+          fields: {household-code: HOUSEHOLD-SYNTH-001, local-household-number: 1001}
+      - id: read-people-from-single-headed-household
+        entity: household
+        accessProfile: household-operator
+        claims: *household_operator_claims
+        request:
+          operation: read_path
+          path: people
+          recordRef: single-headed-household
+          select: [person-code, legal-name, person-sex]
+          top: 20
+          count: true
+        expect: {outcome: success, status: 200, count: 0}
       - id: query-household-demographics
         entity: household
         accessProfile: household-operator

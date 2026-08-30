@@ -151,6 +151,22 @@ fn derived_fields_selectors_and_read_paths_compile_to_route_specific_inventories
         household.derived_relations["demographics"].sql_bytes,
         sql.as_bytes()
     );
+    let last_source_view = compiled
+        .ddl()
+        .statements
+        .iter()
+        .rposition(|statement| statement.id.ends_with(".source-view"))
+        .expect("source views are generated");
+    let first_derived_view = compiled
+        .ddl()
+        .statements
+        .iter()
+        .position(|statement| statement.id.contains(".derived."))
+        .expect("derived view is generated");
+    assert!(
+        last_source_view < first_derived_view,
+        "all source views must exist before cross-entity derived SQL is installed"
+    );
     assert!(compiled
         .routes()
         .routes
@@ -242,6 +258,15 @@ fn derived_sql_is_asset_backed_value_free_and_validates_output_aliases() {
         .diagnostics()
         .iter()
         .any(|diagnostic| diagnostic.code == "derived.sql.invalid"));
+
+    compile_json_with_assets(
+        project,
+        vec![derived_sql_asset(
+            "sql/demographics.sql",
+            "WITH counts AS (SELECT h.id AS id, count(*) AS child_count FROM registry_source.household h GROUP BY h.id) SELECT c.id AS id, c.child_count AS child_count FROM counts c",
+        )],
+    )
+    .expect("a bounded non-recursive CTE over registry_source is accepted");
 }
 
 #[test]

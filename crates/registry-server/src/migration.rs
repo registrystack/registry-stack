@@ -260,11 +260,16 @@ pub async fn apply_verified_package(
         .statements
         .iter()
         .zip(&compiler_checksums)
-        .map(|(statement, checksum)| PackageDdlStatement {
-            sql: &statement.sql,
-            checksum,
+        .enumerate()
+        .map(|(ordinal, (statement, checksum))| {
+            Ok(PackageDdlStatement {
+                sql: &statement.sql,
+                checksum,
+                kind: statement.kind,
+                ordinal: i32::try_from(ordinal).map_err(|_| MigrationError::PackageBinding)?,
+            })
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>>>()?;
 
     // Threat: a path-only backup check could be swapped between validation
     // and the maintenance transition. The library opens with NOFOLLOW, checks

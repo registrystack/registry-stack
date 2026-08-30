@@ -653,7 +653,7 @@ fn inspected_migration_summaries_are_exact_deterministic_and_value_free() {
             "destructiveOrIrreversible": 0,
             "unsupported": 0,
         },
-        "generatedStatementCount": 2,
+        "generatedStatementCount": 3,
         "reviewedMigrations": [{
             "changeClass": "data_backfill_required",
             "recovery": "exact_target_resume",

@@ -15,9 +15,11 @@ use registry_server::api::{
     RevisionReadService, ServiceFuture, VerifiedClaimValue, VerifiedRequestClaims,
 };
 use registry_server::artifacts::REGISTRY_METADATA_ARTIFACT_PATH;
-use registry_server::contract::Operation;
+use registry_server::contract::{ModuleAssetSource, Operation};
 use registry_server::cursor::CursorCodec;
-use registry_server::{compile_project, parse_project_yaml, CompileProfile};
+use registry_server::{
+    compile_project, compile_project_with_assets, parse_project_yaml, CompileProfile,
+};
 use serde_json::{json, Value};
 use tower::Service as _;
 use zeroize::Zeroizing;
@@ -158,6 +160,37 @@ entities:
         readableFields: [sensitive-note]
         filterableFields: [sensitive-note]
         sortableFields: [sensitive-note]
+"#;
+
+const DERIVED_DISCOVERY_PROJECT: &str = r#"
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: derived-discovery
+  version: 0.1.0
+  defaultLanguage: en
+entities:
+  - id: benefit-record
+    route: benefit-records
+    mutationMode: mutable
+    classification: restricted
+    fields:
+      - {id: label, type: string, required: true, maxLength: 100, classification: restricted}
+    derived:
+      - id: eligibility
+        sql: sql/eligibility.sql
+        key: id
+        execution: live
+        fields:
+          - {id: eligibility-score, type: int64, classification: restricted}
+    accessProfiles:
+      - id: operator
+        default: true
+        principalClaim: registry_principal
+        requiredScopes: [registry.read]
+        requiredPurposes: [case-management]
+        operations: [get, list]
+        readableFields: [label, eligibility-score]
 "#;
 
 const DISCOVERY_MATRIX_PROJECT: &str = r#"
@@ -645,6 +678,179 @@ async fn relationship_route_uses_path_grant_not_direct_target_rights() {
     assert_eq!(ungranted.status(), StatusCode::NOT_FOUND);
     assert_eq!(body_json(ungranted).await, unknown_path_body);
     assert_eq!(harness.records.calls(), before);
+}
+
+#[tokio::test]
+async fn relationship_discovery_uses_target_entity_and_unions_authorized_operation_fields() {
+    let project =
+        parse_project_yaml(LOOKUP_PATH_PROJECT.as_bytes()).expect("relationship project parses");
+    let registry = compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("relationship project compiles");
+    let path_entry = registry
+        .metadata()
+        .entities
+        .iter()
+        .find(|entity| entity.id == "household")
+        .and_then(|entity| {
+            entity
+                .entries
+                .iter()
+                .find(|entry| entry.route_id == "records.household.path.people")
+        })
+        .expect("relationship metadata entry is compiled");
+    assert_eq!(path_entry.response_entity_id, "person");
+    assert_eq!(
+        path_entry.readable_fields,
+        BTreeSet::from(["person-code".to_owned()])
+    );
+    let path_filter = registry
+        .queries()
+        .operations
+        .iter()
+        .find(|operation| operation.id == "records.household.operator.path.people")
+        .and_then(|operation| {
+            operation
+                .filter_fields
+                .iter()
+                .find(|field| field.field == "person-code")
+        })
+        .expect("relationship string filter capability is compiled");
+    assert!(path_filter
+        .operators
+        .contains(&registry_server::model::CompiledQueryFilterOperator::Contains));
+
+    let harness = Harness::from_project(LOOKUP_PATH_PROJECT, true);
+    let claims = Some(caseworker_claims("case-management"));
+    let openapi = body_json(
+        harness
+            .send(
+                Method::GET,
+                "/openapi.json?accessProfile=operator",
+                claims.clone(),
+            )
+            .await,
+    )
+    .await;
+    assert_eq!(
+        openapi["paths"]["/v1/records/households/{record_id}/people"]["get"]
+            ["x-registry-responseEntity"],
+        "person"
+    );
+    assert_eq!(
+        openapi["components"]["schemas"]["person"]["properties"],
+        json!({
+            "person-code": {"type": "string", "minLength": 0, "maxLength": 64},
+            "sensitive-note": {"type": "string", "minLength": 0, "maxLength": 64}
+        })
+    );
+
+    let person_schema = body_json(
+        harness
+            .send(
+                Method::GET,
+                "/v1/schemas/person?accessProfile=operator",
+                claims.clone(),
+            )
+            .await,
+    )
+    .await;
+    assert_eq!(
+        person_schema["properties"],
+        openapi["components"]["schemas"]["person"]["properties"]
+    );
+    let household_schema = body_json(
+        harness
+            .send(
+                Method::GET,
+                "/v1/schemas/household?accessProfile=operator",
+                claims.clone(),
+            )
+            .await,
+    )
+    .await;
+    assert!(household_schema["properties"]
+        .get("household-code")
+        .is_some());
+    assert!(household_schema["properties"].get("person-code").is_none());
+
+    let metadata = body_json(
+        harness
+            .send(Method::GET, "/v1/registry?accessProfile=operator", claims)
+            .await,
+    )
+    .await;
+    let person = metadata["entities"]
+        .as_array()
+        .expect("metadata entities")
+        .iter()
+        .find(|entity| entity["id"] == "person")
+        .expect("target entity is discoverable through direct and relationship reads");
+    assert_eq!(
+        person["readableFields"],
+        json!(["person-code", "sensitive-note"])
+    );
+}
+
+#[tokio::test]
+async fn derived_fields_are_discoverable_as_read_only_response_properties() {
+    let project = parse_project_yaml(DERIVED_DISCOVERY_PROJECT.as_bytes())
+        .expect("derived discovery project parses");
+    let registry = Arc::new(
+        compile_project_with_assets(
+            &project,
+            &[],
+            &[ModuleAssetSource {
+                module: None,
+                path: "sql/eligibility.sql".to_owned(),
+                bytes: b"SELECT benefit.id AS id, 0::bigint AS eligibility_score FROM registry_source.benefit_record benefit".to_vec(),
+            }],
+            CompileProfile::Authoring,
+        )
+        .expect("derived discovery project compiles"),
+    );
+    assert!(!registry.entities()["benefit-record"]
+        .fields
+        .contains_key("eligibility-score"));
+    let records = Arc::new(RecordingReadService::default());
+    let app = router(Arc::new(HttpService::new(
+        registry,
+        read_identity(),
+        records.clone(),
+        Arc::new(ControlledReadiness(AtomicBool::new(true))),
+        cursor_codec(),
+    )));
+    let schema = body_json(
+        send_to(
+            &app,
+            Method::GET,
+            "/v1/schemas/benefit-record?accessProfile=operator",
+            Some(caseworker_claims("case-management")),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        schema["properties"]["eligibility-score"],
+        json!({"type": "integer", "format": "int64", "readOnly": true})
+    );
+    assert_eq!(
+        schema["properties"]["label"],
+        json!({"type": "string", "minLength": 0, "maxLength": 100})
+    );
+    assert_eq!(schema["required"], json!(["label"]));
+
+    let response = send_to(
+        &app,
+        Method::GET,
+        "/v1/records/benefit-records/00000000-0000-4000-8000-000000000001?accessProfile=operator&$select=eligibility-score",
+        Some(caseworker_claims("case-management")),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        records.last_request().selected_fields,
+        BTreeSet::from(["eligibility-score".to_owned()])
+    );
 }
 
 #[tokio::test]

@@ -5,10 +5,12 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 MODULE_PATH = Path(__file__).with_name("demo.py")
@@ -40,7 +42,7 @@ class DemoProvisioningTests(unittest.TestCase):
         password.write_text("a" * 48, encoding="ascii")
         password.chmod(0o600)
         (self.root / "keys").mkdir()
-        for name in ("mint", "operator", "no-purpose"):
+        for name in ("mint", "operator", "no-purpose", "viewer"):
             (self.root / f"keys/{name}-public.jwk.json").write_text(
                 json.dumps(public_jwk(f"{name}-key")), encoding="utf-8"
             )
@@ -64,10 +66,10 @@ class DemoProvisioningTests(unittest.TestCase):
         self.assertIn("algorithms: [ES256]", mint)
         self.assertNotIn("database-password", mint)
         operator = (self.root / "mint/clients/household-demo.yaml").read_text(encoding="utf-8")
-        self.assertIn("registry_principal: synthetic-household-operator", operator)
-        self.assertIn("registry_purpose: household-administration", operator)
+        self.assertIn('registry_principal: "synthetic-household-operator"', operator)
+        self.assertIn('registry_purpose: "household-administration"', operator)
         no_purpose = (self.root / "mint/clients/household-demo-no-purpose.yaml").read_text(encoding="utf-8")
-        self.assertIn("registry_principal: synthetic-household-operator", no_purpose)
+        self.assertIn('registry_principal: "synthetic-household-operator"', no_purpose)
         self.assertNotIn("registry_purpose", no_purpose)
 
         runtime = (self.root / "runtime-test.yaml").read_text(encoding="utf-8")
@@ -76,6 +78,7 @@ class DemoProvisioningTests(unittest.TestCase):
         self.assertIn("documentRef: secret:file/mint-jwks", runtime)
         self.assertIn("principal: registry_principal", runtime)
         self.assertIn("purpose: registry_purpose", runtime)
+        self.assertIn("household-demo-viewer", runtime)
         self.assertNotIn("a" * 48, runtime)
         self.assertEqual(
             json.loads((self.root / "secrets/mint-jwks").read_text(encoding="utf-8"))["keys"][0]["kid"],
@@ -89,6 +92,17 @@ class DemoProvisioningTests(unittest.TestCase):
             "mint-jwks",
         ):
             self.assertEqual(os.stat(self.root / f"secrets/{name}").st_mode & 0o077, 0)
+        database_setup = (self.root / "database/initialize.sql").read_text(
+            encoding="utf-8"
+        )
+        for schema in (
+            "registry_internal",
+            "registry_data",
+            "registry_source",
+            "registry_derived",
+            "registry_context",
+        ):
+            self.assertIn(f"CREATE SCHEMA {schema}", database_setup)
 
     def test_render_runtime_selects_exact_package_and_listener(self) -> None:
         DEMO.prepare(self.root, self.fixture, 15432, 18081, 18080)
@@ -98,6 +112,32 @@ class DemoProvisioningTests(unittest.TestCase):
         self.assertIn(f"activeRevision: {revision}", runtime)
         self.assertIn(f"root: {self.root.resolve() / 'build/package'}", runtime)
         self.assertIn("bind: 127.0.0.1:18080", runtime)
+
+    def test_schema_test_credentials_cover_every_packaged_journey_step(self) -> None:
+        DEMO.prepare(self.root, self.fixture, 15432, 18081, 18080)
+        journey_source = (self.root / "project/tests/journeys.yaml").read_text(
+            encoding="utf-8"
+        )
+        credential_source = (self.root / "schema-test-credentials.yaml").read_text(
+            encoding="utf-8"
+        )
+        journey_id = next(
+            line.removeprefix("  - id: ").strip()
+            for line in journey_source.splitlines()
+            if line.startswith("  - id: ")
+        )
+        expected = {
+            (journey_id, line.removeprefix("      - id: ").strip())
+            for line in journey_source.splitlines()
+            if line.startswith("      - id: ")
+        }
+        actual = set(
+            re.findall(
+                r"journeyId: ([a-z0-9-]+), stepId: ([a-z0-9-]+)",
+                credential_source,
+            )
+        )
+        self.assertEqual(actual, expected)
 
     def test_seed_is_referentially_closed_and_stable(self) -> None:
         people, households, memberships = DEMO.seed_spec()
@@ -119,6 +159,123 @@ class DemoProvisioningTests(unittest.TestCase):
         self.assertEqual(
             sum(person["residency-status"] == "usual-resident" for person in people),
             8,
+        )
+
+    def test_viewer_registration_is_created_only_after_a_household_id_is_known(self) -> None:
+        DEMO.prepare(self.root, self.fixture, 15432, 18081, 18080)
+        household_id = "0198f0f5-0877-7ae2-a853-09f2d47b6840"
+        (self.root / "seed-record-ids.json").write_text(
+            json.dumps(
+                {
+                    "people": {},
+                    "households": {"HOUSEHOLD-DEMO-001": household_id},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        DEMO.configure_viewer(self.root)
+
+        viewer = (self.root / "mint/clients/household-demo-viewer.yaml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('scopes: ["registry:household:view"]', viewer)
+        self.assertIn(f'household_id: "{household_id}"', viewer)
+        self.assertIn('household_code: "HOUSEHOLD-DEMO-001"', viewer)
+        self.assertIn('registry_purpose: "household-view"', viewer)
+        self.assertIn("viewer-key", viewer)
+        self.assertNotIn("signing-p256-private-jwk", viewer)
+
+    def test_viewer_registration_refuses_a_non_uuid_bound_record(self) -> None:
+        DEMO.prepare(self.root, self.fixture, 15432, 18081, 18080)
+        (self.root / "seed-record-ids.json").write_text(
+            json.dumps({"households": {"HOUSEHOLD-DEMO-001": "not-a-record-id"}}),
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(DEMO.DemoError, "not a UUID"):
+            DEMO.configure_viewer(self.root)
+
+    def test_viewer_queries_prove_bound_get_claim_lookup_and_concealed_denials(self) -> None:
+        household_id = "0198f0f5-0877-7ae2-a853-09f2d47b6840"
+        (self.root / "seed-record-ids.json").write_text(
+            json.dumps({"households": {"HOUSEHOLD-DEMO-001": household_id}}),
+            encoding="utf-8",
+        )
+        calls: list[tuple[str, str, str, object, object]] = []
+
+        def request(
+            root: Path,
+            method: str,
+            path: str,
+            token_name: str,
+            body: dict[str, object] | None = None,
+            idempotency_key: str | None = None,
+            expected: int = 200,
+        ) -> tuple[dict[str, object], dict[str, str]]:
+            self.assertEqual(root, self.root.resolve())
+            calls.append((method, path, token_name, body, expected))
+            if expected == 404:
+                return {"code": "resource.not_found"}, {}
+            return {
+                "id": household_id,
+                "revision": 1,
+                "data": {"household-code": "HOUSEHOLD-DEMO-001"},
+            }, {}
+
+        with mock.patch.object(DEMO, "_request", side_effect=request), mock.patch.object(
+            DEMO, "_print_query"
+        ):
+            DEMO.query(self.root, "viewer")
+
+        self.assertEqual(len(calls), 4)
+        self.assertEqual(calls[0][0:3], ("GET", f"/v1/records/households/{household_id}?accessProfile=household-viewer", "viewer-token"))
+        self.assertEqual(calls[1][0:3], ("POST", "/v1/records/households:lookup?accessProfile=household-viewer", "viewer-token"))
+        self.assertEqual(calls[1][3], {"selector": "by-household-code"})
+        self.assertTrue(all(call[2] == "viewer-token" for call in calls))
+        self.assertEqual([call[4] for call in calls], [200, 200, 404, 404])
+
+    def test_operator_selector_query_uses_the_exact_values_property(self) -> None:
+        household_id = "0198f0f5-0877-7ae2-a853-09f2d47b6840"
+        (self.root / "seed-record-ids.json").write_text(
+            json.dumps({"households": {"HOUSEHOLD-DEMO-001": household_id}}),
+            encoding="utf-8",
+        )
+        calls: list[tuple[str, str, object]] = []
+
+        def request(
+            root: Path,
+            method: str,
+            path: str,
+            token_name: str,
+            body: dict[str, object] | None = None,
+            idempotency_key: str | None = None,
+            expected: int = 200,
+        ) -> tuple[dict[str, object], dict[str, str]]:
+            calls.append((method, path, body))
+            if method == "POST":
+                return {
+                    "id": household_id,
+                    "revision": 1,
+                    "data": {"household-code": "HOUSEHOLD-DEMO-001"},
+                }, {}
+            return {"items": []}, {}
+
+        with mock.patch.object(DEMO, "_request", side_effect=request), mock.patch.object(
+            DEMO, "_print_query"
+        ):
+            DEMO.query(self.root, "operator")
+
+        self.assertEqual(calls[-1][0:2], ("POST", "/v1/records/households:lookup?accessProfile=household-operator"))
+        self.assertEqual(
+            calls[-1][2],
+            {
+                "selector": "by-local-reference",
+                "values": {
+                    "administrative-area": "north-demo",
+                    "local-household-number": 1001,
+                },
+            },
         )
 
     def test_prepare_refuses_a_fixture_without_the_expected_localization_boundary(self) -> None:

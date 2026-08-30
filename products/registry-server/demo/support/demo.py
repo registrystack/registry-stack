@@ -14,6 +14,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,7 @@ SOURCE_REVISION = "publicschema-household-local-0.1.0"
 AUDIENCE = "urn:registry-server:household-demo"
 OPERATOR_CLIENT = "household-demo"
 NO_PURPOSE_CLIENT = "household-demo-no-purpose"
+VIEWER_CLIENT = "household-demo-viewer"
 MIGRATION_ROLE = "registry_demo_migration"
 RUNTIME_ROLE = "registry_demo_runtime"
 TEST_DATABASE = "registry_demo_test"
@@ -92,17 +94,26 @@ def _local_project(root: Path, fixture: Path) -> None:
     project_path.write_text(source, encoding="utf-8")
 
 
-def _mint_client(client_id: str, principal: str, public_key: dict[str, Any], purpose: str | None) -> str:
-    claims = f"    registry_principal: {principal}\n"
-    if purpose is not None:
-        claims += f"    registry_purpose: {purpose}\n"
+def _mint_client(
+    client_id: str,
+    public_key: dict[str, Any],
+    scopes: list[str],
+    claims: dict[str, str],
+) -> str:
+    rendered_scopes = ", ".join(
+        json.dumps(scope, ensure_ascii=True, separators=(",", ":")) for scope in scopes
+    )
+    rendered_claims = "".join(
+        f"    {name}: {json.dumps(value, ensure_ascii=True, separators=(',', ':'))}\n"
+        for name, value in sorted(claims.items())
+    )
     return (
         f"clientId: {client_id}\n"
         f"principal: urn:registry-server:demo:{client_id}\n"
         "authorization:\n"
-        "  scopes: [registry:household:operate]\n"
+        f"  scopes: [{rendered_scopes}]\n"
         "  claims:\n"
-        f"{claims}"
+        f"{rendered_claims}"
         f"keys: [{json.dumps(public_key, sort_keys=True, separators=(',', ':'))}]\n"
     )
 
@@ -145,7 +156,7 @@ authentication:
     accessTokenType: at+jwt
     scopeClaim: scope
     scopeSeparator: " "
-    allowedClients: [{OPERATOR_CLIENT}, {NO_PURPOSE_CLIENT}]
+    allowedClients: [{OPERATOR_CLIENT}, {NO_PURPOSE_CLIENT}, {VIEWER_CLIENT}]
     deniedKids: []
     maxTokenLifetimeSeconds: 300
     leewayMilliseconds: 30000
@@ -205,18 +216,21 @@ def prepare(root: Path, fixture: Path, database_port: int, mint_port: int, serve
         root / f"mint/clients/{OPERATOR_CLIENT}.yaml",
         _mint_client(
             OPERATOR_CLIENT,
-            "synthetic-household-operator",
             operator_public,
-            "household-administration",
+            ["registry:household:operate"],
+            {
+                "registry_principal": "synthetic-household-operator",
+                "registry_purpose": "household-administration",
+            },
         ),
     )
     _write_new(
         root / f"mint/clients/{NO_PURPOSE_CLIENT}.yaml",
         _mint_client(
             NO_PURPOSE_CLIENT,
-            "synthetic-household-operator",
             no_purpose_public,
-            None,
+            ["registry:household:operate"],
+            {"registry_principal": "synthetic-household-operator"},
         ),
     )
     _write_new(
@@ -293,7 +307,10 @@ REVOKE ALL ON DATABASE {TEST_DATABASE} FROM PUBLIC;
 GRANT CONNECT ON DATABASE {TEST_DATABASE} TO {MIGRATION_ROLE}, {RUNTIME_ROLE};
 CREATE SCHEMA registry_internal AUTHORIZATION {MIGRATION_ROLE};
 CREATE SCHEMA registry_data AUTHORIZATION {MIGRATION_ROLE};
-REVOKE ALL ON SCHEMA registry_internal, registry_data FROM PUBLIC;
+CREATE SCHEMA registry_source AUTHORIZATION {MIGRATION_ROLE};
+CREATE SCHEMA registry_derived AUTHORIZATION {MIGRATION_ROLE};
+CREATE SCHEMA registry_context AUTHORIZATION {MIGRATION_ROLE};
+REVOKE ALL ON SCHEMA registry_internal, registry_data, registry_source, registry_derived, registry_context FROM PUBLIC;
 """,
     )
     _write_new(
@@ -328,6 +345,8 @@ bindings:
   - {{journeyId: household-person-lifecycle, stepId: create-single-headed-household, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
   - {{journeyId: household-person-lifecycle, stepId: create-woman-headed-household, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
   - {{journeyId: household-person-lifecycle, stepId: create-isolation-household, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: household-person-lifecycle, stepId: lookup-single-headed-household, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: household-person-lifecycle, stepId: read-people-from-single-headed-household, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
   - {{journeyId: household-person-lifecycle, stepId: query-household-demographics, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
   - {{journeyId: household-person-lifecycle, stepId: refuse-incomplete-membership, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
   - {{journeyId: household-person-lifecycle, stepId: operator-without-purpose-is-concealed, credential: {{type: bearer, tokenRef: secret:file/no-purpose-token}}}}
@@ -501,24 +520,127 @@ def seed(root: Path) -> None:
     print("Seeded 8 synthetic people, 3 households, and 8 current memberships.")
 
 
-def query(root: Path) -> None:
-    root = _require_root(root)
+def _bound_household(root: Path) -> tuple[str, str]:
     seed_ids = _read_json_object(root / "seed-record-ids.json")
     households = seed_ids.get("households")
-    if not isinstance(households, dict) or not isinstance(households.get("HOUSEHOLD-DEMO-001"), str):
+    household_code = "HOUSEHOLD-DEMO-001"
+    household_id = households.get(household_code) if isinstance(households, dict) else None
+    if not isinstance(household_id, str):
         raise DemoError("seed record identifiers are missing; run the demo seed first")
-    first_household_id = urllib.parse.quote(households["HOUSEHOLD-DEMO-001"], safe="")
-    queries = [
-        ("People from one household", f"/v1/records/households/{first_household_id}/people?accessProfile=household-operator&$select=person-code,legal-name,person-sex,residency-status&$orderby=person-code&$top=20&$count=true"),
-        ("Derived stored and computed filter", "/v1/records/households?accessProfile=household-operator&$select=household-code,administrative-area,local-household-number,child-count&$filter=administrative-area%20eq%20%27north-demo%27%20and%20child-count%20eq%201&$orderby=local-household-number&$top=20&$count=true"),
-        ("Single headed with child under five", "/v1/records/households?accessProfile=household-operator&$select=household-code,child-under-5-count,single-headed&$filter=single-headed%20eq%20true%20and%20child-under-5-count%20eq%201&$top=20&$count=true"),
-        ("Woman headed with child and elderly", "/v1/records/households?accessProfile=household-operator&$select=household-code,woman-headed,child-count,elderly-count&$filter=woman-headed%20eq%20true%20and%20child-count%20eq%201%20and%20elderly-count%20eq%201&$top=20&$count=true"),
-        ("Selector lookup input shape", "/v1/records/households?accessProfile=household-operator&$select=household-code,local-household-number&$filter=household-code%20eq%20%27HOUSEHOLD-DEMO-001%27&$top=1"),
-    ]
-    for label, path in queries:
-        response, _ = _request(root, "GET", path, "operator-token")
-        print(f"\n{label}\n{'=' * len(label)}")
-        print(json.dumps(response, indent=2, sort_keys=True))
+    try:
+        parsed = uuid.UUID(household_id)
+    except ValueError as error:
+        raise DemoError("the bound household identifier is not a UUID") from error
+    if str(parsed) != household_id:
+        raise DemoError("the bound household identifier is not canonical")
+    return household_id, household_code
+
+
+def configure_viewer(root: Path) -> None:
+    root = _require_root(root)
+    household_id, household_code = _bound_household(root)
+    viewer_public = _read_json_object(root / "keys/viewer-public.jwk.json")
+    _write_new(
+        root / f"mint/clients/{VIEWER_CLIENT}.yaml",
+        _mint_client(
+            VIEWER_CLIENT,
+            viewer_public,
+            ["registry:household:view"],
+            {
+                "household_code": household_code,
+                "household_id": household_id,
+                "registry_principal": "synthetic-household-viewer",
+                "registry_purpose": "household-view",
+            },
+        ),
+    )
+
+
+def _print_query(label: str, response: dict[str, Any]) -> None:
+    print(f"\n{label}\n{'=' * len(label)}")
+    print(json.dumps(response, indent=2, sort_keys=True))
+
+
+def _assert_bound_household(response: dict[str, Any], household_id: str, household_code: str) -> None:
+    data = response.get("data")
+    if (
+        response.get("id") != household_id
+        or not isinstance(data, dict)
+        or data.get("household-code") != household_code
+    ):
+        raise DemoError("viewer read did not return its one bound household")
+
+
+def query(root: Path, suite: str = "all") -> None:
+    root = _require_root(root)
+    if suite not in ("all", "operator", "viewer"):
+        raise DemoError("query suite must be all, operator, or viewer")
+    household_id, household_code = _bound_household(root)
+    encoded_household_id = urllib.parse.quote(household_id, safe="")
+    if suite in ("all", "operator"):
+        queries = [
+            ("People from one household", f"/v1/records/households/{encoded_household_id}/people?accessProfile=household-operator&$select=person-code,legal-name,person-sex,residency-status&$orderby=person-code&$top=20&$count=true"),
+            ("Derived stored and computed filter", "/v1/records/households?accessProfile=household-operator&$select=household-code,administrative-area,local-household-number,child-count&$filter=administrative-area%20eq%20%27north-demo%27%20and%20child-count%20eq%201&$orderby=local-household-number&$top=20&$count=true"),
+            ("Single headed with child under five", "/v1/records/households?accessProfile=household-operator&$select=household-code,child-under-5-count,single-headed&$filter=single-headed%20eq%20true%20and%20child-under-5-count%20eq%201&$top=20&$count=true"),
+            ("Woman headed with child and elderly", "/v1/records/households?accessProfile=household-operator&$select=household-code,woman-headed,child-count,elderly-count&$filter=woman-headed%20eq%20true%20and%20child-count%20eq%201%20and%20elderly-count%20eq%201&$top=20&$count=true"),
+        ]
+        for label, path in queries:
+            response, _ = _request(root, "GET", path, "operator-token")
+            _print_query(label, response)
+        operator_lookup, _ = _request(
+            root,
+            "POST",
+            "/v1/records/households:lookup?accessProfile=household-operator",
+            "operator-token",
+            {
+                "selector": "by-local-reference",
+                "values": {
+                    "administrative-area": "north-demo",
+                    "local-household-number": 1001,
+                },
+            },
+        )
+        _assert_bound_household(operator_lookup, household_id, household_code)
+        _print_query("Exact request-value selector lookup", operator_lookup)
+
+    if suite in ("all", "viewer"):
+        viewer_get, _ = _request(
+            root,
+            "GET",
+            f"/v1/records/households/{encoded_household_id}?accessProfile=household-viewer",
+            "viewer-token",
+        )
+        _assert_bound_household(viewer_get, household_id, household_code)
+        _print_query("Viewer get bound by verified household ID claim", viewer_get)
+
+        viewer_lookup, _ = _request(
+            root,
+            "POST",
+            "/v1/records/households:lookup?accessProfile=household-viewer",
+            "viewer-token",
+            {"selector": "by-household-code"},
+        )
+        _assert_bound_household(viewer_lookup, household_id, household_code)
+        _print_query("Viewer lookup using its verified household code claim", viewer_lookup)
+
+        denied = [
+            (
+                "Viewer list is concealed",
+                "/v1/records/households?accessProfile=household-viewer",
+            ),
+            (
+                "Viewer relationship path is concealed",
+                f"/v1/records/households/{encoded_household_id}/people?accessProfile=household-viewer",
+            ),
+        ]
+        for label, path in denied:
+            response, _ = _request(root, "GET", path, "viewer-token", expected=404)
+            if response.get("code") != "resource.not_found":
+                raise DemoError("viewer denial did not use the concealed resource response")
+            rendered = json.dumps(response, sort_keys=True)
+            if household_id in rendered or household_code in rendered:
+                raise DemoError("viewer denial exposed a bound household value")
+            _print_query(label, response)
 
 
 def wait_http(url: str, timeout_seconds: float) -> None:
@@ -554,8 +676,11 @@ def parser() -> argparse.ArgumentParser:
     runtime_parser.add_argument("--revision", required=True)
     seed_parser = commands.add_parser("seed")
     seed_parser.add_argument("--root", required=True, type=Path)
+    viewer_parser = commands.add_parser("configure-viewer")
+    viewer_parser.add_argument("--root", required=True, type=Path)
     query_parser = commands.add_parser("query")
     query_parser.add_argument("--root", required=True, type=Path)
+    query_parser.add_argument("--suite", choices=("all", "operator", "viewer"), default="all")
     wait_parser = commands.add_parser("wait-http")
     wait_parser.add_argument("--url", required=True)
     wait_parser.add_argument("--timeout", type=float, default=30.0)
@@ -575,8 +700,10 @@ def main() -> int:
             render_runtime(args.root, args.revision)
         elif args.command == "seed":
             seed(args.root)
+        elif args.command == "configure-viewer":
+            configure_viewer(args.root)
         elif args.command == "query":
-            query(args.root)
+            query(args.root, args.suite)
         elif args.command == "wait-http":
             wait_http(args.url, args.timeout)
         elif args.command == "store-token":

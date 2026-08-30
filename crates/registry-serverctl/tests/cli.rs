@@ -890,7 +890,14 @@ fn explain_reports_are_derived_from_compiled_inventories() {
     assert_eq!(planner_list["apiFields"][0]["sourceKind"], "stored");
     assert_eq!(
         planner_list["filterable"][0]["operators"],
-        json!(["equals", "in", "is_null", "is_not_null", "prefix"])
+        json!([
+            "equals",
+            "in",
+            "is_null",
+            "is_not_null",
+            "prefix",
+            "contains"
+        ])
     );
     assert_eq!(planner_list["bounds"]["maxPageSize"], 100);
     assert!(!String::from_utf8(queries.stdout)

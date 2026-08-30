@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -14,9 +15,9 @@ use registry_platform_crypto::{generate_private_jwk, sign, GeneratedKeyAlgorithm
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
 use registry_platform_testing::MockIdp;
-use registry_server::compiler::{compile_project, CompileProfile};
+use registry_server::compiler::{compile_project_with_assets, CompileProfile};
 use registry_server::contract::{
-    parse_module_yaml, parse_project_yaml, Operation, RegistryProject,
+    parse_module_yaml, parse_project_yaml, ModuleAssetSource, Operation, RegistryProject,
 };
 use registry_server::package::{
     load_package, PackageBuildRequest, PackageIntent, PackageLoadContext,
@@ -193,11 +194,23 @@ impl PilotHarness {
     }
 
     pub fn token(&self, purpose: &str, row_boundary_claims: &[(&str, Value)]) -> String {
+        self.token_with_scopes(purpose, row_boundary_claims, &[])
+    }
+
+    pub fn token_with_scopes(
+        &self,
+        purpose: &str,
+        row_boundary_claims: &[(&str, Value)],
+        scopes: &[&str],
+    ) -> String {
         let mut claims = json!({
             "aud": AUDIENCE,
             "registry_principal": "pilot-operator",
             "purpose": purpose,
         });
+        if !scopes.is_empty() {
+            claims["scope"] = Value::String(scopes.join(" "));
+        }
         for (name, value) in row_boundary_claims {
             claims[*name] = value.clone();
         }
@@ -290,6 +303,7 @@ struct FixtureSources {
     project: RegistryProject,
     project_bytes: Vec<u8>,
     modules: Vec<(String, Vec<u8>)>,
+    module_assets: Vec<ModuleAssetSource>,
     compiled: CompiledRegistry,
 }
 
@@ -302,28 +316,50 @@ impl FixtureSources {
             .expect("committed pilot registry source is readable");
         let project = parse_project_yaml(&project_bytes)
             .expect("committed pilot registry follows the strict authoring contract");
-        let modules = project
-            .modules
-            .iter()
-            .map(|locked| {
-                let bytes = fs::read(root.join("modules").join(&locked.id).join("module.yaml"))
-                    .expect("every exact locked module source is committed and readable");
-                (locked.id.clone(), bytes)
-            })
-            .collect::<Vec<_>>();
-        let parsed_modules = modules
-            .iter()
-            .map(|(_, bytes)| {
-                parse_module_yaml(bytes)
-                    .expect("committed pilot module follows the strict contract")
-            })
-            .collect::<Vec<_>>();
-        let compiled = compile_project(&project, &parsed_modules, CompileProfile::Production)
-            .expect("pilot fixture closes under the Production compiler without repair");
+        let mut modules = Vec::new();
+        let mut parsed_modules = Vec::new();
+        let mut module_assets = Vec::new();
+        for locked in &project.modules {
+            let module_root = root.join("modules").join(&locked.id);
+            let bytes = fs::read(module_root.join("module.yaml"))
+                .expect("every exact locked module source is committed and readable");
+            let module = parse_module_yaml(&bytes)
+                .expect("committed pilot module follows the strict contract");
+            let declared_assets = module
+                .entities
+                .iter()
+                .flat_map(|entity| &entity.derived)
+                .chain(
+                    module
+                        .extend_entities
+                        .iter()
+                        .flat_map(|extension| &extension.derived),
+                )
+                .map(|derived| derived.sql.clone())
+                .collect::<BTreeSet<_>>();
+            for asset_path in declared_assets {
+                module_assets.push(ModuleAssetSource {
+                    module: Some(module.id.clone()),
+                    bytes: fs::read(module_root.join(&asset_path))
+                        .expect("every declared module SQL asset is committed and readable"),
+                    path: asset_path,
+                });
+            }
+            modules.push((locked.id.clone(), bytes));
+            parsed_modules.push(module);
+        }
+        let compiled = compile_project_with_assets(
+            &project,
+            &parsed_modules,
+            &module_assets,
+            CompileProfile::Production,
+        )
+        .expect("pilot fixture closes under the Production compiler without repair");
         Self {
             project,
             project_bytes,
             modules,
+            module_assets,
             compiled,
         }
     }
@@ -373,7 +409,15 @@ impl PublishedPackage {
                     id: id.clone(),
                     path: format!("source/modules/{id}/module.yaml"),
                     bytes: bytes.clone(),
-                    assets: Vec::new(),
+                    assets: sources
+                        .module_assets
+                        .iter()
+                        .filter(|asset| asset.module.as_deref() == Some(id.as_str()))
+                        .map(|asset| PackageSourceFile {
+                            path: asset.path.clone(),
+                            bytes: asset.bytes.clone(),
+                        })
+                        .collect(),
                 })
                 .collect(),
             fixture_journeys: PackageSourceFile {

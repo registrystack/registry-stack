@@ -1419,6 +1419,12 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
         ))
         .await
         .expect("target fingerprint transaction installs the exact compiled runtime ACL");
+    reconcile_view_acl_for_fingerprint(
+        &transaction,
+        provisional_second.registry(),
+        database.runtime_role.as_str(),
+    )
+    .await;
     let second_catalog = ExpectedManagedCatalog::compiled(provisional_second.registry());
     let target_schema =
         managed_schema_fingerprint(&transaction, &database.runtime_role, &second_catalog)
@@ -1824,6 +1830,12 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
             .map_err(|_| ())
             .expect("third exact additive plan applies in fingerprint transaction");
     }
+    reconcile_view_acl_for_fingerprint(
+        &transaction,
+        provisional_third.registry(),
+        database.runtime_role.as_str(),
+    )
+    .await;
     let third_catalog = ExpectedManagedCatalog::compiled(provisional_third.registry());
     let third_schema =
         managed_schema_fingerprint(&transaction, &database.runtime_role, &third_catalog)
@@ -1964,6 +1976,37 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
     assert_eq!(recovered_status, "ready");
 
     database.cleanup().await;
+}
+
+async fn reconcile_view_acl_for_fingerprint(
+    client: &impl GenericClient,
+    registry: &registry_server::CompiledRegistry,
+    runtime_role: &str,
+) {
+    for view in &registry.ddl().views {
+        let schema = quote_identifier(&view.schema);
+        let name = quote_identifier(&view.name);
+        client
+            .batch_execute(&format!(
+                "REVOKE ALL ON TABLE {schema}.{name} FROM PUBLIC, \"{runtime_role}\";"
+            ))
+            .await
+            .expect("fingerprint transaction reconciles compiled view revocations");
+        if !view.runtime_privileges.is_empty() {
+            let privileges = view
+                .runtime_privileges
+                .iter()
+                .map(|privilege| privilege.as_sql())
+                .collect::<Vec<_>>()
+                .join(", ");
+            client
+                .batch_execute(&format!(
+                    "GRANT {privileges} ON TABLE {schema}.{name} TO \"{runtime_role}\";"
+                ))
+                .await
+                .expect("fingerprint transaction reconciles compiled view grants");
+        }
+    }
 }
 
 #[derive(Clone, Copy)]

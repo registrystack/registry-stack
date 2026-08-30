@@ -297,7 +297,7 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
     let widened_body = canonicalize_json(&json!({
         "items":[{"id":"00000000-0000-4000-8000-000000000001","revision":1,
                    "data":{"code":"ROW-000","secret":SECRET_CANARY}}],
-        "nextCursor":null
+        "pageInfo":{"nextCursor":null}
     }))
     .unwrap();
     let widened = execute_export_page(

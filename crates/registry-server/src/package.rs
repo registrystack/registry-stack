@@ -1584,11 +1584,39 @@ fn reviewed_successor_migration_plan(
         &change_set.from_revision,
         additive_changes,
     );
+    let refresh_views = additive
+        .statements
+        .iter()
+        .any(|statement| statement.kind == DdlStatementKind::View)
+        || change_set.changes.iter().any(|change| {
+            matches!(
+                change.code,
+                CompiledRegistryChangeCode::EntityRemoved
+                    | CompiledRegistryChangeCode::FieldAddedRequired
+                    | CompiledRegistryChangeCode::FieldRemoved
+                    | CompiledRegistryChangeCode::FieldTypeChanged
+                    | CompiledRegistryChangeCode::FieldPhysicalNameChanged
+                    | CompiledRegistryChangeCode::DerivedRelationRemoved
+                    | CompiledRegistryChangeCode::DerivedRelationChanged
+            )
+        });
+    let mut statements = additive.statements;
+    if refresh_views {
+        statements.retain(|statement| statement.kind != DdlStatementKind::View);
+        statements.extend(
+            candidate
+                .ddl()
+                .statements
+                .iter()
+                .filter(|statement| statement.kind == DdlStatementKind::View)
+                .cloned(),
+        );
+    }
     Ok(MigrationPlan {
         from_revision: Some(change_set.from_revision.clone()),
         prior_baseline: Some(baseline.clone()),
         changes: change_set.changes.clone(),
-        statements: additive.statements,
+        statements,
         reviewed_descriptors: descriptor_paths,
         prior_schema_fingerprint: Some(prior_schema_fingerprint),
     })

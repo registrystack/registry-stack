@@ -527,7 +527,10 @@ impl QueryBuilder {
         match key {
             "accessProfile" => {
                 ensure_absent(self.access_profile.is_none())?;
-                self.access_profile = Some(ApiIdentifier::parse(value)?.0);
+                if !valid_config_identifier(value) {
+                    return Err(QueryParseError::InvalidValue);
+                }
+                self.access_profile = Some(value.to_owned());
             }
             "asOf" => {
                 ensure_absent(self.as_of.is_none())?;
@@ -681,7 +684,7 @@ fn parse_opaque_value(value: &str) -> Result<String, QueryParseError> {
     Ok(value.to_owned())
 }
 
-fn valid_identifier(value: &str) -> bool {
+fn valid_config_identifier(value: &str) -> bool {
     let mut bytes = value.bytes();
     let Some(first) = bytes.next() else {
         return false;
@@ -691,6 +694,16 @@ fn valid_identifier(value: &str) -> bool {
         && bytes.all(|byte| {
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_' | b'.')
         })
+}
+
+fn valid_identifier(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+    value.len() <= MAX_IDENTIFIER_BYTES
+        && (first.is_ascii_lowercase() || first == b'_')
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
 fn push_optional_atom(output: &mut String, name: &str, value: Option<&str>) {
@@ -847,6 +860,7 @@ impl<'a> Lexer<'a> {
         while self.index < self.input.len() {
             let byte = self.input.as_bytes()[self.index];
             if byte.is_ascii_lowercase()
+                || byte.is_ascii_uppercase()
                 || byte.is_ascii_digit()
                 || matches!(byte, b'-' | b'_' | b'.')
             {
@@ -1233,37 +1247,25 @@ mod tests {
 
     #[test]
     fn top_and_count_are_strict() {
-        assert_eq!(
-            parse([("$top", "1")])
-                .unwrap()
-                .canonical()
-                .contains("top=1"),
-            true
-        );
-        assert_eq!(
-            parse([("$top", "100")])
-                .unwrap()
-                .canonical()
-                .contains("top=100"),
-            true
-        );
+        assert!(parse([("$top", "1")])
+            .unwrap()
+            .canonical()
+            .contains("top=1"));
+        assert!(parse([("$top", "100")])
+            .unwrap()
+            .canonical()
+            .contains("top=100"));
         for value in ["", "0", "101", "-1", "1.0", "+1", "true"] {
             assert_eq!(parse([("$top", value)]), Err(QueryParseError::InvalidValue));
         }
-        assert_eq!(
-            parse([("$count", "true")])
-                .unwrap()
-                .canonical()
-                .contains("count=true"),
-            true
-        );
-        assert_eq!(
-            parse([("$count", "false")])
-                .unwrap()
-                .canonical()
-                .contains("count=false"),
-            true
-        );
+        assert!(parse([("$count", "true")])
+            .unwrap()
+            .canonical()
+            .contains("count=true"));
+        assert!(parse([("$count", "false")])
+            .unwrap()
+            .canonical()
+            .contains("count=false"));
         for value in ["", "True", "1", "yes"] {
             assert_eq!(
                 parse([("$count", value)]),
@@ -1288,6 +1290,8 @@ mod tests {
 
     #[test]
     fn select_is_bounded_and_duplicate_free() {
+        let camel = parse([("$select", "childUnder5Count")]).expect("lower camel API name parses");
+        assert!(camel.canonical().contains("id(16:childUnder5Count)"));
         assert_eq!(
             parse([("$select", "case-code,case-code")]),
             Err(QueryParseError::DuplicateOption)
@@ -1335,6 +1339,10 @@ mod tests {
         ] {
             assert_eq!(parsed_canonical(&filter(source)), canonical);
         }
+        assert_eq!(
+            parsed_canonical(&filter("childUnder5Count gt 0")),
+            "gt(id(16:childUnder5Count),int(1:0))"
+        );
     }
 
     #[test]

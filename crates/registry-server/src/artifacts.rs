@@ -162,6 +162,14 @@ fn entity_schema(entity: &CompiledEntity) -> Value {
             required.push(Value::String(field.id.clone()));
         }
     }
+    for field in entity.derived_fields.values() {
+        let mut schema = field_schema(&field.logical.field_type);
+        schema
+            .as_object_mut()
+            .expect("field schemas are objects")
+            .insert("readOnly".to_owned(), Value::Bool(true));
+        properties.insert(field.logical.id.clone(), schema);
+    }
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": format!("urn:registry-server:entity:{}", entity.id),

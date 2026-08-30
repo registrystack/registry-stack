@@ -349,7 +349,8 @@ impl ReadFilterOperator {
             Self::In => CompiledQueryFilterOperator::In,
             Self::IsNull => CompiledQueryFilterOperator::IsNull,
             Self::IsNotNull => CompiledQueryFilterOperator::IsNotNull,
-            Self::StartsWith | Self::Contains => CompiledQueryFilterOperator::Prefix,
+            Self::StartsWith => CompiledQueryFilterOperator::Prefix,
+            Self::Contains => CompiledQueryFilterOperator::Contains,
         }
     }
 }

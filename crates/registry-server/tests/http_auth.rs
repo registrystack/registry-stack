@@ -573,6 +573,20 @@ async fn constructor_requires_one_exact_bounded_verifier_profile() {
     }
 }
 
+#[tokio::test]
+async fn constructor_accepts_the_compiled_canonical_id_as_a_row_boundary() {
+    let source = PROJECT.replace(
+        "        rowBoundaries:\n          - {field: jurisdiction, claim: jurisdictions, operator: in}",
+        "        rowBoundaries:\n          - {field: id, claim: case_id, operator: equals}\n          - {field: jurisdiction, claim: jurisdictions, operator: in}",
+    );
+    let project = parse_project_yaml(source.as_bytes()).expect("canonical id project parses");
+    let registry = compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("canonical id boundary compiles");
+    let idp = MockIdp::start().await;
+    authenticator(&registry, &idp, authority_claims())
+        .expect("canonical UUID authority is derived from the compiled id field");
+}
+
 async fn assert_refused_without_record_call(harness: &Harness, token: &str) {
     let before = harness.records.calls.load(Ordering::SeqCst);
     let response = harness

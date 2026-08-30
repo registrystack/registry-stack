@@ -842,7 +842,7 @@ fn validate_receipt(
         || receipt.plan_sha256 != digest(descriptor_bytes)
         || receipt.sql_sha256 != expected_sql
         || receipt.assertion_sha256 != expected_assertions
-        || !(13..=18).contains(&receipt.postgres_major)
+        || !(15..=18).contains(&receipt.postgres_major)
         || (receipt.fixture_inventory.is_empty() && !metadata_only)
         || !strictly_sorted(
             receipt
