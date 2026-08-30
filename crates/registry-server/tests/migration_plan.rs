@@ -90,7 +90,11 @@ fn reviewed_migration_plan_closes_ast_sql_and_bound_evidence() {
 
     let root = tempfile::Builder::new()
         .prefix("registry-migration-plan-")
-        .tempdir_in("/private/tmp")
+        .tempdir_in(
+            std::env::temp_dir()
+                .canonicalize()
+                .expect("canonical temporary root"),
+        )
         .expect("temporary package parent");
     let package = root.path().join("package");
     prepared
@@ -427,7 +431,11 @@ fn reviewed_migration_plan_rejects_uncovered_changes_forbidden_sql_and_unbound_e
         .expect("valid reviewed package prepares before tamper");
     let root = tempfile::Builder::new()
         .prefix("registry-migration-plan-")
-        .tempdir_in("/private/tmp")
+        .tempdir_in(
+            std::env::temp_dir()
+                .canonicalize()
+                .expect("canonical temporary root"),
+        )
         .expect("temporary package parent");
     let package = root.path().join("package");
     prepared

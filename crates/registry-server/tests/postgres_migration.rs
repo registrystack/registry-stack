@@ -212,7 +212,11 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
     assert!(!view_transition[0].sql.contains("CASCADE"));
     let backup_root = tempfile::Builder::new()
         .prefix("registry-backup-canary-")
-        .tempdir_in("/private/tmp")
+        .tempdir_in(
+            std::env::temp_dir()
+                .canonicalize()
+                .expect("canonical temporary root"),
+        )
         .expect("backup temporary directory creates");
     let backup_path = backup_root.path().join("path-record-sql-canary.backup");
     fs::write(&backup_path, &backup_bytes).expect("restorable backup artifact writes");
@@ -836,7 +840,11 @@ fn publish_and_load(
 ) -> VerifiedPackage {
     let root = tempfile::Builder::new()
         .prefix("registry-reviewed-runtime-")
-        .tempdir_in("/private/tmp")
+        .tempdir_in(
+            std::env::temp_dir()
+                .canonicalize()
+                .expect("canonical temporary root"),
+        )
         .expect("package temporary directory creates");
     let package = root.path().join("package");
     prepared

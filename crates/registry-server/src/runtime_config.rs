@@ -311,9 +311,9 @@ fn contains_governed_member(value: &serde_norway::Value) -> bool {
                 // Destination-map keys are compiler-issued logical ids. Do not
                 // reinterpret an id such as `events` as a governed field; the
                 // strict destination value type rejects every undeployed key.
-                || (!key
+                || (key
                     .as_str()
-                    .is_some_and(|key| key == "eventDestinations")
+                    .is_none_or(|key| key != "eventDestinations")
                     && contains_governed_member(value))
         }),
         serde_norway::Value::Sequence(values) => values.iter().any(contains_governed_member),

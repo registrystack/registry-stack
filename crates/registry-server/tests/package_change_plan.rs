@@ -725,7 +725,11 @@ fn tampered_package_never_returns_a_migration_summary_or_canary() {
     .expect("initial package prepares");
     let root = tempfile::Builder::new()
         .prefix("registry-package-summary-tamper-")
-        .tempdir_in("/private/tmp")
+        .tempdir_in(
+            std::env::temp_dir()
+                .canonicalize()
+                .expect("canonical temporary root"),
+        )
         .expect("temporary package parent creates");
     let package = root.path().join("package");
     prepared
@@ -1560,7 +1564,11 @@ fn inspect_prepared(
 ) -> registry_server::package::IntegrityInspectedPackage {
     let root = tempfile::Builder::new()
         .prefix("registry-package-summary-")
-        .tempdir_in("/private/tmp")
+        .tempdir_in(
+            std::env::temp_dir()
+                .canonicalize()
+                .expect("canonical temporary root"),
+        )
         .expect("temporary package parent creates");
     let package = root.path().join("package");
     prepared

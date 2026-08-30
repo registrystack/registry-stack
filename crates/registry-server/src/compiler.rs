@@ -2934,10 +2934,7 @@ fn asset_map<'a>(
 ) -> BTreeMap<(Option<String>, String), &'a [u8]> {
     let mut map = BTreeMap::new();
     for asset in assets {
-        if !asset
-            .module
-            .as_deref()
-            .is_none_or(|module| !module.is_empty())
+        if asset.module.as_deref().is_some_and(str::is_empty)
             || !valid_relative_sql_path(&asset.path)
             || asset.bytes.is_empty()
             || asset.bytes.len() > MAX_DERIVED_SQL_BYTES

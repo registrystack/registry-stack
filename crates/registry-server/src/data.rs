@@ -1722,7 +1722,7 @@ fn validate_import_response(
             .ok_or(DataError::InvalidResponse)?;
         if result["operation"].as_str() != Some(expected_operation)
             || !result["id"].as_str().is_some_and(valid_uuid)
-            || !result["revision"].as_u64().is_some_and(|value| value > 0)
+            || result["revision"].as_u64().is_none_or(|value| value == 0)
             || !result["etag"].as_str().is_some_and(valid_strong_etag)
         {
             return Err(DataError::InvalidResponse);
@@ -1762,9 +1762,9 @@ fn validate_export_response(
         return Err(DataError::InvalidResponse);
     }
     if object.get("count").is_some_and(|count| {
-        !count
+        count
             .as_u64()
-            .is_some_and(|count| count >= items.len() as u64)
+            .is_none_or(|count| count < items.len() as u64)
     }) {
         return Err(DataError::InvalidResponse);
     }
@@ -1785,7 +1785,7 @@ fn validate_export_response(
         require_exact_keys(item, &["id", "revision", "data"])
             .map_err(|_| DataError::InvalidResponse)?;
         if !item["id"].as_str().is_some_and(valid_uuid)
-            || !item["revision"].as_u64().is_some_and(|value| value > 0)
+            || item["revision"].as_u64().is_none_or(|value| value == 0)
         {
             return Err(DataError::InvalidResponse);
         }

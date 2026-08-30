@@ -495,11 +495,12 @@ def validate_postgres_tls_entrypoint(errors: list[str]) -> None:
     workflow = CI_WORKFLOW.read_text(encoding="utf-8")
     required_workflow_fragments = (
         "ports:\n          - 5432/tcp",
-        "REGISTRY_SERVER_TEST_DATABASE_URL: postgresql://registry_server:registry_server_test@localhost:${{ job.services.postgres.ports[5432] }}/registry_server",
-        "REGISTRY_SERVER_TEST_TLS_DATABASE_URL: postgresql://registry_server:registry_server_test@localhost:${{ job.services.postgres.ports[5432] }}/registry_server",
-        "REGISTRY_SERVER_TEST_TLS_HOSTNAME_MISMATCH_DATABASE_URL: postgresql://registry_server:registry_server_test@127.0.0.1:${{ job.services.postgres.ports[5432] }}/registry_server",
-        "REGISTRY_SERVER_TEST_TLS_POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}",
-        "REGISTRY_SERVER_TEST_TLS_CA_PEM_PATH: ${{ runner.temp }}/registry-server-postgres-trusted-ca.pem",
+        "DATABASE_PORT: ${{ job.services.postgres.ports['5432'] }}",
+        "REGISTRY_SERVER_TEST_DATABASE_URL=postgresql://registry_server:registry_server_test@localhost:${DATABASE_PORT}/registry_server",
+        "REGISTRY_SERVER_TEST_TLS_DATABASE_URL=postgresql://registry_server:registry_server_test@localhost:${DATABASE_PORT}/registry_server",
+        "REGISTRY_SERVER_TEST_TLS_HOSTNAME_MISMATCH_DATABASE_URL=postgresql://registry_server:registry_server_test@127.0.0.1:${DATABASE_PORT}/registry_server",
+        "POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}",
+        "TLS_CA_PEM_PATH: ${{ runner.temp }}/registry-server-postgres-trusted-ca.pem",
         "run: products/registry-server/scripts/test-postgres-tls.sh",
     )
     for fragment in required_workflow_fragments:
