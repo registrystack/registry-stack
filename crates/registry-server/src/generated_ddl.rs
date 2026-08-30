@@ -331,9 +331,11 @@ pub(crate) fn generate_ddl(
                 .expect("derived SQL asset was UTF-8 validated")
                 .trim()
                 .trim_end_matches(';');
+            let key = quote_identifier(&relation.key_field.replace('-', "_"));
+            let cardinality = quote_identifier("registry_derived_key_cardinality");
             let mut columns = vec![format!(
                 "{}::{} AS {}",
-                quote_identifier(&relation.key_field.replace('-', "_")),
+                key,
                 sql_type(&entity.canonical_id.field_type),
                 quote_identifier(&entity.canonical_id.sql_name)
             )];
@@ -356,7 +358,15 @@ pub(crate) fn generate_ddl(
                     "CREATE VIEW registry_derived.{view}
                      WITH (security_invoker=true, security_barrier=true)
                      AS SELECT {}
-                        FROM ({sql}) AS trusted_derived",
+                        FROM (
+                            SELECT trusted_derived.*,
+                                   count(*) OVER (PARTITION BY trusted_derived.{key}) AS {cardinality}
+                              FROM ({sql}) AS trusted_derived
+                        ) AS checked_derived
+                       WHERE CASE
+                           WHEN {cardinality} = 1 THEN true
+                           ELSE 1 / ({cardinality} - {cardinality}) = 0
+                       END",
                     columns.join(", "),
                 ),
             });

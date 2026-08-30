@@ -167,6 +167,9 @@ fn derived_fields_selectors_and_read_paths_compile_to_route_specific_inventories
         last_source_view < first_derived_view,
         "all source views must exist before cross-entity derived SQL is installed"
     );
+    let derived_view = &compiled.ddl().statements[first_derived_view].sql;
+    assert!(derived_view.contains("count(*) OVER (PARTITION BY trusted_derived.\"id\")"));
+    assert!(derived_view.contains("registry_derived_key_cardinality"));
     assert!(compiled
         .routes()
         .routes
