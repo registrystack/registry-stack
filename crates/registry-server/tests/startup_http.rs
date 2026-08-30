@@ -7,7 +7,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use axum::body::{to_bytes, Body};
@@ -44,6 +44,7 @@ const WEBHOOK_SECRET_CANARY: &str = "rs-v1-25-webhook-secret-canary";
 const WEBHOOK_PAYLOAD_CANARY: &str = "rs-v1-25-webhook-payload-canary";
 const UPSTREAM_DETAIL_CANARY: &str = "rs-v1-25-upstream-detail-canary";
 const TRACESTATE_CANARY: &str = "registry=rs-v1-25-tracestate-canary";
+static TRACING_CAPTURE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 const PROJECT: &str = r#"
 apiVersion: registry.registrystack.org/v1alpha1
@@ -378,18 +379,28 @@ impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for CapturedOperation
     }
 }
 
+fn captured_request_logs() -> &'static CapturedOperationalLogs {
+    static WRITER: OnceLock<CapturedOperationalLogs> = OnceLock::new();
+    WRITER.get_or_init(|| {
+        let writer = CapturedOperationalLogs::default();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_target(false)
+            .with_current_span(false)
+            .with_span_list(false)
+            .with_writer(writer.clone())
+            .finish();
+        tracing::subscriber::set_global_default(subscriber)
+            .expect("request log subscriber installs once for this test binary");
+        writer
+    })
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn request_operational_log_has_only_closed_value_free_fields() {
+    let _capture_guard = TRACING_CAPTURE.lock().await;
     const INBOUND: &str = "00-11111111111111111111111111111111-2222222222222222-01";
-    let writer = CapturedOperationalLogs::default();
-    let subscriber = tracing_subscriber::fmt()
-        .json()
-        .with_target(false)
-        .with_current_span(false)
-        .with_span_list(false)
-        .with_writer(writer.clone())
-        .finish();
-    let _subscriber = tracing::subscriber::set_default(subscriber);
+    let writer = captured_request_logs();
     let service = Arc::new(HttpService::new(
         compiled_registry(),
         ReadRuntimeIdentity {
@@ -424,7 +435,12 @@ async fn request_operational_log_has_only_closed_value_free_fields() {
     assert_forbidden_values_absent(&output);
     assert!(!output.contains("operational-log-token-canary"));
     assert!(!output.contains("/health"));
-    let rendered: Value = serde_json::from_str(output.trim()).expect("request log is JSON");
+    let expected_trace_id = trace_id(INBOUND);
+    let rendered = output
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("request log is JSON"))
+        .find(|record| record["fields"]["trace_id"] == expected_trace_id)
+        .expect("correlated request log is present");
     let fields = rendered["fields"]
         .as_object()
         .expect("request log fields are an object");
@@ -443,7 +459,7 @@ async fn request_operational_log_has_only_closed_value_free_fields() {
     assert_eq!(fields["method"], "GET");
     assert_eq!(fields["status"], "success");
     assert_eq!(fields["problem_code"], "none");
-    assert_eq!(fields["trace_id"], trace_id(INBOUND));
+    assert_eq!(fields["trace_id"], expected_trace_id);
     uuid::Uuid::parse_str(
         fields["request_id"]
             .as_str()
@@ -561,8 +577,9 @@ fn operational_level_name(level: OperationalLogLevel) -> &'static str {
     }
 }
 
-#[test]
-fn every_operational_event_renders_exact_closed_value_free_json_fields() {
+#[tokio::test(flavor = "current_thread")]
+async fn every_operational_event_renders_exact_closed_value_free_json_fields() {
+    let _capture_guard = TRACING_CAPTURE.lock().await;
     let mut events = vec![
         OperationalEvent::StartupBegan,
         OperationalEvent::Listening,
