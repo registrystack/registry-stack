@@ -75,11 +75,14 @@ CREATE VIEW registry_source."person"
                    WHERE record_lifecycle = 'active';
 CREATE VIEW registry_derived."household__household_demographics"
                      WITH (security_invoker=true, security_barrier=true)
-                     AS SELECT "id"::uuid AS "id", "head_count"::bigint AS "head_count", "child_count"::bigint AS "child_count", "child_under_5_count"::bigint AS "child_under_5_count", "elderly_count"::bigint AS "elderly_count", "single_headed"::boolean AS "single_headed", "woman_headed"::boolean AS "woman_headed"
+                     AS SELECT "__registry$derived$key" AS "id", "head_count"::bigint AS "head_count", "child_count"::bigint AS "child_count", "child_under_5_count"::bigint AS "child_under_5_count", "elderly_count"::bigint AS "elderly_count", "single_headed"::boolean AS "single_headed", "woman_headed"::boolean AS "woman_headed"
                         FROM (
-                            SELECT trusted_derived.*,
-                                   count(*) OVER (PARTITION BY trusted_derived."id") AS "registry_derived_key_cardinality"
-                              FROM (SELECT
+                            SELECT canonical_derived.*,
+                                   count(*) OVER (PARTITION BY canonical_derived."__registry$derived$key") AS "__registry$derived$cardinality"
+                              FROM (
+                                  SELECT trusted_derived.*,
+                                         trusted_derived."id"::uuid AS "__registry$derived$key"
+                                    FROM (SELECT
   h.id AS id,
   count(*) FILTER (
     WHERE gm.relationship = 'head'
@@ -128,8 +131,12 @@ LEFT JOIN registry_source.group_membership gm
 LEFT JOIN registry_source.person p
   ON p.id = gm.person
 GROUP BY h.id) AS trusted_derived
+                              ) AS canonical_derived
                         ) AS checked_derived
                        WHERE CASE
-                           WHEN "registry_derived_key_cardinality" = 1 THEN true
-                           ELSE 1 / ("registry_derived_key_cardinality" - "registry_derived_key_cardinality") = 0
+                           WHEN "__registry$derived$key" IS NOT NULL AND "__registry$derived$cardinality" = 1 THEN true
+                           -- PostgreSQL has no scalar ASSERT. This row-dependent
+                           -- expression raises one stable, value-free error for
+                           -- a null or duplicate canonical key.
+                           ELSE 1 / ("__registry$derived$cardinality" - "__registry$derived$cardinality") = 0
                        END;

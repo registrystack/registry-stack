@@ -332,11 +332,13 @@ pub(crate) fn generate_ddl(
                 .trim()
                 .trim_end_matches(';');
             let key = quote_identifier(&relation.key_field.replace('-', "_"));
-            let cardinality = quote_identifier("registry_derived_key_cardinality");
+            // `$` is outside the closed logical identifier grammar, so these
+            // wrapper-only names cannot collide with an authored SQL output.
+            let canonical_key = quote_identifier("__registry$derived$key");
+            let cardinality = quote_identifier("__registry$derived$cardinality");
             let mut columns = vec![format!(
-                "{}::{} AS {}",
-                key,
-                sql_type(&entity.canonical_id.field_type),
+                "{} AS {}",
+                canonical_key,
                 quote_identifier(&entity.canonical_id.sql_name)
             )];
             for field_id in &relation.fields {
@@ -359,15 +361,23 @@ pub(crate) fn generate_ddl(
                      WITH (security_invoker=true, security_barrier=true)
                      AS SELECT {}
                         FROM (
-                            SELECT trusted_derived.*,
-                                   count(*) OVER (PARTITION BY trusted_derived.{key}) AS {cardinality}
-                              FROM ({sql}) AS trusted_derived
+                            SELECT canonical_derived.*,
+                                   count(*) OVER (PARTITION BY canonical_derived.{canonical_key}) AS {cardinality}
+                              FROM (
+                                  SELECT trusted_derived.*,
+                                         trusted_derived.{key}::{} AS {canonical_key}
+                                    FROM ({sql}) AS trusted_derived
+                              ) AS canonical_derived
                         ) AS checked_derived
                        WHERE CASE
-                           WHEN {cardinality} = 1 THEN true
+                           WHEN {canonical_key} IS NOT NULL AND {cardinality} = 1 THEN true
+                           -- PostgreSQL has no scalar ASSERT. This row-dependent
+                           -- expression raises one stable, value-free error for
+                           -- a null or duplicate canonical key.
                            ELSE 1 / ({cardinality} - {cardinality}) = 0
                        END",
                     columns.join(", "),
+                    sql_type(&entity.canonical_id.field_type),
                 ),
             });
             views.push(DdlView {

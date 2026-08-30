@@ -143,6 +143,10 @@ membership, and a reviewed live SQL asset that contributes derived household
 facts such as head count, child count, under-five child count, elderly count,
 single-headed, and woman-headed:
 
+Every emitted derived row must have a non-null canonical `id`, and one derived
+relation may emit at most one row for that `id`. Registry Server refuses the
+query atomically when reviewed SQL violates either rule.
+
 ```bash
 registry-serverctl generate manifest \
   products/registry-server/acceptance/publicschema-household \

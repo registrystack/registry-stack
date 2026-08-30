@@ -472,6 +472,47 @@ async fn install_derived_view_fixture() {
         .is_err());
     transaction.rollback().await.expect("proof rolls back");
 
+    let null_key_transaction = begin_record_transaction(
+        &mut client,
+        lock_key,
+        Duration::from_secs(1),
+        &identity,
+        &claims,
+    )
+    .await
+    .expect("null-key proof transaction starts");
+    null_key_transaction
+        .transaction_for_test()
+        .execute(
+            &format!(
+                "INSERT INTO registry_data.{table} (record_id, {tenant}, {size})
+                 VALUES ('00000000-0000-4000-8000-000000000303', 'north', 0)"
+            ),
+            &[],
+        )
+        .await
+        .expect("invalid derived-key source row is visible inside the proof transaction");
+    null_key_transaction
+        .transaction_for_test()
+        .execute(
+            "SELECT set_config('registry.evaluation_date', '2026-08-30', true)",
+            &[],
+        )
+        .await
+        .expect("null-key proof installs explicit evaluation date");
+    assert!(null_key_transaction
+        .transaction_for_test()
+        .query(
+            &format!("SELECT * FROM registry_derived.{derived_view}"),
+            &[]
+        )
+        .await
+        .is_err());
+    null_key_transaction
+        .rollback()
+        .await
+        .expect("null-key source row rolls back");
+
     let duplicate_transaction = begin_record_transaction(
         &mut client,
         lock_key,
@@ -996,7 +1037,7 @@ fn derived_registry() -> registry_server::CompiledRegistry {
         &[ModuleAssetSource {
             module: None,
             path: "sql/facts.sql".to_owned(),
-            bytes: b"SELECT h.id AS id, h.size AS child_count, registry_context.evaluation_date() AS observed_on FROM registry_source.household h JOIN registry_source.household sibling ON sibling.tenant = h.tenant".to_vec(),
+            bytes: b"SELECT CASE WHEN h.size = 0 THEN NULL WHEN sibling.id = h.id THEN '00000000-0000-4000-8000-000000000301' ELSE '00000000000040008000000000000301' END AS id, h.size AS child_count, registry_context.evaluation_date() AS observed_on FROM registry_source.household h JOIN registry_source.household sibling ON sibling.tenant = h.tenant AND sibling.size > 0".to_vec(),
         }],
         CompileProfile::Authoring,
     )

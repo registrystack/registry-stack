@@ -85,7 +85,8 @@ fn derived_fields_selectors_and_read_paths_compile_to_route_specific_inventories
           "id":"demographics","sql":"sql/household-demographics.sql","key":"id","execution":"live",
           "fields":[
             {"id":"child-count","type":"int64","classification":"restricted"},
-            {"id":"single-headed","type":"boolean","classification":"restricted"}
+            {"id":"single-headed","type":"boolean","classification":"restricted"},
+            {"id":"registry-derived-key-cardinality","type":"int64","classification":"restricted"}
           ]
         }],
         "selectorProfiles":[
@@ -121,7 +122,7 @@ fn derived_fields_selectors_and_read_paths_compile_to_route_specific_inventories
         ]
       }]
     }"#;
-    let sql = "SELECT h.id AS id, 0::bigint AS child_count, false AS single_headed FROM registry_source.household h";
+    let sql = "SELECT h.id AS id, 0::bigint AS child_count, false AS single_headed, 1::bigint AS registry_derived_key_cardinality FROM registry_source.household h";
     let compiled = compile_json_with_assets(
         project,
         vec![derived_sql_asset("sql/household-demographics.sql", sql)],
@@ -168,8 +169,10 @@ fn derived_fields_selectors_and_read_paths_compile_to_route_specific_inventories
         "all source views must exist before cross-entity derived SQL is installed"
     );
     let derived_view = &compiled.ddl().statements[first_derived_view].sql;
-    assert!(derived_view.contains("count(*) OVER (PARTITION BY trusted_derived.\"id\")"));
-    assert!(derived_view.contains("registry_derived_key_cardinality"));
+    assert!(derived_view
+        .contains("count(*) OVER (PARTITION BY canonical_derived.\"__registry$derived$key\")"));
+    assert!(derived_view.contains("\"__registry$derived$cardinality\""));
+    assert!(derived_view.contains("\"registry_derived_key_cardinality\"::bigint"));
     assert!(compiled
         .routes()
         .routes
