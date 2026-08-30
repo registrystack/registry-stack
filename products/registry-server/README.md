@@ -87,6 +87,11 @@ and governed migrations. It does not provide a UI, GraphQL, workflow,
 eligibility, payment, identity matching, SQLite support, a multi-registry
 control plane, or runtime code plugins.
 
+The focused direction for hooks is documented in
+[`EVENTS-AND-WEBHOOKS.md`](EVENTS-AND-WEBHOOKS.md). Version 1 uses explicit
+transactional events and authenticated after-commit webhooks, with future Rhai
+rules kept behind the same governed extension boundary.
+
 PostgreSQL is the sole Version 1 database. The administrator installs
 `btree_gist`; neither the runtime nor migration role installs extensions.
 

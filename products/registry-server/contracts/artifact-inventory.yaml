@@ -5,6 +5,7 @@ artifacts:
   - {path: DEFINITION-OF-DONE.md, kind: completion-contract, state: authored}
   - {path: IMPLEMENTATION.md, kind: implementation-guide, state: authored}
   - {path: ACCEPTANCE-JOURNEYS.md, kind: acceptance-guide, state: authored}
+  - {path: EVENTS-AND-WEBHOOKS.md, kind: extension-direction-spec, state: authored}
   - {path: contracts/definition-of-done.yaml, kind: machine-readable-dod, state: authored}
   - {path: contracts/implementation-schedule.yaml, kind: delivery-schedule, state: authored}
   - {path: contracts/acceptance-scenario-matrix.yaml, kind: acceptance-matrix, state: authored}

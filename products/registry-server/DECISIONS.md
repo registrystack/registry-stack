@@ -3,8 +3,8 @@
 - Version 1 supports PostgreSQL only. SQLite is not a deployment compatibility
   promise.
 - Extension points begin with transactionally created outbox events and
-  authenticated webhooks. Arbitrary synchronous code hooks are not part of the
-  server.
+  authenticated webhooks under `EVENTS-AND-WEBHOOKS.md`. Arbitrary synchronous
+  code hooks are not part of the server.
 - Packages contain governed model and generated artifacts. Runtime
   configuration binds deployment-specific values and secrets and is not part of
   the signed model.
