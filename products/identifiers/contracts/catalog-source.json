@@ -107,6 +107,22 @@
       "status": "active",
       "compatibilityLine": "v2alpha1",
       "description": "Relay V2 authoring JSON Schema."
+    },
+    {
+      "glob": "products/registry-server/generated/authoring/*.schema.json",
+      "sourcePath": "crates/registry-server/src/schema.rs",
+      "owner": "registry-server",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Server project authoring JSON Schema."
+    },
+    {
+      "glob": "products/registry-server/generated/runtime/*.schema.json",
+      "sourcePath": "crates/registry-server/src/schema.rs",
+      "owner": "registry-server",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Server runtime configuration JSON Schema."
     }
   ],
   "records": [

@@ -362,7 +362,7 @@ through a governed read, and privacy regressions that expose raw subject identif
   allowance rather than by construction: only a `local` assurance bundle may declare it, only at a
   canonical numeric-loopback origin, and production and evidence-grade bundles reject that kind.
   {/* Evidence: valid_secret_reference(), crates/registry-relay-v2/src/contract.rs;
-       parse_reference(), validate_file_metadata(), and the tests
+       SecretReference, validate_file_metadata(), and the tests
        references_use_only_the_two_exact_contract_grammars,
        file_secret_accepts_only_owner_read_and_optional_owner_write_modes, and
        file_secret_rejects_every_name_for_a_hard_link in

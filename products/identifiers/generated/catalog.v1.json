@@ -12,7 +12,7 @@
       "description": "JSON-LD namespace for Registry Manifest terms.",
       "source": {
         "path": "crates/registry-manifest-core/src/lib.rs",
-        "sha256": "ac1ef80a34aa0e477702fd5c5b61f715fd4f4cd8f4982c5e914ec8665ef6bf92"
+        "sha256": "0db88429a6353a5a097a76434f5a5e7009556bf80e5066e2df6b643315d4cb81"
       }
     },
     {
@@ -844,6 +844,42 @@
       "artifact": {
         "path": "crates/registry-relayctl/schemas/authoring/runtime.schema.json",
         "sha256": "9beeda053e86d8ffa67755e91883efd0d2205026ee7d0aa7f38cecef7a6f781b",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/registry-server/authoring/registry-project.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "registry-server",
+      "title": "Registry Server authored project",
+      "description": "Registry Server project authoring JSON Schema.",
+      "source": {
+        "path": "crates/registry-server/src/schema.rs",
+        "sha256": "b8adb47a1ae445395121e3d51f4d7dac93e5465032cef5c55b47430ed4f3ee80"
+      },
+      "artifact": {
+        "path": "products/registry-server/generated/authoring/registry-project.schema.json",
+        "sha256": "d553fe4ce669a36018a520ae7f16cf7c33837a4c7000027b831598d744fc7187",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/registry-server/runtime/runtime.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "registry-server",
+      "title": "Registry Server runtime configuration",
+      "description": "Registry Server runtime configuration JSON Schema.",
+      "source": {
+        "path": "crates/registry-server/src/schema.rs",
+        "sha256": "b8adb47a1ae445395121e3d51f4d7dac93e5465032cef5c55b47430ed4f3ee80"
+      },
+      "artifact": {
+        "path": "products/registry-server/generated/runtime/runtime.schema.json",
+        "sha256": "76ab2845bff3f137c6c8640725d74879332d991544543bdb8c86821613653b9b",
         "mediaType": "application/schema+json"
       }
     },
