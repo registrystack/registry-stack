@@ -16,6 +16,7 @@ use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_crypto::{generate_private_jwk, sign, GeneratedKeyAlgorithm, PrivateJwk};
 use registry_server::compiler::{compile_project, module_digest, CompileProfile};
 use registry_server::contract::{parse_module_yaml, parse_project_yaml};
+use registry_server::event_destination::EventDestinationCompatibilityInventory;
 use registry_server::migration::{
     apply_verified_package, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
     ApplyVerifiedPackageRequest, MigrationError,
@@ -31,10 +32,12 @@ use registry_server::postgres::{
     begin_record_transaction, install_compiled_schema, managed_schema_fingerprint, ClaimContext,
     ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey,
 };
+use registry_server::runtime_config::parse_runtime_config;
 use registry_server::startup::{prepare_startup, StartupError};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tokio_postgres::GenericClient;
+use uuid::Uuid;
 
 const INSTANCE: &str = "instance-under-test";
 const DATABASE: &str = "database-under-test";
@@ -1845,17 +1848,361 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
     database.cleanup().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn successor_apply_refuses_to_strand_retained_webhook_work() {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs prerequisite");
+    let (mut migration, migration_task) = database.connect_migration().await;
+    let destination_fixture = EventDestinationCompatibilityFixture::create();
+
+    let first = PackageFixture::build(
+        "local",
+        1,
+        None,
+        fingerprint(1),
+        PlanChoice::WebhookSchema,
+        None,
+    );
+    let provisional_first = load_package(
+        first.root.path(),
+        &local_context(PackageIntent::InitialActivation),
+    )
+    .expect("initial webhook package verifies before fingerprinting");
+    let transaction = migration
+        .transaction()
+        .await
+        .expect("initial webhook fingerprint transaction starts");
+    install_compiled_schema(
+        &transaction,
+        provisional_first.registry(),
+        &database.runtime_role,
+    )
+    .await
+    .expect("initial webhook schema installs for fingerprinting");
+    let first_catalog = ExpectedManagedCatalog::compiled(provisional_first.registry());
+    let first_fingerprint =
+        managed_schema_fingerprint(&transaction, &database.runtime_role, &first_catalog)
+            .await
+            .expect("initial webhook fingerprint derives");
+    transaction
+        .rollback()
+        .await
+        .expect("initial webhook fingerprint transaction rolls back");
+    rewrite_unsigned(first.root.path(), |manifest| {
+        manifest.schema_fingerprint.clone_from(&first_fingerprint);
+    });
+    let verified_first = load_package(
+        first.root.path(),
+        &local_context(PackageIntent::InitialActivation),
+    )
+    .expect("initial webhook package reloads with exact fingerprint");
+    let active = apply_package(
+        &database,
+        &verified_first,
+        ApplyPrecondition::InitialActivation,
+        Duration::from_secs(1),
+        Duration::from_secs(1),
+    )
+    .await
+    .expect("initial webhook package activates");
+
+    let exact_inventory = destination_fixture.inventory(verified_first.registry(), "/events/v1");
+    let exact_digest = exact_inventory
+        .binding_digest("neutral-events")
+        .expect("compiled logical destination has an activated digest")
+        .to_owned();
+    let data_schema = verified_first.registry().event_deliveries().deliveries[0]
+        .data_schema
+        .as_str();
+    let pending_event = Uuid::new_v4();
+    insert_upgrade_webhook_delivery(
+        &database,
+        &active,
+        pending_event,
+        "neutral-events",
+        &exact_digest,
+        data_schema,
+        UpgradeDeliveryState::Pending,
+    )
+    .await;
+    insert_upgrade_webhook_delivery(
+        &database,
+        &active,
+        Uuid::new_v4(),
+        "removed-delivered-destination",
+        &fingerprint(31),
+        data_schema,
+        UpgradeDeliveryState::Delivered,
+    )
+    .await;
+    let erased_pending_event = Uuid::new_v4();
+    insert_upgrade_webhook_delivery(
+        &database,
+        &active,
+        erased_pending_event,
+        "removed-erased-pending-destination",
+        &fingerprint(34),
+        data_schema,
+        UpgradeDeliveryState::Pending,
+    )
+    .await;
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_outbox
+             SET payload = NULL
+             WHERE event_id = $1",
+            &[&erased_pending_event],
+        )
+        .await
+        .expect("upgrade test erases one pending payload before retention cleanup");
+    let expired_pending_event = Uuid::new_v4();
+    insert_upgrade_webhook_delivery(
+        &database,
+        &active,
+        expired_pending_event,
+        "removed-expired-pending-destination",
+        &fingerprint(35),
+        data_schema,
+        UpgradeDeliveryState::Pending,
+    )
+    .await;
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_outbox
+             SET payload_expires_at = transaction_timestamp() - interval '1 second'
+             WHERE event_id = $1",
+            &[&expired_pending_event],
+        )
+        .await
+        .expect("upgrade test expires one pending payload before retention cleanup");
+    insert_upgrade_webhook_delivery(
+        &database,
+        &active,
+        Uuid::new_v4(),
+        "removed-dead-letter-destination",
+        &fingerprint(32),
+        data_schema,
+        UpgradeDeliveryState::DeadLettered,
+    )
+    .await;
+    insert_upgrade_webhook_delivery(
+        &database,
+        &active,
+        Uuid::new_v4(),
+        "removed-expired-destination",
+        &fingerprint(33),
+        data_schema,
+        UpgradeDeliveryState::Expired,
+    )
+    .await;
+
+    let second = PackageFixture::build(
+        "local",
+        2,
+        Some(&active.package_revision),
+        first_fingerprint,
+        PlanChoice::WebhookSecondTable,
+        None,
+    );
+    let activation_context = local_context(PackageIntent::Activation {
+        active_revision: &active.package_revision,
+        active_sequence: 1,
+    });
+    let provisional_second = load_package(second.root.path(), &activation_context)
+        .expect("unrelated additive webhook successor verifies before fingerprinting");
+    let transaction = migration
+        .transaction()
+        .await
+        .expect("successor webhook fingerprint transaction starts");
+    for statement in &provisional_second.manifest().migration_plan.statements {
+        transaction
+            .batch_execute(&statement.sql)
+            .await
+            .expect("successor additive DDL applies for fingerprinting");
+    }
+    let second_table = &provisional_second.registry().entities()["second-record"].physical_table;
+    transaction
+        .batch_execute(&format!(
+            "REVOKE ALL ON TABLE registry_data.{} FROM PUBLIC, \"{}\";
+             GRANT SELECT, INSERT ON TABLE registry_data.{} TO \"{}\";",
+            quote_identifier(second_table),
+            database.runtime_role.as_str(),
+            quote_identifier(second_table),
+            database.runtime_role.as_str(),
+        ))
+        .await
+        .expect("successor fingerprint transaction installs target runtime ACL");
+    let second_catalog = ExpectedManagedCatalog::compiled(provisional_second.registry());
+    let second_fingerprint =
+        managed_schema_fingerprint(&transaction, &database.runtime_role, &second_catalog)
+            .await
+            .expect("successor webhook fingerprint derives");
+    transaction
+        .rollback()
+        .await
+        .expect("successor webhook fingerprint transaction rolls back");
+    rewrite_unsigned(second.root.path(), |manifest| {
+        manifest.schema_fingerprint.clone_from(&second_fingerprint);
+    });
+    let verified_second = load_package(second.root.path(), &activation_context)
+        .expect("successor webhook package reloads with exact fingerprint");
+    migration_task.abort();
+
+    let before_refusals = registry_state_snapshot(&database.admin).await;
+    let changed_inventory =
+        destination_fixture.inventory(verified_second.registry(), "/events/changed");
+    let removed_inventory = EventDestinationCompatibilityInventory::default();
+    let changed_refused = apply_package_with_event_destination_compatibility(
+        &database,
+        &verified_second,
+        ApplyPrecondition::Successor { current: &active },
+        &changed_inventory,
+    )
+    .await;
+    assert_eq!(changed_refused.err(), Some(MigrationError::ApplyFailed));
+    assert_eq!(
+        registry_state_snapshot(&database.admin).await,
+        before_refusals,
+        "a changed pending binding is refused before maintenance state changes"
+    );
+
+    let lease_token = Uuid::new_v4();
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_webhook_delivery_state
+             SET state = 'leased', attempt = 1, next_attempt_at = NULL,
+                 attempt_started_at = transaction_timestamp(),
+                 lease_expires_at = transaction_timestamp() + interval '1 hour',
+                 lease_token = $2, updated_at = transaction_timestamp()
+             WHERE event_id = $1",
+            &[&pending_event, &lease_token],
+        )
+        .await
+        .expect("upgrade test simulates retained leased work");
+    let removed_refused = apply_package_with_event_destination_compatibility(
+        &database,
+        &verified_second,
+        ApplyPrecondition::Successor { current: &active },
+        &removed_inventory,
+    )
+    .await;
+    assert_eq!(removed_refused.err(), Some(MigrationError::ApplyFailed));
+    assert_eq!(
+        registry_state_snapshot(&database.admin).await,
+        before_refusals,
+        "a removed leased binding is refused before maintenance state changes"
+    );
+    let retained_lease: String = database
+        .admin
+        .query_one(
+            "SELECT state FROM registry_internal.registry_webhook_delivery_state
+             WHERE event_id = $1",
+            &[&pending_event],
+        )
+        .await
+        .expect("leased state remains after refused activation")
+        .get(0);
+    assert_eq!(retained_lease, "leased");
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_webhook_delivery_state
+             SET state = 'pending', attempt = 0,
+                 next_attempt_at = transaction_timestamp(), attempt_started_at = NULL,
+                 lease_expires_at = NULL, lease_token = NULL,
+                 updated_at = transaction_timestamp()
+             WHERE event_id = $1 AND state = 'leased' AND lease_token = $2",
+            &[&pending_event, &lease_token],
+        )
+        .await
+        .expect("upgrade test restores pending old delivery for worker proof");
+
+    let target_inventory = destination_fixture.inventory(verified_second.registry(), "/events/v1");
+    assert_eq!(
+        target_inventory.binding_digest("neutral-events"),
+        Some(exact_digest.as_str())
+    );
+    let upgraded = apply_package_with_event_destination_compatibility(
+        &database,
+        &verified_second,
+        ApplyPrecondition::Successor { current: &active },
+        &target_inventory,
+    )
+    .await
+    .expect("an unrelated additive successor with the exact binding activates");
+    assert_eq!(upgraded.package_sequence, 2);
+    let after_upgrade = registry_state_snapshot(&database.admin).await;
+    assert_eq!(after_upgrade.4, upgraded.package_revision);
+    assert_eq!(after_upgrade.7, "ready");
+
+    let retained = database
+        .admin
+        .query_one(
+            "SELECT delivery.package_revision, delivery.logical_destination_id,
+                    delivery.destination_binding_digest, state.state
+             FROM registry_internal.registry_webhook_deliveries AS delivery
+             JOIN registry_internal.registry_webhook_delivery_state AS state
+               ON state.event_id = delivery.event_id
+              AND state.compiled_delivery_id = delivery.compiled_delivery_id
+             WHERE delivery.event_id = $1",
+            &[&pending_event],
+        )
+        .await
+        .expect("retained pre-upgrade delivery remains queryable");
+    assert_eq!(retained.get::<_, String>(0), active.package_revision);
+    assert_eq!(retained.get::<_, String>(1), "neutral-events");
+    assert_eq!(retained.get::<_, String>(2), exact_digest);
+    assert_eq!(retained.get::<_, String>(3), "pending");
+    let ignored_event_ids = vec![erased_pending_event, expired_pending_event];
+    let ignored_pending: Vec<(String, bool, bool)> = database
+        .admin
+        .query(
+            "SELECT state.state, outbox.payload IS NULL,
+                    outbox.payload_expires_at <= transaction_timestamp()
+             FROM registry_internal.registry_webhook_delivery_state AS state
+             JOIN registry_internal.registry_outbox AS outbox
+               ON outbox.event_id = state.event_id
+             WHERE state.event_id = ANY($1::uuid[])
+             ORDER BY state.event_id",
+            &[&ignored_event_ids],
+        )
+        .await
+        .expect("ignored pending retention states remain inspectable")
+        .into_iter()
+        .map(|row| (row.get(0), row.get(1), row.get(2)))
+        .collect();
+    assert_eq!(ignored_pending.len(), 2);
+    assert!(ignored_pending
+        .iter()
+        .all(|(state, payload_erased, payload_expired)| {
+            state == "pending" && (*payload_erased || *payload_expired)
+        }));
+
+    database.cleanup().await;
+}
+
 #[derive(Clone, Copy)]
 enum PlanChoice {
     Schema,
     SecondTable,
     ThirdTable,
+    WebhookSchema,
+    WebhookSecondTable,
 }
 
 fn predecessor_plan_choice(plan: PlanChoice) -> PlanChoice {
     match plan {
         PlanChoice::Schema | PlanChoice::SecondTable => PlanChoice::Schema,
         PlanChoice::ThirdTable => PlanChoice::SecondTable,
+        PlanChoice::WebhookSchema => PlanChoice::WebhookSchema,
+        PlanChoice::WebhookSecondTable => PlanChoice::WebhookSchema,
     }
 }
 
@@ -1864,6 +2211,8 @@ fn canonical_sequence_for_plan(plan: PlanChoice) -> u64 {
         PlanChoice::Schema => 1,
         PlanChoice::SecondTable => 2,
         PlanChoice::ThirdTable => 3,
+        PlanChoice::WebhookSchema => 1,
+        PlanChoice::WebhookSecondTable => 2,
     }
 }
 
@@ -2045,7 +2394,10 @@ fn project_bytes(environment: &str, sequence: u64, module_digest: &str) -> Vec<u
 }
 
 fn module_bytes(plan: PlanChoice) -> Vec<u8> {
-    let second = if matches!(plan, PlanChoice::SecondTable | PlanChoice::ThirdTable) {
+    let second = if matches!(
+        plan,
+        PlanChoice::SecondTable | PlanChoice::ThirdTable | PlanChoice::WebhookSecondTable
+    ) {
         r#",{"id":"second-record","route":"second-records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}],"accessProfiles":[{"id":"writer","principalClaim":"principal","operations":["get","create"],"readableFields":["code"],"writableFields":["code"]}]}"#
     } else {
         ""
@@ -2055,8 +2407,16 @@ fn module_bytes(plan: PlanChoice) -> Vec<u8> {
     } else {
         ""
     };
+    let events = if matches!(
+        plan,
+        PlanChoice::WebhookSchema | PlanChoice::WebhookSecondTable
+    ) {
+        r#","events":[{"id":"neutral-created-v1","trigger":"created","projection":["code"],"webhook":{"destinationId":"neutral-events"}}]"#
+    } else {
+        ""
+    };
     format!(
-        r#"{{"id":"core","version":"1","entities":[{{"id":"neutral-record","route":"neutral-records","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}}],"accessProfiles":[{{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]}}{second}{third}]}}"#
+        r#"{{"id":"core","version":"1","entities":[{{"id":"neutral-record","route":"neutral-records","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}}],"accessProfiles":[{{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]{events}}}{second}{third}]}}"#
     )
     .into_bytes()
 }
@@ -2132,6 +2492,281 @@ async fn apply_package(
         timeouts,
     ))
     .await
+}
+
+async fn apply_package_with_event_destination_compatibility(
+    database: &TestDatabase,
+    package: &registry_server::package::VerifiedPackage,
+    precondition: ApplyPrecondition<'_>,
+    inventory: &EventDestinationCompatibilityInventory,
+) -> registry_server::migration::Result<ExpectedRegistryIdentity> {
+    let timeouts = ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(1))
+        .expect("test apply timeouts are bounded");
+    apply_verified_package(
+        ApplyVerifiedPackageRequest::new(
+            &database.migration_config,
+            package,
+            precondition,
+            ApplyRoles::new(&database.migration_role, &database.runtime_role),
+            timeouts,
+        )
+        .with_event_destination_compatibility_inventory(inventory),
+    )
+    .await
+}
+
+#[derive(Clone, Copy)]
+enum UpgradeDeliveryState {
+    Pending,
+    Delivered,
+    DeadLettered,
+    Expired,
+}
+
+async fn insert_upgrade_webhook_delivery(
+    database: &TestDatabase,
+    active: &ExpectedRegistryIdentity,
+    event_id: Uuid,
+    logical_destination_id: &str,
+    binding_digest: &str,
+    data_schema: &str,
+    state: UpgradeDeliveryState,
+) {
+    let compiled_delivery_id = "events.neutral-record.neutral-created-v1.webhook";
+    let payload = br#"{"code":"old"}"#.as_slice();
+    let payload_digest = Sha256::digest(payload).to_vec();
+    let retry_delays_ms = vec![1_000_i64, 2_000, 4_000, 8_000];
+    database
+        .admin
+        .execute(
+            "INSERT INTO registry_internal.registry_outbox
+                 (event_id, event_type, trigger, entity_id, record_reference,
+                  record_revision, package_revision, schema_fingerprint, payload,
+                  payload_expires_at)
+             VALUES ($1, 'neutral-created-v1', 'created', 'neutral-record',
+                     'record-reference', 1, $2, $3, $4,
+                     transaction_timestamp() + interval '7 days')",
+            &[
+                &event_id,
+                &active.package_revision,
+                &active.schema_fingerprint,
+                &payload,
+            ],
+        )
+        .await
+        .expect("upgrade test outbox row inserts");
+    database
+        .admin
+        .execute(
+            "INSERT INTO registry_internal.registry_webhook_deliveries
+                 (event_id, compiled_delivery_id, logical_destination_id,
+                  destination_binding_digest, package_revision, schema_fingerprint,
+                  data_schema, classification_ceiling, authentication_profile, delivery_mode,
+                  attempt_timeout_ms, initial_backoff_ms, maximum_backoff_ms,
+                  exponential_backoff_multiplier, maximum_attempts, retry_delays_ms,
+                  maximum_payload_bytes, payload_digest, deployed_attempt_timeout_ms,
+                  deployed_maximum_attempts, dead_letter, operator_replay)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 'internal', 'hmac_sha256_v1',
+                     'after_commit', 5000, 1000, 8000, 2, 5, $8, 1024, $9,
+                     4000, 4, 'required', true)",
+            &[
+                &event_id,
+                &compiled_delivery_id,
+                &logical_destination_id,
+                &binding_digest,
+                &active.package_revision,
+                &active.schema_fingerprint,
+                &data_schema,
+                &retry_delays_ms,
+                &payload_digest,
+            ],
+        )
+        .await
+        .expect("upgrade test captured delivery inserts");
+    database
+        .admin
+        .execute(
+            "INSERT INTO registry_internal.registry_webhook_delivery_state
+                 (event_id, compiled_delivery_id, generation, state, attempt, next_attempt_at)
+             VALUES ($1, $2, 1, 'pending', 0, transaction_timestamp())",
+            &[&event_id, &compiled_delivery_id],
+        )
+        .await
+        .expect("upgrade test pending state inserts");
+
+    let terminal_update = match state {
+        UpgradeDeliveryState::Pending => return,
+        UpgradeDeliveryState::Delivered => {
+            "SET state = 'delivered', attempt = 1, next_attempt_at = NULL,
+                 delivered_at = transaction_timestamp(), updated_at = transaction_timestamp()"
+        }
+        UpgradeDeliveryState::DeadLettered => {
+            "SET state = 'dead_lettered', attempt = 1, next_attempt_at = NULL,
+                 dead_lettered_at = transaction_timestamp(), updated_at = transaction_timestamp()"
+        }
+        UpgradeDeliveryState::Expired => {
+            "SET state = 'expired', next_attempt_at = NULL,
+                 expired_at = transaction_timestamp(), updated_at = transaction_timestamp()"
+        }
+    };
+    database
+        .admin
+        .execute(
+            &format!(
+                "UPDATE registry_internal.registry_webhook_delivery_state {terminal_update}
+                 WHERE event_id = $1 AND compiled_delivery_id = $2"
+            ),
+            &[&event_id, &compiled_delivery_id],
+        )
+        .await
+        .expect("upgrade test terminal state installs");
+    if matches!(
+        state,
+        UpgradeDeliveryState::Delivered | UpgradeDeliveryState::Expired
+    ) {
+        database
+            .admin
+            .execute(
+                "UPDATE registry_internal.registry_outbox
+                 SET payload = NULL,
+                     payload_expires_at = CASE
+                         WHEN $2 THEN transaction_timestamp() - interval '1 second'
+                         ELSE payload_expires_at
+                     END
+                 WHERE event_id = $1",
+                &[&event_id, &matches!(state, UpgradeDeliveryState::Expired)],
+            )
+            .await
+            .expect("upgrade test terminal payload is erased");
+    }
+}
+
+struct EventDestinationCompatibilityFixture {
+    _root: TempRoot,
+    secret_root: PathBuf,
+    package_root: PathBuf,
+    trust_anchor: PathBuf,
+}
+
+impl EventDestinationCompatibilityFixture {
+    fn create() -> Self {
+        let root = TempRoot::create();
+        fs::create_dir(root.path()).expect("destination compatibility root creates");
+        let secret_root = root.path().join("secrets");
+        let package_root = root.path().join("package");
+        fs::create_dir(&secret_root).expect("destination compatibility secrets create");
+        fs::create_dir(&package_root).expect("destination compatibility package root creates");
+        let trust_anchor = root.path().join("trust-anchor.json");
+        fs::write(&trust_anchor, "{}").expect("destination compatibility trust file writes");
+        let key_path = secret_root.join("webhook-key");
+        fs::write(&key_path, [0x51_u8; 32]).expect("destination compatibility key writes");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600))
+                .expect("destination compatibility key permissions set");
+        }
+        Self {
+            _root: root,
+            secret_root,
+            package_root,
+            trust_anchor,
+        }
+    }
+
+    fn inventory(
+        &self,
+        registry: &registry_server::CompiledRegistry,
+        path: &str,
+    ) -> EventDestinationCompatibilityInventory {
+        let raw = format!(
+            r#"
+listener:
+  bind: 127.0.0.1:8080
+  trustedProxy: direct
+identity:
+  environment: local
+  instanceId: {INSTANCE}
+  databaseId: {DATABASE}
+  databaseInitializationEnvironment: local
+secretProviders:
+  file:
+    root: {}
+database:
+  runtimeUrlRef: secret:file/runtime-database-url
+  migrationUrlRef: secret:file/migration-database-url
+  pool:
+    maxSize: 4
+    waitTimeoutMilliseconds: 1000
+    createTimeoutMilliseconds: 1000
+    recycleTimeoutMilliseconds: 1000
+  roles:
+    migration: registry_migration
+    runtime: registry_runtime
+package:
+  root: {}
+  trustAnchorPath: {}
+  compilerSourceRevision: {SOURCE_REVISION}
+  activeRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  activeSequence: 1
+authentication:
+  oidc:
+    issuer: https://issuer.example
+    audience: urn:registry-server:webhook-upgrade
+    allowedAlgorithm: EdDSA
+    accessTokenType: JWT
+    scopeClaim: scope
+    scopeSeparator: " "
+    allowedClients: [registry-client]
+    deniedKids: [denied-kid]
+    maxTokenLifetimeSeconds: 300
+    leewayMilliseconds: 60000
+    jwksCache:
+      cacheTtlSeconds: 600
+      negativeCacheTtlSeconds: 60
+      refreshCooldownSeconds: 30
+      maxDocumentBytes: 65536
+      requestTimeoutMilliseconds: 5000
+      outageToleranceSeconds: 900
+  authorityClaims:
+    principal: registry_principal
+    purpose: registry_purpose
+    rowBoundaryClaims:
+      - {{name: jurisdiction, type: directString}}
+audit:
+  hashKeyRef: secret:file/audit-key
+cursor:
+  secretRef: secret:file/cursor-key
+  maxAgeSeconds: 300
+eventDestinations:
+  neutral-events:
+    origin: https://events.example/
+    path: {path}
+    networkProfile: productionHttps
+    dnsFamily: dualStackStrict
+    allowedPrivateCidrs: []
+    hmacSha256KeyRef: secret:file/webhook-key
+    classificationCeiling: internal
+    deliveryCeilings:
+      attemptTimeoutMilliseconds: 4000
+      maximumAttempts: 4
+operationalTimeouts:
+  httpRequestMilliseconds: 10000
+  shutdownGraceMilliseconds: 30000
+  recordLockMilliseconds: 5000
+  migrationLockMilliseconds: 30000
+  migrationStatementMilliseconds: 60000
+"#,
+            self.secret_root.display(),
+            self.package_root.display(),
+            self.trust_anchor.display(),
+        );
+        parse_runtime_config(&raw)
+            .expect("upgrade compatibility runtime parses")
+            .activate_event_destinations(registry)
+            .expect("upgrade compatibility destination activates")
+            .compatibility_inventory()
+    }
 }
 
 async fn registry_state_snapshot(

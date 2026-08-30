@@ -454,8 +454,6 @@ async fn assert_exact_durable_journey_outcomes(
                  (SELECT count(*) FROM registry_internal.registry_idempotency
                    WHERE response_status = 200),
                  (SELECT count(*) FROM registry_internal.registry_outbox),
-                 (SELECT count(*) FROM registry_internal.registry_outbox
-                   WHERE event_type = 'widget-created' AND trigger = 'created'),
                  (SELECT count(*) FROM registry_internal.registry_audit)",
             &[],
         )
@@ -469,9 +467,8 @@ async fn assert_exact_durable_journey_outcomes(
     assert_eq!(counts.get::<_, i64>(5), 1);
     assert_eq!(counts.get::<_, i64>(6), 1);
     assert_eq!(counts.get::<_, i64>(7), 2);
-    assert_eq!(counts.get::<_, i64>(8), 3);
-    assert_eq!(counts.get::<_, i64>(9), 3);
-    assert_eq!(counts.get::<_, i64>(10), 11);
+    assert_eq!(counts.get::<_, i64>(8), 0);
+    assert_eq!(counts.get::<_, i64>(9), 11);
 
     let audit_rows = database
         .admin

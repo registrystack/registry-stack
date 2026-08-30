@@ -3,11 +3,11 @@
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use registry_server::compiler::{compile_project, module_digest, CompileProfile};
 use registry_server::contract::{
-    parse_module_json, parse_project_json, ModuleLockSource, RegistryModule, RegistryProject,
-    WebhookAuthenticationProfile, WebhookDeadLetterMode,
+    parse_module_json, parse_project_json, Classification, ModuleLockSource, RegistryModule,
+    RegistryProject, WebhookAuthenticationProfile, WebhookDeadLetterMode,
 };
 use registry_server::diagnostics::CompileFailure;
-use registry_server::model::CompiledWebhookDeliveryMode;
+use registry_server::model::{CompiledWebhookDeliveryMode, CompiledWebhookRetryProfile};
 use serde_json::{json, Value};
 
 fn project_value() -> Value {
@@ -30,18 +30,12 @@ fn project_value() -> Value {
                 "id": "case-created",
                 "trigger": "created",
                 "projection": ["label", "region"],
+                "when": {
+                    "kind": "fields",
+                    "afterEquals": {"region": "north"}
+                },
                 "webhook": {
-                    "destinationId": "case-operations",
-                    "classificationCeiling": "internal",
-                    "authenticationProfile": "hmac_sha256_v1",
-                    "delivery": {
-                        "attemptTimeoutMs": 5000,
-                        "initialBackoffMs": 250,
-                        "maximumBackoffMs": 2000,
-                        "maximumAttempts": 5,
-                        "deadLetter": "required",
-                        "operatorReplay": false
-                    }
+                    "destinationId": "case-operations"
                 }
             }, {
                 "id": "case-patched-outbox",
@@ -79,12 +73,6 @@ fn webhook_mut(value: &mut Value) -> &mut serde_json::Map<String, Value> {
         .expect("webhook object")
 }
 
-fn delivery_mut(value: &mut Value) -> &mut serde_json::Map<String, Value> {
-    webhook_mut(value)["delivery"]
-        .as_object_mut()
-        .expect("delivery object")
-}
-
 #[test]
 fn governed_webhook_compiles_to_deterministic_destination_neutral_inventory() {
     let source = project_value();
@@ -100,6 +88,16 @@ fn governed_webhook_compiles_to_deterministic_destination_neutral_inventory() {
     assert_eq!(delivery.event_id, "case-created");
     assert_eq!(delivery.destination_id, "case-operations");
     assert_eq!(delivery.projection_fields, ["label", "region"]);
+    assert_eq!(delivery.classification_ceiling, Classification::Internal);
+    assert!(delivery.when.is_some());
+    assert!(delivery.data_schema.starts_with(
+        "urn:registry-server:event-schema:webhook-contract:case:case-created:sha256:"
+    ));
+    assert!(delivery.data_schema_fingerprint.starts_with("sha256:"));
+    assert_eq!(
+        delivery.data_schema_artifact_path,
+        "generated/event-schemas/case.case-created.schema.json"
+    );
     assert_eq!(
         delivery.authentication_profile,
         WebhookAuthenticationProfile::HmacSha256V1
@@ -108,11 +106,19 @@ fn governed_webhook_compiles_to_deterministic_destination_neutral_inventory() {
         delivery.delivery_mode,
         CompiledWebhookDeliveryMode::AfterCommit
     );
+    assert_eq!(
+        delivery.retry_profile,
+        CompiledWebhookRetryProfile::RegistryV1
+    );
+    assert_eq!(delivery.attempt_timeout_ms, 5000);
+    assert_eq!(delivery.initial_backoff_ms, 1000);
+    assert_eq!(delivery.maximum_backoff_ms, 8000);
+    assert_eq!(delivery.maximum_attempts, 5);
     assert_eq!(delivery.exponential_backoff_multiplier, 2);
-    assert_eq!(delivery.retry_delays_ms, [250, 500, 1000, 2000]);
-    assert_eq!(delivery.maximum_payload_bytes, 600);
+    assert_eq!(delivery.retry_delays_ms, [1000, 2000, 4000, 8000]);
+    assert_eq!(delivery.maximum_payload_bytes, 2288);
     assert_eq!(delivery.dead_letter, WebhookDeadLetterMode::Required);
-    assert!(!delivery.operator_replay);
+    assert!(delivery.operator_replay);
 
     let artifact = first
         .artifacts()
@@ -126,6 +132,16 @@ fn governed_webhook_compiles_to_deterministic_destination_neutral_inventory() {
     assert_eq!(
         parsed,
         serde_json::to_value(inventory).expect("inventory serializes")
+    );
+    let schema = first
+        .artifacts()
+        .get(&delivery.data_schema_artifact_path)
+        .expect("event data schema is generated");
+    assert_eq!(schema.sha256, delivery.data_schema_fingerprint);
+    let schema_value = parse_json_strict(&schema.bytes).expect("event schema is strict JSON");
+    assert_eq!(
+        schema_value["properties"]["values"]["required"],
+        json!(["label", "region"])
     );
     let text = String::from_utf8(artifact.bytes.clone()).expect("artifact is UTF-8");
     for forbidden in ["http://", "https://", "secret", "tls", "certificate"] {
@@ -154,30 +170,12 @@ fn destination_auth_delivery_and_deployed_members_are_closed_and_value_free() {
         }
     }
 
-    for (path, value) in [
-        ("authenticationProfile", "bearer_token"),
-        ("delivery.mode", "before_commit"),
-    ] {
-        let mut source = project_value();
-        if path == "authenticationProfile" {
-            webhook_mut(&mut source).insert(path.to_owned(), json!(value));
-        } else {
-            delivery_mut(&mut source).insert("mode".to_owned(), json!(value));
-        }
-        let failure = parse_project_json(
-            &serde_json::to_vec(&source).expect("unsupported profile source serializes"),
-        )
-        .expect_err("unsupported closed mode is refused during strict parse");
-        assert_eq!(failure.diagnostics()[0].code, "source.shape.invalid");
-        assert!(!serde_json::to_string(&failure)
-            .expect("failure serializes")
-            .contains(value));
-    }
-
     for (member, canary) in [
         ("destinationUrl", "https://deployed.example/webhook-canary"),
         ("secret", "raw-webhook-secret-canary"),
         ("tlsCertificate", "raw-tls-certificate-canary"),
+        ("classificationCeiling", "restricted"),
+        ("authenticationProfile", "hmac_sha256_v1"),
     ] {
         let mut source = project_value();
         webhook_mut(&mut source).insert(member.to_owned(), json!(canary));
@@ -189,10 +187,16 @@ fn destination_auth_delivery_and_deployed_members_are_closed_and_value_free() {
         let diagnostic = serde_json::to_string(&failure).expect("failure serializes");
         assert!(!diagnostic.contains(canary));
     }
+
+    let mut source = project_value();
+    webhook_mut(&mut source).insert("delivery".to_owned(), json!({"attemptTimeoutMs": 5000}));
+    let failure = parse_project_json(&serde_json::to_vec(&source).expect("source serializes"))
+        .expect_err("per-event delivery policy is not authored");
+    assert_eq!(failure.diagnostics()[0].code, "source.shape.invalid");
 }
 
 #[test]
-fn webhook_projection_and_classification_ceiling_are_closed() {
+fn webhook_projection_is_closed_and_classification_is_derived() {
     let mut missing = project_value();
     missing["entities"][0]["events"][0]
         .as_object_mut()
@@ -210,27 +214,90 @@ fn webhook_projection_and_classification_ceiling_are_closed() {
     unknown["entities"][0]["events"][0]["projection"] = json!(["unknown-field"]);
     assert_compile_code(&unknown, "event.projection.field_unknown");
 
-    let mut projected_above_ceiling = project_value();
-    projected_above_ceiling["entities"][0]["events"][0]["projection"] = json!(["secret"]);
-    assert_compile_code(
-        &projected_above_ceiling,
-        "event.webhook.classification_ceiling.underdeclared",
+    let mut restricted = project_value();
+    restricted["entities"][0]["events"][0]["projection"] = json!(["secret"]);
+    restricted["entities"][0]["events"][0]
+        .as_object_mut()
+        .expect("event object")
+        .remove("when");
+    assert_eq!(
+        compile(&restricted)
+            .expect("classification follows the projection")
+            .event_deliveries()
+            .deliveries[0]
+            .classification_ceiling,
+        Classification::Restricted
     );
 
     let mut minimized = project_value();
     minimized["entities"][0]["classification"] = json!("restricted");
     minimized["entities"][0]["events"][0]["projection"] = json!(["label"]);
-    minimized["entities"][0]["events"][0]["webhook"]["classificationCeiling"] = json!("public");
+    minimized["entities"][0]["events"][0]
+        .as_object_mut()
+        .expect("event object")
+        .remove("when");
     let minimized = compile(&minimized)
         .expect("a restricted entity may deliver only explicitly projected public fields");
     assert_eq!(
         minimized.event_deliveries().deliveries[0].projection_fields,
         ["label"]
     );
+    assert_eq!(
+        minimized.event_deliveries().deliveries[0].classification_ceiling,
+        Classification::Public
+    );
+
+    let mut condition_observes_restricted = project_value();
+    condition_observes_restricted["entities"][0]["events"][0]["projection"] = json!(["label"]);
+    condition_observes_restricted["entities"][0]["events"][0]["when"] = json!({
+        "kind": "fields",
+        "afterEquals": {"secret": "eligible"}
+    });
+    assert_eq!(
+        compile(&condition_observes_restricted)
+            .expect("observable condition classification is compiled")
+            .event_deliveries()
+            .deliveries[0]
+            .classification_ceiling,
+        Classification::Restricted,
+        "event occurrence must carry the classification of predicate inputs"
+    );
 
     let mut oversized = project_value();
     oversized["entities"][0]["fields"][0]["maxLength"] = json!(300_000);
     assert_compile_code(&oversized, "event.webhook.projection_too_large");
+
+    let mut exact_envelope_boundary = project_value();
+    exact_envelope_boundary["entities"][0]["fields"][0] = json!({
+        "id": "label",
+        "type": "structured",
+        "maxBytes": 1_046_878,
+        "schema": {
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+            "additionalProperties": false
+        },
+        "required": true,
+        "classification": "public"
+    });
+    exact_envelope_boundary["entities"][0]["events"][0]["projection"] = json!(["label"]);
+    exact_envelope_boundary["entities"][0]["events"][0]
+        .as_object_mut()
+        .expect("event object")
+        .remove("when");
+    assert_eq!(
+        compile(&exact_envelope_boundary)
+            .expect("a full event body at the transport bound compiles")
+            .event_deliveries()
+            .deliveries[0]
+            .maximum_payload_bytes,
+        1_048_576
+    );
+    exact_envelope_boundary["entities"][0]["fields"][0]["maxBytes"] = json!(1_046_879);
+    assert_compile_code(
+        &exact_envelope_boundary,
+        "event.webhook.projection_too_large",
+    );
 
     let mut exact_transport_mismatch = project_value();
     exact_transport_mismatch["entities"][0]["fields"][0] = json!({
@@ -319,38 +386,62 @@ fn webhook_projection_and_classification_ceiling_are_closed() {
 }
 
 #[test]
-fn webhook_timeout_backoff_attempt_and_dead_letter_bounds_are_closed() {
-    for (member, value, code) in [
-        ("attemptTimeoutMs", 0_u32, "event.webhook.timeout.invalid"),
-        ("attemptTimeoutMs", 10_001, "event.webhook.timeout.invalid"),
-        ("initialBackoffMs", 0, "event.webhook.backoff.invalid"),
-        (
-            "maximumBackoffMs",
-            3_600_001,
-            "event.webhook.backoff.invalid",
-        ),
-        ("maximumAttempts", 0, "event.webhook.attempts.invalid"),
-        ("maximumAttempts", 21, "event.webhook.attempts.invalid"),
+fn field_conditions_are_typed_nonempty_and_trigger_compatible() {
+    let mut patched = project_value();
+    patched["entities"][0]["events"][0]["trigger"] = json!("patched");
+    patched["entities"][0]["events"][0]["when"] = json!({
+        "kind": "fields",
+        "changed": ["region"],
+        "beforeEquals": {"region": null},
+        "afterEquals": {"region": "north"}
+    });
+    compile(&patched).expect("patched events support all Version 1 field predicates");
+
+    let mut empty = project_value();
+    empty["entities"][0]["events"][0]["when"] = json!({"kind": "fields"});
+    assert_compile_code(&empty, "event.when.empty");
+
+    let mut incompatible_created = project_value();
+    incompatible_created["entities"][0]["events"][0]["when"] = json!({
+        "kind": "fields",
+        "changed": ["region"]
+    });
+    assert_compile_code(&incompatible_created, "event.when.trigger_incompatible");
+
+    let mut incompatible_tombstone = project_value();
+    incompatible_tombstone["entities"][0]["events"][0]["trigger"] = json!("tombstoned");
+    incompatible_tombstone["entities"][0]["events"][0]["when"] = json!({
+        "kind": "fields",
+        "afterEquals": {"region": "north"}
+    });
+    assert_compile_code(&incompatible_tombstone, "event.when.trigger_incompatible");
+
+    for when in [
+        json!({"kind": "fields", "changed": ["unknown"]}),
+        json!({"kind": "fields", "beforeEquals": {"unknown": "value"}}),
+        json!({"kind": "fields", "afterEquals": {"unknown": "value"}}),
     ] {
-        let mut source = project_value();
-        delivery_mut(&mut source).insert(member.to_owned(), json!(value));
-        assert_compile_code(&source, code);
+        let mut source = patched.clone();
+        source["entities"][0]["events"][0]["when"] = when;
+        assert_compile_code(&source, "event.when.field_unknown");
     }
 
-    let mut incoherent = project_value();
-    delivery_mut(&mut incoherent).insert("initialBackoffMs".to_owned(), json!(2001));
-    assert_compile_code(&incoherent, "event.webhook.backoff.invalid");
+    let mut wrong_type = patched;
+    wrong_type["entities"][0]["events"][0]["when"] = json!({
+        "kind": "fields",
+        "afterEquals": {"region": 7}
+    });
+    assert_compile_code(&wrong_type, "event.when.value_invalid");
 
-    let mut missing_dead_letter = project_value();
-    delivery_mut(&mut missing_dead_letter).remove("deadLetter");
-    assert_compile_code(&missing_dead_letter, "event.webhook.dead_letter.required");
-
-    let mut missing_replay = project_value();
-    delivery_mut(&mut missing_replay).remove("operatorReplay");
+    let mut structured = project_value();
+    structured["entities"][0]["events"][0]["when"] = json!({
+        "kind": "fields",
+        "afterEquals": {"region": {"unexpected": true}}
+    });
     let failure = parse_project_json(
-        &serde_json::to_vec(&missing_replay).expect("missing replay source serializes"),
+        &serde_json::to_vec(&structured).expect("structured predicate source serializes"),
     )
-    .expect_err("operator replay permission must be explicit");
+    .expect_err("comparison values are scalar or null");
     assert_eq!(failure.diagnostics()[0].code, "source.shape.invalid");
 }
 
@@ -405,12 +496,36 @@ fn additive_modules_add_nonconflicting_subscriptions_deterministically_and_refus
 }
 
 #[test]
-fn outbox_only_event_compatibility_emits_an_empty_delivery_inventory() {
+fn event_ids_are_unique_across_entities_for_unambiguous_external_types() {
     let mut source = project_value();
-    source["entities"][0]["events"][0]
-        .as_object_mut()
-        .expect("event object")
-        .remove("webhook");
+    source["entities"]
+        .as_array_mut()
+        .expect("entities array")
+        .push(json!({
+            "id": "appeal",
+            "route": "appeals",
+            "mutationMode": "create_only",
+            "fields": [
+                {"id": "label", "type": "string", "maxLength": 64, "classification": "public"}
+            ],
+            "events": [{
+                "id": "case-created",
+                "trigger": "created",
+                "projection": ["label"],
+                "webhook": {"destinationId": "appeal-operations"}
+            }]
+        }));
+    assert_compile_code(&source, "event.id.registry_duplicate");
+}
+
+#[test]
+fn outbox_only_event_is_authoring_only_and_production_requires_delivery() {
+    let mut source = project_value();
+    source["entities"][0]["events"] = json!([{
+        "id": "case-created",
+        "trigger": "created",
+        "projection": ["label"]
+    }]);
     let compiled = compile(&source).expect("outbox-only events remain valid");
     assert!(compiled.event_deliveries().deliveries.is_empty());
     let artifact = compiled
@@ -421,6 +536,13 @@ fn outbox_only_event_compatibility_emits_an_empty_delivery_inventory() {
     assert!(compiled.entities()["case"].events["case-created"]
         .webhook
         .is_none());
+
+    let failure = compile_project(&parse_project(&source), &[], CompileProfile::Production)
+        .expect_err("production has no supported outbox-only consumer API");
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "event.delivery.required"));
 }
 
 fn webhook_module(id: &str, event_id: &str, destination_id: &str) -> RegistryModule {
@@ -435,17 +557,7 @@ fn webhook_module(id: &str, event_id: &str, destination_id: &str) -> RegistryMod
                     "trigger": "created",
                     "projection": ["label"],
                     "webhook": {
-                        "destinationId": destination_id,
-                        "classificationCeiling": "internal",
-                        "authenticationProfile": "hmac_sha256_v1",
-                        "delivery": {
-                            "attemptTimeoutMs": 1000,
-                            "initialBackoffMs": 100,
-                            "maximumBackoffMs": 1000,
-                            "maximumAttempts": 3,
-                            "deadLetter": "required",
-                            "operatorReplay": true
-                        }
+                        "destinationId": destination_id
                     }
                 }]
             }]

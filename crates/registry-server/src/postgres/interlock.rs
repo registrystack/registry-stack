@@ -9,6 +9,7 @@ use tokio_postgres::NoTls;
 use tokio_postgres::{Client, GenericClient};
 use uuid::Uuid;
 
+use crate::event_destination::EventDestinationCompatibilityInventory;
 use crate::generated_ddl::DdlStatementKind;
 use crate::migration_plan::{
     AffectedRowBounds, ReviewedMigrationStepDescriptor, ValidatedReviewedMigrationAssertion,
@@ -693,6 +694,7 @@ impl DedicatedApplyConnection {
         current: &ExpectedRegistryIdentity,
         target: &ExpectedRegistryIdentity,
         ledger: &MigrationLedgerEntry,
+        event_destination_compatibility_inventory: Option<&EventDestinationCompatibilityInventory>,
     ) -> Result<()> {
         ensure_verified_package_session(self.locked, self.verified_migration_role)?;
         current.validate()?;
@@ -708,6 +710,11 @@ impl DedicatedApplyConnection {
             ));
         }
         let transaction = self.client.transaction().await?;
+        verify_retained_webhook_delivery_bindings(
+            &transaction,
+            event_destination_compatibility_inventory,
+        )
+        .await?;
         let changed = transaction
             .execute(
                 "UPDATE registry_internal.registry_state
@@ -1081,6 +1088,65 @@ impl DedicatedApplyConnection {
         self.connection_task.abort();
         Ok(())
     }
+}
+
+/// Refuse a successor before changing maintenance state when its activated
+/// non-secret destination bindings cannot finish every retained non-terminal
+/// delivery. The package session's exclusive advisory lock prevents Registry
+/// workers or mutations from changing this inventory while the check and
+/// maintenance transition commit together.
+async fn verify_retained_webhook_delivery_bindings(
+    transaction: &impl GenericClient,
+    inventory: Option<&EventDestinationCompatibilityInventory>,
+) -> Result<()> {
+    let tables = transaction
+        .query_one(
+            "SELECT to_regclass('registry_internal.registry_webhook_deliveries') IS NOT NULL,
+                    to_regclass('registry_internal.registry_webhook_delivery_state') IS NOT NULL",
+            &[],
+        )
+        .await?;
+    let deliveries_exist = tables.try_get::<_, bool>(0)?;
+    let states_exist = tables.try_get::<_, bool>(1)?;
+    if !deliveries_exist && !states_exist {
+        return Ok(());
+    }
+    if !deliveries_exist || !states_exist {
+        return Err(PostgresKernelError::RegistryUnavailable);
+    }
+
+    let (logical_destination_ids, binding_digests): (Vec<String>, Vec<String>) = inventory
+        .into_iter()
+        .flat_map(EventDestinationCompatibilityInventory::binding_digests)
+        .map(|(logical_id, digest)| (logical_id.to_owned(), digest.to_owned()))
+        .unzip();
+    let incompatible = transaction
+        .query_opt(
+            "SELECT 1
+             FROM registry_internal.registry_webhook_delivery_state AS state
+             JOIN registry_internal.registry_webhook_deliveries AS delivery
+               ON delivery.event_id = state.event_id
+              AND delivery.compiled_delivery_id = state.compiled_delivery_id
+             JOIN registry_internal.registry_outbox AS outbox
+               ON outbox.event_id = delivery.event_id
+             WHERE state.state IN ('pending', 'leased')
+               AND outbox.payload IS NOT NULL
+               AND outbox.payload_expires_at > transaction_timestamp()
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM unnest($1::text[], $2::text[])
+                       AS activated(logical_destination_id, binding_digest)
+                   WHERE activated.logical_destination_id = delivery.logical_destination_id
+                     AND activated.binding_digest = delivery.destination_binding_digest
+               )
+             LIMIT 1",
+            &[&logical_destination_ids, &binding_digests],
+        )
+        .await?;
+    if incompatible.is_some() {
+        return Err(PostgresKernelError::RegistryUnavailable);
+    }
+    Ok(())
 }
 
 fn ledger_step(

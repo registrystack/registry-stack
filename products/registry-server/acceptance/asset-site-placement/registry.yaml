@@ -68,8 +68,6 @@ entities:
       - {id: asset, type: reference, target: asset-item, required: true, classification: internal}
       - {id: observed-at, type: timestamp, required: true, classification: internal}
       - {id: result, type: vocabulary-code, vocabulary: inspection-result, required: true, classification: internal}
-    events:
-      - {id: inspection-created, trigger: created, projection: [asset, observed-at, result]}
 accessProfiles:
   - id: asset-operator
     default: true

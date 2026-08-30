@@ -14,13 +14,15 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use postgres_harness::TestDatabase;
 use registry_platform_audit::AuditProfile;
+use registry_platform_canonical_json::canonicalize_json;
 use registry_server::compiler::{compile_project, CompileProfile};
 use registry_server::contract::parse_project_json;
 use registry_server::event_destination::ActivatedEventDestinationRegistry;
+use registry_server::idempotency::PermittedResponseHeader;
 use registry_server::model::CompiledEventDelivery;
 use registry_server::mutation::{
-    MutationBody, MutationCoordinator, MutationError, MutationFaultPoint, MutationPlan,
-    MutationRequest,
+    install_mutation_schema, MutationBody, MutationCoordinator, MutationError, MutationFaultPoint,
+    MutationPlan, MutationRequest, PatchOperation,
 };
 use registry_server::postgres::{
     install_compiled_schema, managed_schema_fingerprint, ClaimContext, ExpectedManagedCatalog,
@@ -126,6 +128,8 @@ async fn real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_determ
         .expect("test owns a strongly keyed audit profile");
     let plan = MutationPlan::from_compiled(&compiled, "records.case.create")
         .expect("create plan retains the exact compiler delivery");
+    let patch_plan = MutationPlan::from_compiled(&compiled, "records.case.patch")
+        .expect("patch plan retains the conditional compiler delivery");
     let claims = mutation_claims(&compiled);
     let table = &compiled.entities()["case"].physical_table;
     let lock_key =
@@ -242,7 +246,7 @@ async fn real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_determ
         &binding_digest,
         &identity,
     );
-    assert!(first_capture.payload == expected_payload());
+    assert_eq!(first_capture.payload, expected_payload(raw_record_id));
     assert!(first_capture.payload.len() <= compiled_delivery.maximum_payload_bytes as usize);
     assert_delivery_is_transport_and_value_free(&database, first_capture.event_id, raw_record_id)
         .await;
@@ -303,11 +307,291 @@ async fn real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_determ
     );
     assert_eq!(durable_counts(&database, table).await.delivery, 2);
 
+    let first_etag = response_etag(&first);
+    let before_same_value = durable_counts(&database, table).await;
+    let same_value = coordinator
+        .execute(
+            &mut client,
+            patch_request(
+                &patch_plan,
+                &claims,
+                "same-value-patch",
+                raw_record_id,
+                &first_etag,
+                "first",
+            ),
+        )
+        .await
+        .expect("a normalized same-value patch commits without overmatching changed");
+    let after_same_value = durable_counts(&database, table).await;
+    assert_eq!(after_same_value.outbox, before_same_value.outbox);
+    assert_eq!(after_same_value.delivery, before_same_value.delivery);
+    assert_eq!(
+        after_same_value.delivery_state,
+        before_same_value.delivery_state
+    );
+
+    let same_value_etag = response_etag(&same_value);
+    let before_match = durable_counts(&database, table).await;
+    let matching = coordinator
+        .execute(
+            &mut client,
+            patch_request(
+                &patch_plan,
+                &claims,
+                "matching-conditional-patch",
+                raw_record_id,
+                &same_value_etag,
+                "approved",
+            ),
+        )
+        .await
+        .expect("all field predicates match inside the patch transaction");
+    let after_match = durable_counts(&database, table).await;
+    assert_eq!(after_match.outbox, before_match.outbox + 1);
+    assert_eq!(after_match.delivery, before_match.delivery + 1);
+    assert_eq!(after_match.delivery_state, before_match.delivery_state + 1);
+    let conditional_capture = capture(&database, 2).await;
+    let conditional_body: Value = serde_json::from_slice(&conditional_capture.payload)
+        .expect("conditional event body is JSON");
+    assert_eq!(
+        conditional_body,
+        json!({
+            "entity": "case",
+            "recordId": raw_record_id,
+            "revision": 3,
+            "trigger": "patched",
+            "packageRevision": PACKAGE_REVISION,
+            "values": {
+                "label": "approved",
+            },
+        })
+    );
+
+    let matching_etag = response_etag(&matching);
+    let before_failed_conjunct = durable_counts(&database, table).await;
+    coordinator
+        .execute(
+            &mut client,
+            patch_request(
+                &patch_plan,
+                &claims,
+                "failed-before-equals-conjunct",
+                raw_record_id,
+                &matching_etag,
+                "changed-again",
+            ),
+        )
+        .await
+        .expect("patch commits while one condition conjunct fails");
+    let after_failed_conjunct = durable_counts(&database, table).await;
+    assert_eq!(after_failed_conjunct.outbox, before_failed_conjunct.outbox);
+    assert_eq!(
+        after_failed_conjunct.delivery,
+        before_failed_conjunct.delivery
+    );
+    assert_eq!(
+        after_failed_conjunct.delivery_state,
+        before_failed_conjunct.delivery_state
+    );
+
     drop(replay_client_a);
     drop(replay_client_b);
     drop(client);
     drop(pool);
     database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_empty_pre_v1_webhook_schema_upgrades_idempotently() {
+    let database = TestDatabase::create(4).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    install_pre_v1_webhook_schema(&migration).await;
+
+    install_mutation_schema(&migration, &database.runtime_role)
+        .await
+        .expect("empty pre-V1 webhook schema upgrades");
+    install_mutation_schema(&migration, &database.runtime_role)
+        .await
+        .expect("the internal schema upgrade is idempotent");
+
+    let columns = migration
+        .query(
+            "SELECT table_name, column_name, is_nullable
+               FROM information_schema.columns
+              WHERE table_schema = 'registry_internal'
+                AND ((table_name = 'registry_outbox'
+                      AND column_name = 'payload_expires_at')
+                  OR (table_name = 'registry_webhook_deliveries'
+                      AND column_name = 'data_schema')
+                  OR (table_name = 'registry_webhook_delivery_state'
+                      AND column_name = 'expired_at'))
+              ORDER BY table_name, column_name",
+            &[],
+        )
+        .await
+        .expect("migration can inspect upgraded internal columns")
+        .into_iter()
+        .map(|row| {
+            (
+                row.get::<_, String>(0),
+                row.get::<_, String>(1),
+                row.get::<_, String>(2),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        columns,
+        [
+            (
+                "registry_outbox".to_owned(),
+                "payload_expires_at".to_owned(),
+                "NO".to_owned(),
+            ),
+            (
+                "registry_webhook_deliveries".to_owned(),
+                "data_schema".to_owned(),
+                "NO".to_owned(),
+            ),
+            (
+                "registry_webhook_delivery_state".to_owned(),
+                "expired_at".to_owned(),
+                "YES".to_owned(),
+            ),
+        ]
+    );
+
+    migration_task.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_pre_v1_webhook_history_refuses_silent_v1_reinterpretation() {
+    let database = TestDatabase::create(4).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    install_pre_v1_webhook_schema(&migration).await;
+    let event_id = Uuid::new_v4();
+    let legacy_body = br#"{"label":"legacy-values-only"}"#.to_vec();
+    migration
+        .execute(
+            "INSERT INTO registry_internal.registry_outbox
+                 (event_id, event_type, trigger, entity_id, record_reference,
+                  record_revision, package_revision, schema_fingerprint, payload)
+             VALUES ($1, 'case-created', 'created', 'case', 'legacy-reference',
+                     1, $2, $3, $4)",
+            &[
+                &event_id,
+                &PACKAGE_REVISION,
+                &SCHEMA_FINGERPRINT,
+                &legacy_body,
+            ],
+        )
+        .await
+        .expect("pre-V1 outbox row installs");
+    migration
+        .execute(
+            "INSERT INTO registry_internal.registry_webhook_deliveries
+                 (event_id, compiled_delivery_id, logical_destination_id,
+                  destination_binding_digest, package_revision, schema_fingerprint,
+                  classification_ceiling, authentication_profile, delivery_mode,
+                  attempt_timeout_ms, initial_backoff_ms, maximum_backoff_ms,
+                  exponential_backoff_multiplier, maximum_attempts, retry_delays_ms,
+                  maximum_payload_bytes, payload_digest, deployed_attempt_timeout_ms,
+                  deployed_maximum_attempts, dead_letter, operator_replay)
+             VALUES ($1, 'case-created:webhook', $2,
+                     'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+                     $3, $4, 'restricted', 'hmac_sha256_v1', 'after_commit',
+                     5000, 1000, 8000, 2, 5, ARRAY[1000,2000,4000,8000]::bigint[],
+                     1048576, $5, 5000, 5, 'required', true)",
+            &[
+                &event_id,
+                &DESTINATION_ID,
+                &PACKAGE_REVISION,
+                &SCHEMA_FINGERPRINT,
+                &Sha256::digest(&legacy_body).to_vec(),
+            ],
+        )
+        .await
+        .expect("pre-V1 webhook history installs");
+
+    assert_eq!(
+        install_mutation_schema(&migration, &database.runtime_role).await,
+        Err(MutationError::Unavailable),
+        "a missing captured data-schema binding is never synthesized"
+    );
+
+    migration_task.abort();
+    database.cleanup().await;
+}
+
+async fn install_pre_v1_webhook_schema(migration: &tokio_postgres::Client) {
+    migration
+        .batch_execute(
+            "CREATE TABLE registry_internal.registry_outbox (
+                 outbox_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                 event_id uuid NOT NULL UNIQUE,
+                 event_type text NOT NULL,
+                 trigger text NOT NULL,
+                 entity_id text NOT NULL,
+                 record_reference text NOT NULL,
+                 record_revision bigint NOT NULL,
+                 package_revision text NOT NULL,
+                 schema_fingerprint text NOT NULL,
+                 payload bytea NOT NULL CHECK (
+                     octet_length(payload) > 0 AND octet_length(payload) <= 2097152
+                 ),
+                 created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+                 UNIQUE (event_id, package_revision, schema_fingerprint)
+             );
+             CREATE TABLE registry_internal.registry_webhook_deliveries (
+                 event_id uuid NOT NULL,
+                 compiled_delivery_id text NOT NULL,
+                 logical_destination_id text NOT NULL,
+                 destination_binding_digest text NOT NULL,
+                 package_revision text NOT NULL,
+                 schema_fingerprint text NOT NULL,
+                 classification_ceiling text NOT NULL,
+                 authentication_profile text NOT NULL,
+                 delivery_mode text NOT NULL,
+                 attempt_timeout_ms bigint NOT NULL,
+                 initial_backoff_ms bigint NOT NULL,
+                 maximum_backoff_ms bigint NOT NULL,
+                 exponential_backoff_multiplier smallint NOT NULL,
+                 maximum_attempts smallint NOT NULL,
+                 retry_delays_ms bigint[] NOT NULL,
+                 maximum_payload_bytes bigint NOT NULL,
+                 payload_digest bytea NOT NULL,
+                 deployed_attempt_timeout_ms bigint NOT NULL,
+                 deployed_maximum_attempts smallint NOT NULL,
+                 dead_letter text NOT NULL,
+                 operator_replay boolean NOT NULL,
+                 created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+                 PRIMARY KEY (event_id, compiled_delivery_id),
+                 FOREIGN KEY (event_id, package_revision, schema_fingerprint)
+                     REFERENCES registry_internal.registry_outbox
+                         (event_id, package_revision, schema_fingerprint)
+             );
+             CREATE TABLE registry_internal.registry_webhook_delivery_state (
+                 event_id uuid NOT NULL,
+                 compiled_delivery_id text NOT NULL,
+                 generation bigint NOT NULL,
+                 state text NOT NULL,
+                 attempt smallint NOT NULL,
+                 next_attempt_at timestamptz,
+                 attempt_started_at timestamptz,
+                 lease_expires_at timestamptz,
+                 lease_token uuid,
+                 delivered_at timestamptz,
+                 dead_lettered_at timestamptz,
+                 updated_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+                 PRIMARY KEY (event_id, compiled_delivery_id),
+                 FOREIGN KEY (event_id, compiled_delivery_id)
+                     REFERENCES registry_internal.registry_webhook_deliveries
+                         (event_id, compiled_delivery_id)
+             );",
+        )
+        .await
+        .expect("pre-V1 webhook internal schema installs");
 }
 
 fn compiled_registry() -> registry_server::CompiledRegistry {
@@ -317,7 +601,7 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
           "kind":"RegistryProject",
           "registry":{"id":"webhook-outbox-registry","version":"1","defaultLanguage":"en"},
           "entities":[{
-            "id":"case","route":"cases","mutationMode":"create_only","classification":"restricted",
+            "id":"case","route":"cases","mutationMode":"mutable","classification":"restricted",
             "fields":[
               {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"},
               {"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"},
@@ -326,7 +610,7 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
             "accessProfiles":[{
               "id":"operator","default":true,"principalClaim":"registry_principal",
               "requiredPurposes":["case-management"],
-              "operations":["create","get","list"],
+              "operations":["create","patch","get","list"],
               "readableFields":["jurisdiction","label","restricted_note"],
               "writableFields":["jurisdiction","label","restricted_note"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
@@ -334,18 +618,17 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
             "events":[{
               "id":"case-created","trigger":"created","projection":["label","restricted_note"],
               "webhook":{
-                "destinationId":"case-operations",
-                "classificationCeiling":"restricted",
-                "authenticationProfile":"hmac_sha256_v1",
-                "delivery":{
-                  "attemptTimeoutMs":5000,
-                  "initialBackoffMs":250,
-                  "maximumBackoffMs":2000,
-                  "maximumAttempts":5,
-                  "deadLetter":"required",
-                  "operatorReplay":true
-                }
+                "destinationId":"case-operations"
               }
+            },{
+              "id":"case-label-changed","trigger":"patched","projection":["label"],
+              "when":{
+                "kind":"fields",
+                "changed":["label"],
+                "beforeEquals":{"label":"first"},
+                "afterEquals":{"restricted_note":"restricted-projection-canary"}
+              },
+              "webhook":{"destinationId":"case-operations"}
             }]
           }]
         }"#,
@@ -433,6 +716,37 @@ fn create_request<'a>(
     }
 }
 
+fn patch_request<'a>(
+    plan: &'a MutationPlan,
+    claims: &'a ClaimContext,
+    idempotency_key: &'a str,
+    record_id: &'a str,
+    expected_etag: &'a str,
+    label: &str,
+) -> MutationRequest<'a> {
+    MutationRequest {
+        plan,
+        idempotency_key,
+        claims,
+        record_id: Some(record_id),
+        expected_etag: Some(expected_etag),
+        body: MutationBody::Patch(vec![PatchOperation::Replace {
+            path: "/data/label".to_owned(),
+            value: json!(label),
+        }]),
+        response_fields: BTreeSet::from([
+            "jurisdiction".to_owned(),
+            "label".to_owned(),
+            "restricted_note".to_owned(),
+        ]),
+    }
+}
+
+fn response_etag(outcome: &registry_server::mutation::MutationOutcome) -> String {
+    String::from_utf8(outcome.response().headers()[&PermittedResponseHeader::Etag].clone())
+        .expect("mutation response etag is UTF-8")
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct DurableCounts {
     current: i64,
@@ -477,6 +791,7 @@ struct CapturedDelivery {
     destination_binding_digest: String,
     package_revision: String,
     schema_fingerprint: String,
+    data_schema: String,
     classification_ceiling: String,
     authentication_profile: String,
     delivery_mode: String,
@@ -492,6 +807,8 @@ struct CapturedDelivery {
     deployed_maximum_attempts: i16,
     dead_letter: String,
     operator_replay: bool,
+    created_at: SystemTime,
+    payload_expires_at: SystemTime,
 }
 
 impl From<Row> for CapturedDelivery {
@@ -504,21 +821,24 @@ impl From<Row> for CapturedDelivery {
             destination_binding_digest: row.get(4),
             package_revision: row.get(5),
             schema_fingerprint: row.get(6),
-            classification_ceiling: row.get(7),
-            authentication_profile: row.get(8),
-            delivery_mode: row.get(9),
-            attempt_timeout_ms: row.get(10),
-            initial_backoff_ms: row.get(11),
-            maximum_backoff_ms: row.get(12),
-            exponential_backoff_multiplier: row.get(13),
-            maximum_attempts: row.get(14),
-            retry_delays_ms: row.get(15),
-            maximum_payload_bytes: row.get(16),
-            payload_digest: row.get(17),
-            deployed_attempt_timeout_ms: row.get(18),
-            deployed_maximum_attempts: row.get(19),
-            dead_letter: row.get(20),
-            operator_replay: row.get(21),
+            data_schema: row.get(7),
+            classification_ceiling: row.get(8),
+            authentication_profile: row.get(9),
+            delivery_mode: row.get(10),
+            attempt_timeout_ms: row.get(11),
+            initial_backoff_ms: row.get(12),
+            maximum_backoff_ms: row.get(13),
+            exponential_backoff_multiplier: row.get(14),
+            maximum_attempts: row.get(15),
+            retry_delays_ms: row.get(16),
+            maximum_payload_bytes: row.get(17),
+            payload_digest: row.get(18),
+            deployed_attempt_timeout_ms: row.get(19),
+            deployed_maximum_attempts: row.get(20),
+            dead_letter: row.get(21),
+            operator_replay: row.get(22),
+            created_at: row.get(23),
+            payload_expires_at: row.get(24),
         }
     }
 }
@@ -530,7 +850,8 @@ async fn capture(database: &TestDatabase, offset: i64) -> CapturedDelivery {
             "SELECT outbox.event_id, outbox.payload,
                     delivery.compiled_delivery_id, delivery.logical_destination_id,
                     delivery.destination_binding_digest, delivery.package_revision,
-                    delivery.schema_fingerprint, delivery.classification_ceiling,
+                    delivery.schema_fingerprint, delivery.data_schema,
+                    delivery.classification_ceiling,
                     delivery.authentication_profile, delivery.delivery_mode,
                     delivery.attempt_timeout_ms, delivery.initial_backoff_ms,
                     delivery.maximum_backoff_ms, delivery.exponential_backoff_multiplier,
@@ -538,7 +859,8 @@ async fn capture(database: &TestDatabase, offset: i64) -> CapturedDelivery {
                     delivery.maximum_payload_bytes, delivery.payload_digest,
                     delivery.deployed_attempt_timeout_ms,
                     delivery.deployed_maximum_attempts, delivery.dead_letter,
-                    delivery.operator_replay
+                    delivery.operator_replay, outbox.created_at,
+                    outbox.payload_expires_at
              FROM registry_internal.registry_outbox AS outbox
              JOIN registry_internal.registry_webhook_deliveries AS delivery
                ON delivery.event_id = outbox.event_id
@@ -562,6 +884,7 @@ fn assert_capture_matches(
     assert_eq!(actual.destination_binding_digest, binding_digest);
     assert_eq!(actual.package_revision, identity.package_revision);
     assert_eq!(actual.schema_fingerprint, identity.schema_fingerprint);
+    assert_eq!(actual.data_schema, compiled.data_schema);
     assert_eq!(actual.classification_ceiling, "restricted");
     assert_eq!(actual.authentication_profile, "hmac_sha256_v1");
     assert_eq!(actual.delivery_mode, "after_commit");
@@ -606,10 +929,29 @@ fn assert_capture_matches(
     assert_eq!(actual.deployed_maximum_attempts, 4);
     assert_eq!(actual.dead_letter, "required");
     assert_eq!(actual.operator_replay, compiled.operator_replay);
+    assert_eq!(
+        actual
+            .payload_expires_at
+            .duration_since(actual.created_at)
+            .expect("payload expiry follows capture"),
+        Duration::from_secs(7 * 24 * 60 * 60),
+        "the deployment default is captured from transaction time"
+    );
 }
 
-fn expected_payload() -> Vec<u8> {
-    format!(r#"{{"label":"first","restricted_note":"{RESTRICTED_CANARY}"}}"#).into_bytes()
+fn expected_payload(record_id: &str) -> Vec<u8> {
+    canonicalize_json(&json!({
+        "entity": "case",
+        "recordId": record_id,
+        "revision": 1,
+        "trigger": "created",
+        "packageRevision": PACKAGE_REVISION,
+        "values": {
+            "label": "first",
+            "restricted_note": RESTRICTED_CANARY,
+        },
+    }))
+    .expect("expected event body canonicalizes")
 }
 
 async fn assert_delivery_is_transport_and_value_free(
@@ -662,6 +1004,7 @@ async fn assert_delivery_is_transport_and_value_free(
             "destination_binding_digest",
             "package_revision",
             "schema_fingerprint",
+            "data_schema",
             "classification_ceiling",
             "authentication_profile",
             "delivery_mode",
@@ -683,6 +1026,42 @@ async fn assert_delivery_is_transport_and_value_free(
 }
 
 async fn assert_capture_acl_is_insert_and_select_only(database: &TestDatabase) {
+    let outbox_privileges = database
+        .admin
+        .query(
+            "SELECT privilege_type
+             FROM information_schema.role_table_grants
+             WHERE table_schema = 'registry_internal'
+               AND table_name = 'registry_outbox'
+               AND grantee = $1
+             ORDER BY privilege_type",
+            &[&database.runtime_role.as_str()],
+        )
+        .await
+        .expect("administrator can inspect outbox table ACL")
+        .into_iter()
+        .map(|row| row.get::<_, String>(0))
+        .collect::<Vec<_>>();
+    assert_eq!(outbox_privileges, ["INSERT", "SELECT"]);
+    let outbox_update_columns = database
+        .admin
+        .query(
+            "SELECT column_name
+             FROM information_schema.role_column_grants
+             WHERE table_schema = 'registry_internal'
+               AND table_name = 'registry_outbox'
+               AND grantee = $1
+               AND privilege_type = 'UPDATE'
+             ORDER BY column_name",
+            &[&database.runtime_role.as_str()],
+        )
+        .await
+        .expect("administrator can inspect outbox column ACL")
+        .into_iter()
+        .map(|row| row.get::<_, String>(0))
+        .collect::<Vec<_>>();
+    assert_eq!(outbox_update_columns, ["payload"]);
+
     let privileges = database
         .admin
         .query(
@@ -859,6 +1238,7 @@ eventDestinations:
     dnsFamily: dualStackStrict
     allowedPrivateCidrs: []
     hmacSha256KeyRef: secret:file/{SECRET_REF_CANARY}
+    classificationCeiling: restricted
     deliveryCeilings:
       attemptTimeoutMilliseconds: 4000
       maximumAttempts: 4

@@ -37,6 +37,26 @@ compiler's deterministic event-delivery inventory. It contains logical
 destination identifiers and governed delivery policy, never deployed URLs,
 secret references, or secret values.
 
+`registry-serverctl webhook sample PROJECT --event ID` compiles the authoring
+project and renders a deterministic CloudEvents HTTP request with typed
+synthetic projection values. The request target and signature are explicit
+placeholders because this offline command does not load deployment
+configuration or secrets.
+
+`registry-serverctl webhook list --runtime-config ABSOLUTE_FILE [--limit N]`
+verifies the current package and database identity before returning bounded
+pending, dead-lettered, and expired metadata. The default limit is 50 and the
+product maximum is 100. Results contain delivery identity, state, attempt,
+payload eligibility, and expiry only. They never contain projected values,
+record identifiers, destination URLs, secret references, or keys.
+
+`registry-serverctl webhook replay --runtime-config ABSOLUTE_FILE --event-id
+UUID --delivery-id ID --expected-generation N` delegates one optimistic replay
+to Registry Server. Replay is limited to a current, replay-enabled dead letter
+whose retained payload and exact destination binding are still available.
+Configuration, identity, generation, eligibility, and retention refusals share
+one value-free diagnostic.
+
 `registry-serverctl doctor --runtime-config ABSOLUTE_FILE` verifies the startup
 dependencies opened by the current preparation path without binding a
 listener. It does not claim listener activation, webhook worker readiness, or

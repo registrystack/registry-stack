@@ -41,6 +41,26 @@ without waiting:
 products/registry-server/demo/run.sh --smoke
 ```
 
+Use `--webhook` to add a local loopback receiver and exercise the configured
+event lifecycle:
+
+```bash
+products/registry-server/demo/run.sh --webhook
+products/registry-server/demo/run.sh --webhook --smoke
+```
+
+Webhook mode extends only the disposable project copy with a conditional
+person event. It leaves the shared acceptance fixture unchanged, generates an
+owner-only HMAC key, and uses Registry Server's loopback-development outbound
+policy. The receiver verifies the exact CloudEvents request and HMAC contract,
+then deterministically proves immediate delivery, automatic retry,
+dead-letter inspection with `registry-serverctl webhook list`, and optimistic
+replay with `registry-serverctl webhook replay`.
+
+The offline `webhook sample` report and final value-free status report are
+written under `demo/.run/`. The script prints their paths, but never prints the
+bearer token or HMAC key.
+
 ## Disposable state
 
 All generated configuration, keys, tokens, logs, package artifacts, and

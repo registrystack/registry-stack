@@ -126,15 +126,6 @@ entities:
         projection: [classified-status, valid-from]
         webhook:
           destinationId: classified-operations-destination
-          classificationCeiling: restricted
-          authenticationProfile: hmac_sha256_v1
-          delivery:
-            attemptTimeoutMs: 5000
-            initialBackoffMs: 250
-            maximumBackoffMs: 2000
-            maximumAttempts: 5
-            deadLetter: required
-            operatorReplay: false
     accessProfiles:
       - id: caseworker
         principalClaim: registry_principal

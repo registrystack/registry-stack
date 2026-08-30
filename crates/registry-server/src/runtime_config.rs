@@ -48,6 +48,8 @@ const MAX_JWKS_DOCUMENT_BYTES: u64 = 1024 * 1024;
 const MIN_RSA_MODULUS_BITS: usize = 2048;
 const MAX_RSA_MODULUS_BITS: usize = 8192;
 const MAX_RSA_EXPONENT_BYTES: usize = 8;
+const DEFAULT_WEBHOOK_PAYLOAD_RETENTION_DAYS: u8 = 7;
+const MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS: u8 = 30;
 
 #[derive(Debug, Error, Clone, Copy, Eq, PartialEq)]
 pub enum RuntimeConfigError {
@@ -199,6 +201,7 @@ pub struct RuntimeConfig {
     audit: AuditConfig,
     cursor: CursorConfig,
     event_destinations: EventDestinationConfigs,
+    event_delivery: EventDeliveryConfig,
     operational_timeouts: OperationalTimeouts,
 }
 
@@ -214,6 +217,7 @@ impl RuntimeConfig {
         let cursor = CursorConfig::from_raw(raw.cursor)?;
         let event_destinations = EventDestinationConfigs::from_raw(raw.event_destinations)
             .map_err(|_| RuntimeConfigError::InvalidEventDestination)?;
+        let event_delivery = EventDeliveryConfig::from_raw(raw.event_delivery)?;
         let operational_timeouts = OperationalTimeouts::from_raw(raw.operational_timeouts)?;
         Ok(Self {
             listener,
@@ -225,6 +229,7 @@ impl RuntimeConfig {
             audit,
             cursor,
             event_destinations,
+            event_delivery,
             operational_timeouts,
         })
     }
@@ -257,6 +262,10 @@ impl RuntimeConfig {
         &self.cursor
     }
 
+    pub fn event_delivery(&self) -> &EventDeliveryConfig {
+        &self.event_delivery
+    }
+
     pub async fn oidc_key_source(&self) -> Result<Arc<JwksFetcher>> {
         self.authentication
             .oidc
@@ -276,6 +285,9 @@ impl RuntimeConfig {
             .secret_resolver()
             .map_err(|_| crate::event_destination::EventDestinationActivationError::Secret)?;
         ActivatedEventDestinationRegistry::activate(compiled, &self.event_destinations, &resolver)
+            .map(|destinations| {
+                destinations.with_payload_retention(self.event_delivery.payload_retention)
+            })
     }
 
     pub fn operational_timeouts(&self) -> &OperationalTimeouts {
@@ -387,6 +399,7 @@ impl fmt::Debug for RuntimeConfig {
             .field("audit", &self.audit)
             .field("cursor", &self.cursor)
             .field("event_destinations", &self.event_destinations)
+            .field("event_delivery", &self.event_delivery)
             .field("operational_timeouts", &self.operational_timeouts)
             .finish()
     }
@@ -1283,6 +1296,31 @@ pub struct CursorConfig {
     max_age: Duration,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EventDeliveryConfig {
+    payload_retention: Duration,
+}
+
+impl EventDeliveryConfig {
+    fn from_raw(raw: RawEventDeliveryConfig) -> Result<Self> {
+        if raw.payload_retention_days == 0
+            || raw.payload_retention_days > MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS
+        {
+            return Err(RuntimeConfigError::InvalidBounds);
+        }
+        Ok(Self {
+            payload_retention: Duration::from_secs(
+                u64::from(raw.payload_retention_days) * 24 * 60 * 60,
+            ),
+        })
+    }
+
+    #[must_use]
+    pub fn payload_retention(&self) -> Duration {
+        self.payload_retention
+    }
+}
+
 impl CursorConfig {
     fn from_raw(raw: RawCursorConfig) -> Result<Self> {
         Ok(Self {
@@ -1395,6 +1433,8 @@ struct RawRuntimeConfig {
     cursor: RawCursorConfig,
     #[serde(default)]
     event_destinations: RawEventDestinationConfigs,
+    #[serde(default)]
+    event_delivery: RawEventDeliveryConfig,
     operational_timeouts: RawOperationalTimeouts,
 }
 
@@ -1551,6 +1591,25 @@ struct RawAuditConfig {
 struct RawCursorConfig {
     secret_ref: String,
     max_age_seconds: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawEventDeliveryConfig {
+    #[serde(default = "default_webhook_payload_retention_days")]
+    payload_retention_days: u8,
+}
+
+impl Default for RawEventDeliveryConfig {
+    fn default() -> Self {
+        Self {
+            payload_retention_days: default_webhook_payload_retention_days(),
+        }
+    }
+}
+
+const fn default_webhook_payload_retention_days() -> u8 {
+    DEFAULT_WEBHOOK_PAYLOAD_RETENTION_DAYS
 }
 
 #[derive(Deserialize)]

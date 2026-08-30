@@ -8,7 +8,8 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::contract::{
-    FieldTypeSource, ManifestProjectionSource, MutationMode, Operation, PackageIdentitySource,
+    EventSource, EventTrigger, FieldTypeSource, ManifestProjectionSource, MutationMode, Operation,
+    PackageIdentitySource,
 };
 use crate::diagnostics::Diagnostic;
 use crate::generated_ddl::DdlInventory;
@@ -21,6 +22,13 @@ use crate::model::{
 use crate::physical_names::{hex_prefix, PhysicalNameInventory};
 
 pub const REGISTRY_METADATA_ARTIFACT_PATH: &str = "generated/metadata/registry.json";
+
+pub(crate) struct EventDataSchemaBinding {
+    pub schema: Value,
+    pub fingerprint: String,
+    pub data_schema: String,
+    pub artifact_path: String,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -133,6 +141,20 @@ pub(crate) fn generate_artifacts(
         insert_json_value(&mut artifacts, &path, &schema)?;
         schemas.insert(entity.id.clone(), schema);
     }
+    for delivery in &event_deliveries.deliveries {
+        let entity = entities
+            .get(&delivery.entity_id)
+            .expect("compiled event delivery refers to a compiled entity");
+        let event = entity
+            .events
+            .get(&delivery.event_id)
+            .expect("compiled event delivery refers to a compiled event");
+        let binding = event_data_schema_binding(registry_id, entity, event)?;
+        debug_assert_eq!(delivery.data_schema, binding.data_schema);
+        debug_assert_eq!(delivery.data_schema_fingerprint, binding.fingerprint);
+        debug_assert_eq!(delivery.data_schema_artifact_path, binding.artifact_path);
+        insert_json_value(&mut artifacts, &binding.artifact_path, &binding.schema)?;
+    }
     let openapi = openapi_document(registry_id, version, entities, routes, &schemas);
     insert_json_value(&mut artifacts, "generated/openapi.json", &openapi)?;
     if let Some(projection) = manifest_projection {
@@ -151,6 +173,68 @@ pub(crate) fn generate_artifacts(
         );
     }
     Ok(GeneratedArtifacts { artifacts })
+}
+
+pub(crate) fn event_data_schema_binding(
+    registry_id: &str,
+    entity: &CompiledEntity,
+    event: &EventSource,
+) -> Result<EventDataSchemaBinding, Diagnostic> {
+    let mut value_properties = Map::new();
+    for field_id in &event.projection {
+        let field = entity
+            .fields
+            .get(field_id)
+            .expect("validated event projection refers to a compiled field");
+        let schema = field_schema(&field.field_type);
+        let schema = if field.required {
+            schema
+        } else {
+            json!({"anyOf": [schema, {"type": "null"}]})
+        };
+        value_properties.insert(field_id.clone(), schema);
+    }
+    let trigger = match event.trigger {
+        EventTrigger::Created => "created",
+        EventTrigger::Patched => "patched",
+        EventTrigger::Tombstoned => "tombstoned",
+    };
+    let schema = json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "entity": {"const": entity.id},
+            "recordId": {"type": "string", "format": "uuid"},
+            "revision": {"type": "integer", "format": "int64", "minimum": 1},
+            "trigger": {"const": trigger},
+            "packageRevision": {"type": "string"},
+            "values": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": value_properties,
+                "required": event.projection,
+            }
+        },
+        "required": ["entity", "recordId", "revision", "trigger", "packageRevision", "values"]
+    });
+    let bytes = canonicalize_json(&schema).map_err(|_| canonicalization_error())?;
+    let digest = Sha256::digest(&bytes);
+    let fingerprint = format!("sha256:{}", hex_prefix(&digest, digest.len()));
+    let data_schema = format!(
+        "urn:registry-server:event-schema:{registry_id}:{}:{}:{fingerprint}",
+        entity.id, event.id
+    );
+    let artifact_path = format!(
+        "generated/event-schemas/{}.{}.schema.json",
+        entity.id, event.id
+    );
+    Ok(EventDataSchemaBinding {
+        schema,
+        fingerprint,
+        data_schema,
+        artifact_path,
+    })
 }
 
 fn entity_schema(entity: &CompiledEntity) -> Value {

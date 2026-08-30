@@ -194,11 +194,23 @@ impl PilotHarness {
     }
 
     pub fn token(&self, purpose: &str, row_boundary_claims: &[(&str, Value)]) -> String {
+        self.token_with_scopes(purpose, &[], row_boundary_claims)
+    }
+
+    pub fn token_with_scopes(
+        &self,
+        purpose: &str,
+        scopes: &[&str],
+        row_boundary_claims: &[(&str, Value)],
+    ) -> String {
         let mut claims = json!({
             "aud": AUDIENCE,
             "registry_principal": "pilot-operator",
             "purpose": purpose,
         });
+        if !scopes.is_empty() {
+            claims["scope"] = Value::String(scopes.join(" "));
+        }
         for (name, value) in row_boundary_claims {
             claims[*name] = value.clone();
         }

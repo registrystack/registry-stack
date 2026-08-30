@@ -37,6 +37,7 @@ mod doctor;
 mod package_inspection;
 mod package_lifecycle;
 mod test_lifecycle;
+mod webhook_lifecycle;
 
 use apply_lifecycle::{ApplyLifecycleError, ApplyLifecycleRequest};
 use data_lifecycle::{
@@ -46,6 +47,9 @@ use package_inspection::{inspect_runtime_package, RuntimePackageInspectionError}
 use package_lifecycle::{PackageLifecycleError, PackageLifecycleState};
 use registry_server::data::DataError;
 use test_lifecycle::{TestLifecycleError, TestLifecycleRequest};
+use webhook_lifecycle::{
+    WebhookLifecycleError, WebhookListOutcome, WebhookReplayOutcome, WebhookSampleOutcome,
+};
 
 const DOMAIN_REFUSAL_EXIT: u8 = 1;
 const USAGE_EXIT: u8 = 2;
@@ -98,6 +102,8 @@ enum Command {
     Migration(MigrationArgs),
     /// Validate, import, or export data through authenticated Registry HTTP APIs.
     Data(DataArgs),
+    /// Inspect and operate configured webhook deliveries.
+    Webhook(WebhookArgs),
 }
 
 #[derive(Debug, Args)]
@@ -262,6 +268,63 @@ struct MigrationArgs {
 struct DataArgs {
     #[command(subcommand)]
     command: DataCommand,
+}
+
+#[derive(Debug, Args)]
+struct WebhookArgs {
+    #[command(subcommand)]
+    command: WebhookCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum WebhookCommand {
+    /// Render one deterministic exact CloudEvents request with synthetic values.
+    Sample(WebhookSampleArgs),
+    /// List bounded value-free pending, dead-lettered, and expired delivery metadata.
+    List(WebhookListArgs),
+    /// Replay one eligible retained dead-letter using optimistic generation binding.
+    Replay(WebhookReplayArgs),
+}
+
+#[derive(Debug, Args)]
+struct WebhookSampleArgs {
+    /// Registry Server authoring project directory.
+    #[arg(value_name = "PROJECT")]
+    project: PathBuf,
+
+    /// Stable authored event identifier.
+    #[arg(long, value_name = "ID")]
+    event: String,
+}
+
+#[derive(Debug, Args)]
+struct WebhookListArgs {
+    /// Absolute Registry Server runtime configuration file.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
+
+    /// Maximum number of value-free delivery rows to return.
+    #[arg(long, value_name = "COUNT", default_value_t = 50)]
+    limit: u16,
+}
+
+#[derive(Debug, Args)]
+struct WebhookReplayArgs {
+    /// Absolute Registry Server runtime configuration file.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
+
+    /// Stable event UUID shown by `webhook list`.
+    #[arg(long, value_name = "UUID")]
+    event_id: String,
+
+    /// Compiled delivery identifier shown by `webhook list`.
+    #[arg(long, value_name = "ID")]
+    delivery_id: String,
+
+    /// Current generation shown by `webhook list`.
+    #[arg(long, value_name = "NUMBER")]
+    expected_generation: i64,
 }
 
 #[derive(Debug, Subcommand)]
@@ -542,6 +605,8 @@ enum DiagnosticArtifact {
     DataOperation,
     DataCheckpoint,
     DataTransport,
+    WebhookSample,
+    WebhookOperations,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -578,6 +643,8 @@ enum SuggestedAction {
     CorrectDataInput,
     VerifyDataCheckpoint,
     VerifyDataTransport,
+    SelectWebhookEvent,
+    VerifyWebhookOperation,
 }
 
 #[derive(Serialize)]
@@ -700,6 +767,33 @@ struct DataExportSuccessReport {
     record_count: u64,
     output_length: u64,
     complete: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebhookSampleSuccessReport {
+    ok: bool,
+    command: &'static str,
+    #[serde(flatten)]
+    outcome: WebhookSampleOutcome,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebhookListSuccessReport {
+    ok: bool,
+    command: &'static str,
+    #[serde(flatten)]
+    outcome: WebhookListOutcome,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebhookReplaySuccessReport {
+    ok: bool,
+    command: &'static str,
+    #[serde(flatten)]
+    outcome: WebhookReplayOutcome,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -984,11 +1078,98 @@ where
                 };
             }
         },
+        Command::Webhook(args) => {
+            return match args.command {
+                WebhookCommand::Sample(args) => match webhook_sample(&args) {
+                    Ok(report) => write_webhook_sample_success(&report, format, stdout, stderr),
+                    Err(failure) => write_failure(&failure, format, stdout, stderr),
+                },
+                WebhookCommand::List(args) => match webhook_list(&args) {
+                    Ok(report) => write_webhook_list_success(&report, format, stdout, stderr),
+                    Err(failure) => write_failure(&failure, format, stdout, stderr),
+                },
+                WebhookCommand::Replay(args) => match webhook_replay(&args) {
+                    Ok(report) => write_webhook_replay_success(&report, format, stdout, stderr),
+                    Err(failure) => write_failure(&failure, format, stdout, stderr),
+                },
+            };
+        }
     };
 
     match result {
         Ok(report) => write_success(&report, format, stdout, stderr),
         Err(failure) => write_failure(&failure, format, stdout, stderr),
+    }
+}
+
+fn webhook_sample(args: &WebhookSampleArgs) -> Result<WebhookSampleSuccessReport, FailureReport> {
+    let compiled = compile(&args.project, ProfileArg::Authoring, "webhook sample")?;
+    let outcome = webhook_lifecycle::sample(&compiled, &args.event)
+        .map_err(|error| webhook_lifecycle_failure("webhook sample", error))?;
+    Ok(WebhookSampleSuccessReport {
+        ok: true,
+        command: "webhook sample",
+        outcome,
+    })
+}
+
+fn webhook_list(args: &WebhookListArgs) -> Result<WebhookListSuccessReport, FailureReport> {
+    let outcome = webhook_lifecycle::list(&args.runtime_config, args.limit)
+        .map_err(|error| webhook_lifecycle_failure("webhook list", error))?;
+    Ok(WebhookListSuccessReport {
+        ok: true,
+        command: "webhook list",
+        outcome,
+    })
+}
+
+fn webhook_replay(args: &WebhookReplayArgs) -> Result<WebhookReplaySuccessReport, FailureReport> {
+    let outcome = webhook_lifecycle::replay(
+        &args.runtime_config,
+        &args.event_id,
+        &args.delivery_id,
+        args.expected_generation,
+    )
+    .map_err(|error| webhook_lifecycle_failure("webhook replay", error))?;
+    Ok(WebhookReplaySuccessReport {
+        ok: true,
+        command: "webhook replay",
+        outcome,
+    })
+}
+
+fn webhook_lifecycle_failure(command: &'static str, error: WebhookLifecycleError) -> FailureReport {
+    let (code, path, message, artifact, action) = match error {
+        WebhookLifecycleError::Event => (
+            "webhook.sample.event_refused",
+            "event",
+            "the selected webhook event is unavailable",
+            DiagnosticArtifact::WebhookSample,
+            SuggestedAction::SelectWebhookEvent,
+        ),
+        WebhookLifecycleError::Sample => (
+            "webhook.sample.render_refused",
+            "sample",
+            "the webhook sample could not be rendered",
+            DiagnosticArtifact::WebhookSample,
+            SuggestedAction::SelectWebhookEvent,
+        ),
+        WebhookLifecycleError::Operator => (
+            "webhook.operation.refused",
+            "webhook",
+            "the webhook operation was refused",
+            DiagnosticArtifact::WebhookOperations,
+            SuggestedAction::VerifyWebhookOperation,
+        ),
+    };
+    FailureReport {
+        ok: false,
+        command,
+        diagnostics: vec![tool_diagnostic(
+            diagnostic(code, path, message),
+            artifact,
+            action,
+        )],
     }
 }
 
@@ -1640,6 +1821,13 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
                 action,
             )
         }
+        ApplyLifecycleError::EventDestinations => (
+            "apply.event_destinations.refused",
+            "eventDestinations",
+            "the event destination bindings were refused",
+            DiagnosticArtifact::RuntimeConfiguration,
+            SuggestedAction::CorrectRuntimeConfiguration,
+        ),
         ApplyLifecycleError::DatabaseConfiguration | ApplyLifecycleError::TimeoutConfiguration => (
             "apply.database_configuration.refused",
             "database",
@@ -3204,6 +3392,76 @@ fn write_data_export_success(
     write_result(result, stderr)
 }
 
+fn write_webhook_sample_success(
+    report: &WebhookSampleSuccessReport,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format == OutputFormat::Json {
+        serde_json::to_writer_pretty(&mut *stdout, report)
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout))
+    } else {
+        writeln!(stdout, "webhook sample succeeded").and_then(|()| {
+            writeln!(stdout, "event: {}", report.outcome.event_id)?;
+            writeln!(
+                stdout,
+                "{} {} HTTP/1.1",
+                report.outcome.request.method, report.outcome.request.request_target
+            )?;
+            for (name, value) in &report.outcome.request.headers {
+                writeln!(stdout, "{name}: {value}")?;
+            }
+            writeln!(stdout)?;
+            writeln!(stdout, "{}", report.outcome.request.canonical_body)
+        })
+    };
+    write_result(result, stderr)
+}
+
+fn write_webhook_list_success(
+    report: &WebhookListSuccessReport,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format == OutputFormat::Json {
+        serde_json::to_writer_pretty(&mut *stdout, report)
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout))
+    } else {
+        writeln!(stdout, "webhook list succeeded").and_then(|()| {
+            for delivery in &report.outcome.deliveries {
+                let rendered = serde_json::to_string(delivery).map_err(io::Error::other)?;
+                writeln!(stdout, "delivery: {rendered}")?;
+            }
+            Ok(())
+        })
+    };
+    write_result(result, stderr)
+}
+
+fn write_webhook_replay_success(
+    report: &WebhookReplaySuccessReport,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format == OutputFormat::Json {
+        serde_json::to_writer_pretty(&mut *stdout, report)
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout))
+    } else {
+        writeln!(stdout, "webhook replay succeeded").and_then(|()| {
+            writeln!(stdout, "event id: {}", report.outcome.event_id)?;
+            writeln!(stdout, "delivery id: {}", report.outcome.delivery_id)?;
+            writeln!(stdout, "generation: {}", report.outcome.generation)
+        })
+    };
+    write_result(result, stderr)
+}
+
 fn data_operation_name(operation: DataOperationArg) -> &'static str {
     match operation {
         DataOperationArg::Create => "create",
@@ -3483,7 +3741,8 @@ mod tests {
                 "doctor",
                 "verify",
                 "migration",
-                "data"
+                "data",
+                "webhook"
             ]
         );
     }

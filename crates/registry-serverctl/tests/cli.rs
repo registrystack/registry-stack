@@ -931,15 +931,6 @@ entities:
         projection: [label]
         webhook:
           destinationId: case-operations
-          classificationCeiling: public
-          authenticationProfile: hmac_sha256_v1
-          delivery:
-            attemptTimeoutMs: 5000
-            initialBackoffMs: 250
-            maximumBackoffMs: 2000
-            maximumAttempts: 5
-            deadLetter: required
-            operatorReplay: false
 "#,
     );
     let arguments = [
@@ -977,6 +968,9 @@ entities:
             "attemptTimeoutMs",
             "authenticationProfile",
             "classificationCeiling",
+            "dataSchema",
+            "dataSchemaArtifactPath",
+            "dataSchemaFingerprint",
             "deadLetter",
             "deliveryMode",
             "destinationId",
@@ -991,6 +985,7 @@ entities:
             "operatorReplay",
             "projectionFields",
             "retryDelaysMs",
+            "retryProfile",
             "trigger",
         ])
     );
@@ -2335,14 +2330,11 @@ fn lifecycle_parser_surfaces_are_exact_and_value_free() {
     let help = registry_serverctl(&["--help"]);
     assert!(help.status.success());
     let rendered = String::from_utf8(help.stdout).expect("top-level help is UTF-8");
-    for available in ["package", "apply", "verify", "migration", "data"] {
+    for available in ["package", "apply", "verify", "migration", "data", "webhook"] {
         assert!(rendered
             .lines()
             .any(|line| line.trim_start().starts_with(available)));
     }
-    assert!(!rendered
-        .lines()
-        .any(|line| line.trim_start().starts_with("webhook")));
 
     for arguments in [
         vec!["verify", "--help"],

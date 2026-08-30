@@ -679,16 +679,21 @@ async fn finish_prepared_server(
         config.operational_timeouts().record_lock,
         audit_profile.clone(),
     ));
-    let webhook_worker = (!registry.event_deliveries().deliveries.is_empty()).then(|| {
-        WebhookWorker::new(WebhookDeliveryService::new(
-            pool.clone(),
-            Arc::clone(&event_destinations),
-            expected.clone(),
-            lock_key,
-            config.operational_timeouts().record_lock,
-            audit_profile.clone(),
-        ))
-    });
+    let webhook_delivery = WebhookDeliveryService::new(
+        pool.clone(),
+        Arc::clone(&event_destinations),
+        expected.clone(),
+        lock_key,
+        config.operational_timeouts().record_lock,
+        audit_profile.clone(),
+    );
+    webhook_delivery
+        .verify_retained_bindings()
+        .await
+        .map_err(|_| StartupError::EventDestinations)?;
+    // The worker also owns payload expiry, so it runs even when the active
+    // package declares no events. Compatible retained work is checked above.
+    let webhook_worker = Some(WebhookWorker::new(webhook_delivery));
     let mutations = Arc::new(PostgresRecordMutationService::new_with_event_destinations(
         pool,
         Arc::clone(&registry),

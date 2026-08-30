@@ -197,21 +197,14 @@ async fn asset_site_placement_journey(harness: &PilotHarness) {
         &token,
     )
     .await;
-    let event_count: i64 = harness
-        .database
-        .admin
-        .query_one(
-            "SELECT count(*) FROM registry_internal.registry_outbox WHERE event_type = 'inspection-created'",
-            &[],
-        )
-        .await
-        .expect("administrator samples the configured create event type")
-        .get(0);
-    assert_eq!(event_count, 1);
 }
 
 async fn household_journey(harness: &PilotHarness) {
-    let token = harness.token("household-administration", &[]);
+    let token = harness.token_with_scopes(
+        "household-administration",
+        &["registry:household:operate"],
+        &[],
+    );
     let openapi = assert_fixture_surface(harness, "household-operator", &token, "household").await;
     assert_eq!(
         openapi["components"]["schemas"]["person"]["properties"]["residency-status"]
@@ -907,7 +900,11 @@ async fn assert_fixture_surface(
             Vec::new(),
         )
         .await;
-    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "compiled OpenAPI is visible to the {profile} profile"
+    );
     let openapi = response_json(response).await;
     let families = [
         ("asset", "/v1/records/assets", "asset-item"),

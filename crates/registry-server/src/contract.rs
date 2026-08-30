@@ -1431,7 +1431,46 @@ pub struct EventSource {
     pub trigger: EventTrigger,
     pub projection: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<EventConditionSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub webhook: Option<WebhookSource>,
+}
+
+/// Closed Version 1 event selection language.
+///
+/// A tagged shape leaves room for a later, separately governed rule ABI
+/// without turning fields into an ad hoc expression language.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(
+    deny_unknown_fields,
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum EventConditionSource {
+    Fields {
+        #[serde(default)]
+        changed: BTreeSet<String>,
+        #[serde(default)]
+        before_equals: BTreeMap<String, EventScalarValue>,
+        #[serde(default)]
+        after_equals: BTreeMap<String, EventScalarValue>,
+    },
+}
+
+/// A comparison literal in the closed field-condition language.
+///
+/// Objects and arrays are refused during source parsing. The compiler then
+/// validates each scalar against the declared Registry field type.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum EventScalarValue {
+    Null,
+    Boolean(bool),
+    Number(serde_json::Number),
+    String(String),
 }
 
 /// Governed, destination-neutral webhook subscription.
@@ -1443,9 +1482,6 @@ pub struct EventSource {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct WebhookSource {
     pub destination_id: String,
-    pub classification_ceiling: Classification,
-    pub authentication_profile: WebhookAuthenticationProfile,
-    pub delivery: WebhookDeliverySource,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1453,19 +1489,6 @@ pub struct WebhookSource {
 #[serde(rename_all = "snake_case")]
 pub enum WebhookAuthenticationProfile {
     HmacSha256V1,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct WebhookDeliverySource {
-    pub attempt_timeout_ms: u32,
-    pub initial_backoff_ms: u32,
-    pub maximum_backoff_ms: u32,
-    pub maximum_attempts: u8,
-    #[serde(default)]
-    pub dead_letter: Option<WebhookDeadLetterMode>,
-    pub operator_replay: bool,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

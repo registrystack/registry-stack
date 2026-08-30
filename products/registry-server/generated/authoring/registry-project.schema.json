@@ -713,6 +713,63 @@
       ],
       "type": "object"
     },
+    "EventConditionSource": {
+      "description": "Closed Version 1 event selection language.\n\nA tagged shape leaves room for a later, separately governed rule ABI\nwithout turning fields into an ad hoc expression language.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "afterEquals": {
+              "additionalProperties": {
+                "$ref": "#/$defs/EventScalarValue"
+              },
+              "default": {},
+              "type": "object"
+            },
+            "beforeEquals": {
+              "additionalProperties": {
+                "$ref": "#/$defs/EventScalarValue"
+              },
+              "default": {},
+              "type": "object"
+            },
+            "changed": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array",
+              "uniqueItems": true
+            },
+            "kind": {
+              "const": "fields",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "EventScalarValue": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "A comparison literal in the closed field-condition language.\n\nObjects and arrays are refused during source parsing. The compiler then\nvalidates each scalar against the declared Registry field type."
+    },
     "EventSource": {
       "additionalProperties": false,
       "properties": {
@@ -733,6 +790,16 @@
           "anyOf": [
             {
               "$ref": "#/$defs/WebhookSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "when": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventConditionSource"
             },
             {
               "type": "null"
@@ -1938,88 +2005,16 @@
       ],
       "type": "object"
     },
-    "WebhookAuthenticationProfile": {
-      "enum": [
-        "hmac_sha256_v1"
-      ],
-      "type": "string"
-    },
-    "WebhookDeadLetterMode": {
-      "enum": [
-        "required"
-      ],
-      "type": "string"
-    },
-    "WebhookDeliverySource": {
-      "additionalProperties": false,
-      "properties": {
-        "attemptTimeoutMs": {
-          "format": "uint32",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "deadLetter": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/WebhookDeadLetterMode"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "initialBackoffMs": {
-          "format": "uint32",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "maximumAttempts": {
-          "format": "uint8",
-          "maximum": 255,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "maximumBackoffMs": {
-          "format": "uint32",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "operatorReplay": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "attemptTimeoutMs",
-        "initialBackoffMs",
-        "maximumBackoffMs",
-        "maximumAttempts",
-        "operatorReplay"
-      ],
-      "type": "object"
-    },
     "WebhookSource": {
       "additionalProperties": false,
       "description": "Governed, destination-neutral webhook subscription.\n\nDeployment configuration may bind `destination_id` to transport details\nand tighten these bounds, but cannot supply or widen this authority.",
       "properties": {
-        "authenticationProfile": {
-          "$ref": "#/$defs/WebhookAuthenticationProfile"
-        },
-        "classificationCeiling": {
-          "$ref": "#/$defs/Classification"
-        },
-        "delivery": {
-          "$ref": "#/$defs/WebhookDeliverySource"
-        },
         "destinationId": {
           "type": "string"
         }
       },
       "required": [
-        "destinationId",
-        "classificationCeiling",
-        "authenticationProfile",
-        "delivery"
+        "destinationId"
       ],
       "type": "object"
     }

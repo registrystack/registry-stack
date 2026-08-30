@@ -24,6 +24,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::contract::Classification;
 use crate::{
     compiler::{
         MAX_WEBHOOK_ATTEMPTS, MAX_WEBHOOK_ATTEMPT_TIMEOUT_MS, MAX_WEBHOOK_PAYLOAD_BYTES,
@@ -73,6 +74,41 @@ pub type Result<T> = std::result::Result<T, EventDestinationActivationError>;
 pub struct ActivatedEventDestinationRegistry {
     binding_digest: String,
     bindings: BTreeMap<String, ActivatedEventDestination>,
+    payload_retention: Duration,
+}
+
+/// Value-free destination identity supplied to package activation.
+///
+/// This inventory deliberately contains no URL, path, TLS material, or secret
+/// reference. It is sufficient only to prove that retained non-terminal work
+/// can still use the exact destination binding under which it was captured.
+#[derive(Clone, Default)]
+pub struct EventDestinationCompatibilityInventory {
+    binding_digests: BTreeMap<String, String>,
+}
+
+impl EventDestinationCompatibilityInventory {
+    #[must_use]
+    pub fn binding_digest(&self, logical_destination_id: &str) -> Option<&str> {
+        self.binding_digests
+            .get(logical_destination_id)
+            .map(String::as_str)
+    }
+
+    pub(crate) fn binding_digests(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.binding_digests
+            .iter()
+            .map(|(logical_id, digest)| (logical_id.as_str(), digest.as_str()))
+    }
+}
+
+impl fmt::Debug for EventDestinationCompatibilityInventory {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("EventDestinationCompatibilityInventory")
+            .field("binding_count", &self.binding_digests.len())
+            .finish()
+    }
 }
 
 impl ActivatedEventDestinationRegistry {
@@ -106,6 +142,7 @@ impl ActivatedEventDestinationRegistry {
             if deliveries.iter().any(|delivery| {
                 config.delivery_ceilings.attempt_timeout_milliseconds > delivery.attempt_timeout_ms
                     || config.delivery_ceilings.maximum_attempts > delivery.maximum_attempts
+                    || delivery.classification_ceiling > config.classification_ceiling
             }) {
                 return Err(EventDestinationActivationError::DeliveryCeilingWidening);
             }
@@ -123,7 +160,19 @@ impl ActivatedEventDestinationRegistry {
         Ok(Self {
             binding_digest: configured.binding_digest()?,
             bindings,
+            payload_retention: Duration::from_secs(7 * 24 * 60 * 60),
         })
+    }
+
+    pub(crate) fn with_payload_retention(mut self, payload_retention: Duration) -> Self {
+        self.payload_retention = payload_retention;
+        self
+    }
+
+    /// Deployment-selected lifetime of a retained pending or dead-letter body.
+    #[must_use]
+    pub fn payload_retention(&self) -> Duration {
+        self.payload_retention
     }
 
     /// Digest of the exact non-secret deployment binding document.
@@ -137,6 +186,21 @@ impl ActivatedEventDestinationRegistry {
     pub fn lookup(&self, compiled_logical_id: &str) -> Option<&ActivatedEventDestination> {
         self.bindings.get(compiled_logical_id)
     }
+
+    /// Build the minimized inventory used to keep queued delivery compatible
+    /// across a package activation.
+    #[must_use]
+    pub fn compatibility_inventory(&self) -> EventDestinationCompatibilityInventory {
+        EventDestinationCompatibilityInventory {
+            binding_digests: self
+                .bindings
+                .iter()
+                .map(|(logical_id, destination)| {
+                    (logical_id.clone(), destination.binding_digest.clone())
+                })
+                .collect(),
+        }
+    }
 }
 
 impl fmt::Debug for ActivatedEventDestinationRegistry {
@@ -145,6 +209,7 @@ impl fmt::Debug for ActivatedEventDestinationRegistry {
             .debug_struct("ActivatedEventDestinationRegistry")
             .field("binding_digest", &self.binding_digest)
             .field("binding_count", &self.bindings.len())
+            .field("payload_retention", &self.payload_retention)
             .finish()
     }
 }
@@ -152,6 +217,7 @@ impl fmt::Debug for ActivatedEventDestinationRegistry {
 /// One activated logical event destination.
 pub struct ActivatedEventDestination {
     binding_digest: String,
+    request_target: String,
     policy: Arc<EventDestinationPolicy>,
     request_template: EventDestinationRequestTemplate,
     hmac_sha256_key: ProtectedSecret,
@@ -178,6 +244,15 @@ impl ActivatedEventDestination {
         &self.request_template
     }
 
+    /// Borrow the exact validated request target used by the closed template.
+    ///
+    /// Registry Server binds these same bytes into its product-owned
+    /// signature, so signing and transport cannot disagree about the path.
+    #[must_use]
+    pub fn request_target(&self) -> &str {
+        &self.request_target
+    }
+
     /// Borrow signing bytes only for the duration of the supplied operation.
     pub fn with_hmac_sha256_key<T>(&self, use_key: impl FnOnce(&[u8]) -> T) -> T {
         use_key(self.hmac_sha256_key.expose_secret())
@@ -201,6 +276,7 @@ impl fmt::Debug for ActivatedEventDestination {
         formatter
             .debug_struct("ActivatedEventDestination")
             .field("binding_digest", &self.binding_digest)
+            .field("request_target", &"[REDACTED]")
             .field("policy", &self.policy)
             .field("request_template", &self.request_template)
             .field("hmac_sha256_key", &"[REDACTED]")
@@ -264,6 +340,7 @@ struct EventDestinationConfig {
     dns_family: EventDestinationDnsFamily,
     allowed_private_cidrs: Vec<IpNet>,
     hmac_sha256_key_ref: SecretReference,
+    classification_ceiling: Classification,
     tls: Option<EventDestinationTlsConfig>,
     delivery_ceilings: EventDestinationDeliveryCeilings,
 }
@@ -285,6 +362,7 @@ impl EventDestinationConfig {
             dns_family: raw.dns_family,
             allowed_private_cidrs,
             hmac_sha256_key_ref,
+            classification_ceiling: raw.classification_ceiling,
             tls,
             delivery_ceilings,
         };
@@ -362,6 +440,7 @@ impl EventDestinationConfig {
 
         Ok(ActivatedEventDestination {
             binding_digest: self.binding_digest(logical_id)?,
+            request_target: self.path.clone(),
             policy: Arc::new(policy),
             request_template,
             hmac_sha256_key,
@@ -387,6 +466,7 @@ impl EventDestinationConfig {
             "dnsFamily": self.dns_family.as_str(),
             "allowedPrivateCidrs": self.allowed_private_cidrs.iter().map(ToString::to_string).collect::<Vec<_>>(),
             "hmacSha256KeyRef": self.hmac_sha256_key_ref.as_str(),
+            "classificationCeiling": self.classification_ceiling,
             "tls": tls,
             "deliveryCeilings": {
                 "attemptTimeoutMilliseconds": self.delivery_ceilings.attempt_timeout_milliseconds,
@@ -469,6 +549,7 @@ impl EventDestinationDeliveryCeilings {
 #[serde(rename_all = "camelCase")]
 enum EventDestinationNetworkProfile {
     ProductionHttps,
+    LoopbackDevelopmentHttp,
     #[cfg(feature = "postgres-test")]
     PinnedLoopbackHttpsTest,
 }
@@ -477,6 +558,7 @@ impl EventDestinationNetworkProfile {
     fn platform(self) -> DestinationProfile {
         match self {
             Self::ProductionHttps => DestinationProfile::ProductionHttps,
+            Self::LoopbackDevelopmentHttp => DestinationProfile::LoopbackDevelopmentHttp,
             #[cfg(feature = "postgres-test")]
             Self::PinnedLoopbackHttpsTest => DestinationProfile::PinnedLoopbackHttpsTest,
         }
@@ -485,6 +567,7 @@ impl EventDestinationNetworkProfile {
     fn as_str(self) -> &'static str {
         match self {
             Self::ProductionHttps => "productionHttps",
+            Self::LoopbackDevelopmentHttp => "loopbackDevelopmentHttp",
             #[cfg(feature = "postgres-test")]
             Self::PinnedLoopbackHttpsTest => "pinnedLoopbackHttpsTest",
         }
@@ -530,6 +613,7 @@ pub(crate) struct RawEventDestinationConfig {
     dns_family: EventDestinationDnsFamily,
     allowed_private_cidrs: Vec<String>,
     hmac_sha256_key_ref: String,
+    classification_ceiling: Classification,
     #[serde(default)]
     tls: Option<RawEventDestinationTlsConfig>,
     delivery_ceilings: RawEventDestinationDeliveryCeilings,

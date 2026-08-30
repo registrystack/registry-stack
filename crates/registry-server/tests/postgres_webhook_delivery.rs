@@ -18,6 +18,7 @@ use hmac::{Hmac, KeyInit, Mac};
 use postgres_harness::TestDatabase;
 use rcgen::{generate_simple_self_signed, CertifiedKey};
 use registry_platform_audit::AuditProfile;
+use registry_platform_canonical_json::canonicalize_json;
 use registry_server::compiler::{compile_project, CompileProfile};
 use registry_server::contract::parse_project_json;
 use registry_server::event_destination::ActivatedEventDestinationRegistry;
@@ -27,7 +28,9 @@ use registry_server::postgres::{
     RowBoundaryContext,
 };
 use registry_server::runtime_config::parse_runtime_config;
-use registry_server::webhook::{WebhookDeliveryError, WebhookDeliveryService, WebhookWorkOutcome};
+use registry_server::webhook::{
+    WebhookDeliveryError, WebhookDeliveryService, WebhookDeliveryStatusKind, WebhookWorkOutcome,
+};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
@@ -43,6 +46,10 @@ const PACKAGE_REVISION: &str =
     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const SCHEMA_FINGERPRINT: &str =
     "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const SUCCESSOR_PACKAGE_REVISION: &str =
+    "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+const SUCCESSOR_SCHEMA_FINGERPRINT: &str =
+    "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
 const DESTINATION_ID: &str = "case-operations";
 const DELIVERY_PATH: &str = "/registry-events";
 const HMAC_KEY: &[u8] = b"webhook-delivery-signing-key-0123456789abcdef";
@@ -109,6 +116,14 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         .get_for_test()
         .await
         .expect("runtime mutation connection is available");
+    assert_eq!(
+        service.list(0).await,
+        Err(WebhookDeliveryError::Unavailable)
+    );
+    assert_eq!(
+        service.list(101).await,
+        Err(WebhookDeliveryError::Unavailable)
+    );
 
     receiver.enqueue(ResponsePlan::Status(500)).await;
     receiver.enqueue(ResponsePlan::Status(204)).await;
@@ -141,17 +156,24 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     receiver.wait_for_count(1).await;
     let first_attempt = receiver.request(0).await;
     assert_exact_request(&first_attempt, &first).await;
-    let next_attempt_at = delivery_next_attempt_at(&database, &first).await;
-    let attempt_started_at = header_time(&first_attempt, "x-registry-event-timestamp");
+    assert_exact_audit_outcome(
+        &database,
+        &audit_profile,
+        &first,
+        1,
+        1,
+        "attempt",
+        "attempt_started",
+    )
+    .await;
+    let retry_delay = delivery_retry_delay(&database, &first).await;
     assert_eq!(
-        next_attempt_at
-            .duration_since(attempt_started_at)
-            .expect("retry is scheduled after its exact attempt start"),
-        Duration::from_millis(100),
-        "retry uses the exact compiler-produced delay from the original attempt start"
+        retry_delay,
+        Duration::from_millis(1_000),
+        "retry waits the exact compiler-produced delay after the failed attempt is finalized"
     );
 
-    tokio::time::sleep(Duration::from_millis(120)).await;
+    tokio::time::sleep(Duration::from_millis(1_020)).await;
     assert_eq!(
         service.deliver_once().await,
         Ok(WebhookWorkOutcome::Delivered)
@@ -178,6 +200,73 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         "http_non_success",
     )
     .await;
+    assert!(!outbox_payload_available(&database, &first).await);
+    assert_eq!(
+        service
+            .replay(first.event_id, &first.compiled_delivery_id, 1)
+            .await,
+        Err(WebhookDeliveryError::Unavailable),
+        "delivered work is never replayable"
+    );
+
+    let pending_expired = create_event(
+        &database,
+        &coordinator,
+        &mut mutation_client,
+        &plan,
+        &claims,
+        "delivery-payload-retention-expired",
+        "expired-before-egress",
+    )
+    .await;
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_outbox
+                SET payload_expires_at = transaction_timestamp() - interval '1 second'
+              WHERE event_id = $1",
+            &[&pending_expired.event_id],
+        )
+        .await
+        .expect("administrator expires one retained pending payload");
+    let egress_before_expiry = receiver.count().await;
+    assert_eq!(service.deliver_once().await, Ok(WebhookWorkOutcome::Idle));
+    assert_eq!(receiver.count().await, egress_before_expiry);
+    assert_eq!(
+        delivery_state(&database, &pending_expired).await,
+        (1, "expired".to_owned(), 0)
+    );
+    assert!(!outbox_payload_available(&database, &pending_expired).await);
+    assert_exact_audit_outcome(
+        &database,
+        &audit_profile,
+        &pending_expired,
+        1,
+        0,
+        "terminal",
+        "payload_expired",
+    )
+    .await;
+    assert_eq!(
+        service
+            .replay(
+                pending_expired.event_id,
+                &pending_expired.compiled_delivery_id,
+                1,
+            )
+            .await,
+        Err(WebhookDeliveryError::Unavailable)
+    );
+    let statuses = service
+        .list(100)
+        .await
+        .expect("bounded operator list loads");
+    let expired_status = statuses
+        .iter()
+        .find(|status| status.event_id == pending_expired.event_id)
+        .expect("expired work remains visible without values");
+    assert_eq!(expired_status.state, WebhookDeliveryStatusKind::Expired);
+    assert!(!expired_status.payload_available);
     assert_exact_audit_outcome(
         &database,
         &audit_profile,
@@ -188,7 +277,6 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         "delivered",
     )
     .await;
-
     receiver
         .enqueue(ResponsePlan::Delay(Duration::from_millis(250), 204))
         .await;
@@ -209,7 +297,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         service.deliver_once().await,
         Ok(WebhookWorkOutcome::RetryScheduled)
     );
-    tokio::time::sleep(Duration::from_millis(120)).await;
+    tokio::time::sleep(Duration::from_millis(1_020)).await;
     assert_eq!(
         service.deliver_once().await,
         Ok(WebhookWorkOutcome::DeadLettered)
@@ -347,10 +435,17 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         )
         .await
         .expect("administrator simulates one expired post-audit lease");
+    assert_eq!(service.deliver_once().await, Ok(WebhookWorkOutcome::Idle));
+    assert_eq!(
+        delivery_retry_delay(&database, &recovered).await,
+        Duration::from_millis(1_000),
+        "interrupted work receives the same full post-finalization backoff"
+    );
+    tokio::time::sleep(Duration::from_millis(1_020)).await;
     assert_eq!(
         service.deliver_once().await,
         Ok(WebhookWorkOutcome::Delivered),
-        "recovery consumes the interrupted attempt and claims the next bounded attempt"
+        "recovery consumes the interrupted attempt before claiming the next bounded attempt"
     );
     receiver.wait_for_count(6).await;
     assert_eq!(
@@ -416,7 +511,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         service.deliver_once().await,
         Ok(WebhookWorkOutcome::RetryScheduled)
     );
-    tokio::time::sleep(Duration::from_millis(120)).await;
+    tokio::time::sleep(Duration::from_millis(1_020)).await;
     assert_eq!(
         service.deliver_once().await,
         Ok(WebhookWorkOutcome::DeadLettered)
@@ -442,6 +537,48 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         "destination_transport_unavailable",
     )
     .await;
+
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_outbox
+                SET payload_expires_at = transaction_timestamp() - interval '1 second'
+              WHERE event_id = $1",
+            &[&transport_event.event_id],
+        )
+        .await
+        .expect("administrator expires one retained dead letter");
+    assert_eq!(service.deliver_once().await, Ok(WebhookWorkOutcome::Idle));
+    assert_eq!(
+        delivery_state(&database, &transport_event).await,
+        (1, "dead_lettered".to_owned(), 2),
+        "retention erasure preserves the terminal failure state"
+    );
+    assert!(!outbox_payload_available(&database, &transport_event).await);
+    let statuses = service
+        .list(100)
+        .await
+        .expect("bounded operator list loads");
+    let dead_letter_status = statuses
+        .iter()
+        .find(|status| status.event_id == transport_event.event_id)
+        .expect("dead letter remains visible without values");
+    assert_eq!(
+        dead_letter_status.state,
+        WebhookDeliveryStatusKind::DeadLettered
+    );
+    assert!(!dead_letter_status.payload_available);
+    assert_eq!(
+        service
+            .replay(
+                transport_event.event_id,
+                &transport_event.compiled_delivery_id,
+                1,
+            )
+            .await,
+        Err(WebhookDeliveryError::Unavailable),
+        "an erased dead letter cannot be replayed"
+    );
 
     let egress_before_refusals = receiver.count().await;
     let binding_refused = create_event(
@@ -483,7 +620,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         "destination_binding_refused",
     )
     .await;
-    tokio::time::sleep(Duration::from_millis(120)).await;
+    tokio::time::sleep(Duration::from_millis(1_020)).await;
     assert_eq!(
         service.deliver_once().await,
         Ok(WebhookWorkOutcome::DeadLettered)
@@ -499,6 +636,21 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         "destination_binding_refused",
     )
     .await;
+    service
+        .verify_retained_bindings()
+        .await
+        .expect("a terminal dead letter never blocks successor startup");
+    assert_eq!(
+        service
+            .replay(
+                binding_refused.event_id,
+                &binding_refused.compiled_delivery_id,
+                1,
+            )
+            .await,
+        Err(WebhookDeliveryError::Unavailable),
+        "replay fails closed when the current destination does not match the captured binding"
+    );
 
     let payload_refused = create_event(
         &database,
@@ -538,7 +690,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         "payload_refused",
     )
     .await;
-    tokio::time::sleep(Duration::from_millis(120)).await;
+    tokio::time::sleep(Duration::from_millis(1_020)).await;
     assert_eq!(
         service.deliver_once().await,
         Ok(WebhookWorkOutcome::DeadLettered)
@@ -644,11 +796,143 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     database.cleanup().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_webhook_delivery_finishes_prior_package_work_after_compatible_upgrade() {
+    let receiver = HttpsReceiver::start().await;
+    let database = TestDatabase::create(6).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    let compiled = compiled_registry();
+    install_compiled_schema(&migration, &compiled, &database.runtime_role)
+        .await
+        .expect("migration installs webhook delivery state");
+    let original_identity = expected_identity();
+    initialize_registry_state(&migration, &original_identity).await;
+    migration_task.abort();
+
+    let fixture = DestinationFixture::new(&receiver);
+    let destinations = Arc::new(fixture.activate(&compiled));
+    let pool = database
+        .runtime_config
+        .build_pool()
+        .expect("bounded runtime pool builds");
+    let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x7c; 32].into())
+        .expect("test owns a keyed audit profile");
+    let lock_key = RegistryLockKey::derive("webhook-delivery-registry")
+        .expect("test lock identity is bounded");
+    let coordinator = MutationCoordinator::new_with_event_destinations(
+        lock_key,
+        Duration::from_secs(2),
+        original_identity.clone(),
+        audit_profile.clone(),
+        Some(Arc::clone(&destinations)),
+    );
+    let plan = MutationPlan::from_compiled(&compiled, "records.case.create")
+        .expect("create plan retains the exact compiler delivery");
+    let claims = mutation_claims(&compiled);
+    let mut mutation_client = pool
+        .get_for_test()
+        .await
+        .expect("runtime mutation connection is available");
+    let captured = create_event(
+        &database,
+        &coordinator,
+        &mut mutation_client,
+        &plan,
+        &claims,
+        "delivery-before-compatible-upgrade",
+        "captured-before-upgrade",
+    )
+    .await;
+    assert_eq!(captured.package_revision, PACKAGE_REVISION);
+    assert_eq!(
+        captured.data_schema,
+        compiled.event_deliveries().deliveries[0].data_schema
+    );
+
+    let successor_identity = ExpectedRegistryIdentity {
+        package_revision: SUCCESSOR_PACKAGE_REVISION.to_owned(),
+        schema_fingerprint: SUCCESSOR_SCHEMA_FINGERPRINT.to_owned(),
+        package_sequence: 2,
+        ..original_identity
+    };
+    let changed = database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_state
+                SET active_package_revision = $1, schema_fingerprint = $2,
+                    package_sequence = $3
+              WHERE singleton",
+            &[
+                &successor_identity.package_revision,
+                &successor_identity.schema_fingerprint,
+                &successor_identity.package_sequence,
+            ],
+        )
+        .await
+        .expect("compatible successor identity activates");
+    assert_eq!(changed, 1);
+
+    let service = WebhookDeliveryService::new(
+        pool.clone(),
+        Arc::clone(&destinations),
+        successor_identity,
+        lock_key,
+        Duration::from_secs(2),
+        audit_profile.clone(),
+    );
+    service
+        .verify_retained_bindings()
+        .await
+        .expect("unchanged destination remains compatible with retained work");
+    receiver.enqueue(ResponsePlan::Status(204)).await;
+    assert_eq!(
+        service.deliver_once().await,
+        Ok(WebhookWorkOutcome::Delivered),
+        "the successor worker delivers immutable work captured by the prior package"
+    );
+    receiver.wait_for_count(1).await;
+    assert_exact_request(&receiver.request(0).await, &captured).await;
+    assert_exact_audit_outcome(
+        &database,
+        &audit_profile,
+        &captured,
+        1,
+        1,
+        "terminal",
+        "delivered",
+    )
+    .await;
+    let payload_available: bool = database
+        .admin
+        .query_one(
+            "SELECT payload IS NOT NULL
+               FROM registry_internal.registry_outbox
+              WHERE event_id = $1",
+            &[&captured.event_id],
+        )
+        .await
+        .expect("administrator can inspect post-delivery retention state")
+        .get(0);
+    assert!(
+        !payload_available,
+        "successful delivery atomically erases values"
+    );
+
+    drop(mutation_client);
+    drop(service);
+    drop(pool);
+    receiver.stop().await;
+    database.cleanup().await;
+}
+
 #[derive(Clone)]
 struct CapturedEvent {
     event_id: Uuid,
     compiled_delivery_id: String,
     payload: Vec<u8>,
+    data_schema: String,
+    package_revision: String,
+    created_at: SystemTime,
 }
 
 async fn create_event(
@@ -686,7 +970,8 @@ async fn create_event(
     let row = database
         .admin
         .query_one(
-            "SELECT outbox.event_id, delivery.compiled_delivery_id, outbox.payload
+            "SELECT outbox.event_id, delivery.compiled_delivery_id, outbox.payload,
+                    delivery.data_schema, delivery.package_revision, outbox.created_at
              FROM registry_internal.registry_outbox AS outbox
              JOIN registry_internal.registry_webhook_deliveries AS delivery
                ON delivery.event_id = outbox.event_id
@@ -696,11 +981,42 @@ async fn create_event(
         )
         .await
         .expect("administrator can inspect the newest capture identity");
-    CapturedEvent {
+    let captured = CapturedEvent {
         event_id: row.get(0),
         compiled_delivery_id: row.get(1),
         payload: row.get(2),
-    }
+        data_schema: row.get(3),
+        package_revision: row.get(4),
+        created_at: row.get(5),
+    };
+    let body: Value =
+        serde_json::from_slice(&captured.payload).expect("captured event body is strict JSON");
+    let record_id = body
+        .get("recordId")
+        .and_then(Value::as_str)
+        .expect("captured event contains a raw record id");
+    Uuid::parse_str(record_id).expect("captured record id is a UUID");
+    assert_eq!(
+        body,
+        json!({
+            "entity": "case",
+            "recordId": record_id,
+            "revision": 1,
+            "trigger": "created",
+            "packageRevision": PACKAGE_REVISION,
+            "values": {
+                "label": label,
+                "restricted_note": RECORD_VALUE_CANARY,
+            },
+        }),
+        "event body carries only the fixed envelope and declared projection"
+    );
+    assert_eq!(
+        captured.payload,
+        canonicalize_json(&body).expect("captured body canonicalizes"),
+        "durable and transmitted body bytes are canonical"
+    );
+    captured
 }
 
 async fn assert_seed_is_exact(
@@ -764,18 +1080,36 @@ async fn delivery_state(database: &TestDatabase, event: &CapturedEvent) -> (i64,
     (row.get(0), row.get(1), row.get(2))
 }
 
-async fn delivery_next_attempt_at(database: &TestDatabase, event: &CapturedEvent) -> SystemTime {
+async fn outbox_payload_available(database: &TestDatabase, event: &CapturedEvent) -> bool {
     database
         .admin
         .query_one(
-            "SELECT next_attempt_at
+            "SELECT payload IS NOT NULL
+               FROM registry_internal.registry_outbox
+              WHERE event_id = $1",
+            &[&event.event_id],
+        )
+        .await
+        .expect("administrator can inspect retained payload availability")
+        .get(0)
+}
+
+async fn delivery_retry_delay(database: &TestDatabase, event: &CapturedEvent) -> Duration {
+    let row = database
+        .admin
+        .query_one(
+            "SELECT next_attempt_at, updated_at
              FROM registry_internal.registry_webhook_delivery_state
              WHERE event_id = $1 AND compiled_delivery_id = $2",
             &[&event.event_id, &event.compiled_delivery_id],
         )
         .await
-        .expect("administrator can inspect the exact retry schedule")
-        .get(0)
+        .expect("administrator can inspect the exact retry schedule");
+    let next_attempt_at = row.get::<_, SystemTime>(0);
+    let updated_at = row.get::<_, SystemTime>(1);
+    next_attempt_at
+        .duration_since(updated_at)
+        .expect("retry is scheduled after finalization")
 }
 
 async fn revoke_audit_insert(database: &TestDatabase) {
@@ -844,7 +1178,7 @@ async fn audit_outcomes(
         .key_hasher()
         .audit_reference_hash(
             "registry-server-webhook-event-v1",
-            PACKAGE_REVISION,
+            &event.package_revision,
             &event.event_id.to_string(),
         )
         .expect("test can derive the keyed event reference");
@@ -919,13 +1253,6 @@ fn header<'a>(request: &'a ReceivedRequest, name: &str) -> &'a str {
         .expect("closed webhook header is present")
 }
 
-fn header_time(request: &ReceivedRequest, name: &str) -> SystemTime {
-    SystemTime::from(
-        OffsetDateTime::parse(header(request, name), &Rfc3339)
-            .expect("webhook timestamp is strict RFC3339"),
-    )
-}
-
 async fn assert_exact_request(request: &ReceivedRequest, event: &CapturedEvent) {
     assert_eq!(request.method, "POST");
     assert_eq!(request.target, DELIVERY_PATH);
@@ -933,43 +1260,73 @@ async fn assert_exact_request(request: &ReceivedRequest, event: &CapturedEvent) 
         request.body == event.payload,
         "request body is the exact captured canonical bytes"
     );
+    assert_eq!(header(request, "ce-id"), event.event_id.to_string());
+    assert_eq!(header(request, "ce-specversion"), "1.0");
     assert_eq!(
-        header(request, "x-registry-event-id"),
-        event.event_id.to_string()
+        header(request, "ce-source"),
+        "urn:registrystack:registry:webhook-delivery-registry:instance:webhook-delivery-instance"
     );
-    assert_eq!(header(request, "x-registry-event-type"), "case-created");
+    assert_eq!(header(request, "ce-type"), "case-created");
+    assert_eq!(
+        header(request, "ce-time"),
+        OffsetDateTime::from(event.created_at)
+            .format(&Rfc3339)
+            .expect("captured event time formats")
+    );
+    assert_eq!(header(request, "ce-dataschema"), event.data_schema);
     assert_eq!(header(request, "x-registry-event-generation"), "1");
     assert_eq!(header(request, "content-type"), "application/json");
-    let signature = independent_signature(
-        header(request, "x-registry-event-id"),
-        header(request, "x-registry-event-type"),
-        header(request, "x-registry-event-generation"),
-        header(request, "x-registry-delivery-attempt"),
-        header(request, "x-registry-event-timestamp"),
-        header(request, "idempotency-key"),
-        &request.body,
-    );
+    let signature = independent_signature(IndependentSignatureFields {
+        event_id: header(request, "ce-id"),
+        source: header(request, "ce-source"),
+        event_type: header(request, "ce-type"),
+        time: header(request, "ce-time"),
+        data_schema: header(request, "ce-dataschema"),
+        generation: header(request, "x-registry-event-generation"),
+        attempt: header(request, "x-registry-delivery-attempt"),
+        delivery_time: header(request, "x-registry-delivery-time"),
+        method: &request.method,
+        request_target: &request.target,
+        content_type: header(request, "content-type"),
+        idempotency_key: header(request, "idempotency-key"),
+        body: &request.body,
+    });
     assert_eq!(header(request, "x-registry-signature"), signature);
 }
 
-fn independent_signature(
-    event_id: &str,
-    event_type: &str,
-    generation: &str,
-    attempt: &str,
-    timestamp: &str,
-    idempotency_key: &str,
-    body: &[u8],
-) -> String {
+struct IndependentSignatureFields<'a> {
+    event_id: &'a str,
+    source: &'a str,
+    event_type: &'a str,
+    time: &'a str,
+    data_schema: &'a str,
+    generation: &'a str,
+    attempt: &'a str,
+    delivery_time: &'a str,
+    method: &'a str,
+    request_target: &'a str,
+    content_type: &'a str,
+    idempotency_key: &'a str,
+    body: &'a [u8],
+}
+
+fn independent_signature(fields: IndependentSignatureFields<'_>) -> String {
     let mut input = SIGNATURE_DOMAIN.to_vec();
     for value in [
-        event_id.as_bytes(),
-        event_type.as_bytes(),
-        generation.as_bytes(),
-        attempt.as_bytes(),
-        timestamp.as_bytes(),
-        idempotency_key.as_bytes(),
-        body,
+        b"1.0".as_slice(),
+        fields.event_id.as_bytes(),
+        fields.source.as_bytes(),
+        fields.event_type.as_bytes(),
+        fields.time.as_bytes(),
+        fields.data_schema.as_bytes(),
+        fields.generation.as_bytes(),
+        fields.attempt.as_bytes(),
+        fields.delivery_time.as_bytes(),
+        fields.method.as_bytes(),
+        fields.request_target.as_bytes(),
+        fields.content_type.as_bytes(),
+        fields.idempotency_key.as_bytes(),
+        fields.body,
     ] {
         input.extend_from_slice(&(value.len() as u64).to_be_bytes());
         input.extend_from_slice(value);
@@ -1003,17 +1360,7 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
             "events":[{
               "id":"case-created","trigger":"created","projection":["label","restricted_note"],
               "webhook":{
-                "destinationId":"case-operations",
-                "classificationCeiling":"restricted",
-                "authenticationProfile":"hmac_sha256_v1",
-                "delivery":{
-                  "attemptTimeoutMs":100,
-                  "initialBackoffMs":100,
-                  "maximumBackoffMs":100,
-                  "maximumAttempts":2,
-                  "deadLetter":"required",
-                  "operatorReplay":true
-                }
+                "destinationId":"case-operations"
               }
             }]
           }]
@@ -1189,6 +1536,7 @@ eventDestinations:
     dnsFamily: ipv4Only
     allowedPrivateCidrs: []
     hmacSha256KeyRef: secret:file/{KEY_REF_CANARY}
+    classificationCeiling: restricted
     tls:
       caBundleRef: secret:file/{CA_REF_CANARY}
     deliveryCeilings:

@@ -2,6 +2,7 @@
 
 //! Package-bound, at-least-once webhook delivery state machine.
 
+use std::path::Path;
 #[cfg(feature = "postgres-test")]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -25,13 +26,16 @@ use crate::audit::{
     WebhookAuditPhase,
 };
 use crate::event_destination::ActivatedEventDestinationRegistry;
+use crate::package::load_package;
 use crate::postgres::{ExpectedRegistryIdentity, RegistryLockKey, RuntimePool};
+use crate::runtime_config::load_runtime_config;
 use crate::startup::{OperationalEvent, WebhookStateTransitionCode};
 
 const LEASE_FINALIZATION_ALLOWANCE: Duration = Duration::from_secs(5);
 const WORKER_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const SIGNATURE_DOMAIN: &[u8] = b"registry-server-webhook-signature-v1";
 const IDEMPOTENCY_DOMAIN: &[u8] = b"registry-server-webhook-idempotency-v1";
+pub const MAX_WEBHOOK_STATUS_RESULTS: u16 = 100;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -39,6 +43,114 @@ type HmacSha256 = Hmac<Sha256>;
 pub enum WebhookDeliveryError {
     #[error("webhook delivery is unavailable")]
     Unavailable,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum WebhookOperatorError {
+    #[error("webhook operator request is unavailable")]
+    Unavailable,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WebhookDeliveryStatusKind {
+    Pending,
+    DeadLettered,
+    Expired,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WebhookDeliveryStatus {
+    pub event_id: Uuid,
+    pub compiled_delivery_id: String,
+    pub generation: i64,
+    pub state: WebhookDeliveryStatusKind,
+    pub attempt: i16,
+    pub payload_available: bool,
+    pub payload_expires_at: String,
+}
+
+/// Verified, product-owned operator boundary used by `registry-serverctl`.
+///
+/// Construction closes package, database identity, destination, and audit
+/// bindings before list or replay is available. The CLI therefore owns no SQL,
+/// retry transition, or signing behavior.
+pub struct WebhookOperatorService {
+    delivery: WebhookDeliveryService,
+}
+
+impl WebhookOperatorService {
+    pub async fn from_runtime_config(path: &Path) -> Result<Self, WebhookOperatorError> {
+        let config = load_runtime_config(path).map_err(|_| WebhookOperatorError::Unavailable)?;
+        let package_root = config.package().root().to_path_buf();
+        {
+            let context = config.package_load_context();
+            load_package(&package_root, &context).map_err(|_| WebhookOperatorError::Unavailable)?;
+        }
+        let connection = config
+            .runtime_database_connection_config()
+            .map_err(|_| WebhookOperatorError::Unavailable)?;
+        let pool = connection
+            .build_pool()
+            .map_err(|_| WebhookOperatorError::Unavailable)?;
+        let mut client = pool
+            .get()
+            .await
+            .map_err(|_| WebhookOperatorError::Unavailable)?;
+        let context = config.package_load_context();
+        let startup = crate::startup::prepare_startup(
+            &package_root,
+            &context,
+            &mut client,
+            config.database().roles().migration(),
+            config.database().roles().runtime(),
+        )
+        .await
+        .map_err(|_| WebhookOperatorError::Unavailable)?;
+        drop(client);
+        let destinations = Arc::new(
+            config
+                .activate_event_destinations(startup.package().registry())
+                .map_err(|_| WebhookOperatorError::Unavailable)?,
+        );
+        let audit_profile = config
+            .audit_profile()
+            .map_err(|_| WebhookOperatorError::Unavailable)?;
+        let delivery = WebhookDeliveryService::new(
+            pool,
+            destinations,
+            startup.expected_identity().clone(),
+            startup.lock_key(),
+            config.operational_timeouts().record_lock,
+            audit_profile,
+        );
+        delivery
+            .verify_retained_bindings()
+            .await
+            .map_err(|_| WebhookOperatorError::Unavailable)?;
+        Ok(Self { delivery })
+    }
+
+    pub async fn list(
+        &self,
+        limit: u16,
+    ) -> Result<Vec<WebhookDeliveryStatus>, WebhookOperatorError> {
+        self.delivery
+            .list(limit)
+            .await
+            .map_err(|_| WebhookOperatorError::Unavailable)
+    }
+
+    pub async fn replay(
+        &self,
+        event_id: Uuid,
+        compiled_delivery_id: &str,
+        expected_generation: i64,
+    ) -> Result<i64, WebhookOperatorError> {
+        self.delivery
+            .replay(event_id, compiled_delivery_id, expected_generation)
+            .await
+            .map_err(|_| WebhookOperatorError::Unavailable)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -93,7 +205,135 @@ impl WebhookDeliveryService {
         self.finalize(&claim, outcome).await
     }
 
-    /// Reset one terminal delivery for an explicitly permitted operator replay.
+    /// Refuse startup or operator use if retained work cannot use its exact
+    /// captured destination under the active deployment bindings.
+    pub async fn verify_retained_bindings(&self) -> Result<(), WebhookDeliveryError> {
+        let mut client = self
+            .pool
+            .get()
+            .await
+            .map_err(|_| WebhookDeliveryError::Unavailable)?;
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(|_| WebhookDeliveryError::Unavailable)?;
+        self.verify_transaction(&transaction).await?;
+        let rows = transaction
+            .query(
+                "SELECT DISTINCT delivery.logical_destination_id,
+                                 delivery.destination_binding_digest
+                   FROM registry_internal.registry_webhook_delivery_state AS state
+                   JOIN registry_internal.registry_webhook_deliveries AS delivery
+                     ON delivery.event_id = state.event_id
+                    AND delivery.compiled_delivery_id = state.compiled_delivery_id
+                   JOIN registry_internal.registry_outbox AS outbox
+                     ON outbox.event_id = delivery.event_id
+                  WHERE state.state IN ('pending', 'leased')
+                    AND outbox.payload IS NOT NULL
+                    AND outbox.payload_expires_at > transaction_timestamp()",
+                &[],
+            )
+            .await
+            .map_err(|_| WebhookDeliveryError::Unavailable)?;
+        for row in rows {
+            let logical_id = bounded_text(&row, 0, 64)?;
+            let binding_digest = bounded_text(&row, 1, 71)?;
+            if self
+                .destinations
+                .lookup(&logical_id)
+                .is_none_or(|destination| destination.binding_digest() != binding_digest)
+            {
+                return Err(WebhookDeliveryError::Unavailable);
+            }
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(|_| WebhookDeliveryError::Unavailable)
+    }
+
+    /// Return bounded, value-free pending and terminal operator metadata.
+    pub async fn list(
+        &self,
+        limit: u16,
+    ) -> Result<Vec<WebhookDeliveryStatus>, WebhookDeliveryError> {
+        if limit == 0 || limit > MAX_WEBHOOK_STATUS_RESULTS {
+            return Err(WebhookDeliveryError::Unavailable);
+        }
+        let mut client = self
+            .pool
+            .get()
+            .await
+            .map_err(|_| WebhookDeliveryError::Unavailable)?;
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(|_| WebhookDeliveryError::Unavailable)?;
+        self.verify_transaction(&transaction).await?;
+        let rows = transaction
+            .query(
+                "SELECT state.event_id, state.compiled_delivery_id,
+                        state.generation, state.state, state.attempt,
+                        outbox.payload IS NOT NULL
+                            AND outbox.payload_expires_at > transaction_timestamp(),
+                        outbox.payload_expires_at
+                   FROM registry_internal.registry_webhook_delivery_state AS state
+                   JOIN registry_internal.registry_outbox AS outbox
+                     ON outbox.event_id = state.event_id
+                  WHERE state.state IN ('pending', 'dead_lettered', 'expired')
+                  ORDER BY state.updated_at DESC, state.event_id,
+                           state.compiled_delivery_id
+                  LIMIT $1",
+                &[&i64::from(limit)],
+            )
+            .await
+            .map_err(|_| WebhookDeliveryError::Unavailable)?;
+        let mut statuses = Vec::with_capacity(rows.len());
+        for row in rows {
+            let event_id = row
+                .try_get::<_, Uuid>(0)
+                .map_err(|_| WebhookDeliveryError::Unavailable)?;
+            let compiled_delivery_id = bounded_delivery_id(&row, 1)?;
+            let generation = row
+                .try_get::<_, i64>(2)
+                .map_err(|_| WebhookDeliveryError::Unavailable)?;
+            let stored_state = bounded_text(&row, 3, 32)?;
+            let attempt = row
+                .try_get::<_, i16>(4)
+                .map_err(|_| WebhookDeliveryError::Unavailable)?;
+            let payload_available = row
+                .try_get::<_, bool>(5)
+                .map_err(|_| WebhookDeliveryError::Unavailable)?;
+            let payload_expires_at = row
+                .try_get::<_, SystemTime>(6)
+                .map_err(|_| WebhookDeliveryError::Unavailable)?;
+            let state = match stored_state.as_str() {
+                "pending" if payload_available => WebhookDeliveryStatusKind::Pending,
+                "pending" | "expired" => WebhookDeliveryStatusKind::Expired,
+                "dead_lettered" => WebhookDeliveryStatusKind::DeadLettered,
+                _ => return Err(WebhookDeliveryError::Unavailable),
+            };
+            statuses.push(WebhookDeliveryStatus {
+                event_id,
+                compiled_delivery_id,
+                generation,
+                state,
+                attempt,
+                payload_available,
+                payload_expires_at: OffsetDateTime::from(payload_expires_at)
+                    .format(&Rfc3339)
+                    .map_err(|_| WebhookDeliveryError::Unavailable)?,
+            });
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(|_| WebhookDeliveryError::Unavailable)?;
+        Ok(statuses)
+    }
+
+    /// Reset one terminal delivery for an explicitly permitted operator replay
+    /// and return the committed replacement generation.
     ///
     /// Every absent, stale, forbidden, or nonterminal target returns the same
     /// value-free refusal.
@@ -102,7 +342,7 @@ impl WebhookDeliveryService {
         event_id: Uuid,
         compiled_delivery_id: &str,
         expected_generation: i64,
-    ) -> Result<(), WebhookDeliveryError> {
+    ) -> Result<i64, WebhookDeliveryError> {
         if compiled_delivery_id.is_empty()
             || compiled_delivery_id.len() > 256
             || expected_generation <= 0
@@ -121,22 +361,21 @@ impl WebhookDeliveryService {
         self.verify_transaction(&transaction).await?;
         let row = transaction
             .query_opt(
-                "SELECT state.generation, state.state, delivery.operator_replay
+                "SELECT state.generation, state.state, delivery.operator_replay,
+                        delivery.package_revision, delivery.logical_destination_id,
+                        delivery.destination_binding_digest
                  FROM registry_internal.registry_webhook_delivery_state AS state
                  JOIN registry_internal.registry_webhook_deliveries AS delivery
                    ON delivery.event_id = state.event_id
                   AND delivery.compiled_delivery_id = state.compiled_delivery_id
+                 JOIN registry_internal.registry_outbox AS outbox
+                   ON outbox.event_id = delivery.event_id
                  WHERE state.event_id = $1
                    AND state.compiled_delivery_id = $2
-                   AND delivery.package_revision = $3
-                   AND delivery.schema_fingerprint = $4
+                   AND outbox.payload IS NOT NULL
+                   AND outbox.payload_expires_at > transaction_timestamp()
                  FOR UPDATE OF state",
-                &[
-                    &event_id,
-                    &compiled_delivery_id,
-                    &self.expected.package_revision,
-                    &self.expected.schema_fingerprint,
-                ],
+                &[&event_id, &compiled_delivery_id],
             )
             .await
             .map_err(|_| WebhookDeliveryError::Unavailable)?
@@ -150,9 +389,18 @@ impl WebhookDeliveryService {
         let operator_replay = row
             .try_get::<_, bool>(2)
             .map_err(|_| WebhookDeliveryError::Unavailable)?;
+        let package_revision = bounded_text(&row, 3, 256)?;
+        let logical_destination_id = bounded_text(&row, 4, 64)?;
+        let destination_binding_digest = bounded_text(&row, 5, 71)?;
         if generation != expected_generation
             || !operator_replay
-            || !matches!(state.as_str(), "delivered" | "dead_lettered")
+            || state != "dead_lettered"
+            || self
+                .destinations
+                .lookup(&logical_destination_id)
+                .is_none_or(|destination| {
+                    destination.binding_digest() != destination_binding_digest
+                })
         {
             return Err(WebhookDeliveryError::Unavailable);
         }
@@ -165,7 +413,7 @@ impl WebhookDeliveryService {
             WebhookAudit {
                 event_id,
                 compiled_delivery_id,
-                package_revision: &self.expected.package_revision,
+                package_revision: &package_revision,
                 generation: next_generation,
                 attempt: 0,
                 phase: WebhookAuditPhase::Replay,
@@ -187,11 +435,12 @@ impl WebhookDeliveryService {
                      lease_token = NULL,
                      delivered_at = NULL,
                      dead_lettered_at = NULL,
+                     expired_at = NULL,
                      updated_at = transaction_timestamp()
                  WHERE event_id = $1
                    AND compiled_delivery_id = $2
                    AND generation = $3
-                   AND state IN ('delivered', 'dead_lettered')",
+                   AND state = 'dead_lettered'",
                 &[
                     &event_id,
                     &compiled_delivery_id,
@@ -207,7 +456,8 @@ impl WebhookDeliveryService {
         transaction
             .commit()
             .await
-            .map_err(|_| WebhookDeliveryError::Unavailable)
+            .map_err(|_| WebhookDeliveryError::Unavailable)?;
+        Ok(next_generation)
     }
 
     async fn claim(&self) -> Result<Option<DeliveryClaim>, WebhookDeliveryError> {
@@ -228,29 +478,30 @@ impl WebhookDeliveryService {
             webhook_failure(WebhookStateTransitionCode::ClaimRecoveryFailed);
             return Err(WebhookDeliveryError::Unavailable);
         }
+        self.expire_retained_payload(&transaction).await?;
         let row = transaction
             .query_opt(
                 "SELECT state.event_id, state.compiled_delivery_id,
                         state.generation, state.attempt,
                         delivery.deployed_attempt_timeout_ms,
                         delivery.deployed_maximum_attempts,
-                        delivery.retry_delays_ms
+                        delivery.retry_delays_ms,
+                        delivery.package_revision
                  FROM registry_internal.registry_webhook_delivery_state AS state
                  JOIN registry_internal.registry_webhook_deliveries AS delivery
                    ON delivery.event_id = state.event_id
                   AND delivery.compiled_delivery_id = state.compiled_delivery_id
+                 JOIN registry_internal.registry_outbox AS outbox
+                   ON outbox.event_id = delivery.event_id
                  WHERE state.state = 'pending'
                    AND state.next_attempt_at <= transaction_timestamp()
                    AND state.attempt < delivery.deployed_maximum_attempts
-                   AND delivery.package_revision = $1
-                   AND delivery.schema_fingerprint = $2
+                   AND outbox.payload IS NOT NULL
+                   AND outbox.payload_expires_at > transaction_timestamp()
                  ORDER BY state.next_attempt_at, state.event_id, state.compiled_delivery_id
                  FOR UPDATE OF state SKIP LOCKED
                  LIMIT 1",
-                &[
-                    &self.expected.package_revision,
-                    &self.expected.schema_fingerprint,
-                ],
+                &[],
             )
             .await
             .map_err(|_| {
@@ -283,6 +534,8 @@ impl WebhookDeliveryService {
         let retry_delays_ms = row
             .try_get::<_, Vec<i64>>(6)
             .map_err(|_| WebhookDeliveryError::Unavailable)?;
+        let package_revision =
+            bounded_text(&row, 7, 256).map_err(|_| WebhookDeliveryError::Unavailable)?;
         let attempt = prior_attempt
             .checked_add(1)
             .filter(|attempt| *attempt <= deployed_maximum_attempts)
@@ -347,7 +600,7 @@ impl WebhookDeliveryService {
             WebhookAudit {
                 event_id,
                 compiled_delivery_id: &compiled_delivery_id,
-                package_revision: &self.expected.package_revision,
+                package_revision: &package_revision,
                 generation,
                 attempt,
                 phase: WebhookAuditPhase::Attempt,
@@ -374,6 +627,7 @@ impl WebhookDeliveryService {
             lease_token,
             deployed_maximum_attempts,
             retry_delays_ms,
+            package_revision,
         }))
     }
 
@@ -386,22 +640,18 @@ impl WebhookDeliveryService {
                 "SELECT state.event_id, state.compiled_delivery_id,
                         state.generation, state.attempt, state.lease_token,
                         delivery.deployed_maximum_attempts,
-                        delivery.retry_delays_ms
+                        delivery.retry_delays_ms,
+                        delivery.package_revision
                  FROM registry_internal.registry_webhook_delivery_state AS state
                  JOIN registry_internal.registry_webhook_deliveries AS delivery
                    ON delivery.event_id = state.event_id
                   AND delivery.compiled_delivery_id = state.compiled_delivery_id
                  WHERE state.state = 'leased'
                    AND state.lease_expires_at <= transaction_timestamp()
-                   AND delivery.package_revision = $1
-                   AND delivery.schema_fingerprint = $2
                  ORDER BY state.lease_expires_at, state.event_id, state.compiled_delivery_id
                  FOR UPDATE OF state SKIP LOCKED
                  LIMIT 1",
-                &[
-                    &self.expected.package_revision,
-                    &self.expected.schema_fingerprint,
-                ],
+                &[],
             )
             .await
             .map_err(|_| WebhookDeliveryError::Unavailable)?;
@@ -427,6 +677,7 @@ impl WebhookDeliveryService {
         let retry_delays_ms = row
             .try_get::<_, Vec<i64>>(6)
             .map_err(|_| WebhookDeliveryError::Unavailable)?;
+        let package_revision = bounded_text(&row, 7, 256)?;
         validate_captured_policy(100, deployed_maximum_attempts, &retry_delays_ms)?;
         let dead_lettered = attempt >= deployed_maximum_attempts;
         append_webhook_audit(
@@ -435,7 +686,7 @@ impl WebhookDeliveryService {
             WebhookAudit {
                 event_id,
                 compiled_delivery_id: &compiled_delivery_id,
-                package_revision: &self.expected.package_revision,
+                package_revision: &package_revision,
                 generation,
                 attempt,
                 phase: WebhookAuditPhase::Terminal,
@@ -487,7 +738,7 @@ impl WebhookDeliveryService {
                 .execute(
                     "UPDATE registry_internal.registry_webhook_delivery_state
                      SET state = 'pending',
-                         next_attempt_at = attempt_started_at
+                         next_attempt_at = transaction_timestamp()
                              + $6::bigint * interval '1 millisecond',
                          attempt_started_at = NULL,
                          lease_expires_at = NULL,
@@ -518,6 +769,96 @@ impl WebhookDeliveryService {
         Ok(())
     }
 
+    async fn expire_retained_payload(
+        &self,
+        transaction: &Transaction<'_>,
+    ) -> Result<(), WebhookDeliveryError> {
+        let row = transaction
+            .query_opt(
+                "SELECT state.event_id, state.compiled_delivery_id,
+                        state.generation, state.attempt, delivery.package_revision
+                   FROM registry_internal.registry_webhook_delivery_state AS state
+                   JOIN registry_internal.registry_webhook_deliveries AS delivery
+                     ON delivery.event_id = state.event_id
+                    AND delivery.compiled_delivery_id = state.compiled_delivery_id
+                   JOIN registry_internal.registry_outbox AS outbox
+                     ON outbox.event_id = delivery.event_id
+                  WHERE state.state IN ('pending', 'dead_lettered')
+                    AND outbox.payload IS NOT NULL
+                    AND outbox.payload_expires_at <= transaction_timestamp()
+                  ORDER BY outbox.payload_expires_at, state.event_id,
+                           state.compiled_delivery_id
+                  FOR UPDATE OF state, outbox SKIP LOCKED
+                  LIMIT 1",
+                &[],
+            )
+            .await
+            .map_err(|_| WebhookDeliveryError::Unavailable)?;
+        let Some(row) = row else {
+            return Ok(());
+        };
+        let event_id = row
+            .try_get::<_, Uuid>(0)
+            .map_err(|_| WebhookDeliveryError::Unavailable)?;
+        let compiled_delivery_id = bounded_delivery_id(&row, 1)?;
+        let generation = row
+            .try_get::<_, i64>(2)
+            .map_err(|_| WebhookDeliveryError::Unavailable)?;
+        let attempt = row
+            .try_get::<_, i16>(3)
+            .map_err(|_| WebhookDeliveryError::Unavailable)?;
+        let package_revision = bounded_text(&row, 4, 256)?;
+        append_webhook_audit(
+            transaction,
+            &self.audit_profile,
+            WebhookAudit {
+                event_id,
+                compiled_delivery_id: &compiled_delivery_id,
+                package_revision: &package_revision,
+                generation,
+                attempt,
+                phase: WebhookAuditPhase::Terminal,
+                outcome: WebhookAuditOutcome::PayloadExpired,
+                disposition: WebhookAuditDisposition::Expired,
+            },
+        )
+        .await
+        .map_err(|_| WebhookDeliveryError::Unavailable)?;
+        let state_changed = transaction
+            .execute(
+                "UPDATE registry_internal.registry_webhook_delivery_state
+                    SET state = CASE WHEN state = 'pending' THEN 'expired' ELSE state END,
+                        next_attempt_at = NULL,
+                        attempt_started_at = NULL,
+                        lease_expires_at = NULL,
+                        lease_token = NULL,
+                        expired_at = transaction_timestamp(),
+                        updated_at = transaction_timestamp()
+                  WHERE event_id = $1
+                    AND compiled_delivery_id = $2
+                    AND generation = $3
+                    AND state IN ('pending', 'dead_lettered')",
+                &[&event_id, &compiled_delivery_id, &generation],
+            )
+            .await
+            .map_err(|_| WebhookDeliveryError::Unavailable)?;
+        let payload_changed = transaction
+            .execute(
+                "UPDATE registry_internal.registry_outbox
+                    SET payload = NULL
+                  WHERE event_id = $1
+                    AND payload IS NOT NULL
+                    AND payload_expires_at <= transaction_timestamp()",
+                &[&event_id],
+            )
+            .await
+            .map_err(|_| WebhookDeliveryError::Unavailable)?;
+        if state_changed != 1 || payload_changed != 1 {
+            return Err(WebhookDeliveryError::Unavailable);
+        }
+        Ok(())
+    }
+
     async fn reload_and_send(
         &self,
         claim: &DeliveryClaim,
@@ -543,10 +884,17 @@ impl WebhookDeliveryService {
         {
             return Ok(WebhookAuditOutcome::DestinationBindingRefused);
         }
-        let timestamp = OffsetDateTime::from(claim.attempt_started_at)
+        let delivery_time = OffsetDateTime::from(claim.attempt_started_at)
+            .format(&Rfc3339)
+            .map_err(|_| WebhookDeliveryError::Unavailable)?;
+        let event_time = OffsetDateTime::from(material.event_time)
             .format(&Rfc3339)
             .map_err(|_| WebhookDeliveryError::Unavailable)?;
         let event_id = claim.event_id.to_string();
+        let source = format!(
+            "urn:registrystack:registry:{}:instance:{}",
+            self.expected.package_id, self.expected.instance_id
+        );
         let generation = claim.generation.to_string();
         let attempt = claim.attempt.to_string();
         let idempotency_key = webhook_idempotency_key(
@@ -560,11 +908,17 @@ impl WebhookDeliveryService {
             webhook_signature(
                 key,
                 SignatureFields {
-                    event_id: &event_id,
+                    id: &event_id,
+                    source: &source,
                     event_type: &material.event_type,
+                    time: &event_time,
+                    data_schema: &material.data_schema,
                     generation: &generation,
                     attempt: &attempt,
-                    timestamp: &timestamp,
+                    delivery_time: &delivery_time,
+                    method: "POST",
+                    request_target: destination.request_target(),
+                    content_type: "application/json",
                     idempotency_key: &idempotency_key,
                     body: &material.body,
                 },
@@ -575,11 +929,14 @@ impl WebhookDeliveryService {
         };
         let request = match destination.request_template().render_event(
             EventDeliveryHeaders {
-                event_id: event_id.as_bytes(),
+                id: event_id.as_bytes(),
+                source: source.as_bytes(),
                 event_type: material.event_type.as_bytes(),
+                time: event_time.as_bytes(),
+                dataschema: material.data_schema.as_bytes(),
                 generation: generation.as_bytes(),
                 attempt: attempt.as_bytes(),
-                timestamp: timestamp.as_bytes(),
+                delivery_time: delivery_time.as_bytes(),
                 idempotency_key: idempotency_key.as_bytes(),
                 signature: signature.as_bytes(),
             },
@@ -641,7 +998,9 @@ impl WebhookDeliveryService {
                         delivery.deployed_maximum_attempts,
                         delivery.authentication_profile,
                         delivery.delivery_mode,
-                        delivery.dead_letter
+                        delivery.dead_letter,
+                        delivery.data_schema,
+                        outbox.created_at
                  FROM registry_internal.registry_webhook_delivery_state AS state
                  JOIN registry_internal.registry_webhook_deliveries AS delivery
                    ON delivery.event_id = state.event_id
@@ -657,6 +1016,8 @@ impl WebhookDeliveryService {
                    AND state.lease_token = $5
                    AND state.state = 'leased'
                    AND state.lease_expires_at > transaction_timestamp()
+                   AND outbox.payload IS NOT NULL
+                   AND outbox.payload_expires_at > transaction_timestamp()
                  FOR SHARE OF state",
                 &[
                     &claim.event_id,
@@ -672,8 +1033,9 @@ impl WebhookDeliveryService {
         let event_type =
             bounded_text(&row, 0, 256).map_err(|_| MaterialLoadError::PayloadRefused)?;
         let body = row
-            .try_get::<_, Vec<u8>>(1)
+            .try_get::<_, Option<Vec<u8>>>(1)
             .map_err(|_| MaterialLoadError::PayloadRefused)?;
+        let body = body.ok_or(MaterialLoadError::PayloadRefused)?;
         let outbox_package_revision =
             bounded_text(&row, 2, 256).map_err(|_| MaterialLoadError::PayloadRefused)?;
         let outbox_schema_fingerprint =
@@ -700,6 +1062,11 @@ impl WebhookDeliveryService {
             bounded_text(&row, 11, 32).map_err(|_| MaterialLoadError::PayloadRefused)?;
         let dead_letter =
             bounded_text(&row, 12, 32).map_err(|_| MaterialLoadError::PayloadRefused)?;
+        let data_schema =
+            bounded_text(&row, 13, 2_048).map_err(|_| MaterialLoadError::PayloadRefused)?;
+        let event_time = row
+            .try_get::<_, SystemTime>(14)
+            .map_err(|_| MaterialLoadError::PayloadRefused)?;
         transaction
             .commit()
             .await
@@ -708,8 +1075,8 @@ impl WebhookDeliveryService {
         let parsed = parse_json_strict(&body).map_err(|_| MaterialLoadError::PayloadRefused)?;
         let canonical =
             canonicalize_json(&parsed).map_err(|_| MaterialLoadError::PayloadRefused)?;
-        if outbox_package_revision != self.expected.package_revision
-            || outbox_schema_fingerprint != self.expected.schema_fingerprint
+        if outbox_package_revision != claim.package_revision
+            || outbox_schema_fingerprint.is_empty()
             || authentication_profile != "hmac_sha256_v1"
             || delivery_mode != "after_commit"
             || dead_letter != "required"
@@ -735,6 +1102,8 @@ impl WebhookDeliveryService {
             logical_destination_id,
             deployed_attempt_timeout_ms,
             deployed_maximum_attempts,
+            data_schema,
+            event_time,
         })
     }
 
@@ -775,7 +1144,7 @@ impl WebhookDeliveryService {
             WebhookAudit {
                 event_id: claim.event_id,
                 compiled_delivery_id: &claim.compiled_delivery_id,
-                package_revision: &self.expected.package_revision,
+                package_revision: &claim.package_revision,
                 generation: claim.generation,
                 attempt: claim.attempt,
                 phase: WebhookAuditPhase::Terminal,
@@ -806,7 +1175,7 @@ impl WebhookDeliveryService {
                     .execute(
                         "UPDATE registry_internal.registry_webhook_delivery_state
                          SET state = 'pending',
-                             next_attempt_at = attempt_started_at
+                             next_attempt_at = transaction_timestamp()
                                  + $6::bigint * interval '1 millisecond',
                              attempt_started_at = NULL,
                              lease_expires_at = NULL,
@@ -834,6 +1203,20 @@ impl WebhookDeliveryService {
         };
         if changed != 1 {
             return Err(WebhookDeliveryError::Unavailable);
+        }
+        if work_outcome == WebhookWorkOutcome::Delivered {
+            let erased = transaction
+                .execute(
+                    "UPDATE registry_internal.registry_outbox
+                        SET payload = NULL
+                      WHERE event_id = $1 AND payload IS NOT NULL",
+                    &[&claim.event_id],
+                )
+                .await
+                .map_err(|_| WebhookDeliveryError::Unavailable)?;
+            if erased != 1 {
+                return Err(WebhookDeliveryError::Unavailable);
+            }
         }
         transaction
             .commit()
@@ -1080,6 +1463,7 @@ struct DeliveryClaim {
     lease_token: Uuid,
     deployed_maximum_attempts: i16,
     retry_delays_ms: Vec<i64>,
+    package_revision: String,
 }
 
 struct DeliveryMaterial {
@@ -1090,6 +1474,8 @@ struct DeliveryMaterial {
     logical_destination_id: String,
     deployed_attempt_timeout_ms: i64,
     deployed_maximum_attempts: i16,
+    data_schema: String,
+    event_time: SystemTime,
 }
 
 enum MaterialLoadError {
@@ -1192,12 +1578,19 @@ fn webhook_idempotency_key(
     format!("sha256:{}", hex::encode(Sha256::digest(input)))
 }
 
+#[derive(Clone, Copy)]
 struct SignatureFields<'a> {
-    event_id: &'a str,
+    id: &'a str,
+    source: &'a str,
     event_type: &'a str,
+    time: &'a str,
+    data_schema: &'a str,
     generation: &'a str,
     attempt: &'a str,
-    timestamp: &'a str,
+    delivery_time: &'a str,
+    method: &'a str,
+    request_target: &'a str,
+    content_type: &'a str,
     idempotency_key: &'a str,
     body: &'a [u8],
 }
@@ -1209,11 +1602,18 @@ fn webhook_signature(
     let mut input = Vec::new();
     input.extend_from_slice(SIGNATURE_DOMAIN);
     for value in [
-        fields.event_id.as_bytes(),
+        b"1.0".as_slice(),
+        fields.id.as_bytes(),
+        fields.source.as_bytes(),
         fields.event_type.as_bytes(),
+        fields.time.as_bytes(),
+        fields.data_schema.as_bytes(),
         fields.generation.as_bytes(),
         fields.attempt.as_bytes(),
-        fields.timestamp.as_bytes(),
+        fields.delivery_time.as_bytes(),
+        fields.method.as_bytes(),
+        fields.request_target.as_bytes(),
+        fields.content_type.as_bytes(),
         fields.idempotency_key.as_bytes(),
         fields.body,
     ] {
@@ -1239,130 +1639,54 @@ mod tests {
     #[test]
     fn hmac_sha256_v1_binds_every_header_and_exact_canonical_body() {
         let key = [0x5a; 32];
-        let signature = |key: &[u8],
-                         event_id: &str,
-                         event_type: &str,
-                         generation: &str,
-                         attempt: &str,
-                         timestamp: &str,
-                         idempotency_key: &str,
-                         body: &[u8]| {
-            webhook_signature(
-                key,
-                SignatureFields {
-                    event_id,
-                    event_type,
-                    generation,
-                    attempt,
-                    timestamp,
-                    idempotency_key,
-                    body,
-                },
-            )
-            .expect("bounded signature computes")
+        let fields = SignatureFields {
+            id: "00000000-0000-4000-8000-000000000001",
+            source: "urn:registrystack:registry:example:instance:primary",
+            event_type: "case-created-v1",
+            time: "2026-08-30T00:00:00Z",
+            data_schema:
+                "urn:registrystack:registry:example:event:case-created-v1:schema:sha256:aaa",
+            generation: "1",
+            attempt: "1",
+            delivery_time: "2026-08-30T00:00:01Z",
+            method: "POST",
+            request_target: "/hooks/registry",
+            content_type: "application/json",
+            idempotency_key:
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            body: br#"{"entity":"case","values":{"label":"value"}}"#,
         };
-        let event_id = "00000000-0000-4000-8000-000000000001";
-        let event_type = "case-created";
-        let generation = "1";
-        let attempt = "1";
-        let timestamp = "2026-08-30T00:00:00Z";
-        let idempotency_key =
-            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        let body = br#"{"label":"value"}"#;
-        let baseline = signature(
-            &key,
-            event_id,
-            event_type,
-            generation,
-            attempt,
-            timestamp,
-            idempotency_key,
-            body,
-        );
-        for changed in [
-            signature(
-                &key,
-                "00000000-0000-4000-8000-000000000002",
-                event_type,
-                generation,
-                attempt,
-                timestamp,
-                idempotency_key,
-                body,
-            ),
-            signature(
-                &key,
-                event_id,
-                "case-patched",
-                generation,
-                attempt,
-                timestamp,
-                idempotency_key,
-                body,
-            ),
-            signature(
-                &key,
-                event_id,
-                event_type,
-                "2",
-                attempt,
-                timestamp,
-                idempotency_key,
-                body,
-            ),
-            signature(
-                &key,
-                event_id,
-                event_type,
-                generation,
-                "2",
-                timestamp,
-                idempotency_key,
-                body,
-            ),
-            signature(
-                &key,
-                event_id,
-                event_type,
-                generation,
-                attempt,
-                "2026-08-30T00:00:01Z",
-                idempotency_key,
-                body,
-            ),
-            signature(
-                &key,
-                event_id,
-                event_type,
-                generation,
-                attempt,
-                timestamp,
-                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                body,
-            ),
-            signature(
-                &key,
-                event_id,
-                event_type,
-                generation,
-                attempt,
-                timestamp,
-                idempotency_key,
-                br#"{"label":"changed"}"#,
-            ),
-            signature(
-                &[0x6b; 32],
-                event_id,
-                event_type,
-                generation,
-                attempt,
-                timestamp,
-                idempotency_key,
-                body,
-            ),
-        ] {
-            assert_ne!(baseline, changed);
+        let baseline = webhook_signature(&key, fields).expect("bounded signature computes");
+        macro_rules! assert_field_is_bound {
+            ($member:ident, $changed:expr) => {{
+                let mut changed = fields;
+                changed.$member = $changed;
+                assert_ne!(
+                    baseline,
+                    webhook_signature(&key, changed).expect("changed signature computes")
+                );
+            }};
         }
+        assert_field_is_bound!(id, "00000000-0000-4000-8000-000000000002");
+        assert_field_is_bound!(source, "urn:registrystack:registry:other:instance:primary");
+        assert_field_is_bound!(event_type, "case-patched-v1");
+        assert_field_is_bound!(time, "2026-08-30T00:00:02Z");
+        assert_field_is_bound!(data_schema, "urn:registrystack:schema:changed");
+        assert_field_is_bound!(generation, "2");
+        assert_field_is_bound!(attempt, "2");
+        assert_field_is_bound!(delivery_time, "2026-08-30T00:00:03Z");
+        assert_field_is_bound!(method, "PUT");
+        assert_field_is_bound!(request_target, "/hooks/other");
+        assert_field_is_bound!(content_type, "application/cloudevents+json");
+        assert_field_is_bound!(
+            idempotency_key,
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        );
+        assert_field_is_bound!(body, br#"{"entity":"case","values":{"label":"changed"}}"#);
+        assert_ne!(
+            baseline,
+            webhook_signature(&[0x6b; 32], fields).expect("changed key computes")
+        );
         assert!(baseline.starts_with("v1="));
         assert!(!baseline[3..].contains('='));
     }

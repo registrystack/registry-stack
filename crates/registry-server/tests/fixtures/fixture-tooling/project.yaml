@@ -39,8 +39,6 @@ entities:
       - {id: quantity, type: int64, required: true, classification: public}
     constraints:
       - {kind: unique, fields: [label]}
-    events:
-      - {id: widget-created, trigger: created, projection: [jurisdiction, label, quantity]}
     accessProfiles:
       - id: operator
         default: true

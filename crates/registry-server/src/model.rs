@@ -6,9 +6,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::artifacts::GeneratedArtifacts;
 use crate::contract::{
-    AccessProfileSource, BatchSource, Classification, ConstraintSource, EventSource,
-    FieldTypeSource, ManifestProjectionSource, MutationMode, Operation, PackageIdentitySource,
-    TemporalSource, ValidTimeRole, WebhookAuthenticationProfile, WebhookDeadLetterMode,
+    AccessProfileSource, BatchSource, Classification, ConstraintSource, EventConditionSource,
+    EventSource, FieldTypeSource, ManifestProjectionSource, MutationMode, Operation,
+    PackageIdentitySource, TemporalSource, ValidTimeRole, WebhookAuthenticationProfile,
+    WebhookDeadLetterMode,
 };
 use crate::diagnostics::Diagnostic;
 use crate::generated_ddl::DdlInventory;
@@ -106,9 +107,15 @@ pub struct CompiledEventDelivery {
     pub trigger: crate::contract::EventTrigger,
     pub destination_id: String,
     pub projection_fields: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub when: Option<EventConditionSource>,
     pub classification_ceiling: Classification,
+    pub data_schema: String,
+    pub data_schema_fingerprint: String,
+    pub data_schema_artifact_path: String,
     pub authentication_profile: WebhookAuthenticationProfile,
     pub delivery_mode: CompiledWebhookDeliveryMode,
+    pub retry_profile: CompiledWebhookRetryProfile,
     pub attempt_timeout_ms: u32,
     pub initial_backoff_ms: u32,
     pub maximum_backoff_ms: u32,
@@ -127,6 +134,12 @@ pub struct CompiledEventDelivery {
 #[serde(rename_all = "snake_case")]
 pub enum CompiledWebhookDeliveryMode {
     AfterCommit,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompiledWebhookRetryProfile {
+    RegistryV1,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

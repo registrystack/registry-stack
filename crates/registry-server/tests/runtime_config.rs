@@ -20,8 +20,8 @@ use registry_server::compiler::{compile_project, CompileProfile};
 use registry_server::contract::parse_project_json;
 use registry_server::event_destination::EventDestinationActivationError;
 use registry_server::runtime_config::{
-    load_runtime_config, load_runtime_config_with_env, parse_runtime_config_with_env,
-    RuntimeConfigError, TrustedProxyPosture,
+    load_runtime_config, load_runtime_config_with_env, parse_runtime_config,
+    parse_runtime_config_with_env, RuntimeConfigError, TrustedProxyPosture,
 };
 use serde_json::{json, Value};
 
@@ -137,6 +137,7 @@ fn event_destination_binding(
     dnsFamily: dualStackStrict
     allowedPrivateCidrs: []
     hmacSha256KeyRef: {key_ref}
+    classificationCeiling: restricted
     deliveryCeilings:
       attemptTimeoutMilliseconds: {timeout_ms}
       maximumAttempts: {maximum_attempts}
@@ -148,26 +149,25 @@ fn compiled_webhooks(destinations: &[(&str, u32, u8)]) -> registry_server::Compi
     let events = destinations
         .iter()
         .enumerate()
-        .map(|(index, (destination_id, timeout_ms, maximum_attempts))| {
-            json!({
-                "id": format!("case-event-{index}"),
-                "trigger": if index == 0 { "created" } else { "patched" },
-                "projection": ["label"],
-                "webhook": {
-                    "destinationId": destination_id,
-                    "classificationCeiling": "internal",
-                    "authenticationProfile": "hmac_sha256_v1",
-                    "delivery": {
-                        "attemptTimeoutMs": timeout_ms,
-                        "initialBackoffMs": 250,
-                        "maximumBackoffMs": 2000,
-                        "maximumAttempts": maximum_attempts,
-                        "deadLetter": "required",
-                        "operatorReplay": false
+        .map(
+            |(index, (destination_id, _timeout_ms, _maximum_attempts))| {
+                let mut event = json!({
+                    "id": format!("case-event-{index}"),
+                    "trigger": if index == 0 { "created" } else { "patched" },
+                    "projection": ["label"],
+                    "webhook": {
+                        "destinationId": destination_id
                     }
+                });
+                if index == 0 {
+                    event["when"] = json!({
+                        "kind": "fields",
+                        "afterEquals": {"eligibility": "eligible"}
+                    });
                 }
-            })
-        })
+                event
+            },
+        )
         .collect::<Vec<Value>>();
     let project = json!({
         "apiVersion": "registry.registrystack.org/v1alpha1",
@@ -180,7 +180,8 @@ fn compiled_webhooks(destinations: &[(&str, u32, u8)]) -> registry_server::Compi
             "tombstone": true,
             "classification": "internal",
             "fields": [
-                {"id": "label", "type": "string", "maxLength": 64, "classification": "internal"}
+                {"id": "label", "type": "string", "maxLength": 64, "classification": "internal"},
+                {"id": "eligibility", "type": "string", "maxLength": 32, "classification": "restricted"}
             ],
             "events": events
         }]
@@ -192,11 +193,14 @@ fn compiled_webhooks(destinations: &[(&str, u32, u8)]) -> registry_server::Compi
 
 fn event_headers() -> EventDeliveryHeaders<'static> {
     EventDeliveryHeaders {
-        event_id: b"event-id",
+        id: b"event-id",
+        source: b"urn:registrystack:registry:example:instance:primary",
         event_type: b"case.created",
+        time: b"2026-08-30T00:00:00Z",
+        dataschema: b"urn:registrystack:registry:example:event:case.created:schema:sha256:aaa",
         generation: b"1",
         attempt: b"1",
-        timestamp: b"2026-08-30T00:00:00Z",
+        delivery_time: b"2026-08-30T00:00:01Z",
         idempotency_key: b"delivery-key",
         signature: b"v1=signature",
     }
@@ -240,6 +244,10 @@ fn strict_runtime_file_loads_and_constructs_existing_runtime_inputs() {
     );
     assert_eq!(config.package().active_sequence(), 1);
     assert_eq!(
+        config.event_delivery().payload_retention(),
+        Duration::from_secs(7 * 24 * 60 * 60)
+    );
+    assert_eq!(
         config.package().compiler_source_revision(),
         "source-revision-1"
     );
@@ -282,6 +290,35 @@ fn strict_runtime_file_loads_and_constructs_existing_runtime_inputs() {
     let _cursor = config
         .cursor_codec()
         .expect("cursor codec builds from protected file secret");
+}
+
+#[test]
+fn webhook_payload_retention_is_deployment_selected_and_capped_at_thirty_days() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+    for days in [1_u8, 30_u8] {
+        let config = parse_runtime_config(&format!(
+            "{base}\neventDelivery:\n  payloadRetentionDays: {days}\n"
+        ))
+        .expect("bounded deployment retention parses");
+        assert_eq!(
+            config.event_delivery().payload_retention(),
+            Duration::from_secs(u64::from(days) * 24 * 60 * 60)
+        );
+    }
+    for days in [0_u8, 31_u8] {
+        assert_eq!(
+            parse_runtime_config(&format!(
+                "{base}\neventDelivery:\n  payloadRetentionDays: {days}\n"
+            ))
+            .err(),
+            Some(RuntimeConfigError::InvalidBounds)
+        );
+    }
 }
 
 #[test]
@@ -1354,7 +1391,7 @@ fn activation_requires_exact_compiled_and_runtime_destination_sets() {
 }
 
 #[test]
-fn runtime_ceilings_narrow_every_subscription_sharing_a_destination() {
+fn runtime_destination_classification_ceiling_cannot_widen_compiled_event_disclosure() {
     let fixture = RuntimeFixture::new();
     fixture.write_secret("event-hmac-key", &[0x41; 32]);
     let compiled = compiled_webhooks(&[
@@ -1388,29 +1425,30 @@ fn runtime_ceilings_narrow_every_subscription_sharing_a_destination() {
         Duration::from_millis(2_500)
     );
 
-    for (timeout_ms, maximum_attempts) in [(3_001, 3), (2_500, 4)] {
-        let widening = parse_runtime_config_with_env(
-            &runtime_with_event_destinations(
-                &fixture,
-                &event_destination_binding(
-                    "shared-destination",
-                    "https://events.example/",
-                    "/hooks/shared",
-                    "secret:file/event-hmac-key",
-                    timeout_ms,
-                    maximum_attempts,
-                ),
-            ),
-            env_lookup,
-        )
-        .expect("bounded but widening binding parses");
-        assert_eq!(
-            widening
-                .activate_event_destinations(&compiled)
-                .expect_err("runtime cannot widen one shared subscription"),
-            EventDestinationActivationError::DeliveryCeilingWidening
-        );
-    }
+    let below_compiled_classification = runtime_with_event_destinations(
+        &fixture,
+        &event_destination_binding(
+            "shared-destination",
+            "https://events.example/",
+            "/hooks/shared",
+            "secret:file/event-hmac-key",
+            2_500,
+            3,
+        ),
+    )
+    .replace(
+        "classificationCeiling: restricted",
+        "classificationCeiling: public",
+    );
+    let below_compiled_classification =
+        parse_runtime_config_with_env(&below_compiled_classification, env_lookup)
+            .expect("lower classification ceiling parses");
+    assert_eq!(
+        below_compiled_classification
+            .activate_event_destinations(&compiled)
+            .expect_err("runtime destination cannot accept a higher-classified event"),
+        EventDestinationActivationError::DeliveryCeilingWidening
+    );
 }
 
 #[test]

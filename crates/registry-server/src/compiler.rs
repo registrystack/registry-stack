@@ -9,13 +9,13 @@ use sha2::{Digest, Sha256};
 use time::{format_description::well_known::Rfc3339, Date, Month, OffsetDateTime};
 use uuid::Uuid;
 
-use crate::artifacts::generate_artifacts;
+use crate::artifacts::{event_data_schema_binding, generate_artifacts};
 use crate::contract::{
     parsed_bbox, valid_decimal_bounds, valid_structured_schema, AccessProfileSource,
-    Classification, ConstraintSource, EntityExtensionSource, EntitySource, EventTrigger,
-    FieldSource, FieldTypeSource, ManifestProjectionTextSource, MutationMode, Operation,
-    RegistryModule, RegistryProject, UniqueWhenPredicate, ValidTimeRole, WebhookDeadLetterMode,
-    MAX_STRUCTURED_VALUE_BYTES,
+    Classification, ConstraintSource, EntityExtensionSource, EntitySource, EventConditionSource,
+    EventScalarValue, EventTrigger, FieldSource, FieldTypeSource, ManifestProjectionTextSource,
+    MutationMode, Operation, RegistryModule, RegistryProject, UniqueWhenPredicate, ValidTimeRole,
+    WebhookAuthenticationProfile, WebhookDeadLetterMode, MAX_STRUCTURED_VALUE_BYTES,
 };
 use crate::diagnostics::{CompileFailure, Diagnostic};
 use crate::generated_ddl::generate_ddl;
@@ -26,8 +26,8 @@ use crate::model::{
     CompiledQueryFilterOperator, CompiledQueryInventory, CompiledQueryKind, CompiledQueryOperation,
     CompiledQuerySortDirection, CompiledQuerySortField, CompiledQueryTemporalBinding,
     CompiledQueryTemporalSemantics, CompiledRegistry, CompiledRevisionKind, CompiledRoute,
-    CompiledRouteInventory, CompiledTemporal, CompiledWebhookDeliveryMode, HttpMethod,
-    MAX_REVISION_HISTORY_RECORDS,
+    CompiledRouteInventory, CompiledTemporal, CompiledWebhookDeliveryMode,
+    CompiledWebhookRetryProfile, HttpMethod, MAX_REVISION_HISTORY_RECORDS,
 };
 use crate::physical_names::{
     hex_prefix, EntityPhysicalNames, PhysicalNameBuilder, PhysicalNameInventory,
@@ -37,21 +37,20 @@ pub const AUTHORING_API_VERSION: &str = "registry.registrystack.org/v1alpha1";
 pub const MAX_BATCH_ITEMS: u16 = 100;
 pub const MAX_BATCH_BYTES: u32 = 2_097_152;
 pub const MIN_WEBHOOK_ATTEMPT_TIMEOUT_MS: u32 = 100;
-/// Maximum per-attempt timeout accepted by the governed event transport.
-///
-/// This matches the platform event-destination operation ceiling. Runtime
-/// activation may narrow it, but can never widen the compiled authority.
-pub const MAX_WEBHOOK_ATTEMPT_TIMEOUT_MS: u32 = 10_000;
-pub const MIN_WEBHOOK_BACKOFF_MS: u32 = 100;
-pub const MAX_WEBHOOK_BACKOFF_MS: u32 = 3_600_000;
-pub const MAX_WEBHOOK_ATTEMPTS: u8 = 20;
+pub const WEBHOOK_ATTEMPT_TIMEOUT_MS: u32 = 5_000;
+pub const WEBHOOK_INITIAL_BACKOFF_MS: u32 = 1_000;
+pub const WEBHOOK_MAXIMUM_BACKOFF_MS: u32 = 8_000;
+pub const WEBHOOK_MAXIMUM_ATTEMPTS: u8 = 5;
+pub const MAX_WEBHOOK_ATTEMPT_TIMEOUT_MS: u32 = WEBHOOK_ATTEMPT_TIMEOUT_MS;
+pub const MAX_WEBHOOK_ATTEMPTS: u8 = WEBHOOK_MAXIMUM_ATTEMPTS;
+pub const MAX_EVENT_PACKAGE_REVISION_BYTES: u32 = 256;
 /// Maximum canonical event body accepted by the governed webhook transport.
 ///
 /// This intentionally matches the platform event-destination body ceiling.
 /// Keeping it in the pure compiler avoids pulling an HTTP client into the
 /// default no-I/O authoring graph; the runtime integration pins the equality.
 pub const MAX_WEBHOOK_PAYLOAD_BYTES: u32 = 1_048_576;
-const WEBHOOK_BACKOFF_MULTIPLIER: u8 = 2;
+pub const WEBHOOK_BACKOFF_MULTIPLIER: u8 = 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -77,7 +76,7 @@ pub fn compile_project(
     apply_extensions(&mut sources, &module_order, &module_map, &mut diagnostics);
     expand_project_access(project, &mut sources, &mut diagnostics);
     resolve_vocabularies(project, &mut sources, &mut diagnostics);
-    validate_entities(&sources, &mut diagnostics);
+    validate_entities(&sources, profile, &mut diagnostics);
     if !diagnostics.is_empty() {
         return Err(CompileFailure::from_errors(diagnostics));
     }
@@ -93,7 +92,9 @@ pub fn compile_project(
     )
     .map_err(CompileFailure::from_one)?;
     let query_inventory = compile_query_inventory(&entities, &mut diagnostics);
-    let event_delivery_inventory = compile_event_delivery_inventory(&entities);
+    let event_delivery_inventory =
+        compile_event_delivery_inventory(&project.registry.id, &entities)
+            .map_err(CompileFailure::from_one)?;
     validate_manifest_projection(project, &entities, &mut diagnostics);
     if !diagnostics.is_empty() {
         return Err(CompileFailure::from_errors(diagnostics));
@@ -1011,8 +1012,13 @@ fn resolve_vocabularies(
     }
 }
 
-fn validate_entities(entities: &BTreeMap<String, EntitySource>, errors: &mut Vec<Diagnostic>) {
+fn validate_entities(
+    entities: &BTreeMap<String, EntitySource>,
+    profile: CompileProfile,
+    errors: &mut Vec<Diagnostic>,
+) {
     let mut routes = BTreeSet::new();
+    let mut event_ids = BTreeSet::new();
     for entity in entities.values() {
         validate_id(&entity.id, "entities[].id", errors);
         validate_id(&entity.route, "entities[].route", errors);
@@ -1058,7 +1064,7 @@ fn validate_entities(entities: &BTreeMap<String, EntitySource>, errors: &mut Vec
         validate_constraints(entity, errors);
         validate_indexes(entity, errors);
         validate_profiles(entity, errors);
-        validate_events(entity, errors);
+        validate_events(entity, profile, &mut event_ids, errors);
     }
 }
 
@@ -1692,7 +1698,12 @@ fn validate_profiles(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
     }
 }
 
-fn validate_events(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
+fn validate_events(
+    entity: &EntitySource,
+    profile: CompileProfile,
+    registry_event_ids: &mut BTreeSet<String>,
+    errors: &mut Vec<Diagnostic>,
+) {
     let fields: BTreeMap<&str, &FieldSource> = entity
         .fields
         .iter()
@@ -1706,6 +1717,12 @@ fn validate_events(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
                 "event.id.duplicate",
                 "entities[].events[].id",
                 "an event identifier is duplicated",
+            ));
+        } else if !registry_event_ids.insert(event.id.clone()) {
+            errors.push(Diagnostic::error(
+                "event.id.registry_duplicate",
+                "entities[].events[].id",
+                "an event identifier must be unique across the Registry",
             ));
         }
         if event.projection.is_empty() {
@@ -1726,11 +1743,12 @@ fn validate_events(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
                 "an event projection refers to an unknown field",
             ));
         }
-        let maximum_payload_bytes = maximum_event_payload_bytes(&event.projection, |field| {
-            fields
-                .get(field)
-                .map(|field| (&field.field_type, field.required))
-        });
+        let maximum_payload_bytes =
+            maximum_event_payload_bytes(&entity.id, &event.projection, |field| {
+                fields
+                    .get(field)
+                    .map(|field| (&field.field_type, field.required))
+            });
         if matches!(
             event.trigger,
             EventTrigger::Patched | EventTrigger::Tombstoned
@@ -1749,7 +1767,15 @@ fn validate_events(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
                 "a tombstone event requires tombstone behavior",
             ));
         }
+        validate_event_condition(event, &fields, errors);
         let Some(webhook) = event.webhook.as_ref() else {
+            if profile == CompileProfile::Production {
+                errors.push(Diagnostic::error(
+                    "event.delivery.required",
+                    "entities[].events[].webhook",
+                    "a production event requires a supported delivery",
+                ));
+            }
             continue;
         };
         if maximum_payload_bytes
@@ -1768,51 +1794,74 @@ fn validate_events(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
                 "a webhook destination must use the closed logical identifier grammar",
             ));
         }
-        if event.projection.iter().any(|field| {
-            fields
-                .get(field.as_str())
-                .is_some_and(|field| field.classification > webhook.classification_ceiling)
-        }) {
+    }
+}
+
+fn validate_event_condition(
+    event: &crate::contract::EventSource,
+    fields: &BTreeMap<&str, &FieldSource>,
+    errors: &mut Vec<Diagnostic>,
+) {
+    let Some(EventConditionSource::Fields {
+        changed,
+        before_equals,
+        after_equals,
+    }) = event.when.as_ref()
+    else {
+        return;
+    };
+    if changed.is_empty() && before_equals.is_empty() && after_equals.is_empty() {
+        errors.push(Diagnostic::error(
+            "event.when.empty",
+            "entities[].events[].when",
+            "a field event condition requires at least one predicate",
+        ));
+    }
+    let compatible = match event.trigger {
+        EventTrigger::Created => changed.is_empty() && before_equals.is_empty(),
+        EventTrigger::Patched => true,
+        EventTrigger::Tombstoned => changed.is_empty() && after_equals.is_empty(),
+    };
+    if !compatible {
+        errors.push(Diagnostic::error(
+            "event.when.trigger_incompatible",
+            "entities[].events[].when",
+            "the field predicates are unavailable for this event trigger",
+        ));
+    }
+    for field in changed {
+        if !fields.contains_key(field.as_str()) {
             errors.push(Diagnostic::error(
-                "event.webhook.classification_ceiling.underdeclared",
-                "entities[].events[].webhook.classificationCeiling",
-                "the webhook classification ceiling is below a projected field",
+                "event.when.field_unknown",
+                "entities[].events[].when.changed",
+                "an event condition refers to an unknown field",
             ));
         }
-        let delivery = &webhook.delivery;
-        if !(MIN_WEBHOOK_ATTEMPT_TIMEOUT_MS..=MAX_WEBHOOK_ATTEMPT_TIMEOUT_MS)
-            .contains(&delivery.attempt_timeout_ms)
-        {
-            errors.push(Diagnostic::error(
-                "event.webhook.timeout.invalid",
-                "entities[].events[].webhook.delivery.attemptTimeoutMs",
-                "the webhook per-attempt timeout is outside the supported bounds",
-            ));
-        }
-        if !(MIN_WEBHOOK_BACKOFF_MS..=MAX_WEBHOOK_BACKOFF_MS).contains(&delivery.initial_backoff_ms)
-            || !(MIN_WEBHOOK_BACKOFF_MS..=MAX_WEBHOOK_BACKOFF_MS)
-                .contains(&delivery.maximum_backoff_ms)
-            || delivery.initial_backoff_ms > delivery.maximum_backoff_ms
-        {
-            errors.push(Diagnostic::error(
-                "event.webhook.backoff.invalid",
-                "entities[].events[].webhook.delivery",
-                "webhook backoff bounds must be positive, bounded, and internally coherent",
-            ));
-        }
-        if delivery.maximum_attempts == 0 || delivery.maximum_attempts > MAX_WEBHOOK_ATTEMPTS {
-            errors.push(Diagnostic::error(
-                "event.webhook.attempts.invalid",
-                "entities[].events[].webhook.delivery.maximumAttempts",
-                "webhook maximum attempts must be within the supported bound",
-            ));
-        }
-        if delivery.dead_letter != Some(WebhookDeadLetterMode::Required) {
-            errors.push(Diagnostic::error(
-                "event.webhook.dead_letter.required",
-                "entities[].events[].webhook.delivery.deadLetter",
-                "webhook delivery requires dead-letter handling",
-            ));
+    }
+    for (path, predicates) in [
+        ("entities[].events[].when.beforeEquals", before_equals),
+        ("entities[].events[].when.afterEquals", after_equals),
+    ] {
+        for (field, value) in predicates {
+            let Some(source) = fields.get(field.as_str()) else {
+                errors.push(Diagnostic::error(
+                    "event.when.field_unknown",
+                    path,
+                    "an event condition refers to an unknown field",
+                ));
+                continue;
+            };
+            if matches!(value, EventScalarValue::Null) {
+                continue;
+            }
+            let value = serde_json::to_value(value).expect("event scalar value serializes");
+            if canonical_field_literal(&value, &source.field_type).is_none() {
+                errors.push(Diagnostic::error(
+                    "event.when.value_invalid",
+                    path,
+                    "an event comparison value must be canonical for its declared field type",
+                ));
+            }
         }
     }
 }
@@ -1830,6 +1879,40 @@ fn valid_logical_destination_id(value: &str) -> bool {
 }
 
 fn maximum_event_payload_bytes<'a>(
+    entity_id: &str,
+    projection: &BTreeSet<String>,
+    field: impl Fn(&str) -> Option<(&'a FieldTypeSource, bool)>,
+) -> Option<u64> {
+    let values = maximum_event_values_bytes(projection, field)?;
+    // Canonical body object braces, five separators, and the six fixed key
+    // encodings (two quotes plus a colon per key).
+    let mut total = 2_u64.checked_add(5)?;
+    for key in [
+        "entity",
+        "recordId",
+        "revision",
+        "trigger",
+        "packageRevision",
+        "values",
+    ] {
+        total = total.checked_add(key.len() as u64 + 3)?;
+    }
+    // Entity ids and triggers use the compiler's closed ASCII grammars.
+    total = total.checked_add(entity_id.len() as u64 + 2)?;
+    // A UUID string, the largest positive i64 revision, and the longest
+    // trigger string, including JSON quotes where applicable.
+    total = total.checked_add(38)?.checked_add(19)?.checked_add(12)?;
+    // Persisted package revisions are bounded to 256 bytes. Six bytes per
+    // byte plus quotes safely covers JSON's longest control-character escape.
+    total = total.checked_add(
+        u64::from(MAX_EVENT_PACKAGE_REVISION_BYTES)
+            .checked_mul(6)?
+            .checked_add(2)?,
+    )?;
+    total.checked_add(values)
+}
+
+fn maximum_event_values_bytes<'a>(
     projection: &BTreeSet<String>,
     field: impl Fn(&str) -> Option<(&'a FieldTypeSource, bool)>,
 ) -> Option<u64> {
@@ -1852,6 +1935,19 @@ fn maximum_event_payload_bytes<'a>(
             .checked_add(maximum_value_bytes)?;
     }
     Some(total)
+}
+
+pub(crate) fn maximum_compiled_event_payload_bytes(
+    entity: &CompiledEntity,
+    event: &crate::contract::EventSource,
+) -> Option<u32> {
+    let maximum = maximum_event_payload_bytes(&entity.id, &event.projection, |field| {
+        entity
+            .fields
+            .get(field)
+            .map(|field| (&field.field_type, field.required))
+    })?;
+    u32::try_from(maximum).ok()
 }
 
 fn maximum_field_json_bytes(field_type: &FieldTypeSource) -> Option<u64> {
@@ -1893,54 +1989,81 @@ fn maximum_field_json_bytes(field_type: &FieldTypeSource) -> Option<u64> {
 }
 
 fn compile_event_delivery_inventory(
+    registry_id: &str,
     entities: &BTreeMap<String, CompiledEntity>,
-) -> CompiledEventDeliveryInventory {
+) -> Result<CompiledEventDeliveryInventory, Diagnostic> {
     let mut deliveries = entities
         .values()
         .flat_map(|entity| {
             entity.events.values().filter_map(move |event| {
-                let webhook = event.webhook.as_ref()?;
-                let delivery = &webhook.delivery;
-                Some(CompiledEventDelivery {
-                    id: format!("events.{}.{}.webhook", entity.id, event.id),
-                    entity_id: entity.id.clone(),
-                    event_id: event.id.clone(),
-                    trigger: event.trigger,
-                    destination_id: webhook.destination_id.clone(),
-                    projection_fields: event.projection.iter().cloned().collect(),
-                    classification_ceiling: webhook.classification_ceiling,
-                    authentication_profile: webhook.authentication_profile,
-                    delivery_mode: CompiledWebhookDeliveryMode::AfterCommit,
-                    attempt_timeout_ms: delivery.attempt_timeout_ms,
-                    initial_backoff_ms: delivery.initial_backoff_ms,
-                    maximum_backoff_ms: delivery.maximum_backoff_ms,
-                    exponential_backoff_multiplier: WEBHOOK_BACKOFF_MULTIPLIER,
-                    maximum_attempts: delivery.maximum_attempts,
-                    retry_delays_ms: webhook_retry_delays(
-                        delivery.initial_backoff_ms,
-                        delivery.maximum_backoff_ms,
-                        delivery.maximum_attempts,
-                    ),
-                    maximum_payload_bytes: u32::try_from(
-                        maximum_event_payload_bytes(&event.projection, |field| {
-                            entity
-                                .fields
-                                .get(field)
-                                .map(|field| (&field.field_type, field.required))
-                        })
-                        .expect("validated webhook projection fields are bounded"),
-                    )
-                    .expect("validated webhook projection fits the transport bound"),
-                    dead_letter: delivery
-                        .dead_letter
-                        .expect("validated webhook delivery requires dead letter"),
-                    operator_replay: delivery.operator_replay,
-                })
+                event
+                    .webhook
+                    .as_ref()
+                    .map(|webhook| (entity, event, webhook))
             })
         })
-        .collect::<Vec<_>>();
+        .map(|(entity, event, webhook)| {
+            let binding = event_data_schema_binding(registry_id, entity, event)?;
+            let classification_ceiling = event
+                .projection
+                .iter()
+                .chain(event_condition_fields(event))
+                .filter_map(|field| entity.fields.get(field))
+                .map(|field| field.classification)
+                .max()
+                .expect("validated event projection is non-empty");
+            Ok(CompiledEventDelivery {
+                id: format!("events.{}.{}.webhook", entity.id, event.id),
+                entity_id: entity.id.clone(),
+                event_id: event.id.clone(),
+                trigger: event.trigger,
+                destination_id: webhook.destination_id.clone(),
+                projection_fields: event.projection.iter().cloned().collect(),
+                when: event.when.clone(),
+                classification_ceiling,
+                data_schema: binding.data_schema,
+                data_schema_fingerprint: binding.fingerprint,
+                data_schema_artifact_path: binding.artifact_path,
+                authentication_profile: WebhookAuthenticationProfile::HmacSha256V1,
+                delivery_mode: CompiledWebhookDeliveryMode::AfterCommit,
+                retry_profile: CompiledWebhookRetryProfile::RegistryV1,
+                attempt_timeout_ms: WEBHOOK_ATTEMPT_TIMEOUT_MS,
+                initial_backoff_ms: WEBHOOK_INITIAL_BACKOFF_MS,
+                maximum_backoff_ms: WEBHOOK_MAXIMUM_BACKOFF_MS,
+                exponential_backoff_multiplier: WEBHOOK_BACKOFF_MULTIPLIER,
+                maximum_attempts: WEBHOOK_MAXIMUM_ATTEMPTS,
+                retry_delays_ms: webhook_retry_delays(
+                    WEBHOOK_INITIAL_BACKOFF_MS,
+                    WEBHOOK_MAXIMUM_BACKOFF_MS,
+                    WEBHOOK_MAXIMUM_ATTEMPTS,
+                ),
+                maximum_payload_bytes: maximum_compiled_event_payload_bytes(entity, event)
+                    .expect("validated webhook projection fields are bounded"),
+                dead_letter: WebhookDeadLetterMode::Required,
+                operator_replay: true,
+            })
+        })
+        .collect::<Result<Vec<_>, Diagnostic>>()?;
     deliveries.sort_by(|left, right| left.id.cmp(&right.id));
-    CompiledEventDeliveryInventory { deliveries }
+    Ok(CompiledEventDeliveryInventory { deliveries })
+}
+
+fn event_condition_fields(
+    event: &crate::contract::EventSource,
+) -> Box<dyn Iterator<Item = &String> + '_> {
+    match event.when.as_ref() {
+        Some(EventConditionSource::Fields {
+            changed,
+            before_equals,
+            after_equals,
+        }) => Box::new(
+            changed
+                .iter()
+                .chain(before_equals.keys())
+                .chain(after_equals.keys()),
+        ),
+        None => Box::new(std::iter::empty()),
+    }
 }
 
 fn webhook_retry_delays(initial_ms: u32, maximum_ms: u32, maximum_attempts: u8) -> Vec<u32> {

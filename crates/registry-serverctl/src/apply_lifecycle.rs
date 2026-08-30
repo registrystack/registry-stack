@@ -20,6 +20,7 @@ pub(crate) enum ApplyLifecycleError {
     TargetPackagePath,
     CurrentPackage(PackageError),
     TargetPackage(PackageError),
+    EventDestinations,
     DatabaseConfiguration,
     TimeoutConfiguration,
     BackupArgument,
@@ -97,6 +98,10 @@ pub(crate) fn run(
     {
         return Err(ApplyLifecycleError::TargetPackage(PackageError::Binding));
     }
+    let activated_event_destinations = config
+        .activate_event_destinations(target.registry())
+        .map_err(|_| ApplyLifecycleError::EventDestinations)?;
+    let event_destination_compatibility = activated_event_destinations.compatibility_inventory();
 
     let connection = config
         .migration_database_connection_config()
@@ -127,7 +132,8 @@ pub(crate) fn run(
         ),
         timeouts,
     )
-    .with_destructive_backup_evidence(&backup_evidence);
+    .with_destructive_backup_evidence(&backup_evidence)
+    .with_event_destination_compatibility_inventory(&event_destination_compatibility);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

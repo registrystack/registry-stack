@@ -88,6 +88,7 @@ pub(crate) enum WebhookAuditOutcome {
     DestinationPolicyRefused,
     DestinationBindingRefused,
     PayloadRefused,
+    PayloadExpired,
     WorkerInterrupted,
     ReplayRequested,
 }
@@ -98,6 +99,7 @@ pub(crate) enum WebhookAuditDisposition {
     Delivered,
     RetryPending,
     DeadLettered,
+    Expired,
     ReplayPending,
 }
 
@@ -357,6 +359,11 @@ pub(crate) async fn append_webhook_audit(
             WebhookAuditDisposition::RetryPending | WebhookAuditDisposition::DeadLettered,
         ) => event.attempt > 0,
         (
+            WebhookAuditPhase::Terminal,
+            WebhookAuditOutcome::PayloadExpired,
+            WebhookAuditDisposition::Expired,
+        ) => event.attempt >= 0,
+        (
             WebhookAuditPhase::Replay,
             WebhookAuditOutcome::ReplayRequested,
             WebhookAuditDisposition::ReplayPending,
@@ -424,6 +431,7 @@ fn webhook_outcome_name(outcome: WebhookAuditOutcome) -> &'static str {
         WebhookAuditOutcome::DestinationPolicyRefused => "destination_policy_refused",
         WebhookAuditOutcome::DestinationBindingRefused => "destination_binding_refused",
         WebhookAuditOutcome::PayloadRefused => "payload_refused",
+        WebhookAuditOutcome::PayloadExpired => "payload_expired",
         WebhookAuditOutcome::WorkerInterrupted => "worker_interrupted",
         WebhookAuditOutcome::ReplayRequested => "replay_requested",
     }
@@ -435,6 +443,7 @@ fn webhook_disposition_name(disposition: WebhookAuditDisposition) -> &'static st
         WebhookAuditDisposition::Delivered => "delivered",
         WebhookAuditDisposition::RetryPending => "retry_pending",
         WebhookAuditDisposition::DeadLettered => "dead_lettered",
+        WebhookAuditDisposition::Expired => "expired",
         WebhookAuditDisposition::ReplayPending => "replay_pending",
     }
 }

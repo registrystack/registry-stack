@@ -8,6 +8,8 @@ import os
 import sys
 import tempfile
 import unittest
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -66,7 +68,9 @@ class DemoProvisioningTests(unittest.TestCase):
         operator = (self.root / "mint/clients/household-demo.yaml").read_text(encoding="utf-8")
         self.assertIn("registry_principal: synthetic-household-operator", operator)
         self.assertIn("registry_purpose: household-administration", operator)
-        no_purpose = (self.root / "mint/clients/household-demo-no-purpose.yaml").read_text(encoding="utf-8")
+        no_purpose = (self.root / "mint/clients/household-demo-no-purpose.yaml").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("registry_principal: synthetic-household-operator", no_purpose)
         self.assertNotIn("registry_purpose", no_purpose)
 
@@ -98,6 +102,131 @@ class DemoProvisioningTests(unittest.TestCase):
         self.assertIn(f"activeRevision: {revision}", runtime)
         self.assertIn(f"root: {self.root.resolve() / 'build/package'}", runtime)
         self.assertIn("bind: 127.0.0.1:18080", runtime)
+
+    def test_webhook_mode_extends_only_the_disposable_module_and_binds_its_compiled_digest(
+        self,
+    ) -> None:
+        webhook_key = self.root / "secrets/webhook-key"
+        webhook_key.write_bytes(b"k" * 32)
+        webhook_key.chmod(0o600)
+        fixture_module = self.fixture / "modules/publicschema-household-demographics/module.yaml"
+        original_fixture_module = fixture_module.read_bytes()
+
+        DEMO.prepare(self.root, self.fixture, 15432, 18081, 18080, True, 18082)
+
+        project_path = self.root / "project/registry.yaml"
+        project = project_path.read_text(encoding="utf-8")
+        module = (
+            self.root / "project/modules/publicschema-household-demographics/module.yaml"
+        ).read_text(encoding="utf-8")
+        self.assertIn(DEMO.WEBHOOK_MODULE_LOCK, project)
+        self.assertNotIn(DEMO.WEBHOOK_MODULE_LOCK + "    digest:", project)
+        self.assertIn("id: usual-resident-created-v1", module)
+        self.assertIn("afterEquals: {residency-status: usual-resident}", module)
+        self.assertEqual(fixture_module.read_bytes(), original_fixture_module)
+
+        digest = "sha256:" + "3" * 64
+        report = self.root / "explain.json"
+        report.write_text(
+            json.dumps(
+                {
+                    "explanation": {
+                        "moduleClosure": [
+                            {
+                                "id": DEMO.WEBHOOK_MODULE_ID,
+                                "version": "0.1.0",
+                                "digest": digest,
+                            }
+                        ]
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        DEMO.bind_webhook_module(self.root, report)
+        self.assertIn(f"    digest: {digest}", project_path.read_text(encoding="utf-8"))
+
+        runtime = (self.root / "runtime-test.yaml").read_text(encoding="utf-8")
+        self.assertIn("origin: http://127.0.0.1:18082", runtime)
+        self.assertIn("networkProfile: loopbackDevelopmentHttp", runtime)
+        self.assertIn("dnsFamily: dualStackStrict", runtime)
+        self.assertIn("hmacSha256KeyRef: secret:file/webhook-key", runtime)
+        self.assertNotIn("k" * 32, runtime)
+
+    def test_receiver_verifies_the_exact_cloudevents_and_signature_contract(self) -> None:
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        event_id = str(uuid.UUID("00000000-0000-4000-8000-000000000001"))
+        body = json.dumps(
+            {
+                "entity": "person",
+                "packageRevision": "sha256:" + "4" * 64,
+                "recordId": "00000000-0000-4000-8000-000000000002",
+                "revision": 1,
+                "trigger": "created",
+                "values": {
+                    "person-code": "PERSON-DEMO-001",
+                    "residency-status": "usual-resident",
+                },
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        headers = {
+            "accept": "application/json",
+            "content-type": "application/json",
+            "ce-specversion": "1.0",
+            "ce-id": event_id,
+            "ce-source": (
+                "urn:registrystack:registry:publicschema-household:"
+                f"instance:{DEMO.INSTANCE_ID}"
+            ),
+            "ce-type": DEMO.WEBHOOK_EVENT_ID,
+            "ce-time": "2026-01-01T00:00:00Z",
+            "ce-dataschema": (
+                "urn:registry-server:event-schema:publicschema-household:person:"
+                f"{DEMO.WEBHOOK_EVENT_ID}:sha256:" + "5" * 64
+            ),
+            "x-registry-event-generation": "1",
+            "x-registry-delivery-attempt": "1",
+            "x-registry-delivery-time": now,
+            "idempotency-key": "sha256:" + "6" * 64,
+        }
+        key = b"receiver-test-key" * 4
+        headers["x-registry-signature"] = DEMO._expected_webhook_signature(key, headers, body)
+
+        self.assertEqual(
+            DEMO._verify_webhook_request(key, "/events", headers, body),
+            (event_id, 1, 1, "sha256:" + "6" * 64),
+        )
+        tampered = dict(headers)
+        tampered["idempotency-key"] = "sha256:" + "7" * 64
+        with self.assertRaises(DEMO.DemoError):
+            DEMO._verify_webhook_request(key, "/events", tampered, body)
+
+    def test_dead_letter_selection_returns_only_replay_eligible_value_free_metadata(self) -> None:
+        report = self.root / "list.json"
+        event_id = "00000000-0000-4000-8000-000000000001"
+        report.write_text(
+            json.dumps(
+                {
+                    "deliveries": [
+                        {
+                            "eventId": event_id,
+                            "deliveryId": "person.usual-resident-created-v1.webhook",
+                            "generation": 1,
+                            "state": "dead_lettered",
+                            "replayEligible": True,
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        self.assertEqual(
+            DEMO.select_dead_letter(report),
+            (event_id, "person.usual-resident-created-v1.webhook", 1),
+        )
 
     def test_seed_is_referentially_closed_and_stable(self) -> None:
         people, households, memberships = DEMO.seed_spec()

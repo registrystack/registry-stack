@@ -1,6 +1,6 @@
 # Events and webhooks
 
-**Status:** Proposed direction for the next implementation slice
+**Status:** Version 1 implemented
 
 ## Goal
 
@@ -70,9 +70,11 @@ Runtime configuration must bind the exact compiled destination set and may
 tighten operational ceilings, never widen delivery authority.
 
 The compiler derives the event classification from the highest-classified
-projected field. The project does not restate it. Activation requires the
-runtime destination to permit that classification, but the destination can
-never add to the compiled projection.
+field used by either the projection or a condition. The project does not
+restate it. A condition can disclose information through whether an event
+fires even when that field is not in the payload. Activation therefore
+requires the runtime destination to permit the full derived classification,
+but the destination can never add to the compiled projection.
 
 ### Event evaluation and capture
 
@@ -88,6 +90,12 @@ destination, and delivery policy. A later package activation must not
 reinterpret it. Activation refuses a destination change that would strand a
 retained non-terminal delivery.
 
+This contract does not reinterpret delivery history created by the earlier
+experimental webhook shape. An empty pre-Version 1 internal schema upgrades
+automatically. A database containing pre-Version 1 webhook history requires an
+explicit operator migration before this version starts, even when those rows
+are terminal; Registry Server does not invent CloudEvents metadata for them.
+
 ### Wire format
 
 Webhooks use CloudEvents 1.0 HTTP binary mode with canonical JSON data:
@@ -96,7 +104,8 @@ Webhooks use CloudEvents 1.0 HTTP binary mode with canonical JSON data:
 - `ce-id`: the stable event UUID
 - `ce-source`: a stable URN for the Registry instance
 - `ce-type`: the authored event id
-- `ce-time`: the mutation commit time
+- `ce-time`: the immutable mutation capture time recorded in the committing
+  transaction
 - `ce-dataschema`: a URN containing the Registry id, event id, and generated
   event-schema fingerprint
 
@@ -122,8 +131,9 @@ Delivery is asynchronous, after commit, and at least once:
 - Any `2xx` response acknowledges delivery. Redirects, transport failures,
   timeouts, and other statuses retry within a bounded product-owned profile.
 - HMAC-SHA-256, dead-lettering, operator replay, a five-second attempt timeout,
-  and the bounded retry profile are secure defaults, not per-event authoring
-  choices. `registry-serverctl explain events` shows the effective values.
+  and five total attempts with 1, 2, 4, then 8 second delays are secure
+  Version 1 defaults, not per-event authoring choices. `registry-serverctl
+  explain events` shows the effective values.
 - The event id and idempotency key remain stable across automatic retries.
   Consumers must deduplicate by `Idempotency-Key`.
 - A dead-letter replay keeps the event id, increments the generation, and gets
@@ -171,8 +181,9 @@ The first complete journey must be possible without reading Rust code:
 - `registry-serverctl webhook replay` replays one eligible dead letter using
   its event id, delivery id, and expected generation.
 - `products/registry-server/demo/run.sh --webhook` starts Mint, PostgreSQL,
-  Registry Server, and a local HMAC-verifying receiver. It demonstrates one
-  successful event and one automatic retry without printing the token or key.
+  Registry Server, and a local HMAC-verifying receiver. Its smoke journey
+  demonstrates automatic retry, dead-letter inspection, operator replay, and
+  eventual authenticated success without printing the token or key.
 
 ## Definition of done
 

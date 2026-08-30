@@ -130,7 +130,7 @@ async fn tombstone_revisions_survive_package_upgrade_and_replay_exactly() {
     );
     assert_current_row_tombstoned(&fixture.database, &fixture.table, &record_id).await;
     assert_three_revisions_one_record_across_package_upgrade(&fixture.database, &record_id).await;
-    assert_tombstone_event_is_canonical(&fixture.database).await;
+    assert_tombstone_event_is_canonical(&fixture.database, &record_id).await;
     let event_id = tombstone_event_id(&fixture.database).await;
 
     let before_replay = durable_counts(&fixture.database, &fixture.table).await;
@@ -927,7 +927,7 @@ async fn assert_three_revisions_one_record_across_package_upgrade(
     );
 }
 
-async fn assert_tombstone_event_is_canonical(database: &TestDatabase) {
+async fn assert_tombstone_event_is_canonical(database: &TestDatabase, record_id: &str) {
     let row = database
         .admin
         .query_one(
@@ -947,8 +947,20 @@ async fn assert_tombstone_event_is_canonical(database: &TestDatabase) {
     assert_eq!(row.get::<_, i64>(4), 3);
     assert_eq!(row.get::<_, String>(5), "package-tombstone-2");
     assert!(row.get::<_, String>(6).starts_with("sha256:"));
+    let expected_payload = canonicalize_json(&json!({
+        "entity": "widget",
+        "recordId": record_id,
+        "revision": 3,
+        "trigger": "tombstoned",
+        "packageRevision": "package-tombstone-2",
+        "values": {
+            "label": "patched-label",
+            "quantity": 7,
+        },
+    }))
+    .expect("expected tombstone event canonicalizes");
     assert!(
-        row.get::<_, Vec<u8>>(7) == br#"{"label":"patched-label","quantity":7}"#.as_slice(),
+        row.get::<_, Vec<u8>>(7) == expected_payload.as_slice(),
         "canonical tombstone outbox projection did not match expected bytes"
     );
 }

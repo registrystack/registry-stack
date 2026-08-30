@@ -3,15 +3,17 @@
 //! Immutable configured events created inside the owning record transaction.
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use registry_platform_canonical_json::canonicalize_json;
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use tokio_postgres::Transaction;
 use uuid::Uuid;
 
 use crate::contract::{
-    Classification, EventSource, EventTrigger, WebhookAuthenticationProfile, WebhookDeadLetterMode,
+    Classification, EventConditionSource, EventScalarValue, EventSource, EventTrigger,
+    WebhookAuthenticationProfile, WebhookDeadLetterMode,
 };
 use crate::event_destination::ActivatedEventDestinationRegistry;
 use crate::model::{CompiledEventDelivery, CompiledWebhookDeliveryMode};
@@ -27,11 +29,14 @@ pub enum OutboxError {
 pub(crate) struct OutboxMutation<'a> {
     pub trigger: EventTrigger,
     pub entity_id: &'a str,
+    pub record_id: &'a str,
     pub record_reference: &'a str,
     pub record_revision: i64,
     pub package_revision: &'a str,
     pub schema_fingerprint: &'a str,
-    pub data: &'a Map<String, Value>,
+    pub before: Option<&'a Map<String, Value>>,
+    pub after: Option<&'a Map<String, Value>>,
+    pub payload_retention: Duration,
 }
 
 pub(crate) async fn insert_configured_events(
@@ -45,6 +50,9 @@ pub(crate) async fn insert_configured_events(
         .values()
         .filter(|event| event.trigger == mutation.trigger)
     {
+        if !condition_matches(event.when.as_ref(), mutation.before, mutation.after)? {
+            continue;
+        }
         let delivery = deliveries
             .iter()
             .find(|delivery| delivery.event_id == event.id);
@@ -64,16 +72,25 @@ pub(crate) async fn insert_configured_events(
                     .collect()
             },
         );
-        let mut projection = Map::new();
-        for field in projection_fields {
-            let value = mutation
-                .data
-                .get(field)
-                .ok_or(OutboxError::InvalidProjection)?;
-            projection.insert(field.to_owned(), value.clone());
+        let snapshot = match mutation.trigger {
+            EventTrigger::Created | EventTrigger::Patched => mutation.after,
+            EventTrigger::Tombstoned => mutation.before,
         }
-        let payload = canonicalize_json(&Value::Object(projection))
-            .map_err(|_| OutboxError::InvalidProjection)?;
+        .ok_or(OutboxError::InvalidProjection)?;
+        let mut values = Map::new();
+        for field in projection_fields {
+            let value = snapshot.get(field).ok_or(OutboxError::InvalidProjection)?;
+            values.insert(field.to_owned(), value.clone());
+        }
+        let payload = canonicalize_json(&json!({
+            "entity": mutation.entity_id,
+            "recordId": mutation.record_id,
+            "revision": mutation.record_revision,
+            "trigger": trigger_name(mutation.trigger),
+            "packageRevision": mutation.package_revision,
+            "values": values,
+        }))
+        .map_err(|_| OutboxError::InvalidProjection)?;
         let event_id = Uuid::new_v4();
         let activated = if let Some(delivery) = delivery {
             if payload.len()
@@ -96,12 +113,18 @@ pub(crate) async fn insert_configured_events(
         } else {
             None
         };
+        let retention_milliseconds = i64::try_from(mutation.payload_retention.as_millis())
+            .ok()
+            .filter(|value| (86_400_000..=2_592_000_000).contains(value))
+            .ok_or(OutboxError::Unavailable)?;
         let changed = transaction
             .execute(
                 "INSERT INTO registry_internal.registry_outbox
                      (event_id, event_type, trigger, entity_id, record_reference,
-                      record_revision, package_revision, schema_fingerprint, payload)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+                      record_revision, package_revision, schema_fingerprint, payload,
+                      payload_expires_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
+                         transaction_timestamp() + $10::bigint * interval '1 millisecond')",
                 &[
                     &event_id,
                     &event.id,
@@ -112,6 +135,7 @@ pub(crate) async fn insert_configured_events(
                     &mutation.package_revision,
                     &mutation.schema_fingerprint,
                     &payload,
+                    &retention_milliseconds,
                 ],
             )
             .await
@@ -137,6 +161,58 @@ pub(crate) async fn insert_configured_events(
         }
     }
     Ok(())
+}
+
+fn condition_matches(
+    condition: Option<&EventConditionSource>,
+    before: Option<&Map<String, Value>>,
+    after: Option<&Map<String, Value>>,
+) -> Result<bool, OutboxError> {
+    let Some(EventConditionSource::Fields {
+        changed,
+        before_equals,
+        after_equals,
+    }) = condition
+    else {
+        return Ok(true);
+    };
+    for field in changed {
+        let before_value = before
+            .and_then(|snapshot| snapshot.get(field))
+            .ok_or(OutboxError::InvalidProjection)?;
+        let after_value = after
+            .and_then(|snapshot| snapshot.get(field))
+            .ok_or(OutboxError::InvalidProjection)?;
+        if before_value == after_value {
+            return Ok(false);
+        }
+    }
+    for (field, expected) in before_equals {
+        let actual = before
+            .and_then(|snapshot| snapshot.get(field))
+            .ok_or(OutboxError::InvalidProjection)?;
+        if actual != &scalar_value(expected) {
+            return Ok(false);
+        }
+    }
+    for (field, expected) in after_equals {
+        let actual = after
+            .and_then(|snapshot| snapshot.get(field))
+            .ok_or(OutboxError::InvalidProjection)?;
+        if actual != &scalar_value(expected) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn scalar_value(value: &EventScalarValue) -> Value {
+    match value {
+        EventScalarValue::Null => Value::Null,
+        EventScalarValue::Boolean(value) => Value::Bool(*value),
+        EventScalarValue::Number(value) => Value::Number(value.clone()),
+        EventScalarValue::String(value) => Value::String(value.clone()),
+    }
 }
 
 struct WebhookCapture<'a> {
@@ -177,14 +253,15 @@ async fn insert_webhook_delivery(
             "INSERT INTO registry_internal.registry_webhook_deliveries
                  (event_id, compiled_delivery_id, logical_destination_id,
                   destination_binding_digest, package_revision, schema_fingerprint,
+                  data_schema,
                   classification_ceiling, authentication_profile, delivery_mode,
                   attempt_timeout_ms, initial_backoff_ms, maximum_backoff_ms,
                   exponential_backoff_multiplier, maximum_attempts, retry_delays_ms,
                   maximum_payload_bytes, payload_digest, deployed_attempt_timeout_ms,
                   deployed_maximum_attempts, dead_letter, operator_replay)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
-                     $10, $11, $12, $13, $14, $15, $16, $17, $18,
-                     $19, $20, $21)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                     $11, $12, $13, $14, $15, $16, $17, $18, $19,
+                     $20, $21, $22)",
             &[
                 &event_id,
                 &delivery.id,
@@ -192,6 +269,7 @@ async fn insert_webhook_delivery(
                 &destination_binding_digest,
                 &package_revision,
                 &schema_fingerprint,
+                &delivery.data_schema,
                 &classification_name(delivery.classification_ceiling),
                 &authentication_profile_name(delivery.authentication_profile),
                 &delivery_mode_name(delivery.delivery_mode),

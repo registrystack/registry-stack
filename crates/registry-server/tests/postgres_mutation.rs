@@ -14,6 +14,7 @@ use axum::body::{to_bytes, Body};
 use axum::http::{HeaderName, HeaderValue, Method, Request, StatusCode};
 use postgres_harness::TestDatabase;
 use registry_platform_audit::{verify_jsonl_lines_with_hasher, AuditEnvelope, AuditProfile};
+use registry_platform_canonical_json::canonicalize_json;
 use registry_server::api::{
     router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
     VerifiedRequestClaims,
@@ -2333,9 +2334,21 @@ async fn assert_patch_preserved_omitted_field(
         )
         .await
         .expect("administrator can inspect configured post-write event");
-    assert!(events.iter().any(|row| {
-        row.get::<_, Vec<u8>>(0) == br#"{"label":"after-patch","quantity":41}"#.as_slice()
-    }));
+    let expected_event = canonicalize_json(&json!({
+        "entity": "widget",
+        "recordId": record_id,
+        "revision": 2,
+        "trigger": "patched",
+        "packageRevision": "package-mutation-1",
+        "values": {
+            "label": "after-patch",
+            "quantity": 41,
+        },
+    }))
+    .expect("expected configured event canonicalizes");
+    assert!(events
+        .iter()
+        .any(|row| row.get::<_, Vec<u8>>(0) == expected_event.as_slice()));
     let quantity_physical = compiled_registry().entities()["widget"].fields["quantity"]
         .physical_name
         .clone();
@@ -2441,7 +2454,9 @@ async fn assert_journals_are_minimized_and_chained(
                 RECORD_RECOVERY,
                 RECORD_CONCURRENT,
             ] {
-                assert!(!payload.contains(record));
+                if table_and_column.0 != "registry_outbox" {
+                    assert!(!payload.contains(record));
+                }
                 assert!(!reference.contains(record));
             }
         }

@@ -10,13 +10,30 @@ run_dir="$demo_dir/.run"
 mint_key_material="$repository_root/crates/registry-mint/demo/support/key_material.py"
 postgres_image='postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675'
 mode=serve
+webhook=false
 
-if [[ "${1:-}" == "--smoke" ]]; then
-  mode=smoke
-elif [[ $# -ne 0 ]]; then
-  printf '%s\n' 'usage: products/registry-server/demo/run.sh [--smoke]' >&2
-  exit 2
-fi
+for argument in "$@"; do
+  case "$argument" in
+    --smoke)
+      if [[ "$mode" == smoke ]]; then
+        printf '%s\n' 'the --smoke option may be supplied only once.' >&2
+        exit 2
+      fi
+      mode=smoke
+      ;;
+    --webhook)
+      if [[ "$webhook" == true ]]; then
+        printf '%s\n' 'the --webhook option may be supplied only once.' >&2
+        exit 2
+      fi
+      webhook=true
+      ;;
+    *)
+      printf '%s\n' 'usage: products/registry-server/demo/run.sh [--smoke] [--webhook]' >&2
+      exit 2
+      ;;
+  esac
+done
 
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -51,6 +68,7 @@ mkdir -m 700 "$run_dir" "$run_dir/secrets" "$run_dir/keys" "$run_dir/logs" "$run
 
 mint_pid=""
 server_pid=""
+receiver_pid=""
 postgres_container="registry-server-demo-${PPID}-$$"
 cleanup() {
   if [[ -n "${server_pid:-}" ]]; then
@@ -61,14 +79,26 @@ cleanup() {
     kill "$mint_pid" >/dev/null 2>&1 || true
     wait "$mint_pid" >/dev/null 2>&1 || true
   fi
+  if [[ -n "${receiver_pid:-}" ]]; then
+    kill "$receiver_pid" >/dev/null 2>&1 || true
+    wait "$receiver_pid" >/dev/null 2>&1 || true
+  fi
   docker rm -f "$postgres_container" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT HUP INT TERM
 
-ports=$(python3 "$support" ports)
-read -r database_port mint_port server_port <<EOF
+if [[ "$webhook" == true ]]; then
+  ports=$(python3 "$support" ports --count 4)
+  read -r database_port mint_port server_port receiver_port <<EOF
 $ports
 EOF
+else
+  ports=$(python3 "$support" ports)
+  read -r database_port mint_port server_port <<EOF
+$ports
+EOF
+  receiver_port=""
+fi
 
 export CARGO_INCREMENTAL=0
 export CARGO_PROFILE_DEV_DEBUG=0
@@ -102,15 +132,36 @@ uv run --quiet "$mint_key_material" secret-hex \
   --out "$run_dir/secrets/audit-key"
 uv run --quiet "$mint_key_material" secret-hex \
   --out "$run_dir/secrets/cursor-key"
+if [[ "$webhook" == true ]]; then
+  uv run --quiet "$mint_key_material" secret-hex \
+    --out "$run_dir/secrets/webhook-key"
+fi
 openssl rand -hex 24 >"$run_dir/secrets/database-password"
 chmod 600 "$run_dir/secrets/database-password"
 
-python3 "$support" prepare \
-  --root "$run_dir" \
-  --fixture "$fixture" \
-  --database-port "$database_port" \
-  --mint-port "$mint_port" \
+prepare_arguments=(
+  prepare
+  --root "$run_dir"
+  --fixture "$fixture"
+  --database-port "$database_port"
+  --mint-port "$mint_port"
   --server-port "$server_port"
+)
+if [[ "$webhook" == true ]]; then
+  prepare_arguments+=(--webhook --receiver-port "$receiver_port")
+fi
+python3 "$support" "${prepare_arguments[@]}"
+
+if [[ "$webhook" == true ]]; then
+  "$registry_serverctl" --format json explain model "$run_dir/project" \
+    >"$run_dir/webhook-model-report.json"
+  python3 "$support" bind-webhook-module \
+    --root "$run_dir" \
+    --report "$run_dir/webhook-model-report.json"
+  "$registry_serverctl" --format json webhook sample "$run_dir/project" \
+    --event usual-resident-created-v1 \
+    >"$run_dir/webhook-sample.json"
+fi
 
 openssl req -x509 -new -nodes -newkey rsa:2048 -sha256 -days 2 \
   -subj '/CN=Registry Server local demo CA' \
@@ -212,7 +263,11 @@ schema_fingerprint=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[
   --output "$run_dir/build" \
   >"$run_dir/package-report.json"
 package_revision=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["packageRevision"])' "$run_dir/package-report.json")
-python3 "$support" render-runtime --root "$run_dir" --revision "$package_revision"
+render_arguments=(render-runtime --root "$run_dir" --revision "$package_revision")
+if [[ "$webhook" == true ]]; then
+  render_arguments+=(--webhook)
+fi
+python3 "$support" "${render_arguments[@]}"
 
 "$registry_serverctl" apply \
   --runtime-config "$run_dir/runtime.yaml" \
@@ -225,14 +280,72 @@ REGISTRY_SERVER_LOG=error "$registry_server" --config "$run_dir/runtime.yaml" \
   >"$run_dir/logs/registry-server.log" 2>&1 &
 server_pid=$!
 python3 "$support" wait-http --url "http://127.0.0.1:${server_port}/ready" --timeout 30
+if [[ "$webhook" == true ]]; then
+  printf '%s\n' '== Starting the local CloudEvents receiver'
+  python3 "$support" serve-webhook-receiver --root "$run_dir" \
+    >"$run_dir/logs/webhook-receiver.log" 2>&1 &
+  receiver_pid=$!
+  python3 "$support" wait-http \
+    --url "http://127.0.0.1:${receiver_port}/ready" \
+    --timeout 30
+fi
 python3 "$support" seed --root "$run_dir"
 "$demo_dir/query.sh" >/dev/null
+
+if [[ "$webhook" == true ]]; then
+  printf '%s\n' '== Proving webhook success, retry, dead-letter inspection, and replay'
+  if ! python3 "$support" wait-webhook \
+    --root "$run_dir" \
+    --phase dead-letter-ready \
+    --timeout 30; then
+    "$registry_serverctl" --format json webhook list \
+      --runtime-config "$run_dir/runtime.yaml" \
+      >"$run_dir/webhook-timeout-list.json" 2>/dev/null || true
+    printf '%s\n' "Webhook progress timed out; inspect $run_dir/webhook-timeout-list.json." >&2
+    exit 1
+  fi
+  dead_letter_found=false
+  for _attempt in $(seq 1 100); do
+    "$registry_serverctl" --format json webhook list \
+      --runtime-config "$run_dir/runtime.yaml" \
+      >"$run_dir/webhook-list.json"
+    if python3 "$support" select-dead-letter \
+      --report "$run_dir/webhook-list.json" \
+      >"$run_dir/dead-letter-selection" 2>/dev/null; then
+      dead_letter_found=true
+      break
+    fi
+    sleep 0.1
+  done
+  if [[ "$dead_letter_found" != true ]]; then
+    printf '%s\n' 'The webhook delivery did not reach the replayable dead letter state.' >&2
+    exit 1
+  fi
+  read -r dead_event_id dead_delivery_id dead_generation \
+    <"$run_dir/dead-letter-selection"
+  "$registry_serverctl" webhook replay \
+    --runtime-config "$run_dir/runtime.yaml" \
+    --event-id "$dead_event_id" \
+    --delivery-id "$dead_delivery_id" \
+    --expected-generation "$dead_generation" \
+    >/dev/null
+  python3 "$support" wait-webhook \
+    --root "$run_dir" \
+    --phase replayed \
+    --timeout 30
+  python3 "$support" verify-webhook --root "$run_dir"
+  printf '%s\n' 'Webhook delivery, retry, dead-letter inspection, and replay passed.'
+fi
 
 printf '\n%s\n' 'Registry Server household demo is ready.'
 printf '  Registry Server: http://127.0.0.1:%s\n' "$server_port"
 printf '  Registry Mint:   http://127.0.0.1:%s\n' "$mint_port"
 printf '  Token file:      %s\n' "$run_dir/secrets/operator-token"
 printf '  Sample queries:  %s\n' "$demo_dir/query.sh"
+if [[ "$webhook" == true ]]; then
+  printf '  Webhook sample:  %s\n' "$run_dir/webhook-sample.json"
+  printf '  Webhook status:  %s\n' "$run_dir/webhook-list.json"
+fi
 printf '  Logs:            %s\n' "$run_dir/logs"
 
 if [[ "$mode" == smoke ]]; then
@@ -242,6 +355,9 @@ fi
 
 printf '\n%s\n' 'Leave this terminal running. Press Ctrl-C to stop the services.'
 while kill -0 "$mint_pid" >/dev/null 2>&1 && kill -0 "$server_pid" >/dev/null 2>&1; do
+  if [[ "$webhook" == true ]] && ! kill -0 "$receiver_pid" >/dev/null 2>&1; then
+    break
+  fi
   sleep 1
 done
 printf '%s\n' "A demo service stopped unexpectedly; inspect $run_dir/logs." >&2

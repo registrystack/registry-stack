@@ -12,6 +12,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
+use crate::event_destination::EventDestinationCompatibilityInventory;
 use crate::migration_plan::{
     ExternalBackupBinding, ReviewedMigrationStepDescriptor, ValidatedReviewedMigrationPlan,
 };
@@ -120,6 +121,7 @@ pub struct ApplyVerifiedPackageRequest<'a> {
     roles: ApplyRoles<'a>,
     timeouts: ApplyTimeouts,
     backup_evidence: &'a [DestructiveBackupEvidence<'a>],
+    event_destination_compatibility_inventory: Option<&'a EventDestinationCompatibilityInventory>,
     fault_after_committed_chunks: Option<u64>,
 }
 
@@ -139,6 +141,7 @@ impl<'a> ApplyVerifiedPackageRequest<'a> {
             roles,
             timeouts,
             backup_evidence: &[],
+            event_destination_compatibility_inventory: None,
             fault_after_committed_chunks: None,
         }
     }
@@ -149,6 +152,19 @@ impl<'a> ApplyVerifiedPackageRequest<'a> {
         evidence: &'a [DestructiveBackupEvidence<'a>],
     ) -> Self {
         self.backup_evidence = evidence;
+        self
+    }
+
+    /// Bind successor activation to the target runtime's activated,
+    /// non-secret logical destination inventory. Omitting this inventory is
+    /// equivalent to an empty inventory and therefore fails closed when any
+    /// retained non-terminal webhook work exists.
+    #[must_use]
+    pub fn with_event_destination_compatibility_inventory(
+        mut self,
+        inventory: &'a EventDestinationCompatibilityInventory,
+    ) -> Self {
+        self.event_destination_compatibility_inventory = Some(inventory);
         self
     }
 
@@ -292,7 +308,12 @@ pub async fn apply_verified_package(
     .map_err(|_| MigrationError::ApplyFailed)?;
     let began = if let Some(current) = current {
         connection
-            .begin_successor_package(current, &target, &ledger)
+            .begin_successor_package(
+                current,
+                &target,
+                &ledger,
+                request.event_destination_compatibility_inventory,
+            )
             .await
     } else {
         connection

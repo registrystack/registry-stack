@@ -1409,16 +1409,19 @@ pub type CredentialDestinationRequestTemplate =
 /// Closed event-delivery request template.
 pub type EventDestinationRequestTemplate = BoundedDestinationRequestTemplate<EventDestination>;
 
-/// Values for the closed event-delivery header set.
+/// Values for the closed CloudEvents HTTP binary event-delivery header set.
 ///
 /// The product owns the signature and retry policy. This transport only binds
 /// the supplied values to fixed header names and preserves their exact bytes.
 pub struct EventDeliveryHeaders<'a> {
-    pub event_id: &'a [u8],
+    pub id: &'a [u8],
+    pub source: &'a [u8],
     pub event_type: &'a [u8],
+    pub time: &'a [u8],
+    pub dataschema: &'a [u8],
     pub generation: &'a [u8],
     pub attempt: &'a [u8],
-    pub timestamp: &'a [u8],
+    pub delivery_time: &'a [u8],
     pub idempotency_key: &'a [u8],
     pub signature: &'a [u8],
 }
@@ -1430,10 +1433,13 @@ impl fmt::Debug for EventDeliveryHeaders<'_> {
 }
 
 const MAX_EVENT_ID_HEADER_BYTES: usize = 128;
+const MAX_EVENT_SOURCE_HEADER_BYTES: usize = 2_048;
 const MAX_EVENT_TYPE_HEADER_BYTES: usize = 256;
+const MAX_EVENT_TIME_HEADER_BYTES: usize = 64;
+const MAX_EVENT_DATASCHEMA_HEADER_BYTES: usize = 2_048;
 const MAX_EVENT_GENERATION_HEADER_BYTES: usize = 32;
 const MAX_EVENT_ATTEMPT_HEADER_BYTES: usize = 32;
-const MAX_EVENT_TIMESTAMP_HEADER_BYTES: usize = 64;
+const MAX_EVENT_DELIVERY_TIME_HEADER_BYTES: usize = 64;
 const MAX_EVENT_IDEMPOTENCY_KEY_HEADER_BYTES: usize = 256;
 const MAX_EVENT_SIGNATURE_HEADER_BYTES: usize = MAX_DESTINATION_HEADER_VALUE_BYTES;
 
@@ -1520,13 +1526,29 @@ impl BoundedDestinationRequestTemplate<EventDestination> {
                 name: "content-type",
                 value: b"application/json",
             },
+            HeaderTemplateInput::Exact {
+                name: "ce-specversion",
+                value: b"1.0",
+            },
             HeaderTemplateInput::Dynamic {
-                name: "x-registry-event-id",
+                name: "ce-id",
                 max_value_bytes: MAX_EVENT_ID_HEADER_BYTES,
             },
             HeaderTemplateInput::Dynamic {
-                name: "x-registry-event-type",
+                name: "ce-source",
+                max_value_bytes: MAX_EVENT_SOURCE_HEADER_BYTES,
+            },
+            HeaderTemplateInput::Dynamic {
+                name: "ce-type",
                 max_value_bytes: MAX_EVENT_TYPE_HEADER_BYTES,
+            },
+            HeaderTemplateInput::Dynamic {
+                name: "ce-time",
+                max_value_bytes: MAX_EVENT_TIME_HEADER_BYTES,
+            },
+            HeaderTemplateInput::Dynamic {
+                name: "ce-dataschema",
+                max_value_bytes: MAX_EVENT_DATASCHEMA_HEADER_BYTES,
             },
             HeaderTemplateInput::Dynamic {
                 name: "x-registry-event-generation",
@@ -1537,8 +1559,8 @@ impl BoundedDestinationRequestTemplate<EventDestination> {
                 max_value_bytes: MAX_EVENT_ATTEMPT_HEADER_BYTES,
             },
             HeaderTemplateInput::Dynamic {
-                name: "x-registry-event-timestamp",
-                max_value_bytes: MAX_EVENT_TIMESTAMP_HEADER_BYTES,
+                name: "x-registry-delivery-time",
+                max_value_bytes: MAX_EVENT_DELIVERY_TIME_HEADER_BYTES,
             },
             HeaderTemplateInput::Dynamic {
                 name: "idempotency-key",
@@ -1580,11 +1602,14 @@ impl BoundedDestinationRequestTemplate<EventDestination> {
         self.render_zeroizing(
             &[],
             &[
-                headers.event_id,
+                headers.id,
+                headers.source,
                 headers.event_type,
+                headers.time,
+                headers.dataschema,
                 headers.generation,
                 headers.attempt,
-                headers.timestamp,
+                headers.delivery_time,
                 headers.idempotency_key,
                 headers.signature,
             ],
@@ -2447,11 +2472,15 @@ fn closed_oauth_headers(
 }
 
 fn closed_event_headers(headers: &[HeaderTemplateInput<'_>]) -> bool {
-    const EXACT: [(&str, usize, Option<&[u8]>); 9] = [
+    const EXACT: [(&str, usize, Option<&[u8]>); 13] = [
         ("accept", 0, Some(b"application/json")),
         ("content-type", 0, Some(b"application/json")),
-        ("x-registry-event-id", MAX_EVENT_ID_HEADER_BYTES, None),
-        ("x-registry-event-type", MAX_EVENT_TYPE_HEADER_BYTES, None),
+        ("ce-specversion", 0, Some(b"1.0")),
+        ("ce-id", MAX_EVENT_ID_HEADER_BYTES, None),
+        ("ce-source", MAX_EVENT_SOURCE_HEADER_BYTES, None),
+        ("ce-type", MAX_EVENT_TYPE_HEADER_BYTES, None),
+        ("ce-time", MAX_EVENT_TIME_HEADER_BYTES, None),
+        ("ce-dataschema", MAX_EVENT_DATASCHEMA_HEADER_BYTES, None),
         (
             "x-registry-event-generation",
             MAX_EVENT_GENERATION_HEADER_BYTES,
@@ -2463,8 +2492,8 @@ fn closed_event_headers(headers: &[HeaderTemplateInput<'_>]) -> bool {
             None,
         ),
         (
-            "x-registry-event-timestamp",
-            MAX_EVENT_TIMESTAMP_HEADER_BYTES,
+            "x-registry-delivery-time",
+            MAX_EVENT_DELIVERY_TIME_HEADER_BYTES,
             None,
         ),
         (
@@ -4111,6 +4140,8 @@ mod tests {
 
     use super::*;
 
+    const MAX_TEST_EVENT_REQUEST_BYTES: usize = 16_384;
+
     fn ip(raw: &str) -> IpAddr {
         raw.parse().expect("test IP parses")
     }
@@ -4136,11 +4167,15 @@ mod tests {
 
     fn event_headers<'a>() -> EventDeliveryHeaders<'a> {
         EventDeliveryHeaders {
-            event_id: b"018f1f47-a922-7e31-8000-000000000001",
-            event_type: b"widget.tombstoned",
+            id: b"018f1f47-a922-7e31-8000-000000000001",
+            source: b"urn:registry:example-registry:example-instance",
+            event_type: b"case-approved-v1",
+            time: b"2026-08-30T02:03:04Z",
+            dataschema:
+                b"urn:registry:schema:example-registry:case-approved-v1:sha256:0123456789abcdef",
             generation: b"42",
             attempt: b"1",
-            timestamp: b"2026-08-30T02:03:04Z",
+            delivery_time: b"2026-08-30T02:03:05Z",
             idempotency_key: b"delivery-018f1f47-a922-7e31-8000-000000000001",
             signature: b"v1=caller-owned-signature",
         }
@@ -6130,16 +6165,21 @@ mod tests {
     #[test]
     fn event_post_is_confined_to_its_closed_slot_and_canonical_shape() {
         let canonical = br#"{"event":"widget.tombstoned","generation":42}"#;
-        let template =
-            EventDestinationRequestTemplate::event_delivery("/hooks/registry", 256, 10_240)
-                .expect("closed event template");
+        let template = EventDestinationRequestTemplate::event_delivery(
+            "/hooks/registry",
+            256,
+            MAX_TEST_EVENT_REQUEST_BYTES,
+        )
+        .expect("closed event template");
         let request = template
             .render_event(event_headers(), canonical.to_vec())
             .expect("canonical event renders");
         let diagnostic = format!("{template:?} {request:?} {:?}", event_headers());
         for canary in [
             "hooks/registry",
-            "widget.tombstoned",
+            "case-approved-v1",
+            "example-instance",
+            "0123456789abcdef",
             "delivery-018f1f47",
             "caller-owned-signature",
             "generation\":42",
@@ -6210,6 +6250,15 @@ mod tests {
                 .unwrap_err(),
             DestinationRequestError::InvalidHeaderValue
         );
+        let oversized_source = vec![b's'; MAX_EVENT_SOURCE_HEADER_BYTES + 1];
+        let mut oversized_headers = event_headers();
+        oversized_headers.source = &oversized_source;
+        assert_eq!(
+            template
+                .render_event(oversized_headers, canonical.to_vec())
+                .unwrap_err(),
+            DestinationRequestError::TemplateBoundsExceeded
+        );
         assert_eq!(
             template
                 .render_event(event_headers(), vec![b'x'; 257])
@@ -6254,11 +6303,15 @@ mod tests {
                         let names = [
                             "accept",
                             "content-type",
-                            "x-registry-event-id",
-                            "x-registry-event-type",
+                            "ce-specversion",
+                            "ce-id",
+                            "ce-source",
+                            "ce-type",
+                            "ce-time",
+                            "ce-dataschema",
                             "x-registry-event-generation",
                             "x-registry-delivery-attempt",
-                            "x-registry-event-timestamp",
+                            "x-registry-delivery-time",
                             "idempotency-key",
                             "x-registry-signature",
                         ];
@@ -6277,13 +6330,31 @@ mod tests {
                                 .and_then(|value| value.to_str().ok())
                                 == Some("application/json")
                             && headers
-                                .get("x-registry-event-id")
+                                .get("ce-specversion")
+                                .and_then(|value| value.to_str().ok())
+                                == Some("1.0")
+                            && headers
+                                .get("ce-id")
                                 .and_then(|value| value.to_str().ok())
                                 == Some("018f1f47-a922-7e31-8000-000000000001")
                             && headers
-                                .get("x-registry-event-type")
+                                .get("ce-source")
                                 .and_then(|value| value.to_str().ok())
-                                == Some("widget.tombstoned")
+                                == Some("urn:registry:example-registry:example-instance")
+                            && headers
+                                .get("ce-type")
+                                .and_then(|value| value.to_str().ok())
+                                == Some("case-approved-v1")
+                            && headers
+                                .get("ce-time")
+                                .and_then(|value| value.to_str().ok())
+                                == Some("2026-08-30T02:03:04Z")
+                            && headers
+                                .get("ce-dataschema")
+                                .and_then(|value| value.to_str().ok())
+                                == Some(
+                                    "urn:registry:schema:example-registry:case-approved-v1:sha256:0123456789abcdef",
+                                )
                             && headers
                                 .get("x-registry-event-generation")
                                 .and_then(|value| value.to_str().ok())
@@ -6293,9 +6364,9 @@ mod tests {
                                 .and_then(|value| value.to_str().ok())
                                 == Some("1")
                             && headers
-                                .get("x-registry-event-timestamp")
+                                .get("x-registry-delivery-time")
                                 .and_then(|value| value.to_str().ok())
-                                == Some("2026-08-30T02:03:04Z")
+                                == Some("2026-08-30T02:03:05Z")
                             && headers
                                 .get("idempotency-key")
                                 .and_then(|value| value.to_str().ok())
@@ -6304,6 +6375,9 @@ mod tests {
                                 .get("x-registry-signature")
                                 .and_then(|value| value.to_str().ok())
                                 == Some("v1=caller-owned-signature")
+                            && !headers.contains_key("x-registry-event-id")
+                            && !headers.contains_key("x-registry-event-type")
+                            && !headers.contains_key("x-registry-event-timestamp")
                             && !headers.contains_key(AUTHORIZATION);
                         *route_captured.lock().expect("capture lock") =
                             Some((exact, body.to_vec()));
@@ -6329,9 +6403,12 @@ mod tests {
             &[],
         )
         .expect("development event policy");
-        let template =
-            EventDestinationRequestTemplate::event_delivery("/hooks/registry", 1_024, 10_240)
-                .expect("closed event template");
+        let template = EventDestinationRequestTemplate::event_delivery(
+            "/hooks/registry",
+            1_024,
+            MAX_TEST_EVENT_REQUEST_BYTES,
+        )
+        .expect("closed event template");
         let expected = br#"{"event":"widget.tombstoned","generation":42}"#;
         let request = template
             .render_event(event_headers(), expected.to_vec())
@@ -6436,11 +6513,14 @@ mod tests {
         };
         let body = br#"{"event":"widget.tombstoned"}"#;
 
-        let redirect_request =
-            EventDestinationRequestTemplate::event_delivery("/hooks/redirect", 256, 10_240)
-                .expect("redirect event template")
-                .render_event(event_headers(), body.to_vec())
-                .expect("redirect event request");
+        let redirect_request = EventDestinationRequestTemplate::event_delivery(
+            "/hooks/redirect",
+            256,
+            MAX_TEST_EVENT_REQUEST_BYTES,
+        )
+        .expect("redirect event template")
+        .render_event(event_headers(), body.to_vec())
+        .expect("redirect event request");
         let redirect_response = policy
             .send_with_resolver(
                 redirect_request,
@@ -6453,11 +6533,14 @@ mod tests {
         assert_eq!(redirect_response.status(), StatusCode::FOUND);
         assert_eq!(redirected.load(Ordering::SeqCst), 0);
 
-        let large_request =
-            EventDestinationRequestTemplate::event_delivery("/hooks/large", 256, 10_240)
-                .expect("large-response event template")
-                .render_event(event_headers(), body.to_vec())
-                .expect("large-response event request");
+        let large_request = EventDestinationRequestTemplate::event_delivery(
+            "/hooks/large",
+            256,
+            MAX_TEST_EVENT_REQUEST_BYTES,
+        )
+        .expect("large-response event template")
+        .render_event(event_headers(), body.to_vec())
+        .expect("large-response event request");
         let large_response = policy
             .send_with_resolver(
                 large_request,

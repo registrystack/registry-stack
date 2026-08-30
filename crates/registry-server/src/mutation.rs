@@ -16,9 +16,14 @@ use tokio_postgres::types::ToSql;
 use tokio_postgres::{error::SqlState, GenericClient, Transaction};
 use uuid::Uuid;
 
+use crate::artifacts::event_data_schema_binding;
 use crate::audit::{
     append_terminal_audit, profile_is_keyed, record_pre_io_audit, PreIoAudit, PreIoAuditKind,
     RegistryAuditError, TerminalAudit, TerminalAuditOutcome,
+};
+use crate::compiler::{
+    WEBHOOK_ATTEMPT_TIMEOUT_MS, WEBHOOK_BACKOFF_MULTIPLIER, WEBHOOK_INITIAL_BACKOFF_MS,
+    WEBHOOK_MAXIMUM_ATTEMPTS, WEBHOOK_MAXIMUM_BACKOFF_MS,
 };
 use crate::contract::{
     AccessProfileSource, EventTrigger, FieldTypeSource, MutationMode, Operation,
@@ -31,7 +36,7 @@ use crate::idempotency::{
 };
 use crate::model::{
     CompiledEntity, CompiledEventDelivery, CompiledRegistry, CompiledRoute,
-    CompiledWebhookDeliveryMode, HttpMethod,
+    CompiledWebhookDeliveryMode, CompiledWebhookRetryProfile, HttpMethod,
 };
 use crate::outbox::{insert_configured_events, OutboxError, OutboxMutation};
 use crate::postgres::{
@@ -84,8 +89,12 @@ pub async fn install_mutation_schema(
                  record_revision bigint NOT NULL CHECK (record_revision > 0),
                  package_revision text NOT NULL CHECK (package_revision <> ''),
                  schema_fingerprint text NOT NULL CHECK (schema_fingerprint <> ''),
-                 payload bytea NOT NULL
-                     CHECK (octet_length(payload) > 0 AND octet_length(payload) <= 2097152),
+                 payload bytea
+                     CONSTRAINT registry_outbox_payload_bounds CHECK (
+                         payload IS NULL OR
+                         (octet_length(payload) > 0 AND octet_length(payload) <= 2097152)
+                     ),
+                 payload_expires_at timestamptz NOT NULL,
                  created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
                  UNIQUE (event_id, package_revision, schema_fingerprint)
              );
@@ -101,6 +110,10 @@ pub async fn install_mutation_schema(
                      CHECK (package_revision <> '' AND octet_length(package_revision) <= 256),
                  schema_fingerprint text NOT NULL
                      CHECK (schema_fingerprint <> '' AND octet_length(schema_fingerprint) <= 256),
+                 data_schema text NOT NULL
+                     CONSTRAINT registry_webhook_delivery_data_schema_bounds CHECK (
+                         data_schema <> '' AND octet_length(data_schema) <= 2048
+                     ),
                  classification_ceiling text NOT NULL
                      CHECK (classification_ceiling IN ('public', 'internal', 'restricted')),
                  authentication_profile text NOT NULL
@@ -145,7 +158,9 @@ pub async fn install_mutation_schema(
                      CHECK (compiled_delivery_id <> '' AND octet_length(compiled_delivery_id) <= 256),
                  generation bigint NOT NULL CHECK (generation > 0),
                  state text NOT NULL
-                     CHECK (state IN ('pending', 'leased', 'delivered', 'dead_lettered')),
+                     CONSTRAINT registry_webhook_delivery_state_values CHECK (
+                         state IN ('pending', 'leased', 'delivered', 'dead_lettered', 'expired')
+                     ),
                  attempt smallint NOT NULL CHECK (attempt BETWEEN 0 AND 20),
                  next_attempt_at timestamptz,
                  attempt_started_at timestamptz,
@@ -153,20 +168,22 @@ pub async fn install_mutation_schema(
                  lease_token uuid,
                  delivered_at timestamptz,
                  dead_lettered_at timestamptz,
+                 expired_at timestamptz,
                  updated_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
                  PRIMARY KEY (event_id, compiled_delivery_id),
                  FOREIGN KEY (event_id, compiled_delivery_id)
                      REFERENCES registry_internal.registry_webhook_deliveries
                          (event_id, compiled_delivery_id)
                      ON DELETE RESTRICT,
-                 CHECK (
+                 CONSTRAINT registry_webhook_delivery_state_shape CHECK (
                      (state = 'pending'
                          AND next_attempt_at IS NOT NULL
                          AND attempt_started_at IS NULL
                          AND lease_expires_at IS NULL
                          AND lease_token IS NULL
                          AND delivered_at IS NULL
-                         AND dead_lettered_at IS NULL)
+                         AND dead_lettered_at IS NULL
+                         AND expired_at IS NULL)
                      OR (state = 'leased'
                          AND attempt > 0
                          AND next_attempt_at IS NULL
@@ -174,7 +191,8 @@ pub async fn install_mutation_schema(
                          AND lease_expires_at > attempt_started_at
                          AND lease_token IS NOT NULL
                          AND delivered_at IS NULL
-                         AND dead_lettered_at IS NULL)
+                         AND dead_lettered_at IS NULL
+                         AND expired_at IS NULL)
                      OR (state = 'delivered'
                          AND attempt > 0
                          AND next_attempt_at IS NULL
@@ -182,7 +200,8 @@ pub async fn install_mutation_schema(
                          AND lease_expires_at IS NULL
                          AND lease_token IS NULL
                          AND delivered_at IS NOT NULL
-                         AND dead_lettered_at IS NULL)
+                         AND dead_lettered_at IS NULL
+                         AND expired_at IS NULL)
                      OR (state = 'dead_lettered'
                          AND attempt > 0
                          AND next_attempt_at IS NULL
@@ -191,6 +210,14 @@ pub async fn install_mutation_schema(
                          AND lease_token IS NULL
                          AND delivered_at IS NULL
                          AND dead_lettered_at IS NOT NULL)
+                     OR (state = 'expired'
+                         AND next_attempt_at IS NULL
+                         AND attempt_started_at IS NULL
+                         AND lease_expires_at IS NULL
+                         AND lease_token IS NULL
+                         AND delivered_at IS NULL
+                         AND dead_lettered_at IS NULL
+                         AND expired_at IS NOT NULL)
                  )
              );
              CREATE INDEX IF NOT EXISTS registry_webhook_delivery_state_due_idx
@@ -242,6 +269,186 @@ pub async fn install_mutation_schema(
         )
         .await
         .map_err(|_| MutationError::Unavailable)?;
+    // `CREATE TABLE IF NOT EXISTS` does not evolve databases activated by an
+    // earlier Registry Server build. Legacy outbox rows receive the
+    // conservative seven-day default from their original capture time. A
+    // legacy webhook row has no V1 data-schema binding, so it cannot safely be
+    // reinterpreted as a V1 delivery and requires explicit operator migration.
+    // Keep this upgrade idempotent so package activation cannot leave the
+    // runtime expecting a column or nullability contract the durable outbox
+    // does not have.
+    migration
+        .batch_execute(
+            "ALTER TABLE registry_internal.registry_outbox
+                 ADD COLUMN IF NOT EXISTS payload_expires_at timestamptz;
+             UPDATE registry_internal.registry_outbox
+                SET payload_expires_at = created_at + interval '7 days'
+              WHERE payload_expires_at IS NULL;
+             DO $registry_outbox_upgrade$
+             BEGIN
+                 IF EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_attribute
+                      WHERE attrelid = 'registry_internal.registry_outbox'::regclass
+                        AND attname = 'payload' AND attnotnull
+                 ) THEN
+                     ALTER TABLE registry_internal.registry_outbox
+                         ALTER COLUMN payload DROP NOT NULL;
+                 END IF;
+                 IF EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_constraint
+                      WHERE conrelid = 'registry_internal.registry_outbox'::regclass
+                        AND conname = 'registry_outbox_payload_check'
+                 ) THEN
+                     ALTER TABLE registry_internal.registry_outbox
+                         DROP CONSTRAINT registry_outbox_payload_check;
+                 END IF;
+                 IF NOT EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_constraint
+                      WHERE conrelid = 'registry_internal.registry_outbox'::regclass
+                        AND conname = 'registry_outbox_payload_bounds'
+                 ) THEN
+                     ALTER TABLE registry_internal.registry_outbox
+                         ADD CONSTRAINT registry_outbox_payload_bounds CHECK (
+                             payload IS NULL OR
+                             (octet_length(payload) > 0 AND octet_length(payload) <= 2097152)
+                         );
+                 END IF;
+                 IF EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_attribute
+                      WHERE attrelid = 'registry_internal.registry_outbox'::regclass
+                        AND attname = 'payload_expires_at' AND NOT attnotnull
+                 ) THEN
+                     ALTER TABLE registry_internal.registry_outbox
+                         ALTER COLUMN payload_expires_at SET NOT NULL;
+                 END IF;
+             END
+             $registry_outbox_upgrade$;
+             ALTER TABLE registry_internal.registry_webhook_deliveries
+                 ADD COLUMN IF NOT EXISTS data_schema text;
+             DO $registry_webhook_delivery_upgrade$
+             BEGIN
+                 IF EXISTS (
+                     SELECT 1
+                       FROM registry_internal.registry_webhook_deliveries
+                      WHERE data_schema IS NULL
+                 ) THEN
+                     RAISE EXCEPTION USING
+                         MESSAGE = 'pre-V1 webhook history requires explicit operator migration';
+                 END IF;
+                 IF EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_attribute
+                      WHERE attrelid =
+                            'registry_internal.registry_webhook_deliveries'::regclass
+                        AND attname = 'data_schema' AND NOT attnotnull
+                 ) THEN
+                     ALTER TABLE registry_internal.registry_webhook_deliveries
+                         ALTER COLUMN data_schema SET NOT NULL;
+                 END IF;
+                 IF NOT EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_constraint
+                      WHERE conrelid =
+                            'registry_internal.registry_webhook_deliveries'::regclass
+                        AND conname = 'registry_webhook_delivery_data_schema_bounds'
+                 ) THEN
+                     ALTER TABLE registry_internal.registry_webhook_deliveries
+                         ADD CONSTRAINT registry_webhook_delivery_data_schema_bounds CHECK (
+                             data_schema <> '' AND octet_length(data_schema) <= 2048
+                         );
+                 END IF;
+             END
+             $registry_webhook_delivery_upgrade$;
+             ALTER TABLE registry_internal.registry_webhook_delivery_state
+                 ADD COLUMN IF NOT EXISTS expired_at timestamptz;
+             DO $registry_webhook_state_upgrade$
+             BEGIN
+                 IF EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_constraint
+                      WHERE conrelid =
+                            'registry_internal.registry_webhook_delivery_state'::regclass
+                        AND conname = 'registry_webhook_delivery_state_state_check'
+                 ) THEN
+                     ALTER TABLE registry_internal.registry_webhook_delivery_state
+                         DROP CONSTRAINT registry_webhook_delivery_state_state_check;
+                 END IF;
+                 IF EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_constraint
+                      WHERE conrelid =
+                            'registry_internal.registry_webhook_delivery_state'::regclass
+                        AND conname = 'registry_webhook_delivery_state_check'
+                 ) THEN
+                     ALTER TABLE registry_internal.registry_webhook_delivery_state
+                         DROP CONSTRAINT registry_webhook_delivery_state_check;
+                 END IF;
+                 IF NOT EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_constraint
+                      WHERE conrelid =
+                            'registry_internal.registry_webhook_delivery_state'::regclass
+                        AND conname = 'registry_webhook_delivery_state_values'
+                 ) THEN
+                     ALTER TABLE registry_internal.registry_webhook_delivery_state
+                         ADD CONSTRAINT registry_webhook_delivery_state_values CHECK (
+                             state IN (
+                                 'pending', 'leased', 'delivered', 'dead_lettered', 'expired'
+                             )
+                         );
+                 END IF;
+                 IF NOT EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_constraint
+                      WHERE conrelid =
+                            'registry_internal.registry_webhook_delivery_state'::regclass
+                        AND conname = 'registry_webhook_delivery_state_shape'
+                 ) THEN
+                     ALTER TABLE registry_internal.registry_webhook_delivery_state
+                         ADD CONSTRAINT registry_webhook_delivery_state_shape CHECK (
+                             (state = 'pending'
+                                 AND next_attempt_at IS NOT NULL
+                                 AND attempt_started_at IS NULL
+                                 AND lease_expires_at IS NULL
+                                 AND lease_token IS NULL
+                                 AND delivered_at IS NULL
+                                 AND dead_lettered_at IS NULL
+                                 AND expired_at IS NULL)
+                             OR (state = 'leased'
+                                 AND attempt > 0
+                                 AND next_attempt_at IS NULL
+                                 AND attempt_started_at IS NOT NULL
+                                 AND lease_expires_at > attempt_started_at
+                                 AND lease_token IS NOT NULL
+                                 AND delivered_at IS NULL
+                                 AND dead_lettered_at IS NULL
+                                 AND expired_at IS NULL)
+                             OR (state = 'delivered'
+                                 AND attempt > 0
+                                 AND next_attempt_at IS NULL
+                                 AND attempt_started_at IS NULL
+                                 AND lease_expires_at IS NULL
+                                 AND lease_token IS NULL
+                                 AND delivered_at IS NOT NULL
+                                 AND dead_lettered_at IS NULL
+                                 AND expired_at IS NULL)
+                             OR (state = 'dead_lettered'
+                                 AND attempt > 0
+                                 AND next_attempt_at IS NULL
+                                 AND attempt_started_at IS NULL
+                                 AND lease_expires_at IS NULL
+                                 AND lease_token IS NULL
+                                 AND delivered_at IS NULL
+                                 AND dead_lettered_at IS NOT NULL)
+                             OR (state = 'expired'
+                                 AND next_attempt_at IS NULL
+                                 AND attempt_started_at IS NULL
+                                 AND lease_expires_at IS NULL
+                                 AND lease_token IS NULL
+                                 AND delivered_at IS NULL
+                                 AND dead_lettered_at IS NULL
+                                 AND expired_at IS NOT NULL)
+                         );
+                 END IF;
+             END
+             $registry_webhook_state_upgrade$;",
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
     let role = runtime_role.as_str();
     migration
         .batch_execute(&format!(
@@ -257,6 +464,7 @@ pub async fn install_mutation_schema(
                  registry_internal.registry_webhook_deliveries,
                  registry_internal.registry_audit,
                  registry_internal.registry_idempotency TO \"{role}\";
+             GRANT UPDATE (payload) ON registry_internal.registry_outbox TO \"{role}\";
              GRANT SELECT, INSERT, UPDATE
                  ON registry_internal.registry_webhook_delivery_state TO \"{role}\";
              GRANT SELECT, INSERT, UPDATE ON registry_internal.registry_audit_head TO \"{role}\";
@@ -408,30 +616,45 @@ fn exact_entity_event_deliveries(
             .webhook
             .as_ref()
             .ok_or(MutationError::InvalidRequest)?;
-        let source_delivery = &webhook.delivery;
         let expected_projection = event.projection.iter().cloned().collect::<Vec<_>>();
+        let classification_ceiling = event
+            .projection
+            .iter()
+            .chain(event_condition_fields(event))
+            .filter_map(|field| entity.fields.get(field))
+            .map(|field| field.classification)
+            .max()
+            .ok_or(MutationError::InvalidRequest)?;
+        let data_schema = event_data_schema_binding(registry.registry_id(), entity, event)
+            .map_err(|_| MutationError::InvalidRequest)?;
         if !delivery_ids.insert(delivery.id.as_str())
             || !delivered_events.insert(delivery.event_id.as_str())
             || delivery.id != format!("events.{}.{}.webhook", entity.id, event.id)
             || delivery.trigger != event.trigger
             || delivery.destination_id != webhook.destination_id
             || delivery.projection_fields != expected_projection
-            || delivery.classification_ceiling != webhook.classification_ceiling
-            || delivery.authentication_profile != webhook.authentication_profile
+            || delivery.when != event.when
+            || delivery.classification_ceiling != classification_ceiling
+            || delivery.data_schema != data_schema.data_schema
+            || delivery.data_schema_fingerprint != data_schema.fingerprint
+            || delivery.data_schema_artifact_path != data_schema.artifact_path
+            || delivery.authentication_profile
+                != crate::contract::WebhookAuthenticationProfile::HmacSha256V1
             || delivery.delivery_mode != CompiledWebhookDeliveryMode::AfterCommit
-            || delivery.attempt_timeout_ms != source_delivery.attempt_timeout_ms
-            || delivery.initial_backoff_ms != source_delivery.initial_backoff_ms
-            || delivery.maximum_backoff_ms != source_delivery.maximum_backoff_ms
-            || delivery.exponential_backoff_multiplier != 2
-            || delivery.maximum_attempts != source_delivery.maximum_attempts
+            || delivery.retry_profile != CompiledWebhookRetryProfile::RegistryV1
+            || delivery.attempt_timeout_ms != WEBHOOK_ATTEMPT_TIMEOUT_MS
+            || delivery.initial_backoff_ms != WEBHOOK_INITIAL_BACKOFF_MS
+            || delivery.maximum_backoff_ms != WEBHOOK_MAXIMUM_BACKOFF_MS
+            || delivery.exponential_backoff_multiplier != WEBHOOK_BACKOFF_MULTIPLIER
+            || delivery.maximum_attempts != WEBHOOK_MAXIMUM_ATTEMPTS
             || delivery.retry_delays_ms
                 != expected_retry_delays(
-                    source_delivery.initial_backoff_ms,
-                    source_delivery.maximum_backoff_ms,
-                    source_delivery.maximum_attempts,
+                    WEBHOOK_INITIAL_BACKOFF_MS,
+                    WEBHOOK_MAXIMUM_BACKOFF_MS,
+                    WEBHOOK_MAXIMUM_ATTEMPTS,
                 )
-            || Some(delivery.dead_letter) != source_delivery.dead_letter
-            || delivery.operator_replay != source_delivery.operator_replay
+            || delivery.dead_letter != crate::contract::WebhookDeadLetterMode::Required
+            || !delivery.operator_replay
             || Some(delivery.maximum_payload_bytes)
                 != expected_maximum_event_payload_bytes(entity, event)
         {
@@ -448,53 +671,26 @@ fn exact_entity_event_deliveries(
     Ok(deliveries)
 }
 
+fn event_condition_fields(event: &crate::contract::EventSource) -> impl Iterator<Item = &String> {
+    let mut fields = BTreeSet::new();
+    if let Some(crate::contract::EventConditionSource::Fields {
+        changed,
+        before_equals,
+        after_equals,
+    }) = &event.when
+    {
+        fields.extend(changed.iter());
+        fields.extend(before_equals.keys());
+        fields.extend(after_equals.keys());
+    }
+    fields.into_iter()
+}
+
 fn expected_maximum_event_payload_bytes(
     entity: &CompiledEntity,
     event: &crate::contract::EventSource,
 ) -> Option<u32> {
-    let mut total = 2_u64.checked_add(event.projection.len().saturating_sub(1) as u64)?;
-    for field_id in &event.projection {
-        let field = entity.fields.get(field_id)?;
-        let maximum_value_bytes = maximum_field_json_bytes(&field.field_type)?;
-        let maximum_value_bytes = if field.required {
-            maximum_value_bytes
-        } else {
-            maximum_value_bytes.max(4)
-        };
-        total = total
-            .checked_add(field_id.len() as u64 + 3)?
-            .checked_add(maximum_value_bytes)?;
-    }
-    let total = u32::try_from(total).ok()?;
-    (total <= crate::compiler::MAX_WEBHOOK_PAYLOAD_BYTES).then_some(total)
-}
-
-fn maximum_field_json_bytes(field_type: &FieldTypeSource) -> Option<u64> {
-    match field_type {
-        FieldTypeSource::Boolean => Some(5),
-        FieldTypeSource::String { max_length, .. } | FieldTypeSource::Text { max_length } => {
-            2_u64.checked_add(u64::from(*max_length).checked_mul(6)?)
-        }
-        FieldTypeSource::Int64 => Some(20),
-        FieldTypeSource::Decimal {
-            precision, scale, ..
-        } => Some(
-            u64::from(*precision)
-                + u64::from(*scale > 0)
-                + u64::from(*scale > 0 && scale == precision)
-                + 3,
-        ),
-        FieldTypeSource::Date => Some(12),
-        FieldTypeSource::Timestamp => Some(64),
-        FieldTypeSource::Uuid | FieldTypeSource::Reference { .. } => Some(38),
-        FieldTypeSource::VocabularyCode { values, .. } => values
-            .iter()
-            .filter_map(|value| canonicalize_json(&Value::String(value.clone())).ok())
-            .map(|value| value.len() as u64)
-            .max(),
-        FieldTypeSource::Crs84Point { .. } => Some(128),
-        FieldTypeSource::Structured { max_bytes, .. } => Some(u64::from(*max_bytes)),
-    }
+    crate::compiler::maximum_compiled_event_payload_bytes(entity, event)
 }
 
 fn expected_retry_delays(initial_ms: u32, maximum_ms: u32, maximum_attempts: u8) -> Vec<u32> {
@@ -868,11 +1064,20 @@ impl MutationCoordinator {
             OutboxMutation {
                 trigger: mutation_trigger(request.plan.route.operation),
                 entity_id: &request.plan.entity.id,
+                record_id: &current.record_id,
                 record_reference: &record_reference,
                 record_revision: current.record_revision,
                 package_revision: &self.expected.package_revision,
                 schema_fingerprint: &self.expected.schema_fingerprint,
-                data: &current.data,
+                before: current.before_data.as_ref(),
+                after: (request.plan.route.operation != Operation::Tombstone)
+                    .then_some(&current.data),
+                payload_retention: self
+                    .event_destinations
+                    .as_deref()
+                    .map_or(Duration::from_secs(7 * 24 * 60 * 60), |destinations| {
+                        destinations.payload_retention()
+                    }),
             },
         )
         .await?;
@@ -1039,11 +1244,19 @@ impl MutationCoordinator {
                 OutboxMutation {
                     trigger: mutation_trigger(item_plan.route.operation),
                     entity_id: &item_plan.entity.id,
+                    record_id: &current.record_id,
                     record_reference: &record_reference,
                     record_revision: current.record_revision,
                     package_revision: &self.expected.package_revision,
                     schema_fingerprint: &self.expected.schema_fingerprint,
-                    data: &current.data,
+                    before: current.before_data.as_ref(),
+                    after: Some(&current.data),
+                    payload_retention: self
+                        .event_destinations
+                        .as_deref()
+                        .map_or(Duration::from_secs(7 * 24 * 60 * 60), |destinations| {
+                            destinations.payload_retention()
+                        }),
                 },
             )
             .await?;
@@ -1336,6 +1549,7 @@ struct CurrentRow {
     record_revision: i64,
     predecessor_revision: Option<i64>,
     record_lifecycle: String,
+    before_data: Option<Map<String, Value>>,
     data: Map<String, Value>,
 }
 
@@ -1367,10 +1581,12 @@ async fn apply_current_row(
             if expected.ct_eq(current_etag.as_bytes()).unwrap_u8() != 1 {
                 return Err(MutationError::PreconditionFailed);
             }
+            let before_data = current.data.clone();
             let data = apply_patch_document(request, &current.data)?;
             let mut row =
                 apply_patch_row(transaction, request, current.record_revision, data).await?;
             row.predecessor_revision = Some(current.record_revision);
+            row.before_data = Some(before_data);
             Ok(row)
         }
         Operation::Tombstone => {
@@ -1551,6 +1767,7 @@ async fn apply_tombstone_row(
         record_revision: next_revision,
         predecessor_revision: Some(current.record_revision),
         record_lifecycle: "tombstoned".to_owned(),
+        before_data: Some(current.data.clone()),
         data: current.data,
     })
 }
@@ -1803,6 +2020,7 @@ fn row_to_current(
         record_revision,
         predecessor_revision: None,
         record_lifecycle,
+        before_data: None,
         data,
     })
 }

@@ -198,6 +198,41 @@ mod tests {
     }
 
     #[test]
+    fn schema_accepts_the_minimal_tagged_event_and_webhook_shape() {
+        let schema = compile(&schema_document());
+        let mut instance = fixture("asset-site-placement");
+        instance["entities"][0]["events"] = serde_json::json!([{
+            "id": "asset-created-v1",
+            "trigger": "created",
+            "projection": ["asset-code", "label"],
+            "when": {
+                "kind": "fields",
+                "afterEquals": {"asset-class": "equipment"}
+            },
+            "webhook": {"destinationId": "asset-operations"}
+        }]);
+
+        assert!(schema.is_valid(&instance));
+    }
+
+    #[test]
+    fn schema_rejects_per_event_delivery_policy() {
+        let schema = compile(&schema_document());
+        let mut instance = fixture("asset-site-placement");
+        instance["entities"][0]["events"] = serde_json::json!([{
+            "id": "asset-created-v1",
+            "trigger": "created",
+            "projection": ["asset-code"],
+            "webhook": {
+                "destinationId": "asset-operations",
+                "authenticationProfile": "hmac_sha256_v1"
+            }
+        }]);
+
+        assert!(!schema.is_valid(&instance));
+    }
+
+    #[test]
     fn committed_authoring_schema_matches_generated_bytes() {
         let committed = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../products/registry-server/generated/authoring")
