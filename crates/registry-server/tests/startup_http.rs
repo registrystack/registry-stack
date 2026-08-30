@@ -122,6 +122,7 @@ impl ReadinessProbe for SlowReadiness {
 
 #[tokio::test]
 async fn request_timeout_returns_value_free_problem() {
+    let _request_logs = captured_request_logs();
     let service = Arc::new(HttpService::new(
         compiled_registry(),
         ReadRuntimeIdentity {
@@ -175,6 +176,7 @@ async fn request_timeout_returns_value_free_problem() {
 
 #[tokio::test]
 async fn trace_transport_health_aliases_and_request_ids_are_correlated() {
+    let _request_logs = captured_request_logs();
     const INBOUND: &str = "00-11111111111111111111111111111111-2222222222222222-01";
     const SECOND: &str = "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01";
 
@@ -399,7 +401,7 @@ fn captured_request_logs() -> &'static CapturedOperationalLogs {
 #[tokio::test(flavor = "current_thread")]
 async fn request_operational_log_has_only_closed_value_free_fields() {
     let _capture_guard = TRACING_CAPTURE.lock().await;
-    const INBOUND: &str = "00-11111111111111111111111111111111-2222222222222222-01";
+    const INBOUND: &str = "00-99999999999999999999999999999999-8888888888888888-01";
     let writer = captured_request_logs();
     let service = Arc::new(HttpService::new(
         compiled_registry(),
@@ -436,11 +438,13 @@ async fn request_operational_log_has_only_closed_value_free_fields() {
     assert!(!output.contains("operational-log-token-canary"));
     assert!(!output.contains("/health"));
     let expected_trace_id = trace_id(INBOUND);
-    let rendered = output
+    let matching_records = output
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).expect("request log is JSON"))
-        .find(|record| record["fields"]["trace_id"] == expected_trace_id)
-        .expect("correlated request log is present");
+        .filter(|record| record["fields"]["trace_id"] == expected_trace_id)
+        .collect::<Vec<_>>();
+    assert_eq!(matching_records.len(), 1);
+    let rendered = &matching_records[0];
     let fields = rendered["fields"]
         .as_object()
         .expect("request log fields are an object");
@@ -663,6 +667,7 @@ async fn every_operational_event_renders_exact_closed_value_free_json_fields() {
 
 #[tokio::test]
 async fn provenance_operational_logs_metrics_and_traces_are_separate_closed_and_value_free() {
+    let _request_logs = captured_request_logs();
     let directory = TestDirectory::create();
     let registry = compiled_registry();
     let registry_revision = registry.revision().to_owned();
