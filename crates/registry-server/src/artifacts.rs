@@ -240,10 +240,13 @@ pub(crate) fn event_data_schema_binding(
 fn entity_schema(entity: &CompiledEntity) -> Value {
     let mut properties = Map::new();
     let mut required = Vec::new();
-    for field in entity.fields.values() {
-        properties.insert(field.id.clone(), field_schema(&field.field_type));
+    for field in &entity.stored_fields {
+        properties.insert(
+            field.logical.api_name.clone(),
+            field_schema(&field.logical.field_type),
+        );
         if field.required {
-            required.push(Value::String(field.id.clone()));
+            required.push(Value::String(field.logical.api_name.clone()));
         }
     }
     json!({
@@ -625,35 +628,42 @@ fn query_parameters(kind: CompiledQueryKind) -> Value {
             "Select one compiled access profile.",
         ),
         query_parameter(
-            "fields",
+            "$select",
             false,
             false,
             json!({"type": "string"}),
-            "Comma-separated subset of readable fields.",
+            "Comma-separated subset of readable API property names.",
         ),
         query_parameter(
-            "filter",
-            false,
-            true,
-            json!({"type": "string"}),
-            "Repeatable field:operator:value filter clause.",
-        ),
-        query_parameter(
-            "sort",
+            "$filter",
             false,
             false,
             json!({"type": "string"}),
-            "One compiled sortable field, ascending only.",
+            "Strict Registry read filter expression over compiled filterable properties.",
         ),
         query_parameter(
-            "pageSize",
+            "$orderby",
             false,
             false,
-            json!({"type": "integer", "minimum": 1}),
-            "Bounded page size within the compiled maximum.",
+            json!({"type": "string"}),
+            "One compiled sortable property, ascending only.",
         ),
         query_parameter(
-            "cursor",
+            "$top",
+            false,
+            false,
+            json!({"type": "integer", "minimum": 1, "maximum": 100}),
+            "Bounded page size.",
+        ),
+        query_parameter(
+            "$count",
+            false,
+            false,
+            json!({"type": "boolean"}),
+            "Request a total count when the compiled operation allows it.",
+        ),
+        query_parameter(
+            "$skiptoken",
             false,
             false,
             json!({"type": "string"}),
@@ -711,6 +721,7 @@ fn operation_name(operation: Operation) -> &'static str {
     match operation {
         Operation::Create => "create",
         Operation::Get => "get",
+        Operation::Lookup => "lookup",
         Operation::List => "list",
         Operation::Patch => "patch",
         Operation::Tombstone => "tombstone",

@@ -232,14 +232,22 @@ class DemoProvisioningTests(unittest.TestCase):
         people, households, memberships = DEMO.seed_spec()
         person_codes = {person["person-code"] for person in people}
         household_codes = {household["household-code"] for household in households}
-        self.assertEqual((len(people), len(households), len(memberships)), (5, 2, 5))
+        self.assertEqual((len(people), len(households), len(memberships)), (8, 3, 8))
         self.assertEqual(len(person_codes), len(people))
         self.assertEqual(len(household_codes), len(households))
+        self.assertEqual(
+            [household["local-household-number"] for household in households],
+            [1001, 1002, 1003],
+        )
         self.assertTrue(all(row["person-code"] in person_codes for row in memberships))
         self.assertTrue(all(row["household-code"] in household_codes for row in memberships))
         self.assertEqual(
+            {person["person-sex"] for person in people},
+            {"female", "male"},
+        )
+        self.assertEqual(
             sum(person["residency-status"] == "usual-resident" for person in people),
-            4,
+            8,
         )
 
     def test_prepare_refuses_a_fixture_without_the_expected_localization_boundary(self) -> None:

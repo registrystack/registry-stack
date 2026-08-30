@@ -920,6 +920,9 @@ async fn verify_opened_startup(
         .batch_execute("SET LOCAL lock_timeout = '5s'")
         .await
         .map_err(|_| StartupError::DatabaseUnready)?;
+    crate::postgres::verify_postgres_15_or_newer(&transaction)
+        .await
+        .map_err(|_| StartupError::DatabaseUnready)?;
     transaction
         .execute(
             "SELECT pg_advisory_xact_lock_shared($1)",
@@ -1024,6 +1027,9 @@ impl DynamicRuntimeReadiness {
             .batch_execute("SET LOCAL lock_timeout = '5s'")
             .await
             .map_err(|_| StartupError::DatabaseUnready)?;
+        crate::postgres::verify_postgres_15_or_newer(&*transaction)
+            .await
+            .map_err(|_| StartupError::DatabaseUnready)?;
         transaction
             .execute(
                 "SELECT pg_advisory_xact_lock_shared($1)",
@@ -1092,11 +1098,20 @@ async fn verify_configured_runtime_role(
                     has_database_privilege(current_user, current_database(), 'CREATE'),
                     has_schema_privilege(current_user, 'registry_internal', 'CREATE'),
                     has_schema_privilege(current_user, 'registry_data', 'CREATE'),
+                    has_schema_privilege(current_user, 'registry_source', 'CREATE'),
+                    has_schema_privilege(current_user, 'registry_derived', 'CREATE'),
+                    has_schema_privilege(current_user, 'registry_context', 'CREATE'),
                     EXISTS (
                         SELECT 1
                         FROM pg_catalog.pg_class c
                         JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-                        WHERE n.nspname IN ('registry_internal', 'registry_data')
+                        WHERE n.nspname IN (
+                            'registry_internal',
+                            'registry_data',
+                            'registry_source',
+                            'registry_derived',
+                            'registry_context'
+                        )
                           AND c.relowner = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user)
                     )
              FROM pg_catalog.pg_roles
@@ -1109,7 +1124,7 @@ async fn verify_configured_runtime_role(
     if actual_role != runtime_role.as_str() {
         return Err(StartupError::DatabaseUnready);
     }
-    if (1..=10).any(|index| row.get::<_, bool>(index)) {
+    if (1..=13).any(|index| row.get::<_, bool>(index)) {
         return Err(StartupError::DatabaseUnready);
     }
     Ok(())

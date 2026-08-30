@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -15,9 +15,9 @@ use registry_platform_crypto::{generate_private_jwk, sign, GeneratedKeyAlgorithm
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
 use registry_platform_testing::MockIdp;
-use registry_server::compiler::{compile_project, CompileProfile};
+use registry_server::compiler::{compile_project_with_assets, CompileProfile};
 use registry_server::contract::{
-    parse_module_yaml, parse_project_yaml, BoundaryOperator, Operation, RegistryProject,
+    parse_module_yaml, parse_project_yaml, ModuleAssetSource, Operation, RegistryProject,
 };
 use registry_server::package::{
     load_package, PackageBuildRequest, PackageIntent, PackageLoadContext,
@@ -302,7 +302,7 @@ pub async fn response_json(response: Response<Body>) -> Value {
 struct FixtureSources {
     project: RegistryProject,
     project_bytes: Vec<u8>,
-    modules: Vec<(String, Vec<u8>)>,
+    modules: Vec<PackageModuleSource>,
     compiled: CompiledRegistry,
 }
 
@@ -315,24 +315,56 @@ impl FixtureSources {
             .expect("committed pilot registry source is readable");
         let project = parse_project_yaml(&project_bytes)
             .expect("committed pilot registry follows the strict authoring contract");
-        let modules = project
-            .modules
-            .iter()
-            .map(|locked| {
-                let bytes = fs::read(root.join("modules").join(&locked.id).join("module.yaml"))
-                    .expect("every exact locked module source is committed and readable");
-                (locked.id.clone(), bytes)
-            })
-            .collect::<Vec<_>>();
-        let parsed_modules = modules
-            .iter()
-            .map(|(_, bytes)| {
-                parse_module_yaml(bytes)
-                    .expect("committed pilot module follows the strict contract")
-            })
-            .collect::<Vec<_>>();
-        let compiled = compile_project(&project, &parsed_modules, CompileProfile::Production)
-            .expect("pilot fixture closes under the Production compiler without repair");
+        let mut modules = Vec::with_capacity(project.modules.len());
+        let mut parsed_modules = Vec::with_capacity(project.modules.len());
+        let mut compiler_assets = Vec::new();
+        for locked in &project.modules {
+            let module_root = root.join("modules").join(&locked.id);
+            let bytes = fs::read(module_root.join("module.yaml"))
+                .expect("every exact locked module source is committed and readable");
+            let module = parse_module_yaml(&bytes)
+                .expect("committed pilot module follows the strict contract");
+            let asset_paths = module
+                .entities
+                .iter()
+                .flat_map(|entity| &entity.derived)
+                .chain(
+                    module
+                        .extend_entities
+                        .iter()
+                        .flat_map(|extension| &extension.derived),
+                )
+                .map(|derived| derived.sql.as_str())
+                .collect::<BTreeSet<_>>();
+            let mut assets = Vec::with_capacity(asset_paths.len());
+            for path in asset_paths {
+                let asset_bytes = fs::read(module_root.join(path))
+                    .expect("every declared pilot module asset is committed and readable");
+                compiler_assets.push(ModuleAssetSource {
+                    module: Some(module.id.clone()),
+                    path: path.to_owned(),
+                    bytes: asset_bytes.clone(),
+                });
+                assets.push(PackageSourceFile {
+                    path: path.to_owned(),
+                    bytes: asset_bytes,
+                });
+            }
+            modules.push(PackageModuleSource {
+                id: locked.id.clone(),
+                path: format!("source/modules/{}/module.yaml", locked.id),
+                bytes,
+                assets,
+            });
+            parsed_modules.push(module);
+        }
+        let compiled = compile_project_with_assets(
+            &project,
+            &parsed_modules,
+            &compiler_assets,
+            CompileProfile::Production,
+        )
+        .expect("pilot fixture closes under the Production compiler without repair");
         Self {
             project,
             project_bytes,
@@ -379,15 +411,7 @@ impl PublishedPackage {
                 path: "source/registry.yaml".to_owned(),
                 bytes: sources.project_bytes.clone(),
             },
-            modules: sources
-                .modules
-                .iter()
-                .map(|(id, bytes)| PackageModuleSource {
-                    id: id.clone(),
-                    path: format!("source/modules/{id}/module.yaml"),
-                    bytes: bytes.clone(),
-                })
-                .collect(),
+            modules: sources.modules.clone(),
             fixture_journeys: PackageSourceFile {
                 path: "tests/journeys.yaml".to_owned(),
                 bytes: fixture_journey_bytes(&sources.compiled),
@@ -524,7 +548,7 @@ fn write_runtime_config(
     database_id: &str,
     database: &TestDatabase,
     idp: &MockIdp,
-    registry: &CompiledRegistry,
+    _registry: &CompiledRegistry,
 ) -> PathBuf {
     let secrets = root.join("secrets");
     fs::create_dir(&secrets).expect("pilot secret root creates");
@@ -534,7 +558,6 @@ fn write_runtime_config(
     );
     write_secret(&secrets.join("audit-key"), &[0x6b; 32]);
     write_secret(&secrets.join("cursor-key"), &[0x43; 32]);
-    let row_boundary_claims = runtime_row_boundary_claims(registry);
     let path = root.join("runtime.yaml");
     fs::write(
         &path,
@@ -586,7 +609,7 @@ authentication:
       outageToleranceSeconds: 0
   authorityClaims:
     principal: registry_principal
-    purpose: purpose{row_boundary_claims}
+    purpose: purpose
 audit:
   hashKeyRef: secret:file/audit-key
 cursor:
@@ -616,36 +639,6 @@ operationalTimeouts:
     .expect("strict pilot runtime configuration writes");
     set_private_permissions(&path);
     path
-}
-
-fn runtime_row_boundary_claims(registry: &CompiledRegistry) -> String {
-    let mut claims = BTreeMap::new();
-    for entity in registry.entities().values() {
-        for profile in entity.access_profiles.values() {
-            for boundary in &profile.row_boundaries {
-                let value_type = match boundary.operator {
-                    BoundaryOperator::Equals => "directString",
-                    BoundaryOperator::In => "directStringSet",
-                };
-                if let Some(previous) = claims.insert(boundary.claim.as_str(), value_type) {
-                    assert_eq!(
-                        previous, value_type,
-                        "one verified authority claim cannot have conflicting compiled types"
-                    );
-                }
-            }
-        }
-    }
-    if claims.is_empty() {
-        return String::new();
-    }
-    let mut yaml = String::from("\n    rowBoundaryClaims:");
-    for (name, value_type) in claims {
-        yaml.push_str(&format!(
-            "\n      - name: {name}\n        type: {value_type}"
-        ));
-    }
-    yaml
 }
 
 fn write_secret(path: &Path, bytes: &[u8]) {

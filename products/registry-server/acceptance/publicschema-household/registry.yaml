@@ -60,6 +60,7 @@ manifestProjection:
         - {id: legal-name, concepts: [https://publicschema.org/name]}
         - {id: family-name, concepts: [https://publicschema.org/family_name]}
         - {id: date-of-birth, concepts: [https://publicschema.org/date_of_birth]}
+        - {id: person-sex, concepts: [https://publicschema.org/sex]}
     - id: household
       title: {en: Household, fr: Ménage}
       description:
@@ -70,6 +71,7 @@ manifestProjection:
         - {field: household-code, kind: local}
       fields:
         - {id: household-code, concepts: [https://publicschema.org/identifier]}
+        - {id: local-household-number, concepts: [https://publicschema.org/local_identifier]}
         - {id: household-name, concepts: [https://publicschema.org/name]}
     - id: group-membership
       title: {en: Group membership, fr: Appartenance à un groupe}
@@ -105,24 +107,63 @@ manifestProjection:
     - id: preferred-language
       schemeIri: https://id.loc.gov/vocabulary/iso639-1
       externalRef: https://id.loc.gov/vocabulary/iso639-1.html
+    - id: person-sex
+      schemeIri: https://publicschema.org/Sex
+      version: "0.3.0"
+      externalRef: https://publicschema.org/Sex
+      concepts:
+        - {code: female, iri: https://publicschema.org/Sex/female, label: {en: Female, fr: Féminin}}
+        - {code: male, iri: https://publicschema.org/Sex/male, label: {en: Male, fr: Masculin}}
+        - {code: unknown, iri: https://publicschema.org/Sex/unknown, label: {en: Unknown, fr: Inconnu}}
 modules:
   - id: publicschema-household-core
     version: 0.1.0
-    digest: sha256:9e681a1d27a3677aa8cd319df83ab70d794263a93a560dd65672319e1d89b231
+    digest: sha256:b13240f2ce7d17b18e8cde04289a341a6517d7952f64adaf7a5341eca4aa340b
   - id: publicschema-household-demographics
     version: 0.1.0
-    digest: sha256:aba9eeebcbf420de79306fb8f499dc52cce8ad838953d5b1fcaf1a878e5f046c
+    digest: sha256:cc40de1b9ede8cb727980022f966da5ced9a26e56853ca3a5b3355ce8aff37d5
 accessProfiles:
   - id: household-operator
+    default: true
     principalClaim: registry_principal
     requiredScopes: [registry:household:operate]
     purposes: [household-administration]
     grants:
-      - {entity: person, actions: [create, get, list, patch], readableFields: [person-code, legal-name, family-name, date-of-birth, residency-status, preferred-language], writableFields: [person-code, legal-name, family-name, date-of-birth, residency-status, preferred-language], filterableFields: [person-code, residency-status]}
-      - {entity: household, actions: [create, get, list, patch], readableFields: [household-code, household-name, administrative-area, household-type], writableFields: [household-code, household-name, administrative-area, household-type], filterableFields: [household-code, administrative-area, household-type]}
-      - {entity: group-membership, actions: [create, get, list, patch], readableFields: [person, household, relationship, valid-from, valid-to], writableFields: [person, household, relationship, valid-from, valid-to], filterableFields: [person, household, valid-from]}
+      - {entity: person, actions: [create, get, list, patch], readableFields: [person-code, legal-name, family-name, date-of-birth, person-sex, residency-status, preferred-language], writableFields: [person-code, legal-name, family-name, date-of-birth, person-sex, residency-status, preferred-language], filterableFields: [person-code, person-sex, residency-status], sortableFields: [person-code]}
+      - entity: household
+        actions: [create, get, lookup, list, patch]
+        readableFields: [household-code, local-household-number, household-name, administrative-area, household-type, head-count, child-count, child-under-5-count, elderly-count, single-headed, woman-headed]
+        writableFields: [household-code, local-household-number, household-name, administrative-area, household-type]
+        filterableFields: [household-code, local-household-number, administrative-area, household-type, head-count, child-count, child-under-5-count, elderly-count, single-headed, woman-headed]
+        sortableFields: [local-household-number, household-code, child-count]
+        allowCount: true
+        lookups:
+          - {selector: by-local-reference, valueOrigin: request}
+          - {selector: by-household-code, valueOrigin: request}
+        readPaths:
+          - path: people
+            readableFields: [person-code, legal-name, family-name, date-of-birth, person-sex, residency-status]
+            filterableFields: [person-sex, residency-status]
+            sortableFields: [person-code]
+            allowCount: true
+      - {entity: group-membership, actions: [create, get, list, patch], readableFields: [person, household, relationship, valid-from, valid-to], writableFields: [person, household, relationship, valid-from, valid-to], filterableFields: [person, household, relationship, valid-from]}
+  - id: household-viewer
+    principalClaim: registry_principal
+    requiredScopes: [registry:household:view]
+    purposes: [household-view]
+    grants:
+      - entity: household
+        actions: [get, lookup]
+        readableFields: [household-code, local-household-number, household-name, administrative-area, household-type]
+        rowBoundaries:
+          - {field: id, claim: household_id, operator: equals}
+        lookups:
+          - selector: by-household-code
+            valueOrigin: verified_claim
+            claimMapping: {household-code: household_code}
 vocabularies:
   - {id: household-relationship, values: [head, spouse, child, dependent, other]}
   - {id: household-type, values: [private, collective, institutional]}
   - {id: residency-status, values: [usual-resident, temporary-resident, departed]}
   - {id: preferred-language, values: [en, es, fr]}
+  - {id: person-sex, values: [female, male, unknown]}

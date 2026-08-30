@@ -7,12 +7,15 @@ use std::path::PathBuf;
 use registry_manifest_core::{compile_manifest, AccessRights, FieldType, MetadataManifest};
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use registry_server::artifacts::REGISTRY_METADATA_ARTIFACT_PATH;
-use registry_server::compiler::{compile_project, module_digest, CompileProfile};
+use registry_server::compiler::{
+    compile_project, compile_project_with_assets, module_digest, module_digest_with_assets,
+    CompileProfile,
+};
 use registry_server::contract::{
     parse_module_json, parse_module_yaml, parse_project_json, parse_project_yaml,
     AccessProfileSource, BoundaryOperator, Classification, ComparisonOperator, ConstraintSource,
-    FieldTypeSource, Operation, PackageIdentitySource, ReferenceDelete, RegistryModule,
-    RowBoundarySource, UniqueWhenPredicate,
+    FieldTypeSource, ModuleAssetSource, Operation, PackageIdentitySource, ReferenceDelete,
+    RegistryModule, RowBoundarySource, UniqueWhenPredicate,
 };
 use registry_server::diagnostics::CompileFailure;
 use registry_server::generated_ddl::DdlStatementKind;
@@ -47,6 +50,353 @@ fn acceptance_project(domain: &str) -> registry_server::contract::RegistryProjec
 fn compile_json(source: &[u8]) -> Result<registry_server::CompiledRegistry, CompileFailure> {
     let project = parse_project_json(source).expect("source shape parses");
     compile_project(&project, &[], CompileProfile::Authoring)
+}
+
+fn compile_json_with_assets(
+    source: &[u8],
+    assets: Vec<ModuleAssetSource>,
+) -> Result<registry_server::CompiledRegistry, CompileFailure> {
+    let project = parse_project_json(source).expect("source shape parses");
+    compile_project_with_assets(&project, &[], &assets, CompileProfile::Authoring)
+}
+
+fn derived_sql_asset(path: &str, sql: &str) -> ModuleAssetSource {
+    ModuleAssetSource {
+        module: None,
+        path: path.to_owned(),
+        bytes: sql.as_bytes().to_vec(),
+    }
+}
+
+#[test]
+fn derived_fields_selectors_and_read_paths_compile_to_route_specific_inventories() {
+    let project = br#"{
+      "apiVersion":"registry.registrystack.org/v1alpha1",
+      "kind":"RegistryProject",
+      "registry":{"id":"household-demo","version":"1","defaultLanguage":"en"},
+      "entities":[{
+        "id":"household","route":"households","mutationMode":"mutable",
+        "fields":[
+          {"id":"household-code","type":"string","maxLength":32,"required":true,"classification":"internal"},
+          {"id":"administrative-area","type":"string","maxLength":32,"required":true,"classification":"internal"},
+          {"id":"local-household-number","type":"string","maxLength":32,"required":true,"classification":"internal"}
+        ],
+        "derived":[{
+          "id":"demographics","sql":"sql/household-demographics.sql","key":"id","execution":"live",
+          "fields":[
+            {"id":"child-count","type":"int64","classification":"restricted"},
+            {"id":"single-headed","type":"boolean","classification":"restricted"}
+          ]
+        }],
+        "selectorProfiles":[
+          {"id":"by-local-reference","fields":["administrative-area","local-household-number"]}
+        ],
+        "readPaths":[{"id":"people","through":"group-membership","to":"person","route":"people"}],
+        "accessProfiles":[{
+          "id":"operator","default":true,"principalClaim":"sub","operations":["get","lookup","list"],
+          "readableFields":["household-code","child-count","single-headed"],
+          "filterableFields":["child-count","single-headed"],
+          "sortableFields":["child-count"],
+          "allowCount":true,
+          "lookups":[{"selector":"by-local-reference","valueOrigin":"request"}],
+          "readPaths":[{
+            "path":"people",
+            "readableFields":["legal-name","date-of-birth"],
+            "filterableFields":["date-of-birth"],
+            "sortableFields":["date-of-birth"],
+            "allowCount":true
+          }]
+        }]
+      },{
+        "id":"person","route":"people","mutationMode":"mutable",
+        "fields":[
+          {"id":"legal-name","type":"string","maxLength":80,"classification":"internal"},
+          {"id":"date-of-birth","type":"date","classification":"internal"}
+        ]
+      },{
+        "id":"group-membership","route":"memberships","mutationMode":"mutable",
+        "fields":[
+          {"id":"household","type":"reference","target":"household","classification":"internal"},
+          {"id":"person","type":"reference","target":"person","classification":"internal"}
+        ]
+      }]
+    }"#;
+    let sql = "SELECT h.id AS id, count(p.id)::bigint AS child_count, false AS single_headed FROM registry_source.household h LEFT JOIN registry_source.group_membership gm ON gm.household = h.id LEFT JOIN registry_source.person p ON p.id = gm.person GROUP BY h.id";
+    let compiled = compile_json_with_assets(
+        project,
+        vec![derived_sql_asset("sql/household-demographics.sql", sql)],
+    )
+    .expect("derived fields and relationship reads compile");
+
+    let household = &compiled.entities()["household"];
+    assert_eq!(
+        household
+            .stored_fields
+            .iter()
+            .map(|field| field.logical.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "household-code",
+            "administrative-area",
+            "local-household-number"
+        ],
+        "stored field authoring order is preserved for DDL/query workers"
+    );
+    assert_eq!(household.canonical_id.id, "id");
+    assert!(!household.fields.contains_key("id"));
+    let source_positions = compiled
+        .ddl()
+        .statements
+        .iter()
+        .enumerate()
+        .filter(|(_, statement)| statement.id.ends_with(".source-view"))
+        .map(|(position, _)| position)
+        .collect::<Vec<_>>();
+    let derived_positions = compiled
+        .ddl()
+        .statements
+        .iter()
+        .enumerate()
+        .filter(|(_, statement)| statement.id.contains(".derived."))
+        .map(|(position, _)| position)
+        .collect::<Vec<_>>();
+    assert_eq!(source_positions.len(), 3);
+    assert_eq!(derived_positions.len(), 1);
+    assert!(
+        source_positions.iter().max() < derived_positions.iter().min(),
+        "all source views must exist before a derived view can reference them"
+    );
+    let person = &compiled.entities()["person"];
+    let path_policy = compiled
+        .ddl()
+        .tables
+        .iter()
+        .find(|table| table.entity_id == "person")
+        .and_then(|table| table.policies.first())
+        .and_then(|policy| policy.using_expression.as_deref())
+        .expect("target read-path RLS policy is compiled");
+    assert!(path_policy.contains(&format!("\"{}\".\"record_id\"", person.physical_table)));
+    let child_count = &household.derived_fields["child-count"].logical;
+    assert_eq!(child_count.api_name, "childCount");
+    assert_eq!(child_count.sql_name, "child_count");
+    assert_eq!(
+        household.derived_relations["demographics"].sql_bytes,
+        sql.as_bytes()
+    );
+    assert!(compiled
+        .routes()
+        .routes
+        .iter()
+        .any(|route| route.id == "records.household.lookup"
+            && route.path == "/v1/records/households:lookup"));
+    assert!(compiled
+        .routes()
+        .routes
+        .iter()
+        .any(|route| route.id == "records.household.path.people"
+            && route.path == "/v1/records/households/{record_id}/people"));
+    assert!(compiled
+        .access()
+        .entries
+        .iter()
+        .any(|entry| entry.route_id == "records.household.path.people"
+            && entry.profile_ids.contains("operator")));
+    let lookup = compiled
+        .queries()
+        .operations
+        .iter()
+        .find(|operation| operation.id == "records.household.operator.lookup")
+        .expect("lookup selector operation is compiled");
+    assert_eq!(
+        lookup.selector_fields,
+        vec!["administrative-area", "local-household-number"]
+    );
+    let path = compiled
+        .queries()
+        .operations
+        .iter()
+        .find(|operation| operation.id == "records.household.operator.path.people")
+        .expect("read-path operation is compiled");
+    assert_eq!(path.read_path.as_deref(), Some("people"));
+    assert!(path.allow_count);
+    assert!(path.processing_fields.contains(&"household".to_owned()));
+    assert!(path.processing_fields.contains(&"person".to_owned()));
+}
+
+#[test]
+fn canonical_id_row_boundary_targets_the_physical_record_id_column() {
+    let compiled = compile_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"canonical-id-boundary","version":"1","defaultLanguage":"en"},
+          "entities":[{
+            "id":"household","route":"households","mutationMode":"mutable",
+            "fields":[
+              {"id":"household-code","type":"string","maxLength":32,"classification":"internal"}
+            ],
+            "accessProfiles":[{
+              "id":"viewer","principalClaim":"sub","operations":["get"],
+              "readableFields":["household-code"],
+              "rowBoundaries":[{"field":"id","claim":"household_id","operator":"equals"}]
+            }]
+          }]
+        }"#,
+    )
+    .expect("the canonical id is a valid governed row boundary");
+
+    let policy = compiled
+        .ddl()
+        .tables
+        .iter()
+        .find(|table| table.entity_id == "household")
+        .and_then(|table| {
+            table
+                .policies
+                .iter()
+                .find(|policy| policy.access_profile == "viewer")
+        })
+        .expect("viewer RLS policy is compiled");
+    let expression = policy
+        .using_expression
+        .as_deref()
+        .expect("viewer SELECT policy has a USING expression");
+    assert!(expression.contains("\"record_id\" ="));
+    assert!(
+        !expression.contains("\"id\" ="),
+        "logical aliases must not cross into physical table policies"
+    );
+}
+
+#[test]
+fn derived_sql_is_asset_backed_value_free_and_validates_output_aliases() {
+    let project = br#"{
+      "apiVersion":"registry.registrystack.org/v1alpha1",
+      "kind":"RegistryProject",
+      "registry":{"id":"derived-demo","version":"1","defaultLanguage":"en"},
+      "entities":[{
+        "id":"household","route":"households","mutationMode":"mutable",
+        "fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"}],
+        "derived":[{
+          "id":"demographics","sql":"sql/demographics.sql","key":"id",
+          "fields":[{"id":"child-count","type":"int64","classification":"internal"}]
+        }]
+      }]
+    }"#;
+
+    let missing = compile_json_with_assets(project, vec![])
+        .expect_err("derived SQL must be supplied as an explicit asset");
+    assert!(missing
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "derived.sql.asset_missing"
+            && !diagnostic.message.contains("SELECT")));
+
+    let wrong_alias = compile_json_with_assets(
+        project,
+        vec![derived_sql_asset(
+            "sql/demographics.sql",
+            "SELECT h.id AS id, 0::bigint AS childCount FROM registry_source.household h",
+        )],
+    )
+    .expect_err("SQL output aliases must use stable SQL field names");
+    assert!(wrong_alias
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "derived.sql.invalid"
+            && diagnostic.path == "entities[household].derived[demographics].sql"
+            && !diagnostic.message.contains("childCount")));
+
+    let wildcard = compile_json_with_assets(
+        project,
+        vec![derived_sql_asset(
+            "sql/demographics.sql",
+            "SELECT * FROM registry_source.household",
+        )],
+    )
+    .expect_err("derived SQL cannot use wildcard projection");
+    assert!(wildcard
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "derived.sql.invalid"));
+}
+
+#[test]
+fn anonymous_access_cannot_process_selector_path_or_derived_private_fields() {
+    let source = |extra: &str| {
+        format!(
+            r#"{{
+              "apiVersion":"registry.registrystack.org/v1alpha1",
+              "kind":"RegistryProject",
+              "registry":{{"id":"public-demo","version":"1","defaultLanguage":"en"}},
+              "entities":[{{
+                "id":"household","route":"households","mutationMode":"mutable","classification":"public",
+                "fields":[{{"id":"public-code","type":"string","maxLength":32,"classification":"public"}},
+                  {{"id":"private-code","type":"string","maxLength":32,"classification":"restricted"}}],
+                "derived":[{{"id":"flags","sql":"sql/flags.sql","key":"id","fields":[{{"id":"risk-flag","type":"boolean","classification":"public"}}]}}],
+                "selectorProfiles":[{{"id":"by-private-code","fields":["private-code"]}}],
+                "accessProfiles":[{{"id":"anon","anonymous":true,"operations":["lookup"],{extra}}}]
+              }}]
+            }}"#
+        )
+    };
+
+    let selector = compile_json_with_assets(
+        source(r#""readableFields":["public-code"],"lookups":[{"selector":"by-private-code","valueOrigin":"request"}]"#).as_bytes(),
+        vec![derived_sql_asset(
+            "sql/flags.sql",
+            "SELECT h.id AS id, false AS risk_flag FROM registry_source.household h",
+        )],
+    )
+    .expect_err("anonymous lookup cannot process restricted selector fields");
+    assert!(selector
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "access_profile.public.processing_non_public"));
+
+    let derived = compile_json_with_assets(
+        source(r#""readableFields":["risk-flag"],"filterableFields":["risk-flag"]"#).as_bytes(),
+        vec![derived_sql_asset(
+            "sql/flags.sql",
+            "SELECT h.id AS id, false AS risk_flag FROM registry_source.household h",
+        )],
+    )
+    .expect_err("anonymous access cannot process derived fields until lineage exists");
+    assert!(derived
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "access_profile.public.processing_non_public"));
+}
+
+#[test]
+fn module_digest_can_bind_explicit_sql_assets() {
+    let module = parse_module_json(
+        br#"{"id":"core","version":"1","entities":[{"id":"record","route":"records","mutationMode":"mutable","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}]}]}"#,
+    )
+    .expect("module parses");
+    let yaml_only = module_digest(&module);
+    let with_asset = module_digest_with_assets(
+        &module,
+        &[ModuleAssetSource {
+            module: Some("core".to_owned()),
+            path: "sql/derived.sql".to_owned(),
+            bytes: b"SELECT r.id AS id FROM registry_source.record r".to_vec(),
+        }],
+    );
+    assert_ne!(yaml_only, with_asset);
+    assert_eq!(yaml_only, module_digest_with_assets(&module, &[]));
+    assert_eq!(
+        yaml_only,
+        module_digest_with_assets(
+            &module,
+            &[ModuleAssetSource {
+                module: Some("another-module".to_owned()),
+                path: "sql/derived.sql".to_owned(),
+                bytes: b"SELECT 1".to_vec(),
+            }],
+        ),
+        "assets owned by another module do not change this module's lock digest"
+    );
 }
 
 #[test]
@@ -341,16 +691,39 @@ fn all_acceptance_fixtures_compile_manifest_projection_under_production() {
                 source_revision: "acceptance-fixture-source".to_owned(),
             });
         let mut modules = Vec::new();
+        let mut assets = Vec::new();
         for lock in &mut project.modules {
-            let module_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            let module_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("../../products/registry-server/acceptance")
                 .join(domain)
                 .join("modules")
-                .join(&lock.id)
-                .join("module.yaml");
+                .join(&lock.id);
+            let module_path = module_root.join("module.yaml");
             let module = if module_path.is_file() {
                 let bytes = fs::read(module_path).expect("locked acceptance module is readable");
-                parse_module_yaml(&bytes).expect("locked acceptance module parses")
+                let module = parse_module_yaml(&bytes).expect("locked acceptance module parses");
+                let mut module_assets = Vec::new();
+                for derived in module
+                    .entities
+                    .iter()
+                    .flat_map(|entity| &entity.derived)
+                    .chain(
+                        module
+                            .extend_entities
+                            .iter()
+                            .flat_map(|extension| &extension.derived),
+                    )
+                {
+                    module_assets.push(ModuleAssetSource {
+                        module: Some(module.id.clone()),
+                        path: derived.sql.clone(),
+                        bytes: fs::read(module_root.join(&derived.sql))
+                            .expect("locked derived SQL asset is readable"),
+                    });
+                }
+                lock.digest = Some(module_digest_with_assets(&module, &module_assets));
+                assets.extend(module_assets);
+                module
             } else {
                 let module = RegistryModule {
                     id: lock.id.clone(),
@@ -365,8 +738,11 @@ fn all_acceptance_fixtures_compile_manifest_projection_under_production() {
             modules.push(module);
         }
 
-        let compiled = compile_project(&project, &modules, CompileProfile::Production)
-            .unwrap_or_else(|failure| panic!("{domain} production compile failed: {failure:?}"));
+        let compiled =
+            compile_project_with_assets(&project, &modules, &assets, CompileProfile::Production)
+                .unwrap_or_else(|failure| {
+                    panic!("{domain} production compile failed: {failure:?}")
+                });
         let artifact = compiled
             .artifacts()
             .get("generated/manifest/registry-manifest.json")
@@ -1811,6 +2187,52 @@ fn generated_openapi_routes_and_physical_names_share_one_compiled_inventory() {
 }
 
 #[test]
+fn entity_schema_uses_compiled_api_names_and_preserves_field_contracts() {
+    let compiled = compile_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"logical-schema","version":"1","defaultLanguage":"en"},
+          "entities":[{
+            "id":"household","route":"households","mutationMode":"mutable",
+            "fields":[
+              {"id":"household-code","type":"string","required":true,"maxLength":64,"classification":"restricted"},
+              {"id":"household-kind-code","apiName":"householdKind","type":"vocabulary-code","vocabulary":"household-kind","required":true,"classification":"restricted"},
+              {"id":"case-note","apiName":"caseNoteText","type":"text","maxLength":200,"classification":"restricted"}
+            ]
+          }],
+          "vocabularies":[{"id":"household-kind","values":["single","extended"]}]
+        }"#,
+    )
+    .expect("logical field names compile");
+    let artifact = compiled
+        .artifacts()
+        .get("generated/schemas/household.schema.json")
+        .expect("entity schema is generated");
+    let schema: Value = parse_json_strict(&artifact.bytes).expect("entity schema is strict JSON");
+
+    assert_eq!(
+        schema["properties"],
+        json!({
+            "caseNoteText": {"type": "string", "maxLength": 200},
+            "householdCode": {"type": "string", "minLength": 0, "maxLength": 64},
+            "householdKind": {
+                "type": "string",
+                "enum": ["single", "extended"],
+                "x-registry-vocabulary": "household-kind"
+            }
+        })
+    );
+    assert_eq!(
+        schema["required"],
+        json!(["householdCode", "householdKind"])
+    );
+    for internal_id in ["household-code", "household-kind-code", "case-note"] {
+        assert!(schema["properties"].get(internal_id).is_none());
+    }
+}
+
+#[test]
 fn compiled_metadata_inventory_is_bijective_canonical_schema_bound_and_deterministic() {
     let first = compile_project(&asset_project(), &[], CompileProfile::Authoring)
         .expect("asset fixture compiles");
@@ -2045,6 +2467,9 @@ fn public_profile_cannot_process_an_internal_field() {
             claim: "asset_code".to_owned(),
             operator: BoundaryOperator::Equals,
         }],
+        lookups: Vec::new(),
+        read_paths: Vec::new(),
+        allow_count: false,
         allow_data_export: false,
         revision_access: false,
     });
@@ -2461,12 +2886,13 @@ fn compiled_query_inventory_is_profile_scoped_bounded_and_temporal() {
     assert_eq!(
         list_parameter_names,
         [
+            "$count",
+            "$filter",
+            "$orderby",
+            "$select",
+            "$skiptoken",
+            "$top",
             "accessProfile",
-            "cursor",
-            "fields",
-            "filter",
-            "pageSize",
-            "sort"
         ]
     );
     let as_of_parameter_names = query_parameter_names(
@@ -2475,13 +2901,14 @@ fn compiled_query_inventory_is_profile_scoped_bounded_and_temporal() {
     assert_eq!(
         as_of_parameter_names,
         [
+            "$count",
+            "$filter",
+            "$orderby",
+            "$select",
+            "$skiptoken",
+            "$top",
             "accessProfile",
             "asOf",
-            "cursor",
-            "fields",
-            "filter",
-            "pageSize",
-            "sort"
         ]
     );
     let as_of_parameters = openapi["paths"]["/v1/records/placements:as-of"]["get"]["parameters"]
@@ -2498,11 +2925,11 @@ fn compiled_query_inventory_is_profile_scoped_bounded_and_temporal() {
     );
     let page_size = as_of_parameters
         .iter()
-        .find(|parameter| parameter["name"] == "pageSize")
-        .expect("pageSize parameter is rendered");
+        .find(|parameter| parameter["name"] == "$top")
+        .expect("$top parameter is rendered");
     assert_eq!(
         page_size["schema"],
-        json!({"type": "integer", "minimum": 1})
+        json!({"type": "integer", "minimum": 1, "maximum": 100})
     );
     assert!(compiled.ddl().statements.iter().any(|statement| {
         statement.id == "entity.asset-placement.constraint.temporal-order"
@@ -2588,7 +3015,7 @@ fn temporal_queries_require_profile_readable_boundary_fields() {
 }
 
 #[test]
-fn reordered_equivalent_query_authoring_has_the_same_revision() {
+fn reordered_stored_field_authoring_changes_revision_but_not_query_inventory() {
     let left = parse_project_json(
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject",
@@ -2631,7 +3058,11 @@ fn reordered_equivalent_query_authoring_has_the_same_revision() {
     let right = compile_project(&right, &[], CompileProfile::Authoring)
         .expect("right query source compiles");
     assert_eq!(left.queries(), right.queries());
-    assert_eq!(left.revision(), right.revision());
+    assert_ne!(
+        left.revision(),
+        right.revision(),
+        "stored field authoring order is now part of the compiled model"
+    );
 }
 
 #[test]

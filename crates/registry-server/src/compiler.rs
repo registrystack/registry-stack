@@ -12,22 +12,30 @@ use uuid::Uuid;
 use crate::artifacts::{event_data_schema_binding, generate_artifacts};
 use crate::contract::{
     parsed_bbox, valid_decimal_bounds, valid_structured_schema, AccessProfileSource,
-    Classification, ConstraintSource, EntityExtensionSource, EntitySource, EventConditionSource,
-    EventScalarValue, EventTrigger, FieldSource, FieldTypeSource, ManifestProjectionTextSource,
-    MutationMode, Operation, RegistryModule, RegistryProject, UniqueWhenPredicate, ValidTimeRole,
-    WebhookAuthenticationProfile, WebhookDeadLetterMode, MAX_STRUCTURED_VALUE_BYTES,
+    Classification, ConstraintSource, DerivedExecutionSource, DerivedFieldSource,
+    EntityExtensionSource, EntitySource, EventConditionSource, EventScalarValue, EventTrigger,
+    FieldSource, FieldTypeSource, LookupValueOrigin, ManifestProjectionTextSource,
+    ModuleAssetSource, MutationMode, Operation, ReadPathGrantSource, RegistryModule,
+    RegistryProject, UniqueWhenPredicate, ValidTimeRole, WebhookAuthenticationProfile,
+    WebhookDeadLetterMode, MAX_STRUCTURED_VALUE_BYTES,
 };
+use crate::derived_sql::{validate_derived_sql, MAX_DERIVED_SQL_BYTES};
 use crate::diagnostics::{CompileFailure, Diagnostic};
 use crate::generated_ddl::generate_ddl;
+use crate::logical_names::{
+    default_api_name, default_sql_name, reserved_logical_name, valid_api_name,
+};
 use crate::model::{
-    CompiledAccessEntry, CompiledAccessInventory, CompiledEntity, CompiledEventDelivery,
-    CompiledEventDeliveryInventory, CompiledField, CompiledMetadataEntity, CompiledMetadataEntry,
-    CompiledMetadataInventory, CompiledModuleIdentity, CompiledQueryFilterField,
-    CompiledQueryFilterOperator, CompiledQueryInventory, CompiledQueryKind, CompiledQueryOperation,
-    CompiledQuerySortDirection, CompiledQuerySortField, CompiledQueryTemporalBinding,
-    CompiledQueryTemporalSemantics, CompiledRegistry, CompiledRevisionKind, CompiledRoute,
-    CompiledRouteInventory, CompiledTemporal, CompiledWebhookDeliveryMode,
-    CompiledWebhookRetryProfile, HttpMethod, MAX_REVISION_HISTORY_RECORDS,
+    CompiledAccessEntry, CompiledAccessInventory, CompiledDerivedField, CompiledDerivedRelation,
+    CompiledEntity, CompiledEventDelivery, CompiledEventDeliveryInventory, CompiledField,
+    CompiledLogicalField, CompiledMetadataEntity, CompiledMetadataEntry, CompiledMetadataInventory,
+    CompiledModuleIdentity, CompiledQueryFilterField, CompiledQueryFilterOperator,
+    CompiledQueryInventory, CompiledQueryKind, CompiledQueryOperation, CompiledQuerySortDirection,
+    CompiledQuerySortField, CompiledQueryTemporalBinding, CompiledQueryTemporalSemantics,
+    CompiledReadPath, CompiledRegistry, CompiledRevisionKind, CompiledRoute,
+    CompiledRouteInventory, CompiledSelectorProfile, CompiledSourceRelation, CompiledStoredField,
+    CompiledTemporal, CompiledWebhookDeliveryMode, CompiledWebhookRetryProfile, HttpMethod,
+    MAX_REVISION_HISTORY_RECORDS,
 };
 use crate::physical_names::{
     hex_prefix, EntityPhysicalNames, PhysicalNameBuilder, PhysicalNameInventory,
@@ -52,6 +60,11 @@ pub const MAX_EVENT_PACKAGE_REVISION_BYTES: u32 = 256;
 pub const MAX_WEBHOOK_PAYLOAD_BYTES: u32 = 1_048_576;
 pub const WEBHOOK_BACKOFF_MULTIPLIER: u8 = 2;
 
+type CollectedEntities = (
+    BTreeMap<String, EntitySource>,
+    BTreeMap<(String, String), Option<String>>,
+);
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CompileProfile {
@@ -65,23 +78,47 @@ pub fn compile_project(
     modules: &[RegistryModule],
     profile: CompileProfile,
 ) -> Result<CompiledRegistry, CompileFailure> {
+    compile_project_with_assets(project, modules, &[], profile)
+}
+
+/// Compile governed source and caller-supplied module assets without opening files.
+pub fn compile_project_with_assets(
+    project: &RegistryProject,
+    modules: &[RegistryModule],
+    assets: &[ModuleAssetSource],
+    profile: CompileProfile,
+) -> Result<CompiledRegistry, CompileFailure> {
     let mut diagnostics = Vec::new();
     let mut findings = Vec::new();
     validate_project_header(project, profile, &mut diagnostics, &mut findings);
-    let module_closure =
-        validate_module_locks(project, modules, profile, &mut diagnostics, &mut findings);
+    let module_closure = validate_module_locks(
+        project,
+        modules,
+        assets,
+        profile,
+        &mut diagnostics,
+        &mut findings,
+    );
     let (module_order, module_map) = order_modules(project, modules, &mut diagnostics);
-    let mut sources = collect_entities(project, &module_order, &module_map, &mut diagnostics);
+    let (mut sources, mut derived_origins) =
+        collect_entities(project, &module_order, &module_map, &mut diagnostics);
     apply_temporal_roles(&mut sources, &mut diagnostics);
-    apply_extensions(&mut sources, &module_order, &module_map, &mut diagnostics);
+    apply_extensions(
+        &mut sources,
+        &mut derived_origins,
+        &module_order,
+        &module_map,
+        &mut diagnostics,
+    );
     expand_project_access(project, &mut sources, &mut diagnostics);
     resolve_vocabularies(project, &mut sources, &mut diagnostics);
     validate_entities(&sources, profile, &mut diagnostics);
+    validate_derived_assets(&sources, &derived_origins, assets, &mut diagnostics);
     if !diagnostics.is_empty() {
         return Err(CompileFailure::from_errors(diagnostics));
     }
 
-    let (entities, physical_names) = compile_entities(&sources)?;
+    let (entities, physical_names) = compile_entities(&sources, &derived_origins, assets)?;
     let (route_inventory, access_inventory) = compile_routes_and_access(&entities)?;
     let metadata_inventory = compile_metadata_inventory(
         &project.registry.id,
@@ -613,6 +650,7 @@ fn order_modules(
 fn validate_module_locks(
     project: &RegistryProject,
     modules: &[RegistryModule],
+    assets: &[ModuleAssetSource],
     profile: CompileProfile,
     errors: &mut Vec<Diagnostic>,
     findings: &mut Vec<Diagnostic>,
@@ -662,7 +700,7 @@ fn validate_module_locks(
                 "an authored module does not match its locked version",
             ));
         }
-        let actual = module_digest(module);
+        let actual = module_digest_with_assets(module, assets);
         if let Some(expected) = &lock.digest {
             if expected != &actual {
                 errors.push(Diagnostic::error(
@@ -710,9 +748,32 @@ fn validate_module_locks(
 }
 
 pub fn module_digest(module: &RegistryModule) -> String {
+    module_digest_with_assets(module, &[])
+}
+
+pub fn module_digest_with_assets(module: &RegistryModule, assets: &[ModuleAssetSource]) -> String {
     let value = serde_json::to_value(module).expect("module serializes");
     let bytes = canonicalize_json(&value).expect("module canonicalizes");
-    let digest = Sha256::digest(bytes);
+    let mut module_assets = assets
+        .iter()
+        .filter(|asset| asset.module.as_deref() == Some(module.id.as_str()))
+        .collect::<Vec<_>>();
+    if module_assets.is_empty() {
+        let digest = Sha256::digest(bytes);
+        return format!("sha256:{}", hex_prefix(&digest, digest.len()));
+    }
+    let mut digest = Sha256::new();
+    digest.update(b"registry-server-module-v2\0");
+    digest.update((bytes.len() as u64).to_be_bytes());
+    digest.update(bytes);
+    module_assets.sort_by(|left, right| left.path.cmp(&right.path));
+    for asset in module_assets {
+        digest.update((asset.path.len() as u64).to_be_bytes());
+        digest.update(asset.path.as_bytes());
+        digest.update((asset.bytes.len() as u64).to_be_bytes());
+        digest.update(&asset.bytes);
+    }
+    let digest = digest.finalize();
     format!("sha256:{}", hex_prefix(&digest, digest.len()))
 }
 
@@ -721,24 +782,41 @@ fn collect_entities(
     module_order: &[String],
     modules: &BTreeMap<String, RegistryModule>,
     errors: &mut Vec<Diagnostic>,
-) -> BTreeMap<String, EntitySource> {
+) -> CollectedEntities {
     let mut entities = BTreeMap::new();
+    let mut derived_origins = BTreeMap::new();
     for entity in &project.entities {
-        insert_entity(&mut entities, entity, "project.entities[].id", errors);
+        insert_entity(
+            &mut entities,
+            &mut derived_origins,
+            entity,
+            None,
+            "project.entities[].id",
+            errors,
+        );
     }
     for module_id in module_order {
         if let Some(module) = modules.get(module_id) {
             for entity in &module.entities {
-                insert_entity(&mut entities, entity, "modules[].entities[].id", errors);
+                insert_entity(
+                    &mut entities,
+                    &mut derived_origins,
+                    entity,
+                    Some(module.id.clone()),
+                    "modules[].entities[].id",
+                    errors,
+                );
             }
         }
     }
-    entities
+    (entities, derived_origins)
 }
 
 fn insert_entity(
     entities: &mut BTreeMap<String, EntitySource>,
+    derived_origins: &mut BTreeMap<(String, String), Option<String>>,
     entity: &EntitySource,
+    module: Option<String>,
     path: &str,
     errors: &mut Vec<Diagnostic>,
 ) {
@@ -748,6 +826,10 @@ fn insert_entity(
             path,
             "an entity identifier is contributed more than once",
         ));
+        return;
+    }
+    for derived in &entity.derived {
+        derived_origins.insert((entity.id.clone(), derived.id.clone()), module.clone());
     }
 }
 
@@ -789,6 +871,7 @@ fn apply_temporal_roles(
 
 fn apply_extensions(
     entities: &mut BTreeMap<String, EntitySource>,
+    derived_origins: &mut BTreeMap<(String, String), Option<String>>,
     module_order: &[String],
     modules: &BTreeMap<String, RegistryModule>,
     errors: &mut Vec<Diagnostic>,
@@ -808,7 +891,13 @@ fn apply_extensions(
                 ));
                 continue;
             };
-            merge_extension(entity, extension, errors);
+            merge_extension(
+                entity,
+                extension,
+                Some(module.id.clone()),
+                derived_origins,
+                errors,
+            );
         }
     }
 }
@@ -816,6 +905,8 @@ fn apply_extensions(
 fn merge_extension(
     entity: &mut EntitySource,
     extension: &EntityExtensionSource,
+    module: Option<String>,
+    derived_origins: &mut BTreeMap<(String, String), Option<String>>,
     errors: &mut Vec<Diagnostic>,
 ) {
     merge_by_id(
@@ -827,6 +918,19 @@ fn merge_extension(
         "a field identifier is contributed more than once",
         errors,
     );
+    let existing_derived = entity.derived.len();
+    merge_by_id(
+        &mut entity.derived,
+        &extension.derived,
+        |value| value.id.as_str(),
+        "extension.derived.duplicate",
+        "modules[].extendEntities[].derived[].id",
+        "a derived relation identifier is contributed more than once",
+        errors,
+    );
+    for derived in entity.derived.iter().skip(existing_derived) {
+        derived_origins.insert((entity.id.clone(), derived.id.clone()), module.clone());
+    }
     merge_by_id(
         &mut entity.indexes,
         &extension.indexes,
@@ -852,6 +956,24 @@ fn merge_extension(
         "extension.event.duplicate",
         "modules[].extendEntities[].events[].id",
         "an event identifier is contributed more than once",
+        errors,
+    );
+    merge_by_id(
+        &mut entity.selector_profiles,
+        &extension.selector_profiles,
+        |value| value.id.as_str(),
+        "extension.selector_profile.duplicate",
+        "modules[].extendEntities[].selectorProfiles[].id",
+        "a selector profile identifier is contributed more than once",
+        errors,
+    );
+    merge_by_id(
+        &mut entity.read_paths,
+        &extension.read_paths,
+        |value| value.id.as_str(),
+        "extension.read_path.duplicate",
+        "modules[].extendEntities[].readPaths[].id",
+        "a read path identifier is contributed more than once",
         errors,
     );
 
@@ -957,6 +1079,9 @@ fn expand_project_access(
                 filterable_fields: grant.filterable_fields.clone(),
                 sortable_fields: grant.sortable_fields.clone(),
                 row_boundaries: grant.row_boundaries.clone(),
+                lookups: grant.lookups.clone(),
+                read_paths: grant.read_paths.clone(),
+                allow_count: grant.allow_count,
                 revision_access: grant.revision_access,
                 allow_data_export: grant.allow_data_export,
             });
@@ -1061,11 +1186,16 @@ fn validate_entities(
             _ => {}
         }
         validate_entity_fields(entity, entities, errors);
+        validate_derived(entity, errors);
+        validate_logical_names(entity, errors);
         validate_constraints(entity, errors);
         validate_indexes(entity, errors);
-        validate_profiles(entity, errors);
+        validate_selector_profiles(entity, errors);
+        validate_read_paths(entity, entities, errors);
+        validate_profiles(entity, entities, errors);
         validate_events(entity, profile, &mut event_ids, errors);
     }
+    validate_read_path_cycles(entities, errors);
 }
 
 fn validate_entity_fields(
@@ -1077,6 +1207,13 @@ fn validate_entity_fields(
     let mut roles = BTreeMap::new();
     for field in &entity.fields {
         validate_id(&field.id, "entities[].fields[].id", errors);
+        if reserved_logical_name(&field.id) {
+            errors.push(Diagnostic::error(
+                "field.id.reserved",
+                "entities[].fields[].id",
+                "a field identifier collides with a reserved Registry field",
+            ));
+        }
         if !fields.insert(field.id.as_str()) {
             errors.push(Diagnostic::error(
                 "field.id.duplicate",
@@ -1209,6 +1346,193 @@ fn validate_entity_fields(
                 "valid-time boundary fields must use the same type",
             ));
         }
+    }
+}
+
+fn validate_derived(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
+    let stored = stored_field_map(entity);
+    let mut ids = BTreeSet::new();
+    let mut field_ids = BTreeSet::new();
+    field_ids.extend(entity.fields.iter().map(|field| field.id.clone()));
+    for derived in &entity.derived {
+        validate_id(&derived.id, "entities[].derived[].id", errors);
+        if !ids.insert(derived.id.as_str()) {
+            errors.push(Diagnostic::error(
+                "derived.id.duplicate",
+                "entities[].derived[].id",
+                "a derived relation identifier is duplicated",
+            ));
+        }
+        if !valid_relative_sql_path(&derived.sql) {
+            errors.push(Diagnostic::error(
+                "derived.sql_path.invalid",
+                "entities[].derived[].sql",
+                "derived SQL must be a module-relative .sql path",
+            ));
+        }
+        if derived.key != "id" || stored.contains_key(derived.key.as_str()) {
+            errors.push(Diagnostic::error(
+                "derived.key.invalid",
+                "entities[].derived[].key",
+                "derived SQL must declare the canonical id key",
+            ));
+        }
+        if derived.execution != DerivedExecutionSource::Live {
+            errors.push(Diagnostic::error(
+                "derived.execution.unsupported",
+                "entities[].derived[].execution",
+                "derived SQL currently supports only live execution",
+            ));
+        }
+        if derived.fields.is_empty() {
+            errors.push(Diagnostic::error(
+                "derived.fields.empty",
+                "entities[].derived[].fields",
+                "derived SQL must declare at least one output field",
+            ));
+        }
+        for field in &derived.fields {
+            validate_derived_field(field, &mut field_ids, errors);
+        }
+    }
+}
+
+fn validate_derived_field(
+    field: &DerivedFieldSource,
+    field_ids: &mut BTreeSet<String>,
+    errors: &mut Vec<Diagnostic>,
+) {
+    validate_id(&field.id, "entities[].derived[].fields[].id", errors);
+    if reserved_logical_name(&field.id) {
+        errors.push(Diagnostic::error(
+            "field.id.reserved",
+            "entities[].derived[].fields[].id",
+            "a field identifier collides with a reserved Registry field",
+        ));
+    }
+    if !field_ids.insert(field.id.clone()) {
+        errors.push(Diagnostic::error(
+            "field.id.duplicate",
+            "entities[].derived[].fields[].id",
+            "a stored or derived field identifier is duplicated",
+        ));
+    }
+    validate_field_type_bounds(&field.field_type, "entities[].derived[].fields[]", errors);
+}
+
+fn validate_logical_names(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
+    let mut api_names = BTreeSet::from(["id".to_owned()]);
+    let mut sql_names = BTreeSet::from(["id".to_owned()]);
+    for field in entity
+        .fields
+        .iter()
+        .map(|field| (&field.id, field.api_name.as_deref()))
+        .chain(entity.derived.iter().flat_map(|derived| {
+            derived
+                .fields
+                .iter()
+                .map(|field| (&field.id, field.api_name.as_deref()))
+        }))
+    {
+        let api_name = field
+            .1
+            .map(str::to_owned)
+            .unwrap_or_else(|| default_api_name(field.0));
+        if !valid_api_name(&api_name) || reserved_logical_name(&api_name) {
+            errors.push(Diagnostic::error(
+                "field.api_name.invalid",
+                "entities[].fields[].apiName",
+                "a field API name must be a non-reserved lower camelCase identifier",
+            ));
+        }
+        if !api_names.insert(api_name) {
+            errors.push(Diagnostic::error(
+                "field.api_name.duplicate",
+                "entities[].fields[].apiName",
+                "field API names must be unique within an entity",
+            ));
+        }
+        let sql_name = default_sql_name(field.0);
+        if reserved_logical_name(&sql_name) || !sql_names.insert(sql_name) {
+            errors.push(Diagnostic::error(
+                "field.sql_name.duplicate",
+                "entities[].fields[].id",
+                "field SQL names must be non-reserved and unique within an entity",
+            ));
+        }
+    }
+}
+
+fn validate_field_type_bounds(
+    field_type: &FieldTypeSource,
+    path: &str,
+    errors: &mut Vec<Diagnostic>,
+) {
+    match field_type {
+        FieldTypeSource::String {
+            min_length,
+            max_length,
+        } if *max_length == 0 || *max_length > 1_000_000 || min_length > max_length => {
+            errors.push(Diagnostic::error(
+                "field.string.bounds_invalid",
+                path,
+                "string length bounds are invalid",
+            ))
+        }
+        FieldTypeSource::Text { max_length } if *max_length == 0 || *max_length > 10_000_000 => {
+            errors.push(Diagnostic::error(
+                "field.text.bound_invalid",
+                path,
+                "text length bound must be positive",
+            ));
+        }
+        FieldTypeSource::VocabularyCode { values, .. }
+            if values.is_empty()
+                || has_duplicates(values)
+                || values.iter().any(|value| !valid_code(value)) =>
+        {
+            errors.push(Diagnostic::error(
+                "field.vocabulary.values_invalid",
+                path,
+                "a vocabulary field requires a non-empty duplicate-free value set",
+            ));
+        }
+        FieldTypeSource::Decimal {
+            precision,
+            scale,
+            minimum,
+            maximum,
+        } if !valid_decimal_bounds(*precision, *scale, minimum.as_deref(), maximum.as_deref()) => {
+            errors.push(Diagnostic::error(
+                "field.decimal.bounds_invalid",
+                path,
+                "decimal precision, scale, or canonical bounds are invalid",
+            ));
+        }
+        FieldTypeSource::Crs84Point { precision, bbox }
+            if *precision > 9
+                || bbox
+                    .as_ref()
+                    .is_some_and(|bbox| parsed_bbox(bbox, *precision).is_none()) =>
+        {
+            errors.push(Diagnostic::error(
+                "field.crs84_point.bounds_invalid",
+                path,
+                "CRS84 point precision or CRS84 bounding box is invalid",
+            ));
+        }
+        FieldTypeSource::Structured { max_bytes, schema }
+            if *max_bytes == 0
+                || *max_bytes > MAX_STRUCTURED_VALUE_BYTES
+                || !valid_structured_schema(schema) =>
+        {
+            errors.push(Diagnostic::error(
+                "field.structured.schema_invalid",
+                path,
+                "structured field schema or byte bound is invalid",
+            ));
+        }
+        _ => {}
     }
 }
 
@@ -1481,6 +1805,86 @@ fn supports_temporal_non_overlap_scope(field_type: &FieldTypeSource) -> bool {
     )
 }
 
+fn stored_field_map(entity: &EntitySource) -> BTreeMap<&str, &FieldSource> {
+    entity
+        .fields
+        .iter()
+        .map(|field| (field.id.as_str(), field))
+        .collect()
+}
+
+fn derived_field_map(entity: &EntitySource) -> BTreeMap<&str, &DerivedFieldSource> {
+    entity
+        .derived
+        .iter()
+        .flat_map(|derived| {
+            derived
+                .fields
+                .iter()
+                .map(|field| (field.id.as_str(), field))
+        })
+        .collect()
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FieldStorageKind {
+    Stored,
+    Derived,
+    Pseudo,
+}
+
+fn selector_field_supported(field_type: &FieldTypeSource) -> bool {
+    !matches!(
+        field_type,
+        FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. }
+    )
+}
+
+fn infer_read_path_refs(
+    source: &EntitySource,
+    through: &EntitySource,
+    target: &str,
+) -> Option<(String, String)> {
+    let source_refs = through
+        .fields
+        .iter()
+        .filter_map(|field| match &field.field_type {
+            FieldTypeSource::Reference { target, .. } if target == &source.id => {
+                Some(field.id.clone())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let target_refs = through
+        .fields
+        .iter()
+        .filter_map(|field| match &field.field_type {
+            FieldTypeSource::Reference {
+                target: field_target,
+                ..
+            } if field_target == target => Some(field.id.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    match (source_refs.as_slice(), target_refs.as_slice()) {
+        ([source_ref], [target_ref]) if source_ref != target_ref => {
+            Some((source_ref.clone(), target_ref.clone()))
+        }
+        _ => None,
+    }
+}
+
+fn valid_relative_sql_path(path: &str) -> bool {
+    !path.is_empty()
+        && path.len() <= 256
+        && path.ends_with(".sql")
+        && !path.starts_with('/')
+        && !path.contains('\\')
+        && path
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..")
+}
+
 fn validate_indexes(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
     let fields: BTreeSet<&str> = entity
         .fields
@@ -1513,12 +1917,154 @@ fn validate_indexes(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
     }
 }
 
-fn validate_profiles(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
-    let fields: BTreeMap<&str, &FieldSource> = entity
-        .fields
+fn validate_selector_profiles(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
+    let fields = stored_field_map(entity);
+    let mut ids = BTreeSet::new();
+    for selector in &entity.selector_profiles {
+        validate_id(&selector.id, "entities[].selectorProfiles[].id", errors);
+        if !ids.insert(selector.id.as_str()) {
+            errors.push(Diagnostic::error(
+                "selector_profile.id.duplicate",
+                "entities[].selectorProfiles[].id",
+                "a selector profile identifier is duplicated",
+            ));
+        }
+        if selector.fields.is_empty()
+            || selector.fields.len() > 16
+            || has_duplicates(&selector.fields)
+            || selector
+                .fields
+                .iter()
+                .any(|field| !fields.contains_key(field.as_str()))
+        {
+            errors.push(Diagnostic::error(
+                "selector_profile.fields.invalid",
+                "entities[].selectorProfiles[].fields",
+                "a selector profile must name one to sixteen stored fields",
+            ));
+            continue;
+        }
+        if selector.fields.iter().any(|field| {
+            fields
+                .get(field.as_str())
+                .is_some_and(|field| !selector_field_supported(&field.field_type))
+        }) {
+            errors.push(Diagnostic::error(
+                "selector_profile.field_type_unsupported",
+                "entities[].selectorProfiles[].fields",
+                "selector profile fields must use supported scalar stored types",
+            ));
+        }
+    }
+}
+
+fn validate_read_paths(
+    entity: &EntitySource,
+    entities: &BTreeMap<String, EntitySource>,
+    errors: &mut Vec<Diagnostic>,
+) {
+    let mut ids = BTreeSet::new();
+    let mut routes = BTreeSet::new();
+    for path in &entity.read_paths {
+        validate_id(&path.id, "entities[].readPaths[].id", errors);
+        validate_id(&path.route, "entities[].readPaths[].route", errors);
+        if !ids.insert(path.id.as_str()) {
+            errors.push(Diagnostic::error(
+                "read_path.id.duplicate",
+                "entities[].readPaths[].id",
+                "a read path identifier is duplicated",
+            ));
+        }
+        if !routes.insert(path.route.as_str()) {
+            errors.push(Diagnostic::error(
+                "read_path.route.duplicate",
+                "entities[].readPaths[].route",
+                "a read path route is duplicated for an entity",
+            ));
+        }
+        if path.to == entity.id {
+            errors.push(Diagnostic::error(
+                "read_path.target.self",
+                "entities[].readPaths[].to",
+                "a read path target must differ from its source entity",
+            ));
+        }
+        let Some(through) = entities.get(&path.through) else {
+            errors.push(Diagnostic::error(
+                "read_path.through.unknown",
+                "entities[].readPaths[].through",
+                "a read path association entity does not resolve",
+            ));
+            continue;
+        };
+        if !entities.contains_key(&path.to) {
+            errors.push(Diagnostic::error(
+                "read_path.target.unknown",
+                "entities[].readPaths[].to",
+                "a read path target entity does not resolve",
+            ));
+            continue;
+        }
+        if infer_read_path_refs(entity, through, &path.to).is_none() {
+            errors.push(Diagnostic::error(
+                "read_path.references.ambiguous",
+                "entities[].readPaths[]",
+                "a read path must have exactly one source reference and one target reference",
+            ));
+        }
+    }
+}
+
+fn validate_read_path_cycles(
+    entities: &BTreeMap<String, EntitySource>,
+    errors: &mut Vec<Diagnostic>,
+) {
+    let edges = entities
+        .values()
+        .flat_map(|entity| {
+            entity
+                .read_paths
+                .iter()
+                .map(|path| (entity.id.as_str(), path.to.as_str()))
+        })
+        .collect::<Vec<_>>();
+    for (source, target) in &edges {
+        if reaches(target, source, &edges, &mut BTreeSet::new()) {
+            errors.push(Diagnostic::error(
+                "read_path.cycle",
+                "entities[].readPaths[]",
+                "read paths must not form a traversal cycle",
+            ));
+            return;
+        }
+    }
+}
+
+fn reaches<'a>(
+    current: &'a str,
+    target: &str,
+    edges: &[(&'a str, &'a str)],
+    visited: &mut BTreeSet<&'a str>,
+) -> bool {
+    if current == target {
+        return true;
+    }
+    if !visited.insert(current) {
+        return false;
+    }
+    edges
         .iter()
-        .map(|field| (field.id.as_str(), field))
-        .collect();
+        .filter(|(source, _)| *source == current)
+        .any(|(_, next)| reaches(next, target, edges, visited))
+}
+
+fn validate_profiles(
+    entity: &EntitySource,
+    entities: &BTreeMap<String, EntitySource>,
+    errors: &mut Vec<Diagnostic>,
+) {
+    let fields = stored_field_map(entity);
+    let derived = derived_field_map(entity);
     let mut ids = BTreeSet::new();
     for access in &entity.access_profiles {
         validate_id(&access.id, "entities[].accessProfiles[].id", errors);
@@ -1604,19 +2150,21 @@ fn validate_profiles(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
                 "bulk data export requires an authenticated list profile with a readable projection",
             ));
         }
-        let mut processed = access.readable_fields.clone();
-        processed.extend(access.writable_fields.iter().cloned());
-        processed.extend(access.filterable_fields.iter().cloned());
-        processed.extend(access.sortable_fields.iter().cloned());
-        processed.extend(
+        let mut read_processed = access.readable_fields.clone();
+        read_processed.extend(access.filterable_fields.iter().cloned());
+        read_processed.extend(access.sortable_fields.iter().cloned());
+        let mut stored_processed = access.writable_fields.clone();
+        stored_processed.extend(
             access
                 .row_boundaries
                 .iter()
                 .map(|boundary| boundary.field.clone()),
         );
-        if processed
+        if read_processed.iter().any(|field| {
+            !fields.contains_key(field.as_str()) && !derived.contains_key(field.as_str())
+        }) || stored_processed
             .iter()
-            .any(|field| !fields.contains_key(field.as_str()))
+            .any(|field| field != "id" && !fields.contains_key(field.as_str()))
         {
             errors.push(Diagnostic::error(
                 "access_profile.field.unknown",
@@ -1635,10 +2183,17 @@ fn validate_profiles(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
         }
         if access.anonymous
             && (entity.classification != Classification::Public
-                || processed.iter().any(|field| {
+                || read_processed.iter().any(|field| {
                     fields
                         .get(field.as_str())
                         .is_some_and(|field| field.classification != Classification::Public)
+                        || derived.contains_key(field.as_str())
+                })
+                || stored_processed.iter().any(|field| {
+                    field != "id"
+                        && fields
+                            .get(field.as_str())
+                            .is_some_and(|field| field.classification != Classification::Public)
                 }))
         {
             errors.push(Diagnostic::error(
@@ -1649,12 +2204,14 @@ fn validate_profiles(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
         }
         let mut boundaries = BTreeSet::new();
         for boundary in &access.row_boundaries {
-            if fields.get(boundary.field.as_str()).is_some_and(|field| {
-                matches!(
-                    field.field_type,
-                    FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. }
-                )
-            }) {
+            if boundary.field != "id"
+                && fields.get(boundary.field.as_str()).is_some_and(|field| {
+                    matches!(
+                        field.field_type,
+                        FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. }
+                    )
+                })
+            {
                 errors.push(Diagnostic::error(
                     "access_profile.row_boundary.type_unsupported",
                     "entities[].accessProfiles[].rowBoundaries",
@@ -1674,6 +2231,15 @@ fn validate_profiles(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
                     "row boundaries must be direct, non-empty, and duplicate-free",
                 ));
             }
+        }
+        validate_lookup_grants(access, entity, &fields, errors);
+        validate_read_path_grants(access, entity, entities, errors);
+        if access.allow_count && !access.operations.contains(&Operation::List) {
+            errors.push(Diagnostic::error(
+                "access_profile.count.unavailable",
+                "entities[].accessProfiles[].allowCount",
+                "direct count access requires an explicit list grant",
+            ));
         }
     }
     for operation in all_operations() {
@@ -1695,6 +2261,241 @@ fn validate_profiles(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
                 "each exposed operation requires exactly one default profile",
             ));
         }
+    }
+    for path in &entity.read_paths {
+        let profiles: Vec<&AccessProfileSource> = entity
+            .access_profiles
+            .iter()
+            .filter(|access| access.read_paths.iter().any(|grant| grant.path == path.id))
+            .collect();
+        if profiles.is_empty() {
+            continue;
+        }
+        let explicit_defaults = profiles.iter().filter(|access| access.default).count();
+        if profiles.len() > 1 && explicit_defaults != 1
+            || profiles.len() == 1 && explicit_defaults > 1
+        {
+            errors.push(Diagnostic::error(
+                "access_profile.default.invalid",
+                "entities[].accessProfiles[].default",
+                "each exposed read-path route requires exactly one default profile",
+            ));
+        }
+    }
+}
+
+fn validate_lookup_grants(
+    access: &AccessProfileSource,
+    entity: &EntitySource,
+    fields: &BTreeMap<&str, &FieldSource>,
+    errors: &mut Vec<Diagnostic>,
+) {
+    if access.lookups.is_empty() {
+        return;
+    }
+    if !access.operations.contains(&Operation::Lookup) {
+        errors.push(Diagnostic::error(
+            "access_profile.lookup.operation_required",
+            "entities[].accessProfiles[].lookups",
+            "lookup grants require the lookup operation",
+        ));
+    }
+    let selectors = entity
+        .selector_profiles
+        .iter()
+        .map(|selector| (selector.id.as_str(), selector))
+        .collect::<BTreeMap<_, _>>();
+    let mut granted = BTreeSet::new();
+    for lookup in &access.lookups {
+        if !granted.insert(lookup.selector.as_str()) {
+            errors.push(Diagnostic::error(
+                "access_profile.lookup.duplicate",
+                "entities[].accessProfiles[].lookups",
+                "lookup selector grants must be unique",
+            ));
+        }
+        let Some(selector) = selectors.get(lookup.selector.as_str()) else {
+            errors.push(Diagnostic::error(
+                "access_profile.lookup.selector_unknown",
+                "entities[].accessProfiles[].lookups[].selector",
+                "a lookup grant refers to an unknown selector profile",
+            ));
+            continue;
+        };
+        if access.anonymous
+            && selector.fields.iter().any(|field| {
+                fields
+                    .get(field.as_str())
+                    .is_some_and(|field| field.classification != Classification::Public)
+            })
+        {
+            errors.push(Diagnostic::error(
+                "access_profile.public.processing_non_public",
+                "entities[].accessProfiles[].lookups",
+                "an anonymous lookup may process only public selector fields",
+            ));
+        }
+        match lookup.value_origin {
+            LookupValueOrigin::Request if !lookup.claim_mapping.is_empty() => {
+                errors.push(Diagnostic::error(
+                    "access_profile.lookup.claim_mapping_unavailable",
+                    "entities[].accessProfiles[].lookups[].claimMapping",
+                    "request-origin lookups must not declare claim mappings",
+                ));
+            }
+            LookupValueOrigin::VerifiedClaim => {
+                let expected = selector.fields.iter().cloned().collect::<BTreeSet<_>>();
+                let actual = lookup
+                    .claim_mapping
+                    .keys()
+                    .cloned()
+                    .collect::<BTreeSet<_>>();
+                if actual != expected || lookup.claim_mapping.values().any(|claim| claim.is_empty())
+                {
+                    errors.push(Diagnostic::error(
+                        "access_profile.lookup.claim_mapping_invalid",
+                        "entities[].accessProfiles[].lookups[].claimMapping",
+                        "claim-origin lookups must map every selector field to one direct claim",
+                    ));
+                }
+            }
+            LookupValueOrigin::Request => {}
+        }
+    }
+}
+
+fn validate_read_path_grants(
+    access: &AccessProfileSource,
+    entity: &EntitySource,
+    entities: &BTreeMap<String, EntitySource>,
+    errors: &mut Vec<Diagnostic>,
+) {
+    let paths = entity
+        .read_paths
+        .iter()
+        .map(|path| (path.id.as_str(), path))
+        .collect::<BTreeMap<_, _>>();
+    let mut granted = BTreeSet::new();
+    for grant in &access.read_paths {
+        if !granted.insert(grant.path.as_str()) {
+            errors.push(Diagnostic::error(
+                "access_profile.read_path.duplicate",
+                "entities[].accessProfiles[].readPaths",
+                "read-path grants must be unique",
+            ));
+        }
+        let Some(path) = paths.get(grant.path.as_str()) else {
+            errors.push(Diagnostic::error(
+                "access_profile.read_path.unknown",
+                "entities[].accessProfiles[].readPaths[].path",
+                "a read-path grant refers to an unknown path",
+            ));
+            continue;
+        };
+        validate_read_path_grant_fields(access, entity, entities, path, grant, errors);
+    }
+}
+
+fn validate_read_path_grant_fields(
+    access: &AccessProfileSource,
+    source: &EntitySource,
+    entities: &BTreeMap<String, EntitySource>,
+    path: &crate::contract::ReadPathSource,
+    grant: &ReadPathGrantSource,
+    errors: &mut Vec<Diagnostic>,
+) {
+    let Some(target) = entities.get(&path.to) else {
+        return;
+    };
+    let Some(through) = entities.get(&path.through) else {
+        return;
+    };
+    let target_stored = stored_field_map(target);
+    let target_derived = derived_field_map(target);
+    if grant.readable_fields.is_empty() {
+        errors.push(Diagnostic::error(
+            "access_profile.read_path.readable_fields_empty",
+            "entities[].accessProfiles[].readPaths[].readableFields",
+            "a read-path grant must declare readable fields",
+        ));
+    }
+    if !grant.filterable_fields.is_subset(&grant.readable_fields)
+        || !grant.sortable_fields.is_subset(&grant.readable_fields)
+    {
+        errors.push(Diagnostic::error(
+            "access_profile.read_path.processing.wider_than_read",
+            "entities[].accessProfiles[].readPaths[]",
+            "read-path filterable and sortable fields must be readable",
+        ));
+    }
+    if access.anonymous && source.classification != Classification::Public {
+        errors.push(Diagnostic::error(
+            "access_profile.public.processing_non_public",
+            "entities[].accessProfiles[].readPaths",
+            "an anonymous read path may process only public source and join fields",
+        ));
+    }
+    if access.anonymous {
+        if let Some((source_ref, target_ref)) = infer_read_path_refs(source, through, &path.to) {
+            let through_fields = stored_field_map(through);
+            if [source_ref, target_ref].iter().any(|field| {
+                through_fields
+                    .get(field.as_str())
+                    .is_some_and(|field| field.classification != Classification::Public)
+            }) {
+                errors.push(Diagnostic::error(
+                    "access_profile.public.processing_non_public",
+                    "entities[].accessProfiles[].readPaths",
+                    "an anonymous read path may process only public join fields",
+                ));
+            }
+        }
+    }
+    let processed = grant
+        .readable_fields
+        .iter()
+        .chain(&grant.filterable_fields)
+        .chain(&grant.sortable_fields)
+        .collect::<BTreeSet<_>>();
+    if processed.iter().any(|field| {
+        field.as_str() != "id"
+            && !target_stored.contains_key(field.as_str())
+            && !target_derived.contains_key(field.as_str())
+    }) {
+        errors.push(Diagnostic::error(
+            "access_profile.read_path.field_unknown",
+            "entities[].accessProfiles[].readPaths[]",
+            "a read-path grant refers to an unknown target field",
+        ));
+    }
+    if access.anonymous
+        && processed.iter().any(|field| {
+            target_derived.contains_key(field.as_str())
+                || (field.as_str() != "id"
+                    && target_stored
+                        .get(field.as_str())
+                        .is_some_and(|field| field.classification != Classification::Public))
+        })
+    {
+        errors.push(Diagnostic::error(
+            "access_profile.public.processing_non_public",
+            "entities[].accessProfiles[].readPaths",
+            "an anonymous read path may process only public target fields and no derived fields",
+        ));
+    }
+    if processed.is_empty() && grant.allow_count {
+        errors.push(Diagnostic::error(
+            "access_profile.read_path.count_without_fields",
+            "entities[].accessProfiles[].readPaths[].allowCount",
+            "read-path count access requires explicit path field capabilities",
+        ));
+    }
+    if path.to == source.id {
+        errors.push(Diagnostic::error(
+            "access_profile.read_path.self_target",
+            "entities[].accessProfiles[].readPaths[].path",
+            "a read-path grant cannot target the source entity",
+        ));
     }
 }
 
@@ -2066,6 +2867,76 @@ fn event_condition_fields(
     }
 }
 
+fn validate_derived_assets(
+    sources: &BTreeMap<String, EntitySource>,
+    origins: &BTreeMap<(String, String), Option<String>>,
+    assets: &[ModuleAssetSource],
+    errors: &mut Vec<Diagnostic>,
+) {
+    let known_relations = sources
+        .values()
+        .map(|entity| default_sql_name(&entity.id))
+        .collect::<Vec<_>>();
+    let known_relations = known_relations.iter().map(String::as_str).collect();
+    let assets = asset_map(assets, errors);
+    for entity in sources.values() {
+        for derived in &entity.derived {
+            let path = format!("entities[{}].derived[{}].sql", entity.id, derived.id);
+            let owner = origins
+                .get(&(entity.id.clone(), derived.id.clone()))
+                .cloned()
+                .flatten();
+            let Some(sql) = assets.get(&(owner.clone(), derived.sql.clone())) else {
+                errors.push(Diagnostic::error(
+                    "derived.sql.asset_missing",
+                    path,
+                    "derived SQL must be supplied as a compilation asset",
+                ));
+                continue;
+            };
+            validate_derived_sql(derived, sql, &known_relations, &path, errors);
+        }
+    }
+}
+
+fn asset_map<'a>(
+    assets: &'a [ModuleAssetSource],
+    errors: &mut Vec<Diagnostic>,
+) -> BTreeMap<(Option<String>, String), &'a [u8]> {
+    let mut map = BTreeMap::new();
+    for asset in assets {
+        if !asset
+            .module
+            .as_deref()
+            .is_none_or(|module| !module.is_empty())
+            || !valid_relative_sql_path(&asset.path)
+            || asset.bytes.is_empty()
+            || asset.bytes.len() > MAX_DERIVED_SQL_BYTES
+        {
+            errors.push(Diagnostic::error(
+                "module.asset.invalid",
+                "modules[].assets[]",
+                "module assets must be bounded module-relative SQL files",
+            ));
+            continue;
+        }
+        if map
+            .insert(
+                (asset.module.clone(), asset.path.clone()),
+                asset.bytes.as_slice(),
+            )
+            .is_some()
+        {
+            errors.push(Diagnostic::error(
+                "module.asset.duplicate",
+                "modules[].assets[]",
+                "module assets must be unique by module and path",
+            ));
+        }
+    }
+    map
+}
+
 fn webhook_retry_delays(initial_ms: u32, maximum_ms: u32, maximum_attempts: u8) -> Vec<u32> {
     let mut delay = initial_ms;
     (1..maximum_attempts)
@@ -2081,19 +2952,24 @@ fn webhook_retry_delays(initial_ms: u32, maximum_ms: u32, maximum_attempts: u8) 
 
 fn compile_entities(
     sources: &BTreeMap<String, EntitySource>,
+    origins: &BTreeMap<(String, String), Option<String>>,
+    assets: &[ModuleAssetSource],
 ) -> Result<(BTreeMap<String, CompiledEntity>, PhysicalNameInventory), CompileFailure> {
     let mut builder = PhysicalNameBuilder::new();
     let mut entities = BTreeMap::new();
     let mut inventory = BTreeMap::new();
+    let asset_lookup = assets
+        .iter()
+        .map(|asset| ((asset.module.clone(), asset.path.clone()), asset))
+        .collect::<BTreeMap<_, _>>();
     for source in sources.values() {
         let table = builder
             .derive("e", &source.id, "entities[].id")
             .map_err(CompileFailure::from_one)?;
         let mut field_names = BTreeMap::new();
         let mut fields = BTreeMap::new();
-        let mut sorted_fields = source.fields.clone();
-        sorted_fields.sort_by(|left, right| left.id.cmp(&right.id));
-        for field in sorted_fields {
+        let mut stored_fields = Vec::new();
+        for field in source.fields.clone() {
             let physical = builder
                 .derive(
                     "f",
@@ -2102,6 +2978,18 @@ fn compile_entities(
                 )
                 .map_err(CompileFailure::from_one)?;
             field_names.insert(field.id.clone(), physical.clone());
+            let logical = logical_field(
+                &field.id,
+                field.api_name.as_deref(),
+                field.field_type.clone(),
+                field.classification,
+            );
+            stored_fields.push(CompiledStoredField {
+                logical: logical.clone(),
+                required: field.required,
+                valid_time_role: field.valid_time_role,
+                physical_name: physical.clone(),
+            });
             fields.insert(
                 field.id.clone(),
                 CompiledField {
@@ -2114,6 +3002,93 @@ fn compile_entities(
                 },
             );
         }
+        let mut derived_fields = BTreeMap::new();
+        let mut derived_relations = BTreeMap::new();
+        for derived in &source.derived {
+            let owner = origins
+                .get(&(source.id.clone(), derived.id.clone()))
+                .cloned()
+                .flatten();
+            let asset = asset_lookup
+                .get(&(owner, derived.sql.clone()))
+                .expect("derived SQL asset was validated");
+            let mut field_ids = Vec::new();
+            for field in &derived.fields {
+                let logical = logical_field(
+                    &field.id,
+                    field.api_name.as_deref(),
+                    field.field_type.clone(),
+                    field.classification,
+                );
+                field_ids.push(field.id.clone());
+                derived_fields.insert(
+                    field.id.clone(),
+                    CompiledDerivedField {
+                        logical,
+                        derivation_id: derived.id.clone(),
+                    },
+                );
+            }
+            derived_relations.insert(
+                derived.id.clone(),
+                CompiledDerivedRelation {
+                    id: derived.id.clone(),
+                    sql_path: derived.sql.clone(),
+                    key_field: derived.key.clone(),
+                    execution: derived.execution,
+                    sql_sha256: sha256_hex(&asset.bytes),
+                    sql_bytes: asset.bytes.clone(),
+                    fields: field_ids,
+                },
+            );
+        }
+        let canonical_id = logical_field(
+            "id",
+            Some("id"),
+            FieldTypeSource::Uuid,
+            Classification::Internal,
+        );
+        let source_relation = CompiledSourceRelation {
+            entity_id: source.id.clone(),
+            sql_name: default_sql_name(&source.id),
+            stored_fields: stored_fields
+                .iter()
+                .map(|field| field.logical.id.clone())
+                .collect(),
+        };
+        let selector_profiles = source
+            .selector_profiles
+            .iter()
+            .map(|selector| {
+                (
+                    selector.id.clone(),
+                    CompiledSelectorProfile {
+                        id: selector.id.clone(),
+                        fields: selector.fields.clone(),
+                    },
+                )
+            })
+            .collect();
+        let read_paths = source
+            .read_paths
+            .iter()
+            .map(|path| {
+                let through = &sources[&path.through];
+                let (source_ref, target_ref) = infer_read_path_refs(source, through, &path.to)
+                    .expect("read-path refs were validated");
+                (
+                    path.id.clone(),
+                    CompiledReadPath {
+                        id: path.id.clone(),
+                        through: path.through.clone(),
+                        to: path.to.clone(),
+                        route: path.route.clone(),
+                        source_ref,
+                        target_ref,
+                    },
+                )
+            })
+            .collect();
         let mut constraints = BTreeMap::new();
         let mut constraint_names = BTreeMap::new();
         for constraint in &source.constraints {
@@ -2193,6 +3168,13 @@ fn compile_entities(
                 classification: source.classification,
                 physical_table: table,
                 temporal: source.temporal.clone().map(CompiledTemporal::from),
+                canonical_id,
+                stored_fields,
+                derived_fields,
+                derived_relations,
+                source_relation,
+                selector_profiles,
+                read_paths,
                 fields,
                 constraints,
                 indexes,
@@ -2289,8 +3271,58 @@ fn compile_routes_and_access(
                 }
             }
             entries.push(CompiledAccessEntry {
+                route_id: format!("records.{}.{}", entity.id, operation_id(operation)),
                 entity_id: entity.id.clone(),
                 operation,
+                profile_ids,
+                default_profile_id: default.id.clone(),
+            });
+        }
+        for read_path in entity.read_paths.values() {
+            let profiles: Vec<&AccessProfileSource> = entity
+                .access_profiles
+                .values()
+                .filter(|profile| {
+                    profile
+                        .read_paths
+                        .iter()
+                        .any(|grant| grant.path == read_path.id)
+                })
+                .collect();
+            if profiles.is_empty() {
+                continue;
+            }
+            let default = if profiles.len() == 1 {
+                profiles[0]
+            } else {
+                profiles
+                    .iter()
+                    .copied()
+                    .find(|profile| profile.default)
+                    .expect("default profile was validated")
+            };
+            let profile_ids: BTreeSet<String> =
+                profiles.iter().map(|profile| profile.id.clone()).collect();
+            let route_id = format!("records.{}.path.{}", entity.id, read_path.id);
+            routes.push(CompiledRoute {
+                id: route_id.clone(),
+                entity_id: entity.id.clone(),
+                method: HttpMethod::Get,
+                path: format!(
+                    "/v1/records/{}/{{record_id}}/{}",
+                    entity.route, read_path.route
+                ),
+                operation: Operation::List,
+                query_kind: Some(CompiledQueryKind::List),
+                revision_kind: None,
+                maximum_records: None,
+                access_profiles: profile_ids.iter().cloned().collect(),
+                default_access_profile: default.id.clone(),
+            });
+            entries.push(CompiledAccessEntry {
+                route_id,
+                entity_id: entity.id.clone(),
+                operation: Operation::List,
                 profile_ids,
                 default_profile_id: default.id.clone(),
             });
@@ -2315,6 +3347,12 @@ fn compile_metadata_inventory(
     routes: &CompiledRouteInventory,
     access: &CompiledAccessInventory,
 ) -> Result<CompiledMetadataInventory, Diagnostic> {
+    let access_by_route = access
+        .entries
+        .iter()
+        .filter(|entry| !entry.route_id.is_empty())
+        .map(|entry| ((entry.route_id.as_str(), entry.operation), entry))
+        .collect::<BTreeMap<_, _>>();
     let access_by_operation = access
         .entries
         .iter()
@@ -2325,8 +3363,9 @@ fn compile_metadata_inventory(
         let Some(entity) = entities.get(&route.entity_id) else {
             return Err(inconsistent_metadata_inventory());
         };
-        let Some(access_entry) =
-            access_by_operation.get(&(route.entity_id.as_str(), route.operation))
+        let Some(access_entry) = access_by_route
+            .get(&(route.id.as_str(), route.operation))
+            .or_else(|| access_by_operation.get(&(route.entity_id.as_str(), route.operation)))
         else {
             return Err(inconsistent_metadata_inventory());
         };
@@ -2417,39 +3456,89 @@ fn compile_query_inventory(
         .collect::<BTreeMap<_, _>>();
     for entity in entities.values() {
         for profile in entity.access_profiles.values() {
-            if !profile.operations.contains(&Operation::List) {
-                continue;
-            }
-            if let Some(operation) = query_operation(
-                entity,
-                profile,
-                &route_ids[&(entity.id.clone(), CompiledQueryKind::List)],
-                CompiledQueryKind::List,
-                None,
-                errors,
-            ) {
-                operations.push(operation);
-            }
-            if let Some(temporal) = &entity.temporal {
-                let binding = temporal_binding(temporal);
+            if profile.operations.contains(&Operation::List) {
                 if let Some(operation) = query_operation(
                     entity,
                     profile,
-                    &route_ids[&(entity.id.clone(), CompiledQueryKind::Current)],
-                    CompiledQueryKind::Current,
-                    Some(binding.clone()),
+                    QueryOperationSpec {
+                        route_id: &route_ids[&(entity.id.clone(), CompiledQueryKind::List)],
+                        kind: CompiledQueryKind::List,
+                        temporal: None,
+                        allow_count: profile.allow_count,
+                        selector_fields: Vec::new(),
+                        read_path: None,
+                    },
                     errors,
                 ) {
                     operations.push(operation);
                 }
-                if let Some(operation) = query_operation(
-                    entity,
-                    profile,
-                    &route_ids[&(entity.id.clone(), CompiledQueryKind::AsOf)],
-                    CompiledQueryKind::AsOf,
-                    Some(binding),
-                    errors,
-                ) {
+                if let Some(temporal) = &entity.temporal {
+                    let binding = temporal_binding(temporal);
+                    if let Some(operation) = query_operation(
+                        entity,
+                        profile,
+                        QueryOperationSpec {
+                            route_id: &route_ids[&(entity.id.clone(), CompiledQueryKind::Current)],
+                            kind: CompiledQueryKind::Current,
+                            temporal: Some(binding.clone()),
+                            allow_count: profile.allow_count,
+                            selector_fields: Vec::new(),
+                            read_path: None,
+                        },
+                        errors,
+                    ) {
+                        operations.push(operation);
+                    }
+                    if let Some(operation) = query_operation(
+                        entity,
+                        profile,
+                        QueryOperationSpec {
+                            route_id: &route_ids[&(entity.id.clone(), CompiledQueryKind::AsOf)],
+                            kind: CompiledQueryKind::AsOf,
+                            temporal: Some(binding),
+                            allow_count: profile.allow_count,
+                            selector_fields: Vec::new(),
+                            read_path: None,
+                        },
+                        errors,
+                    ) {
+                        operations.push(operation);
+                    }
+                }
+            }
+            if profile.operations.contains(&Operation::Lookup) {
+                for lookup in &profile.lookups {
+                    if let Some(selector) = entity.selector_profiles.get(&lookup.selector) {
+                        let route_id = format!("records.{}.lookup", entity.id);
+                        if let Some(operation) = query_operation(
+                            entity,
+                            profile,
+                            QueryOperationSpec {
+                                route_id: &route_id,
+                                kind: CompiledQueryKind::List,
+                                temporal: None,
+                                allow_count: false,
+                                selector_fields: selector.fields.clone(),
+                                read_path: None,
+                            },
+                            errors,
+                        ) {
+                            operations.push(operation);
+                        }
+                    }
+                }
+            }
+            for grant in &profile.read_paths {
+                let Some(path) = entity.read_paths.get(&grant.path) else {
+                    continue;
+                };
+                let Some(target) = entities.get(&path.to) else {
+                    continue;
+                };
+                let route_id = format!("records.{}.path.{}", entity.id, path.id);
+                if let Some(operation) =
+                    read_path_query_operation(entity, target, profile, grant, &route_id, errors)
+                {
                     operations.push(operation);
                 }
             }
@@ -2459,14 +3548,82 @@ fn compile_query_inventory(
     CompiledQueryInventory { operations }
 }
 
+fn read_path_query_operation(
+    source: &CompiledEntity,
+    target: &CompiledEntity,
+    profile: &AccessProfileSource,
+    grant: &ReadPathGrantSource,
+    route_id: &str,
+    errors: &mut Vec<Diagnostic>,
+) -> Option<CompiledQueryOperation> {
+    let readable_fields = grant.readable_fields.clone();
+    let filterable_fields = grant.filterable_fields.clone();
+    let sortable_fields = grant.sortable_fields.clone();
+    let mut projection_fields = readable_fields.iter().cloned().collect::<Vec<_>>();
+    projection_fields.sort();
+    let filter_fields = filterable_fields
+        .iter()
+        .filter_map(|field| {
+            let (field_type, _) = compiled_field_type(target, field)?;
+            query_filter_field(field_type, field, errors)
+        })
+        .collect::<Vec<_>>();
+    let sort_fields = sortable_fields
+        .iter()
+        .filter_map(|field| {
+            let (field_type, _) = compiled_field_type(target, field)?;
+            query_sort_field(field_type, field, errors)
+        })
+        .collect::<Vec<_>>();
+    let mut processing_fields = readable_fields;
+    processing_fields.extend(filterable_fields);
+    processing_fields.extend(sortable_fields);
+    if let Some(path) = source.read_paths.get(&grant.path) {
+        processing_fields.insert(path.source_ref.clone());
+        processing_fields.insert(path.target_ref.clone());
+    }
+    Some(CompiledQueryOperation {
+        id: format!("records.{}.{}.path.{}", source.id, profile.id, grant.path),
+        route_id: route_id.to_owned(),
+        entity_id: target.id.clone(),
+        profile_id: profile.id.clone(),
+        kind: CompiledQueryKind::List,
+        max_page_size: 100,
+        projection_fields,
+        filter_fields,
+        sort_fields,
+        allow_count: grant.allow_count,
+        selector_fields: Vec::new(),
+        read_path: Some(grant.path.clone()),
+        processing_fields: processing_fields.into_iter().collect(),
+        stable_tie_breaker: "record_id".to_owned(),
+        temporal: None,
+    })
+}
+
+struct QueryOperationSpec<'a> {
+    route_id: &'a str,
+    kind: CompiledQueryKind,
+    temporal: Option<CompiledQueryTemporalBinding>,
+    allow_count: bool,
+    selector_fields: Vec<String>,
+    read_path: Option<String>,
+}
+
 fn query_operation(
     entity: &CompiledEntity,
     profile: &AccessProfileSource,
-    route_id: &str,
-    kind: CompiledQueryKind,
-    temporal: Option<CompiledQueryTemporalBinding>,
+    spec: QueryOperationSpec<'_>,
     errors: &mut Vec<Diagnostic>,
 ) -> Option<CompiledQueryOperation> {
+    let QueryOperationSpec {
+        route_id,
+        kind,
+        temporal,
+        allow_count,
+        selector_fields,
+        read_path,
+    } = spec;
     if let Some(binding) = &temporal {
         let temporal_fields = [&binding.start_field, &binding.end_field];
         if temporal_fields
@@ -2507,26 +3664,41 @@ fn query_operation(
         .filterable_fields
         .iter()
         .filter_map(|field| {
-            let compiled = entity.fields.get(field)?;
-            query_filter_field(&compiled.field_type, field, errors)
+            let (field_type, _) = compiled_field_type(entity, field)?;
+            query_filter_field(field_type, field, errors)
         })
         .collect::<Vec<_>>();
     let sort_fields = profile
         .sortable_fields
         .iter()
         .filter_map(|field| {
-            let compiled = entity.fields.get(field)?;
-            query_sort_field(&compiled.field_type, field, errors)
+            let (field_type, _) = compiled_field_type(entity, field)?;
+            query_sort_field(field_type, field, errors)
         })
         .collect::<Vec<_>>();
-
-    Some(CompiledQueryOperation {
-        id: format!(
+    let mut processing_fields = profile.readable_fields.clone();
+    processing_fields.extend(profile.filterable_fields.iter().cloned());
+    processing_fields.extend(profile.sortable_fields.iter().cloned());
+    processing_fields.extend(selector_fields.iter().cloned());
+    processing_fields.extend(
+        profile
+            .row_boundaries
+            .iter()
+            .map(|boundary| boundary.field.clone()),
+    );
+    let id = if !selector_fields.is_empty() {
+        format!("records.{}.{}.lookup", entity.id, profile.id)
+    } else {
+        format!(
             "records.{}.{}.{}",
             entity.id,
             profile.id,
             query_kind_id(kind)
-        ),
+        )
+    };
+
+    Some(CompiledQueryOperation {
+        id,
         route_id: route_id.to_owned(),
         entity_id: entity.id.clone(),
         profile_id: profile.id.clone(),
@@ -2535,6 +3707,10 @@ fn query_operation(
         projection_fields,
         filter_fields,
         sort_fields,
+        allow_count,
+        selector_fields,
+        read_path,
+        processing_fields: processing_fields.into_iter().collect(),
         stable_tie_breaker: "record_id".to_owned(),
         temporal,
     })
@@ -2578,6 +3754,44 @@ fn query_filter_field(
         field: field.to_owned(),
         operators,
     })
+}
+
+fn compiled_field_type<'a>(
+    entity: &'a CompiledEntity,
+    field: &str,
+) -> Option<(&'a FieldTypeSource, FieldStorageKind)> {
+    if field == "id" {
+        return Some((&entity.canonical_id.field_type, FieldStorageKind::Pseudo));
+    }
+    if let Some(stored) = entity.fields.get(field) {
+        return Some((&stored.field_type, FieldStorageKind::Stored));
+    }
+    entity
+        .derived_fields
+        .get(field)
+        .map(|derived| (&derived.logical.field_type, FieldStorageKind::Derived))
+}
+
+fn logical_field(
+    id: &str,
+    api_name: Option<&str>,
+    field_type: FieldTypeSource,
+    classification: Classification,
+) -> CompiledLogicalField {
+    CompiledLogicalField {
+        id: id.to_owned(),
+        api_name: api_name
+            .map(str::to_owned)
+            .unwrap_or_else(|| default_api_name(id)),
+        sql_name: default_sql_name(id),
+        field_type,
+        classification,
+    }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    format!("sha256:{}", hex_prefix(&digest, digest.len()))
 }
 
 fn query_sort_field(
@@ -2624,6 +3838,7 @@ fn route_shape(entity: &CompiledEntity, operation: Operation) -> (HttpMethod, St
     match operation {
         Operation::Create => (HttpMethod::Post, base),
         Operation::Get => (HttpMethod::Get, format!("{base}/{{record_id}}")),
+        Operation::Lookup => (HttpMethod::Post, format!("{base}:lookup")),
         Operation::List => (HttpMethod::Get, base),
         Operation::Patch => (HttpMethod::Patch, format!("{base}/{{record_id}}")),
         Operation::Tombstone => (HttpMethod::Delete, format!("{base}/{{record_id}}")),
@@ -2632,10 +3847,11 @@ fn route_shape(entity: &CompiledEntity, operation: Operation) -> (HttpMethod, St
     }
 }
 
-fn all_operations() -> [Operation; 7] {
+fn all_operations() -> [Operation; 8] {
     [
         Operation::Create,
         Operation::Get,
+        Operation::Lookup,
         Operation::List,
         Operation::Patch,
         Operation::Tombstone,
@@ -2648,6 +3864,7 @@ fn operation_id(operation: Operation) -> &'static str {
     match operation {
         Operation::Create => "create",
         Operation::Get => "get",
+        Operation::Lookup => "lookup",
         Operation::List => "list",
         Operation::Patch => "patch",
         Operation::Tombstone => "tombstone",

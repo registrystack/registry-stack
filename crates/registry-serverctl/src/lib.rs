@@ -5,7 +5,7 @@
 //! parsing, validation, compilation, and artifact generation remain in
 //! `registry-server`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
@@ -14,6 +14,7 @@ use std::process::ExitCode;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use clap::{ArgGroup, Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use registry_server::contract::ModuleAssetSource;
 use registry_server::migration_plan::ReviewedMigrationRecovery;
 use registry_server::package::{
     inspect_package_integrity, CompiledRegistryChangeClass, MigrationInspectionPlanKind,
@@ -24,9 +25,9 @@ use registry_server::package::{
 use registry_server::runtime_config::RuntimeConfigError;
 use registry_server::tooling::{classify_registry_diff, CompiledRegistryDiff, DiffClassification};
 use registry_server::{
-    compile_project, parse_module_yaml, parse_project_yaml, CompileFailure, CompileProfile,
-    CompiledRegistry, Diagnostic, DiagnosticSeverity, GeneratedArtifact, GeneratedArtifacts,
-    RegistryModule, RegistryProject,
+    compile_project_with_assets, parse_module_yaml, parse_project_yaml, CompileFailure,
+    CompileProfile, CompiledRegistry, Diagnostic, DiagnosticSeverity, GeneratedArtifact,
+    GeneratedArtifacts, RegistryModule, RegistryProject,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -59,6 +60,7 @@ const OPERATIONAL_FAILURE_EXIT: u8 = 3;
 // before runtime secret resolution or database rehearsal. Broader package-file
 // limits still apply to fixture journeys and generated package artifacts.
 const AUTHORED_SOURCE_REDERIVATION_MAX_BYTES: u64 = 1024 * 1024;
+const MAX_DERIVED_SQL_ASSET_BYTES: u64 = 256 * 1024;
 static STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Parser)]
@@ -512,6 +514,7 @@ enum ExplainSubject {
     Model,
     Access,
     Routes,
+    Queries,
     Events,
 }
 
@@ -854,6 +857,13 @@ struct CapturedProjectSource {
 struct CapturedModuleSource {
     id: String,
     module: RegistryModule,
+    bytes: Vec<u8>,
+    assets: Vec<CapturedModuleAssetSource>,
+}
+
+#[derive(Debug)]
+struct CapturedModuleAssetSource {
+    path: String,
     bytes: Vec<u8>,
 }
 
@@ -1545,6 +1555,14 @@ fn capture_candidate(
             path: format!("source/modules/{}/module.yaml", module.id),
             id: module.id,
             bytes: module.bytes,
+            assets: module
+                .assets
+                .into_iter()
+                .map(|asset| PackageSourceFile {
+                    path: asset.path,
+                    bytes: asset.bytes,
+                })
+                .collect(),
         })
         .collect();
     let fixture_journey_bytes = read_bounded_regular_file(
@@ -2273,6 +2291,7 @@ fn explain(
         ExplainSubject::Model => explain_model(&compiled),
         ExplainSubject::Access => serde_json::to_value(compiled.access()),
         ExplainSubject::Routes => serde_json::to_value(compiled.routes()),
+        ExplainSubject::Queries => explain_queries(&compiled),
         ExplainSubject::Events => serde_json::to_value(compiled.event_deliveries()),
     }
     .map_err(|_| FailureReport {
@@ -2325,22 +2344,35 @@ fn compile_captured_project(
         .iter()
         .map(|module| module.module.clone())
         .collect::<Vec<_>>();
-    compile_project(&source.project, &modules, profile.into()).map_err(|failure| FailureReport {
-        ok: false,
-        command,
-        diagnostics: failure
-            .diagnostics()
-            .iter()
-            .cloned()
-            .map(|diagnostic| {
-                tool_diagnostic(
-                    diagnostic,
-                    DiagnosticArtifact::RegistryProject,
-                    SuggestedAction::CorrectAuthoringSource,
-                )
+    let assets = source
+        .modules
+        .iter()
+        .flat_map(|module| {
+            module.assets.iter().map(|asset| ModuleAssetSource {
+                module: Some(module.id.clone()),
+                path: asset.path.clone(),
+                bytes: asset.bytes.clone(),
             })
-            .collect(),
-    })
+        })
+        .collect::<Vec<_>>();
+    compile_project_with_assets(&source.project, &modules, &assets, profile.into()).map_err(
+        |failure| FailureReport {
+            ok: false,
+            command,
+            diagnostics: failure
+                .diagnostics()
+                .iter()
+                .cloned()
+                .map(|diagnostic| {
+                    tool_diagnostic(
+                        remap_derived_diagnostic_path(diagnostic, source),
+                        DiagnosticArtifact::RegistryProject,
+                        SuggestedAction::CorrectAuthoringSource,
+                    )
+                })
+                .collect(),
+        },
+    )
 }
 
 fn compiler_findings(compiled: &CompiledRegistry) -> Vec<ToolDiagnostic> {
@@ -2383,7 +2415,13 @@ fn capture_project_source(project_path: &Path) -> Result<CapturedProjectSource, 
         .into_iter()
         .map(|(id, bytes)| {
             let module = parse_module_yaml(&bytes).map_err(first_diagnostic)?;
-            Ok(CapturedModuleSource { id, module, bytes })
+            let assets = load_module_asset_files(project_path, &id, &module)?;
+            Ok(CapturedModuleSource {
+                id,
+                module,
+                bytes,
+                assets,
+            })
         })
         .collect::<Result<Vec<_>, Diagnostic>>()?;
     Ok(CapturedProjectSource {
@@ -2477,6 +2515,96 @@ fn load_module_files(
             Ok((id, bytes))
         })
         .collect()
+}
+
+fn load_module_asset_files(
+    project_path: &Path,
+    module_id: &str,
+    module: &RegistryModule,
+) -> Result<Vec<CapturedModuleAssetSource>, Diagnostic> {
+    let mut paths = BTreeSet::new();
+    for entity in &module.entities {
+        for derived in &entity.derived {
+            validate_module_sql_asset_path(module_id, &derived.sql)?;
+            if !paths.insert(derived.sql.clone()) {
+                return Err(diagnostic(
+                    "source.module_asset.duplicate",
+                    &format!("modules/{module_id}/module.yaml"),
+                    "derived SQL assets must be unique within a module",
+                ));
+            }
+        }
+    }
+    for extension in &module.extend_entities {
+        for derived in &extension.derived {
+            validate_module_sql_asset_path(module_id, &derived.sql)?;
+            if !paths.insert(derived.sql.clone()) {
+                return Err(diagnostic(
+                    "source.module_asset.duplicate",
+                    &format!("modules/{module_id}/module.yaml"),
+                    "derived SQL assets must be unique within a module",
+                ));
+            }
+        }
+    }
+    paths
+        .into_iter()
+        .map(|path| {
+            let bytes = read_bounded_regular_file(
+                &project_path.join("modules").join(module_id).join(&path),
+                "source.module_asset.missing",
+                MAX_DERIVED_SQL_ASSET_BYTES,
+            )?;
+            if bytes.is_empty() {
+                return Err(diagnostic(
+                    "source.module_asset.bounds",
+                    &format!("modules/{module_id}/{path}"),
+                    "derived SQL assets must be non-empty bounded regular files",
+                ));
+            }
+            Ok(CapturedModuleAssetSource { path, bytes })
+        })
+        .collect()
+}
+
+fn validate_module_sql_asset_path(module_id: &str, asset_path: &str) -> Result<(), Diagnostic> {
+    if asset_path.is_empty()
+        || asset_path.len() > 512
+        || asset_path.contains('\\')
+        || asset_path.ends_with('/')
+        || !asset_path.ends_with(".sql")
+    {
+        return Err(module_asset_path_diagnostic(module_id));
+    }
+    let path = Path::new(asset_path);
+    let components = path.components().collect::<Vec<_>>();
+    if path.is_absolute()
+        || components.len() > 12
+        || components
+            .iter()
+            .any(|component| !matches!(component, Component::Normal(_)))
+        || path.to_str() != Some(asset_path)
+        || components
+            .iter()
+            .filter_map(|component| match component {
+                Component::Normal(component) => component.to_str(),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("/")
+            != asset_path
+    {
+        return Err(module_asset_path_diagnostic(module_id));
+    }
+    Ok(())
+}
+
+fn module_asset_path_diagnostic(module_id: &str) -> Diagnostic {
+    diagnostic(
+        "source.module_asset.path_unsafe",
+        &format!("modules/{module_id}/module.yaml"),
+        "derived SQL assets must be bounded module-relative .sql paths",
+    )
 }
 
 fn init_files() -> BTreeMap<String, Vec<u8>> {
@@ -2640,6 +2768,67 @@ fn explain_model(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
         "physicalNames": compiled.physical_names(),
         "package": compiled.package(),
         "manifestProjection": compiled.manifest_projection(),
+    }))
+}
+
+fn explain_queries(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
+    let operations = compiled
+        .queries()
+        .operations
+        .iter()
+        .map(|operation| {
+            let entity = compiled.entities().get(&operation.entity_id);
+            let api_fields = entity
+                .map(|entity| {
+                    operation
+                        .projection_fields
+                        .iter()
+                        .filter_map(|field_id| {
+                            query_field_summary(
+                                field_id,
+                                entity
+                                    .stored_fields
+                                    .iter()
+                                    .find(|field| field.logical.id == *field_id)
+                                    .map(|field| (&field.logical.api_name, "stored"))
+                                    .or_else(|| {
+                                        entity
+                                            .derived_fields
+                                            .get(field_id)
+                                            .map(|field| (&field.logical.api_name, "derived"))
+                                    }),
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            json!({
+                "id": operation.id,
+                "routeId": operation.route_id,
+                "profile": operation.profile_id,
+                "entity": operation.entity_id,
+                "kind": operation.kind,
+                "apiFields": api_fields,
+                "filterable": operation.filter_fields,
+                "sortable": operation.sort_fields,
+                "allowCount": operation.allow_count,
+                "selectors": operation.selector_fields,
+                "readPath": operation.read_path,
+                "bounds": {
+                    "maxPageSize": operation.max_page_size
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::to_value(json!({ "operations": operations }))
+}
+
+fn query_field_summary(field_id: &str, resolved: Option<(&String, &str)>) -> Option<Value> {
+    let (api_name, source_kind) = resolved?;
+    Some(json!({
+        "field": field_id,
+        "apiName": api_name,
+        "sourceKind": source_kind,
     }))
 }
 
@@ -3021,6 +3210,49 @@ fn first_diagnostic(failure: CompileFailure) -> Diagnostic {
             "the authoring source is invalid",
         )
     })
+}
+
+fn remap_derived_diagnostic_path(
+    mut diagnostic: Diagnostic,
+    source: &CapturedProjectSource,
+) -> Diagnostic {
+    if !diagnostic.code.starts_with("derived.sql.") {
+        return diagnostic;
+    }
+    diagnostic.message =
+        "derived SQL asset failed value-minimized validation against its module config".to_owned();
+    if let Some(path) = derived_source_path(source, &diagnostic.path) {
+        diagnostic.path = path;
+    }
+    diagnostic
+}
+
+fn derived_source_path(source: &CapturedProjectSource, diagnostic_path: &str) -> Option<String> {
+    for module in &source.modules {
+        for entity in &module.module.entities {
+            for derived in &entity.derived {
+                let path = format!("entities[{}].derived[{}].sql", entity.id, derived.id);
+                if path == diagnostic_path {
+                    return Some(format!(
+                        "modules/{}/module.yaml:{}",
+                        module.id, diagnostic_path
+                    ));
+                }
+            }
+        }
+        for extension in &module.module.extend_entities {
+            for derived in &extension.derived {
+                let path = format!("entities[{}].derived[{}].sql", extension.entity, derived.id);
+                if path == diagnostic_path {
+                    return Some(format!(
+                        "modules/{}/module.yaml:{}",
+                        module.id, diagnostic_path
+                    ));
+                }
+            }
+        }
+    }
+    None
 }
 
 fn tool_diagnostic(
@@ -3694,6 +3926,8 @@ fn write_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use registry_server::compile_project;
 
     struct TestDirectory {
         path: PathBuf,

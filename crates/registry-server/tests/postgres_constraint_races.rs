@@ -563,8 +563,8 @@ fn create_request<'a>(
 fn temporal_data(start: &str, end: &str) -> Map<String, Value> {
     Map::from_iter([
         ("scope".to_owned(), Value::String("scope-a".to_owned())),
-        ("valid-from".to_owned(), Value::String(start.to_owned())),
-        ("valid-to".to_owned(), Value::String(end.to_owned())),
+        ("validFrom".to_owned(), Value::String(start.to_owned())),
+        ("validTo".to_owned(), Value::String(end.to_owned())),
     ])
 }
 

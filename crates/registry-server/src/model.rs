@@ -29,6 +29,73 @@ pub struct CompiledField {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledLogicalField {
+    pub id: String,
+    pub api_name: String,
+    pub sql_name: String,
+    pub field_type: FieldTypeSource,
+    pub classification: Classification,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledStoredField {
+    #[serde(flatten)]
+    pub logical: CompiledLogicalField,
+    pub required: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub valid_time_role: Option<ValidTimeRole>,
+    pub physical_name: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledDerivedField {
+    #[serde(flatten)]
+    pub logical: CompiledLogicalField,
+    pub derivation_id: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledDerivedRelation {
+    pub id: String,
+    pub sql_path: String,
+    pub key_field: String,
+    pub execution: crate::contract::DerivedExecutionSource,
+    pub sql_sha256: String,
+    pub sql_bytes: Vec<u8>,
+    pub fields: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledSourceRelation {
+    pub entity_id: String,
+    pub sql_name: String,
+    pub stored_fields: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledSelectorProfile {
+    pub id: String,
+    pub fields: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledReadPath {
+    pub id: String,
+    pub through: String,
+    pub to: String,
+    pub route: String,
+    pub source_ref: String,
+    pub target_ref: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledEntity {
     pub id: String,
     pub route: String,
@@ -40,6 +107,13 @@ pub struct CompiledEntity {
     pub physical_table: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temporal: Option<CompiledTemporal>,
+    pub canonical_id: CompiledLogicalField,
+    pub stored_fields: Vec<CompiledStoredField>,
+    pub derived_fields: BTreeMap<String, CompiledDerivedField>,
+    pub derived_relations: BTreeMap<String, CompiledDerivedRelation>,
+    pub source_relation: CompiledSourceRelation,
+    pub selector_profiles: BTreeMap<String, CompiledSelectorProfile>,
+    pub read_paths: BTreeMap<String, CompiledReadPath>,
     pub fields: BTreeMap<String, CompiledField>,
     pub constraints: BTreeMap<String, ConstraintSource>,
     pub indexes: BTreeMap<String, Vec<String>>,
@@ -161,6 +235,8 @@ pub enum CompiledRevisionKind {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledAccessEntry {
+    #[serde(default)]
+    pub route_id: String,
     pub entity_id: String,
     pub operation: Operation,
     pub profile_ids: BTreeSet<String>,
@@ -265,6 +341,14 @@ pub struct CompiledQueryOperation {
     pub projection_fields: Vec<String>,
     pub filter_fields: Vec<CompiledQueryFilterField>,
     pub sort_fields: Vec<CompiledQuerySortField>,
+    #[serde(default)]
+    pub allow_count: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selector_fields: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub processing_fields: Vec<String>,
     pub stable_tie_breaker: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temporal: Option<CompiledQueryTemporalBinding>,

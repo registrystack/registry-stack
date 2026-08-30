@@ -16,7 +16,9 @@ use crate::event_destination::EventDestinationCompatibilityInventory;
 use crate::migration_plan::{
     ExternalBackupBinding, ReviewedMigrationStepDescriptor, ValidatedReviewedMigrationPlan,
 };
-use crate::package::{PackageFileRole, VerifiedPackage};
+use crate::package::{
+    PackageFileRole, VerifiedPackage, REVIEWED_VIEW_TRANSITION_STATEMENT_ID_PREFIX,
+};
 use crate::postgres::{
     statement_checksum, ConnectionConfig, ExpectedManagedCatalog, ExpectedRegistryIdentity,
     MigrationArtifactBinding, MigrationLedgerEntry, MigrationLedgerStep, MigrationLedgerStepKind,
@@ -279,6 +281,9 @@ pub async fn apply_verified_package(
         .map(|(statement, checksum)| PackageDdlStatement {
             sql: &statement.sql,
             checksum,
+            reapply_on_resume: statement
+                .id
+                .starts_with(REVIEWED_VIEW_TRANSITION_STATEMENT_ID_PREFIX),
         })
         .collect::<Vec<_>>();
 

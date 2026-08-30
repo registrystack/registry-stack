@@ -41,6 +41,7 @@ const MAX_VERIFIED_DDL_STATEMENT_TIMEOUT: Duration = Duration::from_secs(60 * 60
 pub(crate) struct PackageDdlStatement<'a> {
     pub sql: &'a str,
     pub checksum: &'a str,
+    pub reapply_on_resume: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -428,10 +429,8 @@ impl DedicatedApplyConnection {
             }
             let transaction = self.client.transaction().await?;
             set_local_duration_timeouts(&transaction, lock_timeout, statement_timeout).await?;
-            if step_progress(&transaction, ledger, ledger_step)
-                .await?
-                .complete
-            {
+            let progress = step_progress(&transaction, ledger, ledger_step).await?;
+            if progress.complete && !statement.reapply_on_resume {
                 transaction.commit().await?;
                 continue;
             }
@@ -439,7 +438,9 @@ impl DedicatedApplyConnection {
                 .batch_execute(statement.sql)
                 .await
                 .map_err(|_| PostgresKernelError::Connection)?;
-            record_step_complete(&transaction, ledger, ledger_step, 0).await?;
+            if !progress.complete {
+                record_step_complete(&transaction, ledger, ledger_step, 0).await?;
+            }
             transaction.commit().await?;
         }
         Ok(())

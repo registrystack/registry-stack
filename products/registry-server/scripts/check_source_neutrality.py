@@ -65,8 +65,6 @@ FORBIDDEN_RUST_TYPE_IDENTIFIERS = (
     "OfficerAppointment",
 )
 FORBIDDEN_DOMAIN_COMPONENTS = (
-    "asset",
-    "assets",
     "site",
     "sites",
     "placement",

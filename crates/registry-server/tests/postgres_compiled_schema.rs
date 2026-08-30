@@ -9,8 +9,8 @@ mod postgres_harness;
 use std::time::Duration;
 
 use postgres_harness::TestDatabase;
-use registry_server::compiler::{compile_project, CompileProfile};
-use registry_server::contract::{parse_project_json, parse_project_yaml};
+use registry_server::compiler::{compile_project, compile_project_with_assets, CompileProfile};
+use registry_server::contract::{parse_project_json, parse_project_yaml, ModuleAssetSource};
 use registry_server::postgres::{
     begin_record_transaction, initialize_registry_state_for_catalog_test, install_compiled_schema,
     verify_catalog_identity_for_catalog, ClaimContext, ExpectedManagedCatalog, RegistryLockKey,
@@ -78,6 +78,18 @@ async fn compiled_postgres_schema_enforces_context_rls_and_exact_catalog() {
         .get_for_test()
         .await
         .expect("runtime connection is available");
+    for schema in ["registry_source", "registry_derived", "registry_context"] {
+        let usage: bool = runtime
+            .query_one(
+                "SELECT has_schema_privilege(current_user, $1, 'USAGE')
+                    AND NOT has_schema_privilege(current_user, $1, 'CREATE')",
+                &[&schema],
+            )
+            .await
+            .expect("runtime schema privilege probe succeeds")
+            .get(0);
+        assert!(usage, "runtime has only USAGE on {schema}");
+    }
     let missing: i64 = runtime
         .query_one(&format!("SELECT count(*) FROM registry_data.{table}"), &[])
         .await
@@ -300,7 +312,221 @@ async fn compiled_postgres_schema_enforces_context_rls_and_exact_catalog() {
     assert_catalog_drift_is_rejected(&database, &catalog, &identity, &table).await;
     database.cleanup().await;
 
+    install_derived_view_fixture().await;
     install_asset_fixture().await;
+}
+
+async fn install_derived_view_fixture() {
+    let registry = derived_registry();
+    let database = TestDatabase::create(1).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    install_compiled_schema(&migration, &registry, &database.runtime_role)
+        .await
+        .expect("derived PostgreSQL schema installs");
+    let catalog = ExpectedManagedCatalog::compiled(&registry);
+    let identity = initialize_registry_state_for_catalog_test(
+        &migration,
+        &database.runtime_role,
+        &catalog,
+        RegistryStateTestIdentity {
+            package_id: PACKAGE_ID,
+            environment: "local",
+            instance_id: INSTANCE_ID,
+            database_id: DATABASE_ID,
+            package_revision: "derived-package-1",
+            package_sequence: 1,
+        },
+    )
+    .await
+    .expect("derived catalog binds active Registry identity");
+    verify_catalog_identity_for_catalog(
+        &migration,
+        &identity,
+        &catalog,
+        &database.migration_role,
+        &database.runtime_role,
+    )
+    .await
+    .expect("derived catalog passes exact verification");
+
+    let entity = &registry.entities()["household"];
+    let table = quote_identifier(&entity.physical_table);
+    let tenant = quote_identifier(&entity.fields["tenant"].physical_name);
+    let size = quote_identifier(&entity.fields["size"].physical_name);
+    let source_view = quote_identifier(&entity.source_relation.sql_name);
+    let derived_view_name = registry
+        .ddl()
+        .views
+        .iter()
+        .find(|view| view.id == "entity.household.derived.facts")
+        .expect("derived view is in compiled DDL inventory")
+        .name
+        .clone();
+    let derived_view = quote_identifier(&derived_view_name);
+
+    let pool = database
+        .runtime_config
+        .build_pool()
+        .expect("bounded runtime pool builds");
+    let lock_key = RegistryLockKey::derive("derived-schema-test").expect("lock key is bounded");
+    let claims = ClaimContext::for_compiled(
+        &registry,
+        "household",
+        Some("principal".to_owned()),
+        "operator",
+        None,
+        vec![RowBoundaryContext::Equals {
+            field: "tenant".to_owned(),
+            value: "north".to_owned(),
+        }],
+    )
+    .expect("derived claims match profile");
+    let mut client = pool
+        .get_for_test()
+        .await
+        .expect("runtime connection is available");
+    let transaction = begin_record_transaction(
+        &mut client,
+        lock_key,
+        Duration::from_secs(1),
+        &identity,
+        &claims,
+    )
+    .await
+    .expect("runtime transaction starts");
+    transaction
+        .transaction_for_test()
+        .execute(
+            &format!(
+                "INSERT INTO registry_data.{table} (record_id, {tenant}, {size})
+                 VALUES ('00000000-0000-4000-8000-000000000301', 'north', 3)"
+            ),
+            &[],
+        )
+        .await
+        .expect("matching derived seed row is accepted");
+    transaction.commit().await.expect("seed commits");
+
+    let transaction = begin_record_transaction(
+        &mut client,
+        lock_key,
+        Duration::from_secs(1),
+        &identity,
+        &claims,
+    )
+    .await
+    .expect("read transaction starts");
+    transaction
+        .transaction_for_test()
+        .execute(
+            "SELECT set_config('registry.evaluation_date', '2026-08-30', true)",
+            &[],
+        )
+        .await
+        .expect("test installs explicit evaluation date");
+    let options: String = transaction
+        .transaction_for_test()
+        .query_one(
+            "SELECT COALESCE(array_to_string(reloptions, ','), '')
+             FROM pg_catalog.pg_class c
+             JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+             WHERE n.nspname = 'registry_derived' AND c.relname = $1",
+            &[&derived_view_name],
+        )
+        .await
+        .expect("derived view options are inspectable")
+        .get(0);
+    assert!(options.contains("security_invoker=true"));
+    assert!(options.contains("security_barrier=true"));
+    let row = transaction
+        .transaction_for_test()
+        .query_one(
+            &format!(
+                "SELECT pg_typeof(child_count)::text, child_count, observed_on::text
+                 FROM registry_derived.{derived_view}"
+            ),
+            &[],
+        )
+        .await
+        .expect("derived wrapper casts declared output types");
+    assert_eq!(row.get::<_, String>(0), "bigint");
+    assert_eq!(row.get::<_, i64>(1), 3);
+    assert_eq!(row.get::<_, String>(2), "2026-08-30");
+    let source_visible: i64 = transaction
+        .transaction_for_test()
+        .query_one(
+            &format!("SELECT count(*) FROM registry_source.{source_view}"),
+            &[],
+        )
+        .await
+        .expect("source view remains RLS confined")
+        .get(0);
+    assert_eq!(source_visible, 1);
+    assert!(transaction
+        .transaction_for_test()
+        .execute(
+            &format!("UPDATE registry_derived.{derived_view} SET child_count = 5"),
+            &[],
+        )
+        .await
+        .is_err());
+    transaction.rollback().await.expect("proof rolls back");
+
+    let denied_claims = ClaimContext::for_compiled(
+        &registry,
+        "household",
+        Some("principal".to_owned()),
+        "operator",
+        None,
+        vec![RowBoundaryContext::Equals {
+            field: "tenant".to_owned(),
+            value: "south".to_owned(),
+        }],
+    )
+    .expect("denied derived claims match profile shape");
+    let denied_transaction = begin_record_transaction(
+        &mut client,
+        lock_key,
+        Duration::from_secs(1),
+        &identity,
+        &denied_claims,
+    )
+    .await
+    .expect("denied read transaction starts");
+    denied_transaction
+        .transaction_for_test()
+        .execute(
+            "SELECT set_config('registry.evaluation_date', '2026-08-30', true)",
+            &[],
+        )
+        .await
+        .expect("test installs explicit evaluation date for denied read");
+    let source_denied: i64 = denied_transaction
+        .transaction_for_test()
+        .query_one(
+            &format!("SELECT count(*) FROM registry_source.{source_view}"),
+            &[],
+        )
+        .await
+        .expect("source view can be queried through denied RLS")
+        .get(0);
+    let derived_denied: i64 = denied_transaction
+        .transaction_for_test()
+        .query_one(
+            &format!("SELECT count(*) FROM registry_derived.{derived_view}"),
+            &[],
+        )
+        .await
+        .expect("derived view can be queried through denied RLS")
+        .get(0);
+    assert_eq!(source_denied, 0);
+    assert_eq!(derived_denied, 0);
+    denied_transaction
+        .rollback()
+        .await
+        .expect("denied proof rolls back");
+    migration_task.abort();
+    database.cleanup().await;
 }
 
 async fn insert_row(
@@ -675,4 +901,49 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
     .expect("compiled PostgreSQL fixture parses");
     compile_project(&project, &[], CompileProfile::Authoring)
         .expect("compiled PostgreSQL fixture compiles")
+}
+
+fn derived_registry() -> registry_server::CompiledRegistry {
+    let project = parse_project_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"derived-postgres","version":"1","defaultLanguage":"en"},
+          "entities":[{
+            "id":"household","route":"households","mutationMode":"mutable",
+            "fields":[
+              {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
+              {"id":"size","type":"int64","required":true,"classification":"internal"}
+            ],
+            "derived":[{
+              "id":"facts","sql":"sql/facts.sql","key":"id","execution":"live",
+              "fields":[
+                {"id":"child-count","type":"int64","classification":"internal"},
+                {"id":"observed-on","type":"date","classification":"internal"}
+              ]
+            }],
+            "accessProfiles":[{
+              "id":"operator","default":true,"principalClaim":"registry_principal",
+              "operations":["create","get","list"],
+              "readableFields":["tenant","size","child-count","observed-on"],
+              "writableFields":["tenant","size"],
+              "filterableFields":["child-count"],
+              "sortableFields":["child-count"],
+              "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
+            }]
+          }]
+        }"#,
+    )
+    .expect("derived PostgreSQL fixture parses");
+    compile_project_with_assets(
+        &project,
+        &[],
+        &[ModuleAssetSource {
+            module: None,
+            path: "sql/facts.sql".to_owned(),
+            bytes: b"SELECT h.id AS id, h.size AS child_count, registry_context.evaluation_date() AS observed_on FROM registry_source.household h".to_vec(),
+        }],
+        CompileProfile::Authoring,
+    )
+    .expect("derived PostgreSQL fixture compiles")
 }

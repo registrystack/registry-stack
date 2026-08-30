@@ -7,11 +7,11 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use axum::body::{to_bytes, Body};
-use axum::http::{Method, Request, StatusCode};
+use axum::http::{header::CONTENT_TYPE, Method, Request, StatusCode};
 use registry_platform_canonical_json::parse_json_strict;
 use registry_server::api::{
     router, HeldReadResponse, HttpService, ReadRuntimeIdentity, ReadServiceError, ReadinessProbe,
-    RecordReadRequest, RecordReadService, RevisionReadRefusal, RevisionReadRequest,
+    RecordReadKind, RecordReadRequest, RecordReadService, RevisionReadRefusal, RevisionReadRequest,
     RevisionReadService, ServiceFuture, VerifiedClaimValue, VerifiedRequestClaims,
 };
 use registry_server::artifacts::REGISTRY_METADATA_ARTIFACT_PATH;
@@ -21,6 +21,9 @@ use registry_server::{compile_project, parse_project_yaml, CompileProfile};
 use serde_json::{json, Value};
 use tower::Service as _;
 use zeroize::Zeroizing;
+
+#[path = "../src/query.rs"]
+mod strict_query;
 
 const PROJECT: &str = r#"
 apiVersion: registry.registrystack.org/v1alpha1
@@ -53,6 +56,7 @@ entities:
         requiredScopes: [registry.read]
         requiredPurposes: [case-management]
         operations: [create, get, list, patch, tombstone, batch, revisions]
+        allowCount: true
         readableFields: [label, secret, jurisdiction]
         writableFields: [label, secret, jurisdiction]
         filterableFields: [label, jurisdiction]
@@ -73,6 +77,87 @@ entities:
         operations: [create, get, list]
         readableFields: [text]
         writableFields: [text]
+"#;
+
+const LOOKUP_PATH_PROJECT: &str = r#"
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: lookup-path-surface
+  version: 0.1.0
+  defaultLanguage: en
+entities:
+  - id: household
+    route: households
+    mutationMode: mutable
+    tombstone: true
+    classification: restricted
+    fields:
+      - {id: household-code, type: string, required: true, maxLength: 64, classification: restricted}
+      - {id: administrative-area, type: string, required: true, maxLength: 64, classification: restricted}
+      - {id: local-household-number, type: int64, required: true, classification: restricted}
+      - {id: private-note, type: string, required: false, maxLength: 64, classification: restricted}
+    selectorProfiles:
+      - {id: by-household-code, fields: [household-code]}
+      - {id: by-local-reference, fields: [administrative-area, local-household-number]}
+      - {id: by-private-note, fields: [private-note]}
+    readPaths:
+      - {id: people, through: membership, to: person, route: people}
+    accessProfiles:
+      - id: operator
+        default: true
+        principalClaim: registry_principal
+        requiredScopes: [registry.read]
+        requiredPurposes: [case-management]
+        operations: [get, lookup, list]
+        readableFields: [household-code, administrative-area, local-household-number]
+        filterableFields: [household-code, administrative-area, local-household-number]
+        sortableFields: [household-code]
+        lookups:
+          - {selector: by-household-code, valueOrigin: request}
+          - {selector: by-local-reference, valueOrigin: request}
+        readPaths:
+          - path: people
+            readableFields: [person-code]
+            filterableFields: [person-code]
+            sortableFields: [person-code]
+            allowCount: true
+      - id: viewer
+        principalClaim: registry_principal
+        requiredScopes: [registry.read]
+        requiredPurposes: [case-management]
+        operations: [get, lookup]
+        readableFields: [household-code]
+        rowBoundaries:
+          - {field: id, claim: household_id, operator: equals}
+        lookups:
+          - selector: by-household-code
+            valueOrigin: verified_claim
+            claimMapping: {household-code: household_code}
+  - id: membership
+    route: memberships
+    mutationMode: mutable
+    classification: restricted
+    fields:
+      - {id: household, type: reference, target: household, required: true, classification: restricted}
+      - {id: person, type: reference, target: person, required: true, classification: restricted}
+  - id: person
+    route: people
+    mutationMode: mutable
+    classification: restricted
+    fields:
+      - {id: person-code, type: string, required: true, maxLength: 64, classification: restricted}
+      - {id: sensitive-note, type: string, required: false, maxLength: 64, classification: restricted}
+    accessProfiles:
+      - id: operator
+        default: true
+        principalClaim: registry_principal
+        requiredScopes: [registry.read]
+        requiredPurposes: [case-management]
+        operations: [get, list]
+        readableFields: [sensitive-note]
+        filterableFields: [sensitive-note]
+        sortableFields: [sensitive-note]
 "#;
 
 const DISCOVERY_MATRIX_PROJECT: &str = r#"
@@ -140,6 +225,33 @@ vocabularies:
     values: [sealed-canary-value, retired-canary-value]
 "#;
 
+const LOGICAL_SCHEMA_PROJECT: &str = r#"
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: logical-schema-surface
+  version: 1
+  defaultLanguage: en
+entities:
+  - id: logical-record
+    route: logical-records
+    mutationMode: mutable
+    classification: public
+    fields:
+      - {id: household-code, type: string, required: true, maxLength: 64, classification: public}
+      - {id: household-kind-code, apiName: householdKind, type: vocabulary-code, vocabulary: household-kind, required: true, classification: public}
+      - {id: private-canary-field, apiName: privateCanary, type: string, required: true, maxLength: 64, classification: restricted}
+    accessProfiles:
+      - id: public
+        default: true
+        anonymous: true
+        operations: [get, list]
+        readableFields: [household-code, household-kind-code]
+vocabularies:
+  - id: household-kind
+    values: [single, extended]
+"#;
+
 #[derive(Default)]
 struct RecordingReadService {
     calls: AtomicUsize,
@@ -203,31 +315,34 @@ async fn closed_query_grammar_reaches_record_service_as_compiled_query() {
     let accepted = harness
         .send(
             Method::GET,
-            "/v1/records/cases?fields=label&filter=label:prefix:Visible&sort=label&pageSize=25",
+            "/v1/records/cases?$select=label&$filter=startswith(label,'Visible')&$orderby=label&$top=25",
             None,
         )
         .await;
     assert_eq!(accepted.status(), StatusCode::OK);
     assert_eq!(accepted.headers()["cache-control"], "no-store");
     let request = harness.records.last_request();
-    let query = request.query.expect("list request carries compiled query");
+    let query = request_query(&request);
     assert_eq!(query.route_id, "records.case.list");
     assert_eq!(query.query_operation_id, "records.case.public.list");
     assert_eq!(query.page_size, 25);
     assert_eq!(request.maximum_records, 26);
-    assert_eq!(query.sort.as_deref(), Some("label"));
-    assert_eq!(query.filters.len(), 1);
-    assert_eq!(query.filters[0].field, "label");
     assert_eq!(
-        query.filters[0].operator,
-        registry_server::model::CompiledQueryFilterOperator::Prefix
+        query.order.as_ref().map(|order| order.field_id.as_str()),
+        Some("label")
+    );
+    let predicate = single_filter_predicate(query);
+    assert_eq!(predicate.field_id, "label");
+    assert_eq!(
+        predicate.operator,
+        registry_server::api::ReadFilterOperator::StartsWith
     );
 
     let before = harness.records.calls();
     let bad_operator = harness
         .send(
             Method::GET,
-            "/v1/records/cases?filter=label:range:a..z",
+            "/v1/records/cases?$filter=label%20approximately%20'a'",
             None,
         )
         .await;
@@ -237,37 +352,317 @@ async fn closed_query_grammar_reaches_record_service_as_compiled_query() {
 }
 
 #[tokio::test]
-async fn repeated_in_filters_are_one_deterministic_finite_set() {
+async fn in_filter_values_are_one_deterministic_finite_set() {
     let harness = Harness::new(true);
     let accepted = harness
         .send(
             Method::GET,
-            "/v1/records/cases?accessProfile=caseworker&filter=jurisdiction:in:area-b&filter=jurisdiction:in:area-a",
+            "/v1/records/cases?accessProfile=caseworker&$filter=jurisdiction%20in%20('area-b','area-a')",
             Some(caseworker_claims("case-management")),
         )
         .await;
     assert_eq!(accepted.status(), StatusCode::OK);
-    let query = harness
-        .records
-        .last_request()
-        .query
-        .expect("list request carries compiled query");
-    assert_eq!(query.filters.len(), 1);
-    assert_eq!(query.filters[0].field, "jurisdiction");
+    let last = harness.records.last_request();
+    let query = request_query(&last);
+    let predicate = single_filter_predicate(query);
+    assert_eq!(predicate.field_id, "jurisdiction");
     assert_eq!(
-        query.filters[0].values,
+        predicate.values,
         vec!["area-a".to_owned(), "area-b".to_owned()]
     );
 
     let mixed = harness
         .send(
             Method::GET,
-            "/v1/records/cases?accessProfile=caseworker&filter=jurisdiction:in:area-a&filter=jurisdiction:equals:area-a",
+            "/v1/records/cases?accessProfile=caseworker&$filter=secret%20eq%20'DO-NOT-LEAK'",
             Some(caseworker_claims("case-management")),
         )
         .await;
     assert_eq!(mixed.status(), StatusCode::BAD_REQUEST);
     assert_eq!(body_json(mixed).await["code"], "query.invalid");
+}
+
+#[tokio::test]
+async fn lookup_body_exactness_origin_types_and_unresolved_equivalence_are_value_free() {
+    let harness = Harness::from_project(LOOKUP_PATH_PROJECT, true);
+    let operator_claims = Some(caseworker_claims("case-management"));
+    let accepted = harness
+        .send_json(
+            Method::POST,
+            "/v1/records/households:lookup?accessProfile=operator&$select=household-code",
+            operator_claims.clone(),
+            json!({
+                "selector": "by-local-reference",
+                "values": {
+                    "administrative-area": "area-a",
+                    "local-household-number": 7
+                }
+            }),
+        )
+        .await;
+    assert_eq!(accepted.status(), StatusCode::OK);
+    let request = harness.records.last_request();
+    assert_eq!(request.maximum_records, 2);
+    assert_eq!(
+        request.selected_fields,
+        BTreeSet::from(["household-code".to_owned()])
+    );
+    let RecordReadKind::Lookup { selector } = request.kind else {
+        panic!("lookup route must reach the service as a lookup request")
+    };
+    assert_eq!(selector.selector_id, "by-local-reference");
+    assert_eq!(
+        selector.query_operation_id,
+        "records.household.operator.lookup"
+    );
+    assert_eq!(
+        selector
+            .values
+            .iter()
+            .map(|value| (value.field_id.as_str(), value.value.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("administrative-area", "area-a"),
+            ("local-household-number", "7")
+        ]
+    );
+
+    for body in [
+        json!({"selector": "by-local-reference"}),
+        json!({"selector": "by-local-reference", "values": {"administrative-area": "area-a", "local-household-number": "7"}}),
+        json!({"selector": "by-local-reference", "values": {"administrative-area": "area-a", "local-household-number": 7, "private-note": "DO-NOT-LEAK"}}),
+        json!({"selector": "by-local-reference", "values": {"administrative-area": "area-a", "local-household-number": 7}, "extra": "DO-NOT-LEAK"}),
+    ] {
+        let before = harness.records.calls();
+        let response = harness
+            .send_json(
+                Method::POST,
+                "/v1/records/households:lookup?accessProfile=operator",
+                operator_claims.clone(),
+                body,
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = body_json(response).await;
+        assert_eq!(body["code"], "request.invalid");
+        assert!(!body.to_string().contains("DO-NOT-LEAK"));
+        assert_eq!(harness.records.calls(), before);
+    }
+
+    let oversized_body = format!(
+        r#"{{"selector":"by-household-code","values":{{"household-code":"{}"}}}}"#,
+        "x".repeat(17 * 1024)
+    );
+    let before = harness.records.calls();
+    let oversized = harness
+        .send_body(
+            Method::POST,
+            "/v1/records/households:lookup?accessProfile=operator",
+            operator_claims.clone(),
+            Some("application/json"),
+            Body::from(oversized_body),
+        )
+        .await;
+    assert_eq!(oversized.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(oversized).await["code"], "request.invalid");
+    assert_eq!(harness.records.calls(), before);
+
+    let unknown = harness
+        .send_json(
+            Method::POST,
+            "/v1/records/households:lookup?accessProfile=operator",
+            operator_claims.clone(),
+            json!({"selector": "missing-canary", "values": {"household-code": "DO-NOT-LEAK"}}),
+        )
+        .await;
+    let unknown_body = body_bytes(unknown).await;
+    let ungranted = harness
+        .send_json(
+            Method::POST,
+            "/v1/records/households:lookup?accessProfile=operator",
+            operator_claims.clone(),
+            json!({"selector": "by-private-note", "values": {"private-note": "DO-NOT-LEAK"}}),
+        )
+        .await;
+    let ungranted_body = body_bytes(ungranted).await;
+    assert_eq!(unknown_body, ungranted_body);
+    assert!(!String::from_utf8_lossy(&unknown_body).contains("DO-NOT-LEAK"));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&unknown_body).expect("unresolved response is JSON")
+            ["code"],
+        "lookup.unresolved"
+    );
+
+    let claim_origin_claims = Some(caseworker_claims_with_direct(
+        "case-management",
+        [
+            (
+                "household_code",
+                VerifiedClaimValue::direct_string("hh-001").expect("claim value"),
+            ),
+            (
+                "household_id",
+                VerifiedClaimValue::direct_string("00000000-0000-4000-8000-000000000001")
+                    .expect("claim value"),
+            ),
+        ],
+    ));
+    let claim_origin = harness
+        .send_json(
+            Method::POST,
+            "/v1/records/households:lookup?accessProfile=viewer",
+            claim_origin_claims,
+            json!({"selector": "by-household-code"}),
+        )
+        .await;
+    assert_eq!(claim_origin.status(), StatusCode::OK);
+    let request = harness.records.last_request();
+    let RecordReadKind::Lookup { selector } = request.kind else {
+        panic!("claim-origin route must reach the service as a lookup request")
+    };
+    assert_eq!(selector.selector_id, "by-household-code");
+    assert_eq!(
+        selector.value_origin,
+        registry_server::contract::LookupValueOrigin::VerifiedClaim
+    );
+    assert_eq!(selector.values[0].value, "hh-001");
+
+    let claim_values_body = harness
+        .send_json(
+            Method::POST,
+            "/v1/records/households:lookup?accessProfile=viewer",
+            Some(caseworker_claims_with_direct(
+                "case-management",
+                [(
+                    "household_id",
+                    VerifiedClaimValue::direct_string("00000000-0000-4000-8000-000000000001")
+                        .expect("claim value"),
+                )],
+            )),
+            json!({"selector": "by-household-code", "values": {"household-code": "DO-NOT-LEAK"}}),
+        )
+        .await;
+    assert_eq!(claim_values_body.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body_json(claim_values_body).await["code"],
+        "request.invalid"
+    );
+
+    let missing_claim = harness
+        .send_json(
+            Method::POST,
+            "/v1/records/households:lookup?accessProfile=viewer",
+            Some(caseworker_claims_with_direct(
+                "case-management",
+                [(
+                    "household_id",
+                    VerifiedClaimValue::direct_string("00000000-0000-4000-8000-000000000001")
+                        .expect("claim value"),
+                )],
+            )),
+            json!({"selector": "by-household-code"}),
+        )
+        .await;
+    assert_eq!(body_bytes(missing_claim).await, unknown_body);
+}
+
+#[tokio::test]
+async fn relationship_route_uses_path_grant_not_direct_target_rights() {
+    let harness = Harness::from_project(LOOKUP_PATH_PROJECT, true);
+    let root = "00000000-0000-4000-8000-000000000001";
+    let accepted = harness
+        .send(
+            Method::GET,
+            &format!(
+                "/v1/records/households/{root}/people?accessProfile=operator&$select=person-code&$filter=startswith(person-code,'P-')&$orderby=person-code&$top=5&$count=true"
+            ),
+            Some(caseworker_claims("case-management")),
+        )
+        .await;
+    assert_eq!(accepted.status(), StatusCode::OK);
+    let request = harness.records.last_request();
+    assert_eq!(request.entity_id, "household");
+    assert_eq!(request.operation_id, "records.household.path.people");
+    assert_eq!(
+        request.selected_fields,
+        BTreeSet::from(["person-code".to_owned()])
+    );
+    assert_eq!(request.maximum_records, 6);
+    let RecordReadKind::Relationship {
+        root_id,
+        path_id,
+        plan,
+    } = request.kind
+    else {
+        panic!("read-path route must reach the service as a relationship request")
+    };
+    assert_eq!(root_id, root);
+    assert_eq!(path_id, "people");
+    assert_eq!(plan.route_id, "records.household.path.people");
+    assert_eq!(
+        plan.query_operation_id,
+        "records.household.operator.path.people"
+    );
+    assert_eq!(plan.page_size, 5);
+    assert!(plan.include_count);
+    assert_eq!(
+        single_filter_predicate(&plan).field_id,
+        "person-code",
+        "path filters are target-field filters from the path grant"
+    );
+    assert_eq!(
+        plan.order.as_ref().map(|order| order.field_id.as_str()),
+        Some("person-code")
+    );
+
+    let before = harness.records.calls();
+    let widened = harness
+        .send(
+            Method::GET,
+            &format!(
+                "/v1/records/households/{root}/people?accessProfile=operator&$select=sensitive-note"
+            ),
+            Some(caseworker_claims("case-management")),
+        )
+        .await;
+    assert_eq!(widened.status(), StatusCode::BAD_REQUEST);
+    let widened_body = body_json(widened).await;
+    assert_eq!(widened_body["code"], "query.invalid");
+    assert!(!widened_body.to_string().contains("sensitive-note"));
+    assert_eq!(harness.records.calls(), before);
+
+    let unknown_path = harness
+        .send(
+            Method::GET,
+            &format!("/v1/records/households/{root}/unknown-path?accessProfile=viewer"),
+            Some(caseworker_claims_with_direct(
+                "case-management",
+                [(
+                    "household_id",
+                    VerifiedClaimValue::direct_string(root).expect("claim value"),
+                )],
+            )),
+        )
+        .await;
+    assert_eq!(unknown_path.status(), StatusCode::NOT_FOUND);
+    let unknown_path_body = body_json(unknown_path).await;
+
+    let ungranted = harness
+        .send(
+            Method::GET,
+            &format!("/v1/records/households/{root}/people?accessProfile=viewer"),
+            Some(caseworker_claims_with_direct(
+                "case-management",
+                [(
+                    "household_id",
+                    VerifiedClaimValue::direct_string(root).expect("claim value"),
+                )],
+            )),
+        )
+        .await;
+    assert_eq!(ungranted.status(), StatusCode::NOT_FOUND);
+    assert_eq!(body_json(ungranted).await, unknown_path_body);
+    assert_eq!(harness.records.calls(), before);
 }
 
 #[tokio::test]
@@ -277,7 +672,7 @@ async fn continuation_requests_refuse_query_overrides_before_record_io() {
     let response = harness
         .send(
             Method::GET,
-            "/v1/records/cases?cursor=opaque-token&fields=label",
+            "/v1/records/cases?$skiptoken=opaque-token&$select=label",
             None,
         )
         .await;
@@ -291,12 +686,124 @@ async fn known_route_malformed_query_is_refusal_audited_before_response() {
     let harness = Harness::new(true);
     harness.records.refusal_fails.store(true, Ordering::SeqCst);
     let response = harness
-        .send(Method::GET, "/v1/records/cases?filter=label:equals", None)
+        .send(Method::GET, "/v1/records/cases?$filter=label%20eq", None)
         .await;
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body_json(response).await["code"], "source.unavailable");
     assert_eq!(harness.records.calls(), 0);
     assert_eq!(harness.records.refusal_calls(), 1);
+}
+
+#[tokio::test]
+async fn legacy_query_keys_are_not_accepted() {
+    let harness = Harness::new(true);
+    for uri in [
+        "/v1/records/cases?fields=label",
+        "/v1/records/cases?filter=label:equals:Visible",
+        "/v1/records/cases?sort=label",
+        "/v1/records/cases?pageSize=25",
+        "/v1/records/cases?cursor=opaque-token",
+    ] {
+        let response = harness.send(Method::GET, uri, None).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{uri}");
+        assert_eq!(body_json(response).await["code"], "query.invalid", "{uri}");
+    }
+    assert_eq!(harness.records.calls(), 0);
+}
+
+#[tokio::test]
+async fn count_requires_compiled_permission_and_top_is_bounded() {
+    let harness = Harness::new(true);
+    let public_count = harness
+        .send(Method::GET, "/v1/records/cases?$count=true", None)
+        .await;
+    assert_eq!(public_count.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(public_count).await["code"], "query.invalid");
+
+    let caseworker_count = harness
+        .send(
+            Method::GET,
+            "/v1/records/cases?accessProfile=caseworker&$count=true&$top=1",
+            Some(caseworker_claims("case-management")),
+        )
+        .await;
+    assert_eq!(caseworker_count.status(), StatusCode::OK);
+    let body = body_json(caseworker_count).await;
+    assert_eq!(body["count"], 1);
+    assert_eq!(body["pageInfo"]["nextCursor"], Value::Null);
+    let request = harness.records.last_request();
+    let query = request_query(&request);
+    assert!(query.include_count);
+    assert_eq!(query.page_size, 1);
+    assert_eq!(request.maximum_records, 2);
+}
+
+#[tokio::test]
+async fn desc_ordering_and_field_capability_failures_are_value_free() {
+    let harness = Harness::new(true);
+    for uri in [
+        "/v1/records/cases?$orderby=label%20desc",
+        "/v1/records/cases?$filter=secret%20eq%20'DO-NOT-LEAK'",
+        "/v1/records/cases?$filter=missing%20eq%20'DO-NOT-LEAK'",
+    ] {
+        let response = harness.send(Method::GET, uri, None).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{uri}");
+        let body = body_json(response).await;
+        assert_eq!(body["code"], "query.invalid", "{uri}");
+        let rendered = body.to_string();
+        assert!(!rendered.contains("secret"));
+        assert!(!rendered.contains("missing"));
+        assert!(!rendered.contains("DO-NOT-LEAK"));
+    }
+    assert_eq!(harness.records.calls(), 0);
+}
+
+#[tokio::test]
+async fn select_id_is_a_noop_and_filter_grouping_reaches_the_plan() {
+    let harness = Harness::new(true);
+    let selected_id = harness
+        .send(Method::GET, "/v1/records/cases?$select=id", None)
+        .await;
+    assert_eq!(selected_id.status(), StatusCode::OK);
+    assert_eq!(
+        harness.records.last_request().selected_fields,
+        BTreeSet::from(["label".to_owned()])
+    );
+
+    let grouped = harness
+        .send(
+            Method::GET,
+            "/v1/records/cases?accessProfile=caseworker&$filter=(label%20eq%20'Visible'%20or%20jurisdiction%20eq%20'area-a')%20and%20not%20jurisdiction%20eq%20'area-b'",
+            Some(caseworker_claims("case-management")),
+        )
+        .await;
+    assert_eq!(grouped.status(), StatusCode::OK);
+    let last = harness.records.last_request();
+    let query = request_query(&last);
+    assert!(matches!(
+        &query.filter,
+        Some(registry_server::api::ReadFilterExpr::Binary {
+            op: registry_server::api::ReadLogicalOp::And,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn strict_query_debug_output_redacts_identifiers_literals_and_tokens() {
+    let query = strict_query::parse_read_query([
+        ("accessProfile", "caseworker-canary"),
+        ("$filter", "secret eq 'literal-canary'"),
+    ])
+    .expect("query parses");
+    let rendered = format!("{query:?}");
+    assert!(!rendered.contains("caseworker-canary"));
+    assert!(!rendered.contains("secret"));
+    assert!(!rendered.contains("literal-canary"));
+
+    let token_query = strict_query::parse_read_query([("$skiptoken", "cursor-canary")])
+        .expect("cursor query parses");
+    assert!(!format!("{token_query:?}").contains("cursor-canary"));
 }
 
 impl RecordingReadService {
@@ -333,7 +840,7 @@ impl RecordReadService for RecordingReadService {
         Box::pin(async move {
             Ok(Some(held(project_fixture(
                 json!({
-                    "id": "record-1",
+                    "id": "00000000-0000-4000-8000-000000000001",
                     "revision": 1,
                     "data": {
                             "label": "Visible label",
@@ -352,11 +859,17 @@ impl RecordReadService for RecordingReadService {
     ) -> ServiceFuture<'_, Result<HeldReadResponse, ReadServiceError>> {
         let selected_fields = request.selected_fields.clone();
         let maximum_records = request.maximum_records;
+        let include_count = match &request.kind {
+            RecordReadKind::List { plan } | RecordReadKind::Relationship { plan, .. } => {
+                plan.include_count
+            }
+            RecordReadKind::Get { .. } | RecordReadKind::Lookup { .. } => false,
+        };
         self.record(request);
         Box::pin(async move {
             let mut records = vec![project_fixture(
                 json!({
-                    "id": "record-1",
+                    "id": "00000000-0000-4000-8000-000000000001",
                     "revision": 1,
                     "data": {
                             "label": "Visible label",
@@ -367,7 +880,33 @@ impl RecordReadService for RecordingReadService {
                 &selected_fields,
             )];
             records.truncate(maximum_records);
-            Ok(held(json!({"items": records})))
+            let mut response = json!({"items": records, "pageInfo": {"nextCursor": null}});
+            if include_count {
+                response["count"] = json!(1);
+            }
+            Ok(held(response))
+        })
+    }
+
+    fn lookup(
+        &self,
+        request: RecordReadRequest,
+    ) -> ServiceFuture<'_, Result<Option<HeldReadResponse>, ReadServiceError>> {
+        let selected_fields = request.selected_fields.clone();
+        self.record(request);
+        Box::pin(async move {
+            Ok(Some(held(project_fixture(
+                json!({
+                    "id": "00000000-0000-4000-8000-000000000001",
+                    "revision": 1,
+                    "data": {
+                            "label": "Visible label",
+                            "secret": "DO-NOT-LEAK",
+                            "jurisdiction": "area-a"
+                    }
+                }),
+                &selected_fields,
+            ))))
         })
     }
 
@@ -404,7 +943,11 @@ struct Harness {
 
 impl Harness {
     fn new(ready: bool) -> Self {
-        let project = parse_project_yaml(PROJECT.as_bytes()).expect("project parses");
+        Self::from_project(PROJECT, ready)
+    }
+
+    fn from_project(source: &str, ready: bool) -> Self {
+        let project = parse_project_yaml(source.as_bytes()).expect("project parses");
         let registry = Arc::new(
             compile_project(&project, &[], CompileProfile::Authoring).expect("project compiles"),
         );
@@ -435,6 +978,43 @@ impl Harness {
             .uri(uri)
             .body(Body::empty())
             .expect("request");
+        if let Some(claims) = claims {
+            request.extensions_mut().insert(claims);
+        }
+        let mut app = self.app.clone();
+        app.call(request).await.expect("response")
+    }
+
+    async fn send_json(
+        &self,
+        method: Method,
+        uri: &str,
+        claims: Option<VerifiedRequestClaims>,
+        body: Value,
+    ) -> axum::response::Response {
+        self.send_body(
+            method,
+            uri,
+            claims,
+            Some("application/json"),
+            Body::from(serde_json::to_vec(&body).expect("JSON body serializes")),
+        )
+        .await
+    }
+
+    async fn send_body(
+        &self,
+        method: Method,
+        uri: &str,
+        claims: Option<VerifiedRequestClaims>,
+        content_type: Option<&str>,
+        body: Body,
+    ) -> axum::response::Response {
+        let mut request = Request::builder().method(method).uri(uri);
+        if let Some(content_type) = content_type {
+            request = request.header(CONTENT_TYPE, content_type);
+        }
+        let mut request = request.body(body).expect("request");
         if let Some(claims) = claims {
             request.extensions_mut().insert(claims);
         }
@@ -537,21 +1117,21 @@ async fn profile_and_resource_concealment_complete_before_record_io() {
     let unauthorized = harness
         .send(
             Method::GET,
-            "/v1/records/cases/record-1?accessProfile=caseworker",
+            "/v1/records/cases/00000000-0000-4000-8000-000000000001?accessProfile=caseworker",
             Some(wrong_purpose),
         )
         .await;
     let unknown_profile = harness
         .send(
             Method::GET,
-            "/v1/records/cases/record-1?accessProfile=missing",
+            "/v1/records/cases/00000000-0000-4000-8000-000000000001?accessProfile=missing",
             Some(caseworker_claims("case-management")),
         )
         .await;
     let unknown_resource = harness
         .send(
             Method::GET,
-            "/v1/records/unknown/record-1?accessProfile=caseworker",
+            "/v1/records/unknown/00000000-0000-4000-8000-000000000001?accessProfile=caseworker",
             Some(caseworker_claims("case-management")),
         )
         .await;
@@ -578,7 +1158,7 @@ async fn profile_and_resource_concealment_complete_before_record_io() {
     let fallback = harness
         .send(
             Method::GET,
-            "/v1/records/cases/record-1?accessProfile=caseworker",
+            "/v1/records/cases/00000000-0000-4000-8000-000000000001?accessProfile=caseworker",
             Some(fallback_claim),
         )
         .await;
@@ -590,7 +1170,11 @@ async fn profile_and_resource_concealment_complete_before_record_io() {
 async fn projection_can_only_reduce_the_authorized_profile() {
     let harness = Harness::new(true);
     let public = harness
-        .send(Method::GET, "/v1/records/cases/record-1?fields=label", None)
+        .send(
+            Method::GET,
+            "/v1/records/cases/00000000-0000-4000-8000-000000000001?$select=label",
+            None,
+        )
         .await;
     assert_eq!(public.status(), StatusCode::OK);
     let public = body_json(public).await;
@@ -598,7 +1182,7 @@ async fn projection_can_only_reduce_the_authorized_profile() {
     assert!(!public.to_string().contains("DO-NOT-LEAK"));
 
     let public_list = harness
-        .send(Method::GET, "/v1/records/cases?fields=label", None)
+        .send(Method::GET, "/v1/records/cases?$select=label", None)
         .await;
     assert_eq!(public_list.status(), StatusCode::OK);
     let public_list = body_json(public_list).await;
@@ -616,7 +1200,7 @@ async fn projection_can_only_reduce_the_authorized_profile() {
 
     let before = harness.records.calls();
     let caller_limit = harness
-        .send(Method::GET, "/v1/records/cases?pageSize=101", None)
+        .send(Method::GET, "/v1/records/cases?$top=101", None)
         .await;
     assert_eq!(caller_limit.status(), StatusCode::BAD_REQUEST);
     assert_eq!(harness.records.calls(), before);
@@ -624,7 +1208,7 @@ async fn projection_can_only_reduce_the_authorized_profile() {
     let widening = harness
         .send(
             Method::GET,
-            "/v1/records/cases/record-1?fields=secret",
+            "/v1/records/cases/00000000-0000-4000-8000-000000000001?$select=secret",
             None,
         )
         .await;
@@ -634,7 +1218,7 @@ async fn projection_can_only_reduce_the_authorized_profile() {
     let protected = harness
         .send(
             Method::GET,
-            "/v1/records/cases/record-1?accessProfile=caseworker&fields=label,secret",
+            "/v1/records/cases/00000000-0000-4000-8000-000000000001?accessProfile=caseworker&$select=label,secret",
             Some(caseworker_claims("case-management")),
         )
         .await;
@@ -672,24 +1256,25 @@ async fn discovery_surfaces_share_caller_filtered_routes_and_fields() {
     assert_eq!(
         query_parameter_names(&public_openapi["paths"]["/v1/records/cases"]["get"]["parameters"]),
         [
+            "$count",
+            "$filter",
+            "$orderby",
+            "$select",
+            "$skiptoken",
+            "$top",
             "accessProfile",
-            "cursor",
-            "fields",
-            "filter",
-            "pageSize",
-            "sort"
         ]
     );
     let page_size = public_openapi["paths"]["/v1/records/cases"]["get"]["parameters"]
         .as_array()
         .expect("query parameters are rendered")
         .iter()
-        .find(|parameter| parameter["name"] == "pageSize")
-        .expect("pageSize parameter is rendered");
+        .find(|parameter| parameter["name"] == "$top")
+        .expect("$top parameter is rendered");
     assert_eq!(page_size["required"], false);
     assert_eq!(
         page_size["schema"],
-        json!({"type": "integer", "minimum": 1})
+        json!({"type": "integer", "minimum": 1, "maximum": 100})
     );
     assert_eq!(
         public_openapi["components"]["schemas"]["case"]["properties"],
@@ -735,6 +1320,98 @@ async fn discovery_surfaces_share_caller_filtered_routes_and_fields() {
     );
     assert_no_mutation_methods(&protected_openapi);
     assert_eq!(harness.records.calls(), 0);
+}
+
+#[tokio::test]
+async fn discovery_schema_uses_compiled_api_names_without_widening_disclosure() {
+    let harness = Harness::from_project(LOGICAL_SCHEMA_PROJECT, true);
+
+    let schema = body_json(
+        harness
+            .send(Method::GET, "/v1/schemas/logical-record", None)
+            .await,
+    )
+    .await;
+    assert_eq!(
+        schema["properties"],
+        json!({
+            "householdCode": {"type": "string", "minLength": 0, "maxLength": 64},
+            "householdKind": {
+                "type": "string",
+                "enum": ["single", "extended"],
+                "x-registry-vocabulary": "household-kind"
+            }
+        })
+    );
+    assert_eq!(
+        schema["required"],
+        json!(["householdCode", "householdKind"])
+    );
+
+    let openapi = body_json(harness.send(Method::GET, "/openapi.json", None).await).await;
+    assert_eq!(openapi["components"]["schemas"]["logical-record"], schema);
+    let rendered = openapi.to_string();
+    for concealed in [
+        "household-code",
+        "household-kind-code",
+        "private-canary-field",
+        "privateCanary",
+    ] {
+        assert!(
+            !rendered.contains(concealed),
+            "discovery leaked concealed or internal field name {concealed}"
+        );
+    }
+    assert_eq!(harness.records.calls(), 0);
+}
+
+#[tokio::test]
+async fn lower_camel_select_resolves_only_compiled_authorized_api_names() {
+    let harness = Harness::from_project(LOGICAL_SCHEMA_PROJECT, true);
+
+    let selected = harness
+        .send(
+            Method::GET,
+            "/v1/records/logical-records/00000000-0000-4000-8000-000000000001?$select=householdCode,householdKind",
+            None,
+        )
+        .await;
+    assert_eq!(selected.status(), StatusCode::OK);
+    assert_eq!(
+        harness.records.last_request().selected_fields,
+        BTreeSet::from([
+            "household-code".to_owned(),
+            "household-kind-code".to_owned(),
+        ])
+    );
+
+    let before = harness.records.calls();
+    for uri in [
+        "/v1/records/logical-records/00000000-0000-4000-8000-000000000001?$select=unknownCanary",
+        "/v1/records/logical-records/00000000-0000-4000-8000-000000000001?$select=privateCanary",
+    ] {
+        let refused = harness.send(Method::GET, uri, None).await;
+        assert_eq!(refused.status(), StatusCode::NOT_FOUND, "{uri}");
+        let problem = body_json(refused).await;
+        assert_eq!(problem["code"], "resource.not_found");
+        let rendered = problem.to_string();
+        assert!(!rendered.contains("unknownCanary"));
+        assert!(!rendered.contains("privateCanary"));
+    }
+    assert_eq!(harness.records.calls(), before);
+
+    let duplicate = harness
+        .send(
+            Method::GET,
+            "/v1/records/logical-records/00000000-0000-4000-8000-000000000001?$select=householdCode,householdCode",
+            None,
+        )
+        .await;
+    assert_eq!(duplicate.status(), StatusCode::BAD_REQUEST);
+    let duplicate = body_json(duplicate).await;
+    assert_eq!(duplicate["code"], "query.invalid");
+    assert!(!duplicate.to_string().contains("householdCode"));
+    assert_eq!(harness.records.calls(), before);
 }
 
 #[tokio::test]
@@ -902,7 +1579,7 @@ async fn caller_filtered_discovery_conceals_counts_vocabularies_events_queries_a
     );
     assert_eq!(
         protected_openapi["components"]["schemas"]["protected-ledger"]["properties"]
-            ["classified-status"],
+            ["classifiedStatus"],
         json!({
             "type": "string",
             "enum": ["sealed-canary-value", "retired-canary-value"],
@@ -953,7 +1630,7 @@ async fn caller_filtered_discovery_conceals_counts_vocabularies_events_queries_a
     )
     .await;
     assert_eq!(
-        protected_schema["properties"]["classified-status"],
+        protected_schema["properties"]["classifiedStatus"],
         json!({
             "type": "string",
             "enum": ["sealed-canary-value", "retired-canary-value"],
@@ -1048,7 +1725,7 @@ async fn real_router_serves_only_authorized_explicit_revision_routes() {
     let extra_query = send_to(
         &app,
         Method::GET,
-        &format!("{list_path}?accessProfile=caseworker&pageSize=1"),
+        &format!("{list_path}?accessProfile=caseworker&$top=1"),
         Some(caseworker_claims("case-management")),
     )
     .await;
@@ -1132,7 +1809,7 @@ async fn real_router_serves_only_authorized_explicit_revision_routes() {
     let audit_failure = send_to(
         &app,
         Method::GET,
-        &format!("{list_path}?pageSize=2"),
+        &format!("{list_path}?$top=2"),
         Some(caseworker_claims("case-management")),
     )
     .await;
@@ -1200,6 +1877,7 @@ fn operation_name(operation: Operation) -> &'static str {
     match operation {
         Operation::Get => "get",
         Operation::List => "list",
+        Operation::Lookup => "lookup",
         Operation::Create => "create",
         Operation::Patch => "patch",
         Operation::Tombstone => "tombstone",
@@ -1214,13 +1892,28 @@ async fn every_compiled_mutation_route_is_absent_from_the_served_router() {
     let claims = Some(caseworker_claims("case-management"));
     for (method, uri) in [
         (Method::POST, "/v1/records/cases"),
-        (Method::PATCH, "/v1/records/cases/record-1"),
-        (Method::DELETE, "/v1/records/cases/record-1"),
+        (
+            Method::PATCH,
+            "/v1/records/cases/00000000-0000-4000-8000-000000000001",
+        ),
+        (
+            Method::DELETE,
+            "/v1/records/cases/00000000-0000-4000-8000-000000000001",
+        ),
         (Method::POST, "/v1/records/cases:batch"),
-        (Method::GET, "/v1/records/cases/record-1/revisions"),
+        (
+            Method::GET,
+            "/v1/records/cases/00000000-0000-4000-8000-000000000001/revisions",
+        ),
         (Method::POST, "/v1/records/notes"),
-        (Method::PATCH, "/v1/records/notes/record-1"),
-        (Method::DELETE, "/v1/records/notes/record-1"),
+        (
+            Method::PATCH,
+            "/v1/records/notes/00000000-0000-4000-8000-000000000001",
+        ),
+        (
+            Method::DELETE,
+            "/v1/records/notes/00000000-0000-4000-8000-000000000001",
+        ),
     ] {
         let response = harness.send(method, uri, claims.clone()).await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
@@ -1230,17 +1923,49 @@ async fn every_compiled_mutation_route_is_absent_from_the_served_router() {
 }
 
 fn caseworker_claims(purpose: &str) -> VerifiedRequestClaims {
+    caseworker_claims_with_direct(
+        purpose,
+        std::iter::empty::<(&'static str, VerifiedClaimValue)>(),
+    )
+}
+
+fn caseworker_claims_with_direct<I>(purpose: &str, direct_claims: I) -> VerifiedRequestClaims
+where
+    I: IntoIterator<Item = (&'static str, VerifiedClaimValue)>,
+{
+    let mut direct = BTreeMap::from([(
+        "jurisdictions".to_owned(),
+        VerifiedClaimValue::direct_string_set(["area-a", "area-b"]).expect("direct claims"),
+    )]);
+    for (name, value) in direct_claims {
+        direct.insert(name.to_owned(), value);
+    }
     VerifiedRequestClaims::authenticated(
         "registry_principal",
         "principal-value-never-rendered",
         BTreeSet::from(["registry.read".to_owned()]),
         Some(purpose.to_owned()),
-        BTreeMap::from([(
-            "jurisdictions".to_owned(),
-            VerifiedClaimValue::direct_string_set(["area-a", "area-b"]).expect("direct claims"),
-        )]),
+        direct,
     )
     .expect("verified context")
+}
+
+fn request_query(request: &RecordReadRequest) -> &registry_server::api::CompiledReadQuery {
+    match &request.kind {
+        RecordReadKind::List { plan } | RecordReadKind::Relationship { plan, .. } => plan,
+        RecordReadKind::Get { .. } | RecordReadKind::Lookup { .. } => {
+            panic!("request did not carry a list query plan")
+        }
+    }
+}
+
+fn single_filter_predicate(
+    query: &registry_server::api::CompiledReadQuery,
+) -> &registry_server::api::ReadFilterPredicate {
+    match query.filter.as_ref().expect("query has a filter") {
+        registry_server::api::ReadFilterExpr::Predicate(predicate) => predicate,
+        other => panic!("expected one predicate filter, got {other:?}"),
+    }
 }
 
 fn project_fixture(mut record: Value, selected_fields: &BTreeSet<String>) -> Value {
@@ -1255,11 +1980,15 @@ fn held(value: Value) -> HeldReadResponse {
     HeldReadResponse::from_json(&value).expect("fake read response serializes")
 }
 
-async fn body_json(response: axum::response::Response) -> Value {
+async fn body_bytes(response: axum::response::Response) -> Vec<u8> {
     let bytes = to_bytes(response.into_body(), 1024 * 1024)
         .await
         .expect("response body");
-    serde_json::from_slice(&bytes).expect("JSON response")
+    bytes.to_vec()
+}
+
+async fn body_json(response: axum::response::Response) -> Value {
+    serde_json::from_slice(&body_bytes(response).await).expect("JSON response")
 }
 
 fn assert_no_mutation_methods(document: &Value) {

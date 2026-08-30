@@ -266,6 +266,13 @@ pub struct RegistryModule {
     pub extend_entities: Vec<EntityExtensionSource>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModuleAssetSource {
+    pub module: Option<String>,
+    pub path: String,
+    pub bytes: Vec<u8>,
+}
+
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -291,6 +298,12 @@ pub struct EntitySource {
     pub events: Vec<EventSource>,
     #[serde(default)]
     pub temporal: Option<TemporalSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub derived: Vec<DerivedSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selector_profiles: Vec<SelectorProfileSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub read_paths: Vec<ReadPathSource>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -308,6 +321,8 @@ pub struct EntityExtensionSource {
     pub entity: String,
     #[serde(default)]
     pub fields: Vec<FieldSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub derived: Vec<DerivedSource>,
     #[serde(default)]
     pub constraints: Vec<ConstraintSource>,
     #[serde(default)]
@@ -316,6 +331,10 @@ pub struct EntityExtensionSource {
     pub access_profiles: Vec<AccessProfileSource>,
     #[serde(default)]
     pub events: Vec<EventSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selector_profiles: Vec<SelectorProfileSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub read_paths: Vec<ReadPathSource>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -339,10 +358,16 @@ fn default_classification() -> Classification {
     Classification::Internal
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct FieldSource {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_name: Option<String>,
     #[serde(flatten)]
     pub field_type: FieldTypeSource,
     #[serde(default)]
@@ -392,6 +417,8 @@ enum FieldSourceSchema {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct BooleanFieldSourceSchema {
     id: String,
+    #[serde(default)]
+    api_name: Option<String>,
     #[serde(rename = "type")]
     field_type: BooleanFieldKindSchema,
     #[serde(default)]
@@ -407,6 +434,8 @@ struct BooleanFieldSourceSchema {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct StringFieldSourceSchema {
     id: String,
+    #[serde(default)]
+    api_name: Option<String>,
     #[serde(rename = "type")]
     field_type: StringFieldKindSchema,
     #[serde(default)]
@@ -425,6 +454,8 @@ struct StringFieldSourceSchema {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct TextFieldSourceSchema {
     id: String,
+    #[serde(default)]
+    api_name: Option<String>,
     #[serde(rename = "type")]
     field_type: TextFieldKindSchema,
     #[serde(default)]
@@ -441,6 +472,8 @@ struct TextFieldSourceSchema {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Int64FieldSourceSchema {
     id: String,
+    #[serde(default)]
+    api_name: Option<String>,
     #[serde(rename = "type")]
     field_type: Int64FieldKindSchema,
     #[serde(default)]
@@ -456,6 +489,8 @@ struct Int64FieldSourceSchema {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct DecimalFieldSourceSchema {
     id: String,
+    #[serde(default)]
+    api_name: Option<String>,
     #[serde(rename = "type")]
     field_type: DecimalFieldKindSchema,
     #[serde(default)]
@@ -477,6 +512,8 @@ struct DecimalFieldSourceSchema {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct DateFieldSourceSchema {
     id: String,
+    #[serde(default)]
+    api_name: Option<String>,
     #[serde(rename = "type")]
     field_type: DateFieldKindSchema,
     #[serde(default)]
@@ -492,6 +529,8 @@ struct DateFieldSourceSchema {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct TimestampFieldSourceSchema {
     id: String,
+    #[serde(default)]
+    api_name: Option<String>,
     #[serde(rename = "type")]
     field_type: TimestampFieldKindSchema,
     #[serde(default)]
@@ -507,6 +546,8 @@ struct TimestampFieldSourceSchema {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct UuidFieldSourceSchema {
     id: String,
+    #[serde(default)]
+    api_name: Option<String>,
     #[serde(rename = "type")]
     field_type: UuidFieldKindSchema,
     #[serde(default)]
@@ -522,6 +563,8 @@ struct UuidFieldSourceSchema {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct VocabularyCodeFieldSourceSchema {
     id: String,
+    #[serde(default)]
+    api_name: Option<String>,
     #[serde(rename = "type")]
     field_type: VocabularyCodeFieldKindSchema,
     #[serde(default)]
@@ -540,6 +583,8 @@ struct VocabularyCodeFieldSourceSchema {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct ReferenceFieldSourceSchema {
     id: String,
+    #[serde(default)]
+    api_name: Option<String>,
     #[serde(rename = "type")]
     field_type: ReferenceFieldKindSchema,
     #[serde(default)]
@@ -558,6 +603,8 @@ struct ReferenceFieldSourceSchema {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Crs84PointFieldSourceSchema {
     id: String,
+    #[serde(default)]
+    api_name: Option<String>,
     #[serde(rename = "type")]
     field_type: Crs84PointFieldKindSchema,
     #[serde(default)]
@@ -576,6 +623,8 @@ struct Crs84PointFieldSourceSchema {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct StructuredFieldSourceSchema {
     id: String,
+    #[serde(default)]
+    api_name: Option<String>,
     #[serde(rename = "type")]
     field_type: StructuredFieldKindSchema,
     #[serde(default)]
@@ -689,101 +738,10 @@ impl<'de> Deserialize<'de> for FieldSource {
         D: Deserializer<'de>,
     {
         let raw = RawFieldSource::deserialize(deserializer)?;
-        let field_type = match raw.kind {
-            RawFieldKind::Boolean => {
-                reject_type_options::<D::Error>(&raw, TypeOptionAllowances::NONE)?;
-                FieldTypeSource::Boolean
-            }
-            RawFieldKind::String => {
-                reject_type_options::<D::Error>(&raw, TypeOptionAllowances::STRING)?;
-                FieldTypeSource::String {
-                    min_length: raw.min_length.unwrap_or_default(),
-                    max_length: raw
-                        .max_length
-                        .ok_or_else(|| D::Error::custom("string maxLength is required"))?,
-                }
-            }
-            RawFieldKind::Text => {
-                reject_type_options::<D::Error>(&raw, TypeOptionAllowances::TEXT)?;
-                FieldTypeSource::Text {
-                    max_length: raw
-                        .max_length
-                        .ok_or_else(|| D::Error::custom("text maxLength is required"))?,
-                }
-            }
-            RawFieldKind::Int64 => {
-                reject_type_options::<D::Error>(&raw, TypeOptionAllowances::NONE)?;
-                FieldTypeSource::Int64
-            }
-            RawFieldKind::Decimal => {
-                reject_type_options::<D::Error>(&raw, TypeOptionAllowances::DECIMAL)?;
-                FieldTypeSource::Decimal {
-                    precision: raw
-                        .precision
-                        .ok_or_else(|| D::Error::custom("decimal precision is required"))?,
-                    scale: raw
-                        .scale
-                        .ok_or_else(|| D::Error::custom("decimal scale is required"))?,
-                    minimum: raw.minimum.clone(),
-                    maximum: raw.maximum.clone(),
-                }
-            }
-            RawFieldKind::Date => {
-                reject_type_options::<D::Error>(&raw, TypeOptionAllowances::NONE)?;
-                FieldTypeSource::Date
-            }
-            RawFieldKind::Timestamp => {
-                reject_type_options::<D::Error>(&raw, TypeOptionAllowances::NONE)?;
-                FieldTypeSource::Timestamp
-            }
-            RawFieldKind::Uuid => {
-                reject_type_options::<D::Error>(&raw, TypeOptionAllowances::NONE)?;
-                FieldTypeSource::Uuid
-            }
-            RawFieldKind::VocabularyCode => {
-                reject_type_options::<D::Error>(&raw, TypeOptionAllowances::VOCABULARY)?;
-                FieldTypeSource::VocabularyCode {
-                    vocabulary: raw
-                        .vocabulary
-                        .clone()
-                        .ok_or_else(|| D::Error::custom("vocabulary is required"))?,
-                    values: raw.values.clone(),
-                }
-            }
-            RawFieldKind::Reference => {
-                reject_type_options::<D::Error>(&raw, TypeOptionAllowances::REFERENCE)?;
-                FieldTypeSource::Reference {
-                    target: raw
-                        .target
-                        .clone()
-                        .ok_or_else(|| D::Error::custom("reference target is required"))?,
-                    on_delete: raw.on_delete.clone().unwrap_or_default(),
-                }
-            }
-            RawFieldKind::Crs84Point => {
-                reject_type_options::<D::Error>(&raw, TypeOptionAllowances::CRS84_POINT)?;
-                FieldTypeSource::Crs84Point {
-                    precision: raw
-                        .precision
-                        .ok_or_else(|| D::Error::custom("point precision is required"))?,
-                    bbox: raw.bbox.clone(),
-                }
-            }
-            RawFieldKind::Structured => {
-                reject_type_options::<D::Error>(&raw, TypeOptionAllowances::STRUCTURED)?;
-                FieldTypeSource::Structured {
-                    max_bytes: raw
-                        .max_bytes
-                        .ok_or_else(|| D::Error::custom("structured maxBytes is required"))?,
-                    schema: raw
-                        .schema
-                        .clone()
-                        .ok_or_else(|| D::Error::custom("structured schema is required"))?,
-                }
-            }
-        };
+        let field_type = parse_field_type::<D::Error>(&raw)?;
         Ok(Self {
             id: raw.id,
+            api_name: raw.api_name,
             field_type,
             required: raw.required,
             classification: raw.classification,
@@ -792,10 +750,142 @@ impl<'de> Deserialize<'de> for FieldSource {
     }
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct DerivedFieldSource {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_name: Option<String>,
+    #[serde(flatten)]
+    pub field_type: FieldTypeSource,
+    pub classification: Classification,
+}
+
+impl<'de> Deserialize<'de> for DerivedFieldSource {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = RawFieldSource::deserialize(deserializer)?;
+        if raw.required || raw.valid_time_role.is_some() {
+            return Err(D::Error::custom(
+                "derived fields cannot declare required or validTimeRole",
+            ));
+        }
+        let field_type = parse_field_type::<D::Error>(&raw)?;
+        Ok(Self {
+            id: raw.id,
+            api_name: raw.api_name,
+            field_type,
+            classification: raw.classification,
+        })
+    }
+}
+
+fn parse_field_type<E: serde::de::Error>(raw: &RawFieldSource) -> Result<FieldTypeSource, E> {
+    let field_type = match raw.kind {
+        RawFieldKind::Boolean => {
+            reject_type_options::<E>(raw, TypeOptionAllowances::NONE)?;
+            FieldTypeSource::Boolean
+        }
+        RawFieldKind::String => {
+            reject_type_options::<E>(raw, TypeOptionAllowances::STRING)?;
+            FieldTypeSource::String {
+                min_length: raw.min_length.unwrap_or_default(),
+                max_length: raw
+                    .max_length
+                    .ok_or_else(|| E::custom("string maxLength is required"))?,
+            }
+        }
+        RawFieldKind::Text => {
+            reject_type_options::<E>(raw, TypeOptionAllowances::TEXT)?;
+            FieldTypeSource::Text {
+                max_length: raw
+                    .max_length
+                    .ok_or_else(|| E::custom("text maxLength is required"))?,
+            }
+        }
+        RawFieldKind::Int64 => {
+            reject_type_options::<E>(raw, TypeOptionAllowances::NONE)?;
+            FieldTypeSource::Int64
+        }
+        RawFieldKind::Decimal => {
+            reject_type_options::<E>(raw, TypeOptionAllowances::DECIMAL)?;
+            FieldTypeSource::Decimal {
+                precision: raw
+                    .precision
+                    .ok_or_else(|| E::custom("decimal precision is required"))?,
+                scale: raw
+                    .scale
+                    .ok_or_else(|| E::custom("decimal scale is required"))?,
+                minimum: raw.minimum.clone(),
+                maximum: raw.maximum.clone(),
+            }
+        }
+        RawFieldKind::Date => {
+            reject_type_options::<E>(raw, TypeOptionAllowances::NONE)?;
+            FieldTypeSource::Date
+        }
+        RawFieldKind::Timestamp => {
+            reject_type_options::<E>(raw, TypeOptionAllowances::NONE)?;
+            FieldTypeSource::Timestamp
+        }
+        RawFieldKind::Uuid => {
+            reject_type_options::<E>(raw, TypeOptionAllowances::NONE)?;
+            FieldTypeSource::Uuid
+        }
+        RawFieldKind::VocabularyCode => {
+            reject_type_options::<E>(raw, TypeOptionAllowances::VOCABULARY)?;
+            FieldTypeSource::VocabularyCode {
+                vocabulary: raw
+                    .vocabulary
+                    .clone()
+                    .ok_or_else(|| E::custom("vocabulary is required"))?,
+                values: raw.values.clone(),
+            }
+        }
+        RawFieldKind::Reference => {
+            reject_type_options::<E>(raw, TypeOptionAllowances::REFERENCE)?;
+            FieldTypeSource::Reference {
+                target: raw
+                    .target
+                    .clone()
+                    .ok_or_else(|| E::custom("reference target is required"))?,
+                on_delete: raw.on_delete.clone().unwrap_or_default(),
+            }
+        }
+        RawFieldKind::Crs84Point => {
+            reject_type_options::<E>(raw, TypeOptionAllowances::CRS84_POINT)?;
+            FieldTypeSource::Crs84Point {
+                precision: raw
+                    .precision
+                    .ok_or_else(|| E::custom("point precision is required"))?,
+                bbox: raw.bbox.clone(),
+            }
+        }
+        RawFieldKind::Structured => {
+            reject_type_options::<E>(raw, TypeOptionAllowances::STRUCTURED)?;
+            FieldTypeSource::Structured {
+                max_bytes: raw
+                    .max_bytes
+                    .ok_or_else(|| E::custom("structured maxBytes is required"))?,
+                schema: raw
+                    .schema
+                    .clone()
+                    .ok_or_else(|| E::custom("structured schema is required"))?,
+            }
+        }
+    };
+    Ok(field_type)
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct RawFieldSource {
     id: String,
+    #[serde(default)]
+    api_name: Option<String>,
     #[serde(rename = "type")]
     kind: RawFieldKind,
     #[serde(default)]
@@ -829,6 +919,45 @@ struct RawFieldSource {
     target: Option<String>,
     #[serde(default)]
     on_delete: Option<ReferenceDelete>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct DerivedSource {
+    pub id: String,
+    pub sql: String,
+    pub key: String,
+    #[serde(default)]
+    pub execution: DerivedExecutionSource,
+    #[serde(default)]
+    pub fields: Vec<DerivedFieldSource>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DerivedExecutionSource {
+    #[default]
+    Live,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SelectorProfileSource {
+    pub id: String,
+    pub fields: Vec<String>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ReadPathSource {
+    pub id: String,
+    pub through: String,
+    pub to: String,
+    pub route: String,
 }
 
 #[derive(Deserialize)]
@@ -1387,6 +1516,12 @@ pub struct AccessProfileSource {
     pub sortable_fields: BTreeSet<String>,
     #[serde(default)]
     pub row_boundaries: Vec<RowBoundarySource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lookups: Vec<LookupGrantSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub read_paths: Vec<ReadPathGrantSource>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub allow_count: bool,
     #[serde(default)]
     pub revision_access: bool,
     #[serde(default)]
@@ -1399,6 +1534,7 @@ pub struct AccessProfileSource {
 pub enum Operation {
     Create,
     Get,
+    Lookup,
     List,
     Patch,
     Tombstone,
@@ -1530,10 +1666,49 @@ pub struct AccessGrantSource {
     pub sortable_fields: BTreeSet<String>,
     #[serde(default)]
     pub row_boundaries: Vec<RowBoundarySource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lookups: Vec<LookupGrantSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub read_paths: Vec<ReadPathGrantSource>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub allow_count: bool,
     #[serde(default)]
     pub revision_access: bool,
     #[serde(default)]
     pub allow_data_export: bool,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct LookupGrantSource {
+    pub selector: String,
+    pub value_origin: LookupValueOrigin,
+    #[serde(default)]
+    pub claim_mapping: BTreeMap<String, String>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LookupValueOrigin {
+    Request,
+    VerifiedClaim,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ReadPathGrantSource {
+    pub path: String,
+    #[serde(default)]
+    pub readable_fields: BTreeSet<String>,
+    #[serde(default)]
+    pub filterable_fields: BTreeSet<String>,
+    #[serde(default)]
+    pub sortable_fields: BTreeSet<String>,
+    #[serde(default)]
+    pub allow_count: bool,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

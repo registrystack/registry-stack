@@ -30,12 +30,13 @@ use super::{
 
 /// Installs one exact compiled Registry data inventory and its closed runtime
 /// privilege set. The caller must already be the verified migration role and
-/// must own both managed schemas.
+/// must own every managed schema.
 pub async fn install_compiled_schema(
     migration: &impl GenericClient,
     registry: &CompiledRegistry,
     runtime_role: &SqlIdentifier,
 ) -> Result<()> {
+    verify_postgres_15_or_newer(migration).await?;
     if registry.ddl().requires_btree_gist {
         verify_btree_gist(migration).await?;
     }
@@ -62,8 +63,8 @@ pub(crate) async fn reconcile_compiled_runtime_acl(
 ) -> Result<()> {
     client
         .batch_execute(&format!(
-            "REVOKE ALL ON SCHEMA registry_data FROM PUBLIC, {};
-             GRANT USAGE ON SCHEMA registry_data TO {};",
+            "REVOKE ALL ON SCHEMA registry_data, registry_source, registry_derived, registry_context FROM PUBLIC, {};
+             GRANT USAGE ON SCHEMA registry_data, registry_source, registry_derived, registry_context TO {};",
             runtime_role.quoted(),
             runtime_role.quoted(),
         ))
@@ -91,6 +92,66 @@ pub(crate) async fn reconcile_compiled_runtime_acl(
                 ))
                 .await?;
         }
+    }
+    for view in &registry.ddl().views {
+        let schema = quote_compiled_identifier(&view.schema);
+        let view_name = quote_compiled_identifier(&view.name);
+        client
+            .batch_execute(&format!(
+                "REVOKE ALL ON TABLE {schema}.{view_name} FROM PUBLIC, {};",
+                runtime_role.quoted(),
+            ))
+            .await?;
+        if !view.runtime_privileges.is_empty() {
+            let privileges = view
+                .runtime_privileges
+                .iter()
+                .map(|privilege| privilege.as_sql())
+                .collect::<Vec<_>>()
+                .join(", ");
+            client
+                .batch_execute(&format!(
+                    "GRANT {privileges} ON TABLE {schema}.{view_name} TO {};",
+                    runtime_role.quoted(),
+                ))
+                .await?;
+        }
+    }
+    for function in &registry.ddl().functions {
+        let schema = quote_compiled_identifier(&function.schema);
+        let name = quote_compiled_identifier(&function.name);
+        client
+            .batch_execute(&format!(
+                "REVOKE ALL ON FUNCTION {schema}.{name}({}) FROM PUBLIC, {};",
+                function.arguments,
+                runtime_role.quoted(),
+            ))
+            .await?;
+        if function.runtime_execute {
+            client
+                .batch_execute(&format!(
+                    "GRANT EXECUTE ON FUNCTION {schema}.{name}({}) TO {};",
+                    function.arguments,
+                    runtime_role.quoted(),
+                ))
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) async fn verify_postgres_15_or_newer(client: &impl GenericClient) -> Result<()> {
+    let version_num: String = client
+        .query_one("SELECT current_setting('server_version_num')", &[])
+        .await?
+        .get(0);
+    let version_num = version_num
+        .parse::<u32>()
+        .map_err(|_| PostgresKernelError::Configuration("PostgreSQL 15 or newer is required"))?;
+    if version_num < 150_000 {
+        return Err(PostgresKernelError::Configuration(
+            "PostgreSQL 15 or newer is required",
+        ));
     }
     Ok(())
 }
@@ -341,7 +402,13 @@ async fn refuse_existing_managed_objects(client: &impl GenericClient) -> Result<
         .batch_execute("SAVEPOINT registry_empty_schema_probe")
         .await?;
     let empty = client
-        .batch_execute("DROP SCHEMA registry_internal RESTRICT; DROP SCHEMA registry_data RESTRICT")
+        .batch_execute(
+            "DROP SCHEMA registry_internal RESTRICT;
+             DROP SCHEMA registry_data RESTRICT;
+             DROP SCHEMA registry_source RESTRICT;
+             DROP SCHEMA registry_derived RESTRICT;
+             DROP SCHEMA registry_context RESTRICT",
+        )
         .await
         .is_ok();
     client
@@ -376,11 +443,20 @@ async fn verify_schema_test_runtime_role(
                     has_database_privilege(current_user, current_database(), 'CREATE'),
                     has_schema_privilege(current_user, 'registry_internal', 'CREATE'),
                     has_schema_privilege(current_user, 'registry_data', 'CREATE'),
+                    has_schema_privilege(current_user, 'registry_source', 'CREATE'),
+                    has_schema_privilege(current_user, 'registry_derived', 'CREATE'),
+                    has_schema_privilege(current_user, 'registry_context', 'CREATE'),
                     EXISTS (
                         SELECT 1
                           FROM pg_catalog.pg_class c
                           JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-                         WHERE n.nspname IN ('registry_internal', 'registry_data')
+                         WHERE n.nspname IN (
+                             'registry_internal',
+                             'registry_data',
+                             'registry_source',
+                             'registry_derived',
+                             'registry_context'
+                         )
                            AND c.relowner = (
                                SELECT oid
                                  FROM pg_catalog.pg_roles
@@ -393,7 +469,7 @@ async fn verify_schema_test_runtime_role(
         )
         .await?;
     if row.get::<_, String>(0) != runtime_role.as_str()
-        || (1..=10).any(|index| row.get::<_, bool>(index))
+        || (1..=13).any(|index| row.get::<_, bool>(index))
     {
         return Err(PostgresKernelError::RoleInvariant(
             "schema-test runtime connection uses unexpected authority",

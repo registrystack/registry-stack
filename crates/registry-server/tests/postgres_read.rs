@@ -101,7 +101,7 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
 
     let get = send(
         &app,
-        &format!("/v1/records/widgets/{VISIBLE_RECORD}?fields=label"),
+        &format!("/v1/records/widgets/{VISIBLE_RECORD}?$select=label"),
         Some(read_claims(["zone-a"])),
     )
     .await;
@@ -120,9 +120,22 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
     assert_eq!(body["data"], json!({"label": "label-001"}));
     assert!(!body.to_string().contains(SECRET_CANARY));
 
+    let governed_names = send(
+        &app,
+        "/v1/records/widgets/00000000-0000-4000-8000-000000000001?accessProfile=auditor",
+        Some(read_claims(["zone-a"])),
+    )
+    .await;
+    assert_eq!(governed_names.status(), StatusCode::OK);
+    let governed_names = body_json(governed_names).await;
+    assert_eq!(governed_names["data"]["publicCode"], Value::Null);
+    assert_eq!(governed_names["data"]["label"], "label-001");
+    assert_eq!(governed_names["data"]["jurisdiction"], "zone-a");
+    assert!(governed_names["data"].get("internal-code").is_none());
+
     let decimal = send(
         &app,
-        &format!("/v1/records/widgets/{VISIBLE_RECORD}?fields=amount"),
+        &format!("/v1/records/widgets/{VISIBLE_RECORD}?$select=amount"),
         Some(read_claims(["zone-a"])),
     )
     .await;
@@ -138,7 +151,7 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
 
     let list = send(
         &app,
-        "/v1/records/widgets?fields=label",
+        "/v1/records/widgets?$select=label",
         Some(read_claims(["zone-a"])),
     )
     .await;
@@ -167,7 +180,7 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
 
     let repeated_in = send(
         &app,
-        "/v1/records/widgets?fields=label&filter=jurisdiction:in:zone-b&filter=jurisdiction:in:zone-a&pageSize=2",
+        "/v1/records/widgets?$select=label&$filter=jurisdiction%20in%20('zone-b','zone-a')&$top=2",
         Some(read_claims(["zone-a"])),
     )
     .await;
@@ -190,7 +203,7 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
 
     let prefix = send(
         &app,
-        "/v1/records/widgets?fields=label&filter=label:prefix:literal%25_%5C",
+        "/v1/records/widgets?$select=label&$filter=startswith(label,'literal%25_%5C')",
         Some(read_claims(["zone-a"])),
     )
     .await;
@@ -203,7 +216,7 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
 
     let continuation = send(
         &app,
-        &format!("/v1/records/widgets?cursor={next_cursor}"),
+        &format!("/v1/records/widgets?$skiptoken={next_cursor}"),
         Some(read_claims(["zone-a"])),
     )
     .await;
@@ -231,7 +244,7 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
     let tampered = String::from_utf8(tampered).expect("cursor remains UTF-8");
     let refused_cursor = send(
         &app,
-        &format!("/v1/records/widgets?cursor={tampered}"),
+        &format!("/v1/records/widgets?$skiptoken={tampered}"),
         Some(read_claims(["zone-a"])),
     )
     .await;
@@ -243,7 +256,7 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
 
     let concealed = send(
         &app,
-        &format!("/v1/records/widgets/{MISMATCH_RECORD}?fields=label"),
+        &format!("/v1/records/widgets/{MISMATCH_RECORD}?$select=label"),
         Some(read_claims(["zone-a"])),
     )
     .await;
@@ -255,7 +268,7 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
 
     let tombstoned = send(
         &app,
-        &format!("/v1/records/widgets/{TOMBSTONED_RECORD}?fields=label"),
+        &format!("/v1/records/widgets/{TOMBSTONED_RECORD}?$select=label"),
         Some(read_claims(["zone-a"])),
     )
     .await;
@@ -268,7 +281,7 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
     let uppercase = send(
         &app,
         &format!(
-            "/v1/records/widgets/{}?fields=label",
+            "/v1/records/widgets/{}?$select=label",
             ALPHA_RECORD.to_ascii_uppercase()
         ),
         Some(read_claims(["zone-a"])),
@@ -288,7 +301,7 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
     );
     let faulted = send(
         &faulting_app,
-        &format!("/v1/records/widgets/{VISIBLE_RECORD}?fields=label"),
+        &format!("/v1/records/widgets/{VISIBLE_RECORD}?$select=label"),
         Some(read_claims(["zone-a"])),
     )
     .await;
@@ -359,7 +372,7 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
         body_json(
             send(
                 &app,
-                "/v1/records/assignments:as-of?fields=label&asOf=2020-05-31T23:59:59Z",
+                "/v1/records/assignments:as-of?$select=label&asOf=2020-05-31T23:59:59Z",
                 Some(read_claims(["zone-a"])),
             )
             .await,
@@ -371,7 +384,7 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
         body_json(
             send(
                 &app,
-                "/v1/records/assignments:as-of?fields=label&asOf=2020-06-01T00:00:00Z",
+                "/v1/records/assignments:as-of?$select=label&asOf=2020-06-01T00:00:00Z",
                 Some(read_claims(["zone-a"])),
             )
             .await,
@@ -381,7 +394,7 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
     );
     let current = send(
         &app,
-        "/v1/records/assignments:current?fields=label,valid-from,valid-to",
+        "/v1/records/assignments:current",
         Some(read_claims(["zone-a"])),
     )
     .await;
@@ -389,13 +402,15 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
     let current = body_json(current).await;
     assert_ids(current.clone(), &[TEMPORAL_OPEN_RECORD]);
     assert_eq!(current["items"][0]["data"]["label"], "lease-a");
-    assert!(current["items"][0]["data"]["valid-from"].is_string());
-    assert_eq!(current["items"][0]["data"]["valid-to"], Value::Null);
+    assert!(current["items"][0]["data"]["validFrom"].is_string());
+    assert_eq!(current["items"][0]["data"]["validTo"], Value::Null);
+    assert!(current["items"][0]["data"].get("valid-from").is_none());
+    assert!(current["items"][0]["data"].get("valid-to").is_none());
     assert!(!current.to_string().contains(TEMPORAL_OTHER_BOUNDARY_RECORD));
 
     let sorted_first = send(
         &app,
-        "/v1/records/widgets?fields=label,rank&filter=label:prefix:sort-key-&sort=rank&pageSize=2",
+        "/v1/records/widgets?$select=label,rank&$filter=startswith(label,'sort-key-')&$orderby=rank&$top=2",
         Some(read_claims(["zone-a"])),
     )
     .await;
@@ -411,7 +426,7 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
         .to_owned();
     let sorted_second = send(
         &app,
-        &format!("/v1/records/widgets?cursor={sorted_second_cursor}"),
+        &format!("/v1/records/widgets?$skiptoken={sorted_second_cursor}"),
         Some(read_claims(["zone-a"])),
     )
     .await;
@@ -428,7 +443,7 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
         .to_owned();
     let sorted_third = send(
         &app,
-        &format!("/v1/records/widgets?cursor={sorted_third_cursor}"),
+        &format!("/v1/records/widgets?$skiptoken={sorted_third_cursor}"),
         Some(read_claims(["zone-a"])),
     )
     .await;
@@ -439,29 +454,29 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
 
     let replay_cursor = next_cursor(
         &app,
-        "/v1/records/widgets?fields=label,rank&filter=label:prefix:sort-key-&sort=rank&pageSize=2",
+        "/v1/records/widgets?$select=label,rank&$filter=startswith(label,'sort-key-')&$orderby=rank&$top=2",
         Some(read_claims(["zone-a"])),
     )
     .await;
     for (uri, claims) in [
         (
-            format!("/v1/records/widgets?cursor={replay_cursor}"),
+            format!("/v1/records/widgets?$skiptoken={replay_cursor}"),
             read_claims_with(PRINCIPAL_CANARY, "audit-review", ["zone-a"]),
         ),
         (
-            format!("/v1/records/widgets?cursor={replay_cursor}"),
+            format!("/v1/records/widgets?$skiptoken={replay_cursor}"),
             read_claims_with("other-principal-value", "case-management", ["zone-a"]),
         ),
         (
-            format!("/v1/records/widgets?cursor={replay_cursor}"),
+            format!("/v1/records/widgets?$skiptoken={replay_cursor}"),
             read_claims_with(PRINCIPAL_CANARY, "case-management", ["zone-b"]),
         ),
         (
-            format!("/v1/records/widgets?accessProfile=auditor&cursor={replay_cursor}"),
+            format!("/v1/records/widgets?accessProfile=auditor&$skiptoken={replay_cursor}"),
             read_claims(["zone-a"]),
         ),
         (
-            format!("/v1/records/assignments?cursor={replay_cursor}"),
+            format!("/v1/records/assignments?$skiptoken={replay_cursor}"),
             read_claims(["zone-a"]),
         ),
     ] {
@@ -483,14 +498,14 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
     );
     assert_cursor_invalid(
         &package_changed_app,
-        &format!("/v1/records/widgets?cursor={replay_cursor}"),
+        &format!("/v1/records/widgets?$skiptoken={replay_cursor}"),
         Some(read_claims(["zone-a"])),
     )
     .await;
 
     let projection_cursor = next_cursor(
         &app,
-        "/v1/records/widgets?fields=label,amount&filter=label:prefix:label-&sort=ordinal&pageSize=2",
+        "/v1/records/widgets?$select=label,amount&$filter=startswith(label,'label-')&$orderby=ordinal&$top=2",
         Some(read_claims(["zone-a"])),
     )
     .await;
@@ -506,7 +521,7 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
     );
     assert_cursor_invalid(
         &projection_changed_app,
-        &format!("/v1/records/widgets?cursor={projection_cursor}"),
+        &format!("/v1/records/widgets?$skiptoken={projection_cursor}"),
         Some(read_claims(["zone-a"])),
     )
     .await;
@@ -527,7 +542,7 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
         );
         assert_cursor_invalid(
             &changed_app,
-            &format!("/v1/records/widgets?cursor={replay_cursor}"),
+            &format!("/v1/records/widgets?$skiptoken={replay_cursor}"),
             Some(read_claims(["zone-a"])),
         )
         .await;
@@ -545,13 +560,13 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
     );
     let expired_cursor = next_cursor(
         &expiring_app,
-        "/v1/records/widgets?fields=label&sort=ordinal&pageSize=1",
+        "/v1/records/widgets?$select=label&$orderby=ordinal&$top=1",
         Some(read_claims(["zone-a"])),
     )
     .await;
     assert_cursor_invalid(
         &expiring_app,
-        &format!("/v1/records/widgets?cursor={expired_cursor}"),
+        &format!("/v1/records/widgets?$skiptoken={expired_cursor}"),
         Some(read_claims(["zone-a"])),
     )
     .await;
@@ -1106,6 +1121,8 @@ async fn assert_read_audit_is_ordered_chained_and_minimized(
             ("terminal", Some("returned")),
             ("attempt", None),
             ("terminal", Some("returned")),
+            ("attempt", None),
+            ("terminal", Some("returned")),
             ("refusal", None),
             ("attempt", None),
             ("terminal", Some("empty")),
@@ -1118,17 +1135,19 @@ async fn assert_read_audit_is_ordered_chained_and_minimized(
     );
     assert_eq!(records[1]["resultCount"], 1);
     assert_eq!(records[3]["resultCount"], 1);
-    assert_eq!(records[5]["resultCount"], 100);
-    assert_eq!(records[7]["resultCount"], 2);
-    assert_eq!(records[9]["resultCount"], 1);
-    assert_eq!(records[11]["resultCount"], 3);
-    assert_eq!(records[14]["resultCount"], 0);
+    assert_eq!(records[5]["resultCount"], 1);
+    assert_eq!(records[7]["resultCount"], 100);
+    assert_eq!(records[9]["resultCount"], 2);
+    assert_eq!(records[11]["resultCount"], 1);
+    assert_eq!(records[13]["resultCount"], 3);
     assert_eq!(records[16]["resultCount"], 0);
+    assert_eq!(records[18]["resultCount"], 0);
     assert!(records[1].get("fieldSetReference").is_some());
     assert!(records[3].get("fieldSetReference").is_some());
     assert!(records[5].get("fieldSetReference").is_some());
-    assert!(records[5].get("queryReference").is_some());
-    assert!(records[5].get("rowBoundaryReference").is_some());
+    assert!(records[7].get("fieldSetReference").is_some());
+    assert!(records[7].get("queryReference").is_some());
+    assert!(records[7].get("rowBoundaryReference").is_some());
 
     let audit_text = records
         .iter()
@@ -1256,7 +1275,8 @@ fn registry_source() -> String {
               {"id":"secret","type":"string","required":true,"maxLength":100,"classification":"restricted"},
               {"id":"amount","type":"decimal","required":true,"precision":8,"scale":2,"classification":"internal"},
               {"id":"ordinal","type":"int64","required":true,"classification":"internal"},
-              {"id":"rank","type":"int64","required":false,"classification":"internal"}
+              {"id":"rank","type":"int64","required":false,"classification":"internal"},
+              {"id":"internal-code","apiName":"publicCode","type":"string","required":false,"maxLength":32,"classification":"internal"}
             ],
             "accessProfiles":[{
               "id":"operator",
@@ -1265,7 +1285,7 @@ fn registry_source() -> String {
               "requiredScopes":["registry.read"],
               "requiredPurposes":["case-management","audit-review"],
               "operations":["create","get","list","tombstone"],
-              "readableFields":["label","secret","amount","jurisdiction","ordinal","rank"],
+              "readableFields":["label","secret","amount","jurisdiction","ordinal","rank","internal-code"],
               "writableFields":["label","secret","amount","jurisdiction","ordinal","rank"],
               "filterableFields":["jurisdiction","label","ordinal","rank"],
               "sortableFields":["ordinal","label","rank"],
@@ -1276,7 +1296,7 @@ fn registry_source() -> String {
               "requiredScopes":["registry.read"],
               "requiredPurposes":["case-management"],
               "operations":["get","list"],
-              "readableFields":["label","jurisdiction"],
+              "readableFields":["label","jurisdiction","internal-code"],
               "filterableFields":["label"],
               "sortableFields":["label"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]

@@ -6,8 +6,11 @@
 use std::fs;
 
 use registry_platform_canonical_json::canonicalize_json;
-use registry_server::compiler::{compile_project, module_digest, CompileProfile};
-use registry_server::contract::{parse_module_yaml, parse_project_yaml};
+use registry_server::compiler::{
+    compile_project, compile_project_with_assets, module_digest, module_digest_with_assets,
+    CompileProfile,
+};
+use registry_server::contract::{parse_module_yaml, parse_project_yaml, ModuleAssetSource};
 #[cfg(feature = "tooling")]
 use registry_server::migration_plan::{
     ArtifactDigestBinding, ChunkCursorProtocol, ExternalBackupBinding, MigrationRehearsalReceipt,
@@ -80,7 +83,7 @@ fn new_optional_scalar_field_emits_only_closed_add_column() {
         Some(PRIOR_REVISION)
     );
     assert_eq!(plan.changes, change_set.changes);
-    assert_eq!(plan.statements.len(), 1);
+    assert_eq!(plan.statements.len(), 2);
     assert_eq!(plan.statements[0].id, "entity.asset.field.color.column");
     assert!(plan.statements[0]
         .sql
@@ -88,6 +91,10 @@ fn new_optional_scalar_field_emits_only_closed_add_column() {
     assert!(plan.statements[0].sql.contains(" ADD COLUMN "));
     assert!(plan.statements[0].sql.contains("varchar(16)"));
     assert!(!plan.statements[0].sql.contains("CREATE TABLE"));
+    assert_eq!(plan.statements[1].id, "entity.asset.source-view");
+    assert!(plan.statements[1]
+        .sql
+        .starts_with("CREATE OR REPLACE VIEW "));
 
     let rendered_changes = serde_json::to_string(&change_set.changes).expect("changes serialize");
     for forbidden in [
@@ -172,6 +179,7 @@ fn new_reference_constraint_and_index_are_supported_additive_statements() {
             "entity.asset.field.site.reference",
             "entity.asset.constraint.code-unique",
             "entity.asset.index.code-idx",
+            "entity.asset.source-view",
         ]
     );
 }
@@ -271,7 +279,7 @@ fn non_additive_changes_are_classified_and_cannot_create_applicable_plans() {
 fn complete_extension_surface_modules_are_order_independent() {
     let field_module = parse_module_yaml(br#"{"id":"field-extension","version":"1","extendEntities":[{"entity":"asset","fields":[{"id":"status","type":"string","maxLength":16,"classification":"internal"}],"constraints":[{"kind":"unique","id":"status-unique","fields":["status"]}],"indexes":[{"id":"status-idx","fields":["status"]}]}]}"#)
         .expect("field extension parses");
-    let event_module = parse_module_yaml(br#"{"id":"event-extension","version":"1","extendEntities":[{"entity":"asset","accessProfiles":[{"id":"auditor","principalClaim":"principal","operations":["get","list"],"readableFields":["code","status"],"writableFields":[]}],"events":[{"id":"asset-created","trigger":"created","projection":["code","status"]}]}],"entities":[{"id":"site","route":"sites","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}]}]}"#)
+    let event_module = parse_module_yaml(br#"{"id":"event-extension","version":"1","extendEntities":[{"entity":"asset","accessProfiles":[{"id":"auditor","principalClaim":"principal","operations":["get","list"],"readableFields":["code","status"],"writableFields":[]}],"events":[{"id":"asset-created","trigger":"created","projection":["code","status"],"webhook":{"destinationId":"package-change-events"}}]}],"entities":[{"id":"site","route":"sites","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}]}]}"#)
         .expect("event extension parses");
     let project_bytes = format!(
         r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"1","defaultLanguage":"en"}},"package":{{"environment":"local","instanceId":"{INSTANCE}","sequence":2,"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"name":"Package Test Publisher"}}}},"dataset":{{"title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}}},"entities":[{{"id":"asset","route":"assets","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}}],"accessProfiles":[{{"id":"reader","default":true,"principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}}],"modules":[{{"id":"field-extension","version":"1","digest":"{}"}},{{"id":"event-extension","version":"1","digest":"{}"}}]}}"#,
@@ -308,19 +316,37 @@ fn complete_extension_surface_modules_are_order_independent() {
 }
 
 #[test]
-fn equivalent_reordered_inputs_produce_byte_stable_change_sets() {
+fn equivalent_reordered_inputs_produce_stable_change_and_statement_inventory() {
     let previous = compile_variant(Variant::Base, 1);
     let candidate = compile_variant(Variant::ReferenceConstraintIndex, 2);
     let reordered = compile_variant(Variant::ReferenceConstraintIndexReordered, 2);
     let first = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
     let second = compiled_registry_change_set(&previous, &reordered, PRIOR_REVISION);
     let first_bytes =
-        canonicalize_json(&serde_json::to_value(&first).expect("first change set serializes"))
-            .expect("first change set canonicalizes");
-    let second_bytes =
-        canonicalize_json(&serde_json::to_value(&second).expect("second change set serializes"))
-            .expect("second change set canonicalizes");
+        canonicalize_json(&serde_json::to_value(&first.changes).expect("first changes serialize"))
+            .expect("first changes canonicalize");
+    let second_bytes = canonicalize_json(
+        &serde_json::to_value(&second.changes).expect("second changes serialize"),
+    )
+    .expect("second changes canonicalize");
     assert_eq!(first_bytes, second_bytes);
+    let first_statement_ids = first
+        .migration_plan
+        .as_ref()
+        .expect("first additive migration plan exists")
+        .statements
+        .iter()
+        .map(|statement| statement.id.as_str())
+        .collect::<Vec<_>>();
+    let second_statement_ids = second
+        .migration_plan
+        .as_ref()
+        .expect("second additive migration plan exists")
+        .statements
+        .iter()
+        .map(|statement| statement.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(first_statement_ids, second_statement_ids);
 }
 
 #[test]
@@ -358,6 +384,101 @@ fn generated_successor_plan_passes_package_validation_with_prior_revision() {
         Some(prior_revision.as_str())
     );
     assert_eq!(successor.manifest().migration_plan, expected_plan);
+}
+
+#[test]
+fn derived_sql_asset_bytes_change_revisions_and_emit_generated_view_replacement() {
+    let previous_source = derived_source_for_sql(
+        1,
+        b"SELECT a.id AS id, a.code AS summary FROM registry_source.asset a",
+    );
+    let previous = compile_derived_source(&previous_source);
+    let previous_package = registry_server::package::prepare_package(derived_build_request(
+        &previous_source,
+        1,
+        None,
+        None,
+    ))
+    .expect("initial derived package prepares");
+
+    let candidate_source = derived_source_for_sql(
+        2,
+        b"SELECT a.id AS id, (a.code) AS summary FROM registry_source.asset a",
+    );
+    let candidate = compile_derived_source(&candidate_source);
+    let successor = registry_server::package::prepare_package(derived_build_request(
+        &candidate_source,
+        2,
+        Some(&previous),
+        Some(previous_package.package_revision()),
+    ))
+    .expect("successor derived package prepares");
+
+    assert_ne!(
+        previous.module_closure()[0].digest,
+        candidate.module_closure()[0].digest
+    );
+    assert_ne!(previous.revision(), candidate.revision());
+    assert_ne!(
+        previous_package.package_revision(),
+        successor.package_revision()
+    );
+    assert!(successor
+        .file_bytes()
+        .contains_key("source/modules/core/sql/summary.sql"));
+    assert!(successor.manifest().files.iter().any(|entry| {
+        entry.path == "source/modules/core/sql/summary.sql"
+            && entry.role == registry_server::package::PackageFileRole::SourceModuleAsset
+    }));
+
+    let change_set =
+        compiled_registry_change_set(&previous, &candidate, previous_package.package_revision());
+    assert_change(
+        &change_set,
+        CompiledRegistryChangeClass::CompatibleAdditive,
+        CompiledRegistryChangeCode::DerivedRelationChanged,
+    );
+    let plan = change_set_to_applicable_migration_plan(&change_set)
+        .expect("same-contract SQL replacement is generated");
+    assert!(plan.statements.iter().any(|statement| {
+        statement.id == "entity.asset.derived.summary.view"
+            && statement.sql.starts_with("CREATE OR REPLACE VIEW ")
+    }));
+
+    let source_asset_entry = successor
+        .manifest()
+        .files
+        .iter()
+        .find(|entry| entry.path == "source/modules/core/sql/summary.sql")
+        .expect("asset file entry exists");
+    assert!(source_asset_entry.sha256.starts_with("sha256:"));
+}
+
+#[test]
+fn oversized_derived_sql_asset_is_refused_before_compilation() {
+    let mut source = derived_source_for_sql(
+        1,
+        b"SELECT a.id AS id, a.code AS summary FROM registry_source.asset a",
+    );
+    source.sql = vec![b'x'; 256 * 1024 + 1];
+    let module = parse_module_yaml(&source.module_bytes).expect("derived module parses");
+    source.project_bytes = project_bytes(
+        1,
+        &module_digest_with_assets(
+            &module,
+            &[ModuleAssetSource {
+                module: Some("core".to_owned()),
+                path: "sql/summary.sql".to_owned(),
+                bytes: source.sql.clone(),
+            }],
+        ),
+    );
+
+    assert_eq!(
+        registry_server::package::prepare_package(derived_build_request(&source, 1, None, None))
+            .err(),
+        Some(registry_server::package::PackageError::Derivation)
+    );
 }
 
 #[cfg(feature = "tooling")]
@@ -512,7 +633,7 @@ fn inspected_migration_summaries_are_exact_deterministic_and_value_free() {
                 "destructiveOrIrreversible": 0,
                 "unsupported": 0,
             },
-            "generatedStatementCount": 1,
+            "generatedStatementCount": 2,
             "reviewedMigrations": [],
         })
     );
@@ -532,7 +653,7 @@ fn inspected_migration_summaries_are_exact_deterministic_and_value_free() {
             "destructiveOrIrreversible": 0,
             "unsupported": 0,
         },
-        "generatedStatementCount": 1,
+        "generatedStatementCount": 2,
         "reviewedMigrations": [{
             "changeClass": "data_backfill_required",
             "recovery": "exact_target_resume",
@@ -672,6 +793,12 @@ struct SourceFixture {
     module_bytes: Vec<u8>,
 }
 
+struct DerivedSourceFixture {
+    project_bytes: Vec<u8>,
+    module_bytes: Vec<u8>,
+    sql: Vec<u8>,
+}
+
 fn compile_variant(variant: Variant, sequence: u64) -> CompiledRegistry {
     let source = source_for_variant(variant, sequence);
     let module = parse_module_yaml(&source.module_bytes).expect("fixture module parses");
@@ -695,6 +822,65 @@ fn project_bytes(sequence: u64, module_digest: &str) -> Vec<u8> {
         r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"1","defaultLanguage":"en"}},"package":{{"environment":"local","instanceId":"{INSTANCE}","sequence":{sequence},"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"name":"Package Test Publisher"}}}},"dataset":{{"title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
     )
     .into_bytes()
+}
+
+fn derived_source_for_sql(sequence: u64, sql: &[u8]) -> DerivedSourceFixture {
+    let module_bytes = br#"{"id":"core","version":"1","entities":[{"id":"asset","route":"assets","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}],"derived":[{"id":"summary","sql":"sql/summary.sql","key":"id","fields":[{"id":"summary","type":"string","maxLength":16,"classification":"internal"}]}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code","summary"]}]}]}"#.to_vec();
+    let module = parse_module_yaml(&module_bytes).expect("derived module parses");
+    let digest = module_digest_with_assets(
+        &module,
+        &[ModuleAssetSource {
+            module: Some("core".to_owned()),
+            path: "sql/summary.sql".to_owned(),
+            bytes: sql.to_vec(),
+        }],
+    );
+    DerivedSourceFixture {
+        project_bytes: project_bytes(sequence, &digest),
+        module_bytes,
+        sql: sql.to_vec(),
+    }
+}
+
+fn compile_derived_source(source: &DerivedSourceFixture) -> CompiledRegistry {
+    let project = parse_project_yaml(&source.project_bytes).expect("derived project parses");
+    let module = parse_module_yaml(&source.module_bytes).expect("derived module parses");
+    compile_project_with_assets(
+        &project,
+        &[module],
+        &[ModuleAssetSource {
+            module: Some("core".to_owned()),
+            path: "sql/summary.sql".to_owned(),
+            bytes: source.sql.clone(),
+        }],
+        CompileProfile::Production,
+    )
+    .expect("derived fixture compiles")
+}
+
+fn derived_build_request(
+    source: &DerivedSourceFixture,
+    sequence: u64,
+    prior_registry: Option<&CompiledRegistry>,
+    prior_revision: Option<&str>,
+) -> PackageBuildRequest {
+    let mut request = build_request(
+        sequence,
+        prior_revision,
+        source.project_bytes.clone(),
+        source.module_bytes.clone(),
+        match prior_registry {
+            Some(registry) => PackageMigrationPlanInput::Successor {
+                prior_registry: Box::new(registry.clone()),
+            },
+            None => PackageMigrationPlanInput::InitialCompiledDdl,
+        },
+    );
+    request.modules[0].assets = vec![PackageSourceFile {
+        path: "sql/summary.sql".to_owned(),
+        bytes: source.sql.clone(),
+    }];
+    request
 }
 
 fn module_bytes(variant: Variant) -> Vec<u8> {
@@ -850,7 +1036,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
             r#""id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code","valid-from","valid-to"],"writableFields":["code","valid-from","valid-to"]"#,
             "",
             "",
-            r#","events":[{"id":"asset-created","trigger":"created","projection":["code"]}]"#,
+            r#","events":[{"id":"asset-created","trigger":"created","projection":["code"],"webhook":{"destinationId":"package-change-events"}}]"#,
         ),
         Variant::MetadataOnlyChanged => asset_entity_with_mode(
             r#"{"id":"code","type":"string","maxLength":8,"classification":"internal"},{"id":"rank","type":"int64","classification":"restricted"},{"id":"valid-from","type":"date","required":true,"classification":"internal","validTimeRole":"valid_from"},{"id":"valid-to","type":"date","classification":"internal"}"#,
@@ -859,7 +1045,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
             r#""id":"reader","principalClaim":"subject","operations":["create","get","list"],"readableFields":["code","valid-from","valid-to"],"writableFields":["code","valid-from","valid-to"]"#,
             "",
             "",
-            r#","events":[{"id":"asset-created","trigger":"created","projection":["code","rank"]}]"#,
+            r#","events":[{"id":"asset-created","trigger":"created","projection":["code","rank"],"webhook":{"destinationId":"package-change-events"}}]"#,
         ),
         Variant::Base | Variant::NewEntity => asset_entity(
             base_asset_fields(),
@@ -967,6 +1153,7 @@ fn build_request(
             id: "core".to_owned(),
             path: "source/modules/core/module.yaml".to_owned(),
             bytes: module_bytes,
+            assets: Vec::new(),
         }],
         fixture_journeys: PackageSourceFile {
             path: "tests/journeys.yaml".to_owned(),

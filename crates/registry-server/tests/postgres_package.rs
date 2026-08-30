@@ -14,8 +14,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use postgres_harness::TestDatabase;
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_crypto::{generate_private_jwk, sign, GeneratedKeyAlgorithm, PrivateJwk};
-use registry_server::compiler::{compile_project, module_digest, CompileProfile};
-use registry_server::contract::{parse_module_yaml, parse_project_yaml};
+use registry_server::compiler::{
+    compile_project, module_digest, module_digest_with_assets, CompileProfile,
+};
+use registry_server::contract::{parse_module_yaml, parse_project_yaml, ModuleAssetSource};
 use registry_server::event_destination::EventDestinationCompatibilityInventory;
 use registry_server::migration::{
     apply_verified_package, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
@@ -268,6 +270,125 @@ fn fixture_journeys_are_required_at_the_fixed_path_and_change_the_package_revisi
     let second = prepare_package(changed).expect("changed journey closure prepares");
     assert_ne!(first.package_revision(), second.package_revision());
     assert_eq!(first.registry(), second.registry());
+}
+
+#[test]
+fn derived_sql_assets_are_captured_and_bound_to_revisions() {
+    let first = derived_asset_request(
+        b"SELECT r.id AS id, r.code AS summary FROM registry_source.neutral_record r",
+    );
+    let second = derived_asset_request(
+        b"SELECT r.id AS id, (r.code) AS summary FROM registry_source.neutral_record r",
+    );
+    let first = prepare_package(first).expect("first derived package prepares");
+    let second = prepare_package(second).expect("second derived package prepares");
+
+    assert!(first
+        .file_bytes()
+        .contains_key("source/modules/core/sql/summary.sql"));
+    assert!(first.manifest().files.iter().any(|entry| {
+        entry.path == "source/modules/core/sql/summary.sql"
+            && entry.role == PackageFileRole::SourceModuleAsset
+    }));
+    assert_eq!(
+        first.manifest().sources.modules[0].assets,
+        vec!["sql/summary.sql".to_owned()]
+    );
+    assert_ne!(
+        first.registry().module_closure(),
+        second.registry().module_closure()
+    );
+    assert_ne!(first.registry().revision(), second.registry().revision());
+    assert_ne!(first.package_revision(), second.package_revision());
+}
+
+#[test]
+fn derived_sql_asset_tampering_is_refused_before_activation() {
+    let prepared = prepare_package(derived_asset_request(
+        b"SELECT r.id AS id, r.code AS summary FROM registry_source.neutral_record r",
+    ))
+    .expect("derived package prepares");
+    let root = TempRoot::create();
+    prepared
+        .publish_to_directory(root.path(), Vec::new())
+        .expect("package publishes");
+    let context = local_context(PackageIntent::InitialActivation);
+    load_package(root.path(), &context).expect("untampered asset package loads");
+
+    let asset_path = root.path().join("source/modules/core/sql/summary.sql");
+    let original = fs::read(&asset_path).expect("asset reads");
+    fs::write(
+        &asset_path,
+        b"SELECT r.id AS id, (r.code) AS summary FROM registry_source.neutral_record r",
+    )
+    .expect("asset tamper writes");
+    assert_eq!(load_error(root.path(), &context), PackageError::Integrity);
+    fs::write(&asset_path, original).expect("asset restores");
+
+    fs::remove_file(&asset_path).expect("asset removes");
+    assert!(matches!(
+        load_error(root.path(), &context),
+        PackageError::Read | PackageError::Closure
+    ));
+}
+
+#[test]
+fn derived_sql_asset_extra_path_swap_and_size_are_refused() {
+    let prepared = prepare_package(derived_asset_request(
+        b"SELECT r.id AS id, r.code AS summary FROM registry_source.neutral_record r",
+    ))
+    .expect("derived package prepares");
+    let root = TempRoot::create();
+    prepared
+        .publish_to_directory(root.path(), Vec::new())
+        .expect("package publishes");
+    let context = local_context(PackageIntent::InitialActivation);
+
+    fs::write(
+        root.path().join("source/modules/core/sql/unlisted.sql"),
+        b"SELECT r.id AS id, r.code AS summary FROM registry_source.neutral_record r",
+    )
+    .expect("extra asset writes");
+    assert_eq!(load_error(root.path(), &context), PackageError::Closure);
+    fs::remove_file(root.path().join("source/modules/core/sql/unlisted.sql"))
+        .expect("extra asset removes");
+
+    let original_path = root.path().join("source/modules/core/sql/summary.sql");
+    let swapped_path = root.path().join("source/modules/core/sql/swapped.sql");
+    fs::rename(&original_path, &swapped_path).expect("asset path swaps");
+    rewrite_unsigned(root.path(), |manifest| {
+        manifest.sources.modules[0].assets = vec!["sql/swapped.sql".to_owned()];
+        let entry = manifest
+            .files
+            .iter_mut()
+            .find(|entry| entry.path == "source/modules/core/sql/summary.sql")
+            .expect("asset entry exists");
+        entry.path = "source/modules/core/sql/swapped.sql".to_owned();
+    });
+    assert_eq!(load_error(root.path(), &context), PackageError::Derivation);
+
+    let mut oversized = derived_asset_request(
+        b"SELECT r.id AS id, r.code AS summary FROM registry_source.neutral_record r",
+    );
+    let bytes = vec![b'x'; 256 * 1024 + 1];
+    let module = parse_module_yaml(&oversized.modules[0].bytes).expect("module parses");
+    oversized.modules[0].assets[0].bytes = bytes.clone();
+    oversized.project.bytes = project_bytes(
+        "local",
+        1,
+        &module_digest_with_assets(
+            &module,
+            &[ModuleAssetSource {
+                module: Some("core".to_owned()),
+                path: "sql/summary.sql".to_owned(),
+                bytes,
+            }],
+        ),
+    );
+    assert_eq!(
+        prepare_package(oversized).err(),
+        Some(PackageError::Derivation)
+    );
 }
 
 #[test]
@@ -1290,13 +1411,22 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
     }
     let provisional_second_table =
         &provisional_second.registry().entities()["second-record"].physical_table;
+    let provisional_second_source_view = &provisional_second.registry().entities()["second-record"]
+        .source_relation
+        .sql_name;
     transaction
         .batch_execute(&format!(
             "REVOKE ALL ON TABLE registry_data.{} FROM PUBLIC, \"{}\";
-             GRANT SELECT, INSERT ON TABLE registry_data.{} TO \"{}\";",
+             GRANT SELECT, INSERT ON TABLE registry_data.{} TO \"{}\";
+             REVOKE ALL ON TABLE registry_source.{} FROM PUBLIC, \"{}\";
+             GRANT SELECT ON TABLE registry_source.{} TO \"{}\";",
             quote_identifier(provisional_second_table),
             database.runtime_role.as_str(),
             quote_identifier(provisional_second_table),
+            database.runtime_role.as_str(),
+            quote_identifier(provisional_second_source_view),
+            database.runtime_role.as_str(),
+            quote_identifier(provisional_second_source_view),
             database.runtime_role.as_str(),
         ))
         .await
@@ -1706,6 +1836,22 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
             .map_err(|_| ())
             .expect("third exact additive plan applies in fingerprint transaction");
     }
+    let third_entity = &provisional_third.registry().entities()["third-record"];
+    transaction
+        .batch_execute(&format!(
+            "REVOKE ALL ON TABLE registry_data.{} FROM PUBLIC, \"{}\";
+             REVOKE ALL ON TABLE registry_source.{} FROM PUBLIC, \"{}\";
+             GRANT SELECT ON TABLE registry_source.{} TO \"{}\";",
+            quote_identifier(&third_entity.physical_table),
+            database.runtime_role.as_str(),
+            quote_identifier(&third_entity.source_relation.sql_name),
+            database.runtime_role.as_str(),
+            quote_identifier(&third_entity.source_relation.sql_name),
+            database.runtime_role.as_str(),
+        ))
+        .await
+        .map_err(|_| ())
+        .expect("third fingerprint transaction installs target runtime ACL");
     let third_catalog = ExpectedManagedCatalog::compiled(provisional_third.registry());
     let third_schema =
         managed_schema_fingerprint(&transaction, &database.runtime_role, &third_catalog)
@@ -2027,13 +2173,22 @@ async fn successor_apply_refuses_to_strand_retained_webhook_work() {
             .expect("successor additive DDL applies for fingerprinting");
     }
     let second_table = &provisional_second.registry().entities()["second-record"].physical_table;
+    let second_source_view = &provisional_second.registry().entities()["second-record"]
+        .source_relation
+        .sql_name;
     transaction
         .batch_execute(&format!(
             "REVOKE ALL ON TABLE registry_data.{} FROM PUBLIC, \"{}\";
-             GRANT SELECT, INSERT ON TABLE registry_data.{} TO \"{}\";",
+             GRANT SELECT, INSERT ON TABLE registry_data.{} TO \"{}\";
+             REVOKE ALL ON TABLE registry_source.{} FROM PUBLIC, \"{}\";
+             GRANT SELECT ON TABLE registry_source.{} TO \"{}\";",
             quote_identifier(second_table),
             database.runtime_role.as_str(),
             quote_identifier(second_table),
+            database.runtime_role.as_str(),
+            quote_identifier(second_source_view),
+            database.runtime_role.as_str(),
+            quote_identifier(second_source_view),
             database.runtime_role.as_str(),
         ))
         .await
@@ -2421,6 +2576,41 @@ fn module_bytes(plan: PlanChoice) -> Vec<u8> {
     .into_bytes()
 }
 
+fn derived_module_bytes() -> Vec<u8> {
+    br#"{"id":"core","version":"1","entities":[{"id":"neutral-record","route":"neutral-records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"}],"derived":[{"id":"summary","sql":"sql/summary.sql","key":"id","fields":[{"id":"summary","type":"string","maxLength":64,"classification":"internal"}]}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code","summary"]}]}]}"#.to_vec()
+}
+
+fn derived_asset_request(sql: &[u8]) -> PackageBuildRequest {
+    let module_bytes = derived_module_bytes();
+    let module = parse_module_yaml(&module_bytes).expect("fixture module parses");
+    let digest = module_digest_with_assets(
+        &module,
+        &[ModuleAssetSource {
+            module: Some("core".to_owned()),
+            path: "sql/summary.sql".to_owned(),
+            bytes: sql.to_vec(),
+        }],
+    );
+    let mut request = build_request(BuildRequestParts {
+        environment: "local",
+        sequence: 1,
+        prior_revision: None,
+        schema_fingerprint: fingerprint(1),
+        project_bytes: project_bytes("local", 1, &digest),
+        module_bytes,
+        migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
+        signature_policy: SignaturePolicy {
+            threshold: 0,
+            key_ids: Vec::new(),
+        },
+    });
+    request.modules[0].assets = vec![PackageSourceFile {
+        path: "sql/summary.sql".to_owned(),
+        bytes: sql.to_vec(),
+    }];
+    request
+}
+
 struct BuildRequestParts<'a> {
     environment: &'a str,
     sequence: u64,
@@ -2450,6 +2640,7 @@ fn build_request(parts: BuildRequestParts<'_>) -> PackageBuildRequest {
             id: "core".to_owned(),
             path: "source/modules/core/module.yaml".to_owned(),
             bytes: parts.module_bytes,
+            assets: Vec::new(),
         }],
         fixture_journeys: PackageSourceFile {
             path: "tests/journeys.yaml".to_owned(),
@@ -2731,8 +2922,6 @@ authentication:
   authorityClaims:
     principal: registry_principal
     purpose: registry_purpose
-    rowBoundaryClaims:
-      - {{name: jurisdiction, type: directString}}
 audit:
   hashKeyRef: secret:file/audit-key
 cursor:

@@ -204,6 +204,16 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
         &destructive_fingerprint,
         reviewed_destructive_source,
     );
+    let view_transition = &destructive_package.manifest().migration_plan.statements;
+    assert_eq!(view_transition.len(), 2);
+    assert!(view_transition[0]
+        .sql
+        .starts_with("DROP VIEW IF EXISTS \"registry_source\"."));
+    assert!(view_transition[0].sql.ends_with(" RESTRICT"));
+    assert!(!view_transition[0].sql.contains("CASCADE"));
+    assert!(view_transition[1]
+        .sql
+        .starts_with("CREATE VIEW registry_source."));
     let backup_root = tempfile::Builder::new()
         .prefix("registry-backup-canary-")
         .tempdir_in("/private/tmp")
@@ -814,6 +824,7 @@ fn build_request(
             id: "core".to_owned(),
             path: "source/modules/core/module.yaml".to_owned(),
             bytes: module_bytes,
+            assets: Vec::new(),
         }],
         fixture_journeys: PackageSourceFile {
             path: "tests/journeys.yaml".to_owned(),
@@ -1277,6 +1288,13 @@ async fn destructive_target_fingerprint(
 ) -> String {
     let entity = &candidate.entities()["asset"];
     let table = quote(&entity.physical_table);
+    let source_view = quote(&entity.source_relation.sql_name);
+    let candidate_source_view = candidate
+        .ddl()
+        .statements
+        .iter()
+        .find(|statement| statement.id == "entity.asset.source-view")
+        .expect("candidate source view DDL exists");
     let prior = compile_variant(Variant::RankRequired, 2);
     let legacy = quote(&prior.entities()["asset"].fields["legacy"].physical_name);
     let (mut migration, task) = database.connect_migration().await;
@@ -1286,7 +1304,12 @@ async fn destructive_target_fingerprint(
         .expect("destructive fingerprint transaction starts");
     transaction
         .batch_execute(&format!(
-            "ALTER TABLE registry_data.{table} DROP COLUMN {legacy}"
+            "DROP VIEW registry_source.{source_view} RESTRICT;
+             {};
+             GRANT SELECT ON TABLE registry_source.{source_view} TO {};
+             ALTER TABLE registry_data.{table} DROP COLUMN {legacy}",
+            candidate_source_view.sql,
+            quote(database.runtime_role.as_str())
         ))
         .await
         .expect("destructive target rehearses");
@@ -1370,13 +1393,29 @@ fn synthetic_backup_sql(
         .iter()
         .find(|statement| statement.id == "entity.asset.table")
         .expect("compiled table DDL exists");
-    let mut sql = format!(
+    let asset_views = registry
+        .ddl()
+        .views
+        .iter()
+        .filter(|view| view.id.starts_with("entity.asset."))
+        .collect::<Vec<_>>();
+    let mut sql = String::new();
+    for schema in ["registry_derived", "registry_source"] {
+        for view in asset_views.iter().filter(|view| view.schema == schema) {
+            sql.push_str(&format!(
+                "DROP VIEW IF EXISTS {}.{} RESTRICT;\n",
+                quote(&view.schema),
+                quote(&view.name)
+            ));
+        }
+    }
+    sql.push_str(&format!(
         "DROP TABLE registry_data.{table};\n{};\n\
          INSERT INTO registry_data.{table}\n\
              (record_id, active_package_revision, {code}, {rank}, {legacy})\n\
          VALUES {values};\n",
         create.sql
-    );
+    ));
     for statement in registry.ddl().statements.iter().filter(|statement| {
         statement.id.starts_with("entity.asset.") && statement.id != "entity.asset.table"
     }) {
@@ -1389,6 +1428,28 @@ fn synthetic_backup_sql(
         quote(runtime_role.as_str()),
         quote(runtime_role.as_str())
     ));
+    for view in asset_views {
+        let privileges = view
+            .runtime_privileges
+            .iter()
+            .map(|privilege| privilege.as_sql())
+            .collect::<Vec<_>>()
+            .join(", ");
+        sql.push_str(&format!(
+            "REVOKE ALL ON TABLE {}.{} FROM PUBLIC, {};\n",
+            quote(&view.schema),
+            quote(&view.name),
+            quote(runtime_role.as_str())
+        ));
+        if !privileges.is_empty() {
+            sql.push_str(&format!(
+                "GRANT {privileges} ON TABLE {}.{} TO {};\n",
+                quote(&view.schema),
+                quote(&view.name),
+                quote(runtime_role.as_str())
+            ));
+        }
+    }
     sql.into_bytes()
 }
 

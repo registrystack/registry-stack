@@ -1574,7 +1574,7 @@ where
             &plan.route_path,
             &[
                 ("accessProfile", plan.profile_id.as_str()),
-                ("cursor", cursor),
+                ("$skiptoken", cursor),
             ],
         )
     } else {
@@ -1582,8 +1582,8 @@ where
             &plan.route_path,
             &[
                 ("accessProfile", plan.profile_id.as_str()),
-                ("fields", fields.as_str()),
-                ("pageSize", page_size.as_str()),
+                ("$select", fields.as_str()),
+                ("$top", page_size.as_str()),
             ],
         )
     };

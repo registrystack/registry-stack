@@ -35,6 +35,7 @@ class GeneratedGateTests(unittest.TestCase):
     def test_generated_gate_script_keeps_a_bounded_database_free_cli_journey(self) -> None:
         generated_gate = (SCRIPT_DIR / "check-generated.sh").read_text(encoding="utf-8")
         self.assertIn("mktemp -d", generated_gate)
+        self.assertIn("publicschema-household", generated_gate)
         self.assertIn('export RUSTC_WRAPPER="${RUSTC_WRAPPER-}"', generated_gate)
         self.assertIn("authoring_baseline", generated_gate)
         self.assertIn("--features schema --example authoring-schema", generated_gate)

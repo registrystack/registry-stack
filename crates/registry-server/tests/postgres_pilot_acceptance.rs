@@ -51,7 +51,7 @@ async fn asset_site_placement_journey(harness: &PilotHarness) {
         .is_none());
     assert!(
         planner_openapi["components"]["schemas"]["asset-item"]["properties"]
-            .get("asset-class")
+            .get("assetClass")
             .is_none()
     );
 
@@ -60,7 +60,7 @@ async fn asset_site_placement_journey(harness: &PilotHarness) {
         "/v1/records/assets",
         &token,
         "asset-create",
-        json!({"asset-code":"A-100","label":"Portable pump","asset-class":"equipment"}),
+        json!({"assetCode":"A-100","label":"Portable pump","assetClass":"equipment"}),
     )
     .await;
     let old_site = create_record(
@@ -68,7 +68,7 @@ async fn asset_site_placement_journey(harness: &PilotHarness) {
         "/v1/records/sites",
         &token,
         "site-old-create",
-        json!({"site-code":"S-OLD","label":"Old depot"}),
+        json!({"siteCode":"S-OLD","label":"Old depot"}),
     )
     .await;
     let current_site = create_record(
@@ -76,7 +76,7 @@ async fn asset_site_placement_journey(harness: &PilotHarness) {
         "/v1/records/sites",
         &token,
         "site-current-create",
-        json!({"site-code":"S-CURRENT","label":"Current depot"}),
+        json!({"siteCode":"S-CURRENT","label":"Current depot"}),
     )
     .await;
     let old_placement = create_record(
@@ -87,8 +87,8 @@ async fn asset_site_placement_journey(harness: &PilotHarness) {
         json!({
             "asset": asset.id,
             "site": old_site.id,
-            "valid-from":"2020-01-01",
-            "valid-to":"2021-01-01"
+            "validFrom":"2020-01-01",
+            "validTo":"2021-01-01"
         }),
     )
     .await;
@@ -100,7 +100,7 @@ async fn asset_site_placement_journey(harness: &PilotHarness) {
         json!({
             "asset": asset.id,
             "site": current_site.id,
-            "valid-from":"2021-01-01"
+            "validFrom":"2021-01-01"
         }),
     )
     .await;
@@ -153,8 +153,8 @@ async fn asset_site_placement_journey(harness: &PilotHarness) {
                 "data":{
                     "asset":asset.id,
                     "site":old_site.id,
-                    "valid-from":"2020-06-01",
-                    "valid-to":"2021-06-01"
+                    "validFrom":"2020-06-01",
+                    "validTo":"2021-06-01"
                 }
             }),
         )
@@ -171,7 +171,7 @@ async fn asset_site_placement_journey(harness: &PilotHarness) {
                 "data":{
                     "asset":FOREIGN_UUID,
                     "site":current_site.id,
-                    "valid-from":"2030-01-01"
+                    "validFrom":"2030-01-01"
                 }
             }),
         )
@@ -185,7 +185,7 @@ async fn asset_site_placement_journey(harness: &PilotHarness) {
         "inspection-create",
         json!({
             "asset":asset.id,
-            "observed-at":"2026-08-30T10:00:00Z",
+            "observedAt":"2026-08-30T10:00:00Z",
             "result":"passed"
         }),
     )
@@ -207,13 +207,13 @@ async fn household_journey(harness: &PilotHarness) {
     );
     let openapi = assert_fixture_surface(harness, "household-operator", &token, "household").await;
     assert_eq!(
-        openapi["components"]["schemas"]["person"]["properties"]["residency-status"]
+        openapi["components"]["schemas"]["person"]["properties"]["residencyStatus"]
             ["x-registry-vocabulary"],
         "residency-status"
     );
     assert!(openapi["components"]["schemas"]["person"]["properties"]
-        .get("preferred-language")
-        .is_some());
+        .get("preferredLanguage")
+        .is_none());
 
     let person = create_record(
         harness,
@@ -221,27 +221,29 @@ async fn household_journey(harness: &PilotHarness) {
         &token,
         "person-create",
         json!({
-            "person-code":"P-100",
-            "legal-name":"Ada North",
-            "family-name":"North",
-            "date-of-birth":"1990-04-03",
-            "residency-status":"usual-resident",
-            "preferred-language":"en"
+            "personCode":"P-100",
+            "legalName":"Ada North",
+            "familyName":"North",
+            "dateOfBirth":"1990-04-03",
+            "personSex":"female",
+            "residencyStatus":"usual-resident",
+            "preferredLanguage":"en"
         }),
     )
     .await;
-    assert_eq!(person.body["data"]["residency-status"], "usual-resident");
-    assert_eq!(person.body["data"]["preferred-language"], "en");
+    assert_eq!(person.body["data"]["residencyStatus"], "usual-resident");
+    assert_eq!(person.body["data"]["preferredLanguage"], "en");
     let old_household = create_record(
         harness,
         "/v1/records/households",
         &token,
         "household-old-create",
         json!({
-            "household-code":"H-OLD",
-            "household-name":"Old household",
-            "administrative-area":"north",
-            "household-type":"private"
+            "householdCode":"H-OLD",
+            "localHouseholdNumber":100,
+            "householdName":"Old household",
+            "administrativeArea":"north",
+            "householdType":"private"
         }),
     )
     .await;
@@ -251,10 +253,11 @@ async fn household_journey(harness: &PilotHarness) {
         &token,
         "household-current-create",
         json!({
-            "household-code":"H-CURRENT",
-            "household-name":"Current household",
-            "administrative-area":"north",
-            "household-type":"private"
+            "householdCode":"H-CURRENT",
+            "localHouseholdNumber":101,
+            "householdName":"Current household",
+            "administrativeArea":"north",
+            "householdType":"private"
         }),
     )
     .await;
@@ -267,8 +270,8 @@ async fn household_journey(harness: &PilotHarness) {
             "person":person.id,
             "household":old_household.id,
             "relationship":"head",
-            "valid-from":"2019-01-01",
-            "valid-to":"2022-01-01"
+            "validFrom":"2019-01-01",
+            "validTo":"2022-01-01"
         }),
     )
     .await;
@@ -281,7 +284,7 @@ async fn household_journey(harness: &PilotHarness) {
             "person":person.id,
             "household":current_household.id,
             "relationship":"head",
-            "valid-from":"2022-01-01"
+            "validFrom":"2022-01-01"
         }),
     )
     .await;
@@ -310,8 +313,8 @@ async fn household_journey(harness: &PilotHarness) {
                 "person":person.id,
                 "household":old_household.id,
                 "relationship":"dependent",
-                "valid-from":"2021-06-01",
-                "valid-to":"2023-01-01"
+                "validFrom":"2021-06-01",
+                "validTo":"2023-01-01"
             }}),
         )
         .await;
@@ -324,7 +327,7 @@ async fn disability_journey(harness: &PilotHarness) {
         assert_fixture_surface(harness, "disability-caseworker", &token, "disability").await;
     assert_eq!(
         openapi["components"]["schemas"]["functioning-observation"]["properties"]
-            ["observation-schema-metadata"]["additionalProperties"],
+            ["observationSchemaMetadata"]["additionalProperties"],
         false
     );
     let concealed_schema = harness
@@ -344,10 +347,10 @@ async fn disability_journey(harness: &PilotHarness) {
         &token,
         "assessment-create",
         json!({
-            "episode-code":"EP-100",
-            "subject-code":"SUBJECT-100",
-            "opened-on":"2026-01-10",
-            "assessment-source":"case-management"
+            "episodeCode":"EP-100",
+            "subjectCode":"SUBJECT-100",
+            "openedOn":"2026-01-10",
+            "assessmentSource":"case-management"
         }),
     )
     .await;
@@ -358,11 +361,11 @@ async fn disability_journey(harness: &PilotHarness) {
             Some(&token),
             Some("observation-invalid-range"),
             json!({"data":{
-                "assessment-episode":assessment.id,
-                "observed-at":"2026-01-11T09:00:00Z",
-                "functioning-domain":"mobility",
-                "severity-score":5,
-                "observation-schema-metadata":{
+                "assessmentEpisode":assessment.id,
+                "observedAt":"2026-01-11T09:00:00Z",
+                "functioningDomain":"mobility",
+                "severityScore":5,
+                "observationSchemaMetadata":{
                     "schemaVersion":"1","vocabularyRelease":"2026-01","scoringScale":"zero-to-four"
                 }
             }}),
@@ -376,11 +379,11 @@ async fn disability_journey(harness: &PilotHarness) {
             Some(&token),
             Some("observation-invalid-structure"),
             json!({"data":{
-                "assessment-episode":assessment.id,
-                "observed-at":"2026-01-11T09:00:00Z",
-                "functioning-domain":"mobility",
-                "severity-score":3,
-                "observation-schema-metadata":{
+                "assessmentEpisode":assessment.id,
+                "observedAt":"2026-01-11T09:00:00Z",
+                "functioningDomain":"mobility",
+                "severityScore":3,
+                "observationSchemaMetadata":{
                     "schemaVersion":"1","vocabularyRelease":"2026-01",
                     "scoringScale":"zero-to-four","undeclared":"refused"
                 }
@@ -394,17 +397,17 @@ async fn disability_journey(harness: &PilotHarness) {
         &token,
         "observation-create",
         json!({
-            "assessment-episode":assessment.id,
-            "observed-at":"2026-01-11T09:00:00Z",
-            "functioning-domain":"mobility",
-            "severity-score":3,
-            "observation-schema-metadata":{
+            "assessmentEpisode":assessment.id,
+            "observedAt":"2026-01-11T09:00:00Z",
+            "functioningDomain":"mobility",
+            "severityScore":3,
+            "observationSchemaMetadata":{
                 "schemaVersion":"1","vocabularyRelease":"2026-01","scoringScale":"zero-to-four"
             }
         }),
     )
     .await;
-    assert_eq!(observation.body["data"]["severity-score"], 3);
+    assert_eq!(observation.body["data"]["severityScore"], 3);
 
     let original = create_record(
         harness,
@@ -412,12 +415,12 @@ async fn disability_journey(harness: &PilotHarness) {
         &token,
         "certification-original",
         json!({
-            "certification-code":"CERT-100",
-            "assessment-episode":assessment.id,
-            "certification-status":"corrected",
-            "valid-from":"2026-01-01",
-            "valid-to":"2026-07-01",
-            "validity-source":"review-board"
+            "certificationCode":"CERT-100",
+            "assessmentEpisode":assessment.id,
+            "certificationStatus":"corrected",
+            "validFrom":"2026-01-01",
+            "validTo":"2026-07-01",
+            "validitySource":"review-board"
         }),
     )
     .await;
@@ -427,23 +430,23 @@ async fn disability_journey(harness: &PilotHarness) {
         &token,
         "certification-correction",
         json!({
-            "certification-code":"CERT-101",
-            "assessment-episode":assessment.id,
-            "certification-status":"active",
-            "valid-from":"2026-07-01",
-            "corrected-certification":original.id,
-            "correction-reason":"reviewed correction",
-            "validity-source":"review-board",
-            "provenance-note":"signed review packet"
+            "certificationCode":"CERT-101",
+            "assessmentEpisode":assessment.id,
+            "certificationStatus":"active",
+            "validFrom":"2026-07-01",
+            "correctedCertification":original.id,
+            "correctionReason":"reviewed correction",
+            "validitySource":"review-board",
+            "provenanceNote":"signed review packet"
         }),
     )
     .await;
     assert_eq!(
-        correction.body["data"]["corrected-certification"],
+        correction.body["data"]["correctedCertification"],
         original.id
     );
-    assert!(correction.body["data"]["correction-reason"].is_string());
-    assert!(correction.body["data"]["provenance-note"].is_string());
+    assert!(correction.body["data"]["correctionReason"].is_string());
+    assert!(correction.body["data"]["provenanceNote"].is_string());
     assert_create_only_refuses_patch_and_tombstone(
         harness,
         "/v1/records/certifications",
@@ -501,8 +504,8 @@ async fn farmer_journey(harness: &PilotHarness) {
         &north_token,
         "north-farmer",
         json!({
-            "farmer-code":"F-NORTH","display-name":"North operator",
-            "administrative-boundary":"north-district"
+            "farmerCode":"F-NORTH","displayName":"North operator",
+            "administrativeBoundary":"north-district"
         }),
     )
     .await;
@@ -512,8 +515,8 @@ async fn farmer_journey(harness: &PilotHarness) {
         &south_token,
         "south-farmer",
         json!({
-            "farmer-code":"F-SOUTH","display-name":"South operator",
-            "administrative-boundary":"south-district"
+            "farmerCode":"F-SOUTH","displayName":"South operator",
+            "administrativeBoundary":"south-district"
         }),
     )
     .await;
@@ -552,10 +555,10 @@ async fn farmer_journey(harness: &PilotHarness) {
         &north_token,
         "holding-old",
         json!({
-            "holding-code":"H-NORTH","farmer":north_farmer.id,"tenure-type":"leased",
-            "tenure-start":"2020-01-01","tenure-end":"2024-01-01",
-            "administrative-boundary":"north-district","import-source":"survey-a",
-            "source-record-id":"holding-old"
+            "holdingCode":"H-NORTH","farmer":north_farmer.id,"tenureType":"leased",
+            "tenureStart":"2020-01-01","tenureEnd":"2024-01-01",
+            "administrativeBoundary":"north-district","importSource":"survey-a",
+            "sourceRecordId":"holding-old"
         }),
     )
     .await;
@@ -565,9 +568,9 @@ async fn farmer_journey(harness: &PilotHarness) {
         &north_token,
         "holding-current",
         json!({
-            "holding-code":"H-NORTH","farmer":north_farmer.id,"tenure-type":"owned",
-            "tenure-start":"2024-01-01","administrative-boundary":"north-district",
-            "import-source":"survey-a","source-record-id":"holding-current"
+            "holdingCode":"H-NORTH","farmer":north_farmer.id,"tenureType":"owned",
+            "tenureStart":"2024-01-01","administrativeBoundary":"north-district",
+            "importSource":"survey-a","sourceRecordId":"holding-current"
         }),
     )
     .await;
@@ -593,11 +596,11 @@ async fn farmer_journey(harness: &PilotHarness) {
             Some(&north_token),
             Some("plot-invalid-point"),
             json!({"data":{
-                "plot-code":"P-BAD-POINT","holding":current_holding.id,
-                "administrative-boundary":"north-district",
+                "plotCode":"P-BAD-POINT","holding":current_holding.id,
+                "administrativeBoundary":"north-district",
                 "centroid":{"type":"Point","coordinates":[32.0,-9.5]},
-                "area-value":"1.2500","area-unit":"hectare",
-                "import-source":"survey-a","source-record-id":"plot-bad-point"
+                "areaValue":"1.2500","areaUnit":"hectare",
+                "importSource":"survey-a","sourceRecordId":"plot-bad-point"
             }}),
         )
         .await;
@@ -609,11 +612,11 @@ async fn farmer_journey(harness: &PilotHarness) {
             Some(&north_token),
             Some("plot-invalid-decimal"),
             json!({"data":{
-                "plot-code":"P-BAD-DECIMAL","holding":current_holding.id,
-                "administrative-boundary":"north-district",
+                "plotCode":"P-BAD-DECIMAL","holding":current_holding.id,
+                "administrativeBoundary":"north-district",
                 "centroid":{"type":"Point","coordinates":[30.5,-9.5]},
-                "area-value":"01.2500","area-unit":"hectare",
-                "import-source":"survey-a","source-record-id":"plot-bad-decimal"
+                "areaValue":"01.2500","areaUnit":"hectare",
+                "importSource":"survey-a","sourceRecordId":"plot-bad-decimal"
             }}),
         )
         .await;
@@ -624,16 +627,16 @@ async fn farmer_journey(harness: &PilotHarness) {
         &north_token,
         "plot-create",
         json!({
-            "plot-code":"P-NORTH","holding":current_holding.id,
-            "administrative-boundary":"north-district",
+            "plotCode":"P-NORTH","holding":current_holding.id,
+            "administrativeBoundary":"north-district",
             "centroid":{"type":"Point","coordinates":[30.5,-9.5]},
-            "area-value":"1.2500","area-unit":"hectare",
-            "import-source":"survey-a","source-record-id":"plot-primary"
+            "areaValue":"1.2500","areaUnit":"hectare",
+            "importSource":"survey-a","sourceRecordId":"plot-primary"
         }),
     )
     .await;
-    assert_eq!(plot.body["data"]["area-value"], "1.2500");
-    assert_eq!(plot.body["data"]["area-unit"], "hectare");
+    assert_eq!(plot.body["data"]["areaValue"], "1.2500");
+    assert_eq!(plot.body["data"]["areaUnit"], "hectare");
 
     let old_activity = create_record(
         harness,
@@ -641,9 +644,9 @@ async fn farmer_journey(harness: &PilotHarness) {
         &north_token,
         "activity-old",
         json!({
-            "plot":plot.id,"administrative-boundary":"north-district",
-            "activity-type":"planting","season-start":"2024-01-01","season-end":"2024-07-01",
-            "quantity-value":"12.500","quantity-unit":"kilogram"
+            "plot":plot.id,"administrativeBoundary":"north-district",
+            "activityType":"planting","seasonStart":"2024-01-01","seasonEnd":"2024-07-01",
+            "quantityValue":"12.500","quantityUnit":"kilogram"
         }),
     )
     .await;
@@ -653,13 +656,13 @@ async fn farmer_journey(harness: &PilotHarness) {
         &north_token,
         "activity-current",
         json!({
-            "plot":plot.id,"administrative-boundary":"north-district",
-            "activity-type":"planting","season-start":"2024-07-01",
-            "quantity-value":"8.250","quantity-unit":"kilogram"
+            "plot":plot.id,"administrativeBoundary":"north-district",
+            "activityType":"planting","seasonStart":"2024-07-01",
+            "quantityValue":"8.250","quantityUnit":"kilogram"
         }),
     )
     .await;
-    assert_eq!(current_activity.body["data"]["quantity-value"], "8.250");
+    assert_eq!(current_activity.body["data"]["quantityValue"], "8.250");
     assert_list_ids(
         harness,
         "/v1/records/seasonal-activities:as-of?accessProfile=farmer-operator&asOf=2024-06-30T23:59:59Z",
@@ -676,11 +679,11 @@ async fn farmer_journey(harness: &PilotHarness) {
     .await;
 
     let batch_body = json!({"items":[{"operation":"create","data":{
-        "plot-code":"P-BATCH","holding":current_holding.id,
-        "administrative-boundary":"north-district",
+        "plotCode":"P-BATCH","holding":current_holding.id,
+        "administrativeBoundary":"north-district",
         "centroid":{"type":"Point","coordinates":[30.75,-9.25]},
-        "area-value":"2.0000","area-unit":"hectare",
-        "import-source":"survey-b","source-record-id":"plot-batch"
+        "areaValue":"2.0000","areaUnit":"hectare",
+        "importSource":"survey-b","sourceRecordId":"plot-batch"
     }}]});
     let first_batch = harness
         .send_json(
@@ -712,11 +715,11 @@ async fn farmer_journey(harness: &PilotHarness) {
             Some(&north_token),
             Some("plot-duplicate-import"),
             json!({"data":{
-                "plot-code":"P-DUPLICATE","holding":current_holding.id,
-                "administrative-boundary":"north-district",
+                "plotCode":"P-DUPLICATE","holding":current_holding.id,
+                "administrativeBoundary":"north-district",
                 "centroid":{"type":"Point","coordinates":[30.8,-9.2]},
-                "area-value":"3.0000","area-unit":"hectare",
-                "import-source":"survey-b","source-record-id":"plot-batch"
+                "areaValue":"3.0000","areaUnit":"hectare",
+                "importSource":"survey-b","sourceRecordId":"plot-batch"
             }}),
         )
         .await;
@@ -732,12 +735,12 @@ async fn business_journey(harness: &PilotHarness) {
         &token,
         "legal-entity-create",
         json!({
-            "jurisdiction-code":"XY","registration-number":"10001",
-            "legal-name":"Example Cooperative","entity-status":"active",
-            "public-service-address":"Public office",
-            "protected-contact":"protected-contact@example.test",
-            "protected-ownership-reference":"ownership-10001",
-            "internal-case-note":"registrar review complete"
+            "jurisdictionCode":"XY","registrationNumber":"10001",
+            "legalName":"Example Cooperative","entityStatus":"active",
+            "publicServiceAddress":"Public office",
+            "protectedContact":"protected-contact@example.test",
+            "protectedOwnershipReference":"ownership-10001",
+            "internalCaseNote":"registrar review complete"
         }),
     )
     .await;
@@ -753,12 +756,10 @@ async fn business_journey(harness: &PilotHarness) {
             .await,
     )
     .await;
-    assert_eq!(public["data"]["legal-name"], "Example Cooperative");
-    assert!(public["data"].get("protected-contact").is_none());
-    assert!(public["data"]
-        .get("protected-ownership-reference")
-        .is_none());
-    assert!(public["data"].get("internal-case-note").is_none());
+    assert_eq!(public["data"]["legalName"], "Example Cooperative");
+    assert!(public["data"].get("protectedContact").is_none());
+    assert!(public["data"].get("protectedOwnershipReference").is_none());
+    assert!(public["data"].get("internalCaseNote").is_none());
     let protected = response_json(
         harness
             .send(
@@ -774,9 +775,9 @@ async fn business_journey(harness: &PilotHarness) {
             .await,
     )
     .await;
-    assert!(protected["data"]["protected-contact"].is_string());
-    assert!(protected["data"]["protected-ownership-reference"].is_string());
-    assert!(protected["data"]["internal-case-note"].is_string());
+    assert!(protected["data"]["protectedContact"].is_string());
+    assert!(protected["data"]["protectedOwnershipReference"].is_string());
+    assert!(protected["data"]["internalCaseNote"].is_string());
 
     let duplicate_identifier = harness
         .send_json(
@@ -785,8 +786,8 @@ async fn business_journey(harness: &PilotHarness) {
             Some(&token),
             Some("legal-entity-duplicate"),
             json!({"data":{
-                "jurisdiction-code":"XY","registration-number":"10001",
-                "legal-name":"Duplicate","entity-status":"active"
+                "jurisdictionCode":"XY","registrationNumber":"10001",
+                "legalName":"Duplicate","entityStatus":"active"
             }}),
         )
         .await;
@@ -798,10 +799,10 @@ async fn business_journey(harness: &PilotHarness) {
         &token,
         "filing-create",
         json!({
-            "legal-entity":legal_entity.id,"filing-number":"F-100",
-            "filing-type":"incorporation","filed-date":"2020-01-01",
-            "source-system":"registrar","source-record-id":"filing-100",
-            "provenance-note":"accepted filing"
+            "legalEntity":legal_entity.id,"filingNumber":"F-100",
+            "filingType":"incorporation","filedDate":"2020-01-01",
+            "sourceSystem":"registrar","sourceRecordId":"filing-100",
+            "provenanceNote":"accepted filing"
         }),
     )
     .await;
@@ -814,10 +815,10 @@ async fn business_journey(harness: &PilotHarness) {
         &token,
         "appointment-historical",
         json!({
-            "legal-entity":legal_entity.id,"officer-code":"OFFICER-A",
-            "officer-name":"First Director","officer-role":"director",
-            "effective-from":"2020-01-01","effective-to":"2022-01-01",
-            "protected-officer-id":"protected-a"
+            "legalEntity":legal_entity.id,"officerCode":"OFFICER-A",
+            "officerName":"First Director","officerRole":"director",
+            "effectiveFrom":"2020-01-01","effectiveTo":"2022-01-01",
+            "protectedOfficerId":"protected-a"
         }),
     )
     .await;
@@ -827,9 +828,9 @@ async fn business_journey(harness: &PilotHarness) {
         &token,
         "appointment-current",
         json!({
-            "legal-entity":legal_entity.id,"officer-code":"OFFICER-A",
-            "officer-name":"First Director","officer-role":"director",
-            "effective-from":"2022-01-01","protected-officer-id":"protected-a"
+            "legalEntity":legal_entity.id,"officerCode":"OFFICER-A",
+            "officerName":"First Director","officerRole":"director",
+            "effectiveFrom":"2022-01-01","protectedOfficerId":"protected-a"
         }),
     )
     .await;
@@ -862,9 +863,9 @@ async fn business_journey(harness: &PilotHarness) {
             Some(&token),
             Some("appointment-partial-unique"),
             json!({"data":{
-                "legal-entity":legal_entity.id,"officer-code":"OFFICER-B",
-                "officer-name":"Second Director","officer-role":"director",
-                "effective-from":"2023-01-01"
+                "legalEntity":legal_entity.id,"officerCode":"OFFICER-B",
+                "officerName":"Second Director","officerRole":"director",
+                "effectiveFrom":"2023-01-01"
             }}),
         )
         .await;
@@ -876,9 +877,9 @@ async fn business_journey(harness: &PilotHarness) {
             Some(&token),
             Some("appointment-overlap"),
             json!({"data":{
-                "legal-entity":legal_entity.id,"officer-code":"OFFICER-A",
-                "officer-name":"First Director","officer-role":"secretary",
-                "effective-from":"2021-01-01","effective-to":"2023-01-01"
+                "legalEntity":legal_entity.id,"officerCode":"OFFICER-A",
+                "officerName":"First Director","officerRole":"secretary",
+                "effectiveFrom":"2021-01-01","effectiveTo":"2023-01-01"
             }}),
         )
         .await;
@@ -972,7 +973,7 @@ async fn assert_create_only_refuses_patch_and_tombstone(
                 ("idempotency-key", "create-only-patch"),
                 ("if-match", &record.etag),
             ],
-            br#"[{"op":"replace","path":"/data/provenance-note","value":"refused"}]"#.to_vec(),
+            br#"[{"op":"replace","path":"/data/provenanceNote","value":"refused"}]"#.to_vec(),
         )
         .await;
     assert_eq!(patch.status(), StatusCode::NOT_FOUND);

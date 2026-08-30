@@ -706,7 +706,7 @@ fn create_request<'a>(
         body: MutationBody::Create(Map::from_iter([
             ("jurisdiction".to_owned(), json!("zone-a")),
             ("label".to_owned(), json!(label)),
-            ("restricted_note".to_owned(), json!(RESTRICTED_CANARY)),
+            ("restrictedNote".to_owned(), json!(RESTRICTED_CANARY)),
         ])),
         response_fields: BTreeSet::from([
             "jurisdiction".to_owned(),
@@ -1223,8 +1223,6 @@ authentication:
   authorityClaims:
     principal: registry_principal
     purpose: registry_purpose
-    rowBoundaryClaims:
-      - {{name: jurisdiction, type: directString}}
 audit:
   hashKeyRef: secret:file/audit-key
 cursor:

@@ -63,6 +63,17 @@ class SourceNeutralityTests(unittest.TestCase):
             source.write_text("pub struct CompiledRegistry;\n", encoding="utf-8")
             self.assertEqual([], CHECKER.find_violations(root))
 
+    def test_generic_module_asset_vocabulary_is_allowed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "crates/registry-server/src/lib.rs"
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                'pub struct ModuleAssetSource;\nconst ERROR: &str = "module.asset.refused";\n',
+                encoding="utf-8",
+            )
+            self.assertEqual([], CHECKER.find_violations(root))
+
     def test_fixture_identifier_in_test_code_is_allowed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

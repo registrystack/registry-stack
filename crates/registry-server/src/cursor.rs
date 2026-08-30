@@ -15,9 +15,10 @@ use serde_json::Value;
 use sha2::Sha256;
 use zeroize::Zeroizing;
 
-use crate::model::CompiledQueryKind;
+use crate::contract::FieldTypeSource;
+use crate::model::{CompiledQueryKind, CompiledQuerySortDirection};
 
-const WIRE_VERSION: u8 = 1;
+const WIRE_VERSION: u8 = 3;
 const ROOT_SECRET_MIN_BYTES: usize = 32;
 const KEY_BYTES: usize = 32;
 const NONCE_BYTES: usize = 24;
@@ -25,9 +26,9 @@ const TAG_BYTES: usize = 16;
 const MAX_PAYLOAD_BYTES: usize = 8 * 1024;
 const MAX_TOKEN_BYTES: usize = (1 + NONCE_BYTES + MAX_PAYLOAD_BYTES + TAG_BYTES) * 2;
 const MAX_AGE_SECONDS: u64 = 86_400;
-const CURSOR_AAD: &[u8] = b"registry-server-cursor-v1";
-const AEAD_LABEL: &[u8] = b"registry-server-cursor-aead-key-v1";
-const BINDING_LABEL: &[u8] = b"registry-server-cursor-binding-key-v1";
+const CURSOR_AAD: &[u8] = b"registry-server-cursor-v3";
+const AEAD_LABEL: &[u8] = b"registry-server-cursor-aead-key-v3";
+const BINDING_LABEL: &[u8] = b"registry-server-cursor-binding-key-v3";
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -248,7 +249,10 @@ pub struct CursorBinding {
     pub(crate) projection_reference: String,
     pub(crate) query_reference: String,
     pub(crate) sort_reference: String,
+    pub(crate) scope_reference: String,
     pub(crate) page_size: u16,
+    #[serde(default)]
+    pub(crate) include_count: bool,
     pub(crate) temporal_instant: Option<String>,
     pub(crate) selected_fields: Vec<String>,
 }
@@ -276,7 +280,9 @@ impl fmt::Debug for CursorBinding {
             .field("projection_reference", &"<redacted>")
             .field("query_reference", &"<redacted>")
             .field("sort_reference", &"<redacted>")
+            .field("scope_reference", &"<redacted>")
             .field("page_size", &self.page_size)
+            .field("include_count", &self.include_count)
             .field(
                 "temporal_instant",
                 &self.temporal_instant.as_ref().map(|_| "<redacted>"),
@@ -289,8 +295,13 @@ impl fmt::Debug for CursorBinding {
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CursorQuery {
-    pub(crate) filters: Vec<CursorFilter>,
-    pub(crate) sort: Option<String>,
+    pub(crate) projection: Vec<CursorProjectionField>,
+    pub(crate) filter: Option<CursorFilterExpr>,
+    pub(crate) order: Option<CursorOrderClause>,
+    pub(crate) include_count: bool,
+    pub(crate) page_size: u16,
+    pub(crate) temporal_instant: Option<String>,
+    pub(crate) scope: CursorQueryScope,
 }
 
 impl fmt::Debug for CursorQuery {
@@ -301,20 +312,129 @@ impl fmt::Debug for CursorQuery {
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CursorFilter {
-    pub(crate) field: String,
-    pub(crate) operator: String,
+pub struct CursorProjectionField {
+    pub(crate) field_id: String,
+    pub(crate) field_type: FieldTypeSource,
+}
+
+impl fmt::Debug for CursorProjectionField {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CursorProjectionField")
+            .field("field_id", &self.field_id)
+            .field("field_type", &self.field_type)
+            .finish()
+    }
+}
+
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", tag = "kind", deny_unknown_fields)]
+pub enum CursorFilterExpr {
+    Binary {
+        op: CursorLogicalOp,
+        left: Box<CursorFilterExpr>,
+        right: Box<CursorFilterExpr>,
+    },
+    Not {
+        expr: Box<CursorFilterExpr>,
+    },
+    Group {
+        expr: Box<CursorFilterExpr>,
+    },
+    Predicate {
+        predicate: CursorFilterPredicate,
+    },
+}
+
+impl fmt::Debug for CursorFilterExpr {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("CursorFilterExpr(<redacted>)")
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CursorLogicalOp {
+    And,
+    Or,
+}
+
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CursorFilterPredicate {
+    pub(crate) field_id: String,
+    pub(crate) field_type: FieldTypeSource,
+    pub(crate) operator: CursorFilterOperator,
     pub(crate) values: Vec<String>,
 }
 
-impl fmt::Debug for CursorFilter {
+impl fmt::Debug for CursorFilterPredicate {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("CursorFilter")
-            .field("field", &self.field)
+            .debug_struct("CursorFilterPredicate")
+            .field("field_id", &self.field_id)
+            .field("field_type", &self.field_type)
             .field("operator", &self.operator)
             .field("values", &"<redacted>")
             .finish()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CursorFilterOperator {
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    In,
+    IsNull,
+    IsNotNull,
+    StartsWith,
+    Contains,
+}
+
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CursorOrderClause {
+    pub(crate) field_id: String,
+    pub(crate) field_type: FieldTypeSource,
+    pub(crate) direction: CompiledQuerySortDirection,
+}
+
+impl fmt::Debug for CursorOrderClause {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CursorOrderClause")
+            .field("field_id", &self.field_id)
+            .field("field_type", &self.field_type)
+            .field("direction", &self.direction)
+            .finish()
+    }
+}
+
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", tag = "kind", deny_unknown_fields)]
+pub enum CursorQueryScope {
+    Collection {},
+    Relationship { path_id: String, root_id: String },
+}
+
+impl fmt::Debug for CursorQueryScope {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Collection {} => formatter.write_str("Collection"),
+            Self::Relationship {
+                path_id,
+                root_id: _,
+            } => formatter
+                .debug_struct("Relationship")
+                .field("path_id", path_id)
+                .field("root_id", &"<redacted>")
+                .finish(),
+        }
     }
 }
 
@@ -382,7 +502,9 @@ mod tests {
             projection_reference: "hmac-sha256:projection".to_owned(),
             query_reference: "hmac-sha256:query".to_owned(),
             sort_reference: "hmac-sha256:sort".to_owned(),
+            scope_reference: "hmac-sha256:scope".to_owned(),
             page_size: 50,
+            include_count: false,
             temporal_instant: Some("2026-01-01T00:00:00Z".to_owned()),
             selected_fields: vec!["label".to_owned()],
         }
@@ -395,12 +517,36 @@ mod tests {
             expires_at_unix_seconds: 1_060,
             binding: binding(),
             query: CursorQuery {
-                filters: vec![CursorFilter {
-                    field: "label".to_owned(),
-                    operator: "prefix".to_owned(),
-                    values: vec!["al".to_owned()],
+                projection: vec![CursorProjectionField {
+                    field_id: "label".to_owned(),
+                    field_type: FieldTypeSource::String {
+                        min_length: 0,
+                        max_length: 80,
+                    },
                 }],
-                sort: Some("label".to_owned()),
+                filter: Some(CursorFilterExpr::Predicate {
+                    predicate: CursorFilterPredicate {
+                        field_id: "label".to_owned(),
+                        field_type: FieldTypeSource::String {
+                            min_length: 0,
+                            max_length: 80,
+                        },
+                        operator: CursorFilterOperator::StartsWith,
+                        values: vec!["al".to_owned()],
+                    },
+                }),
+                order: Some(CursorOrderClause {
+                    field_id: "label".to_owned(),
+                    field_type: FieldTypeSource::String {
+                        min_length: 0,
+                        max_length: 80,
+                    },
+                    direction: CompiledQuerySortDirection::Asc,
+                }),
+                include_count: false,
+                page_size: 50,
+                temporal_instant: Some("2026-01-01T00:00:00Z".to_owned()),
+                scope: CursorQueryScope::Collection {},
             },
             continuation: CursorContinuation {
                 last_record_id: "00000000-0000-4000-8000-000000000001".to_owned(),
@@ -526,6 +672,11 @@ mod tests {
             {
                 let mut value = expected.clone();
                 value.sort_reference = "hmac-sha256:other-sort".to_owned();
+                value
+            },
+            {
+                let mut value = expected.clone();
+                value.scope_reference = "hmac-sha256:other-scope".to_owned();
                 value
             },
             {

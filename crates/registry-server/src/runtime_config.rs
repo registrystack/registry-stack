@@ -28,7 +28,7 @@ use thiserror::Error;
 use zeroize::Zeroizing;
 
 use crate::{
-    auth::{AuthorityClaimConfig, RowBoundaryClaimMapping, RowBoundaryClaimType},
+    auth::AuthorityClaimConfig,
     cursor::CursorCodec,
     event_destination::{
         ActivatedEventDestinationRegistry, EventDestinationConfigs, RawEventDestinationConfigs,
@@ -1174,7 +1174,6 @@ impl fmt::Debug for JwksCacheConfig {
 pub struct AuthorityClaimsConfig {
     principal: String,
     purpose: Option<String>,
-    row_boundary_claims: Vec<RowBoundaryClaimConfig>,
 }
 
 impl AuthorityClaimsConfig {
@@ -1183,9 +1182,6 @@ impl AuthorityClaimsConfig {
         if let Some(purpose) = &raw.purpose {
             validate_authority_claim_name(purpose)?;
         }
-        if raw.row_boundary_claims.len() > MAX_LIST_ITEMS {
-            return Err(RuntimeConfigError::InvalidOidc);
-        }
         let mut names = HashSet::new();
         names.insert(raw.principal.as_str());
         if let Some(purpose) = &raw.purpose {
@@ -1193,32 +1189,14 @@ impl AuthorityClaimsConfig {
                 return Err(RuntimeConfigError::InvalidOidc);
             }
         }
-        for mapping in &raw.row_boundary_claims {
-            validate_authority_claim_name(&mapping.name)?;
-            if !names.insert(mapping.name.as_str()) {
-                return Err(RuntimeConfigError::InvalidOidc);
-            }
-        }
         Ok(Self {
             principal: raw.principal,
             purpose: raw.purpose,
-            row_boundary_claims: raw
-                .row_boundary_claims
-                .into_iter()
-                .map(RowBoundaryClaimConfig::from_raw)
-                .collect(),
         })
     }
 
     fn to_platform_config(&self) -> AuthorityClaimConfig {
-        AuthorityClaimConfig::new(
-            self.principal.clone(),
-            self.purpose.clone(),
-            self.row_boundary_claims
-                .iter()
-                .map(RowBoundaryClaimConfig::to_platform_mapping)
-                .collect(),
-        )
+        AuthorityClaimConfig::new(self.principal.clone(), self.purpose.clone())
     }
 }
 
@@ -1228,43 +1206,7 @@ impl fmt::Debug for AuthorityClaimsConfig {
             .debug_struct("AuthorityClaimsConfig")
             .field("principal", &"<redacted>")
             .field("purpose", &self.purpose.as_ref().map(|_| "<redacted>"))
-            .field("row_boundary_claim_count", &self.row_boundary_claims.len())
             .finish()
-    }
-}
-
-#[derive(Clone)]
-struct RowBoundaryClaimConfig {
-    name: String,
-    value_type: RowBoundaryClaimConfigType,
-}
-
-impl RowBoundaryClaimConfig {
-    fn from_raw(raw: RawRowBoundaryClaimConfig) -> Self {
-        Self {
-            name: raw.name,
-            value_type: raw.value_type,
-        }
-    }
-
-    fn to_platform_mapping(&self) -> RowBoundaryClaimMapping {
-        RowBoundaryClaimMapping::new(self.name.clone(), self.value_type.to_platform_type())
-    }
-}
-
-#[derive(Clone, Copy, Deserialize)]
-#[serde(rename_all = "camelCase")]
-enum RowBoundaryClaimConfigType {
-    DirectString,
-    DirectStringSet,
-}
-
-impl RowBoundaryClaimConfigType {
-    fn to_platform_type(self) -> RowBoundaryClaimType {
-        match self {
-            Self::DirectString => RowBoundaryClaimType::DirectString,
-            Self::DirectStringSet => RowBoundaryClaimType::DirectStringSet,
-        }
     }
 }
 
@@ -1568,16 +1510,6 @@ struct RawAuthorityClaimsConfig {
     principal: String,
     #[serde(default)]
     purpose: Option<String>,
-    #[serde(default)]
-    row_boundary_claims: Vec<RawRowBoundaryClaimConfig>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RawRowBoundaryClaimConfig {
-    name: String,
-    #[serde(rename = "type")]
-    value_type: RowBoundaryClaimConfigType,
 }
 
 #[derive(Deserialize)]

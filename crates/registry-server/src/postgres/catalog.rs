@@ -13,6 +13,13 @@ use super::{
     SqlIdentifier,
 };
 
+const MANAGED_SCHEMAS: &[&str] = &[
+    "registry_internal",
+    "registry_data",
+    "registry_source",
+    "registry_derived",
+    "registry_context",
+];
 const TABLE_OWNER_PRIVILEGES: &[&str] = &[
     "DELETE",
     "INSERT",
@@ -24,12 +31,15 @@ const TABLE_OWNER_PRIVILEGES: &[&str] = &[
     "UPDATE",
 ];
 const SEQUENCE_OWNER_PRIVILEGES: &[&str] = &["SELECT", "UPDATE", "USAGE"];
+const FUNCTION_OWNER_PRIVILEGES: &[&str] = &["EXECUTE"];
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum ManagedObjectKind {
     Schema,
     Table,
+    View,
     Sequence,
+    Function,
 }
 
 impl ManagedObjectKind {
@@ -37,7 +47,9 @@ impl ManagedObjectKind {
         match self {
             Self::Schema => "schema",
             Self::Table => "table",
+            Self::View => "view",
             Self::Sequence => "sequence",
+            Self::Function => "function",
         }
     }
 }
@@ -152,6 +164,24 @@ impl ExpectedManagedCatalog {
                 });
             }
         }
+        for view in &registry.ddl().views {
+            catalog.view(
+                &format!("{}.{}", view.schema, view.name),
+                view.runtime_privileges
+                    .iter()
+                    .copied()
+                    .map(TablePrivilege::as_sql),
+            );
+        }
+        for function in &registry.ddl().functions {
+            catalog.function(
+                &format!(
+                    "{}.{}({})",
+                    function.schema, function.name, function.arguments
+                ),
+                function.runtime_execute.then_some("EXECUTE"),
+            );
+        }
         catalog
     }
 
@@ -160,8 +190,9 @@ impl ExpectedManagedCatalog {
             objects: BTreeSet::new(),
             policies: BTreeSet::new(),
         };
-        catalog.schema("registry_data");
-        catalog.schema("registry_internal");
+        for schema in MANAGED_SCHEMAS {
+            catalog.schema(schema);
+        }
         catalog.table(
             "registry_internal.registry_state",
             ["SELECT"],
@@ -208,6 +239,24 @@ impl ExpectedManagedCatalog {
             kind: ManagedObjectKind::Sequence,
             name: name.to_owned(),
             runtime_privileges: privileges.into_iter().map(str::to_owned).collect(),
+            row_security: None,
+        });
+    }
+
+    fn view(&mut self, name: &str, privileges: impl IntoIterator<Item = &'static str>) {
+        self.objects.insert(ManagedObject {
+            kind: ManagedObjectKind::View,
+            name: name.to_owned(),
+            runtime_privileges: privileges.into_iter().map(str::to_owned).collect(),
+            row_security: None,
+        });
+    }
+
+    fn function(&mut self, name: &str, privilege: Option<&'static str>) {
+        self.objects.insert(ManagedObject {
+            kind: ManagedObjectKind::Function,
+            name: name.to_owned(),
+            runtime_privileges: privilege.into_iter().map(str::to_owned).collect(),
             row_security: None,
         });
     }
@@ -418,8 +467,8 @@ pub(crate) async fn install_registry_state_schema(
     install_migration_ledger(migration, runtime_role).await?;
     migration
         .batch_execute(&format!(
-            "REVOKE ALL ON SCHEMA registry_internal, registry_data FROM PUBLIC, {};\n\
-             GRANT USAGE ON SCHEMA registry_internal, registry_data TO {};\n\
+            "REVOKE ALL ON SCHEMA registry_internal, registry_data, registry_source, registry_derived, registry_context FROM PUBLIC, {};\n\
+             GRANT USAGE ON SCHEMA registry_internal, registry_data, registry_source, registry_derived, registry_context TO {};\n\
              REVOKE ALL ON TABLE registry_internal.registry_state FROM {};\n\
              GRANT SELECT ON TABLE registry_internal.registry_state TO {};",
             runtime_role.quoted(),
@@ -609,15 +658,15 @@ async fn verify_closed_ambient_catalog(client: &impl GenericClient) -> Result<()
                      SELECT 1
                      FROM pg_catalog.pg_class c
                      JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-                     WHERE n.nspname IN ('registry_internal', 'registry_data')
-                       AND c.relkind NOT IN ('r', 'S', 'i')
+                     WHERE n.nspname = ANY($1::text[])
+                       AND c.relkind NOT IN ('r', 'S', 'i', 'v')
                  ),
                  EXISTS (
                      SELECT 1
                      FROM pg_catalog.pg_trigger t
                      JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
                      JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-                     WHERE n.nspname IN ('registry_internal', 'registry_data')
+                     WHERE n.nspname = ANY($1::text[])
                        AND NOT t.tgisinternal
                  ),
                  EXISTS (
@@ -625,30 +674,35 @@ async fn verify_closed_ambient_catalog(client: &impl GenericClient) -> Result<()
                      FROM pg_catalog.pg_rewrite w
                      JOIN pg_catalog.pg_class c ON c.oid = w.ev_class
                      JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-                     WHERE n.nspname IN ('registry_internal', 'registry_data')
+                     WHERE n.nspname = ANY($1::text[])
                        AND c.relkind = 'r'
                  ),
                  EXISTS (
                      SELECT 1
                      FROM pg_catalog.pg_proc p
                      JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
-                     WHERE n.nspname IN ('registry_internal', 'registry_data')
+                     WHERE n.nspname = ANY($1::text[])
+                       AND NOT (
+                           n.nspname = 'registry_context'
+                           AND p.proname = 'evaluation_date'
+                           AND pg_catalog.pg_get_function_identity_arguments(p.oid) = ''
+                       )
                  ),
                  EXISTS (
                      SELECT 1
                      FROM pg_catalog.pg_publication_rel pr
                      JOIN pg_catalog.pg_class c ON c.oid = pr.prrelid
                      JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-                     WHERE n.nspname IN ('registry_internal', 'registry_data')
+                     WHERE n.nspname = ANY($1::text[])
                  ) OR EXISTS (
                      SELECT 1
                      FROM pg_catalog.pg_publication_namespace pn
                      JOIN pg_catalog.pg_namespace n ON n.oid = pn.pnnspid
-                     WHERE n.nspname IN ('registry_internal', 'registry_data')
+                     WHERE n.nspname = ANY($1::text[])
                  ) OR EXISTS (
                      SELECT 1 FROM pg_catalog.pg_publication WHERE puballtables
                  )",
-            &[],
+            &[&MANAGED_SCHEMAS],
         )
         .await?;
     if (0..5).any(|index| row.get::<_, bool>(index)) {
@@ -669,17 +723,25 @@ async fn verify_managed_owners_for_catalog(
             "SELECT 'schema', n.nspname, r.rolname
              FROM pg_catalog.pg_namespace n
              JOIN pg_catalog.pg_roles r ON r.oid = n.nspowner
-             WHERE n.nspname IN ('registry_internal', 'registry_data')
+             WHERE n.nspname = ANY($1::text[])
              UNION ALL
-             SELECT CASE c.relkind WHEN 'r' THEN 'table' ELSE 'sequence' END,
+             SELECT CASE c.relkind WHEN 'r' THEN 'table' WHEN 'v' THEN 'view' ELSE 'sequence' END,
                     n.nspname || '.' || c.relname,
                     r.rolname
              FROM pg_catalog.pg_class c
              JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
              JOIN pg_catalog.pg_roles r ON r.oid = c.relowner
-             WHERE n.nspname IN ('registry_internal', 'registry_data')
-               AND c.relkind IN ('r', 'S')",
-            &[],
+             WHERE n.nspname = ANY($1::text[])
+               AND c.relkind IN ('r', 'v', 'S')
+             UNION ALL
+             SELECT 'function',
+                    n.nspname || '.' || p.proname || '(' || pg_catalog.pg_get_function_identity_arguments(p.oid) || ')',
+                    r.rolname
+             FROM pg_catalog.pg_proc p
+             JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+             JOIN pg_catalog.pg_roles r ON r.oid = p.proowner
+             WHERE n.nspname = ANY($1::text[])",
+            &[&MANAGED_SCHEMAS],
         )
         .await?;
     let actual: BTreeSet<(String, String, String)> = rows
@@ -715,8 +777,8 @@ async fn verify_row_security(
             "SELECT n.nspname || '.' || c.relname, c.relrowsecurity, c.relforcerowsecurity
              FROM pg_catalog.pg_class c
              JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-             WHERE n.nspname IN ('registry_internal', 'registry_data') AND c.relkind = 'r'",
-            &[],
+             WHERE n.nspname = ANY($1::text[]) AND c.relkind = 'r'",
+            &[&MANAGED_SCHEMAS],
         )
         .await?;
     let actual: BTreeSet<(String, bool, bool)> = rows
@@ -756,8 +818,8 @@ async fn verify_policies(
              FROM pg_catalog.pg_policy p
              JOIN pg_catalog.pg_class c ON c.oid = p.polrelid
              JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-             WHERE n.nspname IN ('registry_internal', 'registry_data')",
-            &[],
+             WHERE n.nspname = ANY($1::text[])",
+            &[&MANAGED_SCHEMAS],
         )
         .await?;
     let actual: BTreeSet<ManagedPolicy> = rows
@@ -797,22 +859,31 @@ async fn query_categorized_acl(
                         n.nspowner,
                         COALESCE(n.nspacl, pg_catalog.acldefault('n', n.nspowner))
                  FROM pg_catalog.pg_namespace n
-                 WHERE n.nspname IN ('registry_internal', 'registry_data')
+                 WHERE n.nspname = ANY($2::text[])
                  UNION ALL
-                 SELECT CASE c.relkind WHEN 'r' THEN 'table' ELSE 'sequence' END,
+                 SELECT CASE c.relkind WHEN 'r' THEN 'table' WHEN 'v' THEN 'view' ELSE 'sequence' END,
                         n.nspname || '.' || c.relname,
                         c.relowner,
                         COALESCE(
                             c.relacl,
                             CASE c.relkind
                                 WHEN 'r' THEN pg_catalog.acldefault('r', c.relowner)
+                                WHEN 'v' THEN pg_catalog.acldefault('r', c.relowner)
                                 ELSE pg_catalog.acldefault('S', c.relowner)
                             END
                         )
                  FROM pg_catalog.pg_class c
                  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-                 WHERE n.nspname IN ('registry_internal', 'registry_data')
-                   AND c.relkind IN ('r', 'S')
+                 WHERE n.nspname = ANY($2::text[])
+                   AND c.relkind IN ('r', 'v', 'S')
+                 UNION ALL
+                 SELECT 'function'::text,
+                        n.nspname || '.' || p.proname || '(' || pg_catalog.pg_get_function_identity_arguments(p.oid) || ')',
+                        p.proowner,
+                        COALESCE(p.proacl, pg_catalog.acldefault('f', p.proowner))
+                 FROM pg_catalog.pg_proc p
+                 JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+                 WHERE n.nspname = ANY($2::text[])
              ), runtime AS (
                  SELECT oid FROM pg_catalog.pg_roles WHERE rolname = $1
              )
@@ -830,7 +901,7 @@ async fn query_categorized_acl(
              CROSS JOIN runtime
              CROSS JOIN LATERAL pg_catalog.aclexplode(o.acl) a
              ORDER BY 1, 2, 3, 4, 5",
-            &[&runtime_role.as_str()],
+            &[&runtime_role.as_str(), &MANAGED_SCHEMAS],
         )
         .await?)
 }
@@ -851,7 +922,9 @@ async fn verify_exact_acl(
         let owner_privileges = match object.kind {
             ManagedObjectKind::Schema => &["CREATE", "USAGE"][..],
             ManagedObjectKind::Table => TABLE_OWNER_PRIVILEGES,
+            ManagedObjectKind::View => TABLE_OWNER_PRIVILEGES,
             ManagedObjectKind::Sequence => SEQUENCE_OWNER_PRIVILEGES,
+            ManagedObjectKind::Function => FUNCTION_OWNER_PRIVILEGES,
         };
         for privilege in owner_privileges {
             expected.insert((
@@ -927,10 +1000,10 @@ async fn fingerprint_catalog(
                ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
              LEFT JOIN pg_catalog.pg_attrdef d
                ON d.adrelid = c.oid AND d.adnum = a.attnum
-             WHERE n.nspname IN ('registry_internal', 'registry_data')
-               AND c.relkind IN ('r', 'S')
+             WHERE n.nspname = ANY($1::text[])
+               AND c.relkind IN ('r', 'v', 'S')
              ORDER BY n.nspname, c.relname, a.attnum",
-            &[],
+            &[&MANAGED_SCHEMAS],
         )
         .await?;
     let constraint_rows = client
@@ -947,9 +1020,9 @@ async fn fingerprint_catalog(
              CROSS JOIN pg_catalog.pg_constraint x
              JOIN pg_catalog.pg_class c ON c.oid = x.conrelid
              JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-             WHERE n.nspname IN ('registry_internal', 'registry_data')
+             WHERE n.nspname = ANY($1::text[])
              ORDER BY n.nspname, c.relname, x.conname",
-            &[],
+            &[&MANAGED_SCHEMAS],
         )
         .await?;
     let index_rows = client
@@ -966,9 +1039,9 @@ async fn fingerprint_catalog(
              JOIN pg_catalog.pg_class table_class ON table_class.oid = x.indrelid
              JOIN pg_catalog.pg_class index_class ON index_class.oid = x.indexrelid
              JOIN pg_catalog.pg_namespace n ON n.oid = table_class.relnamespace
-             WHERE n.nspname IN ('registry_internal', 'registry_data')
+             WHERE n.nspname = ANY($1::text[])
              ORDER BY n.nspname, table_class.relname, index_class.relname",
-            &[],
+            &[&MANAGED_SCHEMAS],
         )
         .await?;
     let policy_rows = client
@@ -988,9 +1061,48 @@ async fn fingerprint_catalog(
              CROSS JOIN pg_catalog.pg_policy p
              JOIN pg_catalog.pg_class c ON c.oid = p.polrelid
              JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-             WHERE n.nspname IN ('registry_internal', 'registry_data')
+             WHERE n.nspname = ANY($1::text[])
              ORDER BY n.nspname, c.relname, p.polname",
-            &[],
+            &[&MANAGED_SCHEMAS],
+        )
+        .await?;
+    let view_rows = client
+        .query(
+            "WITH deparse_context AS MATERIALIZED (
+                 SELECT pg_catalog.set_config('search_path', 'pg_catalog', true)
+             )
+             SELECT n.nspname,
+                    c.relname,
+                    pg_catalog.pg_get_viewdef(c.oid, false),
+                    COALESCE(array_to_string(c.reloptions, ','), '')
+             FROM deparse_context
+             CROSS JOIN pg_catalog.pg_class c
+             JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+             WHERE n.nspname = ANY($1::text[])
+               AND c.relkind = 'v'
+             ORDER BY n.nspname, c.relname",
+            &[&MANAGED_SCHEMAS],
+        )
+        .await?;
+    let function_rows = client
+        .query(
+            "WITH deparse_context AS MATERIALIZED (
+                 SELECT pg_catalog.set_config('search_path', 'pg_catalog', true)
+             )
+             SELECT n.nspname,
+                    p.proname,
+                    pg_catalog.pg_get_function_identity_arguments(p.oid),
+                    pg_catalog.format_type(p.prorettype, NULL),
+                    p.provolatile::text,
+                    p.prosecdef,
+                    p.prokind::text,
+                    pg_catalog.pg_get_functiondef(p.oid)
+             FROM deparse_context
+             CROSS JOIN pg_catalog.pg_proc p
+             JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+             WHERE n.nspname = ANY($1::text[])
+             ORDER BY n.nspname, p.proname, pg_catalog.pg_get_function_identity_arguments(p.oid)",
+            &[&MANAGED_SCHEMAS],
         )
         .await?;
     let acl_rows = query_categorized_acl(client, runtime_role).await?;
@@ -1029,6 +1141,19 @@ async fn fingerprint_catalog(
             hash_text(&mut hasher, &row.get::<_, String>(index));
         }
         hash_bool(&mut hasher, row.get(4));
+        hash_bool(&mut hasher, row.get(5));
+    }
+    hasher.update(b"registry-server/catalog/v4/views");
+    for row in view_rows {
+        for index in 0..4 {
+            hash_text(&mut hasher, &row.get::<_, String>(index));
+        }
+    }
+    hasher.update(b"registry-server/catalog/v4/functions");
+    for row in function_rows {
+        for index in [0, 1, 2, 3, 4, 6, 7] {
+            hash_text(&mut hasher, &row.get::<_, String>(index));
+        }
         hash_bool(&mut hasher, row.get(5));
     }
     hasher.update(b"registry-server/catalog/v3/acl");

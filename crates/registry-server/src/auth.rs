@@ -18,7 +18,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::api::{VerifiedClaimValue, VerifiedRequestClaims};
-use crate::contract::BoundaryOperator;
+use crate::contract::{BoundaryOperator, FieldTypeSource, LookupValueOrigin};
 use crate::model::CompiledRegistry;
 
 const MAX_CLAIM_NAME_BYTES: usize = 128;
@@ -38,49 +38,19 @@ const REGISTERED_CLAIMS: &[&str] = &[
     "cnf",
 ];
 
-/// The one bounded JSON shape accepted for a compiled row-boundary claim.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub enum RowBoundaryClaimType {
-    DirectString,
-    DirectStringSet,
-}
-
-/// One operator-configured row-boundary claim mapping.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RowBoundaryClaimMapping {
-    name: String,
-    value_type: RowBoundaryClaimType,
-}
-
-impl RowBoundaryClaimMapping {
-    #[must_use]
-    pub fn new(name: impl Into<String>, value_type: RowBoundaryClaimType) -> Self {
-        Self {
-            name: name.into(),
-            value_type,
-        }
-    }
-}
-
 /// Direct claims that may become Registry authority after OIDC verification.
 #[derive(Clone, Eq, PartialEq)]
 pub struct AuthorityClaimConfig {
     principal_claim: String,
     purpose_claim: Option<String>,
-    row_boundary_claims: Vec<RowBoundaryClaimMapping>,
 }
 
 impl AuthorityClaimConfig {
     #[must_use]
-    pub fn new(
-        principal_claim: impl Into<String>,
-        purpose_claim: Option<String>,
-        row_boundary_claims: Vec<RowBoundaryClaimMapping>,
-    ) -> Self {
+    pub fn new(principal_claim: impl Into<String>, purpose_claim: Option<String>) -> Self {
         Self {
             principal_claim: principal_claim.into(),
             purpose_claim,
-            row_boundary_claims,
         }
     }
 }
@@ -91,7 +61,25 @@ impl fmt::Debug for AuthorityClaimConfig {
             .debug_struct("AuthorityClaimConfig")
             .field("principal_claim", &self.principal_claim)
             .field("purpose_claim", &self.purpose_claim)
-            .field("row_boundary_claim_count", &self.row_boundary_claims.len())
+            .finish()
+    }
+}
+
+/// One compiled direct-claim expectation derived from row boundaries and
+/// lookup selector claim mappings. Values remain direct verified scalars; set
+/// shape is only available for row-boundary `in` operators.
+#[derive(Clone, Eq, PartialEq)]
+struct DirectClaimExpectation {
+    field_type: FieldTypeSource,
+    multi_value: bool,
+}
+
+impl fmt::Debug for DirectClaimExpectation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DirectClaimExpectation")
+            .field("field_type", &self.field_type)
+            .field("multi_value", &self.multi_value)
             .finish()
     }
 }
@@ -127,7 +115,7 @@ pub struct RegistryAuthenticator {
     audience: String,
     principal_claim: String,
     purpose_claim: Option<String>,
-    row_boundary_claims: BTreeMap<String, RowBoundaryClaimType>,
+    direct_claims: BTreeMap<String, DirectClaimExpectation>,
 }
 
 impl RegistryAuthenticator {
@@ -140,14 +128,14 @@ impl RegistryAuthenticator {
         claims: AuthorityClaimConfig,
     ) -> Result<Self, AuthenticationConfigError> {
         validate_verifier_profile(&verifier_config)?;
-        let row_boundary_claims = validate_claim_mapping(registry, &verifier_config, &claims)?;
+        let direct_claims = validate_claim_mapping(registry, &verifier_config, &claims)?;
         let audience = verifier_config.audiences[0].clone();
         Ok(Self {
             verifier: TokenVerifier::new(verifier_config, key_source),
             audience,
             principal_claim: claims.principal_claim,
             purpose_claim: claims.purpose_claim,
-            row_boundary_claims,
+            direct_claims,
         })
     }
 
@@ -187,11 +175,11 @@ impl RegistryAuthenticator {
             .map(validate_scope)
             .collect::<Result<BTreeSet<_>, _>>()?;
         let direct_claims = self
-            .row_boundary_claims
+            .direct_claims
             .iter()
-            .filter_map(|(name, value_type)| {
+            .filter_map(|(name, expectation)| {
                 claims.get(name).map(|value| {
-                    mapped_claim(value, *value_type).map(|value| (name.clone(), value))
+                    mapped_claim(value, expectation).map(|value| (name.clone(), value))
                 })
             })
             .collect::<Result<BTreeMap<_, _>, _>>()?;
@@ -215,7 +203,7 @@ impl fmt::Debug for RegistryAuthenticator {
             .field("audience", &"<redacted>")
             .field("principal_claim", &self.principal_claim)
             .field("purpose_claim", &self.purpose_claim)
-            .field("row_boundary_claims", &self.row_boundary_claims.keys())
+            .field("direct_claims", &self.direct_claims.keys())
             .finish()
     }
 }
@@ -294,7 +282,7 @@ fn validate_claim_mapping(
     registry: &CompiledRegistry,
     verifier: &TokenVerifierConfig,
     claims: &AuthorityClaimConfig,
-) -> Result<BTreeMap<String, RowBoundaryClaimType>, AuthenticationConfigError> {
+) -> Result<BTreeMap<String, DirectClaimExpectation>, AuthenticationConfigError> {
     let mut configured_names = BTreeSet::new();
     if !valid_authority_claim_name(&claims.principal_claim)
         || !configured_names.insert(claims.principal_claim.as_str())
@@ -310,20 +298,8 @@ fn validate_claim_mapping(
             return Err(AuthenticationConfigError::InvalidClaimMapping);
         }
     }
-    let mut configured_rows = BTreeMap::new();
-    for mapping in &claims.row_boundary_claims {
-        if !valid_authority_claim_name(&mapping.name)
-            || mapping.name == verifier.scope_claim
-            || !configured_names.insert(mapping.name.as_str())
-            || configured_rows
-                .insert(mapping.name.clone(), mapping.value_type)
-                .is_some()
-        {
-            return Err(AuthenticationConfigError::InvalidClaimMapping);
-        }
-    }
 
-    let mut expected_rows = BTreeMap::new();
+    let mut expected_direct_claims = BTreeMap::new();
     let mut purpose_required = false;
     for entity in registry.entities().values() {
         for profile in entity.access_profiles.values() {
@@ -342,23 +318,86 @@ fn validate_claim_mapping(
             }
             purpose_required |= !profile.required_purposes.is_empty();
             for boundary in &profile.row_boundaries {
-                let value_type = match boundary.operator {
-                    BoundaryOperator::Equals => RowBoundaryClaimType::DirectString,
-                    BoundaryOperator::In => RowBoundaryClaimType::DirectStringSet,
+                let field_type = if boundary.field == entity.canonical_id.id {
+                    entity.canonical_id.field_type.clone()
+                } else {
+                    entity
+                        .fields
+                        .get(&boundary.field)
+                        .ok_or(AuthenticationConfigError::CompiledAuthorityMismatch)?
+                        .field_type
+                        .clone()
                 };
-                if expected_rows
-                    .insert(boundary.claim.clone(), value_type)
-                    .is_some_and(|prior| prior != value_type)
-                {
-                    return Err(AuthenticationConfigError::CompiledAuthorityMismatch);
+                let expectation = DirectClaimExpectation {
+                    field_type,
+                    multi_value: boundary.operator == BoundaryOperator::In,
+                };
+                insert_direct_claim_expectation(
+                    &mut expected_direct_claims,
+                    &boundary.claim,
+                    expectation,
+                )?;
+            }
+            for lookup in profile
+                .lookups
+                .iter()
+                .filter(|lookup| lookup.value_origin == LookupValueOrigin::VerifiedClaim)
+            {
+                let selector = entity
+                    .selector_profiles
+                    .get(&lookup.selector)
+                    .ok_or(AuthenticationConfigError::CompiledAuthorityMismatch)?;
+                for field_id in &selector.fields {
+                    let claim = lookup
+                        .claim_mapping
+                        .get(field_id)
+                        .ok_or(AuthenticationConfigError::CompiledAuthorityMismatch)?;
+                    let field_type = entity
+                        .fields
+                        .get(field_id)
+                        .ok_or(AuthenticationConfigError::CompiledAuthorityMismatch)?
+                        .field_type
+                        .clone();
+                    insert_direct_claim_expectation(
+                        &mut expected_direct_claims,
+                        claim,
+                        DirectClaimExpectation {
+                            field_type,
+                            multi_value: false,
+                        },
+                    )?;
                 }
             }
         }
     }
-    if purpose_required != claims.purpose_claim.is_some() || expected_rows != configured_rows {
+    for name in expected_direct_claims.keys() {
+        if !valid_authority_claim_name(name)
+            || name == &verifier.scope_claim
+            || !configured_names.insert(name.as_str())
+        {
+            return Err(AuthenticationConfigError::InvalidClaimMapping);
+        }
+    }
+    if purpose_required != claims.purpose_claim.is_some() {
         return Err(AuthenticationConfigError::CompiledAuthorityMismatch);
     }
-    Ok(configured_rows)
+    Ok(expected_direct_claims)
+}
+
+fn insert_direct_claim_expectation(
+    claims: &mut BTreeMap<String, DirectClaimExpectation>,
+    name: &str,
+    expectation: DirectClaimExpectation,
+) -> Result<(), AuthenticationConfigError> {
+    if !valid_authority_claim_name(name) {
+        return Err(AuthenticationConfigError::InvalidClaimMapping);
+    }
+    match claims.insert(name.to_owned(), expectation.clone()) {
+        Some(prior) if prior != expectation => {
+            Err(AuthenticationConfigError::CompiledAuthorityMismatch)
+        }
+        _ => Ok(()),
+    }
 }
 
 fn valid_claim_name(value: &str) -> bool {
@@ -414,29 +453,53 @@ fn optional_direct_string(value: Option<&Value>) -> Result<Option<String>, Authe
 
 fn mapped_claim(
     value: &Value,
-    value_type: RowBoundaryClaimType,
+    expectation: &DirectClaimExpectation,
 ) -> Result<VerifiedClaimValue, AuthenticationError> {
-    match value_type {
-        RowBoundaryClaimType::DirectString => {
-            let value = value.as_str().ok_or(AuthenticationError::InvalidClaims)?;
-            VerifiedClaimValue::direct_string(value.to_owned())
-                .map_err(|_| AuthenticationError::InvalidClaims)
-        }
-        RowBoundaryClaimType::DirectStringSet => {
-            let values = value.as_array().ok_or(AuthenticationError::InvalidClaims)?;
-            let values = values
-                .iter()
-                .map(|value| {
-                    value
-                        .as_str()
-                        .map(str::to_owned)
-                        .ok_or(AuthenticationError::InvalidClaims)
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            VerifiedClaimValue::direct_string_set(values)
-                .map_err(|_| AuthenticationError::InvalidClaims)
-        }
+    if expectation.multi_value {
+        let values = value.as_array().ok_or(AuthenticationError::InvalidClaims)?;
+        let values = values
+            .iter()
+            .map(|value| mapped_scalar_claim(value, &expectation.field_type))
+            .collect::<Result<Vec<_>, _>>()?;
+        VerifiedClaimValue::direct_string_set(values)
+            .map_err(|_| AuthenticationError::InvalidClaims)
+    } else {
+        VerifiedClaimValue::direct_string(mapped_scalar_claim(value, &expectation.field_type)?)
+            .map_err(|_| AuthenticationError::InvalidClaims)
     }
+}
+
+fn mapped_scalar_claim(
+    value: &Value,
+    field_type: &FieldTypeSource,
+) -> Result<String, AuthenticationError> {
+    let value = match field_type {
+        FieldTypeSource::Boolean => value
+            .as_bool()
+            .map(|value| value.to_string())
+            .ok_or(AuthenticationError::InvalidClaims)?,
+        FieldTypeSource::Int64 => value
+            .as_i64()
+            .map(|value| value.to_string())
+            .ok_or(AuthenticationError::InvalidClaims)?,
+        FieldTypeSource::String { .. }
+        | FieldTypeSource::Text { .. }
+        | FieldTypeSource::Decimal { .. }
+        | FieldTypeSource::Date
+        | FieldTypeSource::Timestamp
+        | FieldTypeSource::Uuid
+        | FieldTypeSource::Reference { .. }
+        | FieldTypeSource::VocabularyCode { .. } => value
+            .as_str()
+            .map(str::to_owned)
+            .ok_or(AuthenticationError::InvalidClaims)?,
+        FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. } => {
+            return Err(AuthenticationError::InvalidClaims);
+        }
+    };
+    crate::postgres::validate_field_value(&value, field_type)
+        .map_err(|_| AuthenticationError::InvalidClaims)?;
+    Ok(value)
 }
 
 fn authentication_refused() -> Response {

@@ -316,7 +316,6 @@ authentication:
   authorityClaims:
     principal: registry_principal
     purpose: registry_purpose
-    rowBoundaryClaims: []
 audit:
   hashKeyRef: secret:env/REGISTRY_SERVER_REHEARSAL_AUDIT_KEY
 cursor:

@@ -20,3 +20,5 @@ traceability:
   - {id: RS-SEC-17, state: enforced, negativeId: RS-NEG-17, negativeTest: {path: crates/registry-server/tests/postgres_read.rs, name: real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced}}
   - {id: RS-SEC-18, state: enforced, negativeId: RS-NEG-18, negativeTest: {path: crates/registry-server/tests/postgres_batch.rs, name: real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable}}
   - {id: RS-SEC-19, state: enforced, negativeId: RS-NEG-19, negativeTest: {path: crates/registry-server/tests/runtime_config.rs, name: static_jwks_validation_refuses_unsafe_documents_value_free}}
+  - {id: RS-SEC-20, state: enforced, negativeId: RS-NEG-20, negativeTest: {path: crates/registry-server/tests/http_read_only.rs, name: lookup_body_exactness_origin_types_and_unresolved_equivalence_are_value_free}}
+  - {id: RS-SEC-21, state: enforced, negativeId: RS-NEG-21, negativeTest: {path: crates/registry-server/tests/http_read_only.rs, name: relationship_route_uses_path_grant_not_direct_target_rights}}

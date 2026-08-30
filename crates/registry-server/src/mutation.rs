@@ -856,16 +856,33 @@ impl MutationCoordinator {
         if !profile_is_keyed(&self.audit_profile) {
             return Err(MutationError::Unavailable);
         }
-        if let Err(error) = validate_request(request, &self.expected) {
-            self.record_boundary_audit(client, request, PreIoAuditKind::Refusal)
+        let normalized_body = match normalize_mutation_body(&request.plan.entity, &request.body) {
+            Ok(body) => body,
+            Err(error) => {
+                self.record_boundary_audit(client, request, PreIoAuditKind::Refusal)
+                    .await?;
+                return Err(error);
+            }
+        };
+        let request = MutationRequest {
+            plan: request.plan,
+            idempotency_key: request.idempotency_key,
+            claims: request.claims,
+            record_id: request.record_id,
+            expected_etag: request.expected_etag,
+            body: normalized_body,
+            response_fields: request.response_fields.clone(),
+        };
+        if let Err(error) = validate_request(&request, &self.expected) {
+            self.record_boundary_audit(client, &request, PreIoAuditKind::Refusal)
                 .await?;
             return Err(error);
         }
-        self.record_boundary_audit(client, request, PreIoAuditKind::Attempt)
+        self.record_boundary_audit(client, &request, PreIoAuditKind::Attempt)
             .await?;
-        let result = self.execute_after_attempt(client, request, fault).await;
+        let result = self.execute_after_attempt(client, &request, fault).await;
         if result.is_err() && !fault.is_enabled() {
-            self.record_boundary_audit(client, request, PreIoAuditKind::Refusal)
+            self.record_boundary_audit(client, &request, PreIoAuditKind::Refusal)
                 .await?;
         }
         result
@@ -880,18 +897,34 @@ impl MutationCoordinator {
         if !profile_is_keyed(&self.audit_profile) {
             return Err(MutationError::Unavailable);
         }
-        if let Err(error) = validate_batch_request(request, &self.expected) {
-            self.record_batch_boundary_audit(client, request, PreIoAuditKind::Refusal)
+        let normalized_items = match normalize_batch_items(&request.plan.entity, &request.items) {
+            Ok(items) => items,
+            Err(error) => {
+                self.record_batch_boundary_audit(client, request, PreIoAuditKind::Refusal)
+                    .await?;
+                return Err(error);
+            }
+        };
+        let request = BatchMutationRequest {
+            plan: request.plan,
+            idempotency_key: request.idempotency_key,
+            claims: request.claims,
+            items: normalized_items,
+            response_fields: request.response_fields.clone(),
+            body_bytes: request.body_bytes,
+        };
+        if let Err(error) = validate_batch_request(&request, &self.expected) {
+            self.record_batch_boundary_audit(client, &request, PreIoAuditKind::Refusal)
                 .await?;
             return Err(error);
         }
-        self.record_batch_boundary_audit(client, request, PreIoAuditKind::Attempt)
+        self.record_batch_boundary_audit(client, &request, PreIoAuditKind::Attempt)
             .await?;
         let result = self
-            .execute_batch_after_attempt(client, request, fault)
+            .execute_batch_after_attempt(client, &request, fault)
             .await;
         if result.is_err() && !fault.is_enabled() {
-            self.record_batch_boundary_audit(client, request, PreIoAuditKind::Refusal)
+            self.record_batch_boundary_audit(client, &request, PreIoAuditKind::Refusal)
                 .await?;
         }
         result
@@ -1325,12 +1358,11 @@ impl MutationCoordinator {
         item: &BatchMutationItem,
         current: &CurrentRow,
     ) -> Result<Value, MutationError> {
-        let data = current
-            .data
-            .iter()
-            .filter(|(field, _)| request.response_fields.contains(*field))
-            .map(|(field, value)| (field.clone(), value.clone()))
-            .collect::<Map<_, _>>();
+        let data = response_data(
+            &request.plan.entity,
+            &current.data,
+            &request.response_fields,
+        )?;
         let etag = strong_record_etag(
             &self.audit_profile,
             request.claims,
@@ -1356,12 +1388,11 @@ impl MutationCoordinator {
         request: &MutationRequest<'_>,
         current: &CurrentRow,
     ) -> Result<HeldResponse, MutationError> {
-        let data = current
-            .data
-            .iter()
-            .filter(|(field, _)| request.response_fields.contains(*field))
-            .map(|(field, value)| (field.clone(), value.clone()))
-            .collect::<Map<_, _>>();
+        let data = response_data(
+            &request.plan.entity,
+            &current.data,
+            &request.response_fields,
+        )?;
         let body = json!({
             "id": current.record_id,
             "revision": current.record_revision,
@@ -1828,6 +1859,135 @@ async fn load_tombstone_row_for_update(
     row_to_current(&request.plan.entity, &row)
 }
 
+fn normalize_mutation_body(
+    entity: &CompiledEntity,
+    body: &MutationBody,
+) -> Result<MutationBody, MutationError> {
+    match body {
+        MutationBody::Create(data) => {
+            Ok(MutationBody::Create(normalize_create_data(entity, data)?))
+        }
+        MutationBody::Patch(operations) => Ok(MutationBody::Patch(
+            operations
+                .iter()
+                .map(|operation| normalize_patch_operation(entity, operation))
+                .collect::<Result<Vec<_>, _>>()?,
+        )),
+        MutationBody::Tombstone => Ok(MutationBody::Tombstone),
+    }
+}
+
+fn normalize_batch_items(
+    entity: &CompiledEntity,
+    items: &[BatchMutationItem],
+) -> Result<Vec<BatchMutationItem>, MutationError> {
+    items
+        .iter()
+        .map(|item| match item {
+            BatchMutationItem::Create(data) => Ok(BatchMutationItem::Create(
+                normalize_create_data(entity, data)?,
+            )),
+            BatchMutationItem::Patch {
+                record_id,
+                expected_etag,
+                patch,
+            } => Ok(BatchMutationItem::Patch {
+                record_id: record_id.clone(),
+                expected_etag: expected_etag.clone(),
+                patch: patch
+                    .iter()
+                    .map(|operation| normalize_patch_operation(entity, operation))
+                    .collect::<Result<Vec<_>, _>>()?,
+            }),
+        })
+        .collect()
+}
+
+fn normalize_create_data(
+    entity: &CompiledEntity,
+    data: &Map<String, Value>,
+) -> Result<Map<String, Value>, MutationError> {
+    let mut normalized = Map::new();
+    for (api_name, value) in data {
+        let field_id = field_id_for_api_name(entity, api_name)?;
+        if normalized
+            .insert(field_id.to_owned(), value.clone())
+            .is_some()
+        {
+            return Err(MutationError::InvalidRequest);
+        }
+    }
+    Ok(normalized)
+}
+
+fn normalize_patch_operation(
+    entity: &CompiledEntity,
+    operation: &PatchOperation,
+) -> Result<PatchOperation, MutationError> {
+    let normalized_path = |path: &str| -> Result<String, MutationError> {
+        let api_name = patch_field(path)?;
+        let field_id = field_id_for_api_name(entity, &api_name)?;
+        Ok(format!("/data/{}", encode_pointer_segment(field_id)))
+    };
+    Ok(match operation {
+        PatchOperation::Add { path, value } => PatchOperation::Add {
+            path: normalized_path(path)?,
+            value: value.clone(),
+        },
+        PatchOperation::Replace { path, value } => PatchOperation::Replace {
+            path: normalized_path(path)?,
+            value: value.clone(),
+        },
+        PatchOperation::Remove { path } => PatchOperation::Remove {
+            path: normalized_path(path)?,
+        },
+        PatchOperation::Test { path, value } => PatchOperation::Test {
+            path: normalized_path(path)?,
+            value: value.clone(),
+        },
+    })
+}
+
+fn field_id_for_api_name<'a>(
+    entity: &'a CompiledEntity,
+    api_name: &str,
+) -> Result<&'a str, MutationError> {
+    let mut matches = entity
+        .stored_fields
+        .iter()
+        .filter(|field| field.logical.api_name == api_name);
+    let field = matches.next().ok_or(MutationError::InvalidRequest)?;
+    if matches.next().is_some() || !entity.fields.contains_key(&field.logical.id) {
+        return Err(MutationError::InvalidRequest);
+    }
+    Ok(&field.logical.id)
+}
+
+fn response_data(
+    entity: &CompiledEntity,
+    data: &Map<String, Value>,
+    response_fields: &BTreeSet<String>,
+) -> Result<Map<String, Value>, MutationError> {
+    let mut response = Map::new();
+    for (field_id, value) in data {
+        if !response_fields.contains(field_id) {
+            continue;
+        }
+        let field = entity
+            .stored_fields
+            .iter()
+            .find(|field| field.logical.id == *field_id)
+            .ok_or(MutationError::Unavailable)?;
+        if response
+            .insert(field.logical.api_name.clone(), value.clone())
+            .is_some()
+        {
+            return Err(MutationError::Unavailable);
+        }
+    }
+    Ok(response)
+}
+
 fn apply_patch_document(
     request: &MutationRequest<'_>,
     current: &Map<String, Value>,
@@ -1965,6 +2125,10 @@ fn decode_pointer_segment(value: &str) -> Result<String, MutationError> {
         }
     }
     Ok(decoded)
+}
+
+fn encode_pointer_segment(value: &str) -> String {
+    value.replace('~', "~0").replace('/', "~1")
 }
 
 fn returning_projection(entity: &CompiledEntity) -> String {

@@ -1161,6 +1161,7 @@ impl PackageFixture {
                 id: "core".to_owned(),
                 path: "source/modules/core/module.yaml".to_owned(),
                 bytes: module_source,
+                assets: Vec::new(),
             }],
             fixture_journeys: PackageSourceFile {
                 path: "tests/journeys.yaml".to_owned(),

@@ -21,9 +21,7 @@ use registry_platform_testing::{oidc_verifier_config, MockIdp};
 use registry_server::api::{
     authenticated_router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture,
 };
-use registry_server::auth::{
-    AuthorityClaimConfig, RegistryAuthenticator, RowBoundaryClaimMapping, RowBoundaryClaimType,
-};
+use registry_server::auth::{AuthorityClaimConfig, RegistryAuthenticator};
 use registry_server::compiler::{compile_project, CompileProfile};
 use registry_server::contract::parse_project_json;
 use registry_server::cursor::CursorCodec;
@@ -434,14 +432,7 @@ fn authenticated_app(
             &registry,
             oidc_verifier_config(idp.issuer(), vec![AUDIENCE.to_owned()]),
             key_source,
-            AuthorityClaimConfig::new(
-                "registry_principal",
-                Some("purpose".to_owned()),
-                vec![RowBoundaryClaimMapping::new(
-                    "jurisdictions",
-                    RowBoundaryClaimType::DirectStringSet,
-                )],
-            ),
+            AuthorityClaimConfig::new("registry_principal", Some("purpose".to_owned())),
         )
         .expect("OIDC authority matches the compiled Registry"),
     );

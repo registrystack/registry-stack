@@ -431,11 +431,18 @@ REVOKE ALL ON SCHEMA registry_internal, registry_data FROM PUBLIC;
         f"""apiVersion: registry.registrystack.org/server-schema-test-credentials/v1
 kind: SchemaTestCredentials
 bindings:
-  - {{journeyId: household-person-lifecycle, stepId: create-person, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: household-person-lifecycle, stepId: get-person, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: household-person-lifecycle, stepId: update-person-residency, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: household-person-lifecycle, stepId: create-household, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: household-person-lifecycle, stepId: list-people, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: household-person-lifecycle, stepId: create-single-headed-head, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: household-person-lifecycle, stepId: create-under-five-child, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: household-person-lifecycle, stepId: create-woman-headed-head, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: household-person-lifecycle, stepId: create-woman-headed-child, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: household-person-lifecycle, stepId: create-woman-headed-elder, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: household-person-lifecycle, stepId: create-isolation-head, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: household-person-lifecycle, stepId: create-isolation-spouse, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: household-person-lifecycle, stepId: create-isolation-child, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: household-person-lifecycle, stepId: create-single-headed-household, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: household-person-lifecycle, stepId: create-woman-headed-household, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: household-person-lifecycle, stepId: create-isolation-household, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: household-person-lifecycle, stepId: query-household-demographics, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
   - {{journeyId: household-person-lifecycle, stepId: refuse-incomplete-membership, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
   - {{journeyId: household-person-lifecycle, stepId: operator-without-purpose-is-concealed, credential: {{type: bearer, tokenRef: secret:file/no-purpose-token}}}}
 """,
@@ -811,22 +818,29 @@ def _create(root: Path, route: str, logical_key: str, data: dict[str, Any]) -> s
 
 def seed_spec() -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     people = [
-        {"person-code": "PERSON-DEMO-001", "legal-name": "Amina Example", "family-name": "Example", "date-of-birth": "1988-02-22", "residency-status": "usual-resident", "preferred-language": "en"},
-        {"person-code": "PERSON-DEMO-002", "legal-name": "Karim Example", "family-name": "Example", "date-of-birth": "2014-06-17", "residency-status": "usual-resident", "preferred-language": "fr"},
-        {"person-code": "PERSON-DEMO-003", "legal-name": "Elena Sample", "family-name": "Sample", "date-of-birth": "1992-11-02", "residency-status": "usual-resident", "preferred-language": "es"},
-        {"person-code": "PERSON-DEMO-004", "legal-name": "Mateo Sample", "family-name": "Sample", "date-of-birth": "2022-03-14", "residency-status": "usual-resident", "preferred-language": "es"},
-        {"person-code": "PERSON-DEMO-005", "legal-name": "Luis Sample", "family-name": "Sample", "date-of-birth": "1989-08-20", "residency-status": "temporary-resident", "preferred-language": "en"},
+        {"person-code": "PERSON-DEMO-001", "legal-name": "Omar Example", "family-name": "Example", "date-of-birth": "1986-02-22", "person-sex": "male", "residency-status": "usual-resident", "preferred-language": "en"},
+        {"person-code": "PERSON-DEMO-002", "legal-name": "Lina Example", "family-name": "Example", "date-of-birth": "2023-03-14", "person-sex": "female", "residency-status": "usual-resident", "preferred-language": "en"},
+        {"person-code": "PERSON-DEMO-003", "legal-name": "Sofia Sample", "family-name": "Sample", "date-of-birth": "1980-11-02", "person-sex": "female", "residency-status": "usual-resident", "preferred-language": "es"},
+        {"person-code": "PERSON-DEMO-004", "legal-name": "Diego Sample", "family-name": "Sample", "date-of-birth": "2016-06-17", "person-sex": "male", "residency-status": "usual-resident", "preferred-language": "es"},
+        {"person-code": "PERSON-DEMO-005", "legal-name": "Rosa Sample", "family-name": "Sample", "date-of-birth": "1940-08-20", "person-sex": "female", "residency-status": "usual-resident", "preferred-language": "es"},
+        {"person-code": "PERSON-DEMO-006", "legal-name": "Karim Control", "family-name": "Control", "date-of-birth": "1975-01-09", "person-sex": "male", "residency-status": "usual-resident", "preferred-language": "fr"},
+        {"person-code": "PERSON-DEMO-007", "legal-name": "Hana Control", "family-name": "Control", "date-of-birth": "1977-09-23", "person-sex": "female", "residency-status": "usual-resident", "preferred-language": "fr"},
+        {"person-code": "PERSON-DEMO-008", "legal-name": "Noor Control", "family-name": "Control", "date-of-birth": "2018-05-06", "person-sex": "female", "residency-status": "usual-resident", "preferred-language": "fr"},
     ]
     households = [
-        {"household-code": "HOUSEHOLD-DEMO-001", "household-name": "Northern Demo Household", "administrative-area": "north-demo", "household-type": "private"},
-        {"household-code": "HOUSEHOLD-DEMO-002", "household-name": "Central Demo Household", "administrative-area": "central-demo", "household-type": "private"},
+        {"household-code": "HOUSEHOLD-DEMO-001", "local-household-number": 1001, "household-name": "Single Headed Under Five Household", "administrative-area": "north-demo", "household-type": "private"},
+        {"household-code": "HOUSEHOLD-DEMO-002", "local-household-number": 1002, "household-name": "Woman Headed Child Elderly Household", "administrative-area": "central-demo", "household-type": "private"},
+        {"household-code": "HOUSEHOLD-DEMO-003", "local-household-number": 1003, "household-name": "Isolation Control Household", "administrative-area": "south-demo", "household-type": "private"},
     ]
     memberships = [
         {"person-code": "PERSON-DEMO-001", "household-code": "HOUSEHOLD-DEMO-001", "relationship": "head", "valid-from": "2026-01-01"},
         {"person-code": "PERSON-DEMO-002", "household-code": "HOUSEHOLD-DEMO-001", "relationship": "child", "valid-from": "2026-01-01"},
-        {"person-code": "PERSON-DEMO-005", "household-code": "HOUSEHOLD-DEMO-002", "relationship": "head", "valid-from": "2026-01-01"},
-        {"person-code": "PERSON-DEMO-003", "household-code": "HOUSEHOLD-DEMO-002", "relationship": "spouse", "valid-from": "2026-01-01"},
+        {"person-code": "PERSON-DEMO-003", "household-code": "HOUSEHOLD-DEMO-002", "relationship": "head", "valid-from": "2026-01-01"},
         {"person-code": "PERSON-DEMO-004", "household-code": "HOUSEHOLD-DEMO-002", "relationship": "child", "valid-from": "2026-01-01"},
+        {"person-code": "PERSON-DEMO-005", "household-code": "HOUSEHOLD-DEMO-002", "relationship": "dependent", "valid-from": "2026-01-01"},
+        {"person-code": "PERSON-DEMO-006", "household-code": "HOUSEHOLD-DEMO-003", "relationship": "head", "valid-from": "2026-01-01"},
+        {"person-code": "PERSON-DEMO-007", "household-code": "HOUSEHOLD-DEMO-003", "relationship": "spouse", "valid-from": "2026-01-01"},
+        {"person-code": "PERSON-DEMO-008", "household-code": "HOUSEHOLD-DEMO-003", "relationship": "child", "valid-from": "2026-01-01"},
     ]
     return people, households, memberships
 
@@ -856,26 +870,27 @@ def seed(root: Path) -> None:
                 "valid-from": membership["valid-from"],
             },
         )
+    _write_json(root / "seed-record-ids.json", {"people": person_ids, "households": household_ids})
     people_response, _ = _request(
         root,
         "GET",
-        "/v1/records/persons?accessProfile=household-operator&pageSize=20",
+        "/v1/records/persons?accessProfile=household-operator&$top=20",
         "operator-token",
     )
     household_response, _ = _request(
         root,
         "GET",
-        "/v1/records/households?accessProfile=household-operator&pageSize=20",
+        "/v1/records/households?accessProfile=household-operator&$top=20",
         "operator-token",
     )
     membership_response, _ = _request(
         root,
         "GET",
-        "/v1/records/group-memberships:current?accessProfile=household-operator&pageSize=20",
+        "/v1/records/group-memberships:current?accessProfile=household-operator&$top=20",
         "operator-token",
     )
-    if [len(response.get("items", [])) for response in (people_response, household_response, membership_response)] != [5, 2, 5]:
-        raise DemoError("seeded list counts did not match the expected 5 people, 2 households, and 5 memberships")
+    if [len(response.get("items", [])) for response in (people_response, household_response, membership_response)] != [8, 3, 8]:
+        raise DemoError("seeded list counts did not match the expected 8 people, 3 households, and 8 memberships")
     _request(
         root,
         "GET",
@@ -883,15 +898,22 @@ def seed(root: Path) -> None:
         "no-purpose-token",
         expected=404,
     )
-    print("Seeded 5 synthetic people, 2 households, and 5 current memberships.")
+    print("Seeded 8 synthetic people, 3 households, and 8 current memberships.")
 
 
 def query(root: Path) -> None:
     root = _require_root(root)
+    seed_ids = _read_json_object(root / "seed-record-ids.json")
+    households = seed_ids.get("households")
+    if not isinstance(households, dict) or not isinstance(households.get("HOUSEHOLD-DEMO-001"), str):
+        raise DemoError("seed record identifiers are missing; run the demo seed first")
+    first_household_id = urllib.parse.quote(households["HOUSEHOLD-DEMO-001"], safe="")
     queries = [
-        ("Usual residents", "/v1/records/persons?accessProfile=household-operator&fields=person-code,legal-name,residency-status&filter=residency-status:equals:usual-resident&pageSize=20"),
-        ("Households", "/v1/records/households?accessProfile=household-operator&fields=household-code,household-name,administrative-area&pageSize=20"),
-        ("Current memberships", "/v1/records/group-memberships:current?accessProfile=household-operator&pageSize=20"),
+        ("People from one household", f"/v1/records/households/{first_household_id}/people?accessProfile=household-operator&$select=person-code,legal-name,person-sex,residency-status&$orderby=person-code&$top=20&$count=true"),
+        ("Derived stored and computed filter", "/v1/records/households?accessProfile=household-operator&$select=household-code,administrative-area,local-household-number,child-count&$filter=administrative-area%20eq%20%27north-demo%27%20and%20child-count%20eq%201&$orderby=local-household-number&$top=20&$count=true"),
+        ("Single headed with child under five", "/v1/records/households?accessProfile=household-operator&$select=household-code,child-under-5-count,single-headed&$filter=single-headed%20eq%20true%20and%20child-under-5-count%20eq%201&$top=20&$count=true"),
+        ("Woman headed with child and elderly", "/v1/records/households?accessProfile=household-operator&$select=household-code,woman-headed,child-count,elderly-count&$filter=woman-headed%20eq%20true%20and%20child-count%20eq%201%20and%20elderly-count%20eq%201&$top=20&$count=true"),
+        ("Selector lookup input shape", "/v1/records/households?accessProfile=household-operator&$select=household-code,local-household-number&$filter=household-code%20eq%20%27HOUSEHOLD-DEMO-001%27&$top=1"),
     ]
     for label, path in queries:
         response, _ = _request(root, "GET", path, "operator-token")
