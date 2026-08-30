@@ -46,6 +46,7 @@ jobs:
       discovery_contracts: ${{ steps.filter.outputs.discovery_contracts }}
       relay_v2_contracts: ${{ steps.filter.outputs.relay_v2_contracts }}
       relay_client_contracts: ${{ steps.filter.outputs.relay_client_contracts }}
+      registry_server_contracts: ${{ steps.filter.outputs.registry_server_contracts }}
       evidence_contracts: ${{ steps.filter.outputs.evidence_contracts }}
       release_tool: ${{ steps.filter.outputs.release_tool }}
       release_source_proof: ${{ steps.filter.outputs.release_source_proof }}
@@ -592,6 +593,76 @@ jobs:
       - name: Relay client source neutrality
         run: products/relay-v2/scripts/check-source-neutrality.sh
 
+  registry-server-contracts:
+    name: Registry Server product contracts
+    needs: changes
+    if: needs.changes.outputs.registry_server_contracts == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        # Docker Hub PostgreSQL 17.11 index, verified 2026-08-29.
+        image: postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        env:
+          POSTGRES_DB: registry_server
+          POSTGRES_PASSWORD: registry_server_test
+          POSTGRES_USER: registry_server
+        options: >-
+          --health-cmd "pg_isready -U registry_server -d registry_server"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432/tcp
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Configure Registry Server test environment
+        env:
+          DATABASE_PORT: ${{ job.services.postgres.ports['5432'] }}
+          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+          TLS_CA_PEM_PATH: ${{ runner.temp }}/registry-server-postgres-trusted-ca.pem
+        run: |
+          {
+            echo "REGISTRY_SERVER_TEST_DATABASE_URL=postgresql://registry_server:registry_server_test@localhost:${DATABASE_PORT}/registry_server"
+            echo "REGISTRY_SERVER_TEST_TLS_DATABASE_HOST=localhost"
+            echo "REGISTRY_SERVER_TEST_TLS_DATABASE_URL=postgresql://registry_server:registry_server_test@localhost:${DATABASE_PORT}/registry_server"
+            echo "REGISTRY_SERVER_TEST_TLS_HOSTNAME_MISMATCH_DATABASE_URL=postgresql://registry_server:registry_server_test@127.0.0.1:${DATABASE_PORT}/registry_server"
+            echo "REGISTRY_SERVER_TEST_TLS_POSTGRES_CONTAINER_ID=${POSTGRES_CONTAINER_ID}"
+            echo "REGISTRY_SERVER_TEST_TLS_CA_PEM_PATH=${TLS_CA_PEM_PATH}"
+          } >> "${GITHUB_ENV}"
+
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.11.16"
+
+      - name: Registry Server contract consistency
+        run: products/registry-server/scripts/check-contracts.sh
+
+      - name: Registry Server PostgreSQL journeys
+        run: products/registry-server/scripts/test-postgres.sh
+
+      - name: Registry Server PostgreSQL TLS proof
+        run: products/registry-server/scripts/test-postgres-tls.sh
+
+      - name: Registry Server clean-checkout adopter workflow
+        run: products/registry-server/scripts/test-adopter-workflow.sh
+
+      - name: Registry Server generic quickstart
+        run: products/registry-server/quickstart/run.sh --smoke
+
   identifiers:
     name: Public identifier catalog
     needs: changes
@@ -627,6 +698,7 @@ jobs:
       - evidence-contracts
       - relay-v2-contracts
       - relay-client-contracts
+      - registry-server-contracts
       - identifiers
     runs-on: ubuntu-24.04
     env:

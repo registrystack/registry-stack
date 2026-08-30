@@ -1,0 +1,43 @@
+// SPDX-License-Identifier: Apache-2.0
+
+//! Runtime-bound, read-only package inspection shared by CLI operations.
+
+use std::path::Path;
+
+use registry_server::package::{
+    inspect_package_with_context, IntegrityInspectedPackage, PackageError, PackageInspectionContext,
+};
+use registry_server::runtime_config::{load_runtime_config, RuntimeConfigError};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RuntimePackageInspectionError {
+    RuntimeConfigPath,
+    RuntimeConfig(RuntimeConfigError),
+    Package(PackageError),
+}
+
+/// Inspect exactly the package selected and bound by one strict runtime
+/// configuration. This opens no database, OIDC source, or listener.
+pub(crate) fn inspect_runtime_package(
+    runtime_config: &Path,
+) -> Result<IntegrityInspectedPackage, RuntimePackageInspectionError> {
+    if !runtime_config.is_absolute() {
+        return Err(RuntimePackageInspectionError::RuntimeConfigPath);
+    }
+    let config = load_runtime_config(runtime_config)
+        .map_err(RuntimePackageInspectionError::RuntimeConfig)?;
+    let context = PackageInspectionContext {
+        environment: config.identity().environment(),
+        instance_id: config.identity().instance_id(),
+        database_id: config.identity().database_id(),
+        database_initialization_environment: config
+            .identity()
+            .database_initialization_environment(),
+        compiler_source_revision: config.package().compiler_source_revision(),
+        trust_anchor: config.package_trust_anchor(),
+        expected_package_revision: config.package().active_revision(),
+        expected_sequence: config.package().active_sequence(),
+    };
+    inspect_package_with_context(config.package().root(), &context)
+        .map_err(RuntimePackageInspectionError::Package)
+}

@@ -20,6 +20,7 @@ from ci_changes import (
     EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_INPUTS,
     EVIDENCE_TUTORIAL_INPUTS,
     IDENTIFIER_CATALOG_INPUTS,
+    REGISTRY_SERVER_PACKAGES,
     SECURITY_WORKFLOW_GATES,
     SHARDS,
     Workspace,
@@ -370,6 +371,38 @@ class CiChangesTest(unittest.TestCase):
         )
         self.assertTrue(outputs["relay_v2_contracts"])
         self.assertTrue(outputs["editors"])
+
+    def test_registry_server_paths_select_its_shard_and_product_gate(self) -> None:
+        for path in (
+            "crates/registry-server/src/compiler.rs",
+            "crates/registry-serverctl/src/main.rs",
+            "products/registry-server/contracts/definition-of-done.yaml",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["registry_server_contracts"])
+                self.assertTrue(
+                    set(outputs["rust_packages"]) & REGISTRY_SERVER_PACKAGES
+                )
+
+        product_outputs = classify(
+            self.workspace,
+            ("products/registry-server/contracts/definition-of-done.yaml",),
+        )
+        self.assertEqual(
+            set(REGISTRY_SERVER_PACKAGES),
+            set(product_outputs["rust_packages"]) & REGISTRY_SERVER_PACKAGES,
+        )
+
+    def test_manifest_core_changes_select_registry_server_through_linked_code(
+        self,
+    ) -> None:
+        manifest_change = ("crates/registry-manifest-core/src/lib.rs",)
+        outputs = classify(self.workspace, manifest_change)
+
+        self.assertTrue(outputs["registry_server_contracts"])
+        self.assertIn("registry-server", outputs["rust_packages"])
+        self.assertIn("registry-manifest-core", outputs["rust_packages"])
 
     def test_evidence_tutorial_inputs_cover_every_registered_tutorial(self) -> None:
         # The gate's registry is the source of truth for which tutorials exist.
@@ -842,6 +875,18 @@ class CiChangesTest(unittest.TestCase):
         self.assertNotIn("\n  notary-contracts:\n", workflow)
         self.assertNotIn("notary_contracts", workflow)
 
+        self.assertIn("\n  registry-server-contracts:\n", workflow)
+        self.assertIn("name: Registry Server product contracts", workflow)
+        self.assertIn(
+            "products/registry-server/scripts/check-contracts.sh", workflow
+        )
+        self.assertIn(
+            "products/registry-server/scripts/test-postgres.sh", workflow
+        )
+        self.assertIn(
+            "products/registry-server/scripts/test-adopter-workflow.sh", workflow
+        )
+
         rust_result = workflow.split("\n  rust-result:\n", 1)[1].split(
             "\n  release-tool:\n", 1
         )[0]
@@ -849,7 +894,63 @@ class CiChangesTest(unittest.TestCase):
         self.assertIn("\n      - evidence-contracts\n", rust_result)
         self.assertIn("\n      - relay-v2-contracts\n", rust_result)
         self.assertIn("\n      - relay-client-contracts\n", rust_result)
+        self.assertIn("\n      - registry-server-contracts\n", rust_result)
         self.assertNotIn("\n      - notary-contracts\n", rust_result)
+
+    def test_registry_server_contracts_pin_postgresql_and_use_the_product_entry_points(
+        self,
+    ) -> None:
+        workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+        registry_server_job = workflow.split(
+            "\n  registry-server-contracts:\n", 1
+        )[1].split("\n  identifiers:\n", 1)[0]
+
+        self.assertIn(
+            "postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675",
+            registry_server_job,
+        )
+        self.assertIn(
+            "ports:\n          - 5432/tcp",
+            registry_server_job,
+        )
+        self.assertIn(
+            "DATABASE_PORT: ${{ job.services.postgres.ports['5432'] }}",
+            registry_server_job,
+        )
+        self.assertIn(
+            "REGISTRY_SERVER_TEST_DATABASE_URL=postgresql://registry_server:registry_server_test@localhost:${DATABASE_PORT}/registry_server",
+            registry_server_job,
+        )
+        self.assertIn(
+            "REGISTRY_SERVER_TEST_TLS_DATABASE_URL=postgresql://registry_server:registry_server_test@localhost:${DATABASE_PORT}/registry_server",
+            registry_server_job,
+        )
+        self.assertIn(
+            "REGISTRY_SERVER_TEST_TLS_HOSTNAME_MISMATCH_DATABASE_URL=postgresql://registry_server:registry_server_test@127.0.0.1:${DATABASE_PORT}/registry_server",
+            registry_server_job,
+        )
+        self.assertIn(
+            "POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}",
+            registry_server_job,
+        )
+        self.assertIn(
+            "TLS_CA_PEM_PATH: ${{ runner.temp }}/registry-server-postgres-trusted-ca.pem",
+            registry_server_job,
+        )
+        self.assertIn(
+            "uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d",
+            registry_server_job,
+        )
+        self.assertIn('version: "0.11.16"', registry_server_job)
+        for entry_point in (
+            "products/registry-server/scripts/check-contracts.sh",
+            "products/registry-server/scripts/test-postgres.sh",
+            "products/registry-server/scripts/test-postgres-tls.sh",
+            "products/registry-server/scripts/test-adopter-workflow.sh",
+            "products/registry-server/quickstart/run.sh --smoke",
+        ):
+            with self.subTest(entry_point=entry_point):
+                self.assertIn(entry_point, registry_server_job)
 
     def test_discovery_contracts_pins_node_for_adopter_binding_tests(self) -> None:
         workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")

@@ -35,7 +35,7 @@
   surface: Portable `metadata.yaml` documents, compiled metadata model, public services, forms, policies, requirements, evidence type lists, evidence offering metadata, and evaluation profile metadata.
   source_of_truth:
     label: Registry Manifest core
-    url: https://github.com/registrystack/registry-stack/blob/v0.23.0/crates/registry-manifest-core/src/lib.rs
+    url: https://github.com/registrystack/registry-stack/blob/b26275aad1a85a14b99e0898abda401ab938872d/crates/registry-manifest-core/src/lib.rs
   consumer_note: Runtime source paths, scopes, table or view names, endpoint locations, credentials, and other deployment bindings belong in consuming service configuration, not manifests.
 - id: registry-manifest.cpsv-ap-service-catalogue
   name: CPSV-AP Service Catalogue Render Contract

@@ -825,6 +825,7 @@ class RegistryReleaseTest(TestCase):
                 "discovery-contracts",
                 "evidence-contracts",
                 "identifiers",
+                "registry-server-contracts",
                 "relay-client-contracts",
                 "relay-v2-contracts",
             },

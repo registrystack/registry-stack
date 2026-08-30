@@ -1,0 +1,111 @@
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: business
+  version: 0.1.0
+  defaultLanguage: en
+package:
+  environment: acceptance
+  instanceId: business-acceptance
+  sequence: 1
+  sourceRevision: business-acceptance-0.1.0
+manifestProjection:
+  accessProfile: public-register
+  classificationCeiling: public
+  catalog:
+    baseUrl: https://business-register.example.gov
+    title: Business Register Catalog
+    description: Portable metadata for the public business register slice.
+    publisher:
+      name: Business Register Authority
+      iri: https://business-register.example.gov/authority
+  dataset:
+    title: Public Business Register
+    description: Public legal entity and officer appointment metadata.
+    owner: Business Register Authority
+    status: active
+modules:
+  - id: business-core
+    version: 0.1.0
+    digest: sha256:fe95523a7c5c061af80f3b85f361ffa0913f6532c1834e1ae0e67e017dd50c2f
+entities:
+  - id: legal-entity
+    route: legal-entities
+    mutationMode: mutable
+    classification: public
+    fields:
+      - {id: jurisdiction-code, type: string, required: true, maxLength: 16, classification: public}
+      - {id: registration-number, type: string, required: true, maxLength: 64, classification: public}
+      - {id: legal-name, type: string, required: true, maxLength: 240, classification: public}
+      - {id: entity-status, type: vocabulary-code, vocabulary: entity-status, required: true, classification: public}
+      - {id: public-service-address, type: string, required: false, maxLength: 240, classification: public}
+      - {id: protected-contact, type: string, required: false, maxLength: 240, classification: restricted}
+      - {id: protected-ownership-reference, type: string, required: false, maxLength: 120, classification: restricted}
+      - {id: internal-case-note, type: text, required: false, maxLength: 4000, classification: restricted}
+    constraints:
+      - {kind: unique, fields: [jurisdiction-code, registration-number]}
+  - id: filing
+    route: filings
+    mutationMode: create_only
+    fields:
+      - {id: legal-entity, type: reference, target: legal-entity, required: true, classification: internal}
+      - {id: filing-number, type: string, required: true, maxLength: 64, classification: internal}
+      - {id: filing-type, type: vocabulary-code, vocabulary: filing-type, required: true, classification: internal}
+      - {id: filed-date, type: date, required: true, classification: internal}
+      - {id: source-system, type: string, required: true, maxLength: 80, classification: internal}
+      - {id: source-record-id, type: string, required: true, maxLength: 120, classification: internal}
+      - {id: correction-of, type: reference, target: filing, required: false, classification: internal}
+      - {id: provenance-note, type: text, required: false, maxLength: 4000, classification: restricted}
+    constraints:
+      - {kind: unique, fields: [legal-entity, filing-number]}
+      - {kind: unique, fields: [source-system, source-record-id]}
+  - id: officer-appointment
+    route: officer-appointments
+    mutationMode: mutable
+    classification: public
+    fields:
+      - {id: legal-entity, type: reference, target: legal-entity, required: true, classification: public}
+      - {id: officer-code, type: string, required: true, maxLength: 64, classification: public}
+      - {id: officer-name, type: string, required: true, maxLength: 240, classification: public}
+      - {id: officer-role, type: vocabulary-code, vocabulary: officer-role, required: true, classification: public}
+      - {id: effective-from, type: date, required: true, classification: public}
+      - {id: effective-to, type: date, required: false, classification: public}
+      - {id: protected-officer-id, type: string, required: false, maxLength: 120, classification: restricted}
+    temporal:
+      startField: effective-from
+      endField: effective-to
+      scopeFields: [legal-entity, officer-code]
+    constraints:
+      - {kind: unique, fields: [legal-entity, officer-code, effective-from]}
+      - kind: unique
+        fields: [legal-entity, officer-role]
+        when:
+          - {kind: field_is_null, field: effective-to}
+          - {kind: active_lifecycle}
+      - {kind: temporal-non-overlap, scopeFields: [legal-entity, officer-code], startField: effective-from, endField: effective-to}
+accessProfiles:
+  - id: public-register
+    default: true
+    anonymous: true
+    grants:
+      - entity: legal-entity
+        operations: [get, list]
+        readableFields: [jurisdiction-code, registration-number, legal-name, entity-status, public-service-address]
+        filterableFields: [jurisdiction-code, entity-status]
+        sortableFields: [legal-name]
+      - entity: officer-appointment
+        operations: [get, list]
+        readableFields: [legal-entity, officer-name, officer-role, effective-from, effective-to]
+        filterableFields: [legal-entity, officer-role, effective-from]
+        sortableFields: [effective-from]
+  - id: business-registrar
+    principalClaim: registry_principal
+    requiredPurposes: [business-registry]
+    grants:
+      - {entity: legal-entity, operations: [create, get, list, patch], readableFields: [jurisdiction-code, registration-number, legal-name, entity-status, public-service-address, protected-contact, protected-ownership-reference, internal-case-note], writableFields: [jurisdiction-code, registration-number, legal-name, entity-status, public-service-address, protected-contact, protected-ownership-reference, internal-case-note], filterableFields: [jurisdiction-code, registration-number, entity-status]}
+      - {entity: filing, operations: [create, get, list], readableFields: [legal-entity, filing-number, filing-type, filed-date, source-system, source-record-id, correction-of, provenance-note], writableFields: [legal-entity, filing-number, filing-type, filed-date, source-system, source-record-id, correction-of, provenance-note], filterableFields: [legal-entity, filing-type, filed-date, source-system]}
+      - {entity: officer-appointment, operations: [create, get, list, patch], readableFields: [legal-entity, officer-code, officer-name, officer-role, effective-from, effective-to, protected-officer-id], writableFields: [legal-entity, officer-code, officer-name, officer-role, effective-from, effective-to, protected-officer-id], filterableFields: [legal-entity, officer-code, officer-role, effective-from]}
+vocabularies:
+  - {id: entity-status, values: [active, dissolved, suspended]}
+  - {id: filing-type, values: [incorporation, annual-return, correction]}
+  - {id: officer-role, values: [director, secretary, partner]}

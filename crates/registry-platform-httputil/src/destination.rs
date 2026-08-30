@@ -31,6 +31,7 @@ use http::header::{
 use http::uri::PathAndQuery;
 use http::{HeaderMap, StatusCode};
 use ipnet::IpNet;
+use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use reqwest::Url;
 use thiserror::Error;
 use tokio::sync::Semaphore;
@@ -165,6 +166,8 @@ pub trait DestinationSlot: sealed::Sealed {
     const DEBUG_NAME: &'static str;
     #[doc(hidden)]
     const CREDENTIAL_EXCHANGE: bool;
+    #[doc(hidden)]
+    const EVENT_DELIVERY: bool;
 }
 
 /// Registry-data destination marker.
@@ -174,6 +177,7 @@ impl sealed::Sealed for DataDestination {}
 impl DestinationSlot for DataDestination {
     const DEBUG_NAME: &'static str = "data";
     const CREDENTIAL_EXCHANGE: bool = false;
+    const EVENT_DELIVERY: bool = false;
 }
 
 /// Credential-exchange destination marker.
@@ -183,6 +187,17 @@ impl sealed::Sealed for CredentialDestination {}
 impl DestinationSlot for CredentialDestination {
     const DEBUG_NAME: &'static str = "credential";
     const CREDENTIAL_EXCHANGE: bool = true;
+    const EVENT_DELIVERY: bool = false;
+}
+
+/// Event-delivery destination marker.
+pub enum EventDestination {}
+
+impl sealed::Sealed for EventDestination {}
+impl DestinationSlot for EventDestination {
+    const DEBUG_NAME: &'static str = "event";
+    const CREDENTIAL_EXCHANGE: bool = false;
+    const EVENT_DELIVERY: bool = true;
 }
 
 /// Runtime class for a fixed outbound destination.
@@ -197,7 +212,7 @@ pub enum DestinationProfile {
     /// Plain HTTP to one exact, explicitly allowed private IP for local development.
     LocalPrivateDevelopmentHttp,
     /// Test-only HTTPS profile that remains confined to loopback addresses.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     PinnedLoopbackHttpsTest,
 }
 
@@ -341,6 +356,8 @@ pub enum DestinationTlsMaterialError {
 pub type DataDestinationPolicy = FixedDestinationPolicy<DataDestination>;
 /// Credential-exchange fixed destination policy.
 pub type CredentialDestinationPolicy = FixedDestinationPolicy<CredentialDestination>;
+/// Event-delivery fixed destination policy.
+pub type EventDestinationPolicy = FixedDestinationPolicy<EventDestination>;
 
 /// Fixed data destination for one bounded internal service hop.
 ///
@@ -578,12 +595,12 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
                     );
                 }
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             DestinationProfile::PinnedLoopbackHttpsTest if origin.scheme() != "https" => {
                 return Err(DestinationPolicyError::ProductionRequiresHttps);
             }
             DestinationProfile::ProductionHttps | DestinationProfile::PrivateServiceHttp => {}
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             DestinationProfile::PinnedLoopbackHttpsTest => {}
         }
 
@@ -976,7 +993,7 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
                 }
                 Err(DestinationSendError::PrivateAddressNotAllowed)
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             DestinationProfile::PinnedLoopbackHttpsTest => {
                 if is_loopback(ip) {
                     Ok(())
@@ -1127,13 +1144,17 @@ pub enum DestinationMethod {
     ReviewedReadOnlyPost,
     /// OAuth 2.0 client-credentials POST, valid only for a credential destination slot.
     OAuth2ClientCredentialsPost,
+    /// Canonical JSON event POST, valid only for an event destination slot.
+    EventPost,
 }
 
 impl DestinationMethod {
     fn as_reqwest(self) -> reqwest::Method {
         match self {
             Self::Get => reqwest::Method::GET,
-            Self::ReviewedReadOnlyPost | Self::OAuth2ClientCredentialsPost => reqwest::Method::POST,
+            Self::ReviewedReadOnlyPost | Self::OAuth2ClientCredentialsPost | Self::EventPost => {
+                reqwest::Method::POST
+            }
         }
     }
 }
@@ -1314,6 +1335,7 @@ enum HeaderTemplateInput<'a> {
 enum RequestTemplateKind {
     General(DestinationMethod),
     OAuth2ClientCredentials(OAuth2ClientCredentialsBodyFormat),
+    EventDelivery,
 }
 
 enum TargetTemplateInput<'a> {
@@ -1384,6 +1406,42 @@ pub type DataDestinationRequestTemplate = BoundedDestinationRequestTemplate<Data
 /// Reviewed credential-destination request template.
 pub type CredentialDestinationRequestTemplate =
     BoundedDestinationRequestTemplate<CredentialDestination>;
+/// Closed event-delivery request template.
+pub type EventDestinationRequestTemplate = BoundedDestinationRequestTemplate<EventDestination>;
+
+/// Values for the closed CloudEvents HTTP binary event-delivery header set.
+///
+/// The product owns the signature and retry policy. This transport only binds
+/// the supplied values to fixed header names and preserves their exact bytes.
+pub struct EventDeliveryHeaders<'a> {
+    pub id: &'a [u8],
+    pub source: &'a [u8],
+    pub event_type: &'a [u8],
+    pub time: &'a [u8],
+    pub dataschema: &'a [u8],
+    pub generation: &'a [u8],
+    pub attempt: &'a [u8],
+    pub delivery_time: &'a [u8],
+    pub idempotency_key: &'a [u8],
+    pub signature: &'a [u8],
+}
+
+impl fmt::Debug for EventDeliveryHeaders<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("EventDeliveryHeaders([REDACTED])")
+    }
+}
+
+const MAX_EVENT_ID_HEADER_BYTES: usize = 128;
+const MAX_EVENT_SOURCE_HEADER_BYTES: usize = 2_048;
+const MAX_EVENT_TYPE_HEADER_BYTES: usize = 256;
+const MAX_EVENT_TIME_HEADER_BYTES: usize = 64;
+const MAX_EVENT_DATASCHEMA_HEADER_BYTES: usize = 2_048;
+const MAX_EVENT_GENERATION_HEADER_BYTES: usize = 32;
+const MAX_EVENT_ATTEMPT_HEADER_BYTES: usize = 32;
+const MAX_EVENT_DELIVERY_TIME_HEADER_BYTES: usize = 64;
+const MAX_EVENT_IDEMPOTENCY_KEY_HEADER_BYTES: usize = 256;
+const MAX_EVENT_SIGNATURE_HEADER_BYTES: usize = MAX_DESTINATION_HEADER_VALUE_BYTES;
 
 /// Closed OAuth 2.0 client-credentials request-body encoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1444,6 +1502,119 @@ impl BoundedDestinationRequestTemplate<CredentialDestination> {
                 max_bytes: max_body_bytes,
             },
             max_request_bytes,
+        )
+    }
+}
+
+impl BoundedDestinationRequestTemplate<EventDestination> {
+    /// Compile the sole event-destination request shape.
+    ///
+    /// The path is fixed and the request has no query or authorization slot.
+    /// Header names, JSON content type, and their maximum sizes are closed by
+    /// this constructor. The body must already be strict canonical JSON.
+    pub fn event_delivery(
+        fixed_path: &str,
+        max_body_bytes: usize,
+        max_request_bytes: usize,
+    ) -> Result<Self, DestinationRequestError> {
+        let headers = [
+            HeaderTemplateInput::Exact {
+                name: "accept",
+                value: b"application/json",
+            },
+            HeaderTemplateInput::Exact {
+                name: "content-type",
+                value: b"application/json",
+            },
+            HeaderTemplateInput::Exact {
+                name: "ce-specversion",
+                value: b"1.0",
+            },
+            HeaderTemplateInput::Dynamic {
+                name: "ce-id",
+                max_value_bytes: MAX_EVENT_ID_HEADER_BYTES,
+            },
+            HeaderTemplateInput::Dynamic {
+                name: "ce-source",
+                max_value_bytes: MAX_EVENT_SOURCE_HEADER_BYTES,
+            },
+            HeaderTemplateInput::Dynamic {
+                name: "ce-type",
+                max_value_bytes: MAX_EVENT_TYPE_HEADER_BYTES,
+            },
+            HeaderTemplateInput::Dynamic {
+                name: "ce-time",
+                max_value_bytes: MAX_EVENT_TIME_HEADER_BYTES,
+            },
+            HeaderTemplateInput::Dynamic {
+                name: "ce-dataschema",
+                max_value_bytes: MAX_EVENT_DATASCHEMA_HEADER_BYTES,
+            },
+            HeaderTemplateInput::Dynamic {
+                name: "x-registry-event-generation",
+                max_value_bytes: MAX_EVENT_GENERATION_HEADER_BYTES,
+            },
+            HeaderTemplateInput::Dynamic {
+                name: "x-registry-delivery-attempt",
+                max_value_bytes: MAX_EVENT_ATTEMPT_HEADER_BYTES,
+            },
+            HeaderTemplateInput::Dynamic {
+                name: "x-registry-delivery-time",
+                max_value_bytes: MAX_EVENT_DELIVERY_TIME_HEADER_BYTES,
+            },
+            HeaderTemplateInput::Dynamic {
+                name: "idempotency-key",
+                max_value_bytes: MAX_EVENT_IDEMPOTENCY_KEY_HEADER_BYTES,
+            },
+            HeaderTemplateInput::Dynamic {
+                name: "x-registry-signature",
+                max_value_bytes: MAX_EVENT_SIGNATURE_HEADER_BYTES,
+            },
+        ];
+        Self::new_with_headers(
+            RequestTemplateKind::EventDelivery,
+            TargetTemplateInput::Fixed(fixed_path),
+            &[],
+            &headers,
+            DestinationAuthorizationTemplate::Forbidden,
+            DestinationBodyTemplate::Required {
+                max_bytes: max_body_bytes,
+            },
+            max_request_bytes,
+        )
+    }
+
+    /// Render caller-owned event metadata and already-canonical JSON bytes.
+    pub fn render_event(
+        &self,
+        headers: EventDeliveryHeaders<'_>,
+        body: Vec<u8>,
+    ) -> Result<EventDestinationRequest, DestinationRequestError> {
+        self.render_event_zeroizing(headers, Zeroizing::new(body))
+    }
+
+    /// Render an event while retaining its body in caller-provided zeroizing storage.
+    pub fn render_event_zeroizing(
+        &self,
+        headers: EventDeliveryHeaders<'_>,
+        body: Zeroizing<Vec<u8>>,
+    ) -> Result<EventDestinationRequest, DestinationRequestError> {
+        self.render_zeroizing(
+            &[],
+            &[
+                headers.id,
+                headers.source,
+                headers.event_type,
+                headers.time,
+                headers.dataschema,
+                headers.generation,
+                headers.attempt,
+                headers.delivery_time,
+                headers.idempotency_key,
+                headers.signature,
+            ],
+            None,
+            Some(body),
         )
     }
 }
@@ -1520,7 +1691,10 @@ impl BoundedDestinationRequestTemplate<DataDestination> {
         {
             return Err(DestinationRequestError::TemplateBoundsExceeded);
         }
-        if method == DestinationMethod::OAuth2ClientCredentialsPost {
+        if matches!(
+            method,
+            DestinationMethod::OAuth2ClientCredentialsPost | DestinationMethod::EventPost
+        ) {
             return Err(DestinationRequestError::MethodSlotMismatch);
         }
         Ok(Self {
@@ -1536,6 +1710,7 @@ impl BoundedDestinationRequestTemplate<DataDestination> {
                     max_bytes: MAX_DESTINATION_REQUEST_BODY_BYTES,
                 },
                 DestinationMethod::OAuth2ClientCredentialsPost => unreachable!(),
+                DestinationMethod::EventPost => unreachable!(),
             },
             max_target_bytes: MAX_DESTINATION_TARGET_BYTES,
             max_request_bytes,
@@ -1767,7 +1942,10 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
         body: DestinationBodyTemplate,
         max_request_bytes: usize,
     ) -> Result<Self, DestinationRequestError> {
-        if method == DestinationMethod::OAuth2ClientCredentialsPost {
+        if matches!(
+            method,
+            DestinationMethod::OAuth2ClientCredentialsPost | DestinationMethod::EventPost
+        ) {
             return Err(DestinationRequestError::MethodSlotMismatch);
         }
         let headers = headers
@@ -1804,7 +1982,10 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
         body: DestinationBodyTemplate,
         max_request_bytes: usize,
     ) -> Result<Self, DestinationRequestError> {
-        if method == DestinationMethod::OAuth2ClientCredentialsPost {
+        if matches!(
+            method,
+            DestinationMethod::OAuth2ClientCredentialsPost | DestinationMethod::EventPost
+        ) {
             return Err(DestinationRequestError::MethodSlotMismatch);
         }
         let headers = headers
@@ -1838,7 +2019,10 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
         body: DestinationBodyTemplate,
         max_request_bytes: usize,
     ) -> Result<Self, DestinationRequestError> {
-        if method == DestinationMethod::OAuth2ClientCredentialsPost {
+        if matches!(
+            method,
+            DestinationMethod::OAuth2ClientCredentialsPost | DestinationMethod::EventPost
+        ) {
             return Err(DestinationRequestError::MethodSlotMismatch);
         }
         let headers = headers
@@ -1870,6 +2054,7 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
             RequestTemplateKind::OAuth2ClientCredentials(format) => {
                 (DestinationMethod::OAuth2ClientCredentialsPost, Some(format))
             }
+            RequestTemplateKind::EventDelivery => (DestinationMethod::EventPost, None),
         };
         let (fixed_path, path_segment_max_bytes) = match target {
             TargetTemplateInput::Fixed(fixed_path) => (fixed_path, None),
@@ -1903,12 +2088,17 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
         {
             return Err(DestinationRequestError::MethodSlotMismatch);
         }
+        if method == DestinationMethod::EventPost
+            && (!query.is_empty() || !closed_event_headers(headers))
+        {
+            return Err(DestinationRequestError::MethodSlotMismatch);
+        }
         let max_body_bytes = body.max_bytes();
         if max_body_bytes > MAX_DESTINATION_REQUEST_BODY_BYTES {
             return Err(DestinationRequestError::BodyTooLarge);
         }
         match method {
-            DestinationMethod::Get if S::CREDENTIAL_EXCHANGE => {
+            DestinationMethod::Get if S::CREDENTIAL_EXCHANGE || S::EVENT_DELIVERY => {
                 return Err(DestinationRequestError::MethodSlotMismatch);
             }
             DestinationMethod::Get if body != DestinationBodyTemplate::Forbidden => {
@@ -1916,6 +2106,14 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
             }
             DestinationMethod::ReviewedReadOnlyPost
                 if S::CREDENTIAL_EXCHANGE
+                    || S::EVENT_DELIVERY
+                    || !matches!(body, DestinationBodyTemplate::Required { max_bytes } if max_bytes > 0) =>
+            {
+                return Err(DestinationRequestError::MethodSlotMismatch);
+            }
+            DestinationMethod::EventPost
+                if !S::EVENT_DELIVERY
+                    || authorization != DestinationAuthorizationTemplate::Forbidden
                     || !matches!(body, DestinationBodyTemplate::Required { max_bytes } if max_bytes > 0) =>
             {
                 return Err(DestinationRequestError::MethodSlotMismatch);
@@ -2134,6 +2332,11 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
         if query_values.len() != self.query.len() || header_values.len() != dynamic_header_count {
             return Err(DestinationRequestError::TemplateValueCountMismatch);
         }
+        if self.method == DestinationMethod::EventPost
+            && header_values.iter().any(|value| value.is_empty())
+        {
+            return Err(DestinationRequestError::InvalidHeaderValue);
+        }
         if self
             .query
             .iter()
@@ -2169,6 +2372,18 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
             (DestinationBodyTemplate::Forbidden, None) => {}
             (DestinationBodyTemplate::Required { .. }, Some(value)) if !value.is_empty() => {}
             _ => return Err(DestinationRequestError::BodyPresenceMismatch),
+        }
+        if self.method == DestinationMethod::EventPost {
+            let event_body = body
+                .as_ref()
+                .ok_or(DestinationRequestError::BodyPresenceMismatch)?;
+            let value = parse_json_strict(event_body)
+                .map_err(|_| DestinationRequestError::InvalidEventBody)?;
+            let canonical =
+                canonicalize_json(&value).map_err(|_| DestinationRequestError::InvalidEventBody)?;
+            if canonical.as_slice() != event_body.as_slice() {
+                return Err(DestinationRequestError::InvalidEventBody);
+            }
         }
 
         let mut target = BoundedTargetWriter::new(self.max_target_bytes);
@@ -2254,6 +2469,62 @@ fn closed_oauth_headers(
         }
     }
     accept && content_type
+}
+
+fn closed_event_headers(headers: &[HeaderTemplateInput<'_>]) -> bool {
+    const EXACT: [(&str, usize, Option<&[u8]>); 13] = [
+        ("accept", 0, Some(b"application/json")),
+        ("content-type", 0, Some(b"application/json")),
+        ("ce-specversion", 0, Some(b"1.0")),
+        ("ce-id", MAX_EVENT_ID_HEADER_BYTES, None),
+        ("ce-source", MAX_EVENT_SOURCE_HEADER_BYTES, None),
+        ("ce-type", MAX_EVENT_TYPE_HEADER_BYTES, None),
+        ("ce-time", MAX_EVENT_TIME_HEADER_BYTES, None),
+        ("ce-dataschema", MAX_EVENT_DATASCHEMA_HEADER_BYTES, None),
+        (
+            "x-registry-event-generation",
+            MAX_EVENT_GENERATION_HEADER_BYTES,
+            None,
+        ),
+        (
+            "x-registry-delivery-attempt",
+            MAX_EVENT_ATTEMPT_HEADER_BYTES,
+            None,
+        ),
+        (
+            "x-registry-delivery-time",
+            MAX_EVENT_DELIVERY_TIME_HEADER_BYTES,
+            None,
+        ),
+        (
+            "idempotency-key",
+            MAX_EVENT_IDEMPOTENCY_KEY_HEADER_BYTES,
+            None,
+        ),
+        (
+            "x-registry-signature",
+            MAX_EVENT_SIGNATURE_HEADER_BYTES,
+            None,
+        ),
+    ];
+    headers.len() == EXACT.len()
+        && headers
+            .iter()
+            .zip(EXACT)
+            .all(|(header, expected)| match (header, expected) {
+                (
+                    HeaderTemplateInput::Exact { name, value },
+                    (expected_name, _, Some(expected_value)),
+                ) => *name == expected_name && *value == expected_value,
+                (
+                    HeaderTemplateInput::Dynamic {
+                        name,
+                        max_value_bytes,
+                    },
+                    (expected_name, expected_max, None),
+                ) => *name == expected_name && *max_value_bytes == expected_max,
+                _ => false,
+            })
 }
 
 struct BoundedTargetWriter {
@@ -2581,6 +2852,8 @@ struct SensitiveHeader {
 pub type DataDestinationRequest = BoundedDestinationRequest<DataDestination>;
 /// Credential-exchange operation request.
 pub type CredentialDestinationRequest = BoundedDestinationRequest<CredentialDestination>;
+/// Event-delivery operation request.
+pub type EventDestinationRequest = BoundedDestinationRequest<EventDestination>;
 
 impl<S: DestinationSlot> fmt::Debug for BoundedDestinationRequest<S> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -2642,7 +2915,8 @@ impl<S: DestinationSlot> BoundedDestinationRequest<S> {
         let method = match self.method {
             DestinationMethod::Get => "GET",
             DestinationMethod::ReviewedReadOnlyPost
-            | DestinationMethod::OAuth2ClientCredentialsPost => "POST",
+            | DestinationMethod::OAuth2ClientCredentialsPost
+            | DestinationMethod::EventPost => "POST",
         };
         let target = std::str::from_utf8(&self.target)
             .expect("bounded destination targets are validated UTF-8");
@@ -2808,6 +3082,8 @@ pub enum DestinationRequestError {
     AuthorizationShapeMismatch,
     #[error("operation body presence does not match the compiled request template")]
     BodyPresenceMismatch,
+    #[error("event request body is not strict canonical JSON")]
+    InvalidEventBody,
 }
 
 /// Value-free resolve, destination-policy, and transport failures.
@@ -2875,6 +3151,8 @@ pub struct BoundedDestinationResponse<S: DestinationSlot> {
 pub type DataDestinationResponse = BoundedDestinationResponse<DataDestination>;
 /// Credential-exchange response.
 pub type CredentialDestinationResponse = BoundedDestinationResponse<CredentialDestination>;
+/// Event-delivery response.
+pub type EventDestinationResponse = BoundedDestinationResponse<EventDestination>;
 
 impl<S: DestinationSlot> fmt::Debug for BoundedDestinationResponse<S> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -3113,6 +3391,8 @@ pub struct BoundedDestinationBody<S: DestinationSlot> {
 pub type DataDestinationBody = BoundedDestinationBody<DataDestination>;
 /// Credential-exchange response bytes.
 pub type CredentialDestinationBody = BoundedDestinationBody<CredentialDestination>;
+/// Event-delivery response bytes.
+pub type EventDestinationBody = BoundedDestinationBody<EventDestination>;
 
 impl<S: DestinationSlot> fmt::Debug for BoundedDestinationBody<S> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -3846,6 +4126,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
+    use axum::extract::OriginalUri;
     use axum::routing::{get, post};
     use axum::Router;
     use proptest::prelude::*;
@@ -3858,6 +4139,8 @@ mod tests {
     use tokio_rustls::TlsAcceptor;
 
     use super::*;
+
+    const MAX_TEST_EVENT_REQUEST_BYTES: usize = 16_384;
 
     fn ip(raw: &str) -> IpAddr {
         raw.parse().expect("test IP parses")
@@ -3880,6 +4163,22 @@ mod tests {
             &cidrs,
         )
         .expect("production policy validates")
+    }
+
+    fn event_headers<'a>() -> EventDeliveryHeaders<'a> {
+        EventDeliveryHeaders {
+            id: b"018f1f47-a922-7e31-8000-000000000001",
+            source: b"urn:registry:example-registry:example-instance",
+            event_type: b"case-approved-v1",
+            time: b"2026-08-30T02:03:04Z",
+            dataschema:
+                b"urn:registry:schema:example-registry:case-approved-v1:sha256:0123456789abcdef",
+            generation: b"42",
+            attempt: b"1",
+            delivery_time: b"2026-08-30T02:03:05Z",
+            idempotency_key: b"delivery-018f1f47-a922-7e31-8000-000000000001",
+            signature: b"v1=caller-owned-signature",
+        }
     }
 
     fn pem(label: &str, der: &[u8]) -> String {
@@ -5861,6 +6160,401 @@ mod tests {
             captured.lock().expect("capture lock").as_deref(),
             Some(expected.as_slice())
         );
+    }
+
+    #[test]
+    fn event_post_is_confined_to_its_closed_slot_and_canonical_shape() {
+        let canonical = br#"{"event":"widget.tombstoned","generation":42}"#;
+        let template = EventDestinationRequestTemplate::event_delivery(
+            "/hooks/registry",
+            256,
+            MAX_TEST_EVENT_REQUEST_BYTES,
+        )
+        .expect("closed event template");
+        let request = template
+            .render_event(event_headers(), canonical.to_vec())
+            .expect("canonical event renders");
+        let diagnostic = format!("{template:?} {request:?} {:?}", event_headers());
+        for canary in [
+            "hooks/registry",
+            "case-approved-v1",
+            "example-instance",
+            "0123456789abcdef",
+            "delivery-018f1f47",
+            "caller-owned-signature",
+            "generation\":42",
+        ] {
+            assert!(!diagnostic.contains(canary));
+        }
+
+        assert_eq!(
+            DataDestinationRequestTemplate::new(
+                DestinationMethod::EventPost,
+                "/hooks/registry",
+                &[],
+                &[],
+                DestinationAuthorizationTemplate::Forbidden,
+                DestinationBodyTemplate::Required { max_bytes: 256 },
+                512,
+            )
+            .unwrap_err(),
+            DestinationRequestError::MethodSlotMismatch
+        );
+        for method in [
+            DestinationMethod::Get,
+            DestinationMethod::ReviewedReadOnlyPost,
+        ] {
+            assert_eq!(
+                EventDestinationRequestTemplate::new(
+                    method,
+                    "/hooks/registry",
+                    &[],
+                    &[],
+                    DestinationAuthorizationTemplate::Forbidden,
+                    if method == DestinationMethod::Get {
+                        DestinationBodyTemplate::Forbidden
+                    } else {
+                        DestinationBodyTemplate::Required { max_bytes: 256 }
+                    },
+                    512,
+                )
+                .unwrap_err(),
+                DestinationRequestError::MethodSlotMismatch
+            );
+        }
+        assert_eq!(
+            EventDestinationRequestTemplate::new(
+                DestinationMethod::OAuth2ClientCredentialsPost,
+                "/oauth/token",
+                &[],
+                &[],
+                DestinationAuthorizationTemplate::Forbidden,
+                DestinationBodyTemplate::Required { max_bytes: 256 },
+                512,
+            )
+            .unwrap_err(),
+            DestinationRequestError::MethodSlotMismatch
+        );
+
+        assert_eq!(
+            template
+                .render_event(event_headers(), br#"{ "generation": 42 }"#.to_vec())
+                .unwrap_err(),
+            DestinationRequestError::InvalidEventBody
+        );
+        let mut unsafe_headers = event_headers();
+        unsafe_headers.signature = b"v1=secret\r\nx-injected: yes";
+        assert_eq!(
+            template
+                .render_event(unsafe_headers, canonical.to_vec())
+                .unwrap_err(),
+            DestinationRequestError::InvalidHeaderValue
+        );
+        let oversized_source = vec![b's'; MAX_EVENT_SOURCE_HEADER_BYTES + 1];
+        let mut oversized_headers = event_headers();
+        oversized_headers.source = &oversized_source;
+        assert_eq!(
+            template
+                .render_event(oversized_headers, canonical.to_vec())
+                .unwrap_err(),
+            DestinationRequestError::TemplateBoundsExceeded
+        );
+        assert_eq!(
+            template
+                .render_event(event_headers(), vec![b'x'; 257])
+                .unwrap_err(),
+            DestinationRequestError::TemplateBoundsExceeded
+        );
+
+        let bad_name = EventDestinationRequestTemplate::new(
+            DestinationMethod::Get,
+            "/hooks/registry",
+            &[],
+            &[("bad header", 16)],
+            DestinationAuthorizationTemplate::Forbidden,
+            DestinationBodyTemplate::Forbidden,
+            512,
+        )
+        .unwrap_err();
+        assert_eq!(bad_name, DestinationRequestError::MethodSlotMismatch);
+
+        let userinfo_canary = "event-userinfo-canary";
+        let error = EventDestinationPolicy::new(
+            "event-destination",
+            &format!("https://{userinfo_canary}:password@example.test/"),
+            DestinationProfile::ProductionHttps,
+            &[],
+        )
+        .unwrap_err();
+        assert_eq!(error, DestinationPolicyError::OriginUserInfoDenied);
+        assert!(!format!("{error:?} {error}").contains(userinfo_canary));
+    }
+
+    #[tokio::test]
+    async fn event_send_preserves_exact_origin_path_body_and_closed_headers() {
+        let captured = Arc::new(Mutex::new(None));
+        let route_captured = Arc::clone(&captured);
+        let app = Router::new().route(
+            "/hooks/registry",
+            post(
+                move |OriginalUri(uri): OriginalUri, headers: HeaderMap, body: Bytes| {
+                    let route_captured = Arc::clone(&route_captured);
+                    async move {
+                        let names = [
+                            "accept",
+                            "content-type",
+                            "ce-specversion",
+                            "ce-id",
+                            "ce-source",
+                            "ce-type",
+                            "ce-time",
+                            "ce-dataschema",
+                            "x-registry-event-generation",
+                            "x-registry-delivery-attempt",
+                            "x-registry-delivery-time",
+                            "idempotency-key",
+                            "x-registry-signature",
+                        ];
+                        let exact = uri
+                            .path_and_query()
+                            .is_some_and(|value| value.as_str() == "/hooks/registry")
+                            && headers
+                                .get(HOST)
+                                .and_then(|value| value.to_str().ok())
+                                .is_some_and(|host| host.starts_with("localhost:"))
+                            && names.iter().all(|name| headers.contains_key(*name))
+                            && headers.get("accept").and_then(|value| value.to_str().ok())
+                                == Some("application/json")
+                            && headers
+                                .get("content-type")
+                                .and_then(|value| value.to_str().ok())
+                                == Some("application/json")
+                            && headers
+                                .get("ce-specversion")
+                                .and_then(|value| value.to_str().ok())
+                                == Some("1.0")
+                            && headers
+                                .get("ce-id")
+                                .and_then(|value| value.to_str().ok())
+                                == Some("018f1f47-a922-7e31-8000-000000000001")
+                            && headers
+                                .get("ce-source")
+                                .and_then(|value| value.to_str().ok())
+                                == Some("urn:registry:example-registry:example-instance")
+                            && headers
+                                .get("ce-type")
+                                .and_then(|value| value.to_str().ok())
+                                == Some("case-approved-v1")
+                            && headers
+                                .get("ce-time")
+                                .and_then(|value| value.to_str().ok())
+                                == Some("2026-08-30T02:03:04Z")
+                            && headers
+                                .get("ce-dataschema")
+                                .and_then(|value| value.to_str().ok())
+                                == Some(
+                                    "urn:registry:schema:example-registry:case-approved-v1:sha256:0123456789abcdef",
+                                )
+                            && headers
+                                .get("x-registry-event-generation")
+                                .and_then(|value| value.to_str().ok())
+                                == Some("42")
+                            && headers
+                                .get("x-registry-delivery-attempt")
+                                .and_then(|value| value.to_str().ok())
+                                == Some("1")
+                            && headers
+                                .get("x-registry-delivery-time")
+                                .and_then(|value| value.to_str().ok())
+                                == Some("2026-08-30T02:03:05Z")
+                            && headers
+                                .get("idempotency-key")
+                                .and_then(|value| value.to_str().ok())
+                                == Some("delivery-018f1f47-a922-7e31-8000-000000000001")
+                            && headers
+                                .get("x-registry-signature")
+                                .and_then(|value| value.to_str().ok())
+                                == Some("v1=caller-owned-signature")
+                            && !headers.contains_key("x-registry-event-id")
+                            && !headers.contains_key("x-registry-event-type")
+                            && !headers.contains_key("x-registry-event-timestamp")
+                            && !headers.contains_key(AUTHORIZATION);
+                        *route_captured.lock().expect("capture lock") =
+                            Some((exact, body.to_vec()));
+                        StatusCode::NO_CONTENT
+                    }
+                },
+            ),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind event test server");
+        let address = listener.local_addr().expect("event test address");
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve event test app");
+        });
+
+        let policy = EventDestinationPolicy::new(
+            "dev-events",
+            &format!("http://localhost:{}/", address.port()),
+            DestinationProfile::LoopbackDevelopmentHttp,
+            &[],
+        )
+        .expect("development event policy");
+        let template = EventDestinationRequestTemplate::event_delivery(
+            "/hooks/registry",
+            1_024,
+            MAX_TEST_EVENT_REQUEST_BYTES,
+        )
+        .expect("closed event template");
+        let expected = br#"{"event":"widget.tombstoned","generation":42}"#;
+        let request = template
+            .render_event(event_headers(), expected.to_vec())
+            .expect("event request renders");
+        let resolver = FakeResolver {
+            answers: vec![address],
+            calls: AtomicUsize::new(0),
+        };
+        let response = policy
+            .send_with_resolver(
+                request,
+                Duration::from_secs(2),
+                &resolver,
+                TransportTrust::System,
+            )
+            .await
+            .expect("event send succeeds");
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert_eq!(resolver.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            captured.lock().expect("capture lock").as_ref(),
+            Some(&(true, expected.to_vec()))
+        );
+    }
+
+    #[test]
+    fn event_destination_rejects_metadata_private_and_substituted_dns_answers() {
+        let policy = EventDestinationPolicy::new(
+            "production-events",
+            "https://events.example.test/",
+            DestinationProfile::ProductionHttps,
+            &[],
+        )
+        .expect("production event policy");
+
+        for (answers, expected) in [
+            (
+                vec![answer("169.254.169.254", 443)],
+                DestinationSendError::CloudMetadataDenied,
+            ),
+            (
+                vec![answer("93.184.216.34", 443), answer("10.0.0.1", 443)],
+                DestinationSendError::PrivateAddressNotAllowed,
+            ),
+            (
+                vec![answer("93.184.216.34", 444)],
+                DestinationSendError::ResolverPortMismatch,
+            ),
+        ] {
+            let answers = ResolvedAnswers::try_collect(answers).expect("bounded DNS answers");
+            assert!(matches!(
+                policy.classify_answers(answers),
+                Err(actual) if actual == expected
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn event_redirect_and_oversized_response_remain_bounded() {
+        let redirected = Arc::new(AtomicUsize::new(0));
+        let route_redirected = Arc::clone(&redirected);
+        let app = Router::new()
+            .route(
+                "/hooks/redirect",
+                post(|| async {
+                    (
+                        StatusCode::FOUND,
+                        [(http::header::LOCATION, "/redirect-target")],
+                    )
+                }),
+            )
+            .route(
+                "/redirect-target",
+                post(move || {
+                    let route_redirected = Arc::clone(&route_redirected);
+                    async move {
+                        route_redirected.fetch_add(1, Ordering::SeqCst);
+                        StatusCode::NO_CONTENT
+                    }
+                }),
+            )
+            .route("/hooks/large", post(|| async { vec![b'x'; 65] }));
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind event bounds server");
+        let address = listener.local_addr().expect("event bounds address");
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve event bounds app");
+        });
+        let policy = EventDestinationPolicy::new(
+            "dev-event-bounds",
+            &format!("http://localhost:{}/", address.port()),
+            DestinationProfile::LoopbackDevelopmentHttp,
+            &[],
+        )
+        .expect("development event policy");
+        let resolver = FakeResolver {
+            answers: vec![address],
+            calls: AtomicUsize::new(0),
+        };
+        let body = br#"{"event":"widget.tombstoned"}"#;
+
+        let redirect_request = EventDestinationRequestTemplate::event_delivery(
+            "/hooks/redirect",
+            256,
+            MAX_TEST_EVENT_REQUEST_BYTES,
+        )
+        .expect("redirect event template")
+        .render_event(event_headers(), body.to_vec())
+        .expect("redirect event request");
+        let redirect_response = policy
+            .send_with_resolver(
+                redirect_request,
+                Duration::from_secs(2),
+                &resolver,
+                TransportTrust::System,
+            )
+            .await
+            .expect("redirect response is returned without following");
+        assert_eq!(redirect_response.status(), StatusCode::FOUND);
+        assert_eq!(redirected.load(Ordering::SeqCst), 0);
+
+        let large_request = EventDestinationRequestTemplate::event_delivery(
+            "/hooks/large",
+            256,
+            MAX_TEST_EVENT_REQUEST_BYTES,
+        )
+        .expect("large-response event template")
+        .render_event(event_headers(), body.to_vec())
+        .expect("large-response event request");
+        let large_response = policy
+            .send_with_resolver(
+                large_request,
+                Duration::from_secs(2),
+                &resolver,
+                TransportTrust::System,
+            )
+            .await
+            .expect("large response headers accepted");
+        assert_eq!(
+            large_response.read_bounded(64).await.unwrap_err(),
+            DestinationResponseError::BodyTooLarge
+        );
+        assert_eq!(resolver.calls.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]

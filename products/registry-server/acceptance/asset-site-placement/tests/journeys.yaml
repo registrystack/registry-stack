@@ -1,0 +1,96 @@
+apiVersion: registry.registrystack.org/server-journeys/v1
+journeys:
+  - id: asset-and-site-caller-surfaces
+    steps:
+      - id: create-asset
+        entity: asset-item
+        accessProfile: asset-operator
+        claims: &asset_operator_claims
+          principal: synthetic-asset-operator
+          purpose: asset-management
+        request:
+          operation: create
+          data:
+            asset-code: ASSET-SYNTH-001
+            label: Synthetic water pump
+            asset-class: equipment
+        expect:
+          outcome: success
+          status: 201
+          fields:
+            asset-code: ASSET-SYNTH-001
+            label: Synthetic water pump
+            asset-class: equipment
+        capture: first-asset
+      - id: planner-gets-asset
+        entity: asset-item
+        accessProfile: site-planner
+        claims: &site_planner_claims
+          principal: synthetic-site-planner
+          purpose: site-planning
+        request: {operation: get, recordRef: first-asset}
+        expect:
+          outcome: success
+          status: 200
+          fields: {asset-code: ASSET-SYNTH-001, label: Synthetic water pump}
+      - id: planner-lists-assets
+        entity: asset-item
+        accessProfile: site-planner
+        claims: *site_planner_claims
+        request: {operation: list}
+        expect: {outcome: success, status: 200, count: 1}
+      - id: operator-renames-asset
+        entity: asset-item
+        accessProfile: asset-operator
+        claims: *asset_operator_claims
+        request:
+          operation: patch
+          recordRef: first-asset
+          etagRef: first-asset
+          changes:
+            - {field: label, value: Synthetic irrigation pump}
+        expect:
+          outcome: success
+          status: 200
+          fields:
+            asset-code: ASSET-SYNTH-001
+            label: Synthetic irrigation pump
+            asset-class: equipment
+        capture: renamed-asset
+      - id: create-site
+        entity: asset-site
+        accessProfile: asset-operator
+        claims: *asset_operator_claims
+        request:
+          operation: create
+          data: {site-code: SITE-SYNTH-001, label: Synthetic northern depot}
+        expect:
+          outcome: success
+          status: 201
+          fields: {site-code: SITE-SYNTH-001, label: Synthetic northern depot}
+        capture: first-site
+      - id: planner-gets-site
+        entity: asset-site
+        accessProfile: site-planner
+        claims: *site_planner_claims
+        request: {operation: get, recordRef: first-site}
+        expect:
+          outcome: success
+          status: 200
+          fields: {site-code: SITE-SYNTH-001, label: Synthetic northern depot}
+      - id: planner-lists-sites
+        entity: asset-site
+        accessProfile: site-planner
+        claims: *site_planner_claims
+        request: {operation: list}
+        expect: {outcome: success, status: 200, count: 1}
+      - id: planner-without-purpose-is-concealed
+        entity: asset-item
+        accessProfile: site-planner
+        claims:
+          principal: synthetic-site-planner
+        request: {operation: get, recordRef: renamed-asset}
+        expect:
+          outcome: refusal
+          status: 404
+          problemCode: resource.not_found
