@@ -458,7 +458,10 @@ provision_adopter_database() {
     -c "GRANT CONNECT ON DATABASE \"$database\" TO \"$adopter_migration_role\", \"$adopter_runtime_role\", \"$adopter_author_role\";" \
     -c "CREATE SCHEMA registry_internal AUTHORIZATION \"$adopter_migration_role\";" \
     -c "CREATE SCHEMA registry_data AUTHORIZATION \"$adopter_migration_role\";" \
-    -c "REVOKE ALL ON SCHEMA registry_internal, registry_data FROM PUBLIC;" >/dev/null
+    -c "CREATE SCHEMA registry_source AUTHORIZATION \"$adopter_migration_role\";" \
+    -c "CREATE SCHEMA registry_derived AUTHORIZATION \"$adopter_migration_role\";" \
+    -c "CREATE SCHEMA registry_context AUTHORIZATION \"$adopter_migration_role\";" \
+    -c "REVOKE ALL ON SCHEMA registry_internal, registry_data, registry_source, registry_derived, registry_context FROM PUBLIC;" >/dev/null
 }
 
 select_free_listener() {
@@ -707,7 +710,7 @@ server_pid=$!
 wait_ready_status "${server_url}ready" 200
 
 cat >"$temporary_root/assets-create.jsonl" <<'EOF'
-{"operation":"create","data":{"asset-code":"ASSET-PUBLIC-001","label":"Synthetic public workflow asset","asset-class":"equipment"}}
+{"operation":"create","data":{"assetCode":"ASSET-PUBLIC-001","label":"Synthetic public workflow asset","assetClass":"equipment"}}
 EOF
 run_json "$temporary_root/data-validate-v1.json" data validate \
   --package "$temporary_root/build-v1/package" \
@@ -734,7 +737,7 @@ import json
 import sys
 document = json.load(open(sys.argv[1], encoding="utf-8"))
 items = document.get("items", [])
-if not any(item.get("data", {}).get("asset-code") == "ASSET-PUBLIC-001" for item in items):
+if not any(item.get("data", {}).get("assetCode") == "ASSET-PUBLIC-001" for item in items):
     raise SystemExit("authorized public data read did not include the created record")
 PY
 
@@ -745,7 +748,7 @@ from pathlib import Path
 path = Path(sys.argv[1])
 source = path.read_text(encoding="utf-8")
 source = source.replace("  sequence: 1\n", "  sequence: 2\n", 1)
-needle = "      - {id: label, type: string, required: true, maxLength: 200, classification: internal}\n"
+needle = "      - {id: asset-class, type: vocabulary-code, vocabulary: asset-classification, required: true, classification: internal}\n"
 replacement = needle + "      - {id: placement-review-note, type: string, required: false, maxLength: 120, classification: restricted}\n"
 if needle not in source:
     raise SystemExit("asset item field insertion point was not found")
@@ -909,10 +912,10 @@ python3 - "$temporary_root/assets-list-v2.json" <<'PY'
 import json
 import sys
 document = json.load(open(sys.argv[1], encoding="utf-8"))
-matching = [item for item in document.get("items", []) if item.get("data", {}).get("asset-code") == "ASSET-PUBLIC-001"]
+matching = [item for item in document.get("items", []) if item.get("data", {}).get("assetCode") == "ASSET-PUBLIC-001"]
 if not matching:
     raise SystemExit("created record did not survive successor activation")
-if any("placement-review-note" in item.get("data", {}) for item in matching):
+if any("placementReviewNote" in item.get("data", {}) for item in matching):
     raise SystemExit("restricted successor field was disclosed")
 PY
 
