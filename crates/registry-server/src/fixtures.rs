@@ -29,7 +29,7 @@ use crate::api::{VerifiedClaimValue, VerifiedRequestClaims};
 use crate::auth::RegistryAuthenticator;
 use crate::compiler::{compile_project_with_assets, module_digest_with_assets, CompileProfile};
 use crate::contract::{parse_module_yaml, parse_project_yaml, ModuleAssetSource};
-use crate::contract::{AccessProfileSource, Operation};
+use crate::contract::{AccessProfileSource, LookupValueOrigin, Operation};
 use crate::derived_sql::MAX_DERIVED_SQL_BYTES;
 use crate::model::CompiledRoute;
 use crate::model::{CompiledRegistry, HttpMethod};
@@ -60,7 +60,7 @@ const MAX_SOURCE_BYTES: usize = 1024 * 1024;
 const MAX_IDENTIFIER_BYTES: usize = 64;
 const MAX_BINDING_BYTES: usize = 256;
 const MAX_BEARER_TOKEN_BYTES: usize = 32 * 1024;
-const MIN_SUPPORTED_POSTGRES_MAJOR: u16 = 13;
+const MIN_SUPPORTED_POSTGRES_MAJOR: u16 = 15;
 const MAX_SUPPORTED_POSTGRES_MAJOR: u16 = 18;
 
 type CredentialMap = BTreeMap<(String, String), Option<Zeroizing<String>>>;
@@ -161,10 +161,12 @@ enum ActionSource {
     },
     Lookup {
         selector: String,
-        value: Value,
+        #[serde(default)]
+        values: Map<String, Value>,
     },
     ReadPath {
         path: String,
+        record_ref: String,
         #[serde(default)]
         select: BTreeSet<String>,
         #[serde(default)]
@@ -192,6 +194,19 @@ impl ActionSource {
             Self::Patch { .. } => Operation::Patch,
             Self::Batch { .. } => Operation::Batch,
         }
+    }
+
+    fn route_id(&self, entity_id: &str) -> String {
+        let suffix = match self {
+            Self::Create { .. } => "create".to_owned(),
+            Self::Get { .. } => "get".to_owned(),
+            Self::List | Self::Query { .. } => "list".to_owned(),
+            Self::Lookup { .. } => "lookup".to_owned(),
+            Self::ReadPath { path, .. } => format!("path.{path}"),
+            Self::Patch { .. } => "patch".to_owned(),
+            Self::Batch { .. } => "batch".to_owned(),
+        };
+        format!("records.{entity_id}.{suffix}")
     }
 }
 
@@ -296,6 +311,7 @@ struct ValidatedStep {
     claims: ClaimsSource,
     route: CompiledRoute,
     profile: AccessProfileSource,
+    response_readable_fields: BTreeSet<String>,
     action: ActionSource,
     expect: ExpectationSource,
     capture: Option<String>,
@@ -371,15 +387,19 @@ pub fn validate_fixture_journeys(
                 .get(&step.access_profile)
                 .ok_or(FixtureError::LogicalReferenceRefused)?;
             let operation = step.request.operation();
-            if !profile.operations.contains(&operation) {
+            if !matches!(step.request, ActionSource::ReadPath { .. })
+                && !profile.operations.contains(&operation)
+            {
                 return Err(FixtureError::LogicalReferenceRefused);
             }
+            let expected_route_id = step.request.route_id(&step.entity);
             let route = registry
                 .routes()
                 .routes
                 .iter()
                 .find(|route| {
                     route.entity_id == step.entity
+                        && route.id == expected_route_id
                         && route.operation == operation
                         && route.method == operation_method(operation)
                         && route.access_profiles.contains(&step.access_profile)
@@ -387,8 +407,17 @@ pub fn validate_fixture_journeys(
                 .cloned()
                 .ok_or(FixtureError::LogicalReferenceRefused)?;
             validate_claims(&step.claims, profile, step.expect.outcome)?;
-            validate_action_fields(&step.request, entity, profile)?;
+            validate_action_fields(&step.request, registry, entity, profile)?;
             validate_expectation(&step.expect, operation, profile, capture.is_some())?;
+            let response_readable_fields = match &step.request {
+                ActionSource::ReadPath { path, .. } => profile
+                    .read_paths
+                    .iter()
+                    .find(|grant| grant.path == *path)
+                    .map(|grant| grant.readable_fields.clone())
+                    .ok_or(FixtureError::LogicalReferenceRefused)?,
+                _ => profile.readable_fields.clone(),
+            };
             steps.push(ValidatedStep {
                 id: step.id,
                 entity: step.entity,
@@ -396,6 +425,7 @@ pub fn validate_fixture_journeys(
                 claims: step.claims,
                 route,
                 profile: profile.clone(),
+                response_readable_fields,
                 action: step.request,
                 expect: step.expect,
                 capture,
@@ -420,6 +450,7 @@ fn validate_action_references(
 ) -> Result<(), FixtureError> {
     let references: &[&str] = match action {
         ActionSource::Get { record_ref } => &[record_ref],
+        ActionSource::ReadPath { record_ref, .. } => &[record_ref],
         ActionSource::Patch {
             record_ref,
             etag_ref,
@@ -429,7 +460,6 @@ fn validate_action_references(
         | ActionSource::List
         | ActionSource::Query { .. }
         | ActionSource::Lookup { .. }
-        | ActionSource::ReadPath { .. }
         | ActionSource::Batch { .. } => &[],
     };
     if references
@@ -497,6 +527,7 @@ fn validate_claims(
 
 fn validate_action_fields(
     action: &ActionSource,
+    registry: &CompiledRegistry,
     entity: &crate::model::CompiledEntity,
     profile: &AccessProfileSource,
 ) -> Result<(), FixtureError> {
@@ -515,17 +546,28 @@ fn validate_action_fields(
         ActionSource::Create { data } => validate_data(data),
         ActionSource::Get { .. } | ActionSource::List => Ok(()),
         ActionSource::Query { select, top, count } => {
-            validate_structured_query(entity, profile, None, select, *top, *count)
+            validate_structured_query(registry, entity, profile, None, select, *top, *count)
         }
-        ActionSource::Lookup { selector, value } => {
+        ActionSource::Lookup { selector, values } => {
+            let selector_profile = entity
+                .selector_profiles
+                .get(selector)
+                .ok_or(FixtureError::LogicalReferenceRefused)?;
+            let lookup = profile
+                .lookups
+                .iter()
+                .find(|lookup| lookup.selector == *selector)
+                .ok_or(FixtureError::LogicalReferenceRefused)?;
+            let exact_fields = selector_profile.fields.iter().collect::<BTreeSet<_>>();
+            let supplied_fields = values.keys().collect::<BTreeSet<_>>();
+            let origin_shape_is_valid = match lookup.value_origin {
+                LookupValueOrigin::Request => supplied_fields == exact_fields,
+                LookupValueOrigin::VerifiedClaim => values.is_empty(),
+            };
             if selector.is_empty()
                 || selector.len() > MAX_IDENTIFIER_BYTES
-                || !entity.selector_profiles.contains_key(selector)
-                || !profile
-                    .lookups
-                    .iter()
-                    .any(|lookup| lookup.selector == *selector)
-                || canonical_size(value)? > MAX_BINDING_BYTES
+                || !origin_shape_is_valid
+                || canonical_size(&Value::Object(values.clone()))? > MAX_BODY_BYTES
             {
                 return Err(FixtureError::LogicalReferenceRefused);
             }
@@ -536,7 +578,8 @@ fn validate_action_fields(
             select,
             top,
             count,
-        } => validate_structured_query(entity, profile, Some(path), select, *top, *count),
+            ..
+        } => validate_structured_query(registry, entity, profile, Some(path), select, *top, *count),
         ActionSource::Patch { changes, .. } => {
             if changes.is_empty() || changes.len() > entity.fields.len() {
                 return Err(FixtureError::JourneyBoundsRefused);
@@ -595,6 +638,7 @@ fn validate_action_fields(
 }
 
 fn validate_structured_query(
+    registry: &CompiledRegistry,
     entity: &crate::model::CompiledEntity,
     profile: &AccessProfileSource,
     read_path: Option<&str>,
@@ -602,28 +646,48 @@ fn validate_structured_query(
     top: Option<u16>,
     count: bool,
 ) -> Result<(), FixtureError> {
-    if top.is_some_and(|top| top == 0 || top > 100) || (count && !profile.allow_count) {
+    if top.is_some_and(|top| top == 0 || top > 100) {
         return Err(FixtureError::JourneyBoundsRefused);
     }
-    if select
-        .iter()
-        .any(|field| !profile.readable_fields.contains(field) || !entity.fields.contains_key(field))
-    {
-        return Err(FixtureError::LogicalReferenceRefused);
-    }
     if let Some(path) = read_path {
+        let compiled_path = entity
+            .read_paths
+            .get(path)
+            .ok_or(FixtureError::LogicalReferenceRefused)?;
+        let grant = profile
+            .read_paths
+            .iter()
+            .find(|grant| grant.path == path)
+            .ok_or(FixtureError::LogicalReferenceRefused)?;
+        let target = registry
+            .entities()
+            .get(&compiled_path.to)
+            .ok_or(FixtureError::LogicalReferenceRefused)?;
         if path.is_empty()
             || path.len() > MAX_IDENTIFIER_BYTES
-            || !entity.read_paths.contains_key(path)
-            || !profile
-                .read_paths
+            || (count && !grant.allow_count)
+            || !select.is_subset(&grant.readable_fields)
+            || select
                 .iter()
-                .any(|grant| grant.path == path && select.is_subset(&grant.readable_fields))
+                .any(|field| !compiled_field_exists(target, field))
         {
             return Err(FixtureError::LogicalReferenceRefused);
         }
+    } else if (count && !profile.allow_count)
+        || select.iter().any(|field| {
+            field != "id"
+                && field != "revision"
+                && (!profile.readable_fields.contains(field)
+                    || !compiled_field_exists(entity, field))
+        })
+    {
+        return Err(FixtureError::LogicalReferenceRefused);
     }
     Ok(())
+}
+
+fn compiled_field_exists(entity: &crate::model::CompiledEntity, field: &str) -> bool {
+    entity.fields.contains_key(field) || entity.derived_fields.contains_key(field)
 }
 
 fn validate_expectation(
@@ -1411,13 +1475,27 @@ fn fixture_request(
         ActionSource::Query { select, top, count } => {
             extra_query_options = fixture_query_options(step, None, select, *top, *count)?;
         }
-        ActionSource::Lookup { .. } => return Err(FixtureError::ExecutionRefused),
+        ActionSource::Lookup { selector, values } => {
+            method = Method::POST;
+            let document = if values.is_empty() {
+                json!({"selector": selector})
+            } else {
+                json!({"selector": selector, "values": values})
+            };
+            body = json_body(&document)?;
+            content_type = Some("application/json");
+        }
         ActionSource::ReadPath {
             path: read_path,
+            record_ref,
             select,
             top,
             count,
         } => {
+            let observed = observations
+                .get(record_ref)
+                .ok_or(FixtureError::RequestConstructionRefused)?;
+            path = path.replace("{record_id}", &observed.record_id);
             extra_query_options =
                 fixture_query_options(step, Some(read_path), select, *top, *count)?;
         }
@@ -1509,7 +1587,7 @@ fn fixture_request(
 
 fn fixture_query_options(
     step: &ValidatedStep,
-    read_path: Option<&str>,
+    _read_path: Option<&str>,
     select: &BTreeSet<String>,
     top: Option<u16>,
     count: bool,
@@ -1526,9 +1604,6 @@ fn fixture_query_options(
     }
     if count {
         parameters.push(("$count", "true".to_owned()));
-    }
-    if let Some(read_path) = read_path {
-        parameters.push(("readPath", read_path.to_owned()));
     }
     if step.access_profile.is_empty() {
         return Err(FixtureError::RequestConstructionRefused);
@@ -1652,28 +1727,44 @@ fn assert_response(
         }
         ExpectedOutcome::Success => match step.action {
             ActionSource::List | ActionSource::Query { .. } | ActionSource::ReadPath { .. } => {
-                let object = exact_object(document, &["items", "pageInfo"])?;
+                let include_count = matches!(
+                    step.action,
+                    ActionSource::Query { count: true, .. }
+                        | ActionSource::ReadPath { count: true, .. }
+                );
+                let expected_keys: &[&str] = if include_count {
+                    &["items", "pageInfo", "count"]
+                } else {
+                    &["items", "pageInfo"]
+                };
+                let object = exact_object(document, expected_keys)?;
                 let items = object
                     .get("items")
                     .and_then(Value::as_array)
                     .ok_or(FixtureError::ResponseShapeRefused)?;
-                let page_info = exact_object(
-                    object
-                        .get("pageInfo")
-                        .ok_or(FixtureError::ResponseShapeRefused)?,
-                    &["nextCursor"],
-                )?;
-                if !page_info.get("nextCursor").is_some_and(|cursor| {
-                    cursor.is_null()
-                        || cursor.as_str().is_some_and(|value| {
-                            !value.is_empty() && value.len() <= MAX_BINDING_BYTES
-                        })
-                }) || Some(items.len()) != step.expect.count
+                let page_info = object
+                    .get("pageInfo")
+                    .and_then(Value::as_object)
+                    .ok_or(FixtureError::ResponseShapeRefused)?;
+                if page_info.len() != 1
+                    || !page_info.get("nextCursor").is_some_and(|cursor| {
+                        cursor.is_null()
+                            || cursor.as_str().is_some_and(|value| {
+                                !value.is_empty() && value.len() <= MAX_BINDING_BYTES
+                            })
+                    })
+                    || Some(items.len()) != step.expect.count
+                    || (include_count
+                        && object.get("count").and_then(Value::as_u64)
+                            != step
+                                .expect
+                                .count
+                                .and_then(|count| u64::try_from(count).ok()))
                 {
                     return Err(FixtureError::ExpectationMismatch);
                 }
                 for item in items {
-                    assert_record_shape(item, &step.profile.readable_fields, &Map::new())?;
+                    assert_record_shape(item, &step.response_readable_fields, &Map::new())?;
                 }
             }
             ActionSource::Batch { .. } => {
@@ -1700,14 +1791,18 @@ fn assert_response(
                     {
                         return Err(FixtureError::ResponseShapeRefused);
                     }
-                    assert_record_members(object, &step.profile.readable_fields, &Map::new())?;
+                    assert_record_members(object, &step.response_readable_fields, &Map::new())?;
                 }
             }
             ActionSource::Create { .. }
             | ActionSource::Get { .. }
             | ActionSource::Lookup { .. }
             | ActionSource::Patch { .. } => {
-                assert_record_shape(document, &step.profile.readable_fields, &step.expect.fields)?;
+                assert_record_shape(
+                    document,
+                    &step.response_readable_fields,
+                    &step.expect.fields,
+                )?;
             }
         },
     }
@@ -1772,7 +1867,7 @@ fn assert_record_members(
 fn problem_contract(status: u16, code: Option<&str>) -> Option<(&'static str, &'static str)> {
     match (status, code?) {
         (400, "query.invalid") => Some(("Bad Request", "The query request is invalid.")),
-        (400, "request.invalid") => Some(("Bad Request", "The mutation request is invalid.")),
+        (400, "request.invalid") => Some(("Bad Request", "The request is invalid.")),
         (404, "resource.not_found") => Some(("Not Found", "The requested resource was not found.")),
         (409, "mutation.conflict") => {
             Some(("Conflict", "The mutation conflicts with current state."))
@@ -2603,10 +2698,8 @@ fn valid_stable_id(value: &str) -> bool {
 
 fn operation_method(operation: Operation) -> HttpMethod {
     match operation {
-        Operation::Create | Operation::Batch => HttpMethod::Post,
-        Operation::Get | Operation::List | Operation::Lookup | Operation::Revisions => {
-            HttpMethod::Get
-        }
+        Operation::Create | Operation::Lookup | Operation::Batch => HttpMethod::Post,
+        Operation::Get | Operation::List | Operation::Revisions => HttpMethod::Get,
         Operation::Patch => HttpMethod::Patch,
         Operation::Tombstone => HttpMethod::Delete,
     }

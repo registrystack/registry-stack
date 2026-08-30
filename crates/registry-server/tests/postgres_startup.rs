@@ -269,6 +269,32 @@ async fn live_old_server_drains_apply_and_exact_successor_restart_becomes_ready(
         ))
         .await
         .expect("successor rehearsal installs the compiled runtime ACL");
+    for view in &verified_provisional_successor.registry().ddl().views {
+        let schema = quote(&view.schema);
+        let name = quote(&view.name);
+        transaction
+            .batch_execute(&format!(
+                "REVOKE ALL ON TABLE {schema}.{name} FROM PUBLIC, \"{}\";",
+                database.runtime_role.as_str()
+            ))
+            .await
+            .expect("successor rehearsal revokes compiled view privileges");
+        if !view.runtime_privileges.is_empty() {
+            let privileges = view
+                .runtime_privileges
+                .iter()
+                .map(|privilege| privilege.as_sql())
+                .collect::<Vec<_>>()
+                .join(", ");
+            transaction
+                .batch_execute(&format!(
+                    "GRANT {privileges} ON TABLE {schema}.{name} TO \"{}\";",
+                    database.runtime_role.as_str()
+                ))
+                .await
+                .expect("successor rehearsal grants compiled view privileges");
+        }
+    }
     let successor_fingerprint = managed_schema_fingerprint(
         &transaction,
         &database.runtime_role,

@@ -20,9 +20,7 @@ use crate::contract::{
     RegistryProject,
 };
 use crate::derived_sql::MAX_DERIVED_SQL_BYTES;
-use crate::generated_ddl::{
-    add_column_statement, generate_ddl, quote_identifier, DdlStatement, DdlStatementKind,
-};
+use crate::generated_ddl::{add_column_statement, DdlStatement, DdlStatementKind};
 #[cfg(feature = "tooling")]
 use crate::migration_plan::{
     prepare_reviewed_migration_plan, validate_reviewed_migration_plan,
@@ -43,7 +41,6 @@ pub const TRUST_ANCHOR_API_VERSION: &str = "registry.registrystack.org/package-t
 pub const COMPILER_ID: &str = "registry-server";
 pub const FIXTURE_JOURNEYS_PATH: &str = "tests/journeys.yaml";
 pub const MAX_PACKAGE_SOURCE_FILE_BYTES: u64 = 16 * 1024 * 1024;
-pub(crate) const REVIEWED_VIEW_TRANSITION_STATEMENT_ID_PREFIX: &str = "reviewed-view-transition.";
 
 const MANIFEST_PATH: &str = "package.json";
 const MAX_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
@@ -1587,12 +1584,33 @@ fn reviewed_successor_migration_plan(
         &change_set.from_revision,
         additive_changes,
     );
+    let refresh_views = additive
+        .statements
+        .iter()
+        .any(|statement| statement.kind == DdlStatementKind::View)
+        || change_set.changes.iter().any(|change| {
+            matches!(
+                change.code,
+                CompiledRegistryChangeCode::EntityRemoved
+                    | CompiledRegistryChangeCode::FieldAddedRequired
+                    | CompiledRegistryChangeCode::FieldRemoved
+                    | CompiledRegistryChangeCode::FieldTypeChanged
+                    | CompiledRegistryChangeCode::FieldPhysicalNameChanged
+                    | CompiledRegistryChangeCode::DerivedRelationRemoved
+                    | CompiledRegistryChangeCode::DerivedRelationChanged
+            )
+        });
     let mut statements = additive.statements;
-    let (view_transition, transitioned_view_ids) =
-        reviewed_view_transition_statements(baseline, candidate, &change_set.changes);
-    if !view_transition.is_empty() {
-        statements.retain(|statement| !transitioned_view_ids.contains(&statement.id));
-        statements.extend(view_transition);
+    if refresh_views {
+        statements.retain(|statement| statement.kind != DdlStatementKind::View);
+        statements.extend(
+            candidate
+                .ddl()
+                .statements
+                .iter()
+                .filter(|statement| statement.kind == DdlStatementKind::View)
+                .cloned(),
+        );
     }
     Ok(MigrationPlan {
         from_revision: Some(change_set.from_revision.clone()),
@@ -1602,127 +1620,6 @@ fn reviewed_successor_migration_plan(
         reviewed_descriptors: descriptor_paths,
         prior_schema_fingerprint: Some(prior_schema_fingerprint),
     })
-}
-
-/// Compiler-owned views must stop depending on base columns before reviewed
-/// destructive SQL can change those columns. `RESTRICT` deliberately refuses
-/// an upgrade when an operator-owned object still depends on a managed view.
-fn reviewed_view_transition_statements(
-    baseline: &CompiledRegistryMigrationBaseline,
-    candidate: &CompiledRegistry,
-    changes: &[CompiledRegistryChange],
-) -> (Vec<DdlStatement>, BTreeSet<String>) {
-    let prior = generate_ddl(&baseline.entities, &baseline.physical_names);
-    let candidate_view_statements = candidate
-        .ddl()
-        .statements
-        .iter()
-        .filter(|statement| statement.kind == DdlStatementKind::View)
-        .map(|statement| (statement.id.as_str(), statement))
-        .collect::<BTreeMap<_, _>>();
-    let source_view_ids = changes
-        .iter()
-        .filter(|change| {
-            matches!(
-                change.code,
-                CompiledRegistryChangeCode::EntityRemoved
-                    | CompiledRegistryChangeCode::FieldRemoved
-            )
-        })
-        .filter_map(|change| {
-            change
-                .target
-                .entity_id
-                .as_ref()
-                .map(|entity_id| format!("entity.{entity_id}.source-view"))
-        })
-        .collect::<BTreeSet<_>>();
-
-    let mut derived_view_ids = changes
-        .iter()
-        .filter(|change| {
-            change.class != CompiledRegistryChangeClass::CompatibleAdditive
-                && matches!(
-                    change.code,
-                    CompiledRegistryChangeCode::DerivedRelationChanged
-                        | CompiledRegistryChangeCode::DerivedRelationRemoved
-                )
-        })
-        .filter_map(|change| {
-            Some(format!(
-                "entity.{}.derived.{}.view",
-                change.target.entity_id.as_ref()?,
-                change.target.member_id.as_ref()?
-            ))
-        })
-        .collect::<BTreeSet<_>>();
-    if !source_view_ids.is_empty() {
-        derived_view_ids.extend(
-            prior
-                .statements
-                .iter()
-                .filter(|statement| statement.kind == DdlStatementKind::View)
-                .map(|statement| statement.id.as_str())
-                .chain(candidate_view_statements.keys().copied())
-                .filter(|id| id.contains(".derived.") && id.ends_with(".view"))
-                .map(str::to_owned),
-        );
-    }
-
-    let transitioned_view_ids = source_view_ids
-        .iter()
-        .chain(&derived_view_ids)
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    if transitioned_view_ids.is_empty() {
-        return (Vec::new(), transitioned_view_ids);
-    }
-
-    let mut statements = Vec::new();
-    for schema in ["registry_derived", "registry_source"] {
-        statements.extend(
-            prior
-                .views
-                .iter()
-                .filter(|view| view.schema == schema)
-                .filter(|view| transitioned_view_ids.contains(&view_statement_id(view)))
-                .map(|view| DdlStatement {
-                    id: format!(
-                        "{REVIEWED_VIEW_TRANSITION_STATEMENT_ID_PREFIX}drop.{}",
-                        view.id
-                    ),
-                    kind: DdlStatementKind::View,
-                    sql: format!(
-                        "DROP VIEW IF EXISTS {}.{} RESTRICT",
-                        quote_identifier(&view.schema),
-                        quote_identifier(&view.name)
-                    ),
-                }),
-        );
-    }
-    for schema in ["registry_source", "registry_derived"] {
-        statements.extend(candidate_view_statements.values().filter_map(|statement| {
-            let prefix = format!("CREATE VIEW {schema}.");
-            (transitioned_view_ids.contains(&statement.id) && statement.sql.starts_with(&prefix))
-                .then(|| DdlStatement {
-                    id: format!(
-                        "{REVIEWED_VIEW_TRANSITION_STATEMENT_ID_PREFIX}create.{}",
-                        statement.id
-                    ),
-                    kind: statement.kind,
-                    sql: statement.sql.clone(),
-                })
-        }));
-    }
-    (statements, transitioned_view_ids)
-}
-
-fn view_statement_id(view: &crate::generated_ddl::DdlView) -> String {
-    match view.schema.as_str() {
-        "registry_source" => format!("{}-view", view.id),
-        "registry_derived" => format!("{}.view", view.id),
-        _ => view.id.clone(),
-    }
 }
 
 fn table_statement_entity_id(statement_id: &str) -> Option<&str> {

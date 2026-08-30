@@ -16,9 +16,7 @@ use crate::event_destination::EventDestinationCompatibilityInventory;
 use crate::migration_plan::{
     ExternalBackupBinding, ReviewedMigrationStepDescriptor, ValidatedReviewedMigrationPlan,
 };
-use crate::package::{
-    PackageFileRole, VerifiedPackage, REVIEWED_VIEW_TRANSITION_STATEMENT_ID_PREFIX,
-};
+use crate::package::{PackageFileRole, VerifiedPackage};
 use crate::postgres::{
     statement_checksum, ConnectionConfig, ExpectedManagedCatalog, ExpectedRegistryIdentity,
     MigrationArtifactBinding, MigrationLedgerEntry, MigrationLedgerStep, MigrationLedgerStepKind,
@@ -278,14 +276,16 @@ pub async fn apply_verified_package(
         .statements
         .iter()
         .zip(&compiler_checksums)
-        .map(|(statement, checksum)| PackageDdlStatement {
-            sql: &statement.sql,
-            checksum,
-            reapply_on_resume: statement
-                .id
-                .starts_with(REVIEWED_VIEW_TRANSITION_STATEMENT_ID_PREFIX),
+        .enumerate()
+        .map(|(ordinal, (statement, checksum))| {
+            Ok(PackageDdlStatement {
+                sql: &statement.sql,
+                checksum,
+                kind: statement.kind,
+                ordinal: i32::try_from(ordinal).map_err(|_| MigrationError::PackageBinding)?,
+            })
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>>>()?;
 
     // Threat: a path-only backup check could be swapped between validation
     // and the maintenance transition. The library opens with NOFOLLOW, checks

@@ -106,13 +106,30 @@ fn no_wildcard(node: &PgNodeWrapper) -> bool {
 }
 
 fn valid_ast(parsed: &pg_query::ParseResult, known_relations: &BTreeSet<&str>) -> bool {
+    let mut cte_names = BTreeSet::new();
+    for (node, _, _, _) in parsed.protobuf.nodes() {
+        if let NodeRef::CommonTableExpr(cte) = node {
+            if cte.ctename.is_empty()
+                || cte.cterecursive
+                || cte.search_clause.is_some()
+                || cte.cycle_clause.is_some()
+                || !cte_names.insert(cte.ctename.as_str())
+            {
+                return false;
+            }
+        }
+    }
     let mut statement_nodes = 0_usize;
     for (node, _, _, _) in parsed.protobuf.nodes() {
         match node {
             NodeRef::RangeVar(range) => {
-                if !range.catalogname.is_empty()
-                    || range.schemaname != "registry_source"
-                    || !known_relations.contains(range.relname.as_str())
+                let source_relation = range.catalogname.is_empty()
+                    && range.schemaname == "registry_source"
+                    && known_relations.contains(range.relname.as_str());
+                let cte_relation = range.catalogname.is_empty()
+                    && range.schemaname.is_empty()
+                    && cte_names.contains(range.relname.as_str());
+                if (!source_relation && !cte_relation)
                     || (!range.relpersistence.is_empty() && range.relpersistence != "p")
                 {
                     return false;

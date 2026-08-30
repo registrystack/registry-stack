@@ -527,7 +527,10 @@ impl QueryBuilder {
         match key {
             "accessProfile" => {
                 ensure_absent(self.access_profile.is_none())?;
-                self.access_profile = Some(ApiIdentifier::parse(value)?.0);
+                if !valid_config_identifier(value) {
+                    return Err(QueryParseError::InvalidValue);
+                }
+                self.access_profile = Some(value.to_owned());
             }
             "asOf" => {
                 ensure_absent(self.as_of.is_none())?;
@@ -681,7 +684,7 @@ fn parse_opaque_value(value: &str) -> Result<String, QueryParseError> {
     Ok(value.to_owned())
 }
 
-fn valid_identifier(value: &str) -> bool {
+fn valid_config_identifier(value: &str) -> bool {
     let mut bytes = value.bytes();
     let Some(first) = bytes.next() else {
         return false;
@@ -689,10 +692,18 @@ fn valid_identifier(value: &str) -> bool {
     value.len() <= MAX_IDENTIFIER_BYTES
         && (first.is_ascii_lowercase() || first == b'_')
         && bytes.all(|byte| {
-            byte.is_ascii_alphabetic()
-                || byte.is_ascii_digit()
-                || matches!(byte, b'-' | b'_' | b'.')
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_' | b'.')
         })
+}
+
+fn valid_identifier(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+    value.len() <= MAX_IDENTIFIER_BYTES
+        && (first.is_ascii_lowercase() || first == b'_')
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
 fn push_optional_atom(output: &mut String, name: &str, value: Option<&str>) {
@@ -1233,6 +1244,11 @@ mod tests {
             parse([("$select", "householdCode,householdCode")]),
             Err(QueryParseError::DuplicateOption)
         );
+        assert_eq!(
+            parse([("accessProfile", "caseWorker")]),
+            Err(QueryParseError::InvalidValue),
+            "config identifiers retain their lowercase-only grammar"
+        );
     }
 
     #[test]
@@ -1322,6 +1338,8 @@ mod tests {
 
     #[test]
     fn select_is_bounded_and_duplicate_free() {
+        let camel = parse([("$select", "childUnder5Count")]).expect("lower camel API name parses");
+        assert!(camel.canonical().contains("id(16:childUnder5Count)"));
         assert_eq!(
             parse([("$select", "case-code,case-code")]),
             Err(QueryParseError::DuplicateOption)
@@ -1369,6 +1387,10 @@ mod tests {
         ] {
             assert_eq!(parsed_canonical(&filter(source)), canonical);
         }
+        assert_eq!(
+            parsed_canonical(&filter("childUnder5Count gt 0")),
+            "gt(id(16:childUnder5Count),int(1:0))"
+        );
     }
 
     #[test]

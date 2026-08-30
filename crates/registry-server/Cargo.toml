@@ -100,6 +100,11 @@ path = "tests/fixture_tooling.rs"
 required-features = ["runtime", "tooling"]
 
 [[test]]
+name = "pilot_acceptance_fixtures"
+path = "tests/pilot_acceptance_fixtures.rs"
+required-features = ["runtime", "tooling"]
+
+[[test]]
 name = "postgres_fixture_journeys"
 path = "tests/postgres_fixture_journeys.rs"
 required-features = ["postgres-test", "tooling"]

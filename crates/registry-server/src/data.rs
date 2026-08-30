@@ -1693,11 +1693,24 @@ fn validate_export_response(
     require_success_json(response)?;
     let value = parse_canonical_response(&response.body)?;
     let object = value.as_object().ok_or(DataError::InvalidResponse)?;
-    require_exact_keys(object, &["items", "pageInfo"]).map_err(|_| DataError::InvalidResponse)?;
+    if !(object.len() == 2 || object.len() == 3)
+        || !object.contains_key("items")
+        || !object.contains_key("pageInfo")
+        || (object.len() == 3 && !object.contains_key("count"))
+    {
+        return Err(DataError::InvalidResponse);
+    }
     let items = object["items"]
         .as_array()
         .ok_or(DataError::InvalidResponse)?;
     if items.len() > usize::from(plan.maximum_page_size) {
+        return Err(DataError::InvalidResponse);
+    }
+    if object.get("count").is_some_and(|count| {
+        !count
+            .as_u64()
+            .is_some_and(|count| count >= items.len() as u64)
+    }) {
         return Err(DataError::InvalidResponse);
     }
     let page_info = object["pageInfo"]

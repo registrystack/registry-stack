@@ -150,12 +150,17 @@ impl ClaimContext {
                 return Err(invalid_context());
             }
             validate_boundary(actual)?;
-            let field = entity
-                .fields
-                .get(&expected.field)
-                .ok_or_else(invalid_context)?;
+            let field_type = if expected.field == entity.canonical_id.id {
+                &entity.canonical_id.field_type
+            } else {
+                &entity
+                    .fields
+                    .get(&expected.field)
+                    .ok_or_else(invalid_context)?
+                    .field_type
+            };
             for value in actual.values() {
-                validate_field_value(value, &field.field_type)?;
+                validate_field_value(value, field_type)?;
             }
         }
         let canonical_row_boundaries = canonical_boundaries(&row_boundaries)?;
@@ -554,6 +559,29 @@ mod tests {
         }
     }
 
+    #[test]
+    fn compiled_context_accepts_a_canonical_id_row_boundary() {
+        let registry = compiled_registry();
+        ClaimContext::for_compiled(
+            &registry,
+            "entry",
+            Some("principal".to_owned()),
+            "viewer",
+            None,
+            vec![equals("id", "123e4567-e89b-12d3-a456-426614174000")],
+        )
+        .expect("the compiled canonical UUID boundary is accepted");
+        assert!(ClaimContext::for_compiled(
+            &registry,
+            "entry",
+            Some("principal".to_owned()),
+            "viewer",
+            None,
+            vec![equals("id", "not-a-uuid")],
+        )
+        .is_err());
+    }
+
     fn equals(field: &str, value: &str) -> RowBoundaryContext {
         RowBoundaryContext::Equals {
             field: field.to_owned(),
@@ -690,36 +718,61 @@ mod tests {
                 constraints: Vec::new(),
                 temporal: None,
                 indexes: Vec::new(),
-                access_profiles: vec![AccessProfileSource {
-                    id: "operator".to_owned(),
-                    default: true,
-                    anonymous: false,
-                    principal_claim: Some("registry_principal".to_owned()),
-                    required_scopes: BTreeSet::new(),
-                    required_purposes: BTreeSet::from(["operations".to_owned()]),
-                    operations,
-                    readable_fields: BTreeSet::from(["tenant".to_owned(), "region".to_owned()]),
-                    writable_fields: BTreeSet::new(),
-                    filterable_fields: BTreeSet::new(),
-                    sortable_fields: BTreeSet::new(),
-                    row_boundaries: vec![
-                        RowBoundarySource {
-                            field: "tenant".to_owned(),
-                            claim: "tenant_claim".to_owned(),
+                access_profiles: vec![
+                    AccessProfileSource {
+                        id: "operator".to_owned(),
+                        default: true,
+                        anonymous: false,
+                        principal_claim: Some("registry_principal".to_owned()),
+                        required_scopes: BTreeSet::new(),
+                        required_purposes: BTreeSet::from(["operations".to_owned()]),
+                        operations: operations.clone(),
+                        readable_fields: BTreeSet::from(["tenant".to_owned(), "region".to_owned()]),
+                        writable_fields: BTreeSet::new(),
+                        filterable_fields: BTreeSet::new(),
+                        sortable_fields: BTreeSet::new(),
+                        row_boundaries: vec![
+                            RowBoundarySource {
+                                field: "tenant".to_owned(),
+                                claim: "tenant_claim".to_owned(),
+                                operator: BoundaryOperator::Equals,
+                            },
+                            RowBoundarySource {
+                                field: "region".to_owned(),
+                                claim: "region_claim".to_owned(),
+                                operator: BoundaryOperator::In,
+                            },
+                        ],
+                        revision_access: false,
+                        allow_data_export: false,
+                        lookups: Vec::new(),
+                        read_paths: Vec::new(),
+                        allow_count: false,
+                    },
+                    AccessProfileSource {
+                        id: "viewer".to_owned(),
+                        default: false,
+                        anonymous: false,
+                        principal_claim: Some("registry_principal".to_owned()),
+                        required_scopes: BTreeSet::new(),
+                        required_purposes: BTreeSet::new(),
+                        operations,
+                        readable_fields: BTreeSet::from(["tenant".to_owned()]),
+                        writable_fields: BTreeSet::new(),
+                        filterable_fields: BTreeSet::new(),
+                        sortable_fields: BTreeSet::new(),
+                        row_boundaries: vec![RowBoundarySource {
+                            field: "id".to_owned(),
+                            claim: "record_id_claim".to_owned(),
                             operator: BoundaryOperator::Equals,
-                        },
-                        RowBoundarySource {
-                            field: "region".to_owned(),
-                            claim: "region_claim".to_owned(),
-                            operator: BoundaryOperator::In,
-                        },
-                    ],
-                    revision_access: false,
-                    allow_data_export: false,
-                    lookups: Vec::new(),
-                    read_paths: Vec::new(),
-                    allow_count: false,
-                }],
+                        }],
+                        revision_access: false,
+                        allow_data_export: false,
+                        lookups: Vec::new(),
+                        read_paths: Vec::new(),
+                        allow_count: false,
+                    },
+                ],
                 events: Vec::new(),
             }],
             access_profiles: Vec::new(),

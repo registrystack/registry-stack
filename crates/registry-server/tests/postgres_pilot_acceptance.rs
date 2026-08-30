@@ -202,8 +202,8 @@ async fn asset_site_placement_journey(harness: &PilotHarness) {
 async fn household_journey(harness: &PilotHarness) {
     let token = harness.token_with_scopes(
         "household-administration",
-        &["registry:household:operate"],
         &[],
+        &["registry:household:operate"],
     );
     let openapi = assert_fixture_surface(harness, "household-operator", &token, "household").await;
     assert_eq!(
@@ -302,6 +302,43 @@ async fn household_journey(harness: &PilotHarness) {
         &[&current_membership.id],
     )
     .await;
+
+    let household = harness
+        .send(
+            Method::GET,
+            &format!(
+                "/v1/records/households/{}?accessProfile=household-operator&$select=household-code,head-count,single-headed,woman-headed",
+                current_household.id
+            ),
+            Some(&token),
+            &[],
+            Vec::new(),
+        )
+        .await;
+    assert_eq!(household.status(), StatusCode::OK);
+    let household = response_json(household).await;
+    assert_eq!(household["data"]["household-code"], "H-CURRENT");
+    assert_eq!(household["data"]["head-count"], 1);
+    assert_eq!(household["data"]["single-headed"], true);
+    assert_eq!(household["data"]["woman-headed"], true);
+
+    let people = harness
+        .send(
+            Method::GET,
+            &format!(
+                "/v1/records/households/{}/people?accessProfile=household-operator&$select=person-code,person-sex&$filter=person-sex%20eq%20%27female%27&$count=true",
+                current_household.id
+            ),
+            Some(&token),
+            &[],
+            Vec::new(),
+        )
+        .await;
+    assert_eq!(people.status(), StatusCode::OK);
+    let people = response_json(people).await;
+    assert_eq!(people["count"], 1);
+    assert_eq!(people["items"][0]["data"]["person-code"], "P-100");
+    assert_eq!(people["items"][0]["data"]["person-sex"], "female");
 
     let overlap = harness
         .send_json(

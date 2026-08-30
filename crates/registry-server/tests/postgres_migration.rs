@@ -205,15 +205,11 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
         reviewed_destructive_source,
     );
     let view_transition = &destructive_package.manifest().migration_plan.statements;
-    assert_eq!(view_transition.len(), 2);
+    assert_eq!(view_transition.len(), 1);
     assert!(view_transition[0]
         .sql
-        .starts_with("DROP VIEW IF EXISTS \"registry_source\"."));
-    assert!(view_transition[0].sql.ends_with(" RESTRICT"));
-    assert!(!view_transition[0].sql.contains("CASCADE"));
-    assert!(view_transition[1]
-        .sql
         .starts_with("CREATE VIEW registry_source."));
+    assert!(!view_transition[0].sql.contains("CASCADE"));
     let backup_root = tempfile::Builder::new()
         .prefix("registry-backup-canary-")
         .tempdir_in("/private/tmp")
@@ -1288,13 +1284,6 @@ async fn destructive_target_fingerprint(
 ) -> String {
     let entity = &candidate.entities()["asset"];
     let table = quote(&entity.physical_table);
-    let source_view = quote(&entity.source_relation.sql_name);
-    let candidate_source_view = candidate
-        .ddl()
-        .statements
-        .iter()
-        .find(|statement| statement.id == "entity.asset.source-view")
-        .expect("candidate source view DDL exists");
     let prior = compile_variant(Variant::RankRequired, 2);
     let legacy = quote(&prior.entities()["asset"].fields["legacy"].physical_name);
     let (mut migration, task) = database.connect_migration().await;
@@ -1302,17 +1291,15 @@ async fn destructive_target_fingerprint(
         .transaction()
         .await
         .expect("destructive fingerprint transaction starts");
+    drop_managed_views_for_fingerprint(&transaction).await;
     transaction
         .batch_execute(&format!(
-            "DROP VIEW registry_source.{source_view} RESTRICT;
-             {};
-             GRANT SELECT ON TABLE registry_source.{source_view} TO {};
-             ALTER TABLE registry_data.{table} DROP COLUMN {legacy}",
-            candidate_source_view.sql,
-            quote(database.runtime_role.as_str())
+            "ALTER TABLE registry_data.{table} DROP COLUMN {legacy}"
         ))
         .await
         .expect("destructive target rehearses");
+    create_candidate_views_for_fingerprint(&transaction, candidate, database.runtime_role.as_str())
+        .await;
     let fingerprint = managed_schema_fingerprint(
         &transaction,
         &database.runtime_role,
@@ -1326,6 +1313,73 @@ async fn destructive_target_fingerprint(
         .expect("destructive target rehearsal rolls back");
     task.abort();
     fingerprint
+}
+
+async fn drop_managed_views_for_fingerprint(transaction: &tokio_postgres::Transaction<'_>) {
+    let rows = transaction
+        .query(
+            "SELECT schemaname, viewname
+               FROM pg_catalog.pg_views
+              WHERE schemaname IN ('registry_derived', 'registry_source')
+              ORDER BY CASE schemaname WHEN 'registry_derived' THEN 0 ELSE 1 END,
+                       viewname",
+            &[],
+        )
+        .await
+        .expect("fingerprint rehearsal inventories compiler-owned views");
+    for row in rows {
+        let schema: String = row.get(0);
+        let view: String = row.get(1);
+        transaction
+            .batch_execute(&format!(
+                "DROP VIEW {}.{} RESTRICT",
+                quote(&schema),
+                quote(&view)
+            ))
+            .await
+            .expect("fingerprint rehearsal drops the prior compiler-owned read view");
+    }
+}
+
+async fn create_candidate_views_for_fingerprint(
+    transaction: &tokio_postgres::Transaction<'_>,
+    candidate: &CompiledRegistry,
+    runtime_role: &str,
+) {
+    for statement in candidate.ddl().statements.iter().filter(|statement| {
+        statement.kind == registry_server::generated_ddl::DdlStatementKind::View
+    }) {
+        transaction
+            .batch_execute(&statement.sql)
+            .await
+            .expect("fingerprint rehearsal creates the candidate compiler-owned read view");
+    }
+    for view in &candidate.ddl().views {
+        let schema = quote(&view.schema);
+        let name = quote(&view.name);
+        transaction
+            .batch_execute(&format!(
+                "REVOKE ALL ON TABLE {schema}.{name} FROM PUBLIC, {};",
+                quote(runtime_role)
+            ))
+            .await
+            .expect("fingerprint rehearsal revokes candidate view privileges");
+        if !view.runtime_privileges.is_empty() {
+            let privileges = view
+                .runtime_privileges
+                .iter()
+                .map(|privilege| privilege.as_sql())
+                .collect::<Vec<_>>()
+                .join(", ");
+            transaction
+                .batch_execute(&format!(
+                    "GRANT {privileges} ON TABLE {schema}.{name} TO {};",
+                    quote(runtime_role)
+                ))
+                .await
+                .expect("fingerprint rehearsal grants candidate view privileges");
+        }
+    }
 }
 
 async fn seed_backfill_rows(database: &TestDatabase, registry: &CompiledRegistry, count: u64) {

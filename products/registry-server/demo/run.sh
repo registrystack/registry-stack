@@ -186,11 +186,14 @@ docker run --detach --name "$postgres_container" \
   --publish "127.0.0.1:${database_port}:5432" \
   "$postgres_image" >"$run_dir/postgres-container-id"
 
-for attempt in $(seq 1 60); do
-  if docker exec "$postgres_container" pg_isready -q -U postgres; then
+for attempt in $(seq 1 120); do
+  # The official image briefly starts a private initialization server. Wait
+  # until PID 1 has replaced the entrypoint with the final PostgreSQL process.
+  if [[ "$(docker exec "$postgres_container" cat /proc/1/comm)" == postgres ]] &&
+    docker exec "$postgres_container" pg_isready -q -U postgres; then
     break
   fi
-  if [[ "$attempt" -eq 60 ]]; then
+  if [[ "$attempt" -eq 120 ]]; then
     printf '%s\n' "PostgreSQL did not become ready; see $run_dir/logs." >&2
     exit 1
   fi
@@ -290,6 +293,25 @@ if [[ "$webhook" == true ]]; then
     --timeout 30
 fi
 python3 "$support" seed --root "$run_dir"
+
+printf '%s\n' '== Binding a viewer credential to the first seeded household'
+uv run --quiet "$mint_key_material" p256 \
+  --private-out "$run_dir/keys/viewer/signing-p256-private-jwk" \
+  --public-out "$run_dir/keys/viewer-public.jwk.json"
+python3 "$support" configure-viewer --root "$run_dir"
+
+kill "$mint_pid"
+wait "$mint_pid" || true
+mint_pid=""
+"$mint" serve --config "$run_dir/mint/mint.yaml" >>"$run_dir/logs/mint.log" 2>&1 &
+mint_pid=$!
+python3 "$support" wait-http --url "http://127.0.0.1:${mint_port}/ready" --timeout 30
+"$mint" token \
+  --url "http://127.0.0.1:${mint_port}/token" \
+  --client-id household-demo-viewer \
+  --key "$run_dir/keys/viewer/signing-p256-private-jwk" |
+  python3 "$support" store-token --out "$run_dir/secrets/viewer-token"
+
 "$demo_dir/query.sh" >/dev/null
 
 if [[ "$webhook" == true ]]; then
@@ -340,7 +362,8 @@ fi
 printf '\n%s\n' 'Registry Server household demo is ready.'
 printf '  Registry Server: http://127.0.0.1:%s\n' "$server_port"
 printf '  Registry Mint:   http://127.0.0.1:%s\n' "$mint_port"
-printf '  Token file:      %s\n' "$run_dir/secrets/operator-token"
+printf '  Operator token:  %s\n' "$run_dir/secrets/operator-token"
+printf '  Viewer token:    %s\n' "$run_dir/secrets/viewer-token"
 printf '  Sample queries:  %s\n' "$demo_dir/query.sh"
 if [[ "$webhook" == true ]]; then
   printf '  Webhook sample:  %s\n' "$run_dir/webhook-sample.json"

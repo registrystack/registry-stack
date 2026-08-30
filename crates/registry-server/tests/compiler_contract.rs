@@ -85,7 +85,8 @@ fn derived_fields_selectors_and_read_paths_compile_to_route_specific_inventories
           "id":"demographics","sql":"sql/household-demographics.sql","key":"id","execution":"live",
           "fields":[
             {"id":"child-count","type":"int64","classification":"restricted"},
-            {"id":"single-headed","type":"boolean","classification":"restricted"}
+            {"id":"single-headed","type":"boolean","classification":"restricted"},
+            {"id":"registry-derived-key-cardinality","type":"int64","classification":"restricted"}
           ]
         }],
         "selectorProfiles":[
@@ -121,7 +122,7 @@ fn derived_fields_selectors_and_read_paths_compile_to_route_specific_inventories
         ]
       }]
     }"#;
-    let sql = "SELECT h.id AS id, count(p.id)::bigint AS child_count, false AS single_headed FROM registry_source.household h LEFT JOIN registry_source.group_membership gm ON gm.household = h.id LEFT JOIN registry_source.person p ON p.id = gm.person GROUP BY h.id";
+    let sql = "SELECT h.id AS id, count(p.id)::bigint AS child_count, false AS single_headed, 1::bigint AS registry_derived_key_cardinality FROM registry_source.household h LEFT JOIN registry_source.group_membership gm ON gm.household = h.id LEFT JOIN registry_source.person p ON p.id = gm.person GROUP BY h.id";
     let compiled = compile_json_with_assets(
         project,
         vec![derived_sql_asset("sql/household-demographics.sql", sql)],
@@ -144,28 +145,6 @@ fn derived_fields_selectors_and_read_paths_compile_to_route_specific_inventories
     );
     assert_eq!(household.canonical_id.id, "id");
     assert!(!household.fields.contains_key("id"));
-    let source_positions = compiled
-        .ddl()
-        .statements
-        .iter()
-        .enumerate()
-        .filter(|(_, statement)| statement.id.ends_with(".source-view"))
-        .map(|(position, _)| position)
-        .collect::<Vec<_>>();
-    let derived_positions = compiled
-        .ddl()
-        .statements
-        .iter()
-        .enumerate()
-        .filter(|(_, statement)| statement.id.contains(".derived."))
-        .map(|(position, _)| position)
-        .collect::<Vec<_>>();
-    assert_eq!(source_positions.len(), 3);
-    assert_eq!(derived_positions.len(), 1);
-    assert!(
-        source_positions.iter().max() < derived_positions.iter().min(),
-        "all source views must exist before a derived view can reference them"
-    );
     let person = &compiled.entities()["person"];
     let path_policy = compiled
         .ddl()
@@ -183,6 +162,27 @@ fn derived_fields_selectors_and_read_paths_compile_to_route_specific_inventories
         household.derived_relations["demographics"].sql_bytes,
         sql.as_bytes()
     );
+    let last_source_view = compiled
+        .ddl()
+        .statements
+        .iter()
+        .rposition(|statement| statement.id.ends_with(".source-view"))
+        .expect("source views are generated");
+    let first_derived_view = compiled
+        .ddl()
+        .statements
+        .iter()
+        .position(|statement| statement.id.contains(".derived."))
+        .expect("derived view is generated");
+    assert!(
+        last_source_view < first_derived_view,
+        "all source views must exist before cross-entity derived SQL is installed"
+    );
+    let derived_view = &compiled.ddl().statements[first_derived_view].sql;
+    assert!(derived_view
+        .contains("count(*) OVER (PARTITION BY canonical_derived.\"__registry$derived$key\")"));
+    assert!(derived_view.contains("\"__registry$derived$cardinality\""));
+    assert!(derived_view.contains("\"registry_derived_key_cardinality\"::bigint"));
     assert!(compiled
         .routes()
         .routes
@@ -319,6 +319,15 @@ fn derived_sql_is_asset_backed_value_free_and_validates_output_aliases() {
         .diagnostics()
         .iter()
         .any(|diagnostic| diagnostic.code == "derived.sql.invalid"));
+
+    compile_json_with_assets(
+        project,
+        vec![derived_sql_asset(
+            "sql/demographics.sql",
+            "WITH counts AS (SELECT h.id AS id, count(*) AS child_count FROM registry_source.household h GROUP BY h.id) SELECT c.id AS id, c.child_count AS child_count FROM counts c",
+        )],
+    )
+    .expect("a bounded non-recursive CTE over registry_source is accepted");
 }
 
 #[test]

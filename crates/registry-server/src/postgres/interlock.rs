@@ -41,7 +41,8 @@ const MAX_VERIFIED_DDL_STATEMENT_TIMEOUT: Duration = Duration::from_secs(60 * 60
 pub(crate) struct PackageDdlStatement<'a> {
     pub sql: &'a str,
     pub checksum: &'a str,
-    pub reapply_on_resume: bool,
+    pub kind: DdlStatementKind,
+    pub ordinal: i32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -267,8 +268,16 @@ impl DedicatedApplyConnection {
             ledger,
             compiler_lock_timeout,
             compiler_statement_timeout,
+            false,
         )
         .await?;
+        let refresh_views = compiler_statements
+            .iter()
+            .any(|statement| statement.kind == DdlStatementKind::View);
+        if refresh_views {
+            self.drop_managed_read_views(compiler_lock_timeout, compiler_statement_timeout)
+                .await?;
+        }
 
         let mut committed_chunks = 0_u64;
         for (migration_index, migration) in plan.migrations().iter().enumerate() {
@@ -337,6 +346,16 @@ impl DedicatedApplyConnection {
             }
         }
 
+        if refresh_views {
+            self.execute_reviewed_compiler_steps(
+                compiler_statements,
+                ledger,
+                compiler_lock_timeout,
+                compiler_statement_timeout,
+                true,
+            )
+            .await?;
+        }
         self.execute_reviewed_assertion_phase(plan, ledger, candidate_tables, true)
             .await?;
         Ok(ReviewedExecutionOutcome::Complete)
@@ -406,6 +425,7 @@ impl DedicatedApplyConnection {
         ledger: &MigrationLedgerEntry,
         lock_timeout: Duration,
         statement_timeout: Duration,
+        views: bool,
     ) -> Result<()> {
         validate_timeout(
             lock_timeout,
@@ -417,11 +437,12 @@ impl DedicatedApplyConnection {
             MAX_VERIFIED_DDL_STATEMENT_TIMEOUT,
             "compiler DDL statement timeout is outside its bound",
         )?;
-        for (index, statement) in statements.iter().enumerate() {
+        for statement in statements
+            .iter()
+            .filter(|statement| (statement.kind == DdlStatementKind::View) == views)
+        {
             validate_statement_checksum(statement)?;
-            let step_ordinal =
-                i32::try_from(index).map_err(|_| PostgresKernelError::RegistryUnavailable)?;
-            let ledger_step = ledger_step(ledger, 0, step_ordinal)?;
+            let ledger_step = ledger_step(ledger, 0, statement.ordinal)?;
             if ledger_step.kind != MigrationLedgerStepKind::CompilerDdl
                 || ledger_step.checksum != statement.checksum
             {
@@ -429,8 +450,10 @@ impl DedicatedApplyConnection {
             }
             let transaction = self.client.transaction().await?;
             set_local_duration_timeouts(&transaction, lock_timeout, statement_timeout).await?;
-            let progress = step_progress(&transaction, ledger, ledger_step).await?;
-            if progress.complete && !statement.reapply_on_resume {
+            let complete = step_progress(&transaction, ledger, ledger_step)
+                .await?
+                .complete;
+            if complete && !views {
                 transaction.commit().await?;
                 continue;
             }
@@ -438,11 +461,56 @@ impl DedicatedApplyConnection {
                 .batch_execute(statement.sql)
                 .await
                 .map_err(|_| PostgresKernelError::Connection)?;
-            if !progress.complete {
+            if !complete {
                 record_step_complete(&transaction, ledger, ledger_step, 0).await?;
             }
             transaction.commit().await?;
         }
+        Ok(())
+    }
+
+    async fn drop_managed_read_views(
+        &mut self,
+        lock_timeout: Duration,
+        statement_timeout: Duration,
+    ) -> Result<()> {
+        // These two schemas are a closed compiler-owned boundary. Reviewed
+        // column changes may require their dependent views to be removed
+        // first; exact package DDL recreates every candidate view afterward.
+        let transaction = self.client.transaction().await?;
+        set_local_duration_timeouts(&transaction, lock_timeout, statement_timeout).await?;
+        let rows = transaction
+            .query(
+                "SELECT schemaname, viewname
+                   FROM pg_catalog.pg_views
+                  WHERE schemaname IN ('registry_derived', 'registry_source')
+                  ORDER BY CASE schemaname WHEN 'registry_derived' THEN 0 ELSE 1 END,
+                           viewname",
+                &[],
+            )
+            .await?;
+        for row in rows {
+            let schema = row
+                .try_get::<_, String>(0)
+                .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+            let view = row
+                .try_get::<_, String>(1)
+                .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+            if !matches!(schema.as_str(), "registry_derived" | "registry_source") {
+                return Err(PostgresKernelError::RegistryUnavailable);
+            }
+            let schema = SqlIdentifier::parse(&schema)?;
+            let view = SqlIdentifier::parse(&view)?;
+            transaction
+                .batch_execute(&format!(
+                    "DROP VIEW {}.{} RESTRICT",
+                    schema.quoted(),
+                    view.quoted()
+                ))
+                .await
+                .map_err(|_| PostgresKernelError::Connection)?;
+        }
+        transaction.commit().await?;
         Ok(())
     }
 

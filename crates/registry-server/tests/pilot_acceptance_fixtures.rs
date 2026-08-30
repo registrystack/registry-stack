@@ -9,25 +9,30 @@ use registry_server::contract::{
     Classification, ConstraintSource, FieldTypeSource, ModuleAssetSource, MutationMode, Operation,
     RegistryModule, RegistryProject, UniqueWhenPredicate, ValidTimeRole,
 };
+use registry_server::fixtures::validate_fixture_journeys;
 use registry_server::generated_ddl::DdlStatementKind;
 use registry_server::model::{CompiledEntity, CompiledRegistry};
 
-fn fixture_sources(name: &str) -> (RegistryProject, Vec<RegistryModule>, Vec<ModuleAssetSource>) {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+fn fixture_root(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../products/registry-server/acceptance")
-        .join(name);
+        .join(name)
+}
+
+fn fixture_sources(name: &str) -> (RegistryProject, Vec<RegistryModule>, Vec<ModuleAssetSource>) {
+    let root = fixture_root(name);
     let bytes = fs::read(root.join("registry.yaml")).expect("committed pilot fixture is readable");
     let project = registry_server::contract::parse_project_yaml(&bytes)
         .expect("pilot fixture follows the authoring contract");
-    let mut modules = Vec::with_capacity(project.modules.len());
+    let mut modules = Vec::new();
     let mut assets = Vec::new();
     for locked in &project.modules {
         let module_root = root.join("modules").join(&locked.id);
-        let bytes = fs::read(module_root.join("module.yaml"))
+        let bytes = fs::read(root.join("modules").join(&locked.id).join("module.yaml"))
             .expect("every locked pilot module source is readable");
         let module = registry_server::contract::parse_module_yaml(&bytes)
             .expect("pilot module follows the authoring contract");
-        let asset_paths = module
+        let declared_assets = module
             .entities
             .iter()
             .flat_map(|entity| &entity.derived)
@@ -37,14 +42,14 @@ fn fixture_sources(name: &str) -> (RegistryProject, Vec<RegistryModule>, Vec<Mod
                     .iter()
                     .flat_map(|extension| &extension.derived),
             )
-            .map(|derived| derived.sql.as_str())
+            .map(|derived| derived.sql.clone())
             .collect::<BTreeSet<_>>();
-        for path in asset_paths {
+        for path in declared_assets {
             assets.push(ModuleAssetSource {
                 module: Some(module.id.clone()),
-                path: path.to_owned(),
-                bytes: fs::read(module_root.join(path))
+                bytes: fs::read(module_root.join(&path))
                     .expect("every declared pilot module asset is readable"),
+                path,
             });
         }
         modules.push(module);
@@ -154,6 +159,35 @@ fn household_pilot_fixture_compiles_person_household_and_time_bounded_membership
             && route.operation == Operation::Patch
             && route.path == "/v1/records/group-memberships/{record_id}"
     }));
+}
+
+#[test]
+fn household_pilot_fixture_journeys_preflight_against_the_exact_compiled_registry() {
+    let compiled = compile_fixture("publicschema-household");
+    let journeys = fs::read(fixture_root("publicschema-household").join("tests/journeys.yaml"))
+        .expect("committed household journeys are readable");
+    if let Err(error) = validate_fixture_journeys(&journeys, &compiled) {
+        let document: serde_json::Value =
+            serde_norway::from_slice(&journeys).expect("journey YAML has a generic value shape");
+        let steps = document["journeys"][0]["steps"]
+            .as_array()
+            .expect("journey steps are an array");
+        for length in 1..=steps.len() {
+            let mut prefix = document.clone();
+            prefix["journeys"][0]["steps"]
+                .as_array_mut()
+                .expect("journey steps remain an array")
+                .truncate(length);
+            let source = serde_norway::to_string(&prefix).expect("journey prefix serializes");
+            if let Err(prefix_error) = validate_fixture_journeys(source.as_bytes(), &compiled) {
+                let step = steps[length - 1]["id"].as_str().unwrap_or("unknown");
+                panic!(
+                    "household journey first fails at step {step}: {prefix_error:?}; full error: {error:?}"
+                );
+            }
+        }
+        panic!("household journey validation failed after every prefix passed: {error:?}");
+    }
 }
 
 #[test]

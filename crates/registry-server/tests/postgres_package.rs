@@ -1411,26 +1411,23 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
     }
     let provisional_second_table =
         &provisional_second.registry().entities()["second-record"].physical_table;
-    let provisional_second_source_view = &provisional_second.registry().entities()["second-record"]
-        .source_relation
-        .sql_name;
     transaction
         .batch_execute(&format!(
             "REVOKE ALL ON TABLE registry_data.{} FROM PUBLIC, \"{}\";
-             GRANT SELECT, INSERT ON TABLE registry_data.{} TO \"{}\";
-             REVOKE ALL ON TABLE registry_source.{} FROM PUBLIC, \"{}\";
-             GRANT SELECT ON TABLE registry_source.{} TO \"{}\";",
+             GRANT SELECT, INSERT ON TABLE registry_data.{} TO \"{}\";",
             quote_identifier(provisional_second_table),
             database.runtime_role.as_str(),
             quote_identifier(provisional_second_table),
-            database.runtime_role.as_str(),
-            quote_identifier(provisional_second_source_view),
-            database.runtime_role.as_str(),
-            quote_identifier(provisional_second_source_view),
             database.runtime_role.as_str(),
         ))
         .await
         .expect("target fingerprint transaction installs the exact compiled runtime ACL");
+    reconcile_view_acl_for_fingerprint(
+        &transaction,
+        provisional_second.registry(),
+        database.runtime_role.as_str(),
+    )
+    .await;
     let second_catalog = ExpectedManagedCatalog::compiled(provisional_second.registry());
     let target_schema =
         managed_schema_fingerprint(&transaction, &database.runtime_role, &second_catalog)
@@ -1836,22 +1833,12 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
             .map_err(|_| ())
             .expect("third exact additive plan applies in fingerprint transaction");
     }
-    let third_entity = &provisional_third.registry().entities()["third-record"];
-    transaction
-        .batch_execute(&format!(
-            "REVOKE ALL ON TABLE registry_data.{} FROM PUBLIC, \"{}\";
-             REVOKE ALL ON TABLE registry_source.{} FROM PUBLIC, \"{}\";
-             GRANT SELECT ON TABLE registry_source.{} TO \"{}\";",
-            quote_identifier(&third_entity.physical_table),
-            database.runtime_role.as_str(),
-            quote_identifier(&third_entity.source_relation.sql_name),
-            database.runtime_role.as_str(),
-            quote_identifier(&third_entity.source_relation.sql_name),
-            database.runtime_role.as_str(),
-        ))
-        .await
-        .map_err(|_| ())
-        .expect("third fingerprint transaction installs target runtime ACL");
+    reconcile_view_acl_for_fingerprint(
+        &transaction,
+        provisional_third.registry(),
+        database.runtime_role.as_str(),
+    )
+    .await;
     let third_catalog = ExpectedManagedCatalog::compiled(provisional_third.registry());
     let third_schema =
         managed_schema_fingerprint(&transaction, &database.runtime_role, &third_catalog)
@@ -2173,26 +2160,23 @@ async fn successor_apply_refuses_to_strand_retained_webhook_work() {
             .expect("successor additive DDL applies for fingerprinting");
     }
     let second_table = &provisional_second.registry().entities()["second-record"].physical_table;
-    let second_source_view = &provisional_second.registry().entities()["second-record"]
-        .source_relation
-        .sql_name;
     transaction
         .batch_execute(&format!(
             "REVOKE ALL ON TABLE registry_data.{} FROM PUBLIC, \"{}\";
-             GRANT SELECT, INSERT ON TABLE registry_data.{} TO \"{}\";
-             REVOKE ALL ON TABLE registry_source.{} FROM PUBLIC, \"{}\";
-             GRANT SELECT ON TABLE registry_source.{} TO \"{}\";",
+             GRANT SELECT, INSERT ON TABLE registry_data.{} TO \"{}\";",
             quote_identifier(second_table),
             database.runtime_role.as_str(),
             quote_identifier(second_table),
-            database.runtime_role.as_str(),
-            quote_identifier(second_source_view),
-            database.runtime_role.as_str(),
-            quote_identifier(second_source_view),
             database.runtime_role.as_str(),
         ))
         .await
         .expect("successor fingerprint transaction installs target runtime ACL");
+    reconcile_view_acl_for_fingerprint(
+        &transaction,
+        provisional_second.registry(),
+        database.runtime_role.as_str(),
+    )
+    .await;
     let second_catalog = ExpectedManagedCatalog::compiled(provisional_second.registry());
     let second_fingerprint =
         managed_schema_fingerprint(&transaction, &database.runtime_role, &second_catalog)
@@ -2341,6 +2325,37 @@ async fn successor_apply_refuses_to_strand_retained_webhook_work() {
         }));
 
     database.cleanup().await;
+}
+
+async fn reconcile_view_acl_for_fingerprint(
+    client: &impl GenericClient,
+    registry: &registry_server::CompiledRegistry,
+    runtime_role: &str,
+) {
+    for view in &registry.ddl().views {
+        let schema = quote_identifier(&view.schema);
+        let name = quote_identifier(&view.name);
+        client
+            .batch_execute(&format!(
+                "REVOKE ALL ON TABLE {schema}.{name} FROM PUBLIC, \"{runtime_role}\";"
+            ))
+            .await
+            .expect("fingerprint transaction reconciles compiled view revocations");
+        if !view.runtime_privileges.is_empty() {
+            let privileges = view
+                .runtime_privileges
+                .iter()
+                .map(|privilege| privilege.as_sql())
+                .collect::<Vec<_>>()
+                .join(", ");
+            client
+                .batch_execute(&format!(
+                    "GRANT {privileges} ON TABLE {schema}.{name} TO \"{runtime_role}\";"
+                ))
+                .await
+                .expect("fingerprint transaction reconciles compiled view grants");
+        }
+    }
 }
 
 #[derive(Clone, Copy)]

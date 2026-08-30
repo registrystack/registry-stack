@@ -255,6 +255,7 @@ pub struct CompiledMetadataEntry {
     pub route_id: String,
     pub operation: Operation,
     pub access_profile: String,
+    pub response_entity_id: String,
     pub readable_fields: BTreeSet<String>,
 }
 
@@ -292,6 +293,7 @@ pub enum CompiledQueryFilterOperator {
     IsNull,
     IsNotNull,
     Prefix,
+    Contains,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]

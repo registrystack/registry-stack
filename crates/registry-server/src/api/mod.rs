@@ -277,10 +277,7 @@ async fn openapi(
         readable_by_entity
             .entry(surface.response_entity.id.clone())
             .and_modify(|fields| {
-                *fields = fields
-                    .intersection(&surface.readable_fields)
-                    .cloned()
-                    .collect();
+                fields.extend(surface.readable_fields.iter().cloned());
             })
             .or_insert_with(|| surface.readable_fields.clone());
     }
@@ -317,25 +314,27 @@ async fn registry_metadata(
     }
 
     let mut entities: BTreeMap<String, MetadataEntity> = BTreeMap::new();
-    for (metadata_entity, entry) in visible {
+    for (_, entry) in visible {
+        let Some(response_entity) = service.registry.entities().get(&entry.response_entity_id)
+        else {
+            return concealed();
+        };
         entities
-            .entry(metadata_entity.id.clone())
+            .entry(response_entity.id.clone())
             .and_modify(|metadata| {
                 metadata
                     .operations
                     .insert(entry.operation, entry.access_profile.clone());
-                metadata.readable_fields = metadata
+                metadata
                     .readable_fields
-                    .intersection(&entry.readable_fields)
-                    .cloned()
-                    .collect();
+                    .extend(entry.readable_fields.iter().cloned());
             })
             .or_insert_with(|| MetadataEntity {
-                id: metadata_entity.id.clone(),
-                route: metadata_entity.route.clone(),
+                id: response_entity.id.clone(),
+                route: response_entity.route.clone(),
                 operations: BTreeMap::from([(entry.operation, entry.access_profile.clone())]),
                 readable_fields: entry.readable_fields.clone(),
-                schema_path: metadata_entity.schema_path.clone(),
+                schema_path: format!("/v1/schemas/{}", response_entity.id),
             });
     }
     let entities = entities
@@ -376,9 +375,7 @@ async fn entity_schema(
         .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let surfaces = visible_surfaces(&service, &claims, &options)
         .into_iter()
-        .filter(|surface| {
-            surface.response_entity.id == entity_id || surface.route.entity_id == entity_id
-        })
+        .filter(|surface| surface.response_entity.id == entity_id)
         .collect::<Vec<_>>();
     let Some(first) = surfaces.first() else {
         return concealed();
@@ -387,14 +384,11 @@ async fn entity_schema(
         surfaces
             .iter()
             .skip(1)
-            .fold(first.readable_fields.clone(), |fields, surface| {
+            .fold(first.readable_fields.clone(), |mut fields, surface| {
+                fields.extend(surface.readable_fields.iter().cloned());
                 fields
-                    .intersection(&surface.readable_fields)
-                    .cloned()
-                    .collect()
             });
-    let schema_entity = first.response_entity.id.clone();
-    match filtered_schema(&service, &schema_entity, &readable) {
+    match filtered_schema(&service, &entity_id, &readable) {
         Some(schema) => Json(schema).into_response(),
         None => concealed(),
     }
@@ -1496,6 +1490,8 @@ fn metadata_entry_for_surface<'a>(
         entry.route_id == surface.route.id
             && entry.operation == surface.route.operation
             && entry.access_profile == surface.context.selected_profile()
+            && entry.response_entity_id == surface.response_entity.id
+            && entry.readable_fields == surface.readable_fields
     })?;
     Some((entity, entry))
 }
@@ -2109,6 +2105,12 @@ fn resolve_data_field_id<'a>(entity: &'a CompiledEntity, api_name: &str) -> Opti
                 .get_key_value(api_name)
                 .map(|(field_id, _)| field_id.as_str())
         })
+        .or_else(|| {
+            entity
+                .derived_fields
+                .get_key_value(api_name)
+                .map(|(field_id, _)| field_id.as_str())
+        })
 }
 
 fn projection_plan(
@@ -2118,13 +2120,26 @@ fn projection_plan(
     selected_fields
         .iter()
         .map(|field_id| {
-            let field = entity.fields.get(field_id).ok_or(ReadQueryError::Invalid)?;
+            let field_type = data_field_type(entity, field_id).ok_or(ReadQueryError::Invalid)?;
             Ok(ReadProjectionField {
                 field_id: field_id.clone(),
-                field_type: field.field_type.clone(),
+                field_type: field_type.clone(),
             })
         })
         .collect()
+}
+
+fn data_field_type<'a>(entity: &'a CompiledEntity, field_id: &str) -> Option<&'a FieldTypeSource> {
+    entity
+        .fields
+        .get(field_id)
+        .map(|field| &field.field_type)
+        .or_else(|| {
+            entity
+                .derived_fields
+                .get(field_id)
+                .map(|field| &field.logical.field_type)
+        })
 }
 
 fn first_page_filter_expr(
@@ -2213,7 +2228,7 @@ fn read_filter_predicate(
         }
     };
     let field_id = resolve_data_field_id(entity, api_field).ok_or(ReadQueryError::Invalid)?;
-    let field = entity.fields.get(field_id).ok_or(ReadQueryError::Invalid)?;
+    let field_type = data_field_type(entity, field_id).ok_or(ReadQueryError::Invalid)?;
     let capability = operation
         .filter_fields
         .iter()
@@ -2233,7 +2248,7 @@ fn read_filter_predicate(
     } else {
         literals
             .into_iter()
-            .map(|literal| literal_to_field_value(literal, &field.field_type))
+            .map(|literal| literal_to_field_value(literal, field_type))
             .collect::<Result<Vec<_>, _>>()?
     };
     if operator == ReadFilterOperator::In {
@@ -2245,7 +2260,7 @@ fn read_filter_predicate(
     }
     Ok(ReadFilterPredicate {
         field_id: field_id.to_owned(),
-        field_type: field.field_type.clone(),
+        field_type: field_type.clone(),
         operator,
         values,
     })
@@ -2285,7 +2300,7 @@ fn read_order_clause(
         return Ok(None);
     };
     let field_id = resolve_data_field_id(entity, api_or_field).ok_or(ReadQueryError::Invalid)?;
-    let field = entity.fields.get(field_id).ok_or(ReadQueryError::Invalid)?;
+    let field_type = data_field_type(entity, field_id).ok_or(ReadQueryError::Invalid)?;
     let sortable = operation.sort_fields.iter().any(|candidate| {
         candidate.field == field_id
             && candidate
@@ -2297,7 +2312,7 @@ fn read_order_clause(
     }
     Ok(Some(ReadOrderClause {
         field_id: field_id.to_owned(),
-        field_type: field.field_type.clone(),
+        field_type: field_type.clone(),
         direction: CompiledQuerySortDirection::Asc,
     }))
 }
@@ -2327,11 +2342,7 @@ fn validate_query_shape(
         if !sortable
             || operation.stable_tie_breaker != "record_id"
             || order.direction != CompiledQuerySortDirection::Asc
-            || entity
-                .fields
-                .get(&order.field_id)
-                .map(|field| &field.field_type)
-                != Some(&order.field_type)
+            || data_field_type(entity, &order.field_id) != Some(&order.field_type)
         {
             return Err(ReadQueryError::Invalid);
         }
@@ -2364,16 +2375,14 @@ fn validate_filter_shape(
                 .predicates
                 .checked_add(1)
                 .ok_or(ReadQueryError::Invalid)?;
-            let field = entity
-                .fields
-                .get(&predicate.field_id)
-                .ok_or(ReadQueryError::Invalid)?;
+            let field_type =
+                data_field_type(entity, &predicate.field_id).ok_or(ReadQueryError::Invalid)?;
             let capability = operation
                 .filter_fields
                 .iter()
                 .find(|field| field.field == predicate.field_id)
                 .ok_or(ReadQueryError::Invalid)?;
-            if field.field_type != predicate.field_type
+            if field_type != &predicate.field_type
                 || !capability
                     .operators
                     .contains(&predicate.operator.compiled_capability())
@@ -2392,7 +2401,7 @@ fn validate_filter_shape(
                     if predicate.values.len() != 1 {
                         return Err(ReadQueryError::Invalid);
                     }
-                    crate::postgres::validate_field_value(&predicate.values[0], &field.field_type)
+                    crate::postgres::validate_field_value(&predicate.values[0], field_type)
                         .map_err(|_| ReadQueryError::Invalid)?;
                 }
                 ReadFilterOperator::In => {
@@ -2409,7 +2418,7 @@ fn validate_filter_shape(
                         .checked_add(predicate.values.len())
                         .ok_or(ReadQueryError::Invalid)?;
                     for value in &predicate.values {
-                        crate::postgres::validate_field_value(value, &field.field_type)
+                        crate::postgres::validate_field_value(value, field_type)
                             .map_err(|_| ReadQueryError::Invalid)?;
                     }
                 }
@@ -2738,10 +2747,8 @@ fn read_order_clause_from_cursor(
     operation: &CompiledQueryOperation,
     order: &CursorOrderClause,
 ) -> Result<ReadOrderClause, ReadQueryError> {
-    let field = entity
-        .fields
-        .get(&order.field_id)
-        .ok_or(ReadQueryError::CursorInvalid)?;
+    let field_type =
+        data_field_type(entity, &order.field_id).ok_or(ReadQueryError::CursorInvalid)?;
     let sortable = operation.sort_fields.iter().any(|candidate| {
         candidate.field == order.field_id
             && candidate
@@ -2749,7 +2756,7 @@ fn read_order_clause_from_cursor(
                 .contains(&CompiledQuerySortDirection::Asc)
     });
     if !sortable
-        || field.field_type != order.field_type
+        || field_type != &order.field_type
         || order.direction != CompiledQuerySortDirection::Asc
     {
         return Err(ReadQueryError::CursorInvalid);
@@ -2781,11 +2788,9 @@ fn read_filter_expr_from_cursor(
             read_filter_expr_from_cursor(entity, expr)?,
         ))),
         CursorFilterExpr::Predicate { predicate } => {
-            let field = entity
-                .fields
-                .get(&predicate.field_id)
+            let field_type = data_field_type(entity, &predicate.field_id)
                 .ok_or(ReadQueryError::CursorInvalid)?;
-            if field.field_type != predicate.field_type {
+            if field_type != &predicate.field_type {
                 return Err(ReadQueryError::CursorInvalid);
             }
             Ok(ReadFilterExpr::Predicate(ReadFilterPredicate {
