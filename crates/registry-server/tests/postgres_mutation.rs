@@ -826,7 +826,7 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
         BTreeSet::from(["rs-sec-13-scope-canary".to_owned()]),
     );
 
-    let openapi = body_json(
+    let operator_openapi = body_json(
         send(
             &app,
             Method::GET,
@@ -838,60 +838,86 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
         .await,
     )
     .await;
-    assert!(openapi["paths"]["/v1/records/widgets"]
+    assert!(operator_openapi["paths"]["/v1/records/widgets"]
         .get("post")
         .is_some());
     assert_eq!(
-        openapi["paths"]["/v1/records/widgets"]["post"]["security"],
+        operator_openapi["paths"]["/v1/records/widgets"]["post"]["security"],
         json!([{"bearerAuth": []}])
     );
     assert_eq!(
-        query_parameter_names(&openapi["paths"]["/v1/records/widgets"]["post"]["parameters"]),
-        ["Idempotency-Key", "accessProfile"]
+        query_parameter_names(
+            &operator_openapi["paths"]["/v1/records/widgets"]["post"]["parameters"]
+        ),
+        ["Idempotency-Key", "accessProfile", "traceparent"]
     );
     assert!(
-        openapi["paths"]["/v1/records/widgets"]["post"]["responses"]["201"]["headers"]
+        operator_openapi["paths"]["/v1/records/widgets"]["post"]["responses"]["201"]["headers"]
             .get("Location")
             .is_some()
     );
-    assert!(openapi["paths"]["/v1/records/widgets/{record_id}"]
+    assert!(operator_openapi["paths"]["/v1/records/widgets/{record_id}"]
         .get("patch")
         .is_some());
     assert_eq!(
         query_parameter_names(
-            &openapi["paths"]["/v1/records/widgets/{record_id}"]["patch"]["parameters"]
+            &operator_openapi["paths"]["/v1/records/widgets/{record_id}"]["patch"]["parameters"]
         ),
-        ["Idempotency-Key", "If-Match", "accessProfile", "record_id"]
+        [
+            "Idempotency-Key",
+            "If-Match",
+            "accessProfile",
+            "record_id",
+            "traceparent"
+        ]
     );
     assert!(
-        openapi["paths"]["/v1/records/widgets/{record_id}"]["patch"]["requestBody"]["content"]
+        operator_openapi["paths"]["/v1/records/widgets/{record_id}"]["patch"]["requestBody"]
+            ["content"]
             .get("application/json-patch+json")
             .is_some()
     );
     assert!(
-        openapi["paths"]["/v1/records/widgets/{record_id}"]["patch"]["responses"]["428"]["content"]
-            ["application/problem+json"]["schema"]
+        operator_openapi["paths"]["/v1/records/widgets/{record_id}"]["patch"]["responses"]["428"]
+            ["content"]["application/problem+json"]["schema"]
             .get("$ref")
             .is_some()
     );
-    assert!(openapi["paths"]["/v1/records/widgets/{record_id}"]
+    assert!(operator_openapi["paths"]["/v1/records/widgets/{record_id}"]
         .get("delete")
         .is_some());
-    assert!(openapi["paths"]["/v1/records/logs"].get("post").is_some());
-    assert!(openapi["paths"]
+    assert!(operator_openapi["paths"].get("/v1/records/logs").is_none());
+
+    let case_openapi = body_json(
+        send(
+            &app,
+            Method::GET,
+            "/openapi.json?accessProfile=case-operator",
+            Some(claims.clone()),
+            &[],
+            Vec::new(),
+        )
+        .await,
+    )
+    .await;
+    assert!(case_openapi["paths"]["/v1/records/logs"]
+        .get("post")
+        .is_some());
+    assert!(case_openapi["paths"]
         .get("/v1/records/logs/{record_id}")
         .and_then(|path| path.get("patch"))
         .is_none());
-    assert!(openapi["paths"]
+    assert!(case_openapi["paths"]
         .get("/v1/records/logs/{record_id}")
         .and_then(|path| path.get("delete"))
         .is_none());
-    assert!(openapi["paths"]
+    assert!(case_openapi["paths"]
         .get("/v1/records/archives/{record_id}")
         .and_then(|path| path.get("delete"))
         .is_none());
+    assert!(case_openapi["paths"].get("/v1/records/widgets").is_none());
 
-    let metadata = body_json(
+    let operator_metadata = body_json(
         send(
             &app,
             Method::GET,
@@ -903,21 +929,47 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
         .await,
     )
     .await;
-    let metadata_entities = metadata["entities"].as_array().expect("metadata entities");
-    let metadata_operations = |entity_id: &str| {
-        metadata_entities
+    let operator_entities = operator_metadata["entities"]
+        .as_array()
+        .expect("operator metadata entities");
+    let operator_operations = |entity_id: &str| {
+        operator_entities
             .iter()
             .find(|entity| entity["id"] == entity_id)
             .and_then(|entity| entity["operations"].as_array())
-            .expect("entity metadata operations")
+            .expect("operator entity metadata operations")
     };
-    assert!(metadata_operations("widget")
+    assert!(operator_operations("widget")
         .iter()
         .any(|operation| operation["operation"] == "tombstone"));
-    assert!(!metadata_operations("log")
+    assert!(!operator_entities.iter().any(|entity| entity["id"] == "log"));
+
+    let case_metadata = body_json(
+        send(
+            &app,
+            Method::GET,
+            "/v1/registry?accessProfile=case-operator",
+            Some(claims.clone()),
+            &[],
+            Vec::new(),
+        )
+        .await,
+    )
+    .await;
+    let case_entities = case_metadata["entities"]
+        .as_array()
+        .expect("case metadata entities");
+    let case_operations = |entity_id: &str| {
+        case_entities
+            .iter()
+            .find(|entity| entity["id"] == entity_id)
+            .and_then(|entity| entity["operations"].as_array())
+            .expect("case entity metadata operations")
+    };
+    assert!(!case_operations("log")
         .iter()
         .any(|operation| operation["operation"] == "tombstone"));
-    assert!(!metadata_operations("archive")
+    assert!(!case_operations("archive")
         .iter()
         .any(|operation| operation["operation"] == "tombstone"));
 
@@ -2223,10 +2275,16 @@ async fn assert_unique_violation_conflict_is_value_free(
     );
     assert!(headers.get("etag").is_none());
     assert!(headers.get("location").is_none());
-    assert_eq!(
-        body.as_slice(),
-        br#"{"type":"urn:registry-server:problem:mutation.conflict","title":"Conflict","status":409,"detail":"The mutation conflicts with current state.","code":"mutation.conflict"}"#
-    );
+    let traceparent = headers
+        .get("traceparent")
+        .and_then(|value| value.to_str().ok())
+        .expect("problem response carries traceparent");
+    let trace_id = traceparent
+        .split('-')
+        .nth(1)
+        .expect("canonical traceparent carries trace ID");
+    assert_eq!(trace_id.len(), 32);
+    assert_ne!(trace_id, "00000000000000000000000000000000");
     let problem: Value = serde_json::from_slice(&body).expect("problem JSON is valid");
     assert_eq!(
         problem,
@@ -2236,6 +2294,7 @@ async fn assert_unique_violation_conflict_is_value_free(
             "status": 409,
             "detail": "The mutation conflicts with current state.",
             "code": "mutation.conflict",
+            "traceId": trace_id,
         })
     );
     assert_eq!(
