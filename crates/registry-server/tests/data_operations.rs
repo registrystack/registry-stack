@@ -33,10 +33,13 @@ fn compiled(allow_data_export: bool) -> registry_server::CompiledRegistry {
                  "classification": "internal"},
                 {"id": "hidden", "type": "string", "maxLength": 16,
                  "classification": "restricted"}
-            ],
-            "accessProfiles": [{
-                "id": PROFILE,
-                "principalClaim": "principal",
+            ]
+        }],
+        "accessProfiles": [{
+            "id": PROFILE,
+            "principalClaim": "principal",
+            "grants": [{
+                "entity": ENTITY,
                 "operations": ["create", "patch", "batch", "list"],
                 "readableFields": ["code", "count", "readonly"],
                 "writableFields": ["code", "count"],
@@ -90,10 +93,13 @@ fn data_export_requires_explicit_nonanonymous_profile_permission() {
             "entities": [{
                 "id": ENTITY, "route": "records", "mutationMode": "create_only",
                 "fields": [{"id": "code", "type": "string", "maxLength": 16,
-                            "classification": "internal"}],
-                "accessProfiles": [{
-                    "id": PROFILE, "anonymous": anonymous,
-                    "principalClaim": if anonymous { Value::Null } else { json!("principal") },
+                            "classification": "internal"}]
+            }],
+            "accessProfiles": [{
+                "id": PROFILE, "anonymous": anonymous,
+                "principalClaim": if anonymous { Value::Null } else { json!("principal") },
+                "grants": [{
+                    "entity": ENTITY,
                     "operations": operations, "readableFields": readable,
                     "allowDataExport": true
                 }]
@@ -124,7 +130,7 @@ fn data_export_requires_explicit_nonanonymous_profile_permission() {
         "registry": {"id": "project-export", "version": "1", "defaultLanguage": "en"},
         "accessProfiles": [{
             "id": "project-exporter", "principalClaim": "principal",
-            "grants": [{"entity": ENTITY, "actions": ["list"],
+            "grants": [{"entity": ENTITY, "operations": ["list"],
                         "readableFields": ["code"], "allowDataExport": true}]
         }],
         "entities": [{
@@ -254,8 +260,9 @@ fn data_validate_and_chunk_plan_reuse_runtime_rules_and_compiled_batch_bounds() 
             "entities":[{"id":ENTITY,"route":"records","mutationMode":"create_only",
                 "batch":{"maximumItems":2,"maximumBytes":100},
                 "fields":[{"id":"code","type":"text","maxLength":1000,"required":true,
-                           "classification":"internal"}],
-                "accessProfiles":[{"id":PROFILE,"principalClaim":"principal",
+                           "classification":"internal"}]}],
+            "accessProfiles":[{"id":PROFILE,"principalClaim":"principal","grants":[{
+                    "entity":ENTITY,
                     "operations":["create","batch"],"readableFields":["code"],
                     "writableFields":["code"]}]}]
         });
@@ -299,10 +306,13 @@ fn data_lifecycle_uses_exact_compiled_api_names() {
                 "maxLength": 16,
                 "required": true,
                 "classification": "internal"
-            }],
-            "accessProfiles": [{
-                "id": PROFILE,
-                "principalClaim": "principal",
+            }]
+        }],
+        "accessProfiles": [{
+            "id": PROFILE,
+            "principalClaim": "principal",
+            "grants": [{
+                "entity": ENTITY,
                 "operations": ["create", "patch", "batch", "list"],
                 "readableFields": ["record-code"],
                 "writableFields": ["record-code"],

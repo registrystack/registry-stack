@@ -55,16 +55,20 @@ entities:
       - {id: secret, type: string, required: true, maxLength: 100, classification: restricted}
       - {id: jurisdiction, type: string, required: true, maxLength: 100, classification: internal}
       - {id: tenant, type: string, required: true, maxLength: 100, classification: internal}
-    accessProfiles:
-      - id: public
-        default: true
-        anonymous: true
+accessProfiles:
+  - id: public
+    default: true
+    anonymous: true
+    grants:
+      - entity: case
         operations: [get]
         readableFields: [label]
-      - id: caseworker
-        principalClaim: registry_principal
-        requiredScopes: [registry.read]
-        requiredPurposes: [case-management-never-rendered]
+  - id: caseworker
+    principalClaim: registry_principal
+    requiredScopes: [registry.read]
+    requiredPurposes: [case-management-never-rendered]
+    grants:
+      - entity: case
         operations: [get]
         readableFields: [label, secret]
         rowBoundaries:
@@ -87,10 +91,12 @@ entities:
     classification: public
     fields:
       - {id: label, type: string, required: true, maxLength: 100, classification: public}
-    accessProfiles:
-      - id: caseworker
-        default: true
-        principalClaim: registry_principal
+accessProfiles:
+  - id: caseworker
+    default: true
+    principalClaim: registry_principal
+    grants:
+      - entity: case
         operations: [get]
         readableFields: [label]
         rowBoundaries:

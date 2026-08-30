@@ -1998,26 +1998,22 @@ fn add_compiled_artifacts(
             .bytes
             .clone(),
     )?;
-    insert_generated(
-        files,
-        "manifest/registry-manifest.json",
-        compiled
-            .artifacts()
-            .get("generated/manifest/registry-manifest.json")
-            .ok_or(PackageError::Derivation)?
-            .bytes
-            .clone(),
-    )?;
-    insert_generated(
-        files,
-        "manifest/dcat.jsonld",
-        compiled
-            .artifacts()
-            .get("generated/manifest/dcat.jsonld")
-            .ok_or(PackageError::Derivation)?
-            .bytes
-            .clone(),
-    )?;
+    let registry_manifest = compiled
+        .artifacts()
+        .get("generated/manifest/registry-manifest.json");
+    let dcat = compiled.artifacts().get("generated/manifest/dcat.jsonld");
+    match (compiled.manifest_projection(), registry_manifest, dcat) {
+        (Some(_), Some(registry_manifest), Some(dcat)) => {
+            insert_generated(
+                files,
+                "manifest/registry-manifest.json",
+                registry_manifest.bytes.clone(),
+            )?;
+            insert_generated(files, "manifest/dcat.jsonld", dcat.bytes.clone())?;
+        }
+        (None, None, None) => {}
+        _ => return Err(PackageError::Derivation),
+    }
     for (path, artifact) in compiled.artifacts().entries() {
         let Some(schema_name) = path.strip_prefix("generated/schemas/") else {
             continue;

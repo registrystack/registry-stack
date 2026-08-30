@@ -534,32 +534,38 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
               {"id":"secret","type":"string","maxLength":128,"classification":"restricted"},
               {"id":"quantity","type":"int64","required":true,"classification":"public"}
             ],
-            "accessProfiles":[{
-              "id":"operator","default":true,"principalClaim":"registry_principal",
-              "requiredPurposes":["case-management","case-review"],
-              "operations":["create","get","patch","batch"],
-              "readableFields":["jurisdiction","label","locked","quantity"],
-              "writableFields":["jurisdiction","label","secret","quantity"],
-              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
-            },{
-              "id":"batch-creator","principalClaim":"registry_principal",
-              "requiredPurposes":["case-management"],
-              "operations":["create","batch"],
-              "readableFields":["jurisdiction","label","locked","quantity"],
-              "writableFields":["jurisdiction","label","secret","quantity"],
-              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
-            },{
-              "id":"operator-minimal","principalClaim":"registry_principal",
-              "requiredPurposes":["case-management"],
-              "operations":["create","patch","batch"],
-              "readableFields":["label"],
-              "writableFields":["jurisdiction","label","secret","quantity"],
-              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
-            }],
             "events":[
               {"id":"widget-created","trigger":"created","projection":["label"]},
               {"id":"widget-patched","trigger":"patched","projection":["label","quantity"]}
             ]
+          }],
+          "accessProfiles":[{
+            "id":"operator","default":true,"principalClaim":"registry_principal",
+            "requiredPurposes":["case-management","case-review"],
+            "grants":[{
+              "entity":"widget","operations":["create","get","patch","batch"],
+              "readableFields":["jurisdiction","label","locked","quantity"],
+              "writableFields":["jurisdiction","label","secret","quantity"],
+              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
+            }]
+          },{
+            "id":"batch-creator","principalClaim":"registry_principal",
+            "requiredPurposes":["case-management"],
+            "grants":[{
+              "entity":"widget","operations":["create","batch"],
+              "readableFields":["jurisdiction","label","locked","quantity"],
+              "writableFields":["jurisdiction","label","secret","quantity"],
+              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
+            }]
+          },{
+            "id":"operator-minimal","principalClaim":"registry_principal",
+            "requiredPurposes":["case-management"],
+            "grants":[{
+              "entity":"widget","operations":["create","patch","batch"],
+              "readableFields":["label"],
+              "writableFields":["jurisdiction","label","secret","quantity"],
+              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
+            }]
           }]
         }"#,
     )

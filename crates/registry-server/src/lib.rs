@@ -12,6 +12,8 @@ pub mod auth;
 pub mod compiler;
 pub mod contract;
 #[cfg(feature = "runtime")]
+pub mod correlation;
+#[cfg(feature = "runtime")]
 pub mod cursor;
 pub mod data;
 pub mod derived_sql;

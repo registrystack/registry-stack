@@ -228,7 +228,9 @@ eventDelivery:
 """
     else:
         event_destinations = "eventDestinations: {}\n"
-    return f"""listener:
+    return f"""apiVersion: registry.registrystack.org/server-runtime/v1alpha1
+kind: RegistryServerRuntimeConfig
+listener:
   bind: {bind}
   trustedProxy: direct
 identity:

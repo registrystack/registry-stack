@@ -647,6 +647,9 @@ jobs:
       - name: Registry Server clean-checkout adopter workflow
         run: products/registry-server/scripts/test-adopter-workflow.sh
 
+      - name: Registry Server generic quickstart
+        run: products/registry-server/quickstart/run.sh --smoke
+
   identifiers:
     name: Public identifier catalog
     needs: changes

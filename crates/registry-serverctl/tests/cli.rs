@@ -590,28 +590,27 @@ fn init_creates_a_domain_neutral_project_that_checks_immediately() {
 
     assert!(output.status.success(), "{output:?}");
     assert!(destination.join("registry.yaml").is_file());
-    assert!(destination.join("modules/core/module.yaml").is_file());
+    assert!(!destination.join("modules").exists());
     assert!(destination.join("tests/journeys.yaml").is_file());
+    let registry =
+        fs::read_to_string(destination.join("registry.yaml")).expect("initialized project reads");
+    assert!(!registry.contains("manifestProjection"));
+    assert!(!registry.contains("modules:"));
     let journeys = fs::read_to_string(destination.join("tests/journeys.yaml"))
         .expect("initialized fixture journeys read");
     assert!(journeys.contains("entity: record"));
     assert!(journeys.contains("accessProfile: operator"));
+    assert!(journeys.contains("scopes: [registry:generic:operate]"));
     assert!(journeys.contains("purpose: registry-operations"));
     assert!(!journeys.contains("token"));
     let initialized_project = parse_project_yaml(
-        &fs::read(destination.join("registry.yaml")).expect("initialized project reads"),
+        &fs::read(destination.join("registry.yaml")).expect("initialized project bytes read"),
     )
     .expect("initialized project parses");
-    let initialized_module = parse_module_yaml(
-        &fs::read(destination.join("modules/core/module.yaml")).expect("initialized module reads"),
-    )
-    .expect("initialized module parses");
-    let compiled = compile_project(
-        &initialized_project,
-        &[initialized_module],
-        CompileProfile::Authoring,
-    )
-    .expect("initialized project compiles");
+    assert!(initialized_project.manifest_projection.is_none());
+    assert!(initialized_project.modules.is_empty());
+    let compiled = compile_project(&initialized_project, &[], CompileProfile::Authoring)
+        .expect("initialized project compiles");
     validate_fixture_journeys(journeys.as_bytes(), &compiled)
         .expect("initialized fixture journeys resolve against the compiled project");
     let report = json_stdout(&output);
@@ -631,6 +630,152 @@ fn init_creates_a_domain_neutral_project_that_checks_immediately() {
     ]);
     assert!(check.status.success(), "{check:?}");
     assert_eq!(json_stdout(&check)["ok"], true);
+}
+
+#[test]
+fn project_lock_writes_module_digests_and_is_idempotent() {
+    let project = TestProject::from_registry_source(modular_project_without_locks());
+    let module_directory = project.path().join("modules/core");
+    fs::create_dir_all(&module_directory).expect("module directory creates");
+    fs::write(
+        module_directory.join("module.yaml"),
+        modular_project_module(),
+    )
+    .expect("module source writes");
+    let module = parse_module_yaml(modular_project_module()).expect("module parses");
+    let expected_digest = module_digest(&module);
+
+    let locked = registry_serverctl(&["--format", "json", "project", "lock", path(project.path())]);
+
+    assert!(locked.status.success(), "{locked:?}");
+    assert!(locked.stderr.is_empty());
+    let report = json_stdout(&locked);
+    assert_eq!(report["command"], "project lock");
+    assert_eq!(report["explanation"]["changed"], true);
+    assert_eq!(report["explanation"]["modules"][0]["id"], "core");
+    assert_eq!(report["explanation"]["modules"][0]["status"], "added");
+    assert_eq!(
+        report["explanation"]["modules"][0]["digest"],
+        expected_digest
+    );
+    assert_eq!(report["artifacts"][0]["path"], "registry.yaml");
+    let project_source = fs::read(project.path().join("registry.yaml")).expect("project reads");
+    let parsed = parse_project_yaml(&project_source).expect("locked project parses");
+    assert_eq!(parsed.modules.len(), 1);
+    assert_eq!(parsed.modules[0].id, "core");
+    assert_eq!(parsed.modules[0].version, "1");
+    assert_eq!(
+        parsed.modules[0].digest.as_deref(),
+        Some(expected_digest.as_str())
+    );
+
+    let check = registry_serverctl(&["--format", "json", "check", path(project.path())]);
+    assert!(check.status.success(), "{check:?}");
+
+    let second = registry_serverctl(&["--format", "json", "project", "lock", path(project.path())]);
+    assert!(second.status.success(), "{second:?}");
+    let second_report = json_stdout(&second);
+    assert_eq!(second_report["explanation"]["changed"], false);
+    assert_eq!(
+        second_report["explanation"]["modules"][0]["status"],
+        "unchanged"
+    );
+    assert!(second_report.get("artifacts").is_none());
+
+    let check_only = registry_serverctl(&[
+        "--format",
+        "json",
+        "project",
+        "lock",
+        path(project.path()),
+        "--check",
+    ]);
+    assert!(check_only.status.success(), "{check_only:?}");
+    assert_eq!(json_stdout(&check_only)["explanation"]["changed"], false);
+}
+
+#[test]
+fn project_lock_check_refuses_stale_digest_without_rewriting() {
+    let project = TestProject::from_registry_source(modular_project_without_locks());
+    let module_directory = project.path().join("modules/core");
+    fs::create_dir_all(&module_directory).expect("module directory creates");
+    fs::write(
+        module_directory.join("module.yaml"),
+        modular_project_module(),
+    )
+    .expect("module source writes");
+    let locked = registry_serverctl(&["--format", "json", "project", "lock", path(project.path())]);
+    assert!(locked.status.success(), "{locked:?}");
+    let locked_project = fs::read(project.path().join("registry.yaml")).expect("project reads");
+
+    fs::write(
+        module_directory.join("module.yaml"),
+        String::from_utf8(modular_project_module().to_vec())
+            .expect("module is UTF-8")
+            .replace("maxLength: 16", "maxLength: 17"),
+    )
+    .expect("module source changes");
+    let stale = registry_serverctl(&[
+        "--format",
+        "json",
+        "project",
+        "lock",
+        path(project.path()),
+        "--check",
+    ]);
+
+    assert_eq!(stale.status.code(), Some(1), "{stale:?}");
+    assert!(stale.stderr.is_empty());
+    let report = json_stdout(&stale);
+    assert_eq!(report["diagnostics"][0]["code"], "module.lock.stale");
+    assert_tool_diagnostic(
+        &report["diagnostics"][0],
+        "registry_project",
+        "update_module_locks",
+    );
+    assert_eq!(
+        fs::read(project.path().join("registry.yaml")).expect("project rereads"),
+        locked_project
+    );
+}
+
+#[test]
+fn project_lock_refuses_missing_locked_source_without_rendering_values() {
+    const MODULE_CANARY: &str = "missing-module-canary";
+    let project = TestProject::from_registry_source(
+        format!(
+            r#"apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: modular-lock-missing
+  version: 1
+  defaultLanguage: en
+modules:
+  - id: {MODULE_CANARY}
+    version: 1
+    digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+"#
+        )
+        .as_bytes(),
+    );
+    let original = fs::read(project.path().join("registry.yaml")).expect("project reads");
+
+    let refused =
+        registry_serverctl(&["--format", "json", "project", "lock", path(project.path())]);
+
+    assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+    assert!(refused.stderr.is_empty());
+    let rendered = String::from_utf8(refused.stdout).expect("diagnostic is UTF-8");
+    assert!(!rendered.contains(MODULE_CANARY));
+    let report: Value = serde_json::from_str(&rendered).expect("diagnostic JSON parses");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "module.lock.source_missing"
+    );
+    assert_eq!(
+        fs::read(project.path().join("registry.yaml")).expect("project rereads"),
+        original
+    );
 }
 
 #[test]
@@ -887,7 +1032,10 @@ fn explain_reports_are_derived_from_compiled_inventories() {
     assert_eq!(planner_list["profile"], "site-planner");
     assert_eq!(planner_list["routeId"], "records.asset-item.list");
     assert_eq!(planner_list["apiFields"][0]["apiName"], "assetCode");
+    assert_eq!(planner_list["apiFields"][0]["field"], "asset-code");
     assert_eq!(planner_list["apiFields"][0]["sourceKind"], "stored");
+    assert_eq!(planner_list["filterable"][0]["apiName"], "assetCode");
+    assert_eq!(planner_list["filterable"][0]["field"], "asset-code");
     assert_eq!(
         planner_list["filterable"][0]["operators"],
         json!([
@@ -899,10 +1047,118 @@ fn explain_reports_are_derived_from_compiled_inventories() {
             "contains"
         ])
     );
+    assert_eq!(
+        planner_list["filterable"][0]["wireOperators"],
+        json!([
+            "contains",
+            "eq",
+            "eq null",
+            "in",
+            "ne",
+            "ne null",
+            "startswith"
+        ])
+    );
+    assert!(planner_list["filterable"][0]["examples"]
+        .as_array()
+        .expect("filter examples are an array")
+        .iter()
+        .any(|example| example == "$filter=assetCode eq 'example'"));
+    assert!(planner_list["sortable"]
+        .as_array()
+        .expect("sortable is an array")
+        .is_empty());
+    assert_eq!(planner_list["wire"]["filter"], "$filter");
+    assert_eq!(planner_list["wire"]["orderBy"], "$orderby");
     assert_eq!(planner_list["bounds"]["maxPageSize"], 100);
+    assert_eq!(planner_list["bounds"]["maxInValues"], 100);
     assert!(!String::from_utf8(queries.stdout)
         .expect("queries JSON is UTF-8")
         .contains("registry_data"));
+}
+
+#[test]
+fn explain_query_filter_examples_match_field_types() {
+    let project = TestProject::from_registry_source(
+        br#"apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: typed-query-examples
+  version: 1
+  defaultLanguage: en
+entities:
+  - id: typed-record
+    route: typed-records
+    mutationMode: create_only
+    fields:
+      - id: label
+        type: string
+        maxLength: 64
+        classification: internal
+      - id: score
+        type: int64
+        classification: internal
+      - id: enabled
+        type: boolean
+        classification: internal
+      - id: observed-on
+        type: date
+        classification: internal
+      - id: observed-at
+        type: timestamp
+        classification: internal
+accessProfiles:
+  - id: reader
+    principalClaim: principal
+    grants:
+      - entity: typed-record
+        operations: [list]
+        readableFields: [label, score, enabled, observed-on, observed-at]
+        filterableFields: [label, score, enabled, observed-on, observed-at]
+"#,
+    );
+
+    let output = registry_serverctl(&[
+        "--format",
+        "json",
+        "explain",
+        "queries",
+        path(project.path()),
+    ]);
+
+    assert!(output.status.success(), "{output:?}");
+    let report = json_stdout(&output);
+    let operation = report["explanation"]["operations"]
+        .as_array()
+        .expect("operations are an array")
+        .iter()
+        .find(|operation| operation["id"] == "records.typed-record.reader.list")
+        .expect("typed query operation is explained");
+    assert_filter_example(operation, "label", "$filter=label eq 'example'");
+    assert_filter_example(operation, "score", "$filter=score eq 1");
+    assert_filter_example(operation, "score", "$filter=score ge 1");
+    assert_filter_example(operation, "enabled", "$filter=enabled eq true");
+    assert_filter_example(operation, "enabled", "$filter=enabled in (true,false)");
+    assert_filter_example(
+        operation,
+        "observedOn",
+        "$filter=observedOn eq '2026-01-02'",
+    );
+    assert_filter_example(
+        operation,
+        "observedOn",
+        "$filter=observedOn ge '2026-01-02'",
+    );
+    assert_filter_example(
+        operation,
+        "observedAt",
+        "$filter=observedAt eq '2026-01-02T03:04:05Z'",
+    );
+    assert_filter_example(
+        operation,
+        "observedAt",
+        "$filter=observedAt ge '2026-01-02T03:04:05Z'",
+    );
 }
 
 #[test]
@@ -2807,6 +3063,36 @@ fn package_project_bytes(module_digest: &str) -> Vec<u8> {
     .into_bytes()
 }
 
+fn modular_project_without_locks() -> &'static [u8] {
+    br#"apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: modular-lock-fixture
+  version: 1
+  defaultLanguage: en
+"#
+}
+
+fn modular_project_module() -> &'static [u8] {
+    br#"id: core
+version: 1
+entities:
+  - id: record
+    route: records
+    mutationMode: create_only
+    fields:
+      - id: code
+        type: string
+        maxLength: 16
+        classification: internal
+    accessProfiles:
+      - id: reader
+        principalClaim: principal
+        operations: [get, list]
+        readableFields: [code]
+"#
+}
+
 fn package_module_bytes() -> Vec<u8> {
     br#"{"id":"core","version":"1","entities":[{"id":"record","route":"records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":16,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}]}]}"#
         .to_vec()
@@ -2898,7 +3184,9 @@ fn write_runtime_config(
     fs::write(
         &path,
         format!(
-            r#"listener:
+            r#"apiVersion: registry.registrystack.org/server-runtime/v1alpha1
+kind: RegistryServerRuntimeConfig
+listener:
   bind: {bind}
   trustedProxy: direct
 identity:
@@ -3040,6 +3328,20 @@ fn assert_inspection_refusal(
     let report: Value = serde_json::from_str(&rendered).expect("refusal JSON parses");
     assert_eq!(report["diagnostics"][0]["code"], expected_code);
     assert_tool_diagnostic(&report["diagnostics"][0], artifact, action);
+}
+
+fn assert_filter_example(operation: &Value, api_name: &str, example: &str) {
+    let field = operation["filterable"]
+        .as_array()
+        .expect("filterable is an array")
+        .iter()
+        .find(|field| field["apiName"] == api_name)
+        .unwrap_or_else(|| panic!("{api_name} filter field is present"));
+    assert!(field["examples"]
+        .as_array()
+        .expect("examples is an array")
+        .iter()
+        .any(|candidate| candidate == example));
 }
 
 fn path(path: &Path) -> &str {

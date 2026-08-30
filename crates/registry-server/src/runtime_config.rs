@@ -19,6 +19,10 @@ use registry_platform_config::{
     expand_config_env_vars_with, SecretError, SecretProvider, SecretReference, SecretResolver,
 };
 use registry_platform_crypto::{parse_json_strict, PublicJwk, SigningAlgorithm};
+#[cfg(feature = "schema")]
+use registry_platform_httputil::destination::{
+    MAX_DESTINATION_ORIGIN_URL_BYTES, MAX_DESTINATION_PRIVATE_CIDRS, MAX_DESTINATION_TARGET_BYTES,
+};
 use registry_platform_oidc::{
     fetch_discovery, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifierConfig,
 };
@@ -27,6 +31,10 @@ use serde_json::{Map, Value};
 use thiserror::Error;
 use zeroize::Zeroizing;
 
+#[cfg(feature = "schema")]
+use crate::compiler::{
+    MAX_WEBHOOK_ATTEMPTS, MAX_WEBHOOK_ATTEMPT_TIMEOUT_MS, MIN_WEBHOOK_ATTEMPT_TIMEOUT_MS,
+};
 use crate::{
     auth::AuthorityClaimConfig,
     cursor::CursorCodec,
@@ -50,6 +58,47 @@ const MAX_RSA_MODULUS_BITS: usize = 8192;
 const MAX_RSA_EXPONENT_BYTES: usize = 8;
 const DEFAULT_WEBHOOK_PAYLOAD_RETENTION_DAYS: u8 = 7;
 const MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS: u8 = 30;
+const DEFAULT_POOL_WAIT_TIMEOUT_MILLISECONDS: u64 = 30_000;
+const DEFAULT_POOL_CREATE_TIMEOUT_MILLISECONDS: u64 = 30_000;
+const DEFAULT_POOL_RECYCLE_TIMEOUT_MILLISECONDS: u64 = 30_000;
+const DEFAULT_JWKS_CACHE_TTL_SECONDS: u64 = 600;
+const DEFAULT_JWKS_NEGATIVE_CACHE_TTL_SECONDS: u64 = 60;
+const DEFAULT_JWKS_REFRESH_COOLDOWN_SECONDS: u64 = 30;
+const DEFAULT_JWKS_MAX_DOCUMENT_BYTES: u64 = 65_536;
+const DEFAULT_JWKS_REQUEST_TIMEOUT_MILLISECONDS: u64 = 5_000;
+const DEFAULT_JWKS_OUTAGE_TOLERANCE_SECONDS: u64 = 900;
+const DEFAULT_CURSOR_MAX_AGE_SECONDS: u64 = 300;
+const DEFAULT_HTTP_REQUEST_TIMEOUT_MILLISECONDS: u64 = 10_000;
+const DEFAULT_SHUTDOWN_GRACE_MILLISECONDS: u64 = 30_000;
+const DEFAULT_RECORD_LOCK_MILLISECONDS: u64 = 5_000;
+const DEFAULT_MIGRATION_LOCK_MILLISECONDS: u64 = 30_000;
+const DEFAULT_MIGRATION_STATEMENT_MILLISECONDS: u64 = 60_000;
+#[cfg(feature = "schema")]
+const MAX_DATABASE_POOL_SIZE: u64 = 128;
+#[cfg(feature = "schema")]
+const SECRET_REFERENCE_SCHEMA_PATTERN: &str =
+    "^(secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$";
+#[cfg(feature = "schema")]
+const MAX_SECRET_REFERENCE_SCHEMA_LENGTH: usize = "secret:file/".len() + 128;
+#[cfg(feature = "schema")]
+const SQL_IDENTIFIER_SCHEMA_PATTERN: &str = "^[_a-z][_a-z0-9]{0,62}$";
+#[cfg(feature = "schema")]
+const CLAIM_NAME_SCHEMA_PATTERN: &str = "^[\\x21-\\x7E]+$";
+#[cfg(feature = "schema")]
+const LIST_VALUE_SCHEMA_PATTERN: &str = "^[^\\x00-\\x20\\x7F]+$";
+#[cfg(feature = "schema")]
+const VALUE_NO_EDGE_WHITESPACE_SCHEMA_PATTERN: &str =
+    "^[^\\s\\x00-\\x1F\\x7F](?:[^\\x00-\\x1F\\x7F]*[^\\s\\x00-\\x1F\\x7F])?$";
+#[cfg(feature = "schema")]
+const SCOPE_SEPARATOR_SCHEMA_PATTERN: &str = "^[^A-Za-z0-9\\x00-\\x1F\\x7F]$";
+#[cfg(feature = "schema")]
+const EVENT_DESTINATION_ID_SCHEMA_PATTERN: &str = "^[a-z][a-z0-9_-]{0,63}$";
+#[cfg(feature = "schema")]
+const EVENT_DESTINATION_PATH_SCHEMA_PATTERN: &str =
+    "^/[\\x20-\\x22\\x24\\x26-\\x3E\\x40-\\x5B\\x5D-\\x7E]*$";
+
+pub const RUNTIME_CONFIG_API_VERSION: &str = "registry.registrystack.org/server-runtime/v1alpha1";
+pub const RUNTIME_CONFIG_KIND: &str = "RegistryServerRuntimeConfig";
 
 #[derive(Debug, Error, Clone, Copy, Eq, PartialEq)]
 pub enum RuntimeConfigError {
@@ -63,6 +112,10 @@ pub enum RuntimeConfigError {
     EnvExpansion,
     #[error("the runtime configuration document is invalid")]
     Document,
+    #[error("runtime configuration uses an unsupported apiVersion")]
+    InvalidApiVersion,
+    #[error("runtime configuration uses an unsupported kind")]
+    InvalidKind,
     #[error("runtime configuration contains a governed member")]
     GovernedMember,
     #[error("runtime configuration contains an invalid deployment binding")]
@@ -87,6 +140,84 @@ pub enum RuntimeConfigError {
     InvalidBounds,
     #[error("runtime configuration secret resolution failed")]
     Secret,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeConfigErrorMetadata {
+    code: &'static str,
+    path: &'static str,
+}
+
+impl RuntimeConfigErrorMetadata {
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        self.code
+    }
+
+    #[must_use]
+    pub const fn path(self) -> &'static str {
+        self.path
+    }
+}
+
+impl RuntimeConfigError {
+    #[must_use]
+    pub const fn metadata(self) -> RuntimeConfigErrorMetadata {
+        RuntimeConfigErrorMetadata {
+            code: self.code(),
+            path: self.path(),
+        }
+    }
+
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Unavailable => "runtime_config.unavailable",
+            Self::UnsafeFile => "runtime_config.unsafe_file",
+            Self::Bounds => "runtime_config.bounds",
+            Self::EnvExpansion => "runtime_config.env_expansion",
+            Self::Document => "runtime_config.document",
+            Self::InvalidApiVersion => "runtime_config.invalid_api_version",
+            Self::InvalidKind => "runtime_config.invalid_kind",
+            Self::GovernedMember => "runtime_config.governed_member",
+            Self::InvalidBinding => "runtime_config.invalid_binding",
+            Self::InvalidListener => "runtime_config.invalid_listener",
+            Self::InvalidSecretProvider => "runtime_config.invalid_secret_provider",
+            Self::InvalidDatabase => "runtime_config.invalid_database",
+            Self::InvalidPackage => "runtime_config.invalid_package",
+            Self::InvalidOidc => "runtime_config.invalid_oidc",
+            Self::InvalidAudit => "runtime_config.invalid_audit",
+            Self::InvalidCursor => "runtime_config.invalid_cursor",
+            Self::InvalidEventDestination => "runtime_config.invalid_event_destination",
+            Self::InvalidBounds => "runtime_config.invalid_bounds",
+            Self::Secret => "runtime_config.secret",
+        }
+    }
+
+    #[must_use]
+    pub const fn path(self) -> &'static str {
+        match self {
+            Self::Unavailable
+            | Self::UnsafeFile
+            | Self::Bounds
+            | Self::EnvExpansion
+            | Self::Document
+            | Self::GovernedMember
+            | Self::InvalidBinding
+            | Self::Secret => "/",
+            Self::InvalidApiVersion => "/apiVersion",
+            Self::InvalidKind => "/kind",
+            Self::InvalidListener => "/listener",
+            Self::InvalidSecretProvider => "/secretProviders",
+            Self::InvalidDatabase => "/database",
+            Self::InvalidPackage => "/package",
+            Self::InvalidOidc => "/authentication/oidc",
+            Self::InvalidAudit => "/audit",
+            Self::InvalidCursor => "/cursor",
+            Self::InvalidEventDestination => "/eventDestinations",
+            Self::InvalidBounds => "/operationalTimeouts",
+        }
+    }
 }
 
 impl From<SecretError> for RuntimeConfigError {
@@ -207,6 +338,12 @@ pub struct RuntimeConfig {
 
 impl RuntimeConfig {
     fn from_raw(raw: RawRuntimeConfig) -> Result<Self> {
+        if raw.api_version != RUNTIME_CONFIG_API_VERSION {
+            return Err(RuntimeConfigError::InvalidApiVersion);
+        }
+        if raw.kind != RUNTIME_CONFIG_KIND {
+            return Err(RuntimeConfigError::InvalidKind);
+        }
         let listener = ListenerConfig::from_raw(raw.listener)?;
         let identity = DeploymentIdentity::from_raw(raw.identity)?;
         let secret_providers = SecretProvidersConfig::from_raw(raw.secret_providers)?;
@@ -442,6 +579,7 @@ impl fmt::Debug for ListenerConfig {
     }
 }
 
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum TrustedProxyPosture {
@@ -855,6 +993,7 @@ impl fmt::Debug for OidcVerifierConfig {
     }
 }
 
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 pub enum OidcAlgorithm {
     EdDSA,
@@ -1362,9 +1501,12 @@ pub(crate) fn parse_secret_reference(
     SecretReference::parse(value).map_err(|_| error)
 }
 
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawRuntimeConfig {
+    api_version: String,
+    kind: String,
     listener: RawListenerConfig,
     identity: RawDeploymentIdentity,
     secret_providers: RawSecretProvidersConfig,
@@ -1375,11 +1517,15 @@ struct RawRuntimeConfig {
     cursor: RawCursorConfig,
     #[serde(default)]
     event_destinations: RawEventDestinationConfigs,
+    /// Optional event-delivery tuning. Defaults to the server's bounded retention policy.
     #[serde(default)]
     event_delivery: RawEventDeliveryConfig,
+    /// Optional operational request, shutdown, locking, and migration timeout tuning.
+    #[serde(default)]
     operational_timeouts: RawOperationalTimeouts,
 }
 
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawListenerConfig {
@@ -1387,6 +1533,7 @@ struct RawListenerConfig {
     trusted_proxy: TrustedProxyPosture,
 }
 
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawDeploymentIdentity {
@@ -1396,6 +1543,7 @@ struct RawDeploymentIdentity {
     database_initialization_environment: String,
 }
 
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawSecretProvidersConfig {
@@ -1403,16 +1551,19 @@ struct RawSecretProvidersConfig {
     file: Option<RawFileSecretProviderConfig>,
 }
 
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawEnvironmentSecretProviderConfig {}
 
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawFileSecretProviderConfig {
     root: PathBuf,
 }
 
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawDatabaseConfig {
@@ -1421,22 +1572,33 @@ struct RawDatabaseConfig {
     pool: RawPoolBounds,
     roles: RawSqlRoles,
     #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(skip))]
     plaintext: Option<bool>,
     #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(skip))]
     url: Option<String>,
     #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(skip))]
     password: Option<String>,
 }
 
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawPoolBounds {
     max_size: usize,
+    /// Defaults to the bounded PostgreSQL pool wait timeout.
+    #[serde(default = "default_pool_wait_timeout_milliseconds")]
     wait_timeout_milliseconds: u64,
+    /// Defaults to the bounded PostgreSQL pool connection-creation timeout.
+    #[serde(default = "default_pool_create_timeout_milliseconds")]
     create_timeout_milliseconds: u64,
+    /// Defaults to the bounded PostgreSQL pool connection-recycle timeout.
+    #[serde(default = "default_pool_recycle_timeout_milliseconds")]
     recycle_timeout_milliseconds: u64,
 }
 
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawSqlRoles {
@@ -1444,6 +1606,7 @@ struct RawSqlRoles {
     runtime: String,
 }
 
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawPackageConfig {
@@ -1454,6 +1617,7 @@ struct RawPackageConfig {
     active_sequence: u64,
 }
 
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawAuthenticationConfig {
@@ -1461,6 +1625,7 @@ struct RawAuthenticationConfig {
     authority_claims: RawAuthorityClaimsConfig,
 }
 
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawOidcVerifierConfig {
@@ -1476,11 +1641,14 @@ struct RawOidcVerifierConfig {
     denied_kids: Vec<String>,
     max_token_lifetime_seconds: u64,
     leeway_milliseconds: u64,
+    /// Optional JWKS fetch and cache tuning. Defaults to bounded cache behavior.
+    #[serde(default)]
     jwks_cache: RawJwksCacheConfig,
     #[serde(default)]
     jwks_source: Option<RawOidcJwksSource>,
 }
 
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(
     rename_all = "camelCase",
@@ -1493,17 +1661,31 @@ enum RawOidcJwksSource {
     Static { document_ref: String },
 }
 
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawJwksCacheConfig {
+    /// Defaults to the bounded JWKS cache time-to-live.
+    #[serde(default = "default_jwks_cache_ttl_seconds")]
     cache_ttl_seconds: u64,
+    /// Defaults to the bounded JWKS negative-cache time-to-live.
+    #[serde(default = "default_jwks_negative_cache_ttl_seconds")]
     negative_cache_ttl_seconds: u64,
+    /// Defaults to the bounded JWKS refresh cooldown.
+    #[serde(default = "default_jwks_refresh_cooldown_seconds")]
     refresh_cooldown_seconds: u64,
+    /// Defaults to the bounded maximum JWKS document size.
+    #[serde(default = "default_jwks_max_document_bytes")]
     max_document_bytes: u64,
+    /// Defaults to the bounded JWKS fetch timeout.
+    #[serde(default = "default_jwks_request_timeout_milliseconds")]
     request_timeout_milliseconds: u64,
+    /// Defaults to the bounded cached-key outage tolerance.
+    #[serde(default = "default_jwks_outage_tolerance_seconds")]
     outage_tolerance_seconds: u64,
 }
 
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawAuthorityClaimsConfig {
@@ -1512,22 +1694,28 @@ struct RawAuthorityClaimsConfig {
     purpose: Option<String>,
 }
 
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawAuditConfig {
     hash_key_ref: String,
 }
 
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawCursorConfig {
     secret_ref: String,
+    /// Defaults to the bounded cursor validity lifetime.
+    #[serde(default = "default_cursor_max_age_seconds")]
     max_age_seconds: u64,
 }
 
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawEventDeliveryConfig {
+    /// Defaults to the bounded retained payload lifetime for pending or dead-letter webhook work.
     #[serde(default = "default_webhook_payload_retention_days")]
     payload_retention_days: u8,
 }
@@ -1544,14 +1732,614 @@ const fn default_webhook_payload_retention_days() -> u8 {
     DEFAULT_WEBHOOK_PAYLOAD_RETENTION_DAYS
 }
 
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawOperationalTimeouts {
+    /// Defaults to the bounded per-request HTTP timeout.
+    #[serde(default = "default_http_request_timeout_milliseconds")]
     http_request_milliseconds: u64,
+    /// Defaults to the bounded graceful-shutdown timeout.
+    #[serde(default = "default_shutdown_grace_milliseconds")]
     shutdown_grace_milliseconds: u64,
+    /// Defaults to the bounded record lock timeout.
+    #[serde(default = "default_record_lock_milliseconds")]
     record_lock_milliseconds: u64,
+    /// Defaults to the bounded migration lock timeout.
+    #[serde(default = "default_migration_lock_milliseconds")]
     migration_lock_milliseconds: u64,
+    /// Defaults to the bounded migration statement timeout.
+    #[serde(default = "default_migration_statement_milliseconds")]
     migration_statement_milliseconds: u64,
+}
+
+impl Default for RawOperationalTimeouts {
+    fn default() -> Self {
+        Self {
+            http_request_milliseconds: default_http_request_timeout_milliseconds(),
+            shutdown_grace_milliseconds: default_shutdown_grace_milliseconds(),
+            record_lock_milliseconds: default_record_lock_milliseconds(),
+            migration_lock_milliseconds: default_migration_lock_milliseconds(),
+            migration_statement_milliseconds: default_migration_statement_milliseconds(),
+        }
+    }
+}
+
+impl Default for RawJwksCacheConfig {
+    fn default() -> Self {
+        Self {
+            cache_ttl_seconds: default_jwks_cache_ttl_seconds(),
+            negative_cache_ttl_seconds: default_jwks_negative_cache_ttl_seconds(),
+            refresh_cooldown_seconds: default_jwks_refresh_cooldown_seconds(),
+            max_document_bytes: default_jwks_max_document_bytes(),
+            request_timeout_milliseconds: default_jwks_request_timeout_milliseconds(),
+            outage_tolerance_seconds: default_jwks_outage_tolerance_seconds(),
+        }
+    }
+}
+
+const fn default_pool_wait_timeout_milliseconds() -> u64 {
+    DEFAULT_POOL_WAIT_TIMEOUT_MILLISECONDS
+}
+
+const fn default_pool_create_timeout_milliseconds() -> u64 {
+    DEFAULT_POOL_CREATE_TIMEOUT_MILLISECONDS
+}
+
+const fn default_pool_recycle_timeout_milliseconds() -> u64 {
+    DEFAULT_POOL_RECYCLE_TIMEOUT_MILLISECONDS
+}
+
+const fn default_jwks_cache_ttl_seconds() -> u64 {
+    DEFAULT_JWKS_CACHE_TTL_SECONDS
+}
+
+const fn default_jwks_negative_cache_ttl_seconds() -> u64 {
+    DEFAULT_JWKS_NEGATIVE_CACHE_TTL_SECONDS
+}
+
+const fn default_jwks_refresh_cooldown_seconds() -> u64 {
+    DEFAULT_JWKS_REFRESH_COOLDOWN_SECONDS
+}
+
+const fn default_jwks_max_document_bytes() -> u64 {
+    DEFAULT_JWKS_MAX_DOCUMENT_BYTES
+}
+
+const fn default_jwks_request_timeout_milliseconds() -> u64 {
+    DEFAULT_JWKS_REQUEST_TIMEOUT_MILLISECONDS
+}
+
+const fn default_jwks_outage_tolerance_seconds() -> u64 {
+    DEFAULT_JWKS_OUTAGE_TOLERANCE_SECONDS
+}
+
+const fn default_cursor_max_age_seconds() -> u64 {
+    DEFAULT_CURSOR_MAX_AGE_SECONDS
+}
+
+const fn default_http_request_timeout_milliseconds() -> u64 {
+    DEFAULT_HTTP_REQUEST_TIMEOUT_MILLISECONDS
+}
+
+const fn default_shutdown_grace_milliseconds() -> u64 {
+    DEFAULT_SHUTDOWN_GRACE_MILLISECONDS
+}
+
+const fn default_record_lock_milliseconds() -> u64 {
+    DEFAULT_RECORD_LOCK_MILLISECONDS
+}
+
+const fn default_migration_lock_milliseconds() -> u64 {
+    DEFAULT_MIGRATION_LOCK_MILLISECONDS
+}
+
+const fn default_migration_statement_milliseconds() -> u64 {
+    DEFAULT_MIGRATION_STATEMENT_MILLISECONDS
+}
+
+#[cfg(feature = "schema")]
+pub fn runtime_config_schema() -> std::result::Result<Value, serde_json::Error> {
+    let mut schema = serde_json::to_value(schemars::schema_for!(RawRuntimeConfig))?;
+    install_schema_const_property(&mut schema, "apiVersion", RUNTIME_CONFIG_API_VERSION);
+    install_schema_const_property(&mut schema, "kind", RUNTIME_CONFIG_KIND);
+    install_schema_constraints(&mut schema);
+    for pointer in [
+        "/properties/eventDestinations",
+        "/$defs/RawAuthorityClaimsConfig/properties/purpose",
+        "/$defs/RawDatabaseConfig/properties/password",
+        "/$defs/RawDatabaseConfig/properties/plaintext",
+        "/$defs/RawDatabaseConfig/properties/url",
+        "/$defs/RawEventDestinationConfig/properties/tls",
+        "/$defs/RawEventDestinationTlsConfig/properties/caBundleRef",
+        "/$defs/RawEventDestinationTlsConfig/properties/clientIdentityRef",
+        "/$defs/RawOidcVerifierConfig/properties/allowedClients",
+        "/$defs/RawOidcVerifierConfig/properties/deniedKids",
+        "/$defs/RawOidcVerifierConfig/properties/jwksSource",
+    ] {
+        remove_schema_default(&mut schema, pointer);
+    }
+    Ok(schema)
+}
+
+#[cfg(feature = "schema")]
+fn install_schema_constraints(schema: &mut Value) {
+    for (pointer, minimum, maximum) in [
+        (
+            "/$defs/RawPoolBounds/properties/maxSize",
+            1,
+            MAX_DATABASE_POOL_SIZE,
+        ),
+        (
+            "/$defs/RawPoolBounds/properties/waitTimeoutMilliseconds",
+            1,
+            60_000,
+        ),
+        (
+            "/$defs/RawPoolBounds/properties/createTimeoutMilliseconds",
+            1,
+            60_000,
+        ),
+        (
+            "/$defs/RawPoolBounds/properties/recycleTimeoutMilliseconds",
+            1,
+            60_000,
+        ),
+        (
+            "/$defs/RawPackageConfig/properties/activeSequence",
+            1,
+            u64::MAX,
+        ),
+        (
+            "/$defs/RawOidcVerifierConfig/properties/maxTokenLifetimeSeconds",
+            1,
+            3_600,
+        ),
+        (
+            "/$defs/RawOidcVerifierConfig/properties/leewayMilliseconds",
+            0,
+            300_000,
+        ),
+        (
+            "/$defs/RawJwksCacheConfig/properties/cacheTtlSeconds",
+            1,
+            86_400,
+        ),
+        (
+            "/$defs/RawJwksCacheConfig/properties/negativeCacheTtlSeconds",
+            1,
+            3_600,
+        ),
+        (
+            "/$defs/RawJwksCacheConfig/properties/refreshCooldownSeconds",
+            1,
+            3_600,
+        ),
+        (
+            "/$defs/RawJwksCacheConfig/properties/maxDocumentBytes",
+            1,
+            MAX_JWKS_DOCUMENT_BYTES,
+        ),
+        (
+            "/$defs/RawJwksCacheConfig/properties/requestTimeoutMilliseconds",
+            1,
+            30_000,
+        ),
+        (
+            "/$defs/RawJwksCacheConfig/properties/outageToleranceSeconds",
+            0,
+            86_400,
+        ),
+        ("/$defs/RawCursorConfig/properties/maxAgeSeconds", 1, 86_400),
+        (
+            "/$defs/RawEventDeliveryConfig/properties/payloadRetentionDays",
+            1,
+            u64::from(MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS),
+        ),
+        (
+            "/$defs/RawOperationalTimeouts/properties/httpRequestMilliseconds",
+            1,
+            60_000,
+        ),
+        (
+            "/$defs/RawOperationalTimeouts/properties/shutdownGraceMilliseconds",
+            1,
+            300_000,
+        ),
+        (
+            "/$defs/RawOperationalTimeouts/properties/recordLockMilliseconds",
+            1,
+            30_000,
+        ),
+        (
+            "/$defs/RawOperationalTimeouts/properties/migrationLockMilliseconds",
+            1,
+            300_000,
+        ),
+        (
+            "/$defs/RawOperationalTimeouts/properties/migrationStatementMilliseconds",
+            1,
+            3_600_000,
+        ),
+        (
+            "/$defs/RawEventDestinationDeliveryCeilings/properties/attemptTimeoutMilliseconds",
+            u64::from(MIN_WEBHOOK_ATTEMPT_TIMEOUT_MS),
+            u64::from(MAX_WEBHOOK_ATTEMPT_TIMEOUT_MS),
+        ),
+        (
+            "/$defs/RawEventDestinationDeliveryCeilings/properties/maximumAttempts",
+            1,
+            u64::from(MAX_WEBHOOK_ATTEMPTS),
+        ),
+    ] {
+        install_schema_integer_bounds(schema, pointer, minimum, maximum);
+    }
+
+    for (pointer, minimum, maximum, pattern) in [
+        (
+            "/$defs/RawDeploymentIdentity/properties/environment",
+            1,
+            MAX_DEPLOYMENT_VALUE_BYTES,
+            VALUE_NO_EDGE_WHITESPACE_SCHEMA_PATTERN,
+        ),
+        (
+            "/$defs/RawDeploymentIdentity/properties/instanceId",
+            1,
+            MAX_DEPLOYMENT_VALUE_BYTES,
+            VALUE_NO_EDGE_WHITESPACE_SCHEMA_PATTERN,
+        ),
+        (
+            "/$defs/RawDeploymentIdentity/properties/databaseId",
+            1,
+            MAX_DEPLOYMENT_VALUE_BYTES,
+            VALUE_NO_EDGE_WHITESPACE_SCHEMA_PATTERN,
+        ),
+        (
+            "/$defs/RawDeploymentIdentity/properties/databaseInitializationEnvironment",
+            1,
+            MAX_DEPLOYMENT_VALUE_BYTES,
+            VALUE_NO_EDGE_WHITESPACE_SCHEMA_PATTERN,
+        ),
+        (
+            "/$defs/RawFileSecretProviderConfig/properties/root",
+            1,
+            MAX_PATH_BYTES,
+            "",
+        ),
+        (
+            "/$defs/RawDatabaseConfig/properties/runtimeUrlRef",
+            1,
+            MAX_SECRET_REFERENCE_SCHEMA_LENGTH,
+            SECRET_REFERENCE_SCHEMA_PATTERN,
+        ),
+        (
+            "/$defs/RawDatabaseConfig/properties/migrationUrlRef",
+            1,
+            MAX_SECRET_REFERENCE_SCHEMA_LENGTH,
+            SECRET_REFERENCE_SCHEMA_PATTERN,
+        ),
+        (
+            "/$defs/RawSqlRoles/properties/migration",
+            1,
+            63,
+            SQL_IDENTIFIER_SCHEMA_PATTERN,
+        ),
+        (
+            "/$defs/RawSqlRoles/properties/runtime",
+            1,
+            63,
+            SQL_IDENTIFIER_SCHEMA_PATTERN,
+        ),
+        (
+            "/$defs/RawPackageConfig/properties/root",
+            1,
+            MAX_PATH_BYTES,
+            "",
+        ),
+        (
+            "/$defs/RawPackageConfig/properties/trustAnchorPath",
+            1,
+            MAX_PATH_BYTES,
+            "",
+        ),
+        (
+            "/$defs/RawPackageConfig/properties/compilerSourceRevision",
+            1,
+            MAX_DEPLOYMENT_VALUE_BYTES,
+            VALUE_NO_EDGE_WHITESPACE_SCHEMA_PATTERN,
+        ),
+        (
+            "/$defs/RawPackageConfig/properties/activeRevision",
+            1,
+            MAX_DEPLOYMENT_VALUE_BYTES,
+            VALUE_NO_EDGE_WHITESPACE_SCHEMA_PATTERN,
+        ),
+        (
+            "/$defs/RawOidcVerifierConfig/properties/issuer",
+            1,
+            MAX_OIDC_VALUE_BYTES,
+            VALUE_NO_EDGE_WHITESPACE_SCHEMA_PATTERN,
+        ),
+        (
+            "/$defs/RawOidcVerifierConfig/properties/audience",
+            1,
+            MAX_OIDC_VALUE_BYTES,
+            VALUE_NO_EDGE_WHITESPACE_SCHEMA_PATTERN,
+        ),
+        (
+            "/$defs/RawOidcVerifierConfig/properties/accessTokenType",
+            1,
+            MAX_OIDC_VALUE_BYTES,
+            VALUE_NO_EDGE_WHITESPACE_SCHEMA_PATTERN,
+        ),
+        (
+            "/$defs/RawOidcVerifierConfig/properties/scopeClaim",
+            1,
+            128,
+            CLAIM_NAME_SCHEMA_PATTERN,
+        ),
+        (
+            "/$defs/RawOidcVerifierConfig/properties/scopeSeparator",
+            1,
+            1,
+            SCOPE_SEPARATOR_SCHEMA_PATTERN,
+        ),
+        (
+            "/$defs/RawOidcJwksSource/oneOf/1/properties/documentRef",
+            1,
+            MAX_SECRET_REFERENCE_SCHEMA_LENGTH,
+            SECRET_REFERENCE_SCHEMA_PATTERN,
+        ),
+        (
+            "/$defs/RawAuthorityClaimsConfig/properties/principal",
+            1,
+            128,
+            CLAIM_NAME_SCHEMA_PATTERN,
+        ),
+        (
+            "/$defs/RawAuthorityClaimsConfig/properties/purpose",
+            1,
+            128,
+            CLAIM_NAME_SCHEMA_PATTERN,
+        ),
+        (
+            "/$defs/RawAuditConfig/properties/hashKeyRef",
+            1,
+            MAX_SECRET_REFERENCE_SCHEMA_LENGTH,
+            SECRET_REFERENCE_SCHEMA_PATTERN,
+        ),
+        (
+            "/$defs/RawCursorConfig/properties/secretRef",
+            1,
+            MAX_SECRET_REFERENCE_SCHEMA_LENGTH,
+            SECRET_REFERENCE_SCHEMA_PATTERN,
+        ),
+        (
+            "/$defs/RawEventDestinationConfig/properties/origin",
+            1,
+            MAX_DESTINATION_ORIGIN_URL_BYTES,
+            "",
+        ),
+        (
+            "/$defs/RawEventDestinationConfig/properties/path",
+            1,
+            MAX_DESTINATION_TARGET_BYTES,
+            EVENT_DESTINATION_PATH_SCHEMA_PATTERN,
+        ),
+        (
+            "/$defs/RawEventDestinationConfig/properties/hmacSha256KeyRef",
+            1,
+            MAX_SECRET_REFERENCE_SCHEMA_LENGTH,
+            SECRET_REFERENCE_SCHEMA_PATTERN,
+        ),
+        (
+            "/$defs/RawEventDestinationTlsConfig/properties/caBundleRef",
+            1,
+            MAX_SECRET_REFERENCE_SCHEMA_LENGTH,
+            SECRET_REFERENCE_SCHEMA_PATTERN,
+        ),
+        (
+            "/$defs/RawEventDestinationTlsConfig/properties/clientIdentityRef",
+            1,
+            MAX_SECRET_REFERENCE_SCHEMA_LENGTH,
+            SECRET_REFERENCE_SCHEMA_PATTERN,
+        ),
+    ] {
+        install_schema_string_constraints(schema, pointer, minimum, maximum, pattern);
+    }
+
+    for pointer in [
+        "/$defs/RawOidcVerifierConfig/properties/allowedClients",
+        "/$defs/RawOidcVerifierConfig/properties/deniedKids",
+    ] {
+        install_schema_array_constraints(schema, pointer, MAX_LIST_ITEMS, true);
+        if let Some(items) = schema
+            .pointer_mut(pointer)
+            .and_then(Value::as_object_mut)
+            .and_then(|member| member.get_mut("items"))
+            .and_then(Value::as_object_mut)
+        {
+            install_string_constraints_in_object(
+                items,
+                1,
+                MAX_LIST_VALUE_BYTES,
+                LIST_VALUE_SCHEMA_PATTERN,
+            );
+        }
+    }
+    install_schema_array_constraints(
+        schema,
+        "/$defs/RawEventDestinationConfig/properties/allowedPrivateCidrs",
+        MAX_DESTINATION_PRIVATE_CIDRS,
+        true,
+    );
+    install_schema_property_names(
+        schema,
+        "/properties/eventDestinations",
+        EVENT_DESTINATION_ID_SCHEMA_PATTERN,
+    );
+    if let Some(member) = schema
+        .pointer_mut("/properties/eventDestinations")
+        .and_then(Value::as_object_mut)
+    {
+        member.insert("maxProperties".to_owned(), Value::from(128_u64));
+    }
+    install_schema_authority_claim_exclusions(schema);
+    install_schema_tls_presence_constraint(schema);
+}
+
+#[cfg(feature = "schema")]
+fn install_schema_const_property(schema: &mut Value, property: &'static str, expected: &str) {
+    let Some(properties) = schema
+        .get_mut("properties")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return;
+    };
+    let Some(member) = properties
+        .get_mut(property)
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return;
+    };
+    member.clear();
+    member.insert("type".to_owned(), Value::String("string".to_owned()));
+    member.insert("const".to_owned(), Value::String(expected.to_owned()));
+}
+
+#[cfg(feature = "schema")]
+fn install_schema_integer_bounds(schema: &mut Value, pointer: &str, minimum: u64, maximum: u64) {
+    if let Some(member) = schema.pointer_mut(pointer).and_then(Value::as_object_mut) {
+        member.insert("minimum".to_owned(), Value::from(minimum));
+        if maximum != u64::MAX {
+            member.insert("maximum".to_owned(), Value::from(maximum));
+        }
+    }
+}
+
+#[cfg(feature = "schema")]
+fn install_schema_string_constraints(
+    schema: &mut Value,
+    pointer: &str,
+    minimum: usize,
+    maximum: usize,
+    pattern: &str,
+) {
+    if let Some(member) = schema.pointer_mut(pointer).and_then(Value::as_object_mut) {
+        install_string_constraints_in_object(member, minimum, maximum, pattern);
+    }
+}
+
+#[cfg(feature = "schema")]
+fn install_string_constraints_in_object(
+    member: &mut Map<String, Value>,
+    minimum: usize,
+    maximum: usize,
+    pattern: &str,
+) {
+    member.insert("minLength".to_owned(), Value::from(minimum));
+    member.insert("maxLength".to_owned(), Value::from(maximum));
+    if !pattern.is_empty() {
+        member.insert("pattern".to_owned(), Value::String(pattern.to_owned()));
+    }
+}
+
+#[cfg(feature = "schema")]
+fn install_schema_array_constraints(
+    schema: &mut Value,
+    pointer: &str,
+    maximum: usize,
+    unique_items: bool,
+) {
+    if let Some(member) = schema.pointer_mut(pointer).and_then(Value::as_object_mut) {
+        member.insert("maxItems".to_owned(), Value::from(maximum));
+        if unique_items {
+            member.insert("uniqueItems".to_owned(), Value::Bool(true));
+        }
+    }
+}
+
+#[cfg(feature = "schema")]
+fn install_schema_property_names(schema: &mut Value, pointer: &str, pattern: &str) {
+    if let Some(member) = schema.pointer_mut(pointer).and_then(Value::as_object_mut) {
+        member.insert(
+            "propertyNames".to_owned(),
+            serde_json::json!({
+                "type": "string",
+                "pattern": pattern,
+            }),
+        );
+    }
+}
+
+#[cfg(feature = "schema")]
+fn install_schema_authority_claim_exclusions(schema: &mut Value) {
+    let registered = serde_json::json!({
+        "enum": [
+            "iss",
+            "aud",
+            "exp",
+            "iat",
+            "nbf",
+            "sub",
+            "client_id",
+            "azp",
+            "jti",
+            "cnf"
+        ]
+    });
+    for pointer in [
+        "/$defs/RawAuthorityClaimsConfig/properties/principal",
+        "/$defs/RawAuthorityClaimsConfig/properties/purpose",
+    ] {
+        if let Some(member) = schema.pointer_mut(pointer).and_then(Value::as_object_mut) {
+            member.insert("not".to_owned(), registered.clone());
+        }
+    }
+}
+
+#[cfg(feature = "schema")]
+fn install_schema_tls_presence_constraint(schema: &mut Value) {
+    let Some(member) = schema
+        .pointer_mut("/$defs/RawEventDestinationTlsConfig")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    member.insert(
+        "anyOf".to_owned(),
+        serde_json::json!([
+            {
+                "required": ["caBundleRef"],
+                "properties": {
+                    "caBundleRef": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": MAX_SECRET_REFERENCE_SCHEMA_LENGTH,
+                        "pattern": SECRET_REFERENCE_SCHEMA_PATTERN
+                    }
+                }
+            },
+            {
+                "required": ["clientIdentityRef"],
+                "properties": {
+                    "clientIdentityRef": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": MAX_SECRET_REFERENCE_SCHEMA_LENGTH,
+                        "pattern": SECRET_REFERENCE_SCHEMA_PATTERN
+                    }
+                }
+            }
+        ]),
+    );
+}
+
+#[cfg(feature = "schema")]
+fn remove_schema_default(schema: &mut Value, pointer: &str) {
+    if let Some(member) = schema.pointer_mut(pointer).and_then(Value::as_object_mut) {
+        member.remove("default");
+    }
 }
 
 fn read_bounded_runtime_config(path: &Path, maximum: u64) -> Result<Vec<u8>> {

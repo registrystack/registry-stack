@@ -433,8 +433,9 @@ fn diff_help_and_selector_usage_preserve_the_closed_command_inventory_and_exit_c
     let report = json_stdout(&refused_runtime);
     assert_eq!(
         report["diagnostics"][0]["code"],
-        "diff.runtime_config.refused"
+        "diff.runtime_config.document"
     );
+    assert_eq!(report["diagnostics"][0]["path"], "/");
     assert_tool_diagnostic(
         &report["diagnostics"][0],
         "runtime_configuration",
@@ -585,7 +586,9 @@ fn write_runtime_config(parent: &Path, package: &PublishedPackage, trust_anchor:
     fs::write(
         &path,
         format!(
-            r#"listener:
+            r#"apiVersion: registry.registrystack.org/server-runtime/v1alpha1
+kind: RegistryServerRuntimeConfig
+listener:
   bind: 127.0.0.1:1
   trustedProxy: direct
 identity:

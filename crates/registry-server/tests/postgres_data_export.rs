@@ -359,10 +359,13 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
                  "classification":"restricted"}
             ],
             "constraints":[{"kind":"unique","fields":["code"]}],
-            "events":[{"id":"entry-created","trigger":"created","projection":["code"]}],
-            "accessProfiles":[{
-                "id":PROFILE, "principalClaim":"registry_principal",
+            "events":[{"id":"entry-created","trigger":"created","projection":["code"]}]
+        }],
+        "accessProfiles":[{
+            "id":PROFILE, "principalClaim":"registry_principal",
                 "requiredPurposes":["data-export"],
+            "grants":[{
+                "entity":"entry",
                 "operations":["create","batch","list"],
                 "readableFields":["code"],
                 "writableFields":["code","jurisdiction","secret"],

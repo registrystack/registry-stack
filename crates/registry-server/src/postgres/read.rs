@@ -117,6 +117,7 @@ impl PostgresRecordReadService {
                         method: request.method,
                         operation_id: &request.operation_id,
                         target_record,
+                        correlation: &request.correlation,
                     },
                 )
                 .await
@@ -137,6 +138,7 @@ impl PostgresRecordReadService {
                     method: request.method,
                     operation_id: &request.operation_id,
                     target_record,
+                    correlation: &request.correlation,
                 },
             )
             .await
@@ -156,6 +158,7 @@ impl PostgresRecordReadService {
                 method: request.method,
                 operation_id: &request.operation_id,
                 target_record,
+                correlation: &request.correlation,
             },
         )
         .await
@@ -500,6 +503,7 @@ impl PostgresRecordReadService {
             record_revision,
             result_count: (outcome != TerminalAuditOutcome::Unresolved).then_some(result_count),
             field_set_reference: Some(field_set_reference),
+            correlation: request.correlation.clone(),
         })
     }
 }
@@ -560,6 +564,7 @@ impl RecordReadService for PostgresRecordReadService {
                     principal: request.principal.as_deref(),
                     selected_access_profile: request.selected_access_profile.as_deref(),
                     purpose_present: request.purpose_present,
+                    correlation: &request.correlation,
                 },
             )
             .await
@@ -2186,9 +2191,12 @@ mod tests {
                     "fields":[
                       {"id":"label","type":"string","required":true,"maxLength":32,"classification":"public"},
                       {"id":"secret","type":"string","required":true,"maxLength":32,"classification":"restricted"}
-                    ],
-                    "accessProfiles":[{
-                      "id":"public","default":true,"anonymous":true,"operations":["list"],
+                    ]
+                  }],
+                  "accessProfiles":[{
+                    "id":"public","default":true,"anonymous":true,
+                    "grants":[{
+                      "entity":"case","operations":["list"],
                       "readableFields":["label"],"filterableFields":["label"],"sortableFields":["label"]
                     }]
                   }]
@@ -2297,6 +2305,7 @@ mod tests {
                 },
             },
             maximum_records: 11,
+            correlation: crate::correlation::RequestCorrelation::server_created(),
         };
         assert!(ReadPlan::from_request(&registry, &expected, &cursors, &request).is_err());
 

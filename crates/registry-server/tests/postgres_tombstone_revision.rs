@@ -558,25 +558,24 @@ fn compiled_registry(tombstone: bool) -> registry_server::CompiledRegistry {
               {{"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"}},
               {{"id":"label","type":"string","maxLength":128,"required":true,"classification":"public"}},
               {{"id":"quantity","type":"int64","required":true,"classification":"public"}}
-            ],
-            "accessProfiles":[{{
-              "id":"operator","default":true,"principalClaim":"registry_principal",
-              "requiredPurposes":["case-management"],
-              "operations":[{operations}],
-              "readableFields":["jurisdiction","label","quantity"],
-              "writableFields":["jurisdiction","label","quantity"],
-              "rowBoundaries":[{{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}}]
-            }}]{events}
+            ]{events}
           }},{{
             "id":"log","route":"logs","mutationMode":"create_only","classification":"public",
             "fields":[
               {{"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"}},
               {{"id":"message","type":"string","maxLength":128,"required":true,"classification":"public"}}
-            ],
-            "accessProfiles":[{{
-              "id":"operator","default":true,"principalClaim":"registry_principal",
-              "requiredPurposes":["case-management"],
-              "operations":["create","get","list"],
+            ]
+          }}],
+          "accessProfiles":[{{
+            "id":"operator","default":true,"principalClaim":"registry_principal",
+            "requiredPurposes":["case-management"],
+            "grants":[{{
+              "entity":"widget","operations":[{operations}],
+              "readableFields":["jurisdiction","label","quantity"],
+              "writableFields":["jurisdiction","label","quantity"],
+              "rowBoundaries":[{{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}}]
+            }},{{
+              "entity":"log","operations":["create","get","list"],
               "readableFields":["jurisdiction","message"],
               "writableFields":["jurisdiction","message"],
               "rowBoundaries":[{{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}}]
@@ -634,6 +633,7 @@ fn create_request<'a>(
             ("quantity".to_owned(), json!(7)),
         ])),
         response_fields: response_fields(),
+        correlation: registry_server::correlation::RequestCorrelation::server_created(),
     }
 }
 
@@ -656,6 +656,7 @@ fn patch_request<'a>(
             value: Value::String(label.to_owned()),
         }]),
         response_fields: response_fields(),
+        correlation: registry_server::correlation::RequestCorrelation::server_created(),
     }
 }
 
@@ -674,6 +675,7 @@ fn tombstone_request<'a>(
         expected_etag: Some(expected_etag),
         body: MutationBody::Tombstone,
         response_fields: response_fields(),
+        correlation: registry_server::correlation::RequestCorrelation::server_created(),
     }
 }
 

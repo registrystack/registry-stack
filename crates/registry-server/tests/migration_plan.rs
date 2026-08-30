@@ -7,6 +7,7 @@ use std::fs;
 use registry_platform_canonical_json::canonicalize_json;
 use registry_server::compiler::{compile_project, module_digest, CompileProfile};
 use registry_server::contract::{parse_module_yaml, parse_project_yaml};
+use registry_server::generated_ddl::DdlStatementKind;
 use registry_server::migration_plan::{
     ArtifactDigestBinding, ChunkCursorProtocol, ExternalBackupBinding, MigrationRehearsalReceipt,
     RehearsalFixture, RehearsalProofs, RehearsalRowAssertion, ReviewedChangeCover,
@@ -54,7 +55,13 @@ fn reviewed_migration_plan_closes_ast_sql_and_bound_evidence() {
         prepare_reviewed_package(Variant::RequiredField, previous, vec![artifacts.source()])
             .expect("reviewed successor package prepares");
 
-    assert!(prepared.manifest().migration_plan.statements.is_empty());
+    assert!(!prepared.manifest().migration_plan.statements.is_empty());
+    assert!(prepared
+        .manifest()
+        .migration_plan
+        .statements
+        .iter()
+        .all(|statement| statement.kind == DdlStatementKind::View));
     assert_eq!(
         prepared.manifest().migration_plan.reviewed_descriptors,
         vec!["modules/core/migrations/required-field/descriptor.json"]

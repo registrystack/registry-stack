@@ -13,9 +13,10 @@ use registry_server::compiler::{
 };
 use registry_server::contract::{
     parse_module_json, parse_module_yaml, parse_project_json, parse_project_yaml,
-    AccessProfileSource, BoundaryOperator, Classification, ComparisonOperator, ConstraintSource,
-    FieldTypeSource, ModuleAssetSource, Operation, PackageIdentitySource, ReferenceDelete,
-    RegistryModule, RowBoundarySource, UniqueWhenPredicate,
+    AccessGrantSource, BoundaryOperator, Classification, ComparisonOperator, ConstraintSource,
+    FieldTypeSource, ModuleAssetSource, Operation, PackageIdentitySource,
+    ProjectAccessProfileSource, ReferenceDelete, RegistryModule, RowBoundarySource,
+    UniqueWhenPredicate,
 };
 use registry_server::diagnostics::CompileFailure;
 use registry_server::generated_ddl::DdlStatementKind;
@@ -92,9 +93,23 @@ fn derived_fields_selectors_and_read_paths_compile_to_route_specific_inventories
         "selectorProfiles":[
           {"id":"by-local-reference","fields":["administrative-area","local-household-number"]}
         ],
-        "readPaths":[{"id":"people","through":"group-membership","to":"person","route":"people"}],
-        "accessProfiles":[{
-          "id":"operator","default":true,"principalClaim":"sub","operations":["get","lookup","list"],
+        "readPaths":[{"id":"people","through":"group-membership","to":"person","route":"people"}]
+      },{
+        "id":"person","route":"people","mutationMode":"mutable",
+        "fields":[
+          {"id":"legal-name","type":"string","maxLength":80,"classification":"internal"},
+          {"id":"date-of-birth","type":"date","classification":"internal"}
+        ]
+      },{
+        "id":"group-membership","route":"memberships","mutationMode":"mutable",
+        "fields":[
+          {"id":"household","type":"reference","target":"household","classification":"internal"},
+          {"id":"person","type":"reference","target":"person","classification":"internal"}
+        ]
+      }],
+      "accessProfiles":[{
+        "id":"operator","default":true,"principalClaim":"sub","grants":[{
+          "entity":"household","operations":["get","lookup","list"],
           "readableFields":["household-code","child-count","single-headed"],
           "filterableFields":["child-count","single-headed"],
           "sortableFields":["child-count"],
@@ -108,18 +123,6 @@ fn derived_fields_selectors_and_read_paths_compile_to_route_specific_inventories
             "allowCount":true
           }]
         }]
-      },{
-        "id":"person","route":"people","mutationMode":"mutable",
-        "fields":[
-          {"id":"legal-name","type":"string","maxLength":80,"classification":"internal"},
-          {"id":"date-of-birth","type":"date","classification":"internal"}
-        ]
-      },{
-        "id":"group-membership","route":"memberships","mutationMode":"mutable",
-        "fields":[
-          {"id":"household","type":"reference","target":"household","classification":"internal"},
-          {"id":"person","type":"reference","target":"person","classification":"internal"}
-        ]
       }]
     }"#;
     let sql = "SELECT h.id AS id, count(p.id)::bigint AS child_count, false AS single_headed, 1::bigint AS registry_derived_key_cardinality FROM registry_source.household h LEFT JOIN registry_source.group_membership gm ON gm.household = h.id LEFT JOIN registry_source.person p ON p.id = gm.person GROUP BY h.id";
@@ -234,9 +237,11 @@ fn canonical_id_row_boundary_targets_the_physical_record_id_column() {
             "id":"household","route":"households","mutationMode":"mutable",
             "fields":[
               {"id":"household-code","type":"string","maxLength":32,"classification":"internal"}
-            ],
-            "accessProfiles":[{
-              "id":"viewer","principalClaim":"sub","operations":["get"],
+            ]
+          }],
+          "accessProfiles":[{
+            "id":"viewer","principalClaim":"sub","grants":[{
+              "entity":"household","operations":["get"],
               "readableFields":["household-code"],
               "rowBoundaries":[{"field":"id","claim":"household_id","operator":"equals"}]
             }]
@@ -343,9 +348,9 @@ fn anonymous_access_cannot_process_selector_path_or_derived_private_fields() {
                 "fields":[{{"id":"public-code","type":"string","maxLength":32,"classification":"public"}},
                   {{"id":"private-code","type":"string","maxLength":32,"classification":"restricted"}}],
                 "derived":[{{"id":"flags","sql":"sql/flags.sql","key":"id","fields":[{{"id":"risk-flag","type":"boolean","classification":"public"}}]}}],
-                "selectorProfiles":[{{"id":"by-private-code","fields":["private-code"]}}],
-                "accessProfiles":[{{"id":"anon","anonymous":true,"operations":["lookup"],{extra}}}]
-              }}]
+                "selectorProfiles":[{{"id":"by-private-code","fields":["private-code"]}}]
+              }}],
+              "accessProfiles":[{{"id":"anon","anonymous":true,"grants":[{{"entity":"household","operations":["lookup"],{extra}}}]}}]
             }}"#
         )
     };
@@ -418,9 +423,11 @@ fn batch_route_requires_explicit_bounds_and_compiles_bounded_openapi() {
               "registry":{{"id":"batch-contract","version":"1","defaultLanguage":"en"}},
               "entities":[{{
                 "id":"record","route":"records","mutationMode":"mutable"{batch},
-                "fields":[{{"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}}],
-                "accessProfiles":[{{
-                  "id":"writer","principalClaim":"principal","operations":{operations},
+                "fields":[{{"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}}]
+              }}],
+              "accessProfiles":[{{
+                "id":"writer","principalClaim":"principal","grants":[{{
+                  "entity":"record","operations":{operations},
                   "readableFields":["label"],"writableFields":["label"]
                 }}]
               }}]
@@ -586,18 +593,26 @@ fn production_refuses_incomplete_authoring_closure() {
 }
 
 #[test]
-fn production_requires_explicit_manifest_projection() {
-    let failure = compile_project(
+fn production_allows_missing_manifest_projection_and_emits_no_manifest_artifacts() {
+    let compiled = compile_project(
         &parse_project_json(
             br#"{
               "apiVersion":"registry.registrystack.org/v1alpha1",
               "kind":"RegistryProject",
               "registry":{"id":"neutral","version":"1","defaultLanguage":"en"},
-              "package":{"environment":"local","instanceId":"local_instance","sequence":1,"sourceRevision":"source"},
+              "package":{"environment":"local","instanceId":"local-instance","sequence":1,"sourceRevision":"source"},
               "entities":[{
                 "id":"record","route":"records","mutationMode":"create_only",
-                "fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"}],
-                "accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get"],"readableFields":["code"]}]
+                "fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"}]
+              }],
+              "accessProfiles":[{
+                "id":"reader",
+                "principalClaim":"principal",
+                "grants":[{
+                  "entity":"record",
+                  "operations":["get"],
+                  "readableFields":["code"]
+                }]
               }]
             }"#,
         )
@@ -605,12 +620,311 @@ fn production_requires_explicit_manifest_projection() {
         &[],
         CompileProfile::Production,
     )
-    .expect_err("production requires a manifest projection");
+    .expect("production compilation does not require a manifest projection");
 
-    assert!(failure.diagnostics().iter().any(|diagnostic| {
-        diagnostic.code == "manifest_projection.required"
-            && diagnostic.path == "project.manifestProjection"
+    assert!(compiled.manifest_projection().is_none());
+    assert!(compiled
+        .artifacts()
+        .entries()
+        .keys()
+        .all(|path| !path.starts_with("generated/manifest/")));
+    assert!(compiled.findings().is_empty());
+}
+
+#[test]
+fn project_access_profiles_use_the_entity_access_vocabulary() {
+    let project = parse_project_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"profile-vocabulary","version":"1","defaultLanguage":"en"},
+          "entities":[{
+            "id":"case-file","route":"case-files","mutationMode":"mutable",
+            "fields":[
+              {"id":"case-code","type":"string","maxLength":32,"classification":"internal"},
+              {"id":"status","type":"string","maxLength":32,"classification":"internal"}
+            ]
+          }],
+          "accessProfiles":[{
+            "id":"operator",
+            "default":true,
+            "principalClaim":"sub",
+            "requiredScopes":["records.read"],
+            "requiredPurposes":["case-management"],
+            "grants":[{
+              "entity":"case-file",
+              "operations":["get","list"],
+              "readableFields":["case-code","status"],
+              "filterableFields":["status"],
+              "allowCount":true
+            }]
+          }]
+        }"#,
+    )
+    .expect("canonical top-level profile source parses");
+
+    let compiled = compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("canonical top-level profile source compiles");
+    let profile = compiled
+        .entities()
+        .get("case-file")
+        .and_then(|entity| entity.access_profiles.get("operator"))
+        .expect("top-level profile is expanded onto its granted entity");
+
+    assert_eq!(profile.principal_claim.as_deref(), Some("sub"));
+    assert_eq!(
+        profile.required_scopes,
+        ["records.read".to_owned()].into_iter().collect()
+    );
+    assert_eq!(
+        profile.required_purposes,
+        ["case-management".to_owned()].into_iter().collect()
+    );
+    assert_eq!(
+        profile.operations,
+        [Operation::Get, Operation::List].into_iter().collect()
+    );
+    assert!(profile.allow_count);
+    assert!(compiled.access().entries.iter().any(|entry| {
+        entry.entity_id == "case-file"
+            && entry.operation == Operation::List
+            && entry.profile_ids == ["operator".to_owned()].into_iter().collect()
+            && entry.default_profile_id == "operator"
     }));
+}
+
+#[test]
+fn root_project_entity_access_profiles_are_compile_time_errors() {
+    let project = parse_project_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"profile-vocabulary","version":"1","defaultLanguage":"en"},
+          "entities":[{
+            "id":"case-file","route":"case-files","mutationMode":"mutable",
+            "fields":[{"id":"case-code","type":"string","maxLength":32,"classification":"internal"}],
+            "accessProfiles":[{
+              "id":"entity-local-reader",
+              "principalClaim":"sub",
+              "operations":["get"],
+              "readableFields":["case-code"]
+            }]
+          }]
+        }"#,
+    )
+    .expect("the shared parser still accepts the internal/module profile field");
+
+    let failure = compile_project(&project, &[], CompileProfile::Authoring)
+        .expect_err("root project entity-local profiles match the public schema refusal");
+    let diagnostic = failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "access_profile.project_entity_local.forbidden")
+        .expect("root entity-local profile refusal is reported");
+    assert_eq!(diagnostic.path, "project.entities[].accessProfiles");
+}
+
+#[test]
+fn module_entity_access_profiles_remain_supported_for_module_composition() {
+    let project = parse_project_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"module-profile","version":"1","defaultLanguage":"en"},
+          "entities":[{
+            "id":"case-file","route":"case-files","mutationMode":"mutable",
+            "fields":[{"id":"case-code","type":"string","maxLength":32,"classification":"internal"}]
+          }],
+          "modules":[{"id":"core","version":"1"}]
+        }"#,
+    )
+    .expect("project parses");
+    let module = parse_module_json(
+        br#"{
+          "id":"core",
+          "version":"1",
+          "entities":[{
+            "id":"module-record","route":"module-records","mutationMode":"mutable",
+            "fields":[{"id":"case-code","type":"string","maxLength":32,"classification":"internal"}],
+            "accessProfiles":[{
+              "id":"module-reader",
+              "principalClaim":"sub",
+              "operations":["get"],
+              "readableFields":["case-code"]
+            }]
+          }],
+          "extendEntities":[{
+            "entity":"case-file",
+            "accessProfiles":[{
+              "id":"extension-reader",
+              "principalClaim":"sub",
+              "operations":["get"],
+              "readableFields":["case-code"]
+            }]
+          }]
+        }"#,
+    )
+    .expect("module parses");
+
+    let compiled = compile_project(&project, &[module], CompileProfile::Authoring)
+        .expect("module-local access profiles remain module composition input");
+    assert!(compiled.entities()["module-record"]
+        .access_profiles
+        .contains_key("module-reader"));
+    assert!(compiled.entities()["case-file"]
+        .access_profiles
+        .contains_key("extension-reader"));
+}
+
+#[test]
+fn anonymous_project_access_profiles_expand_without_authenticated_claims() {
+    let project = parse_project_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"anonymous-profile","version":"1","defaultLanguage":"en"},
+          "entities":[{
+            "id":"public-record","route":"public-records","mutationMode":"mutable","classification":"public",
+            "fields":[
+              {"id":"code","type":"string","maxLength":32,"classification":"public"},
+              {"id":"name","type":"string","maxLength":80,"classification":"public"}
+            ]
+          }],
+          "accessProfiles":[{
+            "id":"public-reader",
+            "default":true,
+            "anonymous":true,
+            "grants":[{
+              "entity":"public-record",
+              "operations":["get","list"],
+              "readableFields":["code","name"],
+              "filterableFields":["code"]
+            }]
+          }]
+        }"#,
+    )
+    .expect("anonymous project profile source parses");
+
+    let compiled = compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("anonymous project profile compiles");
+    let profile = compiled
+        .entities()
+        .get("public-record")
+        .and_then(|entity| entity.access_profiles.get("public-reader"))
+        .expect("anonymous top-level profile is expanded onto its granted entity");
+
+    assert!(profile.anonymous);
+    assert_eq!(profile.principal_claim, None);
+    assert!(profile.required_scopes.is_empty());
+    assert!(profile.required_purposes.is_empty());
+    assert_eq!(
+        profile.operations,
+        [Operation::Get, Operation::List].into_iter().collect()
+    );
+}
+
+#[test]
+fn anonymous_project_access_profiles_cannot_require_authenticated_claims() {
+    let source = |extra: &str| {
+        format!(
+            r#"{{
+              "apiVersion":"registry.registrystack.org/v1alpha1",
+              "kind":"RegistryProject",
+              "registry":{{"id":"anonymous-profile","version":"1","defaultLanguage":"en"}},
+              "entities":[{{
+                "id":"public-record","route":"public-records","mutationMode":"mutable","classification":"public",
+                "fields":[{{"id":"code","type":"string","maxLength":32,"classification":"public"}}]
+              }}],
+              "accessProfiles":[{{
+                "id":"public-reader",
+                "anonymous":true,
+                {extra}
+                "grants":[{{"entity":"public-record","operations":["get"],"readableFields":["code"]}}]
+              }}]
+            }}"#
+        )
+    };
+
+    for (source, code, path) in [
+        (
+            source(r#""principalClaim":"sub","#),
+            "access_profile.principal_claim.forbidden",
+            "project.accessProfiles[].principalClaim",
+        ),
+        (
+            source(r#""requiredScopes":["records.read"],"#),
+            "access_profile.anonymous.claim_requirements_forbidden",
+            "project.accessProfiles[]",
+        ),
+        (
+            source(r#""requiredPurposes":["case-management"],"#),
+            "access_profile.anonymous.claim_requirements_forbidden",
+            "project.accessProfiles[]",
+        ),
+    ] {
+        let project = parse_project_json(source.as_bytes()).expect("project source parses");
+        let failure = compile_project(&project, &[], CompileProfile::Authoring)
+            .expect_err("anonymous profiles cannot require authenticated claims");
+        assert!(failure
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == code && diagnostic.path == path));
+    }
+}
+
+#[test]
+fn project_access_profiles_reject_the_legacy_purpose_vocabulary() {
+    let failure = parse_project_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"profile-vocabulary","version":"1","defaultLanguage":"en"},
+          "entities":[{
+            "id":"case-file","route":"case-files","mutationMode":"mutable",
+            "fields":[{"id":"case-code","type":"string","maxLength":32,"classification":"internal"}]
+          }],
+          "accessProfiles":[{
+            "id":"operator",
+            "principalClaim":"sub",
+            "purposes":["case-management"],
+            "grants":[{"entity":"case-file","operations":["get"],"readableFields":["case-code"]}]
+          }]
+        }"#,
+    )
+    .expect_err("legacy purposes key is no longer part of the authoring contract");
+
+    let diagnostic = &failure.diagnostics()[0];
+    assert_eq!(diagnostic.code, "source.shape.invalid");
+    assert_eq!(diagnostic.path, "project.accessProfiles[0].purposes");
+}
+
+#[test]
+fn project_access_grants_reject_the_legacy_action_vocabulary() {
+    let failure = parse_project_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"profile-vocabulary","version":"1","defaultLanguage":"en"},
+          "entities":[{
+            "id":"case-file","route":"case-files","mutationMode":"mutable",
+            "fields":[{"id":"case-code","type":"string","maxLength":32,"classification":"internal"}]
+          }],
+          "accessProfiles":[{
+            "id":"operator",
+            "principalClaim":"sub",
+            "requiredPurposes":["case-management"],
+            "grants":[{"entity":"case-file","actions":["get"],"readableFields":["case-code"]}]
+          }]
+        }"#,
+    )
+    .expect_err("legacy actions key is no longer part of the authoring contract");
+
+    let diagnostic = &failure.diagnostics()[0];
+    assert_eq!(diagnostic.code, "source.shape.invalid");
+    assert_eq!(
+        diagnostic.path,
+        "project.accessProfiles[0].grants[0].actions"
+    );
 }
 
 #[test]
@@ -812,20 +1126,24 @@ fn manifest_projection_filters_by_selected_profile_and_classification_ceiling() 
           },
           "entities":[
             {"id":"visible-target","route":"visible-targets","mutationMode":"create_only","classification":"public",
-             "fields":[{"id":"label","type":"string","maxLength":64,"classification":"public"}],
-             "accessProfiles":[{"id":"operator","principalClaim":"principal","operations":["get"],"readableFields":["label"]}]},
+             "fields":[{"id":"label","type":"string","maxLength":64,"classification":"public"}]},
             {"id":"hidden-target","route":"hidden-targets","mutationMode":"create_only","classification":"restricted",
-             "fields":[{"id":"label","type":"string","maxLength":64,"classification":"restricted"}],
-             "accessProfiles":[{"id":"operator","principalClaim":"principal","operations":["get"],"readableFields":["label"]}]},
+             "fields":[{"id":"label","type":"string","maxLength":64,"classification":"restricted"}]},
             {"id":"link","route":"links","mutationMode":"create_only","classification":"public",
              "fields":[
                {"id":"name","type":"string","maxLength":64,"classification":"public"},
                {"id":"operator-note","type":"string","maxLength":64,"classification":"internal"},
                {"id":"visible-ref","type":"reference","target":"visible-target","classification":"public"},
                {"id":"hidden-ref","type":"reference","target":"hidden-target","classification":"public"}
-             ],
-             "accessProfiles":[{"id":"operator","principalClaim":"principal","operations":["get"],"readableFields":["name","operator-note","visible-ref","hidden-ref"]}]}
-          ]
+             ]}
+          ],
+          "accessProfiles":[{
+            "id":"operator","principalClaim":"principal","grants":[
+              {"entity":"visible-target","operations":["get"],"readableFields":["label"]},
+              {"entity":"hidden-target","operations":["get"],"readableFields":["label"]},
+              {"entity":"link","operations":["get"],"readableFields":["name","operator-note","visible-ref","hidden-ref"]}
+            ]
+          }]
         }"#,
     )
     .expect("project parses");
@@ -887,11 +1205,13 @@ fn manifest_projection_metadata_cannot_describe_hidden_entities_or_fields() {
                {"id":"name","type":"string","maxLength":64,"classification":"public"},
                {"id":"secret-note","type":"string","maxLength":64,"classification":"restricted"},
                {"id":"profile","type":"structured","maxBytes":1024,"schema":{"type":"object","additionalProperties":false},"classification":"public"}
-             ],
-             "accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get"],"readableFields":["name","profile"]}]},
+             ]},
             {"id":"secret-record","route":"secret-records","mutationMode":"create_only","classification":"restricted",
-             "fields":[{"id":"name","type":"string","maxLength":64,"classification":"restricted"}],
-             "accessProfiles":[{"id":"other-reader","principalClaim":"principal","operations":["get"],"readableFields":["name"]}]}
+             "fields":[{"id":"name","type":"string","maxLength":64,"classification":"restricted"}]}
+          ],
+          "accessProfiles":[
+            {"id":"reader","principalClaim":"principal","grants":[{"entity":"record","operations":["get"],"readableFields":["name","profile"]}]},
+            {"id":"other-reader","principalClaim":"principal","grants":[{"entity":"secret-record","operations":["get"],"readableFields":["name"]}]}
           ]
         }"#,
     )
@@ -947,9 +1267,11 @@ fn independent_additive_modules_are_order_independent() {
           ],
           "entities":[{
             "id":"object","route":"objects","mutationMode":"mutable",
-            "fields":[{"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"}],
-            "accessProfiles":[{
-              "id":"operator","default":true,"principalClaim":"registry_principal","operations":["create","get","list","patch"],
+            "fields":[{"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"}]
+          }],
+          "accessProfiles":[{
+            "id":"operator","default":true,"principalClaim":"registry_principal","grants":[{
+              "entity":"object","operations":["create","get","list","patch"],
               "readableFields":["code"],"writableFields":["code"]
             }]
           }]
@@ -1002,7 +1324,7 @@ fn project_access_profile_required_scopes_compile_into_each_grant() {
             "id":"operator","principalClaim":"registry_principal",
             "requiredScopes":["registry:record:operate"],
             "grants":[{
-              "entity":"record","actions":["get"],"readableFields":["code"]
+              "entity":"record","operations":["get"],"readableFields":["code"]
             }]
           }]
         }"#,
@@ -1140,9 +1462,11 @@ fn generic_decimal_crs84_point_and_structured_fields_compile_to_deterministic_dd
                 "properties":{"batch":{"type":"string","maxLength":32}},
                 "required":["batch"]
               }}
-            ],
-            "accessProfiles":[{
-              "id":"operator","default":true,"principalClaim":"principal","operations":["create","get","list","patch"],
+            ]
+          }],
+          "accessProfiles":[{
+            "id":"operator","default":true,"principalClaim":"principal","grants":[{
+              "entity":"reading","operations":["create","get","list","patch"],
               "readableFields":["amount","location","payload"],
               "writableFields":["amount","location","payload"]
             }]
@@ -1353,9 +1677,9 @@ fn generic_scalar_option_and_schema_negatives_fail_before_ddl_generation() {
               "registry":{{"id":"generic-scalars","version":"1","defaultLanguage":"en"}},
               "entities":[{{
                 "id":"reading","route":"readings","mutationMode":"mutable",
-                "fields":[{field}],
-                "accessProfiles":[{{"id":"operator","default":true,"principalClaim":"principal","operations":["get"],"readableFields":["{}"]}}]
-              }}]
+                "fields":[{field}]
+              }}],
+              "accessProfiles":[{{"id":"operator","default":true,"principalClaim":"principal","grants":[{{"entity":"reading","operations":["get"],"readableFields":["{}"]}}]}}]
             }}"#,
             if field.contains("\"amount\"") {
                 "amount"
@@ -1393,9 +1717,11 @@ fn crs84_point_and_structured_fields_cannot_be_row_boundaries_until_equality_is_
               "registry":{{"id":"generic-scalars","version":"1","defaultLanguage":"en"}},
               "entities":[{{
                 "id":"reading","route":"readings","mutationMode":"mutable",
-                "fields":[{field}],
-                "accessProfiles":[{{
-                  "id":"operator","default":true,"principalClaim":"principal","operations":["get"],
+                "fields":[{field}]
+              }}],
+              "accessProfiles":[{{
+                "id":"operator","default":true,"principalClaim":"principal","grants":[{{
+                  "entity":"reading","operations":["get"],
                   "readableFields":["{field_id}"],
                   "rowBoundaries":[{{"field":"{field_id}","claim":"claim","operator":"equals"}}]
                 }}]
@@ -1974,10 +2300,11 @@ fn anonymous_profiles_cannot_inherit_partial_unique_processing_over_non_public_f
         "constraints":[{
           "kind":"unique","fields":["code"],
           "when":[{"kind":"field_is_not_null","field":"protected-marker"}]
-        }],
-        "accessProfiles":[{
-          "id":"public-reader","anonymous":true,"default":true,
-          "operations":["get"],"readableFields":["code"]
+        }]
+      }],
+      "accessProfiles":[{
+        "id":"public-reader","anonymous":true,"default":true,"grants":[{
+          "entity":"entry","operations":["get"],"readableFields":["code"]
         }]
       }]
     }"#;
@@ -2019,10 +2346,11 @@ fn anonymous_public_surface_rejects_every_non_public_constraint_field() {
           {"kind":"int_range","field":"range-field","minimum":0,"maximum":10},
           {"kind":"vocabulary","field":"vocabulary-field","values":["active"]},
           {"kind":"temporal-non-overlap","scopeFields":["temporal-scope"],"startField":"temporal-start","endField":"temporal-end"}
-        ],
-        "accessProfiles":[{
-          "id":"public-reader","anonymous":true,"default":true,
-          "operations":["get"],"readableFields":["label"]
+        ]
+      }],
+      "accessProfiles":[{
+        "id":"public-reader","anonymous":true,"default":true,"grants":[{
+          "entity":"record","operations":["get"],"readableFields":["label"]
         }]
       }],
       "vocabularies":[{"id":"status","values":["active","inactive"]}]
@@ -2074,7 +2402,7 @@ fn anonymous_public_surface_rejects_every_non_public_constraint_field() {
     }
 
     let mut authenticated = base;
-    let profile = &mut authenticated.entities[0].access_profiles[0];
+    let profile = &mut authenticated.access_profiles[0];
     profile.anonymous = false;
     profile.principal_claim = Some("principal".to_owned());
     for (_, field_id) in cases {
@@ -2104,10 +2432,11 @@ fn compiled_partial_unique_constraint_keeps_closed_predicates_in_the_model() {
         "constraints":[{
           "kind":"unique","fields":["code"],
           "when":[{"kind":"active_lifecycle"},{"kind":"field_equals","field":"status","value":"active"}]
-        }],
-        "accessProfiles":[{
-          "id":"public-reader","anonymous":true,"default":true,
-          "operations":["get"],"readableFields":["code","status"],"filterableFields":["status"]
+        }]
+      }],
+      "accessProfiles":[{
+        "id":"public-reader","anonymous":true,"default":true,"grants":[{
+          "entity":"entry","operations":["get"],"readableFields":["code","status"],"filterableFields":["status"]
         }]
       }],
       "vocabularies":[{"id":"status","values":["active","closed"]}]
@@ -2149,7 +2478,7 @@ fn create_only_operation_conflict_fails_before_artifact_generation() {
         .iter_mut()
         .find(|grant| grant.entity == "inspection-event")
         .expect("fixture grants the create-only entity");
-    grant.actions.insert(Operation::Patch);
+    grant.operations.insert(Operation::Patch);
 
     let failure = compile_project(&project, &[], CompileProfile::Authoring)
         .expect_err("create-only patch is refused");
@@ -2179,6 +2508,130 @@ fn generated_openapi_routes_and_physical_names_share_one_compiled_inventory() {
         .map(|entry| entry.as_object().expect("path item is an object").len())
         .sum();
     assert_eq!(generated_operation_count, compiled.routes().routes.len());
+    assert_eq!(
+        value["components"]["securitySchemes"]["bearerAuth"],
+        json!({"type": "http", "scheme": "bearer", "bearerFormat": "JWT"})
+    );
+    assert_eq!(
+        value["components"]["schemas"]["Problem"]["properties"]["code"]["enum"],
+        json!([
+            "authentication.refused",
+            "idempotency.conflict",
+            "lookup.unresolved",
+            "mutation.conflict",
+            "precondition.failed",
+            "precondition.required",
+            "query.cursor_invalid",
+            "query.invalid",
+            "request.invalid",
+            "request.timeout",
+            "resource.not_found",
+            "service.unavailable",
+            "source.unavailable",
+            "unsupported.media_type"
+        ])
+    );
+    assert_eq!(
+        value["components"]["schemas"]["Problem"]["required"],
+        json!(["type", "title", "status", "detail", "code", "traceId"])
+    );
+    assert_eq!(
+        value["components"]["schemas"]["Problem"]["properties"]["traceId"]["pattern"],
+        "^[0-9a-f]{32}$"
+    );
+
+    let list = &value["paths"]["/v1/records/assets"]["get"];
+    assert_eq!(list["security"], json!([{"bearerAuth": []}]));
+    assert!(list["responses"]["200"]["headers"]
+        .get("traceparent")
+        .is_some());
+    assert!(
+        list["responses"]["200"]["content"]["application/json"]["schema"]["required"]
+            .as_array()
+            .expect("list response required members")
+            .contains(&json!("pageInfo"))
+    );
+    assert!(
+        list["responses"]["200"]["content"]["application/json"]["schema"]["properties"]
+            .get("count")
+            .is_some()
+    );
+    assert!(
+        list["responses"]["200"]["content"]["application/json"]["schema"]["properties"]
+            .get("totalCount")
+            .is_none()
+    );
+    assert_eq!(
+        list["x-registry-queryProfiles"]["asset-operator"]["selectableProperties"],
+        json!(["assetClass", "assetCode", "label"])
+    );
+    assert_eq!(
+        list["x-registry-queryProfiles"]["site-planner"]["selectableProperties"],
+        json!(["assetCode", "label"])
+    );
+    assert!(list["x-registry-queryProfiles"]["asset-operator"]["filterableProperties"].is_array());
+
+    let detail = &value["paths"]["/v1/records/assets/{record_id}"]["get"];
+    assert_eq!(
+        query_parameter_names(&detail["parameters"]),
+        ["$select", "accessProfile", "record_id", "traceparent"]
+    );
+    assert!(detail["responses"]["200"]["headers"].get("ETag").is_some());
+    assert!(detail["responses"]["200"]["headers"]
+        .get("traceparent")
+        .is_some());
+    assert!(detail["responses"]["504"]["headers"]
+        .get("traceparent")
+        .is_some());
+    assert_eq!(
+        detail["responses"]["504"]["content"]["application/problem+json"]["examples"]
+            ["request.timeout"]["value"]["traceId"],
+        "11111111111111111111111111111111"
+    );
+    assert_eq!(
+        detail["responses"]["200"]["content"]["application/json"]["schema"]["properties"]["data"],
+        json!({"$ref": "#/components/schemas/asset-item"})
+    );
+
+    let create = &value["paths"]["/v1/records/assets"]["post"];
+    assert_eq!(
+        query_parameter_names(&create["parameters"]),
+        ["Idempotency-Key", "accessProfile", "traceparent"]
+    );
+    assert!(create["responses"]["201"]["headers"].get("ETag").is_some());
+    assert!(create["responses"]["201"]["headers"]
+        .get("Location")
+        .is_some());
+    assert!(create["responses"]["201"]["headers"]
+        .get("traceparent")
+        .is_some());
+    assert_eq!(
+        create["requestBody"]["content"]["application/json"]["schema"]["properties"]["data"],
+        json!({"$ref": "#/components/schemas/asset-item-create-input"})
+    );
+
+    let patch = &value["paths"]["/v1/records/assets/{record_id}"]["patch"];
+    assert_eq!(
+        query_parameter_names(&patch["parameters"]),
+        [
+            "Idempotency-Key",
+            "If-Match",
+            "accessProfile",
+            "record_id",
+            "traceparent"
+        ]
+    );
+    assert!(patch["requestBody"]["content"]
+        .get("application/json-patch+json")
+        .is_some());
+    assert!(patch["responses"]["428"]["headers"]
+        .get("traceparent")
+        .is_some());
+    assert!(
+        patch["responses"]["428"]["content"]["application/problem+json"]["schema"]
+            .get("$ref")
+            .is_some()
+    );
 
     for names in compiled.physical_names().entities.values() {
         let all = std::iter::once(&names.table)
@@ -2193,6 +2646,90 @@ fn generated_openapi_routes_and_physical_names_share_one_compiled_inventory() {
                 .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'));
         }
     }
+}
+
+#[test]
+fn generated_openapi_separates_security_and_mutation_input_from_read_schema() {
+    let compiled = compile_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"business-contract","version":"1","defaultLanguage":"en"},
+          "entities":[{
+            "id":"business-record","route":"business-records","mutationMode":"mutable","classification":"public",
+            "fields":[
+              {"id":"code","type":"string","required":true,"maxLength":32,"classification":"public"},
+              {"id":"business-note","apiName":"businessNote","type":"string","maxLength":80,"classification":"public"},
+              {"id":"draft-note","apiName":"draftNote","type":"string","maxLength":80,"classification":"internal"}
+            ]
+          }],
+          "accessProfiles":[{
+            "id":"public",
+            "default":true,
+            "anonymous":true,
+            "grants":[{
+              "entity":"business-record",
+              "operations":["get","list"],
+              "readableFields":["code","business-note"]
+            }]
+          },{
+            "id":"business",
+            "principalClaim":"registry_principal",
+            "requiredPurposes":["business"],
+            "grants":[{
+              "entity":"business-record",
+              "operations":["create","get"],
+              "readableFields":["code","business-note"],
+              "writableFields":["code","draft-note"]
+            }]
+          }]
+        }"#,
+    )
+    .expect("business contract compiles");
+    let openapi = compiled
+        .artifacts()
+        .get("generated/openapi.json")
+        .expect("OpenAPI is generated");
+    let openapi = parse_json_strict(&openapi.bytes).expect("OpenAPI is strict JSON");
+
+    assert_eq!(
+        openapi["paths"]["/v1/records/business-records/{record_id}"]["get"]["security"],
+        json!([{}, {"bearerAuth": []}])
+    );
+    assert_eq!(
+        openapi["paths"]["/v1/records/business-records"]["post"]["security"],
+        json!([{"bearerAuth": []}])
+    );
+    assert_eq!(
+        openapi["paths"]["/v1/records/business-records"]["post"]["requestBody"]["content"]
+            ["application/json"]["schema"]["properties"]["data"],
+        json!({"$ref": "#/components/schemas/business-record-create-input"})
+    );
+    assert_eq!(
+        openapi["paths"]["/v1/records/business-records"]["post"]["responses"]["201"]["content"]
+            ["application/json"]["schema"]["properties"]["data"],
+        json!({"$ref": "#/components/schemas/business-record"})
+    );
+    assert_eq!(
+        openapi["components"]["schemas"]["business-record-create-input"]["properties"],
+        json!({
+            "code": {"type": "string", "minLength": 0, "maxLength": 32},
+            "draftNote": {"type": "string", "minLength": 0, "maxLength": 80}
+        })
+    );
+    assert_eq!(
+        openapi["components"]["schemas"]["business-record-create-input"]["required"],
+        json!(["code"])
+    );
+    assert!(
+        openapi["components"]["schemas"]["business-record"]["properties"]
+            .get("businessNote")
+            .is_some()
+    );
+    assert_ne!(
+        openapi["components"]["schemas"]["business-record-create-input"]["properties"],
+        openapi["components"]["schemas"]["business-record"]["properties"]
+    );
 }
 
 #[test]
@@ -2353,10 +2890,11 @@ fn compiler_produces_both_revision_routes_when_explicitly_configured() {
           "registry":{"id":"revision-surface","version":"1","defaultLanguage":"en"},
           "entities":[{
             "id":"entry","route":"entries","mutationMode":"create_only","classification":"internal",
-            "fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"}],
-            "accessProfiles":[{
-              "id":"auditor","default":true,"principalClaim":"principal",
-              "operations":["revisions"],"revisionAccess":true,"readableFields":["code"]
+            "fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"}]
+          }],
+          "accessProfiles":[{
+            "id":"auditor","default":true,"principalClaim":"principal","grants":[{
+              "entity":"entry","operations":["revisions"],"revisionAccess":true,"readableFields":["code"]
             }]
           }]
         }"#,
@@ -2405,16 +2943,26 @@ fn compiler_produces_both_revision_routes_when_explicitly_configured() {
         query_parameter_names(
             &openapi["paths"]["/v1/records/entries/{record_id}/revisions"]["get"]["parameters"]
         ),
-        ["accessProfile", "record_id"]
+        ["accessProfile", "record_id", "traceparent"]
     );
 }
 
 #[test]
 fn compiler_omits_revision_routes_when_not_configured_or_revision_access_is_false() {
-    for (operations, revision_access, anonymous) in [
-        (r#"["get"]"#, "true", "false"),
-        (r#"["revisions"]"#, "false", "false"),
-        (r#"["revisions"]"#, "true", "true"),
+    for (operations, revision_access, anonymous, principal_claim) in [
+        (
+            r#"["get"]"#,
+            "true",
+            "false",
+            r#""principalClaim":"principal","#,
+        ),
+        (
+            r#"["revisions"]"#,
+            "false",
+            "false",
+            r#""principalClaim":"principal","#,
+        ),
+        (r#"["revisions"]"#, "true", "true", ""),
     ] {
         let source = format!(
             r#"{{
@@ -2423,10 +2971,11 @@ fn compiler_omits_revision_routes_when_not_configured_or_revision_access_is_fals
               "registry":{{"id":"revision-surface","version":"1","defaultLanguage":"en"}},
               "entities":[{{
                 "id":"entry","route":"entries","mutationMode":"create_only","classification":"public",
-                "fields":[{{"id":"code","type":"string","maxLength":32,"classification":"public"}}],
-                "accessProfiles":[{{
-                  "id":"reader","default":true,"anonymous":{anonymous},"principalClaim":"principal",
-                  "operations":{operations},"revisionAccess":{revision_access},"readableFields":["code"]
+                "fields":[{{"id":"code","type":"string","maxLength":32,"classification":"public"}}]
+              }}],
+              "accessProfiles":[{{
+                "id":"reader","default":true,"anonymous":{anonymous},{principal_claim}"grants":[{{
+                  "entity":"entry","operations":{operations},"revisionAccess":{revision_access},"readableFields":["code"]
                 }}]
               }}]
             }}"#
@@ -2456,31 +3005,35 @@ fn public_profile_cannot_process_an_internal_field() {
     project.access_profiles[0].default = true;
     let entity = project
         .entities
-        .iter_mut()
+        .iter()
         .find(|entity| entity.id == "asset-item")
         .expect("asset entity exists");
-    entity.access_profiles.push(AccessProfileSource {
+    assert!(entity.fields.iter().any(|field| field.id == "asset-code"));
+    project.access_profiles.push(ProjectAccessProfileSource {
         id: "public-reader".to_owned(),
         default: false,
         anonymous: true,
         principal_claim: None,
         required_scopes: Default::default(),
         required_purposes: Default::default(),
-        operations: [Operation::Get].into_iter().collect(),
-        readable_fields: ["asset-code".to_owned()].into_iter().collect(),
-        writable_fields: Default::default(),
-        filterable_fields: Default::default(),
-        sortable_fields: Default::default(),
-        row_boundaries: vec![RowBoundarySource {
-            field: "asset-code".to_owned(),
-            claim: "asset_code".to_owned(),
-            operator: BoundaryOperator::Equals,
+        grants: vec![AccessGrantSource {
+            entity: "asset-item".to_owned(),
+            operations: [Operation::Get].into_iter().collect(),
+            readable_fields: ["asset-code".to_owned()].into_iter().collect(),
+            writable_fields: Default::default(),
+            filterable_fields: Default::default(),
+            sortable_fields: Default::default(),
+            row_boundaries: vec![RowBoundarySource {
+                field: "asset-code".to_owned(),
+                claim: "asset_code".to_owned(),
+                operator: BoundaryOperator::Equals,
+            }],
+            lookups: Vec::new(),
+            read_paths: Vec::new(),
+            allow_count: false,
+            allow_data_export: false,
+            revision_access: false,
         }],
-        lookups: Vec::new(),
-        read_paths: Vec::new(),
-        allow_count: false,
-        allow_data_export: false,
-        revision_access: false,
     });
 
     let failure = compile_project(&project, &[], CompileProfile::Authoring)
@@ -2503,10 +3056,11 @@ fn anonymous_public_profile_cannot_filter_a_non_public_field() {
             "fields":[
               {"id":"label","type":"string","maxLength":32,"classification":"public"},
               {"id":"hidden-filter-canary","type":"string","maxLength":32,"classification":"restricted"}
-            ],
-            "accessProfiles":[{
-              "id":"public-reader","anonymous":true,"default":true,
-              "operations":["list"],"readableFields":["label"],
+            ]
+          }],
+          "accessProfiles":[{
+            "id":"public-reader","anonymous":true,"default":true,"grants":[{
+              "entity":"entry","operations":["list"],"readableFields":["label"],
               "filterableFields":["hidden-filter-canary"]
             }]
           }]
@@ -2557,7 +3111,8 @@ fn additive_module_conflicts_fail_instead_of_using_input_precedence() {
           "modules":[{"id":"core","version":"1"},{"id":"a","version":"1"},{"id":"b","version":"1"}],
           "entities":[{"id":"object","route":"objects","mutationMode":"mutable","fields":[
             {"id":"code","type":"string","maxLength":8,"classification":"internal"}
-          ],"accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","operations":["get"],"readableFields":["code"]}]}]
+          ]}],
+          "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","grants":[{"entity":"object","operations":["get"],"readableFields":["code"]}]}]
         }"#,
     )
     .expect("project parses");
@@ -2588,11 +3143,15 @@ fn operation_ids_preserve_distinct_valid_entity_ids_without_collisions() {
           "entities":[
             {"id":"case-file","route":"case-files","mutationMode":"create_only","fields":[
               {"id":"code","type":"string","maxLength":8,"classification":"internal"}
-            ],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get"],"readableFields":["code"]}]},
+            ]},
             {"id":"case_file","route":"case_file_records","mutationMode":"create_only","fields":[
               {"id":"code","type":"string","maxLength":8,"classification":"internal"}
-            ],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get"],"readableFields":["code"]}]}
-          ]
+            ]}
+          ],
+          "accessProfiles":[{"id":"reader","principalClaim":"principal","grants":[
+            {"entity":"case-file","operations":["get"],"readableFields":["code"]},
+            {"entity":"case_file","operations":["get"],"readableFields":["code"]}
+          ]}]
         }"#,
     )
     .expect("project parses");
@@ -2902,6 +3461,7 @@ fn compiled_query_inventory_is_profile_scoped_bounded_and_temporal() {
             "$skiptoken",
             "$top",
             "accessProfile",
+            "traceparent",
         ]
     );
     let as_of_parameter_names = query_parameter_names(
@@ -2918,6 +3478,7 @@ fn compiled_query_inventory_is_profile_scoped_bounded_and_temporal() {
             "$top",
             "accessProfile",
             "asOf",
+            "traceparent",
         ]
     );
     let as_of_parameters = openapi["paths"]["/v1/records/placements:as-of"]["get"]["parameters"]
@@ -2984,10 +3545,11 @@ fn query_inventory_rejects_unsupported_filter_and_sort_field_types() {
                 "id":"entry","route":"entries","mutationMode":"mutable",
                 "fields":[
                   {{"id":"payload","type":"structured","maxBytes":256,"classification":"internal","schema":{{"type":"object","additionalProperties":false}}}}
-                ],
-                "accessProfiles":[{{
-                  "id":"operator","default":true,"principalClaim":"principal",
-                  "operations":["list"],"readableFields":["payload"],{member}
+                ]
+              }}],
+              "accessProfiles":[{{
+                "id":"operator","default":true,"principalClaim":"principal","grants":[{{
+                  "entity":"entry","operations":["list"],"readableFields":["payload"],{member}
                 }}]
               }}]
             }}"#
@@ -3034,9 +3596,11 @@ fn reordered_stored_field_authoring_changes_revision_but_not_query_inventory() {
             "fields":[
               {"id":"code","type":"string","maxLength":32,"classification":"internal"},
               {"id":"count","type":"int64","classification":"internal"}
-            ],
-            "accessProfiles":[{
-              "id":"operator","default":true,"principalClaim":"principal","operations":["list"],
+            ]
+          }],
+          "accessProfiles":[{
+            "id":"operator","default":true,"principalClaim":"principal","grants":[{
+              "entity":"entry","operations":["list"],
               "readableFields":["code","count"],"filterableFields":["count","code"],"sortableFields":["count","code"]
             }]
           }]
@@ -3052,9 +3616,11 @@ fn reordered_stored_field_authoring_changes_revision_but_not_query_inventory() {
             "fields":[
               {"id":"count","type":"int64","classification":"internal"},
               {"id":"code","type":"string","maxLength":32,"classification":"internal"}
-            ],
-            "accessProfiles":[{
-              "id":"operator","default":true,"principalClaim":"principal","operations":["list"],
+            ]
+          }],
+          "accessProfiles":[{
+            "id":"operator","default":true,"principalClaim":"principal","grants":[{
+              "entity":"entry","operations":["list"],
               "readableFields":["count","code"],"filterableFields":["code","count"],"sortableFields":["code","count"]
             }]
           }]
@@ -3083,11 +3649,15 @@ fn duplicate_routes_fail_before_artifact_generation() {
           "entities":[
             {"id":"first-record","route":"hidden-route-value","mutationMode":"create_only","fields":[
               {"id":"code","type":"string","maxLength":8,"classification":"internal"}
-            ],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get"],"readableFields":["code"]}]},
+            ]},
             {"id":"second-record","route":"hidden-route-value","mutationMode":"create_only","fields":[
               {"id":"code","type":"string","maxLength":8,"classification":"internal"}
-            ],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get"],"readableFields":["code"]}]}
-          ]
+            ]}
+          ],
+          "accessProfiles":[{"id":"reader","principalClaim":"principal","grants":[
+            {"entity":"first-record","operations":["get"],"readableFields":["code"]},
+            {"entity":"second-record","operations":["get"],"readableFields":["code"]}
+          ]}]
         }"#,
     )
     .expect("project parses");
@@ -3114,10 +3684,11 @@ fn anonymous_profiles_cannot_grant_mutation_operations() {
           "registry":{"id":"neutral","version":"1","defaultLanguage":"en"},
           "entities":[{
             "id":"public-entry","route":"public-entries","mutationMode":"mutable","classification":"public",
-            "fields":[{"id":"label","type":"string","maxLength":32,"classification":"public"}],
-            "accessProfiles":[{
-              "id":"anonymous-writer","anonymous":true,"default":true,
-              "operations":["create","patch"],"readableFields":["label"],"writableFields":["label"]
+            "fields":[{"id":"label","type":"string","maxLength":32,"classification":"public"}]
+          }],
+          "accessProfiles":[{
+            "id":"anonymous-writer","anonymous":true,"default":true,"grants":[{
+              "entity":"public-entry","operations":["create","patch"],"readableFields":["label"],"writableFields":["label"]
             }]
           }]
         }"#,
@@ -3147,7 +3718,8 @@ fn production_refuses_a_digest_present_lock_without_module_source() {
           "modules":[{"id":"missing-module","version":"1","digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}],
           "entities":[{"id":"object","route":"objects","mutationMode":"create_only","fields":[
             {"id":"code","type":"string","maxLength":8,"classification":"internal"}
-          ],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get"],"readableFields":["code"]}]}]
+          ]}],
+          "accessProfiles":[{"id":"reader","principalClaim":"principal","grants":[{"entity":"object","operations":["get"],"readableFields":["code"]}]}]
         }"#,
     )
     .expect("project parses");

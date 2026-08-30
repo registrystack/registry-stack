@@ -981,6 +981,7 @@ async fn create_event(
                     "label".to_owned(),
                     "restricted_note".to_owned(),
                 ]),
+                correlation: registry_server::correlation::RequestCorrelation::server_created(),
             },
         )
         .await
@@ -1367,19 +1368,21 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
               {"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"},
               {"id":"restricted_note","type":"string","maxLength":64,"required":true,"classification":"restricted"}
             ],
-            "accessProfiles":[{
-              "id":"operator","default":true,"principalClaim":"registry_principal",
-              "requiredPurposes":["case-management"],
-              "operations":["create","get","list"],
-              "readableFields":["jurisdiction","label","restricted_note"],
-              "writableFields":["jurisdiction","label","restricted_note"],
-              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
-            }],
             "events":[{
               "id":"case-created","trigger":"created","projection":["label","restricted_note"],
               "webhook":{
                 "destinationId":"case-operations"
               }
+            }]
+          }],
+          "accessProfiles":[{
+            "id":"operator","default":true,"principalClaim":"registry_principal",
+            "requiredPurposes":["case-management"],
+            "grants":[{
+              "entity":"case","operations":["create","get","list"],
+              "readableFields":["jurisdiction","label","restricted_note"],
+              "writableFields":["jurisdiction","label","restricted_note"],
+              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]
           }]
         }"#,
@@ -1488,7 +1491,8 @@ impl DestinationFixture {
         compiled: &registry_server::CompiledRegistry,
     ) -> ActivatedEventDestinationRegistry {
         let raw = format!(
-            r#"
+            r#"apiVersion: registry.registrystack.org/server-runtime/v1alpha1
+kind: RegistryServerRuntimeConfig
 listener:
   bind: 127.0.0.1:8080
   trustedProxy: direct

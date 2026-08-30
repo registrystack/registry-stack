@@ -1026,7 +1026,8 @@ impl StartupFixture {
         fs::write(
             &path,
             format!(
-                r#"
+                r#"apiVersion: registry.registrystack.org/server-runtime/v1alpha1
+kind: RegistryServerRuntimeConfig
 listener:
   bind: {listener}
   trustedProxy: direct

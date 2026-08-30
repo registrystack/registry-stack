@@ -106,6 +106,7 @@ impl PostgresRevisionReadService {
                         method: request.method,
                         operation_id: &request.operation_id,
                         target_record: Some(&request.record_id),
+                        correlation: &request.correlation,
                     },
                 )
                 .await
@@ -126,6 +127,7 @@ impl PostgresRevisionReadService {
                 method: request.method,
                 operation_id: &request.operation_id,
                 target_record: Some(&request.record_id),
+                correlation: &request.correlation,
             },
         )
         .await
@@ -284,6 +286,7 @@ impl PostgresRevisionReadService {
                     record_revision: None,
                     result_count: Some(result_count),
                     field_set_reference: Some(field_set_reference),
+                    correlation: request.correlation.clone(),
                 },
                 query_reference: None,
                 row_boundary_reference: Some(row_boundary_reference),
@@ -335,6 +338,7 @@ impl RevisionReadService for PostgresRevisionReadService {
                     principal: request.principal.as_deref(),
                     selected_access_profile: request.selected_access_profile.as_deref(),
                     purpose_present: request.purpose_present,
+                    correlation: &request.correlation,
                 },
             )
             .await

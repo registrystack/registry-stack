@@ -863,10 +863,13 @@ mod tests {
                 "fields": [
                     {"id": "code", "type": "string", "minLength": 2, "maxLength": 16,
                      "required": true, "classification": "internal"}
-                ],
-                "accessProfiles": [{
-                    "id": PROFILE,
-                    "principalClaim": "principal",
+                ]
+            }],
+            "accessProfiles": [{
+                "id": PROFILE,
+                "principalClaim": "principal",
+                "grants": [{
+                    "entity": ENTITY,
                     "operations": ["create", "batch", "list"],
                     "readableFields": ["code"],
                     "writableFields": ["code"],

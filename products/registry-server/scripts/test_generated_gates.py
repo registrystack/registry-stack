@@ -40,6 +40,9 @@ class GeneratedGateTests(unittest.TestCase):
         self.assertIn("authoring_baseline", generated_gate)
         self.assertIn("--features schema --example authoring-schema", generated_gate)
         self.assertIn("products/registry-server/generated/authoring", generated_gate)
+        self.assertIn("runtime_baseline", generated_gate)
+        self.assertIn("--features runtime,schema --example runtime-schema", generated_gate)
+        self.assertIn("products/registry-server/generated/runtime", generated_gate)
         for selector in ("openapi", "schemas", "manifest", "metadata", "sql"):
             self.assertIn(selector, generated_gate)
         self.assertNotIn(" apply ", generated_gate)
@@ -78,6 +81,8 @@ class GeneratedGateTests(unittest.TestCase):
             "REGISTRY_SERVER_TEST_TLS_CA_PEM_PATH",
             'export SSL_CERT_FILE="$adopter_tls_ca_pem_path"',
             "umask 077",
+            "apiVersion: registry.registrystack.org/server-runtime/v1alpha1",
+            "kind: RegistryServerRuntimeConfig",
             "maxTokenLifetimeSeconds: 3600",
             '"exp": now + 3600',
             "jwksSource:",

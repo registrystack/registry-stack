@@ -6,12 +6,19 @@ use std::collections::BTreeMap;
 use serde_json::{Map, Value};
 
 use crate::contract::RegistryProject;
+#[cfg(feature = "runtime")]
+use crate::runtime_config::runtime_config_schema;
 
 const SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
 
 pub const REGISTRY_PROJECT_SCHEMA_FILE: &str = "registry-project.schema.json";
 pub const REGISTRY_PROJECT_SCHEMA_ID: &str =
     "https://id.registrystack.org/schemas/registry-server/authoring/registry-project.v1alpha1.schema.json";
+#[cfg(feature = "runtime")]
+pub const RUNTIME_CONFIG_SCHEMA_FILE: &str = "runtime.schema.json";
+#[cfg(feature = "runtime")]
+pub const RUNTIME_CONFIG_SCHEMA_ID: &str =
+    "https://id.registrystack.org/schemas/registry-server/runtime/runtime.v1alpha1.schema.json";
 
 /// Every authoring schema under its committed artifact filename.
 pub fn documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> {
@@ -20,6 +27,23 @@ pub fn documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> 
         "Registry Server authored project",
         REGISTRY_PROJECT_SCHEMA_ID,
         serde_json::to_value(schemars::schema_for!(RegistryProject))?,
+    )];
+    entries
+        .into_iter()
+        .map(|(file, title, identifier, derived)| {
+            Ok((file, render(published(derived, title, identifier))?))
+        })
+        .collect()
+}
+
+/// Every runtime schema under its committed artifact filename.
+#[cfg(feature = "runtime")]
+pub fn runtime_documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> {
+    let entries = [(
+        RUNTIME_CONFIG_SCHEMA_FILE,
+        "Registry Server runtime configuration",
+        RUNTIME_CONFIG_SCHEMA_ID,
+        runtime_config_schema()?,
     )];
     entries
         .into_iter()
@@ -61,6 +85,12 @@ mod tests {
     use serde_json::Value;
 
     use super::{documents, REGISTRY_PROJECT_SCHEMA_FILE, REGISTRY_PROJECT_SCHEMA_ID};
+    #[cfg(feature = "runtime")]
+    use super::{runtime_documents, RUNTIME_CONFIG_SCHEMA_FILE, RUNTIME_CONFIG_SCHEMA_ID};
+    #[cfg(feature = "runtime")]
+    use crate::runtime_config::{
+        parse_runtime_config, RUNTIME_CONFIG_API_VERSION, RUNTIME_CONFIG_KIND,
+    };
 
     const ACCEPTANCE_PROJECTS: &[&str] = &[
         "asset-site-placement",
@@ -83,6 +113,113 @@ mod tests {
             .with_draft(Draft::Draft202012)
             .compile(&value)
             .expect("a generated schema compiles as 2020-12")
+    }
+
+    #[cfg(feature = "runtime")]
+    fn runtime_schema_document() -> String {
+        runtime_documents()
+            .expect("the Registry Server runtime schema generates")
+            .remove(RUNTIME_CONFIG_SCHEMA_FILE)
+            .expect("the RuntimeConfig schema is generated")
+    }
+
+    #[cfg(feature = "runtime")]
+    fn runtime_instance() -> Value {
+        serde_json::json!({
+            "apiVersion": RUNTIME_CONFIG_API_VERSION,
+            "kind": RUNTIME_CONFIG_KIND,
+            "listener": {
+                "bind": "127.0.0.1:8080",
+                "trustedProxy": "direct"
+            },
+            "identity": {
+                "environment": "production",
+                "instanceId": "registry-primary",
+                "databaseId": "registry-db",
+                "databaseInitializationEnvironment": "production"
+            },
+            "secretProviders": {
+                "environment": {},
+                "file": {
+                    "root": "/var/lib/registry-server/secrets"
+                }
+            },
+            "database": {
+                "runtimeUrlRef": "secret:env/REGISTRY_SERVER_DATABASE_URL",
+                "migrationUrlRef": "secret:env/REGISTRY_SERVER_MIGRATION_DATABASE_URL",
+                "pool": {
+                    "maxSize": 4
+                },
+                "roles": {
+                    "migration": "registry_migration",
+                    "runtime": "registry_runtime"
+                }
+            },
+            "package": {
+                "root": "/var/lib/registry-server/package",
+                "trustAnchorPath": "/etc/registry-server/package-trust-anchor.json",
+                "compilerSourceRevision": "source-revision",
+                "activeRevision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "activeSequence": 1
+            },
+            "authentication": {
+                "oidc": {
+                    "issuer": "https://issuer.example",
+                    "audience": "urn:registry-server:test",
+                    "allowedAlgorithm": "EdDSA",
+                    "accessTokenType": "JWT",
+                    "scopeClaim": "scope",
+                    "scopeSeparator": " ",
+                    "maxTokenLifetimeSeconds": 300,
+                    "leewayMilliseconds": 60000
+                },
+                "authorityClaims": {
+                    "principal": "registry_principal"
+                }
+            },
+            "audit": {
+                "hashKeyRef": "secret:file/audit-key"
+            },
+            "cursor": {
+                "secretRef": "secret:file/cursor-key"
+            }
+        })
+    }
+
+    #[cfg(feature = "runtime")]
+    fn valid_event_destination() -> Value {
+        serde_json::json!({
+            "origin": "https://webhook.example",
+            "path": "/events",
+            "networkProfile": "productionHttps",
+            "dnsFamily": "dualStackStrict",
+            "allowedPrivateCidrs": [],
+            "hmacSha256KeyRef": "secret:file/webhook-hmac",
+            "classificationCeiling": "public",
+            "deliveryCeilings": {
+                "attemptTimeoutMilliseconds": 100,
+                "maximumAttempts": 1
+            }
+        })
+    }
+
+    #[cfg(feature = "runtime")]
+    fn assert_schema_rejects_parser_refused_runtime(
+        schema: &JSONSchema,
+        label: &str,
+        mutate: impl FnOnce(&mut Value),
+    ) {
+        let mut instance = runtime_instance();
+        mutate(&mut instance);
+        let raw = serde_json::to_string(&instance).expect("the mutated runtime is JSON");
+        assert!(
+            parse_runtime_config(&raw).is_err(),
+            "{label}: parser accepted the representative invalid runtime"
+        );
+        assert!(
+            !schema.is_valid(&instance),
+            "{label}: schema accepted a runtime the parser rejects"
+        );
     }
 
     fn acceptance_root() -> std::path::PathBuf {
@@ -165,6 +302,44 @@ mod tests {
     }
 
     #[test]
+    fn schema_rejects_the_legacy_top_level_access_profile_vocabulary() {
+        let document = schema_document();
+        let schema = compile(&document);
+        let mut old_purposes = fixture("asset-site-placement");
+        let required_purposes = old_purposes["accessProfiles"][0]
+            .as_object_mut()
+            .expect("access profile is an object")
+            .remove("requiredPurposes")
+            .expect("fixture uses canonical requiredPurposes");
+        old_purposes["accessProfiles"][0]["purposes"] = required_purposes;
+        assert!(!schema.is_valid(&old_purposes));
+
+        let mut old_actions = fixture("asset-site-placement");
+        let operations = old_actions["accessProfiles"][0]["grants"][0]
+            .as_object_mut()
+            .expect("access grant is an object")
+            .remove("operations")
+            .expect("fixture uses canonical operations");
+        old_actions["accessProfiles"][0]["grants"][0]["actions"] = operations;
+        assert!(!schema.is_valid(&old_actions));
+    }
+
+    #[test]
+    fn schema_rejects_entity_local_project_access_profiles() {
+        let document = schema_document();
+        let schema = compile(&document);
+        let mut instance = fixture("business");
+        instance["entities"][0]["accessProfiles"] = serde_json::json!([{
+            "id": "entity-local-reader",
+            "anonymous": true,
+            "operations": ["get"],
+            "readableFields": ["legal-name"]
+        }]);
+
+        assert!(!schema.is_valid(&instance));
+    }
+
+    #[test]
     fn schema_rejects_field_options_that_do_not_belong_to_the_field_type() {
         let document = schema_document();
         let schema = compile(&document);
@@ -240,6 +415,365 @@ mod tests {
         assert_eq!(
             fs::read_to_string(committed).expect("the committed schema exists"),
             schema_document(),
+        );
+    }
+
+    #[cfg(feature = "runtime")]
+    #[test]
+    fn runtime_schema_declares_the_published_dialect_identifier_and_title() {
+        let document = runtime_schema_document();
+        let value: Value = serde_json::from_str(&document).expect("the schema is JSON");
+        assert_eq!(
+            value.get("$schema").and_then(Value::as_str),
+            Some("https://json-schema.org/draft/2020-12/schema"),
+        );
+        assert_eq!(
+            value.get("$id").and_then(Value::as_str),
+            Some(RUNTIME_CONFIG_SCHEMA_ID),
+        );
+        assert_eq!(
+            value.get("title").and_then(Value::as_str),
+            Some("Registry Server runtime configuration"),
+        );
+        assert_eq!(value.get("additionalProperties"), Some(&Value::Bool(false)));
+        assert_eq!(
+            value
+                .pointer("/properties/apiVersion/const")
+                .and_then(Value::as_str),
+            Some(RUNTIME_CONFIG_API_VERSION),
+        );
+        assert_eq!(
+            value
+                .pointer("/properties/kind/const")
+                .and_then(Value::as_str),
+            Some(RUNTIME_CONFIG_KIND),
+        );
+    }
+
+    #[cfg(feature = "runtime")]
+    #[test]
+    fn runtime_schema_publishes_only_safe_operational_defaults() {
+        let document = runtime_schema_document();
+        let value: Value = serde_json::from_str(&document).expect("the schema is JSON");
+        for (pointer, expected) in [
+            (
+                "/$defs/RawPoolBounds/properties/waitTimeoutMilliseconds/default",
+                Value::from(30_000_u64),
+            ),
+            (
+                "/$defs/RawPoolBounds/properties/createTimeoutMilliseconds/default",
+                Value::from(30_000_u64),
+            ),
+            (
+                "/$defs/RawPoolBounds/properties/recycleTimeoutMilliseconds/default",
+                Value::from(30_000_u64),
+            ),
+            (
+                "/$defs/RawOidcVerifierConfig/properties/jwksCache/default/requestTimeoutMilliseconds",
+                Value::from(5_000_u64),
+            ),
+            (
+                "/$defs/RawJwksCacheConfig/properties/cacheTtlSeconds/default",
+                Value::from(600_u64),
+            ),
+            (
+                "/$defs/RawJwksCacheConfig/properties/negativeCacheTtlSeconds/default",
+                Value::from(60_u64),
+            ),
+            (
+                "/$defs/RawJwksCacheConfig/properties/refreshCooldownSeconds/default",
+                Value::from(30_u64),
+            ),
+            (
+                "/$defs/RawJwksCacheConfig/properties/maxDocumentBytes/default",
+                Value::from(65_536_u64),
+            ),
+            (
+                "/$defs/RawJwksCacheConfig/properties/requestTimeoutMilliseconds/default",
+                Value::from(5_000_u64),
+            ),
+            (
+                "/$defs/RawJwksCacheConfig/properties/outageToleranceSeconds/default",
+                Value::from(900_u64),
+            ),
+            (
+                "/$defs/RawCursorConfig/properties/maxAgeSeconds/default",
+                Value::from(300_u64),
+            ),
+            (
+                "/properties/eventDelivery/default/payloadRetentionDays",
+                Value::from(7_u64),
+            ),
+            (
+                "/properties/operationalTimeouts/default/httpRequestMilliseconds",
+                Value::from(10_000_u64),
+            ),
+            (
+                "/$defs/RawOperationalTimeouts/properties/httpRequestMilliseconds/default",
+                Value::from(10_000_u64),
+            ),
+            (
+                "/$defs/RawOperationalTimeouts/properties/shutdownGraceMilliseconds/default",
+                Value::from(30_000_u64),
+            ),
+            (
+                "/$defs/RawOperationalTimeouts/properties/recordLockMilliseconds/default",
+                Value::from(5_000_u64),
+            ),
+            (
+                "/$defs/RawOperationalTimeouts/properties/migrationLockMilliseconds/default",
+                Value::from(30_000_u64),
+            ),
+            (
+                "/$defs/RawOperationalTimeouts/properties/migrationStatementMilliseconds/default",
+                Value::from(60_000_u64),
+            ),
+        ] {
+            assert_eq!(value.pointer(pointer), Some(&expected), "{pointer}");
+        }
+        for pointer in [
+            "/properties/eventDestinations/default",
+            "/$defs/RawAuthorityClaimsConfig/properties/purpose/default",
+            "/$defs/RawDatabaseConfig/properties/password/default",
+            "/$defs/RawDatabaseConfig/properties/plaintext/default",
+            "/$defs/RawDatabaseConfig/properties/url/default",
+            "/$defs/RawEventDestinationConfig/properties/tls/default",
+            "/$defs/RawEventDestinationTlsConfig/properties/caBundleRef/default",
+            "/$defs/RawEventDestinationTlsConfig/properties/clientIdentityRef/default",
+            "/$defs/RawOidcVerifierConfig/properties/allowedClients/default",
+            "/$defs/RawOidcVerifierConfig/properties/deniedKids/default",
+            "/$defs/RawOidcVerifierConfig/properties/jwksSource/default",
+        ] {
+            assert_eq!(value.pointer(pointer), None, "{pointer}");
+        }
+    }
+
+    #[cfg(feature = "runtime")]
+    #[test]
+    fn runtime_schema_accepts_defaulted_runtime_and_rejects_inline_database_material() {
+        let schema = compile(&runtime_schema_document());
+        assert!(
+            schema.is_valid(&runtime_instance()),
+            "minimal runtime with safe defaults validates"
+        );
+
+        for (field, value) in [
+            (
+                "url",
+                Value::String("postgres://inline.example/db".to_owned()),
+            ),
+            ("password", Value::String("inline-password".to_owned())),
+            ("plaintext", Value::Bool(true)),
+        ] {
+            let mut instance = runtime_instance();
+            instance["database"][field] = value;
+            assert!(!schema.is_valid(&instance), "{field}");
+        }
+
+        let mut wrong_kind = runtime_instance();
+        wrong_kind["kind"] = Value::String("RegistryProject".to_owned());
+        assert!(!schema.is_valid(&wrong_kind));
+
+        let value: Value =
+            serde_json::from_str(&runtime_schema_document()).expect("the schema is JSON");
+        assert!(value.pointer("/$defs/RawEventDestinationConfig").is_some());
+        assert!(value
+            .pointer("/$defs/RawEventDestinationConfigSchema")
+            .is_none());
+    }
+
+    #[cfg(feature = "runtime")]
+    #[test]
+    fn runtime_schema_rejects_representative_parser_refused_values() {
+        let schema = compile(&runtime_schema_document());
+        assert_schema_rejects_parser_refused_runtime(
+            &schema,
+            "payload retention above runtime maximum",
+            |instance| {
+                instance["eventDelivery"] = serde_json::json!({"payloadRetentionDays": 31});
+            },
+        );
+        assert_schema_rejects_parser_refused_runtime(
+            &schema,
+            "package active sequence must be positive",
+            |instance| {
+                instance["package"]["activeSequence"] = Value::from(0_u64);
+            },
+        );
+        assert_schema_rejects_parser_refused_runtime(
+            &schema,
+            "pool size above runtime maximum",
+            |instance| {
+                instance["database"]["pool"]["maxSize"] = Value::from(129_u64);
+            },
+        );
+        assert_schema_rejects_parser_refused_runtime(
+            &schema,
+            "pool wait timeout above runtime maximum",
+            |instance| {
+                instance["database"]["pool"]["waitTimeoutMilliseconds"] = Value::from(60_001_u64);
+            },
+        );
+        assert_schema_rejects_parser_refused_runtime(
+            &schema,
+            "SQL role identifier grammar",
+            |instance| {
+                instance["database"]["roles"]["runtime"] = Value::String("RegistryRuntime".into());
+            },
+        );
+        assert_schema_rejects_parser_refused_runtime(
+            &schema,
+            "database secret reference grammar",
+            |instance| {
+                instance["database"]["runtimeUrlRef"] =
+                    Value::String("secret:env/not_uppercase".into());
+            },
+        );
+        assert_schema_rejects_parser_refused_runtime(
+            &schema,
+            "OIDC maximum token lifetime",
+            |instance| {
+                instance["authentication"]["oidc"]["maxTokenLifetimeSeconds"] =
+                    Value::from(3_601_u64);
+            },
+        );
+        assert_schema_rejects_parser_refused_runtime(&schema, "OIDC leeway", |instance| {
+            instance["authentication"]["oidc"]["leewayMilliseconds"] = Value::from(300_001_u64);
+        });
+        assert_schema_rejects_parser_refused_runtime(
+            &schema,
+            "OIDC scope claim grammar",
+            |instance| {
+                instance["authentication"]["oidc"]["scopeClaim"] =
+                    Value::String("bad claim".into());
+            },
+        );
+        assert_schema_rejects_parser_refused_runtime(
+            &schema,
+            "OIDC scope separator grammar",
+            |instance| {
+                instance["authentication"]["oidc"]["scopeSeparator"] = Value::String("a".into());
+            },
+        );
+        assert_schema_rejects_parser_refused_runtime(
+            &schema,
+            "OIDC client list uniqueness",
+            |instance| {
+                instance["authentication"]["oidc"]["allowedClients"] =
+                    serde_json::json!(["client-a", "client-a"]);
+            },
+        );
+        assert_schema_rejects_parser_refused_runtime(
+            &schema,
+            "authority claim excludes registered JWT claims",
+            |instance| {
+                instance["authentication"]["authorityClaims"]["principal"] =
+                    Value::String("iss".into());
+            },
+        );
+        assert_schema_rejects_parser_refused_runtime(
+            &schema,
+            "JWKS cache document size",
+            |instance| {
+                instance["authentication"]["oidc"]["jwksCache"] =
+                    serde_json::json!({"maxDocumentBytes": 1_048_577});
+            },
+        );
+        assert_schema_rejects_parser_refused_runtime(
+            &schema,
+            "JWKS negative cache lower bound",
+            |instance| {
+                instance["authentication"]["oidc"]["jwksCache"] =
+                    serde_json::json!({"negativeCacheTtlSeconds": 0});
+            },
+        );
+        assert_schema_rejects_parser_refused_runtime(&schema, "cursor maximum age", |instance| {
+            instance["cursor"]["maxAgeSeconds"] = Value::from(86_401_u64);
+        });
+        assert_schema_rejects_parser_refused_runtime(
+            &schema,
+            "operational timeout upper bound",
+            |instance| {
+                instance["operationalTimeouts"] =
+                    serde_json::json!({"migrationStatementMilliseconds": 3_600_001});
+            },
+        );
+        assert_schema_rejects_parser_refused_runtime(
+            &schema,
+            "event destination identifier grammar",
+            |instance| {
+                instance["eventDestinations"] =
+                    serde_json::json!({"AssetOps": valid_event_destination()});
+            },
+        );
+        assert_schema_rejects_parser_refused_runtime(
+            &schema,
+            "event destination signing secret reference grammar",
+            |instance| {
+                let mut destination = valid_event_destination();
+                destination["hmacSha256KeyRef"] = Value::String("secret:file/".into());
+                instance["eventDestinations"] = serde_json::json!({"asset_ops": destination});
+            },
+        );
+        assert_schema_rejects_parser_refused_runtime(
+            &schema,
+            "event destination attempt timeout lower bound",
+            |instance| {
+                let mut destination = valid_event_destination();
+                destination["deliveryCeilings"]["attemptTimeoutMilliseconds"] = Value::from(99_u64);
+                instance["eventDestinations"] = serde_json::json!({"asset_ops": destination});
+            },
+        );
+        assert_schema_rejects_parser_refused_runtime(
+            &schema,
+            "event destination maximum attempts upper bound",
+            |instance| {
+                let mut destination = valid_event_destination();
+                destination["deliveryCeilings"]["maximumAttempts"] = Value::from(6_u64);
+                instance["eventDestinations"] = serde_json::json!({"asset_ops": destination});
+            },
+        );
+        assert_schema_rejects_parser_refused_runtime(
+            &schema,
+            "event destination TLS requires at least one string ref",
+            |instance| {
+                let mut destination = valid_event_destination();
+                destination["tls"] = serde_json::json!({});
+                instance["eventDestinations"] = serde_json::json!({"asset_ops": destination});
+            },
+        );
+    }
+
+    #[cfg(feature = "runtime")]
+    #[test]
+    fn runtime_schema_reproduces_byte_for_byte() {
+        assert_eq!(
+            runtime_documents().expect("the Registry Server runtime schema generates"),
+            runtime_documents().expect("the Registry Server runtime schema generates again"),
+        );
+    }
+
+    #[cfg(feature = "runtime")]
+    #[test]
+    fn runtime_schema_is_pretty_json_with_one_trailing_newline() {
+        let document = runtime_schema_document();
+        assert!(document.ends_with('\n') && !document.ends_with("\n\n"));
+        let value: Value = serde_json::from_str(&document).expect("the schema is JSON");
+        let mut rendered =
+            serde_json::to_string_pretty(&value).expect("a parsed schema renders again");
+        rendered.push('\n');
+        assert_eq!(document, rendered);
+    }
+
+    #[cfg(feature = "runtime")]
+    #[test]
+    fn committed_runtime_schema_matches_generated_bytes() {
+        let committed = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/registry-server/generated/runtime")
+            .join(RUNTIME_CONFIG_SCHEMA_FILE);
+        assert_eq!(
+            fs::read_to_string(committed).expect("the committed runtime schema exists"),
+            runtime_schema_document(),
         );
     }
 }

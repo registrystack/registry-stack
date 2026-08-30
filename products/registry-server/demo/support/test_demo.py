@@ -77,6 +77,8 @@ class DemoProvisioningTests(unittest.TestCase):
         self.assertNotIn("registry_purpose", no_purpose)
 
         runtime = (self.root / "runtime-test.yaml").read_text(encoding="utf-8")
+        self.assertIn("apiVersion: registry.registrystack.org/server-runtime/v1alpha1", runtime)
+        self.assertIn("kind: RegistryServerRuntimeConfig", runtime)
         self.assertIn("accessTokenType: at+jwt", runtime)
         self.assertIn("kind: static", runtime)
         self.assertIn("documentRef: secret:file/mint-jwks", runtime)

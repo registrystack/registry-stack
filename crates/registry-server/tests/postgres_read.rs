@@ -1277,30 +1277,7 @@ fn registry_source() -> String {
               {"id":"ordinal","type":"int64","required":true,"classification":"internal"},
               {"id":"rank","type":"int64","required":false,"classification":"internal"},
               {"id":"internal-code","apiName":"publicCode","type":"string","required":false,"maxLength":32,"classification":"internal"}
-            ],
-            "accessProfiles":[{
-              "id":"operator",
-              "default":true,
-              "principalClaim":"registry_principal",
-              "requiredScopes":["registry.read"],
-              "requiredPurposes":["case-management","audit-review"],
-              "operations":["create","get","list","tombstone"],
-              "readableFields":["label","secret","amount","jurisdiction","ordinal","rank","internal-code"],
-              "writableFields":["label","secret","amount","jurisdiction","ordinal","rank"],
-              "filterableFields":["jurisdiction","label","ordinal","rank"],
-              "sortableFields":["ordinal","label","rank"],
-              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
-            },{
-              "id":"auditor",
-              "principalClaim":"registry_principal",
-              "requiredScopes":["registry.read"],
-              "requiredPurposes":["case-management"],
-              "operations":["get","list"],
-              "readableFields":["label","jurisdiction","internal-code"],
-              "filterableFields":["label"],
-              "sortableFields":["label"],
-              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
-            }]
+            ]
           },{
             "id":"assignment",
             "route":"assignments",
@@ -1323,21 +1300,45 @@ fn registry_source() -> String {
               "scopeFields":["label"],
               "startField":"valid-from",
               "endField":"valid-to"
-            }],
-            "accessProfiles":[{
-              "id":"operator",
-              "default":true,
-              "principalClaim":"registry_principal",
-              "requiredScopes":["registry.read"],
-              "requiredPurposes":["case-management","audit-review"],
+            }]
+	          }],
+          "accessProfiles":[{
+            "id":"operator",
+            "default":true,
+            "principalClaim":"registry_principal",
+            "requiredScopes":["registry.read"],
+            "requiredPurposes":["case-management","audit-review"],
+            "grants":[{
+              "entity":"widget",
+              "operations":["create","get","list","tombstone"],
+              "readableFields":["label","secret","amount","jurisdiction","ordinal","rank","internal-code"],
+              "writableFields":["label","secret","amount","jurisdiction","ordinal","rank"],
+              "filterableFields":["jurisdiction","label","ordinal","rank"],
+              "sortableFields":["ordinal","label","rank"],
+              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
+            },{
+              "entity":"assignment",
               "operations":["create","get","list"],
               "readableFields":["label","jurisdiction","valid-from","valid-to"],
               "writableFields":["label","jurisdiction","valid-from","valid-to"],
               "filterableFields":["label","jurisdiction"],
               "sortableFields":["label"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
-	            }]
-	          }]
+            }]
+          },{
+            "id":"auditor",
+            "principalClaim":"registry_principal",
+            "requiredScopes":["registry.read"],
+            "requiredPurposes":["case-management"],
+            "grants":[{
+              "entity":"widget",
+              "operations":["get","list"],
+              "readableFields":["label","jurisdiction","internal-code"],
+              "filterableFields":["label"],
+              "sortableFields":["label"],
+              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
+            }]
+          }]
 	        }"#
     .to_owned()
 }

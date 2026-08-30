@@ -39,11 +39,13 @@ entities:
       - {id: quantity, type: int64, required: true, classification: public}
     constraints:
       - {kind: unique, fields: [label]}
-    accessProfiles:
-      - id: operator
-        default: true
-        principalClaim: registry_principal
-        requiredPurposes: [case-management]
+accessProfiles:
+  - id: operator
+    default: true
+    principalClaim: registry_principal
+    requiredPurposes: [case-management]
+    grants:
+      - entity: widget
         operations: [create, get, list, patch, batch]
         readableFields: [jurisdiction, label, note, quantity]
         writableFields: [jurisdiction, label, note, quantity]

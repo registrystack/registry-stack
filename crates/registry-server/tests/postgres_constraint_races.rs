@@ -474,33 +474,21 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
           "registry":{"id":"constraint-race-registry","version":"1","defaultLanguage":"en"},
           "entities":[{
             "id":"parent","route":"parents","mutationMode":"create_only","classification":"public",
-            "fields":[{"id":"name","type":"string","maxLength":64,"required":true,"classification":"public"}],
-            "accessProfiles":[{
-              "id":"operator","default":true,"principalClaim":"principal","requiredPurposes":["operations"],
-              "operations":["create","get"],"readableFields":["name"],"writableFields":["name"]
-            }]
+            "fields":[{"id":"name","type":"string","maxLength":64,"required":true,"classification":"public"}]
           },{
             "id":"child","route":"children","mutationMode":"create_only","classification":"public",
             "fields":[
               {"id":"parent","type":"reference","target":"parent","onDelete":"restrict","required":true,"classification":"public"},
               {"id":"alternate-parent","type":"reference","target":"parent","onDelete":"restrict","classification":"public"},
               {"id":"name","type":"string","maxLength":64,"required":true,"classification":"public"}
-            ],
-            "accessProfiles":[{
-              "id":"operator","default":true,"principalClaim":"principal","requiredPurposes":["operations"],
-              "operations":["create","get"],"readableFields":["parent","alternate-parent","name"],"writableFields":["parent","alternate-parent","name"]
-            }]
+            ]
           },{
             "id":"unique-entry","route":"unique-entries","mutationMode":"create_only","classification":"public",
             "fields":[
               {"id":"scope","type":"string","maxLength":64,"required":true,"classification":"public"},
               {"id":"code","type":"string","maxLength":64,"required":true,"classification":"public"}
             ],
-            "constraints":[{"kind":"unique","fields":["scope","code"]}],
-            "accessProfiles":[{
-              "id":"operator","default":true,"principalClaim":"principal","requiredPurposes":["operations"],
-              "operations":["create","get"],"readableFields":["scope","code"],"writableFields":["scope","code"]
-            }]
+            "constraints":[{"kind":"unique","fields":["scope","code"]}]
           },{
             "id":"period","route":"periods","mutationMode":"create_only","classification":"public",
             "fields":[
@@ -512,10 +500,18 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
             "constraints":[{
               "kind":"temporal-non-overlap","scopeFields":["scope"],
               "startField":"valid-from","endField":"valid-to"
-            }],
-            "accessProfiles":[{
-              "id":"operator","default":true,"principalClaim":"principal","requiredPurposes":["operations"],
-              "operations":["create","get"],
+            }]
+          }],
+          "accessProfiles":[{
+            "id":"operator","default":true,"principalClaim":"principal","requiredPurposes":["operations"],
+            "grants":[{
+              "entity":"parent","operations":["create","get"],"readableFields":["name"],"writableFields":["name"]
+            },{
+              "entity":"child","operations":["create","get"],"readableFields":["parent","alternate-parent","name"],"writableFields":["parent","alternate-parent","name"]
+            },{
+              "entity":"unique-entry","operations":["create","get"],"readableFields":["scope","code"],"writableFields":["scope","code"]
+            },{
+              "entity":"period","operations":["create","get"],
               "readableFields":["scope","valid-from","valid-to"],
               "writableFields":["scope","valid-from","valid-to"]
             }]
@@ -557,6 +553,7 @@ fn create_request<'a>(
             .iter()
             .map(|field| (*field).to_owned())
             .collect::<BTreeSet<_>>(),
+        correlation: registry_server::correlation::RequestCorrelation::server_created(),
     }
 }
 

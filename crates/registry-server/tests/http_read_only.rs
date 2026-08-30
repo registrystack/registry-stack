@@ -45,18 +45,28 @@ entities:
       - {id: label, type: string, required: true, maxLength: 100, classification: public}
       - {id: secret, type: string, required: true, maxLength: 100, classification: restricted}
       - {id: jurisdiction, type: string, required: true, maxLength: 32, classification: internal}
-    accessProfiles:
-      - id: public
-        default: true
-        anonymous: true
+  - id: protected-note
+    route: notes
+    mutationMode: create_only
+    classification: restricted
+    fields:
+      - {id: text, type: text, required: true, maxLength: 200, classification: restricted}
+accessProfiles:
+  - id: public
+    default: true
+    anonymous: true
+    grants:
+      - entity: case
         operations: [get, list]
         readableFields: [label]
         filterableFields: [label]
         sortableFields: [label]
-      - id: caseworker
-        principalClaim: registry_principal
-        requiredScopes: [registry.read]
-        requiredPurposes: [case-management]
+  - id: caseworker
+    principalClaim: registry_principal
+    requiredScopes: [registry.read]
+    requiredPurposes: [case-management]
+    grants:
+      - entity: case
         operations: [create, get, list, patch, tombstone, batch, revisions]
         allowCount: true
         readableFields: [label, secret, jurisdiction]
@@ -65,17 +75,7 @@ entities:
         sortableFields: [label]
         rowBoundaries:
           - {field: jurisdiction, claim: jurisdictions, operator: in}
-  - id: protected-note
-    route: notes
-    mutationMode: create_only
-    classification: restricted
-    fields:
-      - {id: text, type: text, required: true, maxLength: 200, classification: restricted}
-    accessProfiles:
-      - id: caseworker
-        principalClaim: registry_principal
-        requiredScopes: [registry.read]
-        requiredPurposes: [case-management]
+      - entity: protected-note
         operations: [create, get, list]
         readableFields: [text]
         writableFields: [text]
@@ -105,37 +105,6 @@ entities:
       - {id: by-private-note, fields: [private-note]}
     readPaths:
       - {id: people, through: membership, to: person, route: people}
-    accessProfiles:
-      - id: operator
-        default: true
-        principalClaim: registry_principal
-        requiredScopes: [registry.read]
-        requiredPurposes: [case-management]
-        operations: [get, lookup, list]
-        readableFields: [household-code, administrative-area, local-household-number]
-        filterableFields: [household-code, administrative-area, local-household-number]
-        sortableFields: [household-code]
-        lookups:
-          - {selector: by-household-code, valueOrigin: request}
-          - {selector: by-local-reference, valueOrigin: request}
-        readPaths:
-          - path: people
-            readableFields: [person-code]
-            filterableFields: [person-code]
-            sortableFields: [person-code]
-            allowCount: true
-      - id: viewer
-        principalClaim: registry_principal
-        requiredScopes: [registry.read]
-        requiredPurposes: [case-management]
-        operations: [get, lookup]
-        readableFields: [household-code]
-        rowBoundaries:
-          - {field: id, claim: household_id, operator: equals}
-        lookups:
-          - selector: by-household-code
-            valueOrigin: verified_claim
-            claimMapping: {household-code: household_code}
   - id: membership
     route: memberships
     mutationMode: mutable
@@ -150,16 +119,46 @@ entities:
     fields:
       - {id: person-code, type: string, required: true, maxLength: 64, classification: restricted}
       - {id: sensitive-note, type: string, required: false, maxLength: 64, classification: restricted}
-    accessProfiles:
-      - id: operator
-        default: true
-        principalClaim: registry_principal
-        requiredScopes: [registry.read]
-        requiredPurposes: [case-management]
+accessProfiles:
+  - id: operator
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: [registry.read]
+    requiredPurposes: [case-management]
+    grants:
+      - entity: household
+        operations: [get, lookup, list]
+        readableFields: [household-code, administrative-area, local-household-number]
+        filterableFields: [household-code, administrative-area, local-household-number]
+        sortableFields: [household-code]
+        lookups:
+          - {selector: by-household-code, valueOrigin: request}
+          - {selector: by-local-reference, valueOrigin: request}
+        readPaths:
+          - path: people
+            readableFields: [person-code]
+            filterableFields: [person-code]
+            sortableFields: [person-code]
+            allowCount: true
+      - entity: person
         operations: [get, list]
         readableFields: [sensitive-note]
         filterableFields: [sensitive-note]
         sortableFields: [sensitive-note]
+  - id: viewer
+    principalClaim: registry_principal
+    requiredScopes: [registry.read]
+    requiredPurposes: [case-management]
+    grants:
+      - entity: household
+        operations: [get, lookup]
+        readableFields: [household-code]
+        rowBoundaries:
+          - {field: id, claim: household_id, operator: equals}
+        lookups:
+          - selector: by-household-code
+            valueOrigin: verified_claim
+            claimMapping: {household-code: household_code}
 "#;
 
 const DERIVED_DISCOVERY_PROJECT: &str = r#"
@@ -183,12 +182,14 @@ entities:
         execution: live
         fields:
           - {id: eligibility-score, type: int64, classification: restricted}
-    accessProfiles:
-      - id: operator
-        default: true
-        principalClaim: registry_principal
-        requiredScopes: [registry.read]
-        requiredPurposes: [case-management]
+accessProfiles:
+  - id: operator
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: [registry.read]
+    requiredPurposes: [case-management]
+    grants:
+      - entity: benefit-record
         operations: [get, list]
         readableFields: [label, eligibility-score]
 "#;
@@ -208,22 +209,6 @@ entities:
     fields:
       - {id: label, type: string, required: true, maxLength: 100, classification: public}
       - {id: restricted-canary-field, type: string, maxLength: 100, classification: restricted}
-    accessProfiles:
-      - id: public
-        default: true
-        anonymous: true
-        operations: [get, list]
-        readableFields: [label]
-        filterableFields: [label]
-        sortableFields: [label]
-      - id: caseworker
-        principalClaim: registry_principal
-        requiredScopes: [registry.read]
-        requiredPurposes: [case-management]
-        operations: [get, list]
-        readableFields: [label, restricted-canary-field]
-        filterableFields: [label]
-        sortableFields: [label]
   - id: protected-ledger
     route: classified-records
     mutationMode: mutable
@@ -244,11 +229,27 @@ entities:
         projection: [classified-status, valid-from]
         webhook:
           destinationId: classified-operations-destination
-    accessProfiles:
-      - id: caseworker
-        principalClaim: registry_principal
-        requiredScopes: [registry.read]
-        requiredPurposes: [case-management]
+accessProfiles:
+  - id: public
+    default: true
+    anonymous: true
+    grants:
+      - entity: public-record
+        operations: [get, list]
+        readableFields: [label]
+        filterableFields: [label]
+        sortableFields: [label]
+  - id: caseworker
+    principalClaim: registry_principal
+    requiredScopes: [registry.read]
+    requiredPurposes: [case-management]
+    grants:
+      - entity: public-record
+        operations: [get, list]
+        readableFields: [label, restricted-canary-field]
+        filterableFields: [label]
+        sortableFields: [label]
+      - entity: protected-ledger
         operations: [get, list]
         readableFields: [classified-status, valid-from, valid-to]
         filterableFields: [classified-status]
@@ -274,10 +275,12 @@ entities:
       - {id: household-code, type: string, required: true, maxLength: 64, classification: public}
       - {id: household-kind-code, apiName: householdKind, type: vocabulary-code, vocabulary: household-kind, required: true, classification: public}
       - {id: private-canary-field, apiName: privateCanary, type: string, required: true, maxLength: 64, classification: restricted}
-    accessProfiles:
-      - id: public
-        default: true
-        anonymous: true
+accessProfiles:
+  - id: public
+    default: true
+    anonymous: true
+    grants:
+      - entity: logical-record
         operations: [get, list]
         readableFields: [household-code, household-kind-code]
 vocabularies:
@@ -509,7 +512,7 @@ async fn lookup_body_exactness_origin_types_and_unresolved_equivalence_are_value
             json!({"selector": "missing-canary", "values": {"householdCode": "DO-NOT-LEAK"}}),
         )
         .await;
-    let unknown_body = body_bytes(unknown).await;
+    let unknown_body = problem_shape(unknown).await;
     let ungranted = harness
         .send_json(
             Method::POST,
@@ -518,14 +521,10 @@ async fn lookup_body_exactness_origin_types_and_unresolved_equivalence_are_value
             json!({"selector": "by-private-note", "values": {"privateNote": "DO-NOT-LEAK"}}),
         )
         .await;
-    let ungranted_body = body_bytes(ungranted).await;
+    let ungranted_body = problem_shape(ungranted).await;
     assert_eq!(unknown_body, ungranted_body);
-    assert!(!String::from_utf8_lossy(&unknown_body).contains("DO-NOT-LEAK"));
-    assert_eq!(
-        serde_json::from_slice::<Value>(&unknown_body).expect("unresolved response is JSON")
-            ["code"],
-        "lookup.unresolved"
-    );
+    assert!(!unknown_body.to_string().contains("DO-NOT-LEAK"));
+    assert_eq!(unknown_body["code"], "lookup.unresolved");
 
     let claim_origin_claims = Some(caseworker_claims_with_direct(
         "case-management",
@@ -597,7 +596,7 @@ async fn lookup_body_exactness_origin_types_and_unresolved_equivalence_are_value
             json!({"selector": "by-household-code"}),
         )
         .await;
-    assert_eq!(body_bytes(missing_claim).await, unknown_body);
+    assert_eq!(problem_shape(missing_claim).await, unknown_body);
 }
 
 #[tokio::test]
@@ -679,7 +678,7 @@ async fn relationship_route_uses_path_grant_not_direct_target_rights() {
         )
         .await;
     assert_eq!(unknown_path.status(), StatusCode::NOT_FOUND);
-    let unknown_path_body = body_json(unknown_path).await;
+    let unknown_path_body = problem_shape(unknown_path).await;
 
     let ungranted = harness
         .send(
@@ -695,7 +694,7 @@ async fn relationship_route_uses_path_grant_not_direct_target_rights() {
         )
         .await;
     assert_eq!(ungranted.status(), StatusCode::NOT_FOUND);
-    assert_eq!(body_json(ungranted).await, unknown_path_body);
+    assert_eq!(problem_shape(ungranted).await, unknown_path_body);
     assert_eq!(harness.records.calls(), before);
 }
 
@@ -1346,9 +1345,9 @@ async fn profile_and_resource_concealment_complete_before_record_io() {
     assert_eq!(unauthorized.status(), StatusCode::NOT_FOUND);
     assert_eq!(unknown_profile.status(), StatusCode::NOT_FOUND);
     assert_eq!(unknown_resource.status(), StatusCode::NOT_FOUND);
-    let unauthorized = body_json(unauthorized).await;
-    assert_eq!(unauthorized, body_json(unknown_profile).await);
-    assert_eq!(unauthorized, body_json(unknown_resource).await);
+    let unauthorized = problem_shape(unauthorized).await;
+    assert_eq!(unauthorized, problem_shape(unknown_profile).await);
+    assert_eq!(unauthorized, problem_shape(unknown_resource).await);
     assert_eq!(unauthorized["code"], "resource.not_found");
     assert!(!unauthorized.to_string().contains("caseworker"));
     assert!(!unauthorized.to_string().contains("another-purpose"));
@@ -1470,7 +1469,29 @@ async fn discovery_surfaces_share_caller_filtered_routes_and_fields() {
             "$skiptoken",
             "$top",
             "accessProfile",
+            "traceparent",
         ]
+    );
+    assert_eq!(
+        public_openapi["paths"]["/v1/records/cases"]["get"]["security"],
+        json!([{}])
+    );
+    assert!(
+        public_openapi["paths"]["/v1/records/cases"]["get"]["responses"]["200"]["headers"]
+            .get("traceparent")
+            .is_some()
+    );
+    assert!(
+        public_openapi["paths"]["/v1/records/cases"]["get"]["responses"]["200"]["content"]
+            ["application/json"]["schema"]["properties"]
+            .get("count")
+            .is_some()
+    );
+    assert!(
+        public_openapi["components"]["schemas"]["Problem"]["required"]
+            .as_array()
+            .expect("Problem required is an array")
+            .contains(&json!("traceId"))
     );
     let page_size = public_openapi["paths"]["/v1/records/cases"]["get"]["parameters"]
         .as_array()
@@ -1524,6 +1545,10 @@ async fn discovery_surfaces_share_caller_filtered_routes_and_fields() {
         protected_openapi["components"]["schemas"]["case"]["properties"]
             .get("secret")
             .is_some()
+    );
+    assert_eq!(
+        protected_openapi["paths"]["/v1/records/cases"]["get"]["security"],
+        json!([{"bearerAuth": []}])
     );
     assert_no_mutation_methods(&protected_openapi);
     assert_eq!(harness.records.calls(), 0);
@@ -1689,8 +1714,10 @@ async fn caller_filtered_discovery_conceals_counts_vocabularies_events_queries_a
         public_openapi["components"]["schemas"]
             .as_object()
             .expect("public schemas")
-            .len(),
-        1
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["Problem", "public-record"])
     );
     assert_eq!(
         public_openapi["paths"]["/v1/records/public-records"]["get"]["x-registry-accessProfile"],
@@ -1700,7 +1727,6 @@ async fn caller_filtered_discovery_conceals_counts_vocabularies_events_queries_a
         public_openapi["components"]["schemas"]["public-record"]["properties"],
         json!({"label": {"type": "string", "minLength": 0, "maxLength": 100}})
     );
-
     let public_metadata = body_json(send_to(&app, Method::GET, "/v1/registry", None).await).await;
     assert_eq!(public_metadata["entities"].as_array().unwrap().len(), 1);
     let metadata_artifact = registry
@@ -1871,7 +1897,7 @@ async fn caller_filtered_discovery_conceals_counts_vocabularies_events_queries_a
     )
     .await;
     assert_eq!(missing_profile_response.status(), StatusCode::NOT_FOUND);
-    let missing_profile = body_json(missing_profile_response).await;
+    let missing_profile = problem_shape(missing_profile_response).await;
     for uri in [
         "/openapi.json?accessProfile=caseworker",
         "/v1/registry?accessProfile=caseworker",
@@ -1886,14 +1912,14 @@ async fn caller_filtered_discovery_conceals_counts_vocabularies_events_queries_a
         )
         .await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
-        assert_eq!(body_json(response).await, missing_profile, "{uri}");
+        assert_eq!(problem_shape(response).await, missing_profile, "{uri}");
     }
 
     for uri in ["/v1/vocabularies", "/v1/events", "/v1/queries"] {
         for claims in [None, authorized_claims.clone()] {
             let response = send_to(&app, Method::GET, uri, claims).await;
             assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
-            assert_eq!(body_json(response).await, missing_profile, "{uri}");
+            assert_eq!(problem_shape(response).await, missing_profile, "{uri}");
         }
     }
     let refusal = serde_json::to_string(&missing_profile).expect("refusal serializes");
@@ -2096,6 +2122,76 @@ fn operation_name(operation: Operation) -> &'static str {
 }
 
 #[tokio::test]
+async fn runtime_openapi_contract_is_filtered_to_the_selected_acceptance_profile() {
+    let source = include_str!(
+        "../../../products/registry-server/acceptance/asset-site-placement/registry.yaml"
+    );
+    let harness = Harness::from_project(source, true);
+    let openapi = body_json(
+        harness
+            .send(
+                Method::GET,
+                "/openapi.json?accessProfile=site-planner",
+                Some(registry_principal_claims("site-planning")),
+            )
+            .await,
+    )
+    .await;
+
+    assert_eq!(
+        openapi["components"]["securitySchemes"]["bearerAuth"],
+        json!({"type": "http", "scheme": "bearer", "bearerFormat": "JWT"})
+    );
+    assert!(openapi["components"]["schemas"]["Problem"]
+        .get("properties")
+        .is_some());
+    assert_eq!(
+        openapi["components"]["schemas"]["Problem"]["required"],
+        json!(["type", "title", "status", "detail", "code", "traceId"])
+    );
+    assert_eq!(
+        openapi["paths"]["/v1/records/assets"]["get"]["x-registry-accessProfile"],
+        "site-planner"
+    );
+    assert_eq!(
+        openapi["paths"]["/v1/records/assets"]["get"]["security"],
+        json!([{"bearerAuth": []}])
+    );
+    assert!(openapi["paths"]["/v1/records/assets"]["get"]
+        .get("x-registry-queryProfile")
+        .is_some());
+    assert!(openapi["paths"]["/v1/records/assets"]["get"]
+        .get("x-registry-queryProfiles")
+        .is_none());
+    assert_eq!(
+        openapi["paths"]["/v1/records/assets"]["get"]["x-registry-queryProfile"]
+            ["selectableProperties"],
+        json!(["assetCode", "label"])
+    );
+    assert_eq!(
+        query_parameter_names(
+            &openapi["paths"]["/v1/records/assets/{record_id}"]["get"]["parameters"]
+        ),
+        ["$select", "accessProfile", "record_id", "traceparent"]
+    );
+    assert!(
+        openapi["paths"]["/v1/records/assets/{record_id}"]["get"]["responses"]["200"]["headers"]
+            .get("ETag")
+            .is_some()
+    );
+    assert!(
+        openapi["paths"]["/v1/records/assets/{record_id}"]["get"]["responses"]["200"]["headers"]
+            .get("traceparent")
+            .is_some()
+    );
+    assert!(openapi["components"]["schemas"]["asset-item"]["properties"]
+        .get("assetClass")
+        .is_none());
+    assert!(openapi["paths"].get("/v1/records/inspections").is_none());
+    assert_eq!(harness.records.calls(), 0);
+}
+
+#[tokio::test]
 async fn every_compiled_mutation_route_is_absent_from_the_served_router() {
     let harness = Harness::new(true);
     let claims = Some(caseworker_claims("case-management"));
@@ -2136,6 +2232,17 @@ fn caseworker_claims(purpose: &str) -> VerifiedRequestClaims {
         purpose,
         std::iter::empty::<(&'static str, VerifiedClaimValue)>(),
     )
+}
+
+fn registry_principal_claims(purpose: &str) -> VerifiedRequestClaims {
+    VerifiedRequestClaims::authenticated(
+        "registry_principal",
+        "registry-principal",
+        BTreeSet::new(),
+        Some(purpose.to_owned()),
+        BTreeMap::new(),
+    )
+    .expect("registry principal claims are valid")
 }
 
 fn caseworker_claims_with_direct<I>(purpose: &str, direct_claims: I) -> VerifiedRequestClaims
@@ -2198,6 +2305,16 @@ async fn body_bytes(response: axum::response::Response) -> Vec<u8> {
 
 async fn body_json(response: axum::response::Response) -> Value {
     serde_json::from_slice(&body_bytes(response).await).expect("JSON response")
+}
+
+async fn problem_shape(response: axum::response::Response) -> Value {
+    let mut problem = body_json(response).await;
+    problem
+        .as_object_mut()
+        .expect("problem response is an object")
+        .remove("traceId")
+        .expect("problem response carries traceId");
+    problem
 }
 
 fn assert_no_mutation_methods(document: &Value) {

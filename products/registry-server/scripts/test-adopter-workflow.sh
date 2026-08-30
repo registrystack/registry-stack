@@ -255,6 +255,8 @@ render_runtime_config() {
   local listener=$8
   local compiler_source_revision=$9
   cat >"$output" <<EOF
+apiVersion: registry.registrystack.org/server-runtime/v1alpha1
+kind: RegistryServerRuntimeConfig
 listener:
   bind: $listener
   trustedProxy: direct

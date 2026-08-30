@@ -2,20 +2,18 @@
 
 //! Concrete PostgreSQL mutation runtime for the compiled HTTP surface.
 
-use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
 use registry_platform_audit::AuditProfile;
-use serde_json::Map;
 
 use crate::api::{
-    AuthorizedRequestContext, BatchMutationInput, ConditionalMutationInput,
+    AuthorizedRequestContext, BatchMutationInput, ConditionalMutationInput, CreateMutationInput,
     RowBoundaryOperator as ApiRowBoundaryOperator, VerifiedRowBoundary,
 };
 use crate::audit::{record_http_refusal_audit, HttpRefusalAudit};
 use crate::event_destination::ActivatedEventDestinationRegistry;
-use crate::model::{CompiledRegistry, HttpMethod};
+use crate::model::CompiledRegistry;
 #[cfg(feature = "postgres-test")]
 use crate::mutation::MutationFaultPoint;
 use crate::mutation::{
@@ -105,14 +103,9 @@ impl PostgresRecordMutationService {
         self
     }
 
-    pub async fn record_refusal(
+    pub(crate) async fn record_refusal(
         &self,
-        method: HttpMethod,
-        operation_id: &str,
-        target_record: Option<&str>,
-        principal: Option<&str>,
-        selected_access_profile: Option<&str>,
-        purpose_present: bool,
+        event: HttpRefusalAudit<'_>,
     ) -> Result<(), MutationError> {
         #[cfg(feature = "postgres-test")]
         if matches!(self.fault, MutationFaultControl::RefusalAudit) {
@@ -129,14 +122,7 @@ impl PostgresRecordMutationService {
             self.lock_timeout,
             &self.expected,
             &self.audit_profile,
-            HttpRefusalAudit {
-                method,
-                operation_id,
-                target_record,
-                principal,
-                selected_access_profile,
-                purpose_present,
-            },
+            event,
         )
         .await
         .map_err(MutationError::from)
@@ -144,30 +130,26 @@ impl PostgresRecordMutationService {
 
     pub async fn create(
         &self,
-        route_id: &str,
-        idempotency_key: &str,
-        context: &AuthorizedRequestContext,
-        entity_id: &str,
-        data: Map<String, serde_json::Value>,
-        response_fields: BTreeSet<String>,
+        input: CreateMutationInput<'_>,
     ) -> Result<MutationOutcome, MutationError> {
         let mut client = self
             .pool
             .get()
             .await
             .map_err(|_| MutationError::Unavailable)?;
-        let claims = strict_claim_context(&self.registry, context, entity_id)?;
-        let plan = MutationPlan::from_compiled(&self.registry, route_id)?;
+        let claims = strict_claim_context(&self.registry, input.context, input.entity_id)?;
+        let plan = MutationPlan::from_compiled(&self.registry, input.route_id)?;
         self.execute_request(
             &mut client,
             MutationRequest {
                 plan: &plan,
-                idempotency_key,
+                idempotency_key: input.idempotency_key,
                 claims: &claims,
                 record_id: None,
                 expected_etag: None,
-                body: MutationBody::Create(data),
-                response_fields,
+                body: MutationBody::Create(input.data),
+                response_fields: input.response_fields,
+                correlation: input.correlation.clone(),
             },
         )
         .await
@@ -200,6 +182,7 @@ impl PostgresRecordMutationService {
             items: input.items,
             response_fields: input.response_fields,
             body_bytes: input.body_bytes,
+            correlation: input.correlation.clone(),
         };
         #[cfg(feature = "postgres-test")]
         if let MutationFaultControl::At(fault) = self.fault {
@@ -241,6 +224,7 @@ impl PostgresRecordMutationService {
                 expected_etag: Some(input.if_match),
                 body,
                 response_fields: input.response_fields,
+                correlation: input.correlation.clone(),
             },
         )
         .await

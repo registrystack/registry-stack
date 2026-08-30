@@ -3,13 +3,6 @@
     "AccessGrantSource": {
       "additionalProperties": false,
       "properties": {
-        "actions": {
-          "items": {
-            "$ref": "#/$defs/Operation"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
         "allowCount": {
           "type": "boolean"
         },
@@ -33,6 +26,13 @@
             "$ref": "#/$defs/LookupGrantSource"
           },
           "type": "array"
+        },
+        "operations": {
+          "items": {
+            "$ref": "#/$defs/Operation"
+          },
+          "type": "array",
+          "uniqueItems": true
         },
         "readPaths": {
           "items": {
@@ -78,119 +78,6 @@
       },
       "required": [
         "entity",
-        "actions"
-      ],
-      "type": "object"
-    },
-    "AccessProfileSource": {
-      "additionalProperties": false,
-      "properties": {
-        "allowCount": {
-          "type": "boolean"
-        },
-        "allowDataExport": {
-          "default": false,
-          "type": "boolean"
-        },
-        "anonymous": {
-          "default": false,
-          "type": "boolean"
-        },
-        "default": {
-          "default": false,
-          "type": "boolean"
-        },
-        "filterableFields": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
-        "id": {
-          "type": "string"
-        },
-        "lookups": {
-          "items": {
-            "$ref": "#/$defs/LookupGrantSource"
-          },
-          "type": "array"
-        },
-        "operations": {
-          "items": {
-            "$ref": "#/$defs/Operation"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
-        "principalClaim": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "readPaths": {
-          "items": {
-            "$ref": "#/$defs/ReadPathGrantSource"
-          },
-          "type": "array"
-        },
-        "readableFields": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
-        "requiredPurposes": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
-        "requiredScopes": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
-        "revisionAccess": {
-          "default": false,
-          "type": "boolean"
-        },
-        "rowBoundaries": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/RowBoundarySource"
-          },
-          "type": "array"
-        },
-        "sortableFields": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
-        "writableFields": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "uniqueItems": true
-        }
-      },
-      "required": [
-        "id",
         "operations"
       ],
       "type": "object"
@@ -982,13 +869,6 @@
     "EntitySource": {
       "additionalProperties": false,
       "properties": {
-        "accessProfiles": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/AccessProfileSource"
-          },
-          "type": "array"
-        },
         "batch": {
           "anyOf": [
             {
@@ -1875,6 +1755,10 @@
     "ProjectAccessProfileSource": {
       "additionalProperties": false,
       "properties": {
+        "anonymous": {
+          "default": false,
+          "type": "boolean"
+        },
         "default": {
           "default": false,
           "type": "boolean"
@@ -1890,9 +1774,13 @@
           "type": "string"
         },
         "principalClaim": {
-          "type": "string"
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
         },
-        "purposes": {
+        "requiredPurposes": {
           "default": [],
           "items": {
             "type": "string"
@@ -1910,8 +1798,7 @@
         }
       },
       "required": [
-        "id",
-        "principalClaim"
+        "id"
       ],
       "type": "object"
     },

@@ -16,7 +16,7 @@ use registry_server::runtime_config::{load_runtime_config, RuntimeConfigError};
 #[derive(Debug)]
 pub(crate) enum ApplyLifecycleError {
     RuntimeConfigPath,
-    RuntimeConfig,
+    RuntimeConfig(RuntimeConfigError),
     TargetPackagePath,
     CurrentPackage(PackageError),
     TargetPackage(PackageError),
@@ -53,8 +53,8 @@ pub(crate) fn run(
         return Err(ApplyLifecycleError::TargetPackagePath);
     }
     let backup_arguments = parse_backup_arguments(request.backups)?;
-    let config = load_runtime_config(request.runtime_config)
-        .map_err(|_error: RuntimeConfigError| ApplyLifecycleError::RuntimeConfig)?;
+    let config =
+        load_runtime_config(request.runtime_config).map_err(ApplyLifecycleError::RuntimeConfig)?;
 
     let current_package = if request.initial {
         None

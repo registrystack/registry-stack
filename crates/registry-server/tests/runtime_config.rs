@@ -22,6 +22,7 @@ use registry_server::event_destination::EventDestinationActivationError;
 use registry_server::runtime_config::{
     load_runtime_config, load_runtime_config_with_env, parse_runtime_config,
     parse_runtime_config_with_env, RuntimeConfigError, TrustedProxyPosture,
+    RUNTIME_CONFIG_API_VERSION, RUNTIME_CONFIG_KIND,
 };
 use serde_json::{json, Value};
 
@@ -36,6 +37,8 @@ const STATIC_JWKS_ENV: &str = "REGISTRY_SERVER_RUNTIME_CONFIG_STATIC_JWKS";
 fn valid_runtime(secret_root: &Path, package_root: &Path, trust_anchor: &Path) -> String {
     format!(
         r#"
+apiVersion: {api_version}
+kind: {kind}
 listener:
   bind: 127.0.0.1:8080
   trustedProxy: direct
@@ -47,7 +50,7 @@ identity:
 secretProviders:
   environment: {{}}
   file:
-    root: {}
+    root: {secret_root}
 database:
   runtimeUrlRef: secret:env/REGISTRY_SERVER_RUNTIME_CONFIG_DATABASE_URL
   migrationUrlRef: secret:env/REGISTRY_SERVER_RUNTIME_CONFIG_MIGRATION_DATABASE_URL
@@ -60,8 +63,8 @@ database:
     migration: registry_migration
     runtime: registry_runtime
 package:
-  root: {}
-  trustAnchorPath: {}
+  root: {package_root}
+  trustAnchorPath: {trust_anchor}
   compilerSourceRevision: source-revision-1
   activeRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   activeSequence: 1
@@ -100,9 +103,11 @@ operationalTimeouts:
   migrationLockMilliseconds: 30000
   migrationStatementMilliseconds: 60000
 "#,
-        secret_root.display(),
-        package_root.display(),
-        trust_anchor.display()
+        api_version = RUNTIME_CONFIG_API_VERSION,
+        kind = RUNTIME_CONFIG_KIND,
+        secret_root = secret_root.display(),
+        package_root = package_root.display(),
+        trust_anchor = trust_anchor.display()
     )
 }
 
@@ -287,6 +292,250 @@ fn strict_runtime_file_loads_and_constructs_existing_runtime_inputs() {
     let _cursor = config
         .cursor_codec()
         .expect("cursor codec builds from protected file secret");
+}
+
+#[test]
+fn runtime_document_identity_is_required_and_exact() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+
+    assert_eq!(
+        parse_runtime_config_with_env(
+            &base.replace(
+                RUNTIME_CONFIG_API_VERSION,
+                "registry.registrystack.org/server-runtime/v2"
+            ),
+            env_lookup
+        )
+        .expect_err("unsupported apiVersion refused"),
+        RuntimeConfigError::InvalidApiVersion
+    );
+    assert_eq!(
+        parse_runtime_config_with_env(
+            &base.replace(RUNTIME_CONFIG_KIND, "RegistryProject"),
+            env_lookup
+        )
+        .expect_err("unsupported kind refused"),
+        RuntimeConfigError::InvalidKind
+    );
+    assert_eq!(
+        parse_runtime_config_with_env(
+            &base.replace(&format!("apiVersion: {RUNTIME_CONFIG_API_VERSION}\n"), ""),
+            env_lookup
+        )
+        .expect_err("missing apiVersion refused by strict document shape"),
+        RuntimeConfigError::Document
+    );
+    assert_eq!(
+        parse_runtime_config_with_env(
+            &base.replace(&format!("kind: {RUNTIME_CONFIG_KIND}\n"), ""),
+            env_lookup
+        )
+        .expect_err("missing kind refused by strict document shape"),
+        RuntimeConfigError::Document
+    );
+}
+
+#[test]
+fn operational_defaults_materialize_without_defaulting_authority() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+    let raw = base
+        .clone()
+    .replace(
+        "    waitTimeoutMilliseconds: 1000\n    createTimeoutMilliseconds: 1000\n    recycleTimeoutMilliseconds: 1000\n",
+        "",
+    )
+    .replace(
+        "    jwksCache:\n      cacheTtlSeconds: 600\n      negativeCacheTtlSeconds: 60\n      refreshCooldownSeconds: 30\n      maxDocumentBytes: 65536\n      requestTimeoutMilliseconds: 5000\n      outageToleranceSeconds: 900\n",
+        "",
+    )
+    .replace("  maxAgeSeconds: 300\n", "")
+    .replace(
+        "operationalTimeouts:\n  httpRequestMilliseconds: 10000\n  shutdownGraceMilliseconds: 30000\n  recordLockMilliseconds: 5000\n  migrationLockMilliseconds: 30000\n  migrationStatementMilliseconds: 60000\n",
+        "",
+    );
+
+    let config = parse_runtime_config_with_env(&raw, env_lookup)
+        .expect("safe operational defaults materialize");
+
+    assert_eq!(config.database().pool_bounds().max_size, 4);
+    assert_eq!(
+        config.database().pool_bounds().wait_timeout,
+        Duration::from_secs(30)
+    );
+    assert_eq!(
+        config.database().pool_bounds().create_timeout,
+        Duration::from_secs(30)
+    );
+    assert_eq!(
+        config.database().pool_bounds().recycle_timeout,
+        Duration::from_secs(30)
+    );
+    let jwks = config.authentication().oidc().jwks_fetcher_config();
+    assert_eq!(jwks.cache_ttl, Duration::from_secs(600));
+    assert_eq!(jwks.negative_cache_ttl, Duration::from_secs(60));
+    assert_eq!(jwks.refresh_cooldown, Duration::from_secs(30));
+    assert_eq!(jwks.max_doc_bytes, 65_536);
+    assert_eq!(jwks.request_timeout, Duration::from_secs(5));
+    assert_eq!(jwks.outage_tolerance, Duration::from_secs(900));
+    assert_eq!(config.cursor().max_age(), Duration::from_secs(300));
+    assert_eq!(
+        config.event_delivery().payload_retention(),
+        Duration::from_secs(7 * 24 * 60 * 60)
+    );
+    assert_eq!(
+        config.operational_timeouts().http_request,
+        Duration::from_secs(10)
+    );
+    assert_eq!(
+        config.operational_timeouts().shutdown_grace,
+        Duration::from_secs(30)
+    );
+    assert_eq!(
+        config.operational_timeouts().record_lock,
+        Duration::from_secs(5)
+    );
+    assert_eq!(
+        config.operational_timeouts().migration_lock,
+        Duration::from_secs(30)
+    );
+    assert_eq!(
+        config.operational_timeouts().migration_statement,
+        Duration::from_secs(60)
+    );
+
+    let partial_raw = base
+        .replace(
+            "    jwksCache:\n      cacheTtlSeconds: 600\n      negativeCacheTtlSeconds: 60\n      refreshCooldownSeconds: 30\n      maxDocumentBytes: 65536\n      requestTimeoutMilliseconds: 5000\n      outageToleranceSeconds: 900\n",
+            "    jwksCache:\n      requestTimeoutMilliseconds: 5000\n",
+        )
+        .replace(
+            "operationalTimeouts:\n  httpRequestMilliseconds: 10000\n  shutdownGraceMilliseconds: 30000\n  recordLockMilliseconds: 5000\n  migrationLockMilliseconds: 30000\n  migrationStatementMilliseconds: 60000\n",
+            "operationalTimeouts:\n  httpRequestMilliseconds: 10000\n",
+        );
+    let partial = parse_runtime_config_with_env(&partial_raw, env_lookup)
+        .expect("partial operational sections receive safe field defaults");
+    let jwks = partial.authentication().oidc().jwks_fetcher_config();
+    assert_eq!(jwks.cache_ttl, Duration::from_secs(600));
+    assert_eq!(jwks.negative_cache_ttl, Duration::from_secs(60));
+    assert_eq!(jwks.refresh_cooldown, Duration::from_secs(30));
+    assert_eq!(jwks.max_doc_bytes, 65_536);
+    assert_eq!(jwks.request_timeout, Duration::from_secs(5));
+    assert_eq!(jwks.outage_tolerance, Duration::from_secs(900));
+    assert_eq!(
+        partial.operational_timeouts().http_request,
+        Duration::from_secs(10)
+    );
+    assert_eq!(
+        partial.operational_timeouts().shutdown_grace,
+        Duration::from_secs(30)
+    );
+    assert_eq!(
+        partial.operational_timeouts().record_lock,
+        Duration::from_secs(5)
+    );
+    assert_eq!(
+        partial.operational_timeouts().migration_lock,
+        Duration::from_secs(30)
+    );
+    assert_eq!(
+        partial.operational_timeouts().migration_statement,
+        Duration::from_secs(60)
+    );
+
+    for required_authority in [
+        ("identity:\n", RuntimeConfigError::Document),
+        ("secretProviders:\n", RuntimeConfigError::Document),
+        ("database:\n", RuntimeConfigError::Document),
+        ("package:\n", RuntimeConfigError::Document),
+        ("authentication:\n", RuntimeConfigError::Document),
+        ("audit:\n", RuntimeConfigError::Document),
+        ("cursor:\n", RuntimeConfigError::Document),
+        (
+            "  runtimeUrlRef: secret:env/REGISTRY_SERVER_RUNTIME_CONFIG_DATABASE_URL\n",
+            RuntimeConfigError::Document,
+        ),
+        ("  roles:\n", RuntimeConfigError::Document),
+        (
+            "    issuer: https://issuer.example\n",
+            RuntimeConfigError::Document,
+        ),
+        (
+            "  hashKeyRef: secret:file/audit-key\n",
+            RuntimeConfigError::Document,
+        ),
+        (
+            "  secretRef: secret:file/cursor-key\n",
+            RuntimeConfigError::Document,
+        ),
+    ] {
+        let (line, expected) = required_authority;
+        assert_eq!(
+            parse_runtime_config_with_env(&raw.replace(line, ""), env_lookup)
+                .expect_err("authority-bearing runtime member is never defaulted"),
+            expected
+        );
+    }
+}
+
+#[test]
+fn runtime_config_errors_expose_stable_value_free_metadata() {
+    let cases = [
+        (
+            RuntimeConfigError::InvalidApiVersion,
+            "runtime_config.invalid_api_version",
+            "/apiVersion",
+        ),
+        (
+            RuntimeConfigError::InvalidKind,
+            "runtime_config.invalid_kind",
+            "/kind",
+        ),
+        (
+            RuntimeConfigError::InvalidDatabase,
+            "runtime_config.invalid_database",
+            "/database",
+        ),
+        (
+            RuntimeConfigError::InvalidOidc,
+            "runtime_config.invalid_oidc",
+            "/authentication/oidc",
+        ),
+        (
+            RuntimeConfigError::InvalidEventDestination,
+            "runtime_config.invalid_event_destination",
+            "/eventDestinations",
+        ),
+        (RuntimeConfigError::Secret, "runtime_config.secret", "/"),
+    ];
+
+    for (error, code, path) in cases {
+        let metadata = error.metadata();
+        assert_eq!(error.code(), code);
+        assert_eq!(error.path(), path);
+        assert_eq!(metadata.code(), code);
+        assert_eq!(metadata.path(), path);
+        let rendered = format!("{error:?} {error} {metadata:?}");
+        for canary in [
+            DATABASE_URL_CANARY,
+            MIGRATION_DATABASE_URL_CANARY,
+            AUDIT_KEY_CANARY,
+            "REGISTRY_SERVER_RUNTIME_CONFIG_DATABASE_URL",
+            "registry_runtime",
+            "https://issuer.example",
+        ] {
+            assert!(!rendered.contains(canary), "{code} leaked {canary}");
+        }
+    }
 }
 
 #[test]

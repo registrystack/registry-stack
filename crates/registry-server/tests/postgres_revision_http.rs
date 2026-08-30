@@ -568,10 +568,13 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
               {"id":"jurisdiction","type":"string","required":true,"maxLength":32,"classification":"internal"},
               {"id":"label","type":"string","required":true,"maxLength":100,"classification":"internal"},
               {"id":"secret","type":"string","required":true,"maxLength":100,"classification":"restricted"}
-            ],
-            "accessProfiles":[{
-              "id":"operator","default":true,"principalClaim":"registry_principal",
-              "requiredScopes":["history.read"],"requiredPurposes":["case-review"],
+            ]
+          }],
+          "accessProfiles":[{
+            "id":"operator","default":true,"principalClaim":"registry_principal",
+            "requiredScopes":["history.read"],"requiredPurposes":["case-review"],
+            "grants":[{
+              "entity":"widget",
               "operations":["revisions"],"revisionAccess":true,
               "readableFields":["label"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]

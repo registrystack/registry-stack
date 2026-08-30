@@ -39,9 +39,11 @@ async fn real_postgres_partial_unique_index_enforces_only_the_closed_predicate()
                 {"kind":"field_is_null","field":"ended-on"},
                 {"kind":"active_lifecycle"}
               ]
-            }],
-            "accessProfiles":[{
-              "id":"operator","default":true,"principalClaim":"principal","operations":["get"],"readableFields":["code","status","ended-on"]
+            }]
+          }],
+          "accessProfiles":[{
+            "id":"operator","default":true,"principalClaim":"principal","grants":[{
+              "entity":"entry","operations":["get"],"readableFields":["code","status","ended-on"]
             }]
           }],
           "vocabularies":[{"id":"status","values":["active","closed"]}]

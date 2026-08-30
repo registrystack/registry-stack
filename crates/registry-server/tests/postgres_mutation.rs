@@ -321,6 +321,7 @@ async fn real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable()
             &mut client,
             MutationRequest {
                 response_fields: BTreeSet::from(["label".to_owned()]),
+                correlation: registry_server::correlation::RequestCorrelation::server_created(),
                 ..create_request(
                     &create_plan,
                     "positive-key",
@@ -544,6 +545,7 @@ async fn real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable()
                     value: json!(42),
                 }]),
                 response_fields: BTreeSet::from(["label".to_owned()]),
+                correlation: registry_server::correlation::RequestCorrelation::server_created(),
             },
         )
         .await;
@@ -569,6 +571,7 @@ async fn real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable()
                 expected_etag: Some(&patched_etag),
                 body: MutationBody::Patch(Vec::new()),
                 response_fields: BTreeSet::from(["label".to_owned()]),
+                correlation: registry_server::correlation::RequestCorrelation::server_created(),
             },
         )
         .await;
@@ -623,6 +626,7 @@ async fn real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable()
                     },
                 ]),
                 response_fields: BTreeSet::from(["label".to_owned(), "quantity".to_owned()]),
+                correlation: registry_server::correlation::RequestCorrelation::server_created(),
             },
         )
         .await;
@@ -837,9 +841,39 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
     assert!(openapi["paths"]["/v1/records/widgets"]
         .get("post")
         .is_some());
+    assert_eq!(
+        openapi["paths"]["/v1/records/widgets"]["post"]["security"],
+        json!([{"bearerAuth": []}])
+    );
+    assert_eq!(
+        query_parameter_names(&openapi["paths"]["/v1/records/widgets"]["post"]["parameters"]),
+        ["Idempotency-Key", "accessProfile"]
+    );
+    assert!(
+        openapi["paths"]["/v1/records/widgets"]["post"]["responses"]["201"]["headers"]
+            .get("Location")
+            .is_some()
+    );
     assert!(openapi["paths"]["/v1/records/widgets/{record_id}"]
         .get("patch")
         .is_some());
+    assert_eq!(
+        query_parameter_names(
+            &openapi["paths"]["/v1/records/widgets/{record_id}"]["patch"]["parameters"]
+        ),
+        ["Idempotency-Key", "If-Match", "accessProfile", "record_id"]
+    );
+    assert!(
+        openapi["paths"]["/v1/records/widgets/{record_id}"]["patch"]["requestBody"]["content"]
+            .get("application/json-patch+json")
+            .is_some()
+    );
+    assert!(
+        openapi["paths"]["/v1/records/widgets/{record_id}"]["patch"]["responses"]["428"]["content"]
+            ["application/problem+json"]["schema"]
+            .get("$ref")
+            .is_some()
+    );
     assert!(openapi["paths"]["/v1/records/widgets/{record_id}"]
         .get("delete")
         .is_some());
@@ -1928,32 +1962,6 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
               {"id":"note","type":"string","maxLength":128,"required":false,"classification":"public"},
               {"id":"quantity","type":"int64","required":true,"classification":"public"}
             ],
-            "accessProfiles":[{
-              "id":"operator","default":true,"principalClaim":"registry_principal",
-              "requiredPurposes":["case-management","case-review"],
-              "operations":["create","get","list","patch","tombstone"],
-              "readableFields":["jurisdiction","label","note","quantity"],
-              "writableFields":["jurisdiction","label","note","quantity"],
-              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
-            },{
-              "id":"review-operator","principalClaim":"registry_principal",
-              "requiredPurposes":["case-management"],
-              "operations":["create","get","list","patch","tombstone"],
-              "readableFields":["jurisdiction","label","note","quantity"],
-              "writableFields":["jurisdiction","label","note","quantity"],
-              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
-            },{
-              "id":"anonymous-reader","anonymous":true,
-              "operations":["get","list"],
-              "readableFields":["label"]
-            },{
-              "id":"label-editor","principalClaim":"registry_principal",
-              "requiredPurposes":["case-management"],
-              "operations":["get","patch"],
-              "readableFields":["label"],
-              "writableFields":["label"],
-              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
-            }],
             "events":[
               {"id":"widget-created","trigger":"created","projection":["label"]},
               {"id":"widget-patched","trigger":"patched","projection":["label","quantity"]},
@@ -1964,25 +1972,57 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
             "fields":[
               {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"},
               {"id":"message","type":"string","maxLength":128,"required":true,"classification":"public"}
-            ],
-            "accessProfiles":[{
-              "id":"operator","default":true,"principalClaim":"registry_principal",
-              "requiredPurposes":["case-management"],
-              "operations":["create","get","list"],
-              "readableFields":["jurisdiction","message"],
-              "writableFields":["jurisdiction","message"],
-              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
-            }]
+            ]
           },{
             "id":"archive","route":"archives","mutationMode":"mutable","classification":"public",
             "fields":[
               {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"},
               {"id":"name","type":"string","maxLength":128,"required":true,"classification":"public"}
-            ],
-            "accessProfiles":[{
-              "id":"operator","default":true,"principalClaim":"registry_principal",
-              "requiredPurposes":["case-management"],
-              "operations":["create","get","list","patch"],
+            ]
+          }],
+          "accessProfiles":[{
+            "id":"operator","default":true,"principalClaim":"registry_principal",
+            "requiredPurposes":["case-management","case-review"],
+            "grants":[{
+              "entity":"widget","operations":["create","get","list","patch","tombstone"],
+              "readableFields":["jurisdiction","label","note","quantity"],
+              "writableFields":["jurisdiction","label","note","quantity"],
+              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
+            }]
+          },{
+            "id":"review-operator","principalClaim":"registry_principal",
+            "requiredPurposes":["case-management"],
+            "grants":[{
+              "entity":"widget","operations":["create","get","list","patch","tombstone"],
+              "readableFields":["jurisdiction","label","note","quantity"],
+              "writableFields":["jurisdiction","label","note","quantity"],
+              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
+            }]
+          },{
+            "id":"anonymous-reader","anonymous":true,
+            "grants":[{
+              "entity":"widget","operations":["get","list"],
+              "readableFields":["label"]
+            }]
+          },{
+            "id":"label-editor","principalClaim":"registry_principal",
+            "requiredPurposes":["case-management"],
+            "grants":[{
+              "entity":"widget","operations":["get","patch"],
+              "readableFields":["label"],
+              "writableFields":["label"],
+              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
+            }]
+          },{
+            "id":"case-operator","default":true,"principalClaim":"registry_principal",
+            "requiredPurposes":["case-management"],
+            "grants":[{
+              "entity":"log","operations":["create","get","list"],
+              "readableFields":["jurisdiction","message"],
+              "writableFields":["jurisdiction","message"],
+              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
+            },{
+              "entity":"archive","operations":["create","get","list","patch"],
               "readableFields":["jurisdiction","name"],
               "writableFields":["jurisdiction","name"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
@@ -2040,6 +2080,7 @@ fn create_request<'a>(
         expected_etag: None,
         body: MutationBody::Create(data),
         response_fields: BTreeSet::from(["label".to_owned(), "quantity".to_owned()]),
+        correlation: registry_server::correlation::RequestCorrelation::server_created(),
     }
 }
 
@@ -2062,6 +2103,7 @@ fn patch_request<'a>(
             value: Value::String(label.to_owned()),
         }]),
         response_fields: BTreeSet::from(["label".to_owned(), "quantity".to_owned()]),
+        correlation: registry_server::correlation::RequestCorrelation::server_created(),
     }
 }
 
@@ -2418,6 +2460,29 @@ async fn assert_journals_are_minimized_and_chained(
     assert!(audit_text.contains("principalReference"));
     assert!(audit_text.contains("recordReference"));
 
+    for (position, envelope) in ordered.iter().enumerate() {
+        if envelope.record["schema"] != "registry-server-audit/v1" {
+            continue;
+        }
+        let request_id = envelope.record["requestId"]
+            .as_str()
+            .expect("HTTP audit carries requestId");
+        uuid::Uuid::parse_str(request_id).expect("requestId is a server UUID");
+        let trace_id = envelope.record["traceId"]
+            .as_str()
+            .expect("HTTP audit carries traceId");
+        assert_eq!(trace_id.len(), 32);
+        if envelope.record["phase"] == "terminal" {
+            let operation_id = &envelope.record["operationId"];
+            assert!(ordered[..position].iter().any(|candidate| {
+                candidate.record["phase"] == "attempt"
+                    && candidate.record["operationId"] == *operation_id
+                    && candidate.record["requestId"] == request_id
+                    && candidate.record["traceId"] == trace_id
+            }));
+        }
+    }
+
     for table_and_column in [
         ("registry_revisions", "snapshot"),
         ("registry_outbox", "payload"),
@@ -2535,4 +2600,20 @@ fn compiled_fixture_exposes_create_patch_and_configured_tombstone_plans() {
         .routes
         .iter()
         .any(|route| { route.entity_id == "archive" && route.operation == Operation::Tombstone }));
+}
+
+fn query_parameter_names(parameters: &Value) -> Vec<String> {
+    let mut names = parameters
+        .as_array()
+        .expect("parameters are an array")
+        .iter()
+        .map(|parameter| {
+            parameter["name"]
+                .as_str()
+                .expect("parameter has a name")
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    names.sort();
+    names
 }

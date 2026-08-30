@@ -14,7 +14,8 @@ use std::process::ExitCode;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use clap::{ArgGroup, Args, CommandFactory, Parser, Subcommand, ValueEnum};
-use registry_server::contract::ModuleAssetSource;
+use registry_server::compiler::module_digest_with_assets;
+use registry_server::contract::{FieldTypeSource, ModuleAssetSource, ModuleLockSource};
 use registry_server::migration_plan::ReviewedMigrationRecovery;
 use registry_server::package::{
     inspect_package_integrity, CompiledRegistryChangeClass, MigrationInspectionPlanKind,
@@ -84,6 +85,8 @@ enum Command {
     Init(InitArgs),
     /// Validate a Registry Server authoring project without opening a database.
     Check(CheckArgs),
+    /// Maintain deterministic authoring project metadata.
+    Project(ProjectArgs),
     /// Write selected compiler artifacts to a new directory.
     Generate(GenerateArgs),
     /// Explain compiled model, access, route, or event inventories.
@@ -124,6 +127,29 @@ struct CheckArgs {
     /// Enforce production-only package closure requirements.
     #[arg(long)]
     production: bool,
+}
+
+#[derive(Debug, Args)]
+struct ProjectArgs {
+    #[command(subcommand)]
+    command: ProjectCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum ProjectCommand {
+    /// Compute and write module source digests in registry.yaml.
+    Lock(ProjectLockArgs),
+}
+
+#[derive(Debug, Args)]
+struct ProjectLockArgs {
+    /// Registry Server project directory.
+    #[arg(value_name = "PROJECT")]
+    project: PathBuf,
+
+    /// Refuse when registry.yaml is not already locked instead of rewriting it.
+    #[arg(long)]
+    check: bool,
 }
 
 #[derive(Debug, Args)]
@@ -622,6 +648,7 @@ enum SuggestedAction {
     SelectAvailableArtifact,
     RetryArtifactGeneration,
     RetryInventoryExplanation,
+    UpdateModuleLocks,
     CorrectRuntimeConfiguration,
     VerifyPackagePath,
     VerifyPackagePermissions,
@@ -994,6 +1021,9 @@ where
     let result = match cli.command {
         Command::Init(args) => init(&args.destination),
         Command::Check(args) => check(&args.project, profile(args.production)),
+        Command::Project(args) => match args.command {
+            ProjectCommand::Lock(args) => project_lock(&args.project, args.check),
+        },
         Command::Generate(args) => generate(
             args.artifact,
             &args.project,
@@ -1710,6 +1740,12 @@ fn package_lifecycle_failure(error: PackageLifecycleError) -> FailureReport {
 }
 
 fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
+    let error = match error {
+        TestLifecycleError::RuntimeConfig(error) => {
+            return runtime_config_failure("test", "test", error)
+        }
+        error => error,
+    };
     let (code, path, message, artifact, action) = match error {
         TestLifecycleError::RuntimeConfigPath => (
             "test.runtime_config.path_invalid",
@@ -1718,20 +1754,7 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
             DiagnosticArtifact::RuntimeConfiguration,
             SuggestedAction::CorrectRuntimeConfiguration,
         ),
-        TestLifecycleError::RuntimeConfig(RuntimeConfigError::UnsafeFile) => (
-            "test.runtime_config.path_invalid",
-            "runtimeConfig",
-            "the runtime configuration path is unsafe",
-            DiagnosticArtifact::RuntimeConfiguration,
-            SuggestedAction::CorrectRuntimeConfiguration,
-        ),
-        TestLifecycleError::RuntimeConfig(_) => (
-            "test.runtime_config.refused",
-            "runtimeConfig",
-            "the runtime configuration was refused",
-            DiagnosticArtifact::RuntimeConfiguration,
-            SuggestedAction::CorrectRuntimeConfiguration,
-        ),
+        TestLifecycleError::RuntimeConfig(_) => unreachable!("handled before match"),
         TestLifecycleError::Candidate => (
             "test.candidate.refused",
             "candidate",
@@ -1801,6 +1824,12 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
 }
 
 fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
+    let error = match error {
+        ApplyLifecycleError::RuntimeConfig(error) => {
+            return runtime_config_failure("apply", "apply", error);
+        }
+        error => error,
+    };
     let (code, path, message, artifact, action) = match error {
         ApplyLifecycleError::RuntimeConfigPath => (
             "apply.runtime_config.path_invalid",
@@ -1809,13 +1838,7 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
             DiagnosticArtifact::RuntimeConfiguration,
             SuggestedAction::CorrectRuntimeConfiguration,
         ),
-        ApplyLifecycleError::RuntimeConfig => (
-            "apply.runtime_config.refused",
-            "runtimeConfig",
-            "the runtime configuration was refused",
-            DiagnosticArtifact::RuntimeConfiguration,
-            SuggestedAction::CorrectRuntimeConfiguration,
-        ),
+        ApplyLifecycleError::RuntimeConfig(_) => unreachable!("handled before match"),
         ApplyLifecycleError::TargetPackagePath => (
             "apply.package.path_invalid",
             "package",
@@ -2014,6 +2037,9 @@ fn inspection_failure(
     prefix: &'static str,
     error: RuntimePackageInspectionError,
 ) -> FailureReport {
+    if let RuntimePackageInspectionError::RuntimeConfig(error) = error {
+        return runtime_config_failure(command, prefix, error);
+    }
     let (code, path, message, artifact, action) = match error {
         RuntimePackageInspectionError::RuntimeConfigPath => (
             format!("{prefix}.runtime_config.path_invalid"),
@@ -2022,20 +2048,7 @@ fn inspection_failure(
             DiagnosticArtifact::RuntimeConfiguration,
             SuggestedAction::CorrectRuntimeConfiguration,
         ),
-        RuntimePackageInspectionError::RuntimeConfig(RuntimeConfigError::UnsafeFile) => (
-            format!("{prefix}.runtime_config.path_invalid"),
-            "runtimeConfig",
-            "the runtime configuration path is unsafe",
-            DiagnosticArtifact::RuntimeConfiguration,
-            SuggestedAction::CorrectRuntimeConfiguration,
-        ),
-        RuntimePackageInspectionError::RuntimeConfig(_) => (
-            format!("{prefix}.runtime_config.refused"),
-            "runtimeConfig",
-            "the runtime configuration was refused",
-            DiagnosticArtifact::RuntimeConfiguration,
-            SuggestedAction::CorrectRuntimeConfiguration,
-        ),
+        RuntimePackageInspectionError::RuntimeConfig(_) => unreachable!("handled before match"),
         RuntimePackageInspectionError::Package(error) => {
             let (suffix, action) = match error {
                 PackageError::UnsafePath => ("path_refused", SuggestedAction::VerifyPackagePath),
@@ -2079,17 +2092,39 @@ fn inspection_failure(
 }
 
 fn runtime_config_diff_failure(error: RuntimeConfigError) -> FailureReport {
-    match error {
-        RuntimeConfigError::UnsafeFile => diff_failure(
-            "diff.runtime_config.path_invalid",
-            "runtimeConfig",
-            "the runtime configuration path is unsafe",
-        ),
-        _ => diff_failure(
-            "diff.runtime_config.refused",
-            "runtimeConfig",
-            "the runtime configuration was refused",
-        ),
+    let detail = runtime_config_diagnostic("diff", error);
+    diff_failure(&detail.code, detail.path, &detail.message)
+}
+
+struct RuntimeConfigDiagnostic {
+    code: String,
+    path: &'static str,
+    message: String,
+}
+
+fn runtime_config_diagnostic(prefix: &str, error: RuntimeConfigError) -> RuntimeConfigDiagnostic {
+    let metadata = error.metadata();
+    RuntimeConfigDiagnostic {
+        code: format!("{prefix}.{}", metadata.code()),
+        path: metadata.path(),
+        message: error.to_string(),
+    }
+}
+
+fn runtime_config_failure(
+    command: &'static str,
+    prefix: &str,
+    error: RuntimeConfigError,
+) -> FailureReport {
+    let detail = runtime_config_diagnostic(prefix, error);
+    FailureReport {
+        ok: false,
+        command,
+        diagnostics: vec![tool_diagnostic(
+            diagnostic(&detail.code, detail.path, &detail.message),
+            DiagnosticArtifact::RuntimeConfiguration,
+            SuggestedAction::CorrectRuntimeConfiguration,
+        )],
     }
 }
 
@@ -2237,6 +2272,114 @@ fn check(project_path: &Path, profile: ProfileArg) -> Result<SuccessReport, Fail
         findings: compiler_findings(&compiled),
         artifacts: Vec::new(),
         explanation: None,
+    })
+}
+
+fn project_lock(project_path: &Path, check_only: bool) -> Result<SuccessReport, FailureReport> {
+    let mut source = capture_project_source_for_lock(project_path).map_err(|diagnostic| {
+        source_failure(
+            "project lock",
+            diagnostic,
+            DiagnosticArtifact::RegistryProject,
+            SuggestedAction::CorrectAuthoringSource,
+        )
+    })?;
+    let current_locks = source
+        .project
+        .modules
+        .iter()
+        .map(|lock| (lock.id.as_str(), lock))
+        .collect::<BTreeMap<_, _>>();
+    let mut next_locks = Vec::new();
+    let mut reports = Vec::new();
+    for module in &source.modules {
+        let assets = module
+            .assets
+            .iter()
+            .map(|asset| ModuleAssetSource {
+                module: Some(module.id.clone()),
+                path: asset.path.clone(),
+                bytes: asset.bytes.clone(),
+            })
+            .collect::<Vec<_>>();
+        let digest = module_digest_with_assets(&module.module, &assets);
+        let status = match current_locks.get(module.id.as_str()) {
+            Some(lock)
+                if lock.version == module.module.version
+                    && lock.digest.as_ref() == Some(&digest) =>
+            {
+                "unchanged"
+            }
+            Some(_) => "updated",
+            None => "added",
+        };
+        next_locks.push(ModuleLockSource {
+            id: module.id.clone(),
+            version: module.module.version.clone(),
+            digest: Some(digest.clone()),
+        });
+        reports.push(json!({
+            "id": &module.id,
+            "version": &module.module.version,
+            "digest": digest,
+            "status": status,
+        }));
+    }
+    next_locks.sort_by(|left, right| left.id.cmp(&right.id));
+    let changed = source.project.modules != next_locks;
+    if check_only && changed {
+        return Err(FailureReport {
+            ok: false,
+            command: "project lock",
+            diagnostics: vec![tool_diagnostic(
+                diagnostic(
+                    "module.lock.stale",
+                    "project.modules",
+                    "the project module locks are not up to date",
+                ),
+                DiagnosticArtifact::RegistryProject,
+                SuggestedAction::UpdateModuleLocks,
+            )],
+        });
+    }
+    let artifacts = if changed {
+        source.project.modules = next_locks;
+        let updated =
+            render_project_with_module_locks(&source.project_bytes, &source.project.modules)
+                .map_err(|diagnostic| {
+                    source_failure(
+                        "project lock",
+                        diagnostic,
+                        DiagnosticArtifact::RegistryProject,
+                        SuggestedAction::UpdateModuleLocks,
+                    )
+                })?;
+        write_project_registry(project_path, &source.project_bytes, &updated).map_err(
+            |diagnostic| {
+                source_failure(
+                    "project lock",
+                    diagnostic,
+                    DiagnosticArtifact::RegistryProject,
+                    SuggestedAction::UpdateModuleLocks,
+                )
+            },
+        )?;
+        vec![artifact_report("registry.yaml", "text/yaml", &updated)]
+    } else {
+        Vec::new()
+    };
+    let compiled = compile(project_path, ProfileArg::Authoring, "project lock")?;
+    Ok(SuccessReport {
+        ok: true,
+        command: "project lock",
+        profile: ProfileArg::Authoring,
+        revision: compiled.revision().to_owned(),
+        findings: compiler_findings(&compiled),
+        artifacts,
+        explanation: Some(json!({
+            "changed": changed,
+            "modules": reports,
+        })),
     })
 }
 
@@ -2431,6 +2574,64 @@ fn capture_project_source(project_path: &Path) -> Result<CapturedProjectSource, 
     })
 }
 
+fn capture_project_source_for_lock(
+    project_path: &Path,
+) -> Result<CapturedProjectSource, Diagnostic> {
+    validate_project_directory(project_path)?;
+    let project_bytes = read_bounded_regular_file(
+        &project_path.join("registry.yaml"),
+        "source.project.missing",
+        AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
+    )?;
+    let project = parse_project_yaml(&project_bytes).map_err(first_diagnostic)?;
+    let mut locked = BTreeSet::new();
+    for lock in &project.modules {
+        if !locked.insert(lock.id.as_str()) {
+            return Err(diagnostic(
+                "module.lock.duplicate",
+                "project.modules",
+                "module lock identifiers must be unique",
+            ));
+        }
+    }
+    let modules = discover_module_files(project_path)?
+        .into_iter()
+        .map(|(directory_id, bytes)| {
+            let module = parse_module_yaml(&bytes).map_err(first_diagnostic)?;
+            if module.id != directory_id {
+                return Err(diagnostic(
+                    "source.module.id_mismatch",
+                    &format!("modules/{directory_id}/module.yaml"),
+                    "the module source id must match its directory name",
+                ));
+            }
+            let assets = load_module_asset_files(project_path, &directory_id, &module)?;
+            Ok(CapturedModuleSource {
+                id: directory_id,
+                module,
+                bytes,
+                assets,
+            })
+        })
+        .collect::<Result<Vec<_>, Diagnostic>>()?;
+    let discovered = modules
+        .iter()
+        .map(|module| module.id.as_str())
+        .collect::<BTreeSet<_>>();
+    if locked.iter().any(|id| !discovered.contains(id)) {
+        return Err(diagnostic(
+            "module.lock.source_missing",
+            "project.modules",
+            "every module lock must have a discovered module source",
+        ));
+    }
+    Ok(CapturedProjectSource {
+        project,
+        project_bytes,
+        modules,
+    })
+}
+
 fn load_module_files(
     project_path: &Path,
     project: &RegistryProject,
@@ -2501,6 +2702,75 @@ fn load_module_files(
                 "every authored module directory must be declared by the project module lock",
             ));
         }
+        module_paths.push((name.to_owned(), entry.path().join("module.yaml")));
+    }
+    module_paths.sort_by(|left, right| left.0.cmp(&right.0));
+    module_paths
+        .into_iter()
+        .map(|(id, path)| {
+            let bytes = read_bounded_regular_file(
+                &path,
+                "source.module.missing",
+                AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
+            )?;
+            Ok((id, bytes))
+        })
+        .collect()
+}
+
+fn discover_module_files(project_path: &Path) -> Result<Vec<(String, Vec<u8>)>, Diagnostic> {
+    let modules_directory = project_path.join("modules");
+    match fs::symlink_metadata(&modules_directory) {
+        Ok(_) => validate_directory(&modules_directory, "source.modules.invalid")?,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(_) => {
+            return Err(diagnostic(
+                "source.modules.unreadable",
+                "modules",
+                "module sources cannot be read",
+            ));
+        }
+    }
+    let mut module_paths = Vec::new();
+    for entry in fs::read_dir(&modules_directory).map_err(|_| {
+        diagnostic(
+            "source.modules.unreadable",
+            "modules",
+            "module sources cannot be read",
+        )
+    })? {
+        let entry = entry.map_err(|_| {
+            diagnostic(
+                "source.modules.unreadable",
+                "modules",
+                "module sources cannot be read",
+            )
+        })?;
+        let file_type = entry.file_type().map_err(|_| {
+            diagnostic(
+                "source.modules.unreadable",
+                "modules",
+                "module sources cannot be read",
+            )
+        })?;
+        if entry.file_name() == ".DS_Store" && file_type.is_file() {
+            continue;
+        }
+        if file_type.is_symlink() || !file_type.is_dir() {
+            return Err(diagnostic(
+                "source.modules.invalid",
+                "modules",
+                "module sources must be directories and must not be symbolic links",
+            ));
+        }
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            return Err(diagnostic(
+                "source.modules.invalid",
+                "modules",
+                "module source names must be valid UTF-8 identifiers",
+            ));
+        };
         module_paths.push((name.to_owned(), entry.path().join("module.yaml")));
     }
     module_paths.sort_by(|left, right| left.0.cmp(&right.0));
@@ -2617,21 +2887,6 @@ registry:
   id: generic-registry
   version: 0.1.0
   defaultLanguage: en
-manifestProjection:
-  accessProfile: operator
-  classificationCeiling: internal
-  catalog:
-    baseUrl: https://registry.example.test
-    title: Generic Registry Catalog
-    publisher:
-      name: Registry Operator
-  dataset:
-    title: Generic Registry Dataset
-    owner: Registry Operator
-    status: active
-modules:
-  - id: core
-    version: 0.1.0
 entities:
   - id: record
     route: records
@@ -2653,19 +2908,13 @@ entities:
 accessProfiles:
   - id: operator
     principalClaim: registry_principal
-    purposes: [registry-operations]
+    requiredScopes: [registry:generic:operate]
+    requiredPurposes: [registry-operations]
     grants:
       - entity: record
-        actions: [create, get, list, patch]
+        operations: [create, get, list, patch]
         readableFields: [code, label]
         writableFields: [code, label]
-"#
-            .to_vec(),
-        ),
-        (
-            "modules/core/module.yaml".to_owned(),
-            br#"id: core
-version: 0.1.0
 "#
             .to_vec(),
         ),
@@ -2679,7 +2928,8 @@ journeys:
         entity: record
         accessProfile: operator
         claims: &operator_claims
-          principal: fixture-operator
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
           purpose: registry-operations
         request:
           operation: create
@@ -2708,6 +2958,178 @@ journeys:
             .to_vec(),
         ),
     ])
+}
+
+fn render_project_with_module_locks(
+    original: &[u8],
+    locks: &[ModuleLockSource],
+) -> Result<Vec<u8>, Diagnostic> {
+    let original = std::str::from_utf8(original).map_err(|_| {
+        diagnostic(
+            "module.lock.render_failed",
+            "registry.yaml",
+            "the project module locks could not be rendered",
+        )
+    })?;
+    let mut rendered = replace_top_level_modules_block(original, &module_locks_yaml(locks));
+    if !rendered.ends_with('\n') {
+        rendered.push('\n');
+    }
+    parse_project_yaml(rendered.as_bytes()).map_err(|_| {
+        diagnostic(
+            "module.lock.render_failed",
+            "registry.yaml",
+            "the project module locks could not be rendered",
+        )
+    })?;
+    Ok(rendered.into_bytes())
+}
+
+fn replace_top_level_modules_block(source: &str, replacement: &str) -> String {
+    let lines = source.split_inclusive('\n').collect::<Vec<_>>();
+    let start = lines
+        .iter()
+        .position(|line| top_level_key(line) == Some("modules"));
+    let Some(start) = start else {
+        let mut rendered = source.trim_end_matches('\n').to_owned();
+        if !rendered.is_empty() {
+            rendered.push_str("\n\n");
+        }
+        rendered.push_str(replacement);
+        return rendered;
+    };
+    let end = lines
+        .iter()
+        .enumerate()
+        .skip(start + 1)
+        .find(|(_, line)| top_level_key(line).is_some())
+        .map(|(index, _)| index)
+        .unwrap_or(lines.len());
+    let mut rendered = String::new();
+    rendered.push_str(&lines[..start].concat());
+    rendered.push_str(replacement);
+    if end < lines.len() {
+        if !rendered.ends_with("\n\n") {
+            rendered.push('\n');
+        }
+        rendered.push_str(&lines[end..].concat());
+    }
+    rendered
+}
+
+fn top_level_key(line: &str) -> Option<&str> {
+    if line.starts_with(char::is_whitespace) || line.starts_with('#') {
+        return None;
+    }
+    let trimmed = line.trim_end();
+    let (key, _) = trimmed.split_once(':')?;
+    if key.is_empty()
+        || key
+            .bytes()
+            .any(|byte| !(byte.is_ascii_alphanumeric() || byte == b'_'))
+    {
+        return None;
+    }
+    Some(key)
+}
+
+fn module_locks_yaml(locks: &[ModuleLockSource]) -> String {
+    let mut rendered = String::from("modules:\n");
+    for lock in locks {
+        rendered.push_str("  - id: ");
+        rendered.push_str(&yaml_string(&lock.id));
+        rendered.push_str("\n    version: ");
+        rendered.push_str(&yaml_string(&lock.version));
+        rendered.push_str("\n    digest: ");
+        rendered.push_str(&yaml_string(
+            lock.digest
+                .as_deref()
+                .expect("project lock always writes module digests"),
+        ));
+        rendered.push('\n');
+    }
+    rendered
+}
+
+fn yaml_string(value: &str) -> String {
+    serde_json::to_string(value).expect("string serialization cannot fail")
+}
+
+fn write_project_registry(
+    project_path: &Path,
+    original: &[u8],
+    updated: &[u8],
+) -> Result<(), Diagnostic> {
+    let registry_path = project_path.join("registry.yaml");
+    let current = read_bounded_regular_file(
+        &registry_path,
+        "source.project.missing",
+        AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
+    )?;
+    if current != original {
+        return Err(diagnostic(
+            "module.lock.concurrent_change",
+            "registry.yaml",
+            "the project source changed before module locks could be written",
+        ));
+    }
+    let parent = registry_path.parent().ok_or_else(|| {
+        diagnostic(
+            "module.lock.write_failed",
+            "registry.yaml",
+            "the project module locks could not be written",
+        )
+    })?;
+    validate_directory_for(
+        parent,
+        "module.lock.write_failed",
+        "registry.yaml",
+        "the project directory is not available",
+        "the project directory must be a directory and must not be a symbolic link",
+    )?;
+    let temporary = parent.join(format!(
+        ".registry-serverctl-lock-{}-{}.tmp",
+        std::process::id(),
+        STAGING_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    let write_result = (|| {
+        let mut file = File::options()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|_| {
+                diagnostic(
+                    "module.lock.write_failed",
+                    "registry.yaml",
+                    "the project module locks could not be written",
+                )
+            })?;
+        file.write_all(updated).map_err(|_| {
+            diagnostic(
+                "module.lock.write_failed",
+                "registry.yaml",
+                "the project module locks could not be written",
+            )
+        })?;
+        file.sync_all().map_err(|_| {
+            diagnostic(
+                "module.lock.write_failed",
+                "registry.yaml",
+                "the project module locks could not be written",
+            )
+        })?;
+        fs::rename(&temporary, &registry_path).map_err(|_| {
+            diagnostic(
+                "module.lock.write_failed",
+                "registry.yaml",
+                "the project module locks could not be written",
+            )
+        })
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    write_result
 }
 
 fn selected_artifacts(
@@ -2784,20 +3206,67 @@ fn explain_queries(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
                         .projection_fields
                         .iter()
                         .filter_map(|field_id| {
-                            query_field_summary(
-                                field_id,
-                                entity
-                                    .stored_fields
-                                    .iter()
-                                    .find(|field| field.logical.id == *field_id)
-                                    .map(|field| (&field.logical.api_name, "stored"))
-                                    .or_else(|| {
-                                        entity
-                                            .derived_fields
-                                            .get(field_id)
-                                            .map(|field| (&field.logical.api_name, "derived"))
-                                    }),
-                            )
+                            query_field_summary(field_id, query_field_identity(entity, field_id))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let filterable = entity
+                .map(|entity| {
+                    operation
+                        .filter_fields
+                        .iter()
+                        .filter_map(|field| {
+                            let identity = query_field_summary(
+                                &field.field,
+                                query_field_identity(entity, &field.field),
+                            )?;
+                            Some(json!({
+                                "apiName": identity["apiName"],
+                                "field": &field.field,
+                                "fieldType": identity["fieldType"],
+                                "operators": &field.operators,
+                                "wireOperators": wire_filter_operators(&field.operators),
+                                "examples": filter_examples(
+                                    identity["apiName"].as_str().expect("api name is a string"),
+                                    query_field_identity(entity, &field.field)
+                                        .expect("field identity was already resolved")
+                                        .field_type,
+                                    &field.operators,
+                                ),
+                            }))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let sortable = entity
+                .map(|entity| {
+                    operation
+                        .sort_fields
+                        .iter()
+                        .filter_map(|field| {
+                            let identity = query_field_summary(
+                                &field.field,
+                                query_field_identity(entity, &field.field),
+                            )?;
+                            Some(json!({
+                                "apiName": identity["apiName"],
+                                "field": &field.field,
+                                "fieldType": identity["fieldType"],
+                                "directions": &field.directions,
+                                "examples": [format!("$orderby={}", identity["apiName"].as_str().expect("api name is a string"))],
+                            }))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let selectors = entity
+                .map(|entity| {
+                    operation
+                        .selector_fields
+                        .iter()
+                        .filter_map(|field| {
+                            query_field_summary(field, query_field_identity(entity, field))
                         })
                         .collect::<Vec<_>>()
                 })
@@ -2809,13 +3278,30 @@ fn explain_queries(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
                 "entity": operation.entity_id,
                 "kind": operation.kind,
                 "apiFields": api_fields,
-                "filterable": operation.filter_fields,
-                "sortable": operation.sort_fields,
+                "filterable": filterable,
+                "sortable": sortable,
                 "allowCount": operation.allow_count,
-                "selectors": operation.selector_fields,
+                "selectors": selectors,
                 "readPath": operation.read_path,
+                "wire": {
+                    "select": "$select",
+                    "filter": "$filter",
+                    "orderBy": "$orderby",
+                    "pageSize": "$top",
+                    "count": "$count",
+                    "cursor": "$skiptoken",
+                    "accessProfile": "accessProfile",
+                    "asOf": "asOf",
+                },
                 "bounds": {
-                    "maxPageSize": operation.max_page_size
+                    "maxPageSize": operation.max_page_size,
+                    "maxTop": registry_server::query::MAX_TOP,
+                    "maxSelectedFields": registry_server::query::MAX_SELECTED_FIELDS,
+                    "maxFilterPayloadBytes": registry_server::query::MAX_QUERY_PAYLOAD_BYTES,
+                    "maxFilterDepth": registry_server::query::MAX_FILTER_DEPTH,
+                    "maxFilterNodes": registry_server::query::MAX_FILTER_NODES,
+                    "maxFilterPredicates": registry_server::query::MAX_FILTER_PREDICATES,
+                    "maxInValues": registry_server::query::MAX_IN_VALUES,
                 }
             })
         })
@@ -2823,13 +3309,274 @@ fn explain_queries(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
     serde_json::to_value(json!({ "operations": operations }))
 }
 
-fn query_field_summary(field_id: &str, resolved: Option<(&String, &str)>) -> Option<Value> {
-    let (api_name, source_kind) = resolved?;
+fn query_field_identity<'a>(
+    entity: &'a registry_server::model::CompiledEntity,
+    field_id: &str,
+) -> Option<QueryFieldIdentity<'a>> {
+    entity
+        .stored_fields
+        .iter()
+        .find(|field| field.logical.id == field_id)
+        .map(|field| QueryFieldIdentity {
+            api_name: &field.logical.api_name,
+            source_kind: "stored",
+            field_type: &field.logical.field_type,
+        })
+        .or_else(|| {
+            entity
+                .derived_fields
+                .get(field_id)
+                .map(|field| QueryFieldIdentity {
+                    api_name: &field.logical.api_name,
+                    source_kind: "derived",
+                    field_type: &field.logical.field_type,
+                })
+        })
+}
+
+struct QueryFieldIdentity<'a> {
+    api_name: &'a str,
+    source_kind: &'static str,
+    field_type: &'a FieldTypeSource,
+}
+
+fn query_field_summary(field_id: &str, resolved: Option<QueryFieldIdentity<'_>>) -> Option<Value> {
+    let resolved = resolved?;
     Some(json!({
         "field": field_id,
-        "apiName": api_name,
-        "sourceKind": source_kind,
+        "apiName": resolved.api_name,
+        "sourceKind": resolved.source_kind,
+        "fieldType": resolved.field_type,
     }))
+}
+
+fn wire_filter_operators(
+    operators: &[registry_server::model::CompiledQueryFilterOperator],
+) -> Vec<&'static str> {
+    let mut wire = BTreeSet::new();
+    for operator in operators {
+        match operator {
+            registry_server::model::CompiledQueryFilterOperator::Equals => {
+                wire.insert("eq");
+                wire.insert("ne");
+            }
+            registry_server::model::CompiledQueryFilterOperator::In => {
+                wire.insert("in");
+            }
+            registry_server::model::CompiledQueryFilterOperator::Range => {
+                wire.insert("ge");
+                wire.insert("gt");
+                wire.insert("le");
+                wire.insert("lt");
+            }
+            registry_server::model::CompiledQueryFilterOperator::IsNull => {
+                wire.insert("eq null");
+            }
+            registry_server::model::CompiledQueryFilterOperator::IsNotNull => {
+                wire.insert("ne null");
+            }
+            registry_server::model::CompiledQueryFilterOperator::Prefix => {
+                wire.insert("startswith");
+            }
+            registry_server::model::CompiledQueryFilterOperator::Contains => {
+                wire.insert("contains");
+            }
+        }
+    }
+    wire.into_iter().collect()
+}
+
+fn filter_examples(
+    api_name: &str,
+    field_type: &FieldTypeSource,
+    operators: &[registry_server::model::CompiledQueryFilterOperator],
+) -> Vec<String> {
+    operators
+        .iter()
+        .filter_map(|operator| filter_example(api_name, field_type, *operator))
+        .collect()
+}
+
+fn filter_example(
+    api_name: &str,
+    field_type: &FieldTypeSource,
+    operator: registry_server::model::CompiledQueryFilterOperator,
+) -> Option<String> {
+    match operator {
+        registry_server::model::CompiledQueryFilterOperator::Equals => {
+            let first = filter_literal(field_type)?;
+            Some(format!("$filter={api_name} eq {first}"))
+        }
+        registry_server::model::CompiledQueryFilterOperator::In => {
+            let first = filter_literal(field_type)?;
+            let second = alternate_filter_literal(field_type)?;
+            Some(format!("$filter={api_name} in ({first},{second})"))
+        }
+        registry_server::model::CompiledQueryFilterOperator::Range => {
+            let first = filter_literal(field_type)?;
+            Some(format!("$filter={api_name} ge {first}"))
+        }
+        registry_server::model::CompiledQueryFilterOperator::IsNull => {
+            Some(format!("$filter={api_name} eq null"))
+        }
+        registry_server::model::CompiledQueryFilterOperator::IsNotNull => {
+            Some(format!("$filter={api_name} ne null"))
+        }
+        registry_server::model::CompiledQueryFilterOperator::Prefix => {
+            let first = filter_literal(field_type)?;
+            Some(format!("$filter=startswith({api_name},{first})"))
+        }
+        registry_server::model::CompiledQueryFilterOperator::Contains => {
+            let first = filter_literal(field_type)?;
+            Some(format!("$filter=contains({api_name},{first})"))
+        }
+    }
+}
+
+fn filter_literal(field_type: &FieldTypeSource) -> Option<String> {
+    match field_type {
+        FieldTypeSource::Boolean => Some("true".to_owned()),
+        FieldTypeSource::String {
+            min_length,
+            max_length,
+        } => quoted_example_string(*min_length, *max_length),
+        FieldTypeSource::Text { max_length } => quoted_example_string(0, *max_length),
+        FieldTypeSource::Int64 => Some("1".to_owned()),
+        FieldTypeSource::Decimal {
+            precision,
+            scale,
+            minimum,
+            maximum,
+        } => decimal_example_literal(*precision, *scale, minimum.as_deref(), maximum.as_deref()),
+        FieldTypeSource::Date => Some("'2026-01-02'".to_owned()),
+        FieldTypeSource::Timestamp => Some("'2026-01-02T03:04:05Z'".to_owned()),
+        FieldTypeSource::Uuid | FieldTypeSource::Reference { .. } => {
+            Some("'00000000-0000-4000-8000-000000000000'".to_owned())
+        }
+        FieldTypeSource::VocabularyCode { values, .. } => {
+            values.first().map(|value| quote_filter_string(value))
+        }
+        FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. } => None,
+    }
+}
+
+fn alternate_filter_literal(field_type: &FieldTypeSource) -> Option<String> {
+    match field_type {
+        FieldTypeSource::Boolean => Some("false".to_owned()),
+        FieldTypeSource::String {
+            min_length,
+            max_length,
+        } => quoted_alternate_string(*min_length, *max_length),
+        FieldTypeSource::Text { max_length } => quoted_alternate_string(0, *max_length),
+        FieldTypeSource::Int64 => Some("2".to_owned()),
+        FieldTypeSource::Decimal {
+            precision,
+            scale,
+            minimum,
+            maximum,
+        } => decimal_alternate_literal(*precision, *scale, minimum.as_deref(), maximum.as_deref()),
+        FieldTypeSource::Date => Some("'2026-01-03'".to_owned()),
+        FieldTypeSource::Timestamp => Some("'2026-01-02T03:04:06Z'".to_owned()),
+        FieldTypeSource::Uuid | FieldTypeSource::Reference { .. } => {
+            Some("'00000000-0000-4000-8000-000000000001'".to_owned())
+        }
+        FieldTypeSource::VocabularyCode { values, .. } => {
+            values.get(1).map(|value| quote_filter_string(value))
+        }
+        FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. } => None,
+    }
+}
+
+fn quoted_example_string(min_length: u32, max_length: u32) -> Option<String> {
+    if max_length == 0 {
+        return Some("''".to_owned());
+    }
+    if min_length <= 7 && max_length >= 7 {
+        return Some("'example'".to_owned());
+    }
+    let length = usize::try_from(min_length.max(1).min(max_length)).ok()?;
+    Some(quote_filter_string(&"a".repeat(length)))
+}
+
+fn quoted_alternate_string(min_length: u32, max_length: u32) -> Option<String> {
+    if min_length <= 6 && max_length >= 6 {
+        return Some("'sample'".to_owned());
+    }
+    if max_length == 0 {
+        return None;
+    }
+    let length = usize::try_from(min_length.max(1).min(max_length)).ok()?;
+    Some(quote_filter_string(&"b".repeat(length)))
+}
+
+fn quote_filter_string(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+fn decimal_example_literal(
+    precision: u8,
+    scale: u8,
+    minimum: Option<&str>,
+    maximum: Option<&str>,
+) -> Option<String> {
+    if let Some(minimum) = minimum {
+        return Some(minimum.to_owned());
+    }
+    let zero = zero_decimal_literal(precision, scale)?;
+    match maximum {
+        Some(maximum)
+            if decimal_literal_order(maximum, &zero) == Some(std::cmp::Ordering::Less) =>
+        {
+            Some(maximum.to_owned())
+        }
+        _ => Some(zero),
+    }
+}
+
+fn decimal_alternate_literal(
+    precision: u8,
+    scale: u8,
+    minimum: Option<&str>,
+    maximum: Option<&str>,
+) -> Option<String> {
+    let first = decimal_example_literal(precision, scale, minimum, maximum)?;
+    let candidate = decimal_one_literal(precision, scale)?;
+    if Some(std::cmp::Ordering::Greater) == decimal_literal_order(&candidate, &first)
+        && maximum.is_none_or(|maximum| {
+            decimal_literal_order(&candidate, maximum) != Some(std::cmp::Ordering::Greater)
+        })
+    {
+        return Some(candidate);
+    }
+    None
+}
+
+fn zero_decimal_literal(precision: u8, scale: u8) -> Option<String> {
+    if !(1..=38).contains(&precision) || scale > precision {
+        return None;
+    }
+    Some(if scale == 0 {
+        "0".to_owned()
+    } else {
+        format!("0.{}", "0".repeat(usize::from(scale)))
+    })
+}
+
+fn decimal_one_literal(precision: u8, scale: u8) -> Option<String> {
+    if !(1..=38).contains(&precision) || scale > precision || precision == scale {
+        return None;
+    }
+    Some(if scale == 0 {
+        "1".to_owned()
+    } else {
+        format!("1.{}", "0".repeat(usize::from(scale)))
+    })
+}
+
+fn decimal_literal_order(left: &str, right: &str) -> Option<std::cmp::Ordering> {
+    let left = left.parse::<f64>().ok()?;
+    let right = right.parse::<f64>().ok()?;
+    left.partial_cmp(&right)
 }
 
 fn validate_project_directory(project_path: &Path) -> Result<(), Diagnostic> {
@@ -3966,6 +4713,7 @@ mod tests {
             [
                 "init",
                 "check",
+                "project",
                 "generate",
                 "explain",
                 "diff",
@@ -4061,10 +4809,10 @@ entities:
 accessProfiles:
   - id: operator
     principalClaim: registry_principal
-    purposes: [operations]
+    requiredPurposes: [operations]
     grants:
       - entity: record
-        actions: [create, get, list, patch]
+        operations: [create, get, list, patch]
         readableFields: [code]
         writableFields: [code]
 "#,

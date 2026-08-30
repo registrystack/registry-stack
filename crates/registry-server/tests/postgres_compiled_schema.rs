@@ -954,12 +954,22 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
                 {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
                 {"id":"region","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
                 {"id":"label","type":"string","minLength":1,"maxLength":128,"required":true,"classification":"internal"}
-              ],
-              "accessProfiles":[
+              ]
+            },
+            {
+              "id":"event","route":"events","mutationMode":"create_only",
+              "fields":[
+                {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}
+              ]
+            }
+          ],
+          "accessProfiles":[
+            {
+              "id":"writer","default":true,"principalClaim":"registry_principal",
+              "requiredPurposes":["operations"],
+              "grants":[
                 {
-                  "id":"writer","default":true,"principalClaim":"registry_principal",
-                  "requiredPurposes":["operations"],
-                  "operations":["create","get","list","patch"],
+                  "entity":"entry","operations":["create","get","list","patch"],
                   "readableFields":["tenant","region","label"],
                   "writableFields":["tenant","region","label"],
                   "rowBoundaries":[
@@ -968,27 +978,21 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
                   ]
                 },
                 {
-                  "id":"reviewer","principalClaim":"registry_principal",
-                  "requiredPurposes":["review"],
-                  "operations":["get","list"],
-                  "readableFields":["tenant","region","label"],
-                  "rowBoundaries":[
-                    {"field":"tenant","claim":"tenant_claim","operator":"equals"},
-                    {"field":"region","claim":"region_claim","operator":"in"}
-                  ]
+                  "entity":"event","operations":["create","get","list"],
+                  "readableFields":["tenant"],"writableFields":["tenant"]
                 }
               ]
             },
             {
-              "id":"event","route":"events","mutationMode":"create_only",
-              "fields":[
-                {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}
-              ],
-              "accessProfiles":[{
-                "id":"writer","default":true,"principalClaim":"registry_principal",
-                "requiredPurposes":["operations"],
-                "operations":["create","get","list"],
-                "readableFields":["tenant"],"writableFields":["tenant"]
+              "id":"reviewer","principalClaim":"registry_principal",
+              "requiredPurposes":["review"],
+              "grants":[{
+                "entity":"entry","operations":["get","list"],
+                "readableFields":["tenant","region","label"],
+                "rowBoundaries":[
+                  {"field":"tenant","claim":"tenant_claim","operator":"equals"},
+                  {"field":"region","claim":"region_claim","operator":"in"}
+                ]
               }]
             }
           ]
@@ -1017,10 +1021,11 @@ fn derived_registry() -> registry_server::CompiledRegistry {
                 {"id":"child-count","type":"int64","classification":"internal"},
                 {"id":"observed-on","type":"date","classification":"internal"}
               ]
-            }],
-            "accessProfiles":[{
-              "id":"operator","default":true,"principalClaim":"registry_principal",
-              "operations":["create","get","list"],
+            }]
+          }],
+          "accessProfiles":[{
+            "id":"operator","default":true,"principalClaim":"registry_principal","grants":[{
+              "entity":"household","operations":["create","get","list"],
               "readableFields":["tenant","size","child-count","observed-on"],
               "writableFields":["tenant","size"],
               "filterableFields":["child-count"],

@@ -19,7 +19,9 @@ artifacts:
   - {path: acceptance/farmer, kind: authored-fixture, state: authored}
   - {path: acceptance/business, kind: authored-fixture, state: authored}
   - {path: demo, kind: local-mint-server-demo, state: authored}
+  - {path: quickstart, kind: generic-first-hour-quickstart, state: authored}
   - {path: generated/authoring/registry-project.schema.json, kind: generated-authoring-schema, state: authored}
+  - {path: generated/runtime/runtime.schema.json, kind: generated-runtime-schema, state: authored}
   - {path: generated/asset-site-placement, kind: generated-baseline, state: authored}
   - {path: generated/publicschema-household, kind: generated-baseline, state: authored}
   - {path: scripts/check-generated.sh, kind: generated-artifact-gate, state: authored}

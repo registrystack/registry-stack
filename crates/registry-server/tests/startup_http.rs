@@ -60,15 +60,20 @@ entities:
     classification: public
     fields:
       - {id: label, type: string, required: true, maxLength: 80, classification: public}
-    accessProfiles:
-      - id: public
-        default: true
-        anonymous: true
+accessProfiles:
+  - id: public
+    default: true
+    anonymous: true
+    grants:
+      - entity: public-record
         operations: [list]
         readableFields: [label]
 "#;
 
-struct NoopRecords;
+#[derive(Default)]
+struct NoopRecords {
+    correlations: Mutex<Vec<(uuid::Uuid, String)>>,
+}
 
 impl RecordReadService for NoopRecords {
     fn get(
@@ -80,8 +85,15 @@ impl RecordReadService for NoopRecords {
 
     fn list(
         &self,
-        _request: RecordReadRequest,
+        request: RecordReadRequest,
     ) -> ServiceFuture<'_, Result<HeldReadResponse, ReadServiceError>> {
+        self.correlations
+            .lock()
+            .expect("correlation capture")
+            .push((
+                request.correlation.request_id(),
+                request.correlation.trace_id().as_str().to_owned(),
+            ));
         Box::pin(async {
             HeldReadResponse::from_json(&json!({"items": []}))
                 .map_err(|_| ReadServiceError::Unavailable)
@@ -115,7 +127,7 @@ async fn request_timeout_returns_value_free_problem() {
             package_revision: "package-startup-http".to_owned(),
             schema_fingerprint: "schema-startup-http".to_owned(),
         },
-        Arc::new(NoopRecords),
+        Arc::new(NoopRecords::default()),
         Arc::new(SlowReadiness),
         Arc::new(
             CursorCodec::new(Zeroizing::new(vec![0x45; 32]), Duration::from_secs(300))
@@ -128,6 +140,10 @@ async fn request_timeout_returns_value_free_problem() {
         .oneshot(
             Request::builder()
                 .uri("/ready")
+                .header(
+                    "traceparent",
+                    "00-11111111111111111111111111111111-2222222222222222-01",
+                )
                 .body(Body::empty())
                 .expect("request builds"),
         )
@@ -135,12 +151,186 @@ async fn request_timeout_returns_value_free_problem() {
         .expect("router responds");
 
     assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
+    let traceparent = response
+        .headers()
+        .get("traceparent")
+        .expect("timeout response carries traceparent")
+        .to_str()
+        .expect("traceparent is ASCII")
+        .to_owned();
+    assert_eq!(
+        traceparent,
+        "00-11111111111111111111111111111111-2222222222222222-01"
+    );
     let body = to_bytes(response.into_body(), 1024 * 1024)
         .await
         .expect("timeout body reads");
     let text = std::str::from_utf8(&body).expect("timeout body is utf-8");
     assert!(text.contains("request.timeout"));
     assert!(!text.contains("startup-http"));
+    let problem: Value = serde_json::from_slice(&body).expect("timeout problem is JSON");
+    assert_eq!(problem["traceId"], trace_id(&traceparent));
+}
+
+#[tokio::test]
+async fn trace_transport_health_aliases_and_request_ids_are_correlated() {
+    const INBOUND: &str = "00-11111111111111111111111111111111-2222222222222222-01";
+    const SECOND: &str = "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01";
+
+    let records = Arc::new(NoopRecords::default());
+    let service = Arc::new(HttpService::new(
+        compiled_registry(),
+        ReadRuntimeIdentity {
+            package_revision: "package-startup-http".to_owned(),
+            schema_fingerprint: "schema-startup-http".to_owned(),
+        },
+        records.clone(),
+        Arc::new(SlowReadiness),
+        Arc::new(
+            CursorCodec::new(Zeroizing::new(vec![0x45; 32]), Duration::from_secs(300))
+                .expect("test cursor key is valid"),
+        ),
+    ));
+    let app = router(service);
+
+    let mut valid_request = Request::builder()
+        .uri("/health")
+        .body(Body::empty())
+        .expect("valid trace request builds");
+    valid_request
+        .headers_mut()
+        .insert("traceparent", HeaderValue::from_static(INBOUND));
+    valid_request.headers_mut().insert(
+        "tracestate",
+        HeaderValue::from_static("registry=caller-controlled"),
+    );
+    let valid = app
+        .clone()
+        .oneshot(valid_request)
+        .await
+        .expect("valid trace responds");
+    assert_eq!(valid.status(), StatusCode::OK);
+    assert_eq!(valid.headers()["traceparent"], INBOUND);
+    assert!(valid.headers().get("tracestate").is_none());
+    let health_body = to_bytes(valid.into_body(), 1024)
+        .await
+        .expect("health body reads");
+
+    let healthz = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/healthz")
+                .body(Body::empty())
+                .expect("healthz request builds"),
+        )
+        .await
+        .expect("healthz responds");
+    assert_eq!(healthz.status(), StatusCode::OK);
+    assert!(healthz.headers().get("traceparent").is_some());
+    assert_eq!(
+        to_bytes(healthz.into_body(), 1024)
+            .await
+            .expect("healthz body reads"),
+        health_body
+    );
+
+    for inbound in [None, Some("invalid")] {
+        let mut request = Request::builder()
+            .uri("/health")
+            .body(Body::empty())
+            .expect("replacement trace request builds");
+        if let Some(inbound) = inbound {
+            request.headers_mut().insert(
+                "traceparent",
+                HeaderValue::from_str(inbound).expect("test header is valid"),
+            );
+        }
+        let response = app
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("replacement trace responds");
+        assert_canonical_server_trace(response.headers()["traceparent"].to_str().unwrap());
+    }
+
+    let mut duplicate = Request::builder()
+        .uri("/health")
+        .body(Body::empty())
+        .expect("duplicate trace request builds");
+    duplicate
+        .headers_mut()
+        .append("traceparent", HeaderValue::from_static(INBOUND));
+    duplicate
+        .headers_mut()
+        .append("traceparent", HeaderValue::from_static(SECOND));
+    let duplicate = app
+        .clone()
+        .oneshot(duplicate)
+        .await
+        .expect("duplicate trace responds");
+    let effective = duplicate.headers()["traceparent"].to_str().unwrap();
+    assert_canonical_server_trace(effective);
+    assert_ne!(effective, INBOUND);
+    assert_ne!(effective, SECOND);
+
+    let mut unmatched_request = Request::builder()
+        .uri("/does-not-exist")
+        .body(Body::empty())
+        .expect("unmatched request builds");
+    unmatched_request
+        .headers_mut()
+        .insert("traceparent", HeaderValue::from_static(INBOUND));
+    let unmatched = app
+        .clone()
+        .oneshot(unmatched_request)
+        .await
+        .expect("unmatched request responds");
+    assert_eq!(unmatched.status(), StatusCode::NOT_FOUND);
+    assert_eq!(unmatched.headers()["traceparent"], INBOUND);
+    let problem: Value = serde_json::from_slice(
+        &to_bytes(unmatched.into_body(), 1024 * 1024)
+            .await
+            .expect("unmatched problem reads"),
+    )
+    .expect("unmatched problem is JSON");
+    assert_eq!(problem["traceId"], trace_id(INBOUND));
+
+    for _ in 0..2 {
+        let mut request = Request::builder()
+            .uri("/v1/records/public-records")
+            .body(Body::empty())
+            .expect("list request builds");
+        request
+            .headers_mut()
+            .insert("traceparent", HeaderValue::from_static(INBOUND));
+        let response = app
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("list request responds");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["traceparent"], INBOUND);
+    }
+    let correlations = records.correlations.lock().expect("correlation capture");
+    assert_eq!(correlations.len(), 2);
+    assert_ne!(correlations[0].0, correlations[1].0);
+    assert_eq!(correlations[0].1, trace_id(INBOUND));
+    assert_eq!(correlations[1].1, trace_id(INBOUND));
+}
+
+fn trace_id(traceparent: &str) -> &str {
+    traceparent
+        .split('-')
+        .nth(1)
+        .expect("canonical traceparent carries trace ID")
+}
+
+fn assert_canonical_server_trace(traceparent: &str) {
+    assert_eq!(traceparent.len(), 55);
+    assert!(traceparent.starts_with("00-"));
+    assert!(traceparent.is_ascii());
+    assert_ne!(trace_id(traceparent), "00000000000000000000000000000000");
 }
 
 #[test]
@@ -186,6 +376,80 @@ impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for CapturedOperation
     fn make_writer(&'writer self) -> Self::Writer {
         self.clone()
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn request_operational_log_has_only_closed_value_free_fields() {
+    const INBOUND: &str = "00-11111111111111111111111111111111-2222222222222222-01";
+    let writer = CapturedOperationalLogs::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_target(false)
+        .with_current_span(false)
+        .with_span_list(false)
+        .with_writer(writer.clone())
+        .finish();
+    let _subscriber = tracing::subscriber::set_default(subscriber);
+    let service = Arc::new(HttpService::new(
+        compiled_registry(),
+        ReadRuntimeIdentity {
+            package_revision: "package-startup-http".to_owned(),
+            schema_fingerprint: "schema-startup-http".to_owned(),
+        },
+        Arc::new(NoopRecords::default()),
+        Arc::new(SlowReadiness),
+        Arc::new(
+            CursorCodec::new(Zeroizing::new(vec![0x45; 32]), Duration::from_secs(300))
+                .expect("test cursor key is valid"),
+        ),
+    ));
+    let mut request = Request::builder()
+        .uri(format!("/health?private={QUERY_VALUE_CANARY}"))
+        .body(Body::empty())
+        .expect("request builds");
+    request
+        .headers_mut()
+        .insert("traceparent", HeaderValue::from_static(INBOUND));
+    request.headers_mut().insert(
+        "authorization",
+        HeaderValue::from_static("Bearer operational-log-token-canary"),
+    );
+    let response = router(service)
+        .oneshot(request)
+        .await
+        .expect("request responds");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let output = writer.text();
+    assert_forbidden_values_absent(&output);
+    assert!(!output.contains("operational-log-token-canary"));
+    assert!(!output.contains("/health"));
+    let rendered: Value = serde_json::from_str(output.trim()).expect("request log is JSON");
+    let fields = rendered["fields"]
+        .as_object()
+        .expect("request log fields are an object");
+    assert_eq!(
+        fields.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "duration_ms",
+            "message",
+            "method",
+            "problem_code",
+            "request_id",
+            "status",
+            "trace_id",
+        ])
+    );
+    assert_eq!(fields["method"], "GET");
+    assert_eq!(fields["status"], "success");
+    assert_eq!(fields["problem_code"], "none");
+    assert_eq!(fields["trace_id"], trace_id(INBOUND));
+    uuid::Uuid::parse_str(
+        fields["request_id"]
+            .as_str()
+            .expect("request log carries request_id"),
+    )
+    .expect("request_id is a UUID");
 }
 
 fn startup_errors() -> [StartupError; 12] {
@@ -391,7 +655,7 @@ async fn provenance_operational_logs_metrics_and_traces_are_separate_closed_and_
             package_revision: "package-startup-http".to_owned(),
             schema_fingerprint: "schema-startup-http".to_owned(),
         },
-        Arc::new(NoopRecords),
+        Arc::new(NoopRecords::default()),
         Arc::new(SlowReadiness),
         Arc::new(
             CursorCodec::new(Zeroizing::new(vec![0x45; 32]), Duration::from_secs(300))
@@ -474,21 +738,23 @@ async fn provenance_operational_logs_metrics_and_traces_are_separate_closed_and_
         .await
         .expect("canary request responds");
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    assert!(response.headers().get("traceparent").is_none());
+    assert_eq!(
+        response.headers()["traceparent"],
+        "00-11111111111111111111111111111111-2222222222222222-01"
+    );
     assert!(response.headers().get("tracestate").is_none());
     let mut rendered_response = response
         .headers()
         .iter()
         .map(|(name, value)| format!("{}:{}\n", name, value.to_str().unwrap_or("<binary>")))
         .collect::<String>();
-    rendered_response.push_str(
-        std::str::from_utf8(
-            &to_bytes(response.into_body(), 1024 * 1024)
-                .await
-                .expect("canary response reads"),
-        )
-        .expect("canary response is UTF-8"),
-    );
+    let response_body = to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .expect("canary response reads");
+    let problem: Value = serde_json::from_slice(&response_body).expect("canary problem is JSON");
+    assert_eq!(problem["traceId"], "11111111111111111111111111111111");
+    rendered_response
+        .push_str(std::str::from_utf8(&response_body).expect("canary response is UTF-8"));
     assert_forbidden_values_absent(&rendered_response);
 
     for uri in ["/metrics", "/v1/metrics"] {
@@ -666,7 +932,9 @@ fn assert_forbidden_values_absent(text: &str) {
 
 fn canary_runtime_document() -> String {
     format!(
-        r#"telemetry:
+        r#"apiVersion: registry.registrystack.org/server-runtime/v1alpha1
+kind: RegistryServerRuntimeConfig
+telemetry:
   rawPrincipal: {RAW_PRINCIPAL_CANARY}
   recordId: {RECORD_ID_CANARY}
   queryValue: {QUERY_VALUE_CANARY}
@@ -685,7 +953,9 @@ fn canary_runtime_document() -> String {
 
 fn runtime_without_telemetry(root: &Path) -> String {
     format!(
-        r#"listener:
+        r#"apiVersion: registry.registrystack.org/server-runtime/v1alpha1
+kind: RegistryServerRuntimeConfig
+listener:
   bind: 127.0.0.1:8080
   trustedProxy: direct
 identity:

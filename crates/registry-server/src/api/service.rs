@@ -10,6 +10,7 @@ use serde_json::Value;
 
 use super::context::AuthorizedRequestContext;
 use crate::contract::FieldTypeSource;
+use crate::correlation::RequestCorrelation;
 use crate::cursor::{CursorBinding, CursorCodec, CursorContinuation, CursorQuery};
 use crate::model::{
     CompiledQueryFilterOperator, CompiledQueryKind, CompiledQuerySortDirection, CompiledRegistry,
@@ -52,6 +53,17 @@ impl HeldReadResponse {
     }
 }
 
+/// Compiler-authorized input for record creation.
+pub struct CreateMutationInput<'a> {
+    pub route_id: &'a str,
+    pub idempotency_key: &'a str,
+    pub context: &'a AuthorizedRequestContext,
+    pub entity_id: &'a str,
+    pub data: serde_json::Map<String, Value>,
+    pub response_fields: BTreeSet<String>,
+    pub correlation: &'a RequestCorrelation,
+}
+
 /// Compiler-authorized input shared by conditional record mutations.
 pub struct ConditionalMutationInput<'a> {
     pub route_id: &'a str,
@@ -61,6 +73,7 @@ pub struct ConditionalMutationInput<'a> {
     pub entity_id: &'a str,
     pub record_id: &'a str,
     pub response_fields: BTreeSet<String>,
+    pub correlation: &'a RequestCorrelation,
 }
 
 /// Compiler-authorized input for one bounded entity-local batch transaction.
@@ -72,6 +85,7 @@ pub struct BatchMutationInput<'a> {
     pub items: Vec<BatchMutationItem>,
     pub response_fields: BTreeSet<String>,
     pub body_bytes: usize,
+    pub correlation: &'a RequestCorrelation,
 }
 
 #[derive(Clone)]
@@ -89,6 +103,7 @@ pub struct RecordReadRequest {
     /// Hard source-execution result bound. Implementations must apply it in
     /// the database plan before rows are materialized.
     pub maximum_records: usize,
+    pub correlation: RequestCorrelation,
 }
 
 impl fmt::Debug for RecordReadRequest {
@@ -363,6 +378,7 @@ pub struct RecordReadRefusal {
     pub principal: Option<String>,
     pub selected_access_profile: Option<String>,
     pub purpose_present: bool,
+    pub correlation: RequestCorrelation,
 }
 
 #[derive(Clone)]
@@ -375,6 +391,7 @@ pub struct RevisionReadRequest {
     pub context: AuthorizedRequestContext,
     pub selected_fields: BTreeSet<String>,
     pub maximum_records: usize,
+    pub correlation: RequestCorrelation,
 }
 
 impl fmt::Debug for RevisionReadRequest {
@@ -401,6 +418,7 @@ pub struct RevisionReadRefusal {
     pub principal: Option<String>,
     pub selected_access_profile: Option<String>,
     pub purpose_present: bool,
+    pub correlation: RequestCorrelation,
 }
 
 impl fmt::Debug for RevisionReadRefusal {

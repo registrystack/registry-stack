@@ -72,19 +72,19 @@ accessProfiles:
   - id: asset-operator
     default: true
     principalClaim: registry_principal
-    purposes: [asset-management]
+    requiredPurposes: [asset-management]
     grants:
-      - {entity: asset-item, actions: [create, get, list, patch, batch], readableFields: [asset-code, label, asset-class], writableFields: [asset-code, label, asset-class]}
-      - {entity: asset-site, actions: [create, get, list, patch], readableFields: [site-code, label], writableFields: [site-code, label]}
-      - {entity: asset-placement, actions: [create, get, list, patch], readableFields: [asset, site, valid-from, valid-to], writableFields: [asset, site, valid-from, valid-to]}
-      - {entity: inspection-event, actions: [create, get, list], readableFields: [asset, observed-at, result], writableFields: [asset, observed-at, result]}
+      - {entity: asset-item, operations: [create, get, list, patch, batch], readableFields: [asset-code, label, asset-class], writableFields: [asset-code, label, asset-class]}
+      - {entity: asset-site, operations: [create, get, list, patch], readableFields: [site-code, label], writableFields: [site-code, label]}
+      - {entity: asset-placement, operations: [create, get, list, patch], readableFields: [asset, site, valid-from, valid-to], writableFields: [asset, site, valid-from, valid-to]}
+      - {entity: inspection-event, operations: [create, get, list], readableFields: [asset, observed-at, result], writableFields: [asset, observed-at, result]}
   - id: site-planner
     principalClaim: registry_principal
-    purposes: [site-planning]
+    requiredPurposes: [site-planning]
     grants:
-      - {entity: asset-item, actions: [get, list], readableFields: [asset-code, label], filterableFields: [asset-code]}
-      - {entity: asset-site, actions: [get, list], readableFields: [site-code, label], filterableFields: [site-code]}
-      - {entity: asset-placement, actions: [create, get, list, patch], readableFields: [asset, site, valid-from, valid-to], writableFields: [asset, site, valid-from, valid-to], filterableFields: [asset, site, valid-from]}
+      - {entity: asset-item, operations: [get, list], readableFields: [asset-code, label], filterableFields: [asset-code]}
+      - {entity: asset-site, operations: [get, list], readableFields: [site-code, label], filterableFields: [site-code]}
+      - {entity: asset-placement, operations: [create, get, list, patch], readableFields: [asset, site, valid-from, valid-to], writableFields: [asset, site, valid-from, valid-to], filterableFields: [asset, site, valid-from]}
 vocabularies:
   - {id: asset-classification, values: [equipment, vehicle, furniture]}
   - {id: inspection-result, values: [passed, failed]}

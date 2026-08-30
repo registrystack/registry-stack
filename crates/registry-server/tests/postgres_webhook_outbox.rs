@@ -607,14 +607,6 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
               {"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"},
               {"id":"restricted_note","type":"string","maxLength":64,"required":true,"classification":"restricted"}
             ],
-            "accessProfiles":[{
-              "id":"operator","default":true,"principalClaim":"registry_principal",
-              "requiredPurposes":["case-management"],
-              "operations":["create","patch","get","list"],
-              "readableFields":["jurisdiction","label","restricted_note"],
-              "writableFields":["jurisdiction","label","restricted_note"],
-              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
-            }],
             "events":[{
               "id":"case-created","trigger":"created","projection":["label","restricted_note"],
               "webhook":{
@@ -629,6 +621,16 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
                 "afterEquals":{"restricted_note":"restricted-projection-canary"}
               },
               "webhook":{"destinationId":"case-operations"}
+            }]
+          }],
+          "accessProfiles":[{
+            "id":"operator","default":true,"principalClaim":"registry_principal",
+            "requiredPurposes":["case-management"],
+            "grants":[{
+              "entity":"case","operations":["create","patch","get","list"],
+              "readableFields":["jurisdiction","label","restricted_note"],
+              "writableFields":["jurisdiction","label","restricted_note"],
+              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]
           }]
         }"#,
@@ -713,6 +715,7 @@ fn create_request<'a>(
             "label".to_owned(),
             "restricted_note".to_owned(),
         ]),
+        correlation: registry_server::correlation::RequestCorrelation::server_created(),
     }
 }
 
@@ -739,6 +742,7 @@ fn patch_request<'a>(
             "label".to_owned(),
             "restricted_note".to_owned(),
         ]),
+        correlation: registry_server::correlation::RequestCorrelation::server_created(),
     }
 }
 
@@ -1172,7 +1176,8 @@ impl DestinationFixture {
         compiled: &registry_server::CompiledRegistry,
     ) -> ActivatedEventDestinationRegistry {
         let raw = format!(
-            r#"
+            r#"apiVersion: registry.registrystack.org/server-runtime/v1alpha1
+kind: RegistryServerRuntimeConfig
 listener:
   bind: 127.0.0.1:8080
   trustedProxy: direct

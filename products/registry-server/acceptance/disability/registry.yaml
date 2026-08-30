@@ -98,11 +98,11 @@ entities:
 accessProfiles:
   - id: disability-caseworker
     principalClaim: registry_principal
-    purposes: [disability-assessment]
+    requiredPurposes: [disability-assessment]
     grants:
-      - {entity: assessment-episode, actions: [create, get, list, patch], readableFields: [episode-code, subject-code, opened-on, closed-on, assessment-source], writableFields: [episode-code, subject-code, opened-on, closed-on, assessment-source], filterableFields: [episode-code, subject-code]}
-      - {entity: functioning-observation, actions: [create, get, list], readableFields: [assessment-episode, observed-at, functioning-domain, severity-score, observation-schema-metadata, observation-note], writableFields: [assessment-episode, observed-at, functioning-domain, severity-score, observation-schema-metadata, observation-note], filterableFields: [assessment-episode, functioning-domain]}
-      - {entity: certification, actions: [create, get, list], readableFields: [certification-code, assessment-episode, certification-status, valid-from, valid-to, corrected-certification, correction-reason, validity-source, provenance-note], writableFields: [certification-code, assessment-episode, certification-status, valid-from, valid-to, corrected-certification, correction-reason, validity-source, provenance-note], filterableFields: [assessment-episode, certification-status, valid-from]}
+      - {entity: assessment-episode, operations: [create, get, list, patch], readableFields: [episode-code, subject-code, opened-on, closed-on, assessment-source], writableFields: [episode-code, subject-code, opened-on, closed-on, assessment-source], filterableFields: [episode-code, subject-code]}
+      - {entity: functioning-observation, operations: [create, get, list], readableFields: [assessment-episode, observed-at, functioning-domain, severity-score, observation-schema-metadata, observation-note], writableFields: [assessment-episode, observed-at, functioning-domain, severity-score, observation-schema-metadata, observation-note], filterableFields: [assessment-episode, functioning-domain]}
+      - {entity: certification, operations: [create, get, list], readableFields: [certification-code, assessment-episode, certification-status, valid-from, valid-to, corrected-certification, correction-reason, validity-source, provenance-note], writableFields: [certification-code, assessment-episode, certification-status, valid-from, valid-to, corrected-certification, correction-reason, validity-source, provenance-note], filterableFields: [assessment-episode, certification-status, valid-from]}
 vocabularies:
   - {id: functioning-domain, values: [mobility, cognition, self-care, communication]}
   - {id: certification-status, values: [draft, active, corrected, withdrawn]}

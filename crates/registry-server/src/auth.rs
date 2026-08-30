@@ -12,7 +12,6 @@ use axum::http::{Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::Response;
 use registry_platform_authcommon::{parse_bearer_token, validate_compact_access_token};
-use registry_platform_httpsec::Problem;
 use registry_platform_oidc::{Audience, JwksFetcher, TokenVerifier, TokenVerifierConfig};
 use serde_json::Value;
 use thiserror::Error;
@@ -509,12 +508,11 @@ fn mapped_scalar_claim(
 }
 
 fn authentication_refused() -> Response {
-    Problem::new(
+    crate::correlation::problem_response(
+        StatusCode::UNAUTHORIZED,
         "urn:registry-server:problem:authentication.refused",
         "Unauthorized",
-        StatusCode::UNAUTHORIZED,
+        "The bearer credential is missing or refused.",
+        "authentication.refused",
     )
-    .detail("The bearer credential is missing or refused.")
-    .with_extra("code", Value::String("authentication.refused".to_owned()))
-    .into_response()
 }

@@ -432,8 +432,9 @@ mod tests {
 
     use crate::compiler::{compile_project, CompileProfile};
     use crate::contract::{
-        parse_project_json, AccessProfileSource, Classification, EntitySource, FieldSource,
-        FieldTypeSource, MutationMode, Operation, RegistryProject, RowBoundarySource,
+        parse_project_json, AccessGrantSource, Classification, EntitySource, FieldSource,
+        FieldTypeSource, MutationMode, Operation, ProjectAccessProfileSource, RegistryProject,
+        RowBoundarySource,
     };
 
     use super::*;
@@ -620,11 +621,7 @@ mod tests {
               "entities":[
                 {
                   "id":"parent-entry","route":"parents","mutationMode":"mutable",
-                  "fields":[{"id":"name","type":"string","minLength":1,"maxLength":8,"required":true,"classification":"internal"}],
-                  "accessProfiles":[{
-                    "id":"typed","default":true,"principalClaim":"registry_principal",
-                    "operations":["get"],"readableFields":["name"]
-                  }]
+                  "fields":[{"id":"name","type":"string","minLength":1,"maxLength":8,"required":true,"classification":"internal"}]
                 },
                 {
                   "id":"typed-entry","route":"typed","mutationMode":"mutable",
@@ -639,10 +636,17 @@ mod tests {
                     {"id":"short-name","type":"string","minLength":1,"maxLength":4,"required":true,"classification":"internal"},
                     {"id":"notes","type":"text","maxLength":6,"required":true,"classification":"internal"},
                     {"id":"color","type":"vocabulary-code","vocabulary":"colors","required":true,"classification":"internal"}
-                  ],
-                  "accessProfiles":[{
-                    "id":"typed","default":true,"principalClaim":"registry_principal",
-                    "operations":["get"],
+                  ]
+                }
+              ],
+              "accessProfiles":[{
+                "id":"typed","default":true,"principalClaim":"registry_principal",
+                "grants":[
+                  {
+                    "entity":"parent-entry","operations":["get"],"readableFields":["name"]
+                  },
+                  {
+                    "entity":"typed-entry","operations":["get"],
                     "readableFields":["enabled","count","amount","effective-on","observed-at","identifier","parent","short-name","notes","color"],
                     "rowBoundaries":[
                       {"field":"enabled","claim":"enabled_claim","operator":"equals"},
@@ -656,9 +660,9 @@ mod tests {
                       {"field":"notes","claim":"text_claim","operator":"in"},
                       {"field":"color","claim":"vocabulary_claim","operator":"equals"}
                     ]
-                  }]
-                }
-              ],
+                  }
+                ]
+              }],
               "vocabularies":[{"id":"colors","values":["red","blue"]}]
             }"#,
         )
@@ -718,14 +722,19 @@ mod tests {
                 constraints: Vec::new(),
                 temporal: None,
                 indexes: Vec::new(),
-                access_profiles: vec![
-                    AccessProfileSource {
-                        id: "operator".to_owned(),
-                        default: true,
-                        anonymous: false,
-                        principal_claim: Some("registry_principal".to_owned()),
-                        required_scopes: BTreeSet::new(),
-                        required_purposes: BTreeSet::from(["operations".to_owned()]),
+                access_profiles: Vec::new(),
+                events: Vec::new(),
+            }],
+            access_profiles: vec![
+                ProjectAccessProfileSource {
+                    id: "operator".to_owned(),
+                    default: true,
+                    anonymous: false,
+                    principal_claim: Some("registry_principal".to_owned()),
+                    required_scopes: BTreeSet::new(),
+                    required_purposes: BTreeSet::from(["operations".to_owned()]),
+                    grants: vec![AccessGrantSource {
+                        entity: "entry".to_owned(),
                         operations: operations.clone(),
                         readable_fields: BTreeSet::from(["tenant".to_owned(), "region".to_owned()]),
                         writable_fields: BTreeSet::new(),
@@ -748,14 +757,17 @@ mod tests {
                         lookups: Vec::new(),
                         read_paths: Vec::new(),
                         allow_count: false,
-                    },
-                    AccessProfileSource {
-                        id: "viewer".to_owned(),
-                        default: false,
-                        anonymous: false,
-                        principal_claim: Some("registry_principal".to_owned()),
-                        required_scopes: BTreeSet::new(),
-                        required_purposes: BTreeSet::new(),
+                    }],
+                },
+                ProjectAccessProfileSource {
+                    id: "viewer".to_owned(),
+                    default: false,
+                    anonymous: false,
+                    principal_claim: Some("registry_principal".to_owned()),
+                    required_scopes: BTreeSet::new(),
+                    required_purposes: BTreeSet::new(),
+                    grants: vec![AccessGrantSource {
+                        entity: "entry".to_owned(),
                         operations,
                         readable_fields: BTreeSet::from(["tenant".to_owned()]),
                         writable_fields: BTreeSet::new(),
@@ -771,11 +783,9 @@ mod tests {
                         lookups: Vec::new(),
                         read_paths: Vec::new(),
                         allow_count: false,
-                    },
-                ],
-                events: Vec::new(),
-            }],
-            access_profiles: Vec::new(),
+                    }],
+                },
+            ],
             vocabularies: Vec::new(),
         };
         compile_project(&project, &[], CompileProfile::Authoring).expect("test project compiles")

@@ -266,7 +266,8 @@ fn runtime_config_with_roles(
     runtime_role: &str,
 ) -> RuntimeConfig {
     parse_runtime_config(&format!(
-        r#"
+        r#"apiVersion: registry.registrystack.org/server-runtime/v1alpha1
+kind: RegistryServerRuntimeConfig
 listener:
   bind: 127.0.0.1:8080
   trustedProxy: direct
@@ -405,10 +406,13 @@ fn project_bytes(environment: &str, instance_id: &str, source_revision: &str) ->
       "type": "string",
       "maxLength": 32,
       "classification": "internal"
-    }}],
-    "accessProfiles": [{{
-      "id": "reader",
-      "principalClaim": "principal",
+    }}]
+  }}],
+  "accessProfiles": [{{
+    "id": "reader",
+    "principalClaim": "principal",
+    "grants": [{{
+      "entity": "case",
       "operations": ["get", "list"],
       "readableFields": ["code"]
     }}]

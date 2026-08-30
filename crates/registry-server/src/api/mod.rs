@@ -15,7 +15,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post};
 use axum::{middleware, Extension, Json, Router};
 use registry_platform_canonical_json::parse_json_strict;
-use registry_platform_httpsec::{security_headers, CspBuilder, Problem};
+use registry_platform_httpsec::{security_headers, CspBuilder};
 use serde_json::{json, Map, Value};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
@@ -25,11 +25,11 @@ pub use context::{
 };
 pub use service::{
     BatchMutationInput, CompiledLookupSelector, CompiledReadQuery, ConditionalMutationInput,
-    HeldReadResponse, HttpService, LookupSelectorValue, ReadFilterExpr, ReadFilterOperator,
-    ReadFilterPredicate, ReadLogicalOp, ReadOrderClause, ReadProjectionField, ReadRuntimeIdentity,
-    ReadServiceError, ReadinessProbe, RecordReadKind, RecordReadRefusal, RecordReadRequest,
-    RecordReadService, RevisionReadRefusal, RevisionReadRequest, RevisionReadService,
-    ServiceFuture,
+    CreateMutationInput, HeldReadResponse, HttpService, LookupSelectorValue, ReadFilterExpr,
+    ReadFilterOperator, ReadFilterPredicate, ReadLogicalOp, ReadOrderClause, ReadProjectionField,
+    ReadRuntimeIdentity, ReadServiceError, ReadinessProbe, RecordReadKind, RecordReadRefusal,
+    RecordReadRequest, RecordReadService, RevisionReadRefusal, RevisionReadRequest,
+    RevisionReadService, ServiceFuture,
 };
 
 use crate::auth::{authenticate_request, RegistryAuthenticator};
@@ -37,6 +37,7 @@ use crate::contract::{
     AccessProfileSource, BoundaryOperator, Classification, FieldTypeSource, LookupValueOrigin,
     Operation,
 };
+use crate::correlation::RequestCorrelation;
 use crate::cursor::{
     now_unix_seconds, CursorBinding, CursorError, CursorFilterExpr, CursorFilterOperator,
     CursorFilterPredicate, CursorLogicalOp, CursorOrderClause, CursorProjectionField,
@@ -52,6 +53,11 @@ use crate::mutation::{parse_json_patch_document, BatchMutationItem, MutationErro
 use crate::query as strict_query;
 use uuid::Uuid;
 
+use crate::artifacts::{
+    openapi_components, openapi_entity_input_schema, openapi_input_schema_id, openapi_operation,
+    OpenApiAccessProfiles, OpenApiOperationSpec,
+};
+
 const MAX_MUTATION_BODY_BYTES: usize = 2 * 1024 * 1024;
 const MAX_LOOKUP_BODY_BYTES: usize = 16 * 1024;
 const MAX_IDEMPOTENCY_KEY_BYTES: usize = 256;
@@ -65,11 +71,14 @@ const MAX_IN_VALUES: usize = 100;
 /// This seam preserves focused authorization and record-kernel tests without
 /// allowing request headers or query values to construct authority.
 pub fn router(service: Arc<HttpService>) -> Router {
-    route_set(service).layer(security_headers(CspBuilder::restrictive()))
+    route_set(service)
+        .layer(middleware::from_fn(crate::correlation::observe))
+        .layer(security_headers(CspBuilder::restrictive()))
 }
 
 fn route_set(service: Arc<HttpService>) -> Router {
     let mut app = Router::new()
+        .route("/health", get(health))
         .route("/healthz", get(health))
         .route("/ready", get(ready))
         .route("/openapi.json", get(openapi))
@@ -151,6 +160,7 @@ pub fn authenticated_router(
             authenticator,
             authenticate_request,
         ))
+        .layer(middleware::from_fn(crate::correlation::observe))
         .layer(security_headers(CspBuilder::restrictive()))
 }
 
@@ -188,6 +198,8 @@ async fn openapi(
 
     let mut paths = Map::new();
     let mut readable_by_entity: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut writable_by_input_schema: BTreeMap<String, (String, BTreeSet<String>)> =
+        BTreeMap::new();
     for surface in &visible {
         let path = paths
             .entry(surface.route.path.clone())
@@ -195,84 +207,22 @@ async fn openapi(
         let Value::Object(methods) = path else {
             unreachable!("OpenAPI paths are objects")
         };
-        let mut operation = Map::from_iter([
-            ("operationId".to_owned(), json!(surface.route.id)),
-            (
-                "x-registry-entity".to_owned(),
-                json!(surface.route.entity_id),
-            ),
-            (
-                "x-registry-responseEntity".to_owned(),
-                json!(surface.response_entity.id),
-            ),
-            (
-                "x-registry-operation".to_owned(),
-                json!(operation_name(surface.route.operation)),
-            ),
-            (
-                "x-registry-accessProfile".to_owned(),
-                json!(surface.context.selected_profile()),
-            ),
-            (
-                "responses".to_owned(),
-                json!({"200": {"description": "Operation completed"}}),
-            ),
-        ]);
-        if let Some(kind) = surface.route.query_kind {
-            operation.insert(
-                "x-registry-queryKind".to_owned(),
-                Value::String(query_kind_name(kind).to_owned()),
-            );
-            operation.insert("parameters".to_owned(), query_parameters(kind));
-        } else if surface.route.operation == Operation::Lookup {
-            operation.insert("parameters".to_owned(), lookup_parameters());
-            operation.insert("requestBody".to_owned(), lookup_request_body());
-        } else if let Some(kind) = surface.route.revision_kind {
-            operation.insert("parameters".to_owned(), revision_parameters(kind));
-            operation.insert(
-                "x-registry-maximumRecords".to_owned(),
-                json!(surface.route.maximum_records),
-            );
-        } else if surface.route.operation == Operation::Batch {
-            let batch = surface
-                .entity
-                .batch
-                .as_ref()
-                .expect("authorized batch routes have compiled bounds");
-            let profile = &surface.entity.access_profiles[surface.context.selected_profile()];
-            let allow_create = profile.operations.contains(&Operation::Create);
-            let allow_patch = profile.operations.contains(&Operation::Patch);
-            operation.insert("parameters".to_owned(), access_profile_parameters());
-            operation.insert(
-                "x-registry-maximumItems".to_owned(),
-                json!(batch.maximum_items),
-            );
-            operation.insert(
-                "x-registry-maximumBytes".to_owned(),
-                json!(batch.maximum_bytes),
-            );
-            operation.insert(
-                "requestBody".to_owned(),
-                batch_request_body(
-                    &surface.route.entity_id,
-                    batch.maximum_items,
-                    allow_create,
-                    allow_patch,
-                ),
-            );
-            operation.insert(
-                "responses".to_owned(),
-                batch_response(
-                    &surface.route.entity_id,
-                    batch.maximum_items,
-                    allow_create,
-                    allow_patch,
-                ),
-            );
-        }
+        let request_schema_ref =
+            openapi_input_schema_id(&surface.entity.id, surface.route.operation);
         methods.insert(
             method_name(surface.route.method).to_owned(),
-            Value::Object(operation),
+            openapi_operation(OpenApiOperationSpec {
+                route: surface.route,
+                entity: surface.entity,
+                response_entity: surface.response_entity,
+                query: service.registry.queries(),
+                schema_ref: &surface.response_entity.id,
+                request_schema_ref: &request_schema_ref,
+                readable_fields: Some(&surface.readable_fields),
+                access_profiles: OpenApiAccessProfiles::Selected(
+                    surface.context.selected_profile(),
+                ),
+            }),
         );
         readable_by_entity
             .entry(surface.response_entity.id.clone())
@@ -280,19 +230,39 @@ async fn openapi(
                 fields.extend(surface.readable_fields.iter().cloned());
             })
             .or_insert_with(|| surface.readable_fields.clone());
+        if matches!(
+            surface.route.operation,
+            Operation::Create | Operation::Batch
+        ) {
+            let profile = &surface.entity.access_profiles[surface.context.selected_profile()];
+            let entry = writable_by_input_schema
+                .entry(request_schema_ref)
+                .or_insert_with(|| (surface.entity.id.clone(), BTreeSet::new()));
+            entry.1.extend(profile.writable_fields.iter().cloned());
+        }
     }
 
-    let schemas = readable_by_entity
+    let mut schemas = readable_by_entity
         .iter()
         .filter_map(|(entity_id, readable)| {
             filtered_schema(&service, entity_id, readable).map(|schema| (entity_id.clone(), schema))
         })
         .collect::<Map<String, Value>>();
+    schemas.extend(writable_by_input_schema.iter().filter_map(
+        |(schema_id, (entity_id, writable))| {
+            service.registry.entities().get(entity_id).map(|entity| {
+                (
+                    schema_id.clone(),
+                    openapi_entity_input_schema(entity, Some(writable)),
+                )
+            })
+        },
+    ));
     Json(json!({
         "openapi": "3.1.0",
         "info": {"title": service.registry.registry_id(), "version": service.registry.version()},
         "paths": paths,
-        "components": {"schemas": schemas}
+        "components": openapi_components(schemas)
     }))
     .into_response()
 }
@@ -397,6 +367,7 @@ async fn entity_schema(
 async fn read_dispatch(
     State(service): State<Arc<HttpService>>,
     Extension(route): Extension<CompiledRoute>,
+    Extension(correlation): Extension<RequestCorrelation>,
     claims: Option<Extension<VerifiedRequestClaims>>,
     RawQuery(raw_query): RawQuery,
     Path(path): Path<HashMap<String, String>>,
@@ -413,14 +384,21 @@ async fn read_dispatch(
                 &claims,
                 path.get("record_id"),
                 invalid_query(),
+                &correlation,
             )
             .await;
         }
     };
     let Some(surface) = authorize_route(&service, &route, &claims, &options) else {
-        let response =
-            audited_read_concealment(&service, &route, &options, &claims, path.get("record_id"))
-                .await;
+        let response = audited_read_concealment(
+            &service,
+            &route,
+            &options,
+            &claims,
+            path.get("record_id"),
+            &correlation,
+        )
+        .await;
         return response;
     };
 
@@ -433,11 +411,20 @@ async fn read_dispatch(
                     &surface,
                     path.get("record_id"),
                     invalid_query(),
+                    &correlation,
                 )
                 .await;
             }
             let Some(record_id) = path.get("record_id") else {
-                return audited_read_refusal(&service, &route, &surface, None, concealed()).await;
+                return audited_read_refusal(
+                    &service,
+                    &route,
+                    &surface,
+                    None,
+                    concealed(),
+                    &correlation,
+                )
+                .await;
             };
             if !valid_canonical_record_uuid(record_id) {
                 return audited_read_refusal(
@@ -446,6 +433,7 @@ async fn read_dispatch(
                     &surface,
                     Some(record_id),
                     concealed(),
+                    &correlation,
                 )
                 .await;
             }
@@ -463,6 +451,7 @@ async fn read_dispatch(
                         &surface,
                         Some(record_id),
                         concealed(),
+                        &correlation,
                     )
                     .await;
                 }
@@ -477,6 +466,7 @@ async fn read_dispatch(
                     id: record_id.clone(),
                 },
                 maximum_records: 1,
+                correlation: correlation.clone(),
             };
             match service.records.get(request).await {
                 Ok(Some(record)) => exact_json(record),
@@ -497,6 +487,7 @@ async fn read_dispatch(
                     &surface,
                     path.get("record_id"),
                     concealed(),
+                    &correlation,
                 )
                 .await;
             }
@@ -518,6 +509,7 @@ async fn read_dispatch(
                         &surface,
                         path.get("record_id"),
                         invalid_query(),
+                        &correlation,
                     )
                     .await;
                 }
@@ -528,6 +520,7 @@ async fn read_dispatch(
                         &surface,
                         path.get("record_id"),
                         cursor_invalid(),
+                        &correlation,
                     )
                     .await;
                 }
@@ -545,6 +538,7 @@ async fn read_dispatch(
                     &surface,
                     path.get("record_id"),
                     concealed(),
+                    &correlation,
                 )
                 .await;
             }
@@ -569,6 +563,7 @@ async fn read_dispatch(
                 selected_fields: readable_fields,
                 kind,
                 maximum_records,
+                correlation: correlation.clone(),
             };
             match service.records.list(request).await {
                 Ok(response) => exact_json_no_store(response),
@@ -583,6 +578,7 @@ async fn read_dispatch(
 async fn lookup_dispatch(
     State(service): State<Arc<HttpService>>,
     Extension(route): Extension<CompiledRoute>,
+    Extension(correlation): Extension<RequestCorrelation>,
     claims: Option<Extension<VerifiedRequestClaims>>,
     RawQuery(raw_query): RawQuery,
     headers: HeaderMap,
@@ -594,15 +590,31 @@ async fn lookup_dispatch(
     let options = match QueryOptions::parse(raw_query.as_deref(), true) {
         Ok(options) => options,
         Err(QueryParseError::Invalid) => {
-            return audited_known_read_refusal(&service, &route, &claims, None, invalid_query())
-                .await;
+            return audited_known_read_refusal(
+                &service,
+                &route,
+                &claims,
+                None,
+                invalid_query(),
+                &correlation,
+            )
+            .await;
         }
     };
     let Some(surface) = authorize_route(&service, &route, &claims, &options) else {
-        return audited_read_concealment(&service, &route, &options, &claims, None).await;
+        return audited_read_concealment(&service, &route, &options, &claims, None, &correlation)
+            .await;
     };
     if surface.read_path.is_some() || options.has_non_projection_query_members() {
-        return audited_read_refusal(&service, &route, &surface, None, invalid_query()).await;
+        return audited_read_refusal(
+            &service,
+            &route,
+            &surface,
+            None,
+            invalid_query(),
+            &correlation,
+        )
+        .await;
     }
     let readable_fields = match resolve_select(
         surface.response_entity,
@@ -612,45 +624,101 @@ async fn lookup_dispatch(
         Ok(Some(fields)) => fields,
         Ok(None) => surface.readable_fields.clone(),
         Err(()) => {
-            return audited_read_refusal(&service, &route, &surface, None, concealed()).await;
+            return audited_read_refusal(
+                &service,
+                &route,
+                &surface,
+                None,
+                concealed(),
+                &correlation,
+            )
+            .await;
         }
     };
     if !single_content_type(&headers, "application/json") {
-        return audited_read_refusal(&service, &route, &surface, None, unsupported_media_type())
-            .await;
+        return audited_read_refusal(
+            &service,
+            &route,
+            &surface,
+            None,
+            unsupported_media_type(),
+            &correlation,
+        )
+        .await;
     }
     let Ok(body) = bounded_body_to(body, MAX_LOOKUP_BODY_BYTES).await else {
-        return audited_read_refusal(&service, &route, &surface, None, invalid_request()).await;
+        return audited_read_refusal(
+            &service,
+            &route,
+            &surface,
+            None,
+            invalid_request(),
+            &correlation,
+        )
+        .await;
     };
     let body = match parse_lookup_body(&body) {
         Ok(body) => body,
         Err(()) => {
-            return audited_read_refusal(&service, &route, &surface, None, invalid_request()).await;
+            return audited_read_refusal(
+                &service,
+                &route,
+                &surface,
+                None,
+                invalid_request(),
+                &correlation,
+            )
+            .await;
         }
     };
     let selector = match resolve_lookup_selector(&service, &route, &surface, &claims, &body) {
         Ok(selector) => selector,
         Err(LookupResolutionError::InvalidRequest) => {
-            return audited_read_refusal(&service, &route, &surface, None, invalid_request()).await;
+            return audited_read_refusal(
+                &service,
+                &route,
+                &surface,
+                None,
+                invalid_request(),
+                &correlation,
+            )
+            .await;
         }
         Err(LookupResolutionError::Unresolved) => {
-            return audited_read_refusal(&service, &route, &surface, None, lookup_unresolved())
-                .await;
+            return audited_read_refusal(
+                &service,
+                &route,
+                &surface,
+                None,
+                lookup_unresolved(),
+                &correlation,
+            )
+            .await;
         }
     };
     if !readable_fields.is_subset(&surface.readable_fields) {
-        return audited_read_refusal(&service, &route, &surface, None, concealed()).await;
+        return audited_read_refusal(&service, &route, &surface, None, concealed(), &correlation)
+            .await;
     }
     let Some(operation) =
         lookup_query_operation_for_selector(&service, &route, &surface, &selector.selector_id)
     else {
-        return audited_read_refusal(&service, &route, &surface, None, lookup_unresolved()).await;
+        return audited_read_refusal(
+            &service,
+            &route,
+            &surface,
+            None,
+            lookup_unresolved(),
+            &correlation,
+        )
+        .await;
     };
     if !readable_fields
         .iter()
         .all(|field| operation.projection_fields.contains(field))
     {
-        return audited_read_refusal(&service, &route, &surface, None, concealed()).await;
+        return audited_read_refusal(&service, &route, &surface, None, concealed(), &correlation)
+            .await;
     }
     let request = RecordReadRequest {
         entity_id: route.entity_id.clone(),
@@ -660,6 +728,7 @@ async fn lookup_dispatch(
         selected_fields: readable_fields,
         kind: RecordReadKind::Lookup { selector },
         maximum_records: 2,
+        correlation: correlation.clone(),
     };
     match service.records.lookup(request).await {
         Ok(Some(record)) => exact_json_no_store(record),
@@ -671,6 +740,7 @@ async fn lookup_dispatch(
 async fn revision_dispatch(
     State(service): State<Arc<HttpService>>,
     Extension(route): Extension<CompiledRoute>,
+    Extension(correlation): Extension<RequestCorrelation>,
     claims: Option<Extension<VerifiedRequestClaims>>,
     RawQuery(raw_query): RawQuery,
     Path(path): Path<HashMap<String, String>>,
@@ -690,6 +760,7 @@ async fn revision_dispatch(
                 &claims,
                 path.get("record_id"),
                 invalid_query(),
+                &correlation,
             )
             .await;
         }
@@ -701,12 +772,20 @@ async fn revision_dispatch(
             &options,
             &claims,
             path.get("record_id"),
+            &correlation,
         )
         .await;
     };
     let Some(record_id) = path.get("record_id") else {
-        return audited_revision_refusal(revisions.as_ref(), &route, &surface, None, concealed())
-            .await;
+        return audited_revision_refusal(
+            revisions.as_ref(),
+            &route,
+            &surface,
+            None,
+            concealed(),
+            &correlation,
+        )
+        .await;
     };
     let revision = match route.revision_kind {
         Some(CompiledRevisionKind::List) if !path.contains_key("revision") => None,
@@ -721,6 +800,7 @@ async fn revision_dispatch(
                     &surface,
                     Some(record_id),
                     concealed(),
+                    &correlation,
                 )
                 .await;
             };
@@ -733,6 +813,7 @@ async fn revision_dispatch(
                 &surface,
                 Some(record_id),
                 concealed(),
+                &correlation,
             )
             .await;
         }
@@ -744,6 +825,7 @@ async fn revision_dispatch(
             &surface,
             Some(record_id),
             concealed(),
+            &correlation,
         )
         .await;
     }
@@ -766,6 +848,7 @@ async fn revision_dispatch(
         context: surface.context,
         selected_fields: surface.readable_fields,
         maximum_records,
+        correlation: correlation.clone(),
     };
     match route.revision_kind {
         Some(CompiledRevisionKind::List) => match revisions.list(request).await {
@@ -788,6 +871,7 @@ async fn audited_known_revision_refusal(
     claims: &VerifiedRequestClaims,
     target_record: Option<&String>,
     response: Response,
+    correlation: &RequestCorrelation,
 ) -> Response {
     match revisions
         .refusal(RevisionReadRefusal {
@@ -797,6 +881,7 @@ async fn audited_known_revision_refusal(
             principal: claims.principal().map(str::to_owned),
             selected_access_profile: None,
             purpose_present: claims.purpose().is_some(),
+            correlation: correlation.clone(),
         })
         .await
     {
@@ -811,6 +896,7 @@ async fn audited_revision_refusal(
     surface: &AuthorizedSurface<'_>,
     target_record: Option<&String>,
     response: Response,
+    correlation: &RequestCorrelation,
 ) -> Response {
     match revisions
         .refusal(RevisionReadRefusal {
@@ -820,6 +906,7 @@ async fn audited_revision_refusal(
             principal: surface.context.principal().map(str::to_owned),
             selected_access_profile: Some(surface.context.selected_profile().to_owned()),
             purpose_present: surface.context.purpose().is_some(),
+            correlation: correlation.clone(),
         })
         .await
     {
@@ -834,6 +921,7 @@ async fn audited_revision_concealment(
     options: &QueryOptions,
     claims: &VerifiedRequestClaims,
     target_record: Option<&String>,
+    correlation: &RequestCorrelation,
 ) -> Response {
     let selected_access_profile = options.access_profile().and_then(|profile| {
         route
@@ -850,6 +938,7 @@ async fn audited_revision_concealment(
             principal: claims.principal().map(str::to_owned),
             selected_access_profile,
             purpose_present: claims.purpose().is_some(),
+            correlation: correlation.clone(),
         })
         .await
     {
@@ -864,6 +953,7 @@ async fn audited_known_read_refusal(
     claims: &VerifiedRequestClaims,
     target_record: Option<&String>,
     response: Response,
+    correlation: &RequestCorrelation,
 ) -> Response {
     match service
         .records
@@ -874,6 +964,7 @@ async fn audited_known_read_refusal(
             principal: claims.principal().map(str::to_owned),
             selected_access_profile: None,
             purpose_present: claims.purpose().is_some(),
+            correlation: correlation.clone(),
         })
         .await
     {
@@ -888,6 +979,7 @@ async fn audited_read_refusal(
     surface: &AuthorizedSurface<'_>,
     target_record: Option<&String>,
     response: Response,
+    correlation: &RequestCorrelation,
 ) -> Response {
     match service
         .records
@@ -898,6 +990,7 @@ async fn audited_read_refusal(
             principal: surface.context.principal().map(str::to_owned),
             selected_access_profile: Some(surface.context.selected_profile().to_owned()),
             purpose_present: surface.context.purpose().is_some(),
+            correlation: correlation.clone(),
         })
         .await
     {
@@ -912,6 +1005,7 @@ async fn audited_read_concealment(
     options: &QueryOptions,
     claims: &VerifiedRequestClaims,
     target_record: Option<&String>,
+    correlation: &RequestCorrelation,
 ) -> Response {
     let selected_access_profile = options.access_profile().and_then(|profile| {
         route
@@ -929,6 +1023,7 @@ async fn audited_read_concealment(
             principal: claims.principal().map(str::to_owned),
             selected_access_profile,
             purpose_present: claims.purpose().is_some(),
+            correlation: correlation.clone(),
         })
         .await
     {
@@ -940,6 +1035,7 @@ async fn audited_read_concealment(
 async fn create_dispatch(
     State(service): State<Arc<HttpService>>,
     Extension(route): Extension<CompiledRoute>,
+    Extension(correlation): Extension<RequestCorrelation>,
     claims: Option<Extension<VerifiedRequestClaims>>,
     RawQuery(raw_query): RawQuery,
     headers: HeaderMap,
@@ -958,11 +1054,20 @@ async fn create_dispatch(
             &QueryOptions::default(),
             &claims,
             None,
+            &correlation,
         )
         .await;
     };
     let Some(surface) = authorize_route(&service, &route, &claims, &options) else {
-        return audited_mutation_concealment(mutations, &route, &options, &claims, None).await;
+        return audited_mutation_concealment(
+            mutations,
+            &route,
+            &options,
+            &claims,
+            None,
+            &correlation,
+        )
+        .await;
     };
     let Some(idempotency_key) = single_header(&headers, "idempotency-key") else {
         return audited_mutation_refusal(
@@ -971,6 +1076,7 @@ async fn create_dispatch(
             &surface.context,
             None,
             invalid_request(),
+            &correlation,
         )
         .await;
     };
@@ -981,6 +1087,7 @@ async fn create_dispatch(
             &surface.context,
             None,
             invalid_request(),
+            &correlation,
         )
         .await;
     }
@@ -991,6 +1098,7 @@ async fn create_dispatch(
             &surface.context,
             None,
             unsupported_media_type(),
+            &correlation,
         )
         .await;
     }
@@ -1001,6 +1109,7 @@ async fn create_dispatch(
             &surface.context,
             None,
             invalid_request(),
+            &correlation,
         )
         .await;
     };
@@ -1011,18 +1120,20 @@ async fn create_dispatch(
             &surface.context,
             None,
             invalid_request(),
+            &correlation,
         )
         .await;
     };
     match mutations
-        .create(
-            &route.id,
+        .create(CreateMutationInput {
+            route_id: &route.id,
             idempotency_key,
-            &surface.context,
-            &route.entity_id,
+            context: &surface.context,
+            entity_id: &route.entity_id,
             data,
-            surface.readable_fields,
-        )
+            response_fields: surface.readable_fields,
+            correlation: &correlation,
+        })
         .await
     {
         Ok(outcome) => exact_mutation(outcome.response()),
@@ -1030,9 +1141,11 @@ async fn create_dispatch(
     }
 }
 
+#[allow(clippy::too_many_arguments)] // Axum extractors are the HTTP contract.
 async fn patch_dispatch(
     State(service): State<Arc<HttpService>>,
     Extension(route): Extension<CompiledRoute>,
+    Extension(correlation): Extension<RequestCorrelation>,
     claims: Option<Extension<VerifiedRequestClaims>>,
     RawQuery(raw_query): RawQuery,
     Path(path): Path<HashMap<String, String>>,
@@ -1055,6 +1168,7 @@ async fn patch_dispatch(
             &QueryOptions::default(),
             &claims,
             Some(record_id.as_str()),
+            &correlation,
         )
         .await;
     };
@@ -1065,6 +1179,7 @@ async fn patch_dispatch(
             &options,
             &claims,
             Some(record_id.as_str()),
+            &correlation,
         )
         .await;
     };
@@ -1075,6 +1190,7 @@ async fn patch_dispatch(
             &surface.context,
             Some(record_id.as_str()),
             invalid_request(),
+            &correlation,
         )
         .await;
     };
@@ -1085,6 +1201,7 @@ async fn patch_dispatch(
             &surface.context,
             Some(record_id.as_str()),
             invalid_request(),
+            &correlation,
         )
         .await;
     }
@@ -1095,6 +1212,7 @@ async fn patch_dispatch(
             &surface.context,
             Some(record_id.as_str()),
             precondition_required(),
+            &correlation,
         )
         .await;
     };
@@ -1105,6 +1223,7 @@ async fn patch_dispatch(
             &surface.context,
             Some(record_id.as_str()),
             precondition_failed(),
+            &correlation,
         )
         .await;
     }
@@ -1115,6 +1234,7 @@ async fn patch_dispatch(
             &surface.context,
             Some(record_id.as_str()),
             unsupported_media_type(),
+            &correlation,
         )
         .await;
     }
@@ -1125,6 +1245,7 @@ async fn patch_dispatch(
             &surface.context,
             Some(record_id.as_str()),
             invalid_request(),
+            &correlation,
         )
         .await;
     };
@@ -1135,6 +1256,7 @@ async fn patch_dispatch(
             &surface.context,
             Some(record_id.as_str()),
             invalid_request(),
+            &correlation,
         )
         .await;
     };
@@ -1145,6 +1267,7 @@ async fn patch_dispatch(
             &surface.context,
             Some(record_id.as_str()),
             invalid_request(),
+            &correlation,
         )
         .await;
     };
@@ -1158,6 +1281,7 @@ async fn patch_dispatch(
                 entity_id: &route.entity_id,
                 record_id,
                 response_fields: surface.readable_fields,
+                correlation: &correlation,
             },
             patch,
         )
@@ -1171,6 +1295,7 @@ async fn patch_dispatch(
 async fn batch_dispatch(
     State(service): State<Arc<HttpService>>,
     Extension(route): Extension<CompiledRoute>,
+    Extension(correlation): Extension<RequestCorrelation>,
     claims: Option<Extension<VerifiedRequestClaims>>,
     RawQuery(raw_query): RawQuery,
     headers: HeaderMap,
@@ -1189,11 +1314,20 @@ async fn batch_dispatch(
             &QueryOptions::default(),
             &claims,
             None,
+            &correlation,
         )
         .await;
     };
     let Some(surface) = authorize_route(&service, &route, &claims, &options) else {
-        return audited_mutation_concealment(mutations, &route, &options, &claims, None).await;
+        return audited_mutation_concealment(
+            mutations,
+            &route,
+            &options,
+            &claims,
+            None,
+            &correlation,
+        )
+        .await;
     };
     let Some(batch) = surface.entity.batch.as_ref() else {
         return audited_mutation_refusal(
@@ -1202,6 +1336,7 @@ async fn batch_dispatch(
             &surface.context,
             None,
             invalid_request(),
+            &correlation,
         )
         .await;
     };
@@ -1212,6 +1347,7 @@ async fn batch_dispatch(
             &surface.context,
             None,
             invalid_request(),
+            &correlation,
         )
         .await;
     };
@@ -1222,6 +1358,7 @@ async fn batch_dispatch(
             &surface.context,
             None,
             invalid_request(),
+            &correlation,
         )
         .await;
     }
@@ -1232,6 +1369,7 @@ async fn batch_dispatch(
             &surface.context,
             None,
             unsupported_media_type(),
+            &correlation,
         )
         .await;
     }
@@ -1242,6 +1380,7 @@ async fn batch_dispatch(
             &surface.context,
             None,
             invalid_request(),
+            &correlation,
         )
         .await;
     };
@@ -1252,6 +1391,7 @@ async fn batch_dispatch(
             &surface.context,
             None,
             invalid_request(),
+            &correlation,
         )
         .await;
     };
@@ -1264,6 +1404,7 @@ async fn batch_dispatch(
             items,
             response_fields: surface.readable_fields,
             body_bytes: body.len(),
+            correlation: &correlation,
         })
         .await
     {
@@ -1272,9 +1413,11 @@ async fn batch_dispatch(
     }
 }
 
+#[allow(clippy::too_many_arguments)] // Axum extractors are the HTTP contract.
 async fn tombstone_dispatch(
     State(service): State<Arc<HttpService>>,
     Extension(route): Extension<CompiledRoute>,
+    Extension(correlation): Extension<RequestCorrelation>,
     claims: Option<Extension<VerifiedRequestClaims>>,
     RawQuery(raw_query): RawQuery,
     Path(path): Path<HashMap<String, String>>,
@@ -1297,6 +1440,7 @@ async fn tombstone_dispatch(
             &QueryOptions::default(),
             &claims,
             Some(record_id.as_str()),
+            &correlation,
         )
         .await;
     };
@@ -1307,6 +1451,7 @@ async fn tombstone_dispatch(
             &options,
             &claims,
             Some(record_id.as_str()),
+            &correlation,
         )
         .await;
     };
@@ -1317,6 +1462,7 @@ async fn tombstone_dispatch(
             &surface.context,
             Some(record_id.as_str()),
             invalid_request(),
+            &correlation,
         )
         .await;
     };
@@ -1327,6 +1473,7 @@ async fn tombstone_dispatch(
             &surface.context,
             Some(record_id.as_str()),
             invalid_request(),
+            &correlation,
         )
         .await;
     }
@@ -1337,6 +1484,7 @@ async fn tombstone_dispatch(
             &surface.context,
             Some(record_id.as_str()),
             precondition_required(),
+            &correlation,
         )
         .await;
     };
@@ -1347,6 +1495,7 @@ async fn tombstone_dispatch(
             &surface.context,
             Some(record_id.as_str()),
             precondition_failed(),
+            &correlation,
         )
         .await;
     }
@@ -1357,6 +1506,7 @@ async fn tombstone_dispatch(
             &surface.context,
             Some(record_id.as_str()),
             unsupported_media_type(),
+            &correlation,
         )
         .await;
     }
@@ -1367,6 +1517,7 @@ async fn tombstone_dispatch(
             &surface.context,
             Some(record_id.as_str()),
             invalid_request(),
+            &correlation,
         )
         .await;
     }
@@ -1379,6 +1530,7 @@ async fn tombstone_dispatch(
             entity_id: &route.entity_id,
             record_id,
             response_fields: surface.readable_fields,
+            correlation: &correlation,
         })
         .await
     {
@@ -1393,16 +1545,18 @@ async fn audited_mutation_refusal(
     context: &AuthorizedRequestContext,
     target_record: Option<&str>,
     response: Response,
+    correlation: &RequestCorrelation,
 ) -> Response {
     match mutations
-        .record_refusal(
-            route.method,
-            &route.id,
+        .record_refusal(crate::audit::HttpRefusalAudit {
+            method: route.method,
+            operation_id: &route.id,
             target_record,
-            context.principal(),
-            Some(context.selected_profile()),
-            context.purpose().is_some(),
-        )
+            principal: context.principal(),
+            selected_access_profile: Some(context.selected_profile()),
+            purpose_present: context.purpose().is_some(),
+            correlation,
+        })
         .await
     {
         Ok(()) => response,
@@ -1416,20 +1570,22 @@ async fn audited_mutation_concealment(
     options: &QueryOptions,
     claims: &VerifiedRequestClaims,
     target_record: Option<&str>,
+    correlation: &RequestCorrelation,
 ) -> Response {
     let selected_profile = options
         .access_profile()
         .map(String::as_str)
         .or(Some(route.default_access_profile.as_str()));
     match mutations
-        .record_refusal(
-            route.method,
-            &route.id,
+        .record_refusal(crate::audit::HttpRefusalAudit {
+            method: route.method,
+            operation_id: &route.id,
             target_record,
-            claims.principal(),
-            selected_profile,
-            claims.purpose().is_some(),
-        )
+            principal: claims.principal(),
+            selected_access_profile: selected_profile,
+            purpose_present: claims.purpose().is_some(),
+            correlation,
+        })
         .await
     {
         Ok(()) => concealed(),
@@ -3219,171 +3375,6 @@ fn operation_name(operation: Operation) -> &'static str {
     }
 }
 
-fn query_kind_name(kind: CompiledQueryKind) -> &'static str {
-    match kind {
-        CompiledQueryKind::List => "list",
-        CompiledQueryKind::Current => "current",
-        CompiledQueryKind::AsOf => "as_of",
-    }
-}
-
-fn query_parameters(kind: CompiledQueryKind) -> Value {
-    let mut parameters = vec![
-        query_parameter(
-            "accessProfile",
-            false,
-            false,
-            json!({"type": "string"}),
-            "Select one compiled access profile.",
-        ),
-        query_parameter(
-            "$select",
-            false,
-            false,
-            json!({"type": "string"}),
-            "Comma-separated subset of readable API property names.",
-        ),
-        query_parameter(
-            "$filter",
-            false,
-            false,
-            json!({"type": "string"}),
-            "Strict Registry read filter expression over compiled filterable properties.",
-        ),
-        query_parameter(
-            "$orderby",
-            false,
-            false,
-            json!({"type": "string"}),
-            "One compiled sortable property, ascending only.",
-        ),
-        query_parameter(
-            "$top",
-            false,
-            false,
-            json!({"type": "integer", "minimum": 1, "maximum": strict_query::MAX_TOP}),
-            "Bounded page size.",
-        ),
-        query_parameter(
-            "$count",
-            false,
-            false,
-            json!({"type": "boolean"}),
-            "Request a total count when the compiled operation allows it.",
-        ),
-        query_parameter(
-            "$skiptoken",
-            false,
-            false,
-            json!({"type": "string"}),
-            "Opaque continuation cursor for the next page.",
-        ),
-    ];
-    if kind == CompiledQueryKind::AsOf {
-        parameters.push(query_parameter(
-            "asOf",
-            true,
-            false,
-            json!({"type": "string", "format": "date-time"}),
-            "Strict UTC RFC3339 instant for the as-of temporal query.",
-        ));
-    }
-    Value::Array(parameters)
-}
-
-fn lookup_parameters() -> Value {
-    Value::Array(vec![
-        query_parameter(
-            "accessProfile",
-            false,
-            false,
-            json!({"type": "string"}),
-            "Select one compiled access profile.",
-        ),
-        query_parameter(
-            "$select",
-            false,
-            false,
-            json!({"type": "string"}),
-            "Comma-separated subset of readable API property names.",
-        ),
-    ])
-}
-
-fn lookup_request_body() -> Value {
-    json!({
-        "required": true,
-        "content": {
-            "application/json": {
-                "schema": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["selector"],
-                    "properties": {
-                        "selector": {"type": "string"},
-                        "values": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": ["string", "integer", "boolean"]
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    })
-}
-
-fn revision_parameters(kind: CompiledRevisionKind) -> Value {
-    let mut parameters = vec![query_parameter(
-        "accessProfile",
-        false,
-        false,
-        json!({"type": "string"}),
-        "Select one compiled access profile.",
-    )];
-    parameters.push(path_parameter(
-        "record_id",
-        json!({"type": "string", "format": "uuid"}),
-        "Canonical record UUID.",
-    ));
-    if kind == CompiledRevisionKind::Detail {
-        parameters.push(path_parameter(
-            "revision",
-            json!({"type": "integer", "format": "int64", "minimum": 1}),
-            "Exact positive record revision.",
-        ));
-    }
-    Value::Array(parameters)
-}
-
-fn query_parameter(
-    name: &str,
-    required: bool,
-    repeatable: bool,
-    schema: Value,
-    description: &str,
-) -> Value {
-    json!({
-        "name": name,
-        "in": "query",
-        "required": required,
-        "description": description,
-        "schema": schema,
-        "explode": repeatable,
-    })
-}
-
-fn path_parameter(name: &str, schema: Value, description: &str) -> Value {
-    json!({
-        "name": name,
-        "in": "path",
-        "required": true,
-        "description": description,
-        "schema": schema,
-    })
-}
-
 fn valid_canonical_record_uuid(value: &str) -> bool {
     value.len() == 36
         && Uuid::parse_str(value).is_ok_and(|identifier| identifier.to_string() == value)
@@ -3549,117 +3540,6 @@ fn parse_batch_body(body: &[u8], maximum_items: usize) -> Result<Vec<BatchMutati
         .collect()
 }
 
-fn access_profile_parameters() -> Value {
-    Value::Array(vec![query_parameter(
-        "accessProfile",
-        false,
-        false,
-        json!({"type": "string"}),
-        "Select one compiled access profile.",
-    )])
-}
-
-fn batch_request_body(
-    entity_id: &str,
-    maximum_items: u16,
-    allow_create: bool,
-    allow_patch: bool,
-) -> Value {
-    let mut item_schemas = Vec::new();
-    if allow_create {
-        item_schemas.push(json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["operation", "data"],
-            "properties": {
-                "operation": {"const": "create"},
-                "data": {"$ref": format!("#/components/schemas/{entity_id}")},
-            }
-        }));
-    }
-    if allow_patch {
-        item_schemas.push(json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["operation", "recordId", "ifMatch", "patch"],
-            "properties": {
-                "operation": {"const": "patch"},
-                "recordId": {"type": "string", "format": "uuid"},
-                "ifMatch": {"type": "string"},
-                "patch": {"type": "array", "minItems": 1, "maxItems": 128},
-            }
-        }));
-    }
-    json!({
-        "required": true,
-        "content": {
-            "application/json": {
-                "schema": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["items"],
-                    "properties": {
-                        "items": {
-                            "type": "array",
-                            "minItems": 1,
-                            "maxItems": maximum_items,
-                            "items": {"oneOf": item_schemas}
-                        }
-                    }
-                }
-            }
-        }
-    })
-}
-
-fn batch_response(
-    entity_id: &str,
-    maximum_items: u16,
-    allow_create: bool,
-    allow_patch: bool,
-) -> Value {
-    let operations = [
-        allow_create.then_some("create"),
-        allow_patch.then_some("patch"),
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>();
-    json!({
-        "200": {
-            "description": "Atomic batch committed",
-            "content": {
-                "application/json": {
-                    "schema": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": ["results"],
-                        "properties": {
-                            "results": {
-                                "type": "array",
-                                "minItems": 1,
-                                "maxItems": maximum_items,
-                                "items": {
-                                    "type": "object",
-                                    "additionalProperties": false,
-                                    "required": ["operation", "id", "revision", "etag", "data"],
-                                    "properties": {
-                                        "operation": {"enum": operations},
-                                        "id": {"type": "string", "format": "uuid"},
-                                        "revision": {"type": "integer", "format": "int64", "minimum": 1},
-                                        "etag": {"type": "string"},
-                                        "data": {"$ref": format!("#/components/schemas/{entity_id}")},
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    })
-}
-
 async fn body_is_empty(body: Body) -> bool {
     to_bytes(body, 0).await.is_ok_and(|bytes| bytes.is_empty())
 }
@@ -3763,12 +3643,11 @@ fn mutation_problem(error: MutationError) -> Response {
 }
 
 fn fixed_problem(status: StatusCode, code: &'static str, detail: &'static str) -> Response {
-    Problem::new(
-        &format!("urn:registry-server:problem:{code}"),
-        status.canonical_reason().unwrap_or("Request failed"),
+    crate::correlation::problem_response(
         status,
+        format!("urn:registry-server:problem:{code}"),
+        status.canonical_reason().unwrap_or("Request failed"),
+        detail,
+        code,
     )
-    .detail(detail)
-    .with_extra("code", Value::String(code.to_owned()))
-    .into_response()
 }

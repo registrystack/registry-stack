@@ -664,7 +664,9 @@ impl PackageFixture {
         fs::write(
             &path,
             format!(
-                r#"listener:
+                r#"apiVersion: registry.registrystack.org/server-runtime/v1alpha1
+kind: RegistryServerRuntimeConfig
+listener:
   bind: 127.0.0.1:9
   trustedProxy: direct
 identity:

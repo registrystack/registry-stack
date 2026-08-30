@@ -22,6 +22,49 @@ AI-assisted authoring remains outside the production authority boundary. It
 may propose configuration and run deterministic checks, but it cannot bypass
 package review, signature policy, or the separate migration database role.
 
+## First-hour local quickstart
+
+For a generic, domain-neutral local path, run:
+
+```bash
+products/registry-server/quickstart/run.sh
+```
+
+The quickstart uses `registry-serverctl init` to create a small generic
+Registry project, adds only local package identity for the disposable package,
+checks it, starts disposable PostgreSQL and Registry Mint on loopback, activates
+an unsigned local package, obtains a short-lived Mint token, POSTs one record,
+and GETs that record back. Generated configuration, keys, tokens, package
+artifacts, logs, and database URLs stay under
+`products/registry-server/quickstart/.run/`, which is ignored by Git and
+created owner-only.
+
+Leave the quickstart terminal running, then use the printed record id in a
+second terminal:
+
+```bash
+products/registry-server/quickstart/query.sh get <record-id>
+```
+
+The query helper reads the bearer token from an owner-only token file. It does
+not put the token on the command line or print it. For a non-interactive local
+smoke, run:
+
+```bash
+products/registry-server/quickstart/run.sh --smoke
+```
+
+To verify only the checked quickstart structure without Docker or network, run:
+
+```bash
+products/registry-server/quickstart/self-test.sh
+```
+
+This route is intentionally local-only: Mint's supervised local-development
+profile, loopback HTTP, disposable PostgreSQL, and an unsigned local package.
+It is the first-hour learning path, not a shortcut around production package
+signing, operated database roles, TLS, migration review, or secret custody.
+
 ## Pilot operator lifecycle
 
 The pilot lifecycle uses the published `registry-serverctl` and
@@ -78,6 +121,13 @@ matches the configured algorithm, signature use, verification operation, key
 identifier policy, and key shape. It is resolved once when the verifier is
 constructed, so rotation requires a reviewed configuration change and process
 restart.
+
+Runtime files set `apiVersion` to
+`registry.registrystack.org/server-runtime/v1alpha1` and `kind` to
+`RegistryServerRuntimeConfig`. The generated JSON Schema at
+`generated/runtime/runtime.schema.json` is suitable for editor validation. It
+documents bounded defaults for operational tuning while keeping package,
+database, authority, role, and secret-reference fields explicit.
 
 ## Scope
 

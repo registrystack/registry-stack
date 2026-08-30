@@ -13,7 +13,6 @@ use axum::middleware::Next;
 use axum::response::Response;
 use axum::{middleware, Router};
 use registry_platform_audit::AuditProfile;
-use registry_platform_httpsec::Problem;
 use registry_platform_oidc::JwksFetcher;
 use thiserror::Error;
 use tokio::net::TcpListener;
@@ -745,27 +744,31 @@ fn with_request_timeout(app: Router, timeout: Duration) -> Router {
 
 async fn request_timeout(
     axum::extract::State(timeout): axum::extract::State<Duration>,
-    request: Request<Body>,
+    mut request: Request<Body>,
     next: Next,
 ) -> Response {
-    match tokio::time::timeout(timeout, next.run(request)).await {
+    let method = crate::correlation::method_name(request.method());
+    let started = std::time::Instant::now();
+    let (correlation, owns_boundary) = crate::correlation::begin_request(&mut request);
+    let response = match tokio::time::timeout(timeout, next.run(request)).await {
         Ok(response) => response,
         Err(_) => timeout_problem(),
+    };
+    if owns_boundary {
+        crate::correlation::finish_response(response, &correlation, method, started)
+    } else {
+        response
     }
 }
 
 fn timeout_problem() -> Response {
-    Problem::new(
+    crate::correlation::problem_response(
+        StatusCode::GATEWAY_TIMEOUT,
         "urn:registry-server:problem:request.timeout",
         "Gateway Timeout",
-        StatusCode::GATEWAY_TIMEOUT,
+        "The request timed out.",
+        "request.timeout",
     )
-    .detail("The request timed out.")
-    .with_extra(
-        "code",
-        serde_json::Value::String("request.timeout".to_owned()),
-    )
-    .into_response()
 }
 
 /// Bind and serve a previously prepared server. Binding consumes the

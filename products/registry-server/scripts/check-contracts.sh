@@ -10,6 +10,7 @@ python3 -m unittest \
   "$script_dir/test_validate_product.py" \
   "$script_dir/test_check_source_neutrality.py" \
   "$script_dir/test_generated_gates.py" \
+  "$script_dir/test_quickstart.py" \
   "$script_dir/../demo/support/test_demo.py"
 
 echo "Registry Server product contracts passed"

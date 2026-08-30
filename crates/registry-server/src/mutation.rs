@@ -28,6 +28,7 @@ use crate::compiler::{
 use crate::contract::{
     AccessProfileSource, EventTrigger, FieldTypeSource, MutationMode, Operation,
 };
+use crate::correlation::RequestCorrelation;
 use crate::data::{validate_field_value, FieldValue};
 use crate::event_destination::ActivatedEventDestinationRegistry;
 use crate::idempotency::{
@@ -712,6 +713,7 @@ pub struct MutationRequest<'a> {
     pub expected_etag: Option<&'a str>,
     pub body: MutationBody,
     pub response_fields: BTreeSet<String>,
+    pub correlation: RequestCorrelation,
 }
 
 pub struct BatchMutationRequest<'a> {
@@ -721,6 +723,7 @@ pub struct BatchMutationRequest<'a> {
     pub items: Vec<BatchMutationItem>,
     pub response_fields: BTreeSet<String>,
     pub body_bytes: usize,
+    pub correlation: RequestCorrelation,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -872,6 +875,7 @@ impl MutationCoordinator {
             expected_etag: request.expected_etag,
             body: normalized_body,
             response_fields: request.response_fields.clone(),
+            correlation: request.correlation.clone(),
         };
         if let Err(error) = validate_request(&request, &self.expected) {
             self.record_boundary_audit(client, &request, PreIoAuditKind::Refusal)
@@ -912,6 +916,7 @@ impl MutationCoordinator {
             items: normalized_items,
             response_fields: request.response_fields.clone(),
             body_bytes: request.body_bytes,
+            correlation: request.correlation.clone(),
         };
         if let Err(error) = validate_batch_request(&request, &self.expected) {
             self.record_batch_boundary_audit(client, &request, PreIoAuditKind::Refusal)
@@ -948,6 +953,7 @@ impl MutationCoordinator {
                 method: request.plan.route.method,
                 operation_id: &request.plan.route.id,
                 target_record: None,
+                correlation: &request.correlation,
             },
         )
         .await?;
@@ -972,6 +978,7 @@ impl MutationCoordinator {
                 method: request.plan.route.method,
                 operation_id: &request.plan.route.id,
                 target_record: request.record_id,
+                correlation: &request.correlation,
             },
         )
         .await?;
@@ -1038,6 +1045,7 @@ impl MutationCoordinator {
                     },
                     result_count: None,
                     field_set_reference: None,
+                    correlation: request.correlation.clone(),
                 },
             )
             .await?;
@@ -1131,6 +1139,7 @@ impl MutationCoordinator {
                 record_revision: Some(current.record_revision),
                 result_count: None,
                 field_set_reference: None,
+                correlation: request.correlation.clone(),
             },
         )
         .await?;
@@ -1207,6 +1216,7 @@ impl MutationCoordinator {
                     record_revision: None,
                     result_count: Some(usize::from(result_count)),
                     field_set_reference: None,
+                    correlation: request.correlation.clone(),
                 },
             )
             .await?;
@@ -1234,6 +1244,7 @@ impl MutationCoordinator {
                 expected_etag,
                 body,
                 response_fields: request.response_fields.clone(),
+                correlation: request.correlation.clone(),
             };
             fault.fail_at(MutationFaultPoint::BeforeCurrentRow)?;
             let current = apply_current_row(
@@ -1329,6 +1340,7 @@ impl MutationCoordinator {
                 record_revision: None,
                 result_count: Some(usize::from(result_count)),
                 field_set_reference: None,
+                correlation: request.correlation.clone(),
             },
         )
         .await?;
@@ -2366,6 +2378,7 @@ fn validate_batch_request(
             expected_etag,
             body,
             response_fields: request.response_fields.clone(),
+            correlation: request.correlation.clone(),
         };
         validate_request(&item_request, expected)?;
         if let MutationBody::Patch(operations) = &item_request.body {

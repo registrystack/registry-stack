@@ -11,6 +11,7 @@ use serde_json::{json, Value};
 use tokio_postgres::Transaction;
 use uuid::Uuid;
 
+use crate::correlation::RequestCorrelation;
 use crate::model::HttpMethod;
 use crate::postgres::{
     begin_record_transaction, ClaimContext, ExpectedRegistryIdentity, RegistryLockKey,
@@ -27,6 +28,7 @@ pub struct PreIoAudit<'a> {
     pub method: HttpMethod,
     pub operation_id: &'a str,
     pub target_record: Option<&'a str>,
+    pub correlation: &'a RequestCorrelation,
 }
 
 pub(crate) struct HttpRefusalAudit<'a> {
@@ -36,6 +38,7 @@ pub(crate) struct HttpRefusalAudit<'a> {
     pub principal: Option<&'a str>,
     pub selected_access_profile: Option<&'a str>,
     pub purpose_present: bool,
+    pub correlation: &'a RequestCorrelation,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -59,6 +62,7 @@ pub(crate) struct TerminalAudit {
     pub record_revision: Option<i64>,
     pub result_count: Option<usize>,
     pub field_set_reference: Option<String>,
+    pub correlation: RequestCorrelation,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -166,6 +170,8 @@ pub async fn record_pre_io_audit(
         },
         "method": method_name(event.method),
         "operationId": event.operation_id,
+        "requestId": event.correlation.request_id().to_string(),
+        "traceId": event.correlation.trace_id().as_str(),
         "packageRevision": expected.package_revision,
         "selectedAccessProfile": claims.access_profile(),
         "purposePresent": claims.purpose().is_some(),
@@ -278,6 +284,14 @@ pub(crate) async fn record_http_refusal_audit(
         (
             "operationId".to_owned(),
             Value::String(event.operation_id.to_owned()),
+        ),
+        (
+            "requestId".to_owned(),
+            Value::String(event.correlation.request_id().to_string()),
+        ),
+        (
+            "traceId".to_owned(),
+            Value::String(event.correlation.trace_id().as_str().to_owned()),
         ),
         (
             "packageRevision".to_owned(),
@@ -477,6 +491,14 @@ fn terminal_record(terminal: TerminalAudit) -> serde_json::Map<String, Value> {
         (
             "operationId".to_owned(),
             Value::String(terminal.operation_id),
+        ),
+        (
+            "requestId".to_owned(),
+            Value::String(terminal.correlation.request_id().to_string()),
+        ),
+        (
+            "traceId".to_owned(),
+            Value::String(terminal.correlation.trace_id().as_str().to_owned()),
         ),
         ("entityId".to_owned(), Value::String(terminal.entity_id)),
         (

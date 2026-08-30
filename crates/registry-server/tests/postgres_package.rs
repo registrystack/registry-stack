@@ -25,7 +25,7 @@ use registry_server::migration::{
 };
 use registry_server::package::{
     derive_package_revision, load_package, prepare_package, PackageBuildRequest, PackageEnvelope,
-    PackageError, PackageFileRole, PackageIntent, PackageLoadContext, PackageManifest,
+    PackageError, PackageFile, PackageFileRole, PackageIntent, PackageLoadContext, PackageManifest,
     PackageMigrationPlanInput, PackageModuleSource, PackageSignature, PackageSourceFile,
     PackageTrustAnchor, SignaturePolicy, TrustAnchorKey, MAX_PACKAGE_SOURCE_FILE_BYTES,
     TRUST_ANCHOR_API_VERSION,
@@ -126,20 +126,20 @@ fn package_builder_refuses_successor_without_prior_compiled_registry() {
 }
 
 #[test]
-fn package_layout_contract_required_manifest_projection_is_in_prepared_closure() {
+fn package_layout_contract_conditional_manifest_projection_is_in_projected_closure() {
     let layout = fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../products/registry-server/contracts/package-layout.yaml"
     ))
     .expect("package layout contract reads");
     assert!(
-        layout.contains("manifest/registry-manifest.json")
-            && layout.contains("lossy-manifest-projection"),
-        "package-layout.yaml requires a lossy manifest projection"
+        layout.contains("path: manifest/registry-manifest.json, role: lossy-manifest-projection, required: false"),
+        "package-layout.yaml makes the lossy manifest projection conditional"
     );
     assert!(
-        layout.contains("manifest/dcat.jsonld") && layout.contains("dcat-catalog-projection"),
-        "package-layout.yaml requires a DCAT catalog projection"
+        layout
+            .contains("path: manifest/dcat.jsonld, role: dcat-catalog-projection, required: false"),
+        "package-layout.yaml makes the DCAT catalog projection conditional"
     );
 
     let module_bytes = module_bytes(PlanChoice::Schema);
@@ -225,6 +225,142 @@ fn package_layout_contract_required_manifest_projection_is_in_prepared_closure()
             "source/registry.yaml",
             "tests/journeys.yaml",
         ])
+    );
+}
+
+#[test]
+fn projection_free_package_omits_manifest_projection_from_signed_closure_and_loads() {
+    let module_bytes = module_bytes(PlanChoice::Schema);
+    let module = parse_module_yaml(&module_bytes).expect("fixture module parses");
+    let project_bytes = project_bytes_without_manifest("local", 1, &module_digest(&module));
+    let request = build_request(BuildRequestParts {
+        environment: "local",
+        sequence: 1,
+        prior_revision: None,
+        schema_fingerprint: fingerprint(1),
+        project_bytes,
+        module_bytes,
+        migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
+        signature_policy: SignaturePolicy {
+            threshold: 0,
+            key_ids: Vec::new(),
+        },
+    });
+
+    let first = prepare_package(request.clone()).expect("projection-free package prepares");
+    let second = prepare_package(request).expect("projection-free package prepares again");
+    assert_eq!(first.manifest(), second.manifest());
+    assert_eq!(
+        first.canonical_signed_bytes(),
+        second.canonical_signed_bytes()
+    );
+    assert_eq!(first.file_bytes(), second.file_bytes());
+    assert!(first.registry().manifest_projection().is_none());
+    assert!(first.manifest().files.iter().all(|entry| !matches!(
+        entry.role,
+        PackageFileRole::LossyManifestProjection | PackageFileRole::DcatCatalogProjection
+    )));
+    assert!(!first
+        .file_bytes()
+        .contains_key("manifest/registry-manifest.json"));
+    assert!(!first.file_bytes().contains_key("manifest/dcat.jsonld"));
+
+    let exact_paths = first
+        .file_bytes()
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        exact_paths,
+        BTreeSet::from([
+            "database/ddl.sql",
+            "database/migration-plan.json",
+            "effective-model.json",
+            "inventories/access.json",
+            "inventories/events.json",
+            "inventories/physical-names.json",
+            "inventories/queries.json",
+            "inventories/routes.json",
+            "metadata/registry.json",
+            "openapi/openapi.json",
+            "schemas/neutral-record.schema.json",
+            "source/modules/core/module.yaml",
+            "source/registry.yaml",
+            "tests/journeys.yaml",
+        ])
+    );
+
+    let root = TempRoot::create();
+    first
+        .publish_to_directory(root.path(), Vec::new())
+        .expect("projection-free package publishes");
+    let loaded = load_package(
+        root.path(),
+        &local_context(PackageIntent::InitialActivation),
+    )
+    .expect("projection-free package loads through full closure rederivation");
+    assert!(loaded.registry().manifest_projection().is_none());
+}
+
+#[test]
+fn projection_free_package_refuses_claimed_manifest_artifacts() {
+    let module_bytes = module_bytes(PlanChoice::Schema);
+    let module = parse_module_yaml(&module_bytes).expect("fixture module parses");
+    let package = prepare_package(build_request(BuildRequestParts {
+        environment: "local",
+        sequence: 1,
+        prior_revision: None,
+        schema_fingerprint: fingerprint(1),
+        project_bytes: project_bytes_without_manifest("local", 1, &module_digest(&module)),
+        module_bytes,
+        migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
+        signature_policy: SignaturePolicy {
+            threshold: 0,
+            key_ids: Vec::new(),
+        },
+    }))
+    .expect("projection-free package prepares");
+    let root = TempRoot::create();
+    package
+        .publish_to_directory(root.path(), Vec::new())
+        .expect("projection-free package publishes");
+
+    let registry_manifest = br#"{"schema_version":"registry-manifest/v1"}"#;
+    let dcat = br#"{"@context":"https://www.w3.org/ns/dcat.jsonld"}"#;
+    let manifest_dir = root.path().join("manifest");
+    fs::create_dir(&manifest_dir).expect("manifest directory creates");
+    fs::write(
+        manifest_dir.join("registry-manifest.json"),
+        registry_manifest,
+    )
+    .expect("claimed manifest writes");
+    fs::write(manifest_dir.join("dcat.jsonld"), dcat).expect("claimed DCAT writes");
+    rewrite_unsigned(root.path(), |manifest| {
+        manifest.files.extend([
+            PackageFile {
+                path: "manifest/registry-manifest.json".to_owned(),
+                role: PackageFileRole::LossyManifestProjection,
+                size: registry_manifest.len() as u64,
+                sha256: format!("sha256:{}", hex(&Sha256::digest(registry_manifest))),
+            },
+            PackageFile {
+                path: "manifest/dcat.jsonld".to_owned(),
+                role: PackageFileRole::DcatCatalogProjection,
+                size: dcat.len() as u64,
+                sha256: format!("sha256:{}", hex(&Sha256::digest(dcat))),
+            },
+        ]);
+        manifest
+            .files
+            .sort_by(|left, right| left.path.cmp(&right.path));
+    });
+
+    assert_eq!(
+        load_error(
+            root.path(),
+            &local_context(PackageIntent::InitialActivation),
+        ),
+        PackageError::Derivation
     );
 }
 
@@ -2590,6 +2726,17 @@ fn project_bytes(environment: &str, sequence: u64, module_digest: &str) -> Vec<u
     .into_bytes()
 }
 
+fn project_bytes_without_manifest(
+    environment: &str,
+    sequence: u64,
+    module_digest: &str,
+) -> Vec<u8> {
+    format!(
+        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"1","defaultLanguage":"en"}},"package":{{"environment":"{environment}","instanceId":"{INSTANCE}","sequence":{sequence},"sourceRevision":"{SOURCE_REVISION}"}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
+    )
+    .into_bytes()
+}
+
 fn module_bytes(plan: PlanChoice) -> Vec<u8> {
     let second = if matches!(
         plan,
@@ -2913,7 +3060,8 @@ impl EventDestinationCompatibilityFixture {
         path: &str,
     ) -> EventDestinationCompatibilityInventory {
         let raw = format!(
-            r#"
+            r#"apiVersion: registry.registrystack.org/server-runtime/v1alpha1
+kind: RegistryServerRuntimeConfig
 listener:
   bind: 127.0.0.1:8080
   trustedProxy: direct

@@ -545,6 +545,7 @@ impl EventDestinationDeliveryCeilings {
     }
 }
 
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "camelCase")]
 enum EventDestinationNetworkProfile {
@@ -574,6 +575,7 @@ impl EventDestinationNetworkProfile {
     }
 }
 
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "camelCase")]
 enum EventDestinationDnsFamily {
@@ -604,6 +606,7 @@ type ConfigResult<T> = std::result::Result<T, EventDestinationConfigError>;
 
 pub(crate) type RawEventDestinationConfigs = BTreeMap<String, RawEventDestinationConfig>;
 
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct RawEventDestinationConfig {
@@ -619,6 +622,7 @@ pub(crate) struct RawEventDestinationConfig {
     delivery_ceilings: RawEventDestinationDeliveryCeilings,
 }
 
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawEventDestinationTlsConfig {
@@ -628,6 +632,7 @@ struct RawEventDestinationTlsConfig {
     client_identity_ref: Option<String>,
 }
 
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawEventDestinationDeliveryCeilings {

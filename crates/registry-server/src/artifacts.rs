@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use registry_platform_canonical_json::canonicalize_json;
 use serde::{Deserialize, Serialize};
@@ -17,7 +17,8 @@ use crate::manifest_adapter::project_manifest_artifacts;
 use crate::model::{
     CompiledAccessInventory, CompiledEntity, CompiledEventDeliveryInventory,
     CompiledMetadataInventory, CompiledModuleIdentity, CompiledQueryInventory, CompiledQueryKind,
-    CompiledRevisionKind, CompiledRouteInventory, HttpMethod,
+    CompiledQueryOperation, CompiledRevisionKind, CompiledRoute, CompiledRouteInventory,
+    HttpMethod,
 };
 use crate::physical_names::{hex_prefix, PhysicalNameInventory};
 
@@ -155,7 +156,7 @@ pub(crate) fn generate_artifacts(
         debug_assert_eq!(delivery.data_schema_artifact_path, binding.artifact_path);
         insert_json_value(&mut artifacts, &binding.artifact_path, &binding.schema)?;
     }
-    let openapi = openapi_document(registry_id, version, entities, routes, &schemas);
+    let openapi = openapi_document(registry_id, version, entities, routes, query, &schemas);
     insert_json_value(&mut artifacts, "generated/openapi.json", &openapi)?;
     if let Some(projection) = manifest_projection {
         let projected = project_manifest_artifacts(registry_id, projection, entities)?;
@@ -260,6 +261,42 @@ fn entity_schema(entity: &CompiledEntity) -> Value {
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": format!("urn:registry-server:entity:{}", entity.id),
+        "type": "object",
+        "additionalProperties": false,
+        "properties": properties,
+        "required": required,
+        "x-registry-mutationMode": match entity.mutation_mode {
+            MutationMode::Mutable => "mutable",
+            MutationMode::CreateOnly => "create_only",
+        }
+    })
+}
+
+pub(crate) fn openapi_input_schema_id(entity_id: &str, operation: Operation) -> String {
+    format!("{entity_id}-{}-input", operation_name(operation))
+}
+
+pub(crate) fn openapi_entity_input_schema(
+    entity: &CompiledEntity,
+    writable_fields: Option<&BTreeSet<String>>,
+) -> Value {
+    let mut properties = Map::new();
+    let mut required = Vec::new();
+    for field in &entity.stored_fields {
+        if writable_fields.is_some_and(|fields| !fields.contains(&field.logical.id)) {
+            continue;
+        }
+        properties.insert(
+            field.logical.api_name.clone(),
+            field_schema(&field.logical.field_type),
+        );
+        if field.required {
+            required.push(Value::String(field.logical.api_name.clone()));
+        }
+    }
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": format!("urn:registry-server:entity:{}:input", entity.id),
         "type": "object",
         "additionalProperties": false,
         "properties": properties,
@@ -387,123 +424,450 @@ fn openapi_document(
     version: &str,
     entities: &BTreeMap<String, CompiledEntity>,
     routes: &CompiledRouteInventory,
+    query: &CompiledQueryInventory,
     schemas: &BTreeMap<String, Value>,
 ) -> Value {
     let mut paths = Map::new();
+    let mut input_schemas = Map::new();
     for route in &routes.routes {
-        let method = match route.method {
-            HttpMethod::Delete => "delete",
-            HttpMethod::Get => "get",
-            HttpMethod::Patch => "patch",
-            HttpMethod::Post => "post",
-        };
+        let entity = entities
+            .get(&route.entity_id)
+            .expect("compiled route refers to a compiled entity");
+        let response_entity = response_entity_for_route(route, entities);
         let path_entry = paths
             .entry(route.path.clone())
             .or_insert_with(|| Value::Object(Map::new()));
         let Value::Object(operations) = path_entry else {
             unreachable!("OpenAPI path entries are objects")
         };
-        let (status, description) = if route.operation == Operation::Create {
-            ("201", "Record created")
-        } else {
-            ("200", "Operation completed")
-        };
-        let mut responses = Map::new();
-        responses.insert(status.to_owned(), json!({"description": description}));
-        let mut operation = Map::from_iter([
-            ("operationId".to_owned(), json!(route.id)),
-            ("x-registry-entity".to_owned(), json!(route.entity_id)),
-            (
-                "x-registry-operation".to_owned(),
-                json!(operation_name(route.operation)),
-            ),
-            (
-                "x-registry-accessProfiles".to_owned(),
-                json!(route.access_profiles),
-            ),
-            ("responses".to_owned(), Value::Object(responses)),
-        ]);
-        if let Some(kind) = route.query_kind {
-            operation.insert(
-                "x-registry-queryKind".to_owned(),
-                Value::String(query_kind_name(kind).to_owned()),
-            );
-            operation.insert("parameters".to_owned(), query_parameters(kind));
-        } else if let Some(kind) = route.revision_kind {
-            operation.insert("parameters".to_owned(), revision_parameters(kind));
-            operation.insert(
-                "x-registry-maximumRecords".to_owned(),
-                json!(route.maximum_records),
-            );
-        } else if route.operation == Operation::Batch {
-            let batch = entities
-                .get(&route.entity_id)
-                .and_then(|entity| entity.batch.as_ref())
-                .expect("batch routes require compiled bounds");
-            let allow_create = route.access_profiles.iter().any(|profile_id| {
-                entities[&route.entity_id].access_profiles[profile_id]
-                    .operations
-                    .contains(&Operation::Create)
-            });
-            let allow_patch = route.access_profiles.iter().any(|profile_id| {
-                entities[&route.entity_id].access_profiles[profile_id]
-                    .operations
-                    .contains(&Operation::Patch)
-            });
-            operation.insert("parameters".to_owned(), access_profile_parameters());
-            operation.insert(
-                "x-registry-maximumItems".to_owned(),
-                json!(batch.maximum_items),
-            );
-            operation.insert(
-                "x-registry-maximumBytes".to_owned(),
-                json!(batch.maximum_bytes),
-            );
-            operation.insert(
-                "requestBody".to_owned(),
-                batch_request_body(
-                    &route.entity_id,
-                    batch.maximum_items,
-                    allow_create,
-                    allow_patch,
-                ),
-            );
-            operation.insert(
-                "responses".to_owned(),
-                batch_response(
-                    &route.entity_id,
-                    batch.maximum_items,
-                    allow_create,
-                    allow_patch,
-                ),
+        let request_schema_ref = openapi_input_schema_id(&entity.id, route.operation);
+        if matches!(route.operation, Operation::Create | Operation::Batch) {
+            let writable_fields = writable_fields_for_route(route, entity);
+            input_schemas.insert(
+                request_schema_ref.clone(),
+                openapi_entity_input_schema(entity, Some(&writable_fields)),
             );
         }
-        operations.insert(method.to_owned(), Value::Object(operation));
+        operations.insert(
+            method_name(route.method).to_owned(),
+            openapi_operation(OpenApiOperationSpec {
+                route,
+                entity,
+                response_entity,
+                query,
+                schema_ref: &response_entity.id,
+                request_schema_ref: &request_schema_ref,
+                readable_fields: None,
+                access_profiles: OpenApiAccessProfiles::All,
+            }),
+        );
     }
-    let component_schemas: Map<String, Value> = schemas
+    let mut component_schemas: Map<String, Value> = schemas
         .iter()
         .map(|(id, schema)| (id.clone(), schema.clone()))
         .collect();
+    component_schemas.extend(input_schemas);
     json!({
         "openapi": "3.1.0",
         "info": {"title": registry_id, "version": version},
         "paths": paths,
-        "components": {"schemas": component_schemas}
+        "components": openapi_components(component_schemas)
     })
 }
 
-fn access_profile_parameters() -> Value {
-    Value::Array(vec![query_parameter(
+#[derive(Clone, Copy)]
+#[cfg_attr(not(feature = "runtime"), allow(dead_code))]
+pub(crate) enum OpenApiAccessProfiles<'a> {
+    All,
+    Selected(&'a str),
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct OpenApiOperationSpec<'a> {
+    pub route: &'a CompiledRoute,
+    pub entity: &'a CompiledEntity,
+    pub response_entity: &'a CompiledEntity,
+    pub query: &'a CompiledQueryInventory,
+    pub schema_ref: &'a str,
+    pub request_schema_ref: &'a str,
+    pub readable_fields: Option<&'a BTreeSet<String>>,
+    pub access_profiles: OpenApiAccessProfiles<'a>,
+}
+
+const OPENAPI_EXAMPLE_TRACE_ID: &str = "11111111111111111111111111111111";
+const OPENAPI_EXAMPLE_TRACEPARENT: &str = "00-11111111111111111111111111111111-2222222222222222-01";
+
+pub(crate) fn openapi_components(mut schemas: Map<String, Value>) -> Value {
+    schemas.insert("Problem".to_owned(), problem_schema());
+    json!({
+        "securitySchemes": {
+            "bearerAuth": {
+                "type": "http",
+                "scheme": "bearer",
+                "bearerFormat": "JWT"
+            }
+        },
+        "schemas": schemas
+    })
+}
+
+pub(crate) fn openapi_operation(spec: OpenApiOperationSpec<'_>) -> Value {
+    let mut operation = Map::from_iter([
+        ("operationId".to_owned(), json!(spec.route.id)),
+        ("x-registry-entity".to_owned(), json!(spec.route.entity_id)),
+        (
+            "x-registry-responseEntity".to_owned(),
+            json!(spec.response_entity.id),
+        ),
+        (
+            "x-registry-operation".to_owned(),
+            json!(operation_name(spec.route.operation)),
+        ),
+        ("security".to_owned(), operation_security(spec)),
+    ]);
+    match spec.access_profiles {
+        OpenApiAccessProfiles::All => {
+            operation.insert(
+                "x-registry-accessProfiles".to_owned(),
+                json!(spec.route.access_profiles),
+            );
+        }
+        OpenApiAccessProfiles::Selected(profile) => {
+            operation.insert("x-registry-accessProfile".to_owned(), json!(profile));
+        }
+    }
+    if let Some(kind) = spec.route.query_kind {
+        operation.insert(
+            "x-registry-queryKind".to_owned(),
+            Value::String(query_kind_name(kind).to_owned()),
+        );
+    }
+    if let Some(kind) = spec.route.revision_kind {
+        operation.insert(
+            "x-registry-revisionKind".to_owned(),
+            Value::String(revision_kind_name(kind).to_owned()),
+        );
+        operation.insert(
+            "x-registry-maximumRecords".to_owned(),
+            json!(spec.route.maximum_records),
+        );
+    }
+    if spec.route.operation == Operation::Batch {
+        let batch = spec
+            .entity
+            .batch
+            .as_ref()
+            .expect("batch routes require compiled bounds");
+        operation.insert(
+            "x-registry-maximumItems".to_owned(),
+            json!(batch.maximum_items),
+        );
+        operation.insert(
+            "x-registry-maximumBytes".to_owned(),
+            json!(batch.maximum_bytes),
+        );
+    }
+    if let Some(query_profile) = query_profile_extension(spec) {
+        operation.insert(query_profile.0, query_profile.1);
+    }
+    let parameters = operation_parameters(spec.route, spec.query, spec.access_profiles);
+    if !parameters.is_empty() {
+        operation.insert("parameters".to_owned(), Value::Array(parameters));
+    }
+    if let Some(request_body) = operation_request_body(spec) {
+        operation.insert("requestBody".to_owned(), request_body);
+    }
+    operation.insert("responses".to_owned(), operation_responses(spec));
+    Value::Object(operation)
+}
+
+fn operation_security(spec: OpenApiOperationSpec<'_>) -> Value {
+    let profiles = match spec.access_profiles {
+        OpenApiAccessProfiles::All => spec.route.access_profiles.clone(),
+        OpenApiAccessProfiles::Selected(profile) => vec![profile.to_owned()],
+    };
+    let mut allows_anonymous = false;
+    let mut requires_bearer = false;
+    for profile_id in profiles {
+        let Some(profile) = spec.entity.access_profiles.get(&profile_id) else {
+            continue;
+        };
+        if profile.anonymous {
+            allows_anonymous = true;
+        } else {
+            requires_bearer = true;
+        }
+    }
+    let mut alternatives = Vec::new();
+    if allows_anonymous {
+        alternatives.push(json!({}));
+    }
+    if requires_bearer {
+        alternatives.push(json!({"bearerAuth": []}));
+    }
+    if alternatives.is_empty() {
+        alternatives.push(json!({"bearerAuth": []}));
+    }
+    Value::Array(alternatives)
+}
+
+fn operation_parameters(
+    route: &CompiledRoute,
+    query: &CompiledQueryInventory,
+    access_profiles: OpenApiAccessProfiles<'_>,
+) -> Vec<Value> {
+    let mut parameters = Vec::new();
+    if route.path.contains("{record_id}") {
+        parameters.push(path_parameter(
+            "record_id",
+            json!({"type": "string", "format": "uuid"}),
+            "Canonical record UUID.",
+        ));
+    }
+    if route.path.contains("{revision}") {
+        parameters.push(path_parameter(
+            "revision",
+            json!({"type": "integer", "format": "int64", "minimum": 1}),
+            "Exact positive record revision.",
+        ));
+    }
+    parameters.push(header_parameter(
+        "traceparent",
+        false,
+        traceparent_schema(),
+        "Optional W3C trace context. Responses carry Registry trace context for the request.",
+    ));
+    parameters.push(access_profile_parameter());
+    match route.operation {
+        Operation::Get => parameters.push(query_parameter(
+            "$select",
+            false,
+            false,
+            json!({"type": "string", "maxLength": crate::query::MAX_QUERY_PAYLOAD_BYTES}),
+            "Comma-separated subset of readable API property names.",
+        )),
+        Operation::List => {
+            parameters.extend(read_query_parameters(route, query, access_profiles));
+        }
+        Operation::Lookup => parameters.push(query_parameter(
+            "$select",
+            false,
+            false,
+            json!({"type": "string", "maxLength": crate::query::MAX_QUERY_PAYLOAD_BYTES}),
+            "Comma-separated subset of readable API property names.",
+        )),
+        Operation::Create | Operation::Patch | Operation::Tombstone | Operation::Batch => {
+            parameters.push(header_parameter(
+                "Idempotency-Key",
+                true,
+                json!({"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[\\x21-\\x2B\\x2D-\\x3A\\x3C-\\x7E]+$"}),
+                "Idempotency key bound to method, route, caller, target record, package revision, request body, and response field set.",
+            ));
+            if matches!(route.operation, Operation::Patch | Operation::Tombstone) {
+                parameters.push(header_parameter(
+                    "If-Match",
+                    true,
+                    json!({"type": "string", "minLength": 6, "maxLength": 256, "pattern": "^\\\"rs-[\\x21\\x23-\\x7E]+\\\"$"}),
+                    "Strong Registry ETag for the currently visible record representation.",
+                ));
+            }
+        }
+        Operation::Revisions => {}
+    }
+    parameters
+}
+
+fn read_query_parameters(
+    route: &CompiledRoute,
+    query: &CompiledQueryInventory,
+    access_profiles: OpenApiAccessProfiles<'_>,
+) -> Vec<Value> {
+    let mut parameters = vec![
+        query_parameter(
+            "$select",
+            false,
+            false,
+            json!({"type": "string", "maxLength": crate::query::MAX_QUERY_PAYLOAD_BYTES}),
+            "Comma-separated subset of readable API property names.",
+        ),
+        query_parameter(
+            "$filter",
+            false,
+            false,
+            json!({"type": "string", "maxLength": crate::query::MAX_QUERY_PAYLOAD_BYTES}),
+            "Strict Registry read filter expression over compiled filterable API properties.",
+        ),
+        query_parameter(
+            "$orderby",
+            false,
+            false,
+            json!({"type": "string", "maxLength": crate::query::MAX_IDENTIFIER_BYTES}),
+            "One compiled sortable property, ascending only.",
+        ),
+        query_parameter(
+            "$top",
+            false,
+            false,
+            json!({"type": "integer", "minimum": 1, "maximum": max_page_size(route, query, access_profiles)}),
+            "Bounded page size.",
+        ),
+        query_parameter(
+            "$count",
+            false,
+            false,
+            json!({"type": "boolean"}),
+            "Request count when the selected compiled query profile allows it.",
+        ),
+        query_parameter(
+            "$skiptoken",
+            false,
+            false,
+            json!({"type": "string", "maxLength": crate::query::MAX_OPAQUE_VALUE_BYTES}),
+            "Opaque continuation cursor for the next page.",
+        ),
+    ];
+    if route.query_kind == Some(CompiledQueryKind::AsOf) {
+        parameters.push(query_parameter(
+            "asOf",
+            true,
+            false,
+            json!({"type": "string", "format": "date-time"}),
+            "Strict UTC RFC3339 instant for the as-of temporal query.",
+        ));
+    }
+    parameters
+}
+
+fn query_parameter(
+    name: &str,
+    required: bool,
+    repeatable: bool,
+    schema: Value,
+    description: &str,
+) -> Value {
+    json!({
+        "name": name,
+        "in": "query",
+        "required": required,
+        "description": description,
+        "schema": schema,
+        "explode": repeatable,
+    })
+}
+
+fn access_profile_parameter() -> Value {
+    query_parameter(
         "accessProfile",
         false,
         false,
-        json!({"type": "string"}),
-        "Select one compiled access profile.",
-    )])
+        json!({"type": "string", "maxLength": crate::query::MAX_IDENTIFIER_BYTES}),
+        "Select one compiled access profile. Omit to use the route default.",
+    )
+}
+
+fn header_parameter(name: &str, required: bool, schema: Value, description: &str) -> Value {
+    json!({
+        "name": name,
+        "in": "header",
+        "required": required,
+        "description": description,
+        "schema": schema,
+    })
+}
+
+fn path_parameter(name: &str, schema: Value, description: &str) -> Value {
+    json!({
+        "name": name,
+        "in": "path",
+        "required": true,
+        "description": description,
+        "schema": schema,
+    })
+}
+
+fn operation_request_body(spec: OpenApiOperationSpec<'_>) -> Option<Value> {
+    match spec.route.operation {
+        Operation::Create => Some(json_request_body(json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["data"],
+            "properties": {
+                "data": {"$ref": format!("#/components/schemas/{}", spec.request_schema_ref)}
+            }
+        }))),
+        Operation::Patch => Some(json_patch_request_body()),
+        Operation::Lookup => Some(json_request_body(json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["selector"],
+            "properties": {
+                "selector": {"type": "string", "maxLength": crate::query::MAX_IDENTIFIER_BYTES},
+                "values": {
+                    "type": "object",
+                    "maxProperties": 16,
+                    "additionalProperties": {
+                        "oneOf": [
+                            {"type": "string", "maxLength": crate::query::MAX_LITERAL_BYTES},
+                            {"type": "integer", "format": "int64"},
+                            {"type": "boolean"}
+                        ]
+                    }
+                }
+            }
+        }))),
+        Operation::Batch => {
+            let batch = spec
+                .entity
+                .batch
+                .as_ref()
+                .expect("batch routes require compiled bounds");
+            let (allow_create, allow_patch) = batch_permissions(spec);
+            Some(batch_request_body(
+                spec.request_schema_ref,
+                batch.maximum_items,
+                allow_create,
+                allow_patch,
+            ))
+        }
+        Operation::Get | Operation::List | Operation::Tombstone | Operation::Revisions => None,
+    }
+}
+
+fn json_request_body(schema: Value) -> Value {
+    json!({
+        "required": true,
+        "content": {"application/json": {"schema": schema}}
+    })
+}
+
+fn json_patch_request_body() -> Value {
+    json!({
+        "required": true,
+        "content": {
+            "application/json-patch+json": {
+                "schema": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 128,
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": true,
+                        "required": ["op", "path"],
+                        "properties": {
+                            "op": {"type": "string", "enum": ["add", "remove", "replace", "move", "copy", "test"]},
+                            "path": {"type": "string", "maxLength": 1024},
+                            "from": {"type": "string", "maxLength": 1024},
+                            "value": true
+                        }
+                    }
+                }
+            }
+        }
+    })
 }
 
 fn batch_request_body(
-    entity_id: &str,
+    schema_ref: &str,
     maximum_items: u16,
     allow_create: bool,
     allow_patch: bool,
@@ -516,7 +880,7 @@ fn batch_request_body(
             "required": ["operation", "data"],
             "properties": {
                 "operation": {"const": "create"},
-                "data": {"$ref": format!("#/components/schemas/{entity_id}")},
+                "data": {"$ref": format!("#/components/schemas/{schema_ref}")},
             }
         }));
     }
@@ -528,8 +892,8 @@ fn batch_request_body(
             "properties": {
                 "operation": {"const": "patch"},
                 "recordId": {"type": "string", "format": "uuid"},
-                "ifMatch": {"type": "string"},
-                "patch": {"type": "array", "minItems": 1, "maxItems": 128},
+                "ifMatch": {"type": "string", "minLength": 6, "maxLength": 256, "pattern": "^\\\"rs-[\\x21\\x23-\\x7E]+\\\"$"},
+                "patch": json_patch_array_schema(),
             }
         }));
     }
@@ -555,8 +919,220 @@ fn batch_request_body(
     })
 }
 
-fn batch_response(
-    entity_id: &str,
+fn json_patch_array_schema() -> Value {
+    json!({
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 128,
+        "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["op", "path"],
+            "properties": {
+                "op": {"type": "string", "enum": ["add", "remove", "replace", "move", "copy", "test"]},
+                "path": {"type": "string", "maxLength": 1024},
+                "from": {"type": "string", "maxLength": 1024},
+                "value": true
+            }
+        }
+    })
+}
+
+fn operation_responses(spec: OpenApiOperationSpec<'_>) -> Value {
+    let success = match spec.route.operation {
+        Operation::Create => success_response(
+            "Record created",
+            StatusResponseHeaders::MutationCreate,
+            record_response_schema(spec.schema_ref),
+        ),
+        Operation::Get => success_response(
+            "Record returned",
+            StatusResponseHeaders::ReadDetail,
+            record_response_schema(spec.schema_ref),
+        ),
+        Operation::Lookup => success_response(
+            "Lookup resolved to one record",
+            StatusResponseHeaders::NoStore,
+            record_response_schema(spec.schema_ref),
+        ),
+        Operation::List => success_response(
+            "Records returned",
+            StatusResponseHeaders::NoStore,
+            list_response_schema(spec.schema_ref),
+        ),
+        Operation::Patch => success_response(
+            "Record patched",
+            StatusResponseHeaders::Mutation,
+            record_response_schema(spec.schema_ref),
+        ),
+        Operation::Tombstone => success_response(
+            "Record tombstoned",
+            StatusResponseHeaders::Mutation,
+            record_response_schema(spec.schema_ref),
+        ),
+        Operation::Batch => {
+            let batch = spec
+                .entity
+                .batch
+                .as_ref()
+                .expect("batch routes require compiled bounds");
+            let (allow_create, allow_patch) = batch_permissions(spec);
+            success_response(
+                "Atomic batch committed",
+                StatusResponseHeaders::Mutation,
+                batch_response_schema(
+                    spec.schema_ref,
+                    batch.maximum_items,
+                    allow_create,
+                    allow_patch,
+                ),
+            )
+        }
+        Operation::Revisions => success_response(
+            "Record revisions returned",
+            StatusResponseHeaders::NoStore,
+            revision_response_schema(spec.schema_ref, spec.route.revision_kind),
+        ),
+    };
+    let success_status = if spec.route.operation == Operation::Create {
+        "201"
+    } else {
+        "200"
+    };
+    let mut responses = Map::from_iter([(success_status.to_owned(), success)]);
+    for (status, problems) in problem_responses(spec.route.operation) {
+        let examples = problems
+            .iter()
+            .map(|problem| {
+                (
+                    problem.code.to_owned(),
+                    json!({"value": problem_example(status, problem.code, problem.detail)}),
+                )
+            })
+            .collect::<Map<_, _>>();
+        responses.insert(
+            status.to_owned(),
+            json!({
+                "description": "Problem response",
+                "headers": {
+                    "traceparent": traceparent_header("Trace context for this problem response.")
+                },
+                "content": {
+                    "application/problem+json": {
+                        "schema": {"$ref": "#/components/schemas/Problem"},
+                        "examples": examples
+                    }
+                }
+            }),
+        );
+    }
+    Value::Object(responses)
+}
+
+#[derive(Clone, Copy)]
+enum StatusResponseHeaders {
+    ReadDetail,
+    NoStore,
+    Mutation,
+    MutationCreate,
+}
+
+fn success_response(description: &str, headers: StatusResponseHeaders, schema: Value) -> Value {
+    let mut response = Map::from_iter([
+        ("description".to_owned(), json!(description)),
+        (
+            "content".to_owned(),
+            json!({"application/json": {"schema": schema}}),
+        ),
+    ]);
+    let mut header_map = match headers {
+        StatusResponseHeaders::ReadDetail => json!({
+            "ETag": etag_header(),
+        }),
+        StatusResponseHeaders::NoStore => json!({
+            "Cache-Control": {"description": "Always no-store for caller-bound read collections, lookup results, and revision history.", "schema": {"const": "no-store"}},
+        }),
+        StatusResponseHeaders::Mutation => json!({
+            "ETag": etag_header(),
+        }),
+        StatusResponseHeaders::MutationCreate => json!({
+            "ETag": etag_header(),
+            "Location": {"description": "Relative URL of the created record.", "schema": {"type": "string"}},
+        }),
+    };
+    header_map
+        .as_object_mut()
+        .expect("response headers are objects")
+        .insert(
+            "traceparent".to_owned(),
+            traceparent_header("Trace context for this response."),
+        );
+    response.insert("headers".to_owned(), header_map);
+    Value::Object(response)
+}
+
+fn etag_header() -> Value {
+    json!({
+        "description": "Strong Registry ETag bound to the record, package revision, caller profile, and response field set.",
+        "schema": {"type": "string", "pattern": "^\\\"rs-[\\x21\\x23-\\x7E]+\\\"$"}
+    })
+}
+
+fn traceparent_header(description: &str) -> Value {
+    json!({
+        "description": description,
+        "schema": traceparent_schema(),
+        "example": OPENAPI_EXAMPLE_TRACEPARENT,
+    })
+}
+
+fn traceparent_schema() -> Value {
+    json!({
+        "type": "string",
+        "minLength": 55,
+        "maxLength": 55,
+        "pattern": "^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$"
+    })
+}
+
+fn record_response_schema(schema_ref: &str) -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "revision", "data"],
+        "properties": {
+            "id": {"type": "string", "format": "uuid"},
+            "revision": {"type": "integer", "format": "int64", "minimum": 1},
+            "data": {"$ref": format!("#/components/schemas/{schema_ref}")},
+        }
+    })
+}
+
+fn list_response_schema(schema_ref: &str) -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items", "pageInfo"],
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": record_response_schema(schema_ref),
+            },
+            "pageInfo": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["nextCursor"],
+                "properties": {
+                    "nextCursor": {"type": ["string", "null"], "maxLength": crate::query::MAX_OPAQUE_VALUE_BYTES}
+                }
+            },
+            "count": {"type": "integer", "format": "int64", "minimum": 0}
+        }
+    })
+}
+
+fn batch_response_schema(
+    schema_ref: &str,
     maximum_items: u16,
     allow_create: bool,
     allow_patch: bool,
@@ -569,33 +1145,24 @@ fn batch_response(
     .flatten()
     .collect::<Vec<_>>();
     json!({
-        "200": {
-            "description": "Atomic batch committed",
-            "content": {
-                "application/json": {
-                    "schema": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": ["results"],
-                        "properties": {
-                            "results": {
-                                "type": "array",
-                                "minItems": 1,
-                                "maxItems": maximum_items,
-                                "items": {
-                                    "type": "object",
-                                    "additionalProperties": false,
-                                    "required": ["operation", "id", "revision", "etag", "data"],
-                                    "properties": {
-                                        "operation": {"enum": operations},
-                                        "id": {"type": "string", "format": "uuid"},
-                                        "revision": {"type": "integer", "format": "int64", "minimum": 1},
-                                        "etag": {"type": "string"},
-                                        "data": {"$ref": format!("#/components/schemas/{entity_id}")},
-                                    }
-                                }
-                            }
-                        }
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["results"],
+        "properties": {
+            "results": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": maximum_items,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["operation", "id", "revision", "etag", "data"],
+                    "properties": {
+                        "operation": {"enum": operations},
+                        "id": {"type": "string", "format": "uuid"},
+                        "revision": {"type": "integer", "format": "int64", "minimum": 1},
+                        "etag": {"type": "string", "pattern": "^\\\"rs-[\\x21\\x23-\\x7E]+\\\"$"},
+                        "data": {"$ref": format!("#/components/schemas/{schema_ref}")},
                     }
                 }
             }
@@ -603,118 +1170,465 @@ fn batch_response(
     })
 }
 
-fn revision_parameters(kind: CompiledRevisionKind) -> Value {
-    let mut parameters = vec![query_parameter(
-        "accessProfile",
-        false,
-        false,
-        json!({"type": "string"}),
-        "Select one compiled access profile.",
-    )];
-    parameters.push(path_parameter(
-        "record_id",
-        json!({"type": "string", "format": "uuid"}),
-        "Canonical record UUID.",
-    ));
-    if kind == CompiledRevisionKind::Detail {
-        parameters.push(path_parameter(
+fn revision_response_schema(schema_ref: &str, kind: Option<CompiledRevisionKind>) -> Value {
+    let item = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
             "revision",
-            json!({"type": "integer", "format": "int64", "minimum": 1}),
-            "Exact positive record revision.",
-        ));
+            "predecessorRevision",
+            "lifecycle",
+            "mutationKind",
+            "actorReference",
+            "requestReference",
+            "createdAt",
+            "data"
+        ],
+        "properties": {
+            "revision": {"type": "integer", "format": "int64", "minimum": 1},
+            "predecessorRevision": {"type": ["integer", "null"], "format": "int64", "minimum": 1},
+            "lifecycle": {"type": "string", "enum": ["active", "tombstoned"]},
+            "mutationKind": {"type": "string", "enum": ["create", "patch", "tombstone"]},
+            "actorReference": {"type": "string"},
+            "requestReference": {"type": "string"},
+            "createdAt": {"type": "string", "format": "date-time"},
+            "data": {"$ref": format!("#/components/schemas/{schema_ref}")},
+        }
+    });
+    if kind == Some(CompiledRevisionKind::Detail) {
+        item
+    } else {
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["items"],
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "maxItems": crate::model::MAX_REVISION_HISTORY_RECORDS,
+                    "items": item
+                }
+            }
+        })
     }
-    Value::Array(parameters)
 }
 
-fn query_parameters(kind: CompiledQueryKind) -> Value {
-    let mut parameters = vec![
-        query_parameter(
-            "accessProfile",
-            false,
-            false,
-            json!({"type": "string"}),
-            "Select one compiled access profile.",
-        ),
-        query_parameter(
-            "$select",
-            false,
-            false,
-            json!({"type": "string"}),
-            "Comma-separated subset of readable API property names.",
-        ),
-        query_parameter(
-            "$filter",
-            false,
-            false,
-            json!({"type": "string"}),
-            "Strict Registry read filter expression over compiled filterable properties.",
-        ),
-        query_parameter(
-            "$orderby",
-            false,
-            false,
-            json!({"type": "string"}),
-            "One compiled sortable property, ascending only.",
-        ),
-        query_parameter(
-            "$top",
-            false,
-            false,
-            json!({"type": "integer", "minimum": 1, "maximum": 100}),
-            "Bounded page size.",
-        ),
-        query_parameter(
-            "$count",
-            false,
-            false,
-            json!({"type": "boolean"}),
-            "Request a total count when the compiled operation allows it.",
-        ),
-        query_parameter(
-            "$skiptoken",
-            false,
-            false,
-            json!({"type": "string"}),
-            "Opaque continuation cursor for the next page.",
-        ),
-    ];
-    if kind == CompiledQueryKind::AsOf {
-        parameters.push(query_parameter(
-            "asOf",
-            true,
-            false,
-            json!({"type": "string", "format": "date-time"}),
-            "Strict UTC RFC3339 instant for the as-of temporal query.",
-        ));
-    }
-    Value::Array(parameters)
+#[derive(Clone, Copy)]
+struct ProblemExample {
+    code: &'static str,
+    detail: &'static str,
 }
 
-fn query_parameter(
-    name: &str,
-    required: bool,
-    repeatable: bool,
-    schema: Value,
-    description: &str,
+fn problem_responses(operation: Operation) -> BTreeMap<&'static str, Vec<ProblemExample>> {
+    let mut responses = BTreeMap::from([
+        (
+            "400",
+            vec![ProblemExample {
+                code: "request.invalid",
+                detail: "The request is invalid.",
+            }],
+        ),
+        (
+            "401",
+            vec![ProblemExample {
+                code: "authentication.refused",
+                detail: "The bearer credential is missing or refused.",
+            }],
+        ),
+        (
+            "404",
+            vec![ProblemExample {
+                code: "resource.not_found",
+                detail: "The requested resource was not found.",
+            }],
+        ),
+        (
+            "503",
+            vec![ProblemExample {
+                code: "source.unavailable",
+                detail: "The Registry data service is unavailable.",
+            }],
+        ),
+        (
+            "504",
+            vec![ProblemExample {
+                code: "request.timeout",
+                detail: "The request timed out.",
+            }],
+        ),
+    ]);
+    if matches!(operation, Operation::List | Operation::Lookup) {
+        responses.entry("400").or_default().extend([
+            ProblemExample {
+                code: "query.invalid",
+                detail: "The query request is invalid.",
+            },
+            ProblemExample {
+                code: "query.cursor_invalid",
+                detail: "The query cursor is invalid.",
+            },
+        ]);
+    }
+    if operation == Operation::Lookup {
+        responses.entry("404").or_default().push(ProblemExample {
+            code: "lookup.unresolved",
+            detail: "The lookup did not resolve exactly one record.",
+        });
+        responses.insert(
+            "415",
+            vec![ProblemExample {
+                code: "unsupported.media_type",
+                detail: "The request media type is not supported.",
+            }],
+        );
+    }
+    if matches!(
+        operation,
+        Operation::Create | Operation::Patch | Operation::Tombstone | Operation::Batch
+    ) {
+        responses.insert(
+            "409",
+            vec![
+                ProblemExample {
+                    code: "mutation.conflict",
+                    detail: "The mutation conflicts with current state.",
+                },
+                ProblemExample {
+                    code: "idempotency.conflict",
+                    detail: "The idempotency key is bound to another request.",
+                },
+            ],
+        );
+        responses.insert(
+            "415",
+            vec![ProblemExample {
+                code: "unsupported.media_type",
+                detail: "The request media type is not supported.",
+            }],
+        );
+    }
+    if matches!(operation, Operation::Patch | Operation::Tombstone) {
+        responses.insert(
+            "412",
+            vec![ProblemExample {
+                code: "precondition.failed",
+                detail: "The mutation precondition failed.",
+            }],
+        );
+        responses.insert(
+            "428",
+            vec![ProblemExample {
+                code: "precondition.required",
+                detail: "The mutation precondition is required.",
+            }],
+        );
+    }
+    responses
+}
+
+fn problem_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "title", "status", "detail", "code", "traceId"],
+        "properties": {
+            "type": {"type": "string", "format": "uri", "maxLength": 256},
+            "title": {"type": "string", "maxLength": 128},
+            "status": {"type": "integer", "minimum": 400, "maximum": 599},
+            "detail": {"type": "string", "maxLength": 256},
+            "traceId": {"type": "string", "minLength": 32, "maxLength": 32, "pattern": "^[0-9a-f]{32}$"},
+            "code": {
+                "type": "string",
+                "enum": [
+                    "authentication.refused",
+                    "idempotency.conflict",
+                    "lookup.unresolved",
+                    "mutation.conflict",
+                    "precondition.failed",
+                    "precondition.required",
+                    "query.cursor_invalid",
+                    "query.invalid",
+                    "request.invalid",
+                    "request.timeout",
+                    "resource.not_found",
+                    "service.unavailable",
+                    "source.unavailable",
+                    "unsupported.media_type"
+                ]
+            }
+        }
+    })
+}
+
+fn problem_example(status: &str, code: &str, detail: &str) -> Value {
+    json!({
+        "type": format!("urn:registry-server:problem:{code}"),
+        "title": match status {
+            "400" => "Bad Request",
+            "401" => "Unauthorized",
+            "404" => "Not Found",
+            "409" => "Conflict",
+            "412" => "Precondition Failed",
+            "415" => "Unsupported Media Type",
+            "428" => "Precondition Required",
+            "503" => "Service Unavailable",
+            "504" => "Gateway Timeout",
+            _ => "Request failed",
+        },
+        "status": status.parse::<u16>().expect("problem status is numeric"),
+        "detail": detail,
+        "code": code,
+        "traceId": OPENAPI_EXAMPLE_TRACE_ID,
+    })
+}
+
+fn batch_permissions(spec: OpenApiOperationSpec<'_>) -> (bool, bool) {
+    match spec.access_profiles {
+        OpenApiAccessProfiles::All => (
+            spec.route.access_profiles.iter().any(|profile_id| {
+                spec.entity.access_profiles[profile_id]
+                    .operations
+                    .contains(&Operation::Create)
+            }),
+            spec.route.access_profiles.iter().any(|profile_id| {
+                spec.entity.access_profiles[profile_id]
+                    .operations
+                    .contains(&Operation::Patch)
+            }),
+        ),
+        OpenApiAccessProfiles::Selected(profile_id) => {
+            let profile = &spec.entity.access_profiles[profile_id];
+            (
+                profile.operations.contains(&Operation::Create),
+                profile.operations.contains(&Operation::Patch),
+            )
+        }
+    }
+}
+
+fn writable_fields_for_route(route: &CompiledRoute, entity: &CompiledEntity) -> BTreeSet<String> {
+    route
+        .access_profiles
+        .iter()
+        .filter_map(|profile_id| entity.access_profiles.get(profile_id))
+        .flat_map(|profile| profile.writable_fields.iter().cloned())
+        .collect()
+}
+
+fn query_profile_extension(spec: OpenApiOperationSpec<'_>) -> Option<(String, Value)> {
+    if spec.route.query_kind.is_none() && spec.route.operation != Operation::Lookup {
+        return None;
+    }
+    let profiles = query_profiles_for_route(spec.route, spec.query, spec.access_profiles);
+    if profiles.is_empty() {
+        return None;
+    }
+    match spec.access_profiles {
+        OpenApiAccessProfiles::Selected(_) => Some((
+            "x-registry-queryProfile".to_owned(),
+            render_query_profile(
+                spec.response_entity,
+                profiles[0],
+                selectable_fields_for_profile(spec, &profiles[0].profile_id),
+            ),
+        )),
+        OpenApiAccessProfiles::All => Some((
+            "x-registry-queryProfiles".to_owned(),
+            Value::Object(
+                profiles
+                    .into_iter()
+                    .map(|profile| {
+                        (
+                            profile.profile_id.clone(),
+                            render_query_profile(
+                                spec.response_entity,
+                                profile,
+                                selectable_fields_for_profile(spec, &profile.profile_id),
+                            ),
+                        )
+                    })
+                    .collect(),
+            ),
+        )),
+    }
+}
+
+fn query_profiles_for_route<'a>(
+    route: &CompiledRoute,
+    query: &'a CompiledQueryInventory,
+    access_profiles: OpenApiAccessProfiles<'_>,
+) -> Vec<&'a CompiledQueryOperation> {
+    let mut profiles = query
+        .operations
+        .iter()
+        .filter(|operation| operation.route_id == route.id)
+        .filter(|operation| match access_profiles {
+            OpenApiAccessProfiles::All => route
+                .access_profiles
+                .iter()
+                .any(|profile| profile == &operation.profile_id),
+            OpenApiAccessProfiles::Selected(profile) => operation.profile_id == profile,
+        })
+        .collect::<Vec<_>>();
+    profiles.sort_by(|left, right| left.profile_id.cmp(&right.profile_id));
+    profiles
+}
+
+fn render_query_profile(
+    entity: &CompiledEntity,
+    operation: &CompiledQueryOperation,
+    selectable_fields: BTreeSet<String>,
 ) -> Value {
     json!({
-        "name": name,
-        "in": "query",
-        "required": required,
-        "description": description,
-        "schema": schema,
-        "explode": repeatable,
+        "profile": operation.profile_id,
+        "kind": query_kind_name(operation.kind),
+        "maxPageSize": operation.max_page_size,
+        "allowCount": operation.allow_count,
+        "selectableProperties": api_field_names(entity, &selectable_fields),
+        "filterableProperties": operation.filter_fields.iter().map(|field| {
+            json!({
+                "property": api_field_name(entity, &field.field).unwrap_or(field.field.as_str()),
+                "operators": field.operators.iter().map(|operator| query_filter_operator_name(*operator)).collect::<Vec<_>>()
+            })
+        }).collect::<Vec<_>>(),
+        "sortableProperties": operation.sort_fields.iter().map(|field| {
+            json!({
+                "property": api_field_name(entity, &field.field).unwrap_or(field.field.as_str()),
+                "directions": field.directions.iter().map(|direction| match direction {
+                    crate::model::CompiledQuerySortDirection::Asc => "asc",
+                }).collect::<Vec<_>>()
+            })
+        }).collect::<Vec<_>>(),
+        "selectorProperties": api_field_names(entity, &operation.selector_fields),
+        "temporal": operation.temporal.as_ref().map(|temporal| json!({
+            "startProperty": api_field_name(entity, &temporal.start_field).unwrap_or(temporal.start_field.as_str()),
+            "endProperty": api_field_name(entity, &temporal.end_field).unwrap_or(temporal.end_field.as_str()),
+            "scopeProperties": api_field_names(entity, &temporal.scope_fields),
+            "semantics": "start_inclusive_end_exclusive",
+        }))
     })
 }
 
-fn path_parameter(name: &str, schema: Value, description: &str) -> Value {
-    json!({
-        "name": name,
-        "in": "path",
-        "required": true,
-        "description": description,
-        "schema": schema,
-    })
+fn query_filter_operator_name(operator: crate::model::CompiledQueryFilterOperator) -> &'static str {
+    match operator {
+        crate::model::CompiledQueryFilterOperator::Equals => "equals",
+        crate::model::CompiledQueryFilterOperator::In => "in",
+        crate::model::CompiledQueryFilterOperator::Range => "range",
+        crate::model::CompiledQueryFilterOperator::IsNull => "is_null",
+        crate::model::CompiledQueryFilterOperator::IsNotNull => "is_not_null",
+        crate::model::CompiledQueryFilterOperator::Prefix => "prefix",
+        crate::model::CompiledQueryFilterOperator::Contains => "contains",
+    }
+}
+
+fn selectable_fields_for_profile(
+    spec: OpenApiOperationSpec<'_>,
+    profile_id: &str,
+) -> BTreeSet<String> {
+    if let Some(readable_fields) = spec.readable_fields {
+        return readable_fields.clone();
+    }
+    if let Some(read_path) = read_path_for_route(spec.route, spec.entity) {
+        return spec
+            .entity
+            .access_profiles
+            .get(profile_id)
+            .and_then(|profile| {
+                profile
+                    .read_paths
+                    .iter()
+                    .find(|grant| grant.path == read_path.id)
+            })
+            .map(|grant| grant.readable_fields.clone())
+            .unwrap_or_default();
+    }
+    spec.entity
+        .access_profiles
+        .get(profile_id)
+        .map(|profile| profile.readable_fields.clone())
+        .unwrap_or_default()
+}
+
+fn api_field_names<'a>(
+    entity: &CompiledEntity,
+    fields: impl IntoIterator<Item = &'a String>,
+) -> Vec<String> {
+    fields
+        .into_iter()
+        .filter_map(|field| api_field_name(entity, field).map(str::to_owned))
+        .collect()
+}
+
+fn api_field_name<'a>(entity: &'a CompiledEntity, field_id: &str) -> Option<&'a str> {
+    entity
+        .stored_fields
+        .iter()
+        .find(|field| field.logical.id == field_id)
+        .map(|field| field.logical.api_name.as_str())
+        .or_else(|| {
+            entity
+                .derived_fields
+                .get(field_id)
+                .map(|field| field.logical.api_name.as_str())
+        })
+        .or_else(|| {
+            (entity.canonical_id.id == field_id).then_some(entity.canonical_id.api_name.as_str())
+        })
+}
+
+fn max_page_size(
+    route: &CompiledRoute,
+    query: &CompiledQueryInventory,
+    access_profiles: OpenApiAccessProfiles<'_>,
+) -> u16 {
+    query_profiles_for_route(route, query, access_profiles)
+        .into_iter()
+        .map(|operation| operation.max_page_size)
+        .max()
+        .unwrap_or(crate::query::MAX_TOP as u16)
+}
+
+fn response_entity_for_route<'a>(
+    route: &CompiledRoute,
+    entities: &'a BTreeMap<String, CompiledEntity>,
+) -> &'a CompiledEntity {
+    let entity = entities
+        .get(&route.entity_id)
+        .expect("compiled route refers to a compiled entity");
+    if route.operation == Operation::List && route.id.contains(".path.") {
+        if let Some(path) = read_path_for_route(route, entity) {
+            return entities
+                .get(&path.to)
+                .expect("compiled read path refers to a compiled entity");
+        }
+    }
+    entity
+}
+
+fn read_path_for_route<'a>(
+    route: &CompiledRoute,
+    entity: &'a CompiledEntity,
+) -> Option<&'a crate::model::CompiledReadPath> {
+    entity
+        .read_paths
+        .values()
+        .find(|path| route.id == format!("records.{}.path.{}", entity.id, path.id))
+}
+
+fn revision_kind_name(kind: CompiledRevisionKind) -> &'static str {
+    match kind {
+        CompiledRevisionKind::List => "list",
+        CompiledRevisionKind::Detail => "detail",
+    }
+}
+
+fn method_name(method: HttpMethod) -> &'static str {
+    match method {
+        HttpMethod::Delete => "delete",
+        HttpMethod::Get => "get",
+        HttpMethod::Patch => "patch",
+        HttpMethod::Post => "post",
+    }
 }
 
 fn query_kind_name(kind: CompiledQueryKind) -> &'static str {

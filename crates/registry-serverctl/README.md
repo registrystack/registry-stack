@@ -8,6 +8,16 @@ rather than defining parallel semantics.
 AI-assisted tools may invoke this CLI, but receive no separate authority to
 sign or apply production changes.
 
+`registry-serverctl project lock PROJECT` computes the compiler-enforced
+digests for discovered `modules/<id>/module.yaml` sources and their declared
+SQL assets, then rewrites only `PROJECT/registry.yaml`. `--check` performs the
+same deterministic comparison without writing and fails when locks are stale.
+
+`registry-serverctl explain queries PROJECT [--production]` renders query
+operations using HTTP API field names as the primary copyable identifiers.
+Every filterable, sortable, and selector field also includes its logical field
+id so authors can trace the output back to source.
+
 `registry-serverctl package PROJECT --database-id ID --schema-fingerprint
 SHA256 --output BUILD` always recompiles with the production profile. It writes
 the exact canonical `BUILD/signing-input.json`.

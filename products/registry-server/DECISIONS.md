@@ -8,6 +8,13 @@
 - Packages contain governed model and generated artifacts. Runtime
   configuration binds deployment-specific values and secrets and is not part of
   the signed model.
+- Runtime configuration is an explicitly versioned document. Authority,
+  credentials, package identity, and database roles remain required; bounded
+  operational tuning uses reviewed defaults so a safe starter file stays
+  readable.
+- A project authors reusable access profiles once at the project top level.
+  Modules may contribute profiles while composing an entity, but root project
+  entities do not carry a second access-profile vocabulary.
 - Domain semantics are optional configuration overlays. Registry Server does
   not hardcode Person, Household, GroupMembership, or any other domain model.
   An overlay may add localized labels, concept URIs, identifiers, relationship
@@ -19,8 +26,14 @@
   source, association entity, target, and target field capability set.
 - Registry Manifest remains the owner of standards-oriented metadata and DCAT
   rendering. Registry Server emits a one-way, lossy Manifest source plus its
-  DCAT JSON-LD projection in the governed package. It does not maintain a
-  second catalogue model or claim conformance that was not explicitly authored.
+  DCAT JSON-LD projection when `manifestProjection` is authored. The projection
+  is optional, so a basic registry is not forced to invent catalogue metadata.
+  The server does not maintain a second catalogue model or claim conformance
+  that was not explicitly authored.
+- `registry-serverctl init` emits one small inline entity and no empty module.
+  Module locks are discovered and refreshed explicitly with `project lock`;
+  lock digests still bind every module source and declared SQL asset before a
+  production package is compiled.
 - Evidence and Relay integrations use their published protocol surfaces and
   platform primitives. Registry Server does not depend on their product crates
   or duplicate their policy, disclosure, credential, or publication engines.

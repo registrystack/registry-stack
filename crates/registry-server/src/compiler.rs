@@ -107,6 +107,7 @@ pub fn compile_project_with_assets(
         &module_map,
         &mut diagnostics,
     );
+    validate_project_entity_access_profiles(project, &mut diagnostics);
     expand_project_access(project, &mut sources, &mut diagnostics);
     resolve_vocabularies(project, &mut sources, &mut diagnostics);
     validate_entities(&sources, profile, &mut diagnostics);
@@ -249,11 +250,7 @@ fn validate_project_header(
             "project.manifestProjection",
             "production Registry Manifest projection has not been declared",
         )),
-        (None, CompileProfile::Production) => errors.push(Diagnostic::error(
-            "manifest_projection.required",
-            "project.manifestProjection",
-            "production compilation requires a Registry Manifest projection",
-        )),
+        (None, CompileProfile::Production) => {}
         (Some(projection), _) => {
             validate_id(
                 &projection.access_profile,
@@ -1014,6 +1011,23 @@ fn merge_by_id<T: Clone>(
     }
 }
 
+fn validate_project_entity_access_profiles(
+    project: &RegistryProject,
+    errors: &mut Vec<Diagnostic>,
+) {
+    if project
+        .entities
+        .iter()
+        .any(|entity| !entity.access_profiles.is_empty())
+    {
+        errors.push(Diagnostic::error(
+            "access_profile.project_entity_local.forbidden",
+            "project.entities[].accessProfiles",
+            "root project entities must declare access through top-level accessProfiles",
+        ));
+    }
+}
+
 fn expand_project_access(
     project: &RegistryProject,
     entities: &mut BTreeMap<String, EntitySource>,
@@ -1029,12 +1043,28 @@ fn expand_project_access(
                 "an access profile identifier is duplicated",
             ));
         }
-        nonempty(
-            &profile.principal_claim,
-            "project.accessProfiles[].principalClaim",
-            "access_profile.principal_claim.empty",
-            errors,
-        );
+        if profile.anonymous {
+            if profile.principal_claim.is_some() {
+                errors.push(Diagnostic::error(
+                    "access_profile.principal_claim.forbidden",
+                    "project.accessProfiles[].principalClaim",
+                    "an anonymous profile cannot declare a principal claim",
+                ));
+            }
+            if !profile.required_scopes.is_empty() || !profile.required_purposes.is_empty() {
+                errors.push(Diagnostic::error(
+                    "access_profile.anonymous.claim_requirements_forbidden",
+                    "project.accessProfiles[]",
+                    "an anonymous profile cannot require scopes or purposes",
+                ));
+            }
+        } else if profile.principal_claim.as_deref().is_none_or(str::is_empty) {
+            errors.push(Diagnostic::error(
+                "access_profile.principal_claim.required",
+                "project.accessProfiles[].principalClaim",
+                "an authenticated profile requires a direct principal claim",
+            ));
+        }
         let mut granted_entities = BTreeSet::new();
         for grant in &profile.grants {
             if !granted_entities.insert(grant.entity.as_str()) {
@@ -1068,11 +1098,11 @@ fn expand_project_access(
             entity.access_profiles.push(AccessProfileSource {
                 id: profile.id.clone(),
                 default: profile.default,
-                anonymous: false,
-                principal_claim: Some(profile.principal_claim.clone()),
+                anonymous: profile.anonymous,
+                principal_claim: profile.principal_claim.clone(),
                 required_scopes: profile.required_scopes.clone(),
-                required_purposes: profile.purposes.clone(),
-                operations: grant.actions.clone(),
+                required_purposes: profile.required_purposes.clone(),
+                operations: grant.operations.clone(),
                 readable_fields: grant.readable_fields.clone(),
                 writable_fields: grant.writable_fields.clone(),
                 filterable_fields: grant.filterable_fields.clone(),

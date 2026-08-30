@@ -292,7 +292,10 @@ pub struct EntitySource {
     pub constraints: Vec<ConstraintSource>,
     #[serde(default)]
     pub indexes: Vec<IndexSource>,
+    /// Internal/module profile contributions. Public project authoring should use
+    /// top-level `accessProfiles`.
     #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(skip))]
     pub access_profiles: Vec<AccessProfileSource>,
     #[serde(default)]
     pub events: Vec<EventSource>,
@@ -327,7 +330,10 @@ pub struct EntityExtensionSource {
     pub constraints: Vec<ConstraintSource>,
     #[serde(default)]
     pub indexes: Vec<IndexSource>,
+    /// Internal/module profile contributions. Public project authoring should use
+    /// top-level `accessProfiles`.
     #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(skip))]
     pub access_profiles: Vec<AccessProfileSource>,
     #[serde(default)]
     pub events: Vec<EventSource>,
@@ -1641,11 +1647,14 @@ pub struct ProjectAccessProfileSource {
     pub id: String,
     #[serde(default)]
     pub default: bool,
-    pub principal_claim: String,
+    #[serde(default)]
+    pub anonymous: bool,
+    #[serde(default)]
+    pub principal_claim: Option<String>,
     #[serde(default)]
     pub required_scopes: BTreeSet<String>,
     #[serde(default)]
-    pub purposes: BTreeSet<String>,
+    pub required_purposes: BTreeSet<String>,
     #[serde(default)]
     pub grants: Vec<AccessGrantSource>,
 }
@@ -1655,7 +1664,7 @@ pub struct ProjectAccessProfileSource {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AccessGrantSource {
     pub entity: String,
-    pub actions: BTreeSet<Operation>,
+    pub operations: BTreeSet<Operation>,
     #[serde(default)]
     pub readable_fields: BTreeSet<String>,
     #[serde(default)]
