@@ -914,19 +914,27 @@ class CiChangesTest(unittest.TestCase):
             registry_server_job,
         )
         self.assertIn(
-            "REGISTRY_SERVER_TEST_DATABASE_URL: postgresql://registry_server:registry_server_test@localhost:${{ job.services.postgres.ports[5432] }}/registry_server",
+            "DATABASE_PORT: ${{ job.services.postgres.ports['5432'] }}",
             registry_server_job,
         )
         self.assertIn(
-            "REGISTRY_SERVER_TEST_TLS_DATABASE_URL: postgresql://registry_server:registry_server_test@localhost:${{ job.services.postgres.ports[5432] }}/registry_server",
+            "REGISTRY_SERVER_TEST_DATABASE_URL=postgresql://registry_server:registry_server_test@localhost:${DATABASE_PORT}/registry_server",
             registry_server_job,
         )
         self.assertIn(
-            "REGISTRY_SERVER_TEST_TLS_HOSTNAME_MISMATCH_DATABASE_URL: postgresql://registry_server:registry_server_test@127.0.0.1:${{ job.services.postgres.ports[5432] }}/registry_server",
+            "REGISTRY_SERVER_TEST_TLS_DATABASE_URL=postgresql://registry_server:registry_server_test@localhost:${DATABASE_PORT}/registry_server",
             registry_server_job,
         )
         self.assertIn(
-            "REGISTRY_SERVER_TEST_TLS_POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}",
+            "REGISTRY_SERVER_TEST_TLS_HOSTNAME_MISMATCH_DATABASE_URL=postgresql://registry_server:registry_server_test@127.0.0.1:${DATABASE_PORT}/registry_server",
+            registry_server_job,
+        )
+        self.assertIn(
+            "POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}",
+            registry_server_job,
+        )
+        self.assertIn(
+            "TLS_CA_PEM_PATH: ${{ runner.temp }}/registry-server-postgres-trusted-ca.pem",
             registry_server_job,
         )
         for entry_point in (
@@ -934,6 +942,7 @@ class CiChangesTest(unittest.TestCase):
             "products/registry-server/scripts/test-postgres.sh",
             "products/registry-server/scripts/test-postgres-tls.sh",
             "products/registry-server/scripts/test-adopter-workflow.sh",
+            "products/registry-server/quickstart/run.sh --smoke",
         ):
             with self.subTest(entry_point=entry_point):
                 self.assertIn(entry_point, registry_server_job)

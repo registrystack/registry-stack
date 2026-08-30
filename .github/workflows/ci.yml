@@ -614,19 +614,27 @@ jobs:
           --health-retries 5
         ports:
           - 5432/tcp
-    env:
-      REGISTRY_SERVER_TEST_DATABASE_URL: postgresql://registry_server:registry_server_test@localhost:${{ job.services.postgres.ports[5432] }}/registry_server
-      REGISTRY_SERVER_TEST_TLS_DATABASE_HOST: localhost
-      REGISTRY_SERVER_TEST_TLS_DATABASE_URL: postgresql://registry_server:registry_server_test@localhost:${{ job.services.postgres.ports[5432] }}/registry_server
-      REGISTRY_SERVER_TEST_TLS_HOSTNAME_MISMATCH_DATABASE_URL: postgresql://registry_server:registry_server_test@127.0.0.1:${{ job.services.postgres.ports[5432] }}/registry_server
-      REGISTRY_SERVER_TEST_TLS_POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
-      REGISTRY_SERVER_TEST_TLS_CA_PEM_PATH: ${{ runner.temp }}/registry-server-postgres-trusted-ca.pem
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
           submodules: false
+
+      - name: Configure Registry Server test environment
+        env:
+          DATABASE_PORT: ${{ job.services.postgres.ports['5432'] }}
+          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+          TLS_CA_PEM_PATH: ${{ runner.temp }}/registry-server-postgres-trusted-ca.pem
+        run: |
+          {
+            echo "REGISTRY_SERVER_TEST_DATABASE_URL=postgresql://registry_server:registry_server_test@localhost:${DATABASE_PORT}/registry_server"
+            echo "REGISTRY_SERVER_TEST_TLS_DATABASE_HOST=localhost"
+            echo "REGISTRY_SERVER_TEST_TLS_DATABASE_URL=postgresql://registry_server:registry_server_test@localhost:${DATABASE_PORT}/registry_server"
+            echo "REGISTRY_SERVER_TEST_TLS_HOSTNAME_MISMATCH_DATABASE_URL=postgresql://registry_server:registry_server_test@127.0.0.1:${DATABASE_PORT}/registry_server"
+            echo "REGISTRY_SERVER_TEST_TLS_POSTGRES_CONTAINER_ID=${POSTGRES_CONTAINER_ID}"
+            echo "REGISTRY_SERVER_TEST_TLS_CA_PEM_PATH=${TLS_CA_PEM_PATH}"
+          } >> "${GITHUB_ENV}"
 
       - name: Cache Cargo registry
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
