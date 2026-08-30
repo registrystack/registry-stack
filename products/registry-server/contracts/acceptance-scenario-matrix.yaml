@@ -1,0 +1,83 @@
+apiVersion: registry.registrystack.org/product-contract/v1
+product: registry-server
+scenarios:
+  - id: RS-J01
+    state: enforced
+    domain: asset-site-placement
+    fixture: acceptance/asset-site-placement
+    doneWhen: "The non-person project proves valid-time placement, current and as-of reads, two access profiles, and generated contracts."
+    evidence: [{path: crates/registry-server/tests/postgres_pilot_acceptance.rs, name: real_postgres_five_domain_pilot_is_configured_production_closed_and_source_neutral}, {path: products/registry-server/scripts/test-adopter-workflow.sh, name: test-adopter-workflow.sh}]
+  - id: RS-J02
+    state: enforced
+    domain: asset-site-placement
+    fixture: acceptance/asset-site-placement
+    doneWhen: "An additive classified field produces an exact diff and signed apply without rebuilding the server."
+    evidence: [{path: crates/registry-server/tests/package_change_plan.rs, name: new_optional_scalar_field_emits_only_closed_add_column}, {path: crates/registry-serverctl/tests/diff.rs, name: diff_inventory_is_deterministic_and_classification_direction_is_exact}, {path: products/registry-server/scripts/test-adopter-workflow.sh, name: test-adopter-workflow.sh}]
+  - id: RS-J03
+    state: enforced
+    domain: household
+    fixture: acceptance/publicschema-household
+    doneWhen: "Household, two persons, and current and historical membership run without privileged runtime concepts."
+    evidence: [{path: crates/registry-server/tests/postgres_pilot_acceptance.rs, name: real_postgres_five_domain_pilot_is_configured_production_closed_and_source_neutral}]
+  - id: RS-J04
+    state: enforced
+    domain: disability
+    fixture: acceptance/disability
+    doneWhen: "Assessment, observation, certification, protected metadata, and correction provenance run as configured records."
+    evidence: [{path: crates/registry-server/tests/postgres_pilot_acceptance.rs, name: real_postgres_five_domain_pilot_is_configured_production_closed_and_source_neutral}]
+  - id: RS-J05
+    state: enforced
+    domain: farmer
+    fixture: acceptance/farmer
+    doneWhen: "Farmer records prove point, unit, temporal, resumable import, and administrative-boundary behavior."
+    evidence: [{path: crates/registry-server/tests/postgres_pilot_acceptance.rs, name: real_postgres_five_domain_pilot_is_configured_production_closed_and_source_neutral}, {path: crates/registry-server/tests/postgres_data_farmer.rs, name: real_postgres_farmer_import_is_authenticated_chunked_resumable_and_race_safe}]
+  - id: RS-J06
+    state: enforced
+    domain: business
+    fixture: acceptance/business
+    doneWhen: "Business records prove filings, appointments, identifiers, constraints, effective time, and public/protected processing."
+    evidence: [{path: crates/registry-server/tests/postgres_pilot_acceptance.rs, name: real_postgres_five_domain_pilot_is_configured_production_closed_and_source_neutral}]
+  - id: RS-J07
+    state: enforced
+    doneWhen: "Runtime inventories contain no acceptance-fixture dependency."
+    evidence: [{path: crates/registry-server/tests/postgres_pilot_acceptance.rs, name: real_postgres_five_domain_pilot_is_configured_production_closed_and_source_neutral}, {path: products/registry-server/scripts/check-source-neutrality.sh, name: check-source-neutrality.sh}, {path: products/registry-server/scripts/test_check_source_neutrality.py, name: test_public_kernel_contract_canary_is_rejected}]
+  - id: RS-J08
+    state: enforced
+    doneWhen: "Hidden processing, unauthorized writes, wrong purpose, stale ETags, changed idempotency, and malformed tokens refuse without leakage."
+    evidence: [{path: crates/registry-server/tests/compiler_contract.rs, name: anonymous_public_profile_cannot_filter_a_non_public_field}, {path: crates/registry-server/tests/compiler_contract.rs, name: anonymous_public_surface_rejects_every_non_public_constraint_field}, {path: crates/registry-server/tests/postgres_mutation.rs, name: real_postgres_http_mutations_are_guarded_and_exactly_replayable}, {path: crates/registry-server/tests/http_auth.rs, name: issuer_audience_algorithm_token_type_and_signature_are_all_verified}]
+  - id: RS-J09
+    state: enforced
+    doneWhen: "Package, profile, purpose, row boundary, projection, and query changes invalidate replay after fresh authorization."
+    evidence: [{path: crates/registry-server/tests/postgres_mutation.rs, name: real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable}, {path: crates/registry-server/tests/postgres_read.rs, name: real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced}]
+  - id: RS-J10
+    state: enforced
+    doneWhen: "Fault injection proves atomic record, revision, audit, idempotency, and configured outbox state."
+    evidence: [{path: crates/registry-server/tests/postgres_mutation.rs, name: real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable}]
+  - id: RS-J11
+    state: enforced
+    doneWhen: "Pool reuse across success and every failure path leaks no authority."
+    evidence: [{path: crates/registry-server/tests/postgres_kernel.rs, name: real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation}]
+  - id: RS-J12
+    state: enforced
+    doneWhen: "Terminal audit failure releases no protected read or mutation response bytes."
+    evidence: [{path: crates/registry-server/tests/postgres_read.rs, name: real_postgres_read_is_authorized_bounded_minimized_and_audit_gated}, {path: crates/registry-server/tests/postgres_mutation.rs, name: real_postgres_http_mutations_are_guarded_and_exactly_replayable}]
+  - id: RS-J13
+    state: enforced
+    doneWhen: "Live apply drains prior work, blocks new work, verifies schema, activates once, and leaves the old process unready."
+    evidence: [{path: crates/registry-server/tests/postgres_package.rs, name: real_postgres_package_startup_apply_failure_and_old_process_are_closed}, {path: crates/registry-server/tests/postgres_startup.rs, name: live_old_server_drains_apply_and_exact_successor_restart_becomes_ready}]
+  - id: RS-J14
+    state: enforced
+    doneWhen: "Package, artifact, checksum, signature, sequence, permission, path, and schema tampering fail before serving or activation."
+    evidence: [{path: crates/registry-server/tests/postgres_package.rs, name: local_unsigned_package_rederives_every_artifact_and_refuses_filesystem_tampering}, {path: crates/registry-server/tests/postgres_package.rs, name: package_manifest_refuses_ddl_checksum_path_and_canonical_json_tampering}, {path: crates/registry-server/tests/postgres_package.rs, name: package_refuses_symlinks_and_production_writable_permissions}, {path: crates/registry-server/tests/postgres_package.rs, name: package_binding_refuses_wrong_environment_instance_database_sequence_and_prior}, {path: crates/registry-server/tests/postgres_package.rs, name: production_package_requires_exact_trust_anchor_threshold_and_signature}, {path: crates/registry-server/tests/postgres_package.rs, name: signed_schema_fingerprint_mismatch_is_durably_failed_and_never_ready}]
+  - id: RS-J15
+    state: enforced
+    doneWhen: "Risky backfill and destructive rehearsal prove bounds, backup binding, and failed-maintenance recovery."
+    evidence: [{path: crates/registry-server/tests/migration_plan.rs, name: reviewed_migration_plan_closes_ast_sql_and_bound_evidence}, {path: crates/registry-server/tests/migration_plan.rs, name: reviewed_migration_plan_rejects_uncovered_changes_forbidden_sql_and_unbound_evidence}, {path: crates/registry-server/tests/postgres_migration.rs, name: real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_and_activation_closed}]
+  - id: RS-J16
+    state: enforced
+    doneWhen: "Webhook delivery, retry, dead letter, replay, projection, and classification confinement pass together."
+    evidence: [{path: crates/registry-server/tests/compiler_webhook.rs, name: governed_webhook_compiles_to_deterministic_destination_neutral_inventory}, {path: crates/registry-server/tests/runtime_config.rs, name: activation_constructs_the_exact_platform_policy_template_and_signing_material}, {path: crates/registry-server/tests/postgres_webhook_outbox.rs, name: real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_deterministically_identified}, {path: crates/registry-server/tests/postgres_webhook_delivery.rs, name: real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_bound_audited_and_confined}]
+  - id: RS-J17
+    state: enforced
+    doneWhen: "An external coding agent can author and check but cannot satisfy signature or migration-role authority."
+    evidence: [{path: crates/registry-serverctl/tests/cli.rs, name: package_always_uses_production_compilation_and_never_offers_a_signing_command}, {path: crates/registry-serverctl/tests/diff.rs, name: production_trust_is_verified_without_opening_runtime_dependencies}, {path: crates/registry-server/tests/postgres_package.rs, name: wrong_migration_role_is_refused_before_initial_control_plane_or_ddl}, {path: products/registry-server/scripts/test-adopter-workflow.sh, name: test-adopter-workflow.sh}]

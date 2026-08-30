@@ -45,6 +45,7 @@ SHARDS = {
         "registry-relay-client-py",
     ),
     "relay-v2": ("registry-relay-v2", "registry-relayctl"),
+    "registry-server": ("registry-server", "registry-serverctl"),
     "evidence": (
         "registry-evidence",
         "registry-evidence-authoring",
@@ -68,6 +69,7 @@ PLATFORM_PACKAGES = frozenset(SHARDS["platform"])
 MANIFEST_PACKAGES = frozenset(SHARDS["manifest"])
 RELAY_V2_PACKAGES = frozenset(SHARDS["relay-v2"])
 RELAY_CLIENT_PACKAGES = frozenset(SHARDS["relay-client"])
+REGISTRY_SERVER_PACKAGES = frozenset(SHARDS["registry-server"])
 
 # Provider publication is part of the Discovery product contract even though
 # Evidence and Relay own its generation and serving code. Keep this explicit:
@@ -514,6 +516,8 @@ def classify(
                 seeds.update(PLATFORM_PACKAGES)
             elif path.startswith("products/relay-v2/"):
                 seeds.update(RELAY_V2_PACKAGES)
+            elif path.startswith("products/registry-server/"):
+                seeds.update(REGISTRY_SERVER_PACKAGES)
             elif path.startswith("products/identifiers/"):
                 # The catalog gate compiles its focused Relay V2 exporter.
                 # Catalog-only tooling does not require the full Rust matrix.
@@ -706,6 +710,7 @@ def classify(
         or any(path in DISCOVERY_TUTORIAL_INPUTS for path in paths),
         "relay_v2_contracts": bool(affected & RELAY_V2_PACKAGES),
         "relay_client_contracts": bool(affected & RELAY_CLIENT_PACKAGES),
+        "registry_server_contracts": bool(affected & REGISTRY_SERVER_PACKAGES),
         "evidence_contracts": bool(affected & EVIDENCE_PACKAGES),
         "release_tool": release_tool,
         "release_source_proof": release_source_proof,

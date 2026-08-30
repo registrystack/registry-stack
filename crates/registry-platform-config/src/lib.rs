@@ -5,7 +5,9 @@ mod secrets;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-pub use secrets::{ProtectedSecret, SecretError, SecretProvider, SecretResolver, MAX_SECRET_BYTES};
+pub use secrets::{
+    ProtectedSecret, SecretError, SecretProvider, SecretReference, SecretResolver, MAX_SECRET_BYTES,
+};
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct DeprecatedConfigField {

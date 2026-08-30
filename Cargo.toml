@@ -36,6 +36,8 @@ members = [
     "crates/registry-relay-client-py",
     "crates/registry-relay-v2",
     "crates/registry-relayctl",
+    "crates/registry-server",
+    "crates/registry-serverctl",
     "crates/registry-language-server",
 ]
 exclude = [
@@ -79,6 +81,8 @@ registry-relay-client-node = { path = "crates/registry-relay-client-node", versi
 registry-relay-client-py = { path = "crates/registry-relay-client-py", version = "0.25.0" }
 registry-relay-v2 = { path = "crates/registry-relay-v2", version = "0.25.0" }
 registry-relayctl = { path = "crates/registry-relayctl", version = "0.25.0" }
+registry-server = { path = "crates/registry-server", version = "0.25.0", default-features = false }
+registry-serverctl = { path = "crates/registry-serverctl", version = "0.25.0" }
 registry-platform-audit = { path = "crates/registry-platform-audit", version = "0.25.0" }
 registry-platform-authcommon = { path = "crates/registry-platform-authcommon", version = "0.25.0" }
 registry-platform-buildinfo = { path = "crates/registry-platform-buildinfo", version = "0.25.0" }
@@ -106,6 +110,7 @@ chrono-tz = { version = "0.10.4" }
 clap = { version = "4", features = ["derive", "env"] }
 criterion = { version = "0.8", features = ["html_reports", "async_tokio"] }
 csv = { version = "1" }
+deadpool-postgres = { version = "=0.14.2", default-features = false, features = ["rt_tokio_1"] }
 ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }
 fake = { version = "=4.4.0", default-features = false }
 fs2 = { version = "0.4" }
@@ -127,6 +132,7 @@ napi = { version = "3.12.0", features = ["async", "serde-json"] }
 napi-build = { version = "2.4.0" }
 napi-derive = { version = "3.6.2" }
 p256 = { version = "0.13", features = ["ecdsa"] }
+pg_query = { version = "=6.1.1", default-features = false }
 pkcs1 = { version = "0.7", features = ["alloc"] }
 pkcs8 = { version = "0.10" }
 proptest = { version = "1" }
@@ -138,6 +144,7 @@ rand_core = { version = "0.6", features = ["std"] }
 rcgen = { version = "0.13", default-features = false, features = ["ring", "zeroize"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "rustls-tls-native-roots"] }
 rhai = { version = "=1.25.1", features = ["sync", "serde"] }
+rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
 # `bundled` vendors the SQLite amalgamation, so a statement source needs no
 # system library. `hooks` carries the authorizer and the progress handler, which
 # are the statement source's safety boundary and its only real cancellation.
@@ -158,6 +165,8 @@ tempfile = { version = "3" }
 thiserror = { version = "2" }
 time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }
 tokio = { version = "1", features = ["fs", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-postgres = { version = "=0.7.18", features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
+tokio-postgres-rustls = { version = "=0.14.0", default-features = false, features = ["ring", "native-certs"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 tower = { version = "0.5" }
 tower-lsp-server = { version = "0.23" }

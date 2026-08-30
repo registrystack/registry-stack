@@ -1,0 +1,8 @@
+id: publicschema-household-demographics
+version: 0.1.0
+dependencies: [publicschema-household-core]
+extendEntities:
+  - entity: person
+    fields:
+      - {id: residency-status, type: vocabulary-code, vocabulary: residency-status, required: true, classification: restricted}
+      - {id: preferred-language, type: vocabulary-code, vocabulary: preferred-language, required: false, classification: restricted}

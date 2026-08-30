@@ -1,0 +1,105 @@
+apiVersion: registry.registrystack.org/server-journeys/v1
+journeys:
+  - id: household-person-lifecycle
+    steps:
+      - id: create-person
+        entity: person
+        accessProfile: household-operator
+        claims: &household_operator_claims
+          principal: synthetic-household-operator
+          scopes: [registry:household:operate]
+          purpose: household-administration
+        request:
+          operation: create
+          data:
+            person-code: PERSON-SYNTH-001
+            legal-name: Synthetic Person One
+            family-name: Example
+            date-of-birth: 1990-01-15
+            residency-status: usual-resident
+            preferred-language: en
+        expect:
+          outcome: success
+          status: 201
+          fields:
+            person-code: PERSON-SYNTH-001
+            legal-name: Synthetic Person One
+            family-name: Example
+            date-of-birth: 1990-01-15
+            residency-status: usual-resident
+            preferred-language: en
+        capture: first-person
+      - id: get-person
+        entity: person
+        accessProfile: household-operator
+        claims: *household_operator_claims
+        request: {operation: get, recordRef: first-person}
+        expect:
+          outcome: success
+          status: 200
+          fields: {person-code: PERSON-SYNTH-001, residency-status: usual-resident}
+      - id: update-person-residency
+        entity: person
+        accessProfile: household-operator
+        claims: *household_operator_claims
+        request:
+          operation: patch
+          recordRef: first-person
+          etagRef: first-person
+          changes:
+            - {field: residency-status, value: temporary-resident}
+        expect:
+          outcome: success
+          status: 200
+          fields:
+            person-code: PERSON-SYNTH-001
+            residency-status: temporary-resident
+        capture: updated-person
+      - id: create-household
+        entity: household
+        accessProfile: household-operator
+        claims: *household_operator_claims
+        request:
+          operation: create
+          data:
+            household-code: HOUSEHOLD-SYNTH-001
+            household-name: Synthetic Example Household
+            administrative-area: demonstration-area
+            household-type: private
+        expect:
+          outcome: success
+          status: 201
+          fields:
+            household-code: HOUSEHOLD-SYNTH-001
+            household-name: Synthetic Example Household
+            administrative-area: demonstration-area
+            household-type: private
+        capture: first-household
+      - id: list-people
+        entity: person
+        accessProfile: household-operator
+        claims: *household_operator_claims
+        request: {operation: list}
+        expect: {outcome: success, status: 200, count: 1}
+      - id: refuse-incomplete-membership
+        entity: group-membership
+        accessProfile: household-operator
+        claims: *household_operator_claims
+        request:
+          operation: create
+          data: {relationship: head, valid-from: 2026-01-01}
+        expect:
+          outcome: refusal
+          status: 400
+          problemCode: request.invalid
+      - id: operator-without-purpose-is-concealed
+        entity: person
+        accessProfile: household-operator
+        claims:
+          principal: synthetic-household-operator
+          scopes: [registry:household:operate]
+        request: {operation: get, recordRef: updated-person}
+        expect:
+          outcome: refusal
+          status: 404
+          problemCode: resource.not_found

@@ -1,0 +1,1798 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Strict deployment-only runtime configuration for Registry Server.
+
+use std::{
+    collections::HashSet,
+    fmt, fs,
+    io::Read,
+    net::SocketAddr,
+    path::{Component, Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
+
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine as _;
+use jsonwebtoken::jwk::JwkSet;
+use registry_platform_audit::AuditProfile;
+use registry_platform_config::{
+    expand_config_env_vars_with, SecretError, SecretProvider, SecretReference, SecretResolver,
+};
+use registry_platform_crypto::{parse_json_strict, PublicJwk, SigningAlgorithm};
+use registry_platform_oidc::{
+    fetch_discovery, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifierConfig,
+};
+use serde::Deserialize;
+use serde_json::{Map, Value};
+use thiserror::Error;
+use zeroize::Zeroizing;
+
+use crate::{
+    auth::{AuthorityClaimConfig, RowBoundaryClaimMapping, RowBoundaryClaimType},
+    cursor::CursorCodec,
+    event_destination::{
+        ActivatedEventDestinationRegistry, EventDestinationConfigs, RawEventDestinationConfigs,
+    },
+    model::CompiledRegistry,
+    package::{PackageIntent, PackageLoadContext},
+    postgres::{ConnectionConfig, PoolBounds, SqlIdentifier},
+};
+
+const MAX_RUNTIME_CONFIG_BYTES: u64 = 64 * 1024;
+const MAX_PATH_BYTES: usize = 512;
+const MAX_DEPLOYMENT_VALUE_BYTES: usize = 256;
+const MAX_OIDC_VALUE_BYTES: usize = 2048;
+const MAX_LIST_ITEMS: usize = 128;
+const MAX_LIST_VALUE_BYTES: usize = 512;
+const MAX_JWKS_DOCUMENT_BYTES: u64 = 1024 * 1024;
+const MIN_RSA_MODULUS_BITS: usize = 2048;
+const MAX_RSA_MODULUS_BITS: usize = 8192;
+const MAX_RSA_EXPONENT_BYTES: usize = 8;
+
+#[derive(Debug, Error, Clone, Copy, Eq, PartialEq)]
+pub enum RuntimeConfigError {
+    #[error("the runtime configuration file is unavailable")]
+    Unavailable,
+    #[error("the runtime configuration file is unsafe")]
+    UnsafeFile,
+    #[error("the runtime configuration exceeds its resource bounds")]
+    Bounds,
+    #[error("runtime configuration environment expansion was refused")]
+    EnvExpansion,
+    #[error("the runtime configuration document is invalid")]
+    Document,
+    #[error("runtime configuration contains a governed member")]
+    GovernedMember,
+    #[error("runtime configuration contains an invalid deployment binding")]
+    InvalidBinding,
+    #[error("runtime configuration contains an invalid listener binding")]
+    InvalidListener,
+    #[error("runtime configuration contains an invalid secret provider binding")]
+    InvalidSecretProvider,
+    #[error("runtime configuration contains an invalid database binding")]
+    InvalidDatabase,
+    #[error("runtime configuration contains an invalid package binding")]
+    InvalidPackage,
+    #[error("runtime configuration contains an invalid OIDC binding")]
+    InvalidOidc,
+    #[error("runtime configuration contains an invalid audit binding")]
+    InvalidAudit,
+    #[error("runtime configuration contains an invalid cursor binding")]
+    InvalidCursor,
+    #[error("runtime configuration contains an invalid event destination binding")]
+    InvalidEventDestination,
+    #[error("runtime configuration contains invalid operational bounds")]
+    InvalidBounds,
+    #[error("runtime configuration secret resolution failed")]
+    Secret,
+}
+
+impl From<SecretError> for RuntimeConfigError {
+    fn from(_error: SecretError) -> Self {
+        Self::Secret
+    }
+}
+
+pub type Result<T> = std::result::Result<T, RuntimeConfigError>;
+
+pub fn load_runtime_config(path: &Path) -> Result<RuntimeConfig> {
+    load_runtime_config_with_env(path, |name| std::env::var(name).ok())
+}
+
+pub fn load_runtime_config_with_env(
+    path: &Path,
+    lookup: impl Fn(&str) -> Option<String>,
+) -> Result<RuntimeConfig> {
+    validate_absolute_lexical_path(path, RuntimeConfigError::UnsafeFile)?;
+    reject_symlink_components(path, RuntimeConfigError::UnsafeFile)?;
+    let bytes = read_bounded_runtime_config(path, MAX_RUNTIME_CONFIG_BYTES)?;
+    let raw = std::str::from_utf8(&bytes).map_err(|_| RuntimeConfigError::Document)?;
+    parse_runtime_config_with_env(raw, lookup).and_then(|config| {
+        config.validate_loaded_paths()?;
+        Ok(config)
+    })
+}
+
+pub fn parse_runtime_config(raw: &str) -> Result<RuntimeConfig> {
+    parse_runtime_config_with_env(raw, |name| std::env::var(name).ok())
+}
+
+pub fn parse_runtime_config_with_env(
+    raw: &str,
+    lookup: impl Fn(&str) -> Option<String>,
+) -> Result<RuntimeConfig> {
+    if raw.is_empty() || raw.len() > usize::try_from(MAX_RUNTIME_CONFIG_BYTES).unwrap_or(usize::MAX)
+    {
+        return Err(RuntimeConfigError::Bounds);
+    }
+    let expanded =
+        expand_config_env_vars_with(raw, lookup).map_err(|_| RuntimeConfigError::EnvExpansion)?;
+    if expanded.len() > usize::try_from(MAX_RUNTIME_CONFIG_BYTES).unwrap_or(usize::MAX) {
+        return Err(RuntimeConfigError::Bounds);
+    }
+    parse_expanded_runtime_config(&expanded)
+}
+
+fn parse_expanded_runtime_config(expanded: &str) -> Result<RuntimeConfig> {
+    reject_governed_members(expanded)?;
+    let raw: RawRuntimeConfig =
+        serde_norway::from_str(expanded).map_err(|_| RuntimeConfigError::Document)?;
+    RuntimeConfig::from_raw(raw)
+}
+
+fn reject_governed_members(raw: &str) -> Result<()> {
+    let value: serde_norway::Value =
+        serde_norway::from_str(raw).map_err(|_| RuntimeConfigError::Document)?;
+    if contains_governed_member(&value) {
+        return Err(RuntimeConfigError::GovernedMember);
+    }
+    Ok(())
+}
+
+fn contains_governed_member(value: &serde_norway::Value) -> bool {
+    const GOVERNED: &[&str] = &[
+        "entities",
+        "fields",
+        "accessProfiles",
+        "routes",
+        "events",
+        "packages",
+        "sources",
+        "semantics",
+        "classifications",
+        "relationships",
+        "mutationMode",
+        "readableFields",
+        "writableFields",
+        "rowBoundaries",
+        "requiredScopes",
+        "requiredPurposes",
+        "retention",
+        "webhooks",
+        "telemetry",
+        "cors",
+    ];
+    match value {
+        serde_norway::Value::Mapping(mapping) => mapping.iter().any(|(key, value)| {
+            key.as_str().is_some_and(|key| GOVERNED.contains(&key))
+                // Destination-map keys are compiler-issued logical ids. Do not
+                // reinterpret an id such as `events` as a governed field; the
+                // strict destination value type rejects every undeployed key.
+                || (!key
+                    .as_str()
+                    .is_some_and(|key| key == "eventDestinations")
+                    && contains_governed_member(value))
+        }),
+        serde_norway::Value::Sequence(values) => values.iter().any(contains_governed_member),
+        _ => false,
+    }
+}
+
+#[derive(Clone)]
+pub struct RuntimeConfig {
+    listener: ListenerConfig,
+    identity: DeploymentIdentity,
+    secret_providers: SecretProvidersConfig,
+    database: DatabaseConfig,
+    package: PackageConfig,
+    authentication: AuthenticationConfig,
+    audit: AuditConfig,
+    cursor: CursorConfig,
+    event_destinations: EventDestinationConfigs,
+    operational_timeouts: OperationalTimeouts,
+}
+
+impl RuntimeConfig {
+    fn from_raw(raw: RawRuntimeConfig) -> Result<Self> {
+        let listener = ListenerConfig::from_raw(raw.listener)?;
+        let identity = DeploymentIdentity::from_raw(raw.identity)?;
+        let secret_providers = SecretProvidersConfig::from_raw(raw.secret_providers)?;
+        let database = DatabaseConfig::from_raw(raw.database)?;
+        let package = PackageConfig::from_raw(raw.package)?;
+        let authentication = AuthenticationConfig::from_raw(raw.authentication)?;
+        let audit = AuditConfig::from_raw(raw.audit)?;
+        let cursor = CursorConfig::from_raw(raw.cursor)?;
+        let event_destinations = EventDestinationConfigs::from_raw(raw.event_destinations)
+            .map_err(|_| RuntimeConfigError::InvalidEventDestination)?;
+        let operational_timeouts = OperationalTimeouts::from_raw(raw.operational_timeouts)?;
+        Ok(Self {
+            listener,
+            identity,
+            secret_providers,
+            database,
+            package,
+            authentication,
+            audit,
+            cursor,
+            event_destinations,
+            operational_timeouts,
+        })
+    }
+
+    pub fn listener(&self) -> &ListenerConfig {
+        &self.listener
+    }
+
+    pub fn identity(&self) -> &DeploymentIdentity {
+        &self.identity
+    }
+
+    pub fn database(&self) -> &DatabaseConfig {
+        &self.database
+    }
+
+    pub fn package(&self) -> &PackageConfig {
+        &self.package
+    }
+
+    pub fn authentication(&self) -> &AuthenticationConfig {
+        &self.authentication
+    }
+
+    pub fn audit(&self) -> &AuditConfig {
+        &self.audit
+    }
+
+    pub fn cursor(&self) -> &CursorConfig {
+        &self.cursor
+    }
+
+    pub async fn oidc_key_source(&self) -> Result<Arc<JwksFetcher>> {
+        self.authentication
+            .oidc
+            .key_source(&self.secret_resolver()?)
+            .await
+    }
+
+    /// Activate the exact deployment bindings required by the compiled Registry.
+    pub fn activate_event_destinations(
+        &self,
+        compiled: &CompiledRegistry,
+    ) -> std::result::Result<
+        ActivatedEventDestinationRegistry,
+        crate::event_destination::EventDestinationActivationError,
+    > {
+        let resolver = self
+            .secret_resolver()
+            .map_err(|_| crate::event_destination::EventDestinationActivationError::Secret)?;
+        ActivatedEventDestinationRegistry::activate(compiled, &self.event_destinations, &resolver)
+    }
+
+    pub fn operational_timeouts(&self) -> &OperationalTimeouts {
+        &self.operational_timeouts
+    }
+
+    pub fn secret_resolver(&self) -> Result<SecretResolver> {
+        self.secret_providers.resolver()
+    }
+
+    pub fn runtime_database_connection_config(&self) -> Result<ConnectionConfig> {
+        self.database_connection_config_for(
+            &self.database.runtime_url_ref,
+            self.database.roles.runtime(),
+        )
+    }
+
+    pub fn migration_database_connection_config(&self) -> Result<ConnectionConfig> {
+        self.database_connection_config_for(
+            &self.database.migration_url_ref,
+            self.database.roles.migration(),
+        )
+    }
+
+    fn database_connection_config_for(
+        &self,
+        url_ref: &SecretReference,
+        expected_role: &SqlIdentifier,
+    ) -> Result<ConnectionConfig> {
+        let secret = self.secret_resolver()?.resolve_reference(url_ref)?;
+        let url =
+            std::str::from_utf8(secret.expose_secret()).map_err(|_| RuntimeConfigError::Secret)?;
+        let postgres = url
+            .parse::<tokio_postgres::Config>()
+            .map_err(|_| RuntimeConfigError::InvalidDatabase)?;
+        if postgres.get_user() != Some(expected_role.as_str()) {
+            return Err(RuntimeConfigError::InvalidDatabase);
+        }
+        ConnectionConfig::require_tls_config(postgres, self.database.pool_bounds)
+            .map_err(|_| RuntimeConfigError::InvalidDatabase)
+    }
+
+    pub fn audit_profile(&self) -> Result<AuditProfile> {
+        let secret = self
+            .secret_resolver()?
+            .resolve_reference(&self.audit.hash_key_ref)?;
+        AuditProfile::production_from_secret_bytes(Zeroizing::new(secret.expose_secret().to_vec()))
+            .map_err(|_| RuntimeConfigError::InvalidAudit)
+    }
+
+    pub fn cursor_codec(&self) -> Result<CursorCodec> {
+        let secret = self
+            .secret_resolver()?
+            .resolve_reference(&self.cursor.secret_ref)?;
+        CursorCodec::new(
+            Zeroizing::new(secret.expose_secret().to_vec()),
+            self.cursor.max_age,
+        )
+        .map_err(|_| RuntimeConfigError::InvalidCursor)
+    }
+
+    pub fn package_load_context(&self) -> PackageLoadContext<'_> {
+        PackageLoadContext {
+            environment: self.identity.environment.as_str(),
+            instance_id: self.identity.instance_id.as_str(),
+            database_id: self.identity.database_id.as_str(),
+            database_initialization_environment: self
+                .identity
+                .database_initialization_environment
+                .as_str(),
+            compiler_source_revision: self.package.compiler_source_revision.as_str(),
+            trust_anchor: self.package_trust_anchor(),
+            intent: PackageIntent::Startup {
+                active_revision: self.package.active_revision.as_str(),
+                active_sequence: self.package.active_sequence,
+            },
+        }
+    }
+
+    /// Production package verification is anchored. Local unsigned packages
+    /// must not carry trust authority into the package verifier.
+    pub fn package_trust_anchor(&self) -> Option<&Path> {
+        (self.identity.database_initialization_environment != "local")
+            .then_some(self.package.trust_anchor_path.as_path())
+    }
+
+    fn validate_loaded_paths(&self) -> Result<()> {
+        validate_existing_directory(&self.package.root, RuntimeConfigError::InvalidPackage)?;
+        if let Some(trust_anchor) = self.package_trust_anchor() {
+            validate_existing_file(trust_anchor, RuntimeConfigError::InvalidPackage)?;
+        }
+        if let Some(root) = self.secret_providers.file_root() {
+            validate_existing_directory(root, RuntimeConfigError::InvalidSecretProvider)?;
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for RuntimeConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RuntimeConfig")
+            .field("listener", &self.listener)
+            .field("identity", &self.identity)
+            .field("secret_providers", &self.secret_providers)
+            .field("database", &self.database)
+            .field("package", &self.package)
+            .field("authentication", &self.authentication)
+            .field("audit", &self.audit)
+            .field("cursor", &self.cursor)
+            .field("event_destinations", &self.event_destinations)
+            .field("operational_timeouts", &self.operational_timeouts)
+            .finish()
+    }
+}
+
+#[derive(Clone)]
+pub struct ListenerConfig {
+    bind: SocketAddr,
+    trusted_proxy: TrustedProxyPosture,
+}
+
+impl ListenerConfig {
+    fn from_raw(raw: RawListenerConfig) -> Result<Self> {
+        let bind = raw
+            .bind
+            .parse::<SocketAddr>()
+            .map_err(|_| RuntimeConfigError::InvalidListener)?;
+        Ok(Self {
+            bind,
+            trusted_proxy: raw.trusted_proxy,
+        })
+    }
+
+    pub fn bind(&self) -> SocketAddr {
+        self.bind
+    }
+
+    pub fn trusted_proxy(&self) -> TrustedProxyPosture {
+        self.trusted_proxy
+    }
+}
+
+impl fmt::Debug for ListenerConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ListenerConfig")
+            .field("bind", &"<redacted>")
+            .field("trusted_proxy", &self.trusted_proxy)
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum TrustedProxyPosture {
+    Direct,
+    OperatorControlledUpstream,
+}
+
+#[derive(Clone)]
+pub struct DeploymentIdentity {
+    environment: String,
+    instance_id: String,
+    database_id: String,
+    database_initialization_environment: String,
+}
+
+impl DeploymentIdentity {
+    fn from_raw(raw: RawDeploymentIdentity) -> Result<Self> {
+        validate_deployment_value(&raw.environment)?;
+        validate_deployment_value(&raw.instance_id)?;
+        validate_deployment_value(&raw.database_id)?;
+        validate_deployment_value(&raw.database_initialization_environment)?;
+        Ok(Self {
+            environment: raw.environment,
+            instance_id: raw.instance_id,
+            database_id: raw.database_id,
+            database_initialization_environment: raw.database_initialization_environment,
+        })
+    }
+
+    pub fn environment(&self) -> &str {
+        &self.environment
+    }
+
+    pub fn instance_id(&self) -> &str {
+        &self.instance_id
+    }
+
+    pub fn database_id(&self) -> &str {
+        &self.database_id
+    }
+
+    pub fn database_initialization_environment(&self) -> &str {
+        &self.database_initialization_environment
+    }
+}
+
+impl fmt::Debug for DeploymentIdentity {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DeploymentIdentity")
+            .field("environment", &"<redacted>")
+            .field("instance_id", &"<redacted>")
+            .field("database_id", &"<redacted>")
+            .field("database_initialization_environment", &"<redacted>")
+            .finish()
+    }
+}
+
+#[derive(Clone)]
+pub struct SecretProvidersConfig {
+    environment: bool,
+    file: Option<FileSecretProviderConfig>,
+}
+
+impl SecretProvidersConfig {
+    fn from_raw(raw: RawSecretProvidersConfig) -> Result<Self> {
+        if raw.environment.is_none() && raw.file.is_none() {
+            return Err(RuntimeConfigError::InvalidSecretProvider);
+        }
+        let file = raw
+            .file
+            .map(FileSecretProviderConfig::from_raw)
+            .transpose()?;
+        Ok(Self {
+            environment: raw.environment.is_some(),
+            file,
+        })
+    }
+
+    fn resolver(&self) -> Result<SecretResolver> {
+        let mut providers = Vec::new();
+        if self.environment {
+            providers.push(SecretProvider::Environment);
+        }
+        if self.file.is_some() {
+            providers.push(SecretProvider::File);
+        }
+        let root = self
+            .file
+            .as_ref()
+            .map_or_else(PathBuf::new, |file| file.root.clone());
+        SecretResolver::new(providers, root).map_err(Into::into)
+    }
+
+    fn file_root(&self) -> Option<&Path> {
+        self.file.as_ref().map(|file| file.root.as_path())
+    }
+}
+
+impl fmt::Debug for SecretProvidersConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SecretProvidersConfig")
+            .field("environment", &self.environment)
+            .field("file", &self.file.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
+}
+
+#[derive(Clone)]
+pub struct FileSecretProviderConfig {
+    root: PathBuf,
+}
+
+impl FileSecretProviderConfig {
+    fn from_raw(raw: RawFileSecretProviderConfig) -> Result<Self> {
+        validate_absolute_lexical_path(&raw.root, RuntimeConfigError::InvalidSecretProvider)?;
+        Ok(Self { root: raw.root })
+    }
+}
+
+#[derive(Clone)]
+pub struct DatabaseConfig {
+    runtime_url_ref: SecretReference,
+    migration_url_ref: SecretReference,
+    pool_bounds: PoolBounds,
+    roles: SqlRoles,
+}
+
+impl DatabaseConfig {
+    fn from_raw(raw: RawDatabaseConfig) -> Result<Self> {
+        if raw.plaintext.is_some() || raw.url.is_some() || raw.password.is_some() {
+            return Err(RuntimeConfigError::InvalidDatabase);
+        }
+        let runtime_url_ref =
+            parse_secret_reference(raw.runtime_url_ref, RuntimeConfigError::InvalidDatabase)?;
+        let migration_url_ref =
+            parse_secret_reference(raw.migration_url_ref, RuntimeConfigError::InvalidDatabase)?;
+        if runtime_url_ref == migration_url_ref {
+            return Err(RuntimeConfigError::InvalidDatabase);
+        }
+        let pool_bounds = PoolBounds::new(
+            raw.pool.max_size,
+            millis(raw.pool.wait_timeout_milliseconds)?,
+            millis(raw.pool.create_timeout_milliseconds)?,
+            millis(raw.pool.recycle_timeout_milliseconds)?,
+        )
+        .map_err(|_| RuntimeConfigError::InvalidBounds)?;
+        Ok(Self {
+            runtime_url_ref,
+            migration_url_ref,
+            pool_bounds,
+            roles: SqlRoles::from_raw(raw.roles)?,
+        })
+    }
+
+    pub fn pool_bounds(&self) -> PoolBounds {
+        self.pool_bounds
+    }
+}
+
+impl fmt::Debug for DatabaseConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DatabaseConfig")
+            .field("runtime_url_ref", &"<redacted>")
+            .field("migration_url_ref", &"<redacted>")
+            .field("pool_bounds", &self.pool_bounds)
+            .finish()
+    }
+}
+
+#[derive(Clone)]
+pub struct PackageConfig {
+    root: PathBuf,
+    trust_anchor_path: PathBuf,
+    compiler_source_revision: String,
+    active_revision: String,
+    active_sequence: u64,
+}
+
+impl PackageConfig {
+    fn from_raw(raw: RawPackageConfig) -> Result<Self> {
+        validate_absolute_lexical_path(&raw.root, RuntimeConfigError::InvalidPackage)?;
+        validate_absolute_lexical_path(&raw.trust_anchor_path, RuntimeConfigError::InvalidPackage)?;
+        validate_deployment_value(&raw.compiler_source_revision)?;
+        validate_deployment_value(&raw.active_revision)?;
+        if raw.active_sequence == 0 {
+            return Err(RuntimeConfigError::InvalidPackage);
+        }
+        Ok(Self {
+            root: raw.root,
+            trust_anchor_path: raw.trust_anchor_path,
+            compiler_source_revision: raw.compiler_source_revision,
+            active_revision: raw.active_revision,
+            active_sequence: raw.active_sequence,
+        })
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn trust_anchor_path(&self) -> &Path {
+        &self.trust_anchor_path
+    }
+
+    pub fn compiler_source_revision(&self) -> &str {
+        &self.compiler_source_revision
+    }
+
+    pub fn active_revision(&self) -> &str {
+        &self.active_revision
+    }
+
+    pub fn active_sequence(&self) -> u64 {
+        self.active_sequence
+    }
+}
+
+impl fmt::Debug for PackageConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PackageConfig")
+            .field("root", &"<redacted>")
+            .field("trust_anchor_path", &"<redacted>")
+            .field("compiler_source_revision", &"<redacted>")
+            .field("active_revision", &"<redacted>")
+            .field("active_sequence", &self.active_sequence)
+            .finish()
+    }
+}
+
+#[derive(Clone)]
+pub struct AuthenticationConfig {
+    oidc: OidcVerifierConfig,
+    authority_claims: AuthorityClaimsConfig,
+}
+
+impl AuthenticationConfig {
+    fn from_raw(raw: RawAuthenticationConfig) -> Result<Self> {
+        Ok(Self {
+            oidc: OidcVerifierConfig::from_raw(raw.oidc)?,
+            authority_claims: AuthorityClaimsConfig::from_raw(raw.authority_claims)?,
+        })
+    }
+
+    pub fn oidc(&self) -> &OidcVerifierConfig {
+        &self.oidc
+    }
+
+    pub fn authority_claim_config(&self) -> AuthorityClaimConfig {
+        self.authority_claims.to_platform_config()
+    }
+}
+
+impl fmt::Debug for AuthenticationConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AuthenticationConfig")
+            .field("oidc", &self.oidc)
+            .field("authority_claims", &self.authority_claims)
+            .finish()
+    }
+}
+
+#[derive(Clone)]
+pub struct OidcVerifierConfig {
+    issuer: String,
+    audience: String,
+    allowed_algorithm: OidcAlgorithm,
+    access_token_type: String,
+    scope_claim: String,
+    scope_separator: char,
+    allowed_clients: Vec<String>,
+    denied_kids: Vec<String>,
+    max_token_lifetime: Duration,
+    leeway: Duration,
+    jwks_cache: JwksCacheConfig,
+    jwks_source: OidcJwksSource,
+}
+
+impl OidcVerifierConfig {
+    fn from_raw(raw: RawOidcVerifierConfig) -> Result<Self> {
+        validate_oidc_value(&raw.issuer)?;
+        validate_oidc_value(&raw.audience)?;
+        validate_oidc_value(&raw.access_token_type)?;
+        validate_claim_name(&raw.scope_claim)?;
+        if raw.scope_separator.is_control() || raw.scope_separator.is_alphanumeric() {
+            return Err(RuntimeConfigError::InvalidOidc);
+        }
+        validate_bounded_list(&raw.allowed_clients)?;
+        validate_bounded_list(&raw.denied_kids)?;
+        let denied_unique = raw.denied_kids.iter().collect::<HashSet<_>>();
+        if denied_unique.len() != raw.denied_kids.len() {
+            return Err(RuntimeConfigError::InvalidOidc);
+        }
+        let allowed_unique = raw.allowed_clients.iter().collect::<HashSet<_>>();
+        if allowed_unique.len() != raw.allowed_clients.len() {
+            return Err(RuntimeConfigError::InvalidOidc);
+        }
+        let max_token_lifetime = seconds_bounded(raw.max_token_lifetime_seconds, 1, 3600)?;
+        let leeway = millis_bounded(raw.leeway_milliseconds, 0, 300_000)?;
+        Ok(Self {
+            issuer: raw.issuer,
+            audience: raw.audience,
+            allowed_algorithm: raw.allowed_algorithm,
+            access_token_type: raw.access_token_type,
+            scope_claim: raw.scope_claim,
+            scope_separator: raw.scope_separator,
+            allowed_clients: raw.allowed_clients,
+            denied_kids: raw.denied_kids,
+            max_token_lifetime,
+            leeway,
+            jwks_cache: JwksCacheConfig::from_raw(raw.jwks_cache)?,
+            jwks_source: raw
+                .jwks_source
+                .map(OidcJwksSource::from_raw)
+                .transpose()?
+                .unwrap_or(OidcJwksSource::Discovery),
+        })
+    }
+
+    pub fn discovery_config(&self) -> OidcDiscoveryConfig {
+        OidcDiscoveryConfig {
+            issuer: self.issuer.clone(),
+            jwks_uri_override: None,
+            discovery_timeout: self.jwks_cache.request_timeout,
+            max_doc_bytes: self.jwks_cache.max_document_bytes,
+        }
+    }
+
+    pub fn jwks_fetcher_config(&self) -> JwksFetcherConfig {
+        JwksFetcherConfig {
+            cache_ttl: self.jwks_cache.cache_ttl,
+            negative_cache_ttl: self.jwks_cache.negative_cache_ttl,
+            refresh_cooldown: self.jwks_cache.refresh_cooldown,
+            max_doc_bytes: self.jwks_cache.max_document_bytes,
+            request_timeout: self.jwks_cache.request_timeout,
+            outage_tolerance: self.jwks_cache.outage_tolerance,
+        }
+    }
+
+    pub fn token_verifier_config(&self) -> TokenVerifierConfig {
+        TokenVerifierConfig::access_token_profile(
+            self.issuer.clone(),
+            vec![self.audience.clone()],
+            vec![self.allowed_algorithm.as_jsonwebtoken()],
+            vec![self.access_token_type.clone()],
+        )
+        .with_scope_claim(self.scope_claim.clone())
+        .with_scope_separator(self.scope_separator)
+        .with_allowed_clients(self.allowed_clients.clone())
+        .with_denied_kids(self.denied_kids.iter().cloned().collect())
+        .with_max_token_lifetime(Some(self.max_token_lifetime))
+        .with_leeway(self.leeway)
+    }
+
+    async fn key_source(&self, resolver: &SecretResolver) -> Result<Arc<JwksFetcher>> {
+        match &self.jwks_source {
+            OidcJwksSource::Discovery => {
+                let discovery = fetch_discovery(&self.discovery_config())
+                    .await
+                    .map_err(|_| RuntimeConfigError::InvalidOidc)?;
+                Ok(Arc::new(JwksFetcher::new(
+                    discovery.jwks_uri,
+                    self.jwks_fetcher_config(),
+                )))
+            }
+            OidcJwksSource::Static { document_ref } => {
+                let document = resolver
+                    .resolve_reference(document_ref)
+                    .map_err(|_| RuntimeConfigError::InvalidOidc)?;
+                if document.is_empty()
+                    || u64::try_from(document.len())
+                        .map_or(true, |len| len > self.jwks_cache.max_document_bytes)
+                {
+                    return Err(RuntimeConfigError::InvalidOidc);
+                }
+                let jwks = validate_static_jwks(
+                    document.expose_secret(),
+                    self.allowed_algorithm,
+                    &self.denied_kids,
+                )?;
+                Ok(Arc::new(JwksFetcher::new_static(
+                    jwks,
+                    self.jwks_fetcher_config(),
+                )))
+            }
+        }
+    }
+}
+
+impl fmt::Debug for OidcVerifierConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("OidcVerifierConfig")
+            .field("issuer", &"<redacted>")
+            .field("audience", &"<redacted>")
+            .field("allowed_algorithm", &self.allowed_algorithm)
+            .field("access_token_type", &"<redacted>")
+            .field("scope_claim", &"<redacted>")
+            .field("scope_separator", &"<redacted>")
+            .field("allowed_clients_count", &self.allowed_clients.len())
+            .field("denied_kids_count", &self.denied_kids.len())
+            .field("max_token_lifetime", &self.max_token_lifetime)
+            .field("leeway", &self.leeway)
+            .field("jwks_cache", &self.jwks_cache)
+            .field("jwks_source", &self.jwks_source.kind())
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+pub enum OidcAlgorithm {
+    EdDSA,
+    ES256,
+    ES384,
+    RS256,
+    RS384,
+}
+
+impl OidcAlgorithm {
+    fn as_jsonwebtoken(self) -> jsonwebtoken::Algorithm {
+        match self {
+            Self::EdDSA => jsonwebtoken::Algorithm::EdDSA,
+            Self::ES256 => jsonwebtoken::Algorithm::ES256,
+            Self::ES384 => jsonwebtoken::Algorithm::ES384,
+            Self::RS256 => jsonwebtoken::Algorithm::RS256,
+            Self::RS384 => jsonwebtoken::Algorithm::RS384,
+        }
+    }
+
+    fn as_signing_algorithm(self) -> SigningAlgorithm {
+        match self {
+            Self::EdDSA => SigningAlgorithm::EdDsa,
+            Self::ES256 => SigningAlgorithm::Es256,
+            Self::ES384 => SigningAlgorithm::Es384,
+            Self::RS256 => SigningAlgorithm::Rs256,
+            Self::RS384 => SigningAlgorithm::Rs384,
+        }
+    }
+
+    fn as_jwa_name(self) -> &'static str {
+        self.as_signing_algorithm().jwa_name()
+    }
+}
+
+#[derive(Clone)]
+enum OidcJwksSource {
+    Discovery,
+    Static { document_ref: SecretReference },
+}
+
+impl OidcJwksSource {
+    fn from_raw(raw: RawOidcJwksSource) -> Result<Self> {
+        match raw {
+            RawOidcJwksSource::Discovery {} => Ok(Self::Discovery),
+            RawOidcJwksSource::Static { document_ref } => Ok(Self::Static {
+                document_ref: parse_secret_reference(
+                    document_ref,
+                    RuntimeConfigError::InvalidOidc,
+                )?,
+            }),
+        }
+    }
+
+    const fn kind(&self) -> OidcJwksSourceKind {
+        match self {
+            Self::Discovery => OidcJwksSourceKind::Discovery,
+            Self::Static { .. } => OidcJwksSourceKind::Static,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum OidcJwksSourceKind {
+    Discovery,
+    Static,
+}
+
+fn validate_static_jwks(
+    bytes: &[u8],
+    allowed_algorithm: OidcAlgorithm,
+    denied_kids: &[String],
+) -> Result<JwkSet> {
+    let value = parse_json_strict(bytes).map_err(|_| RuntimeConfigError::InvalidOidc)?;
+    let object = value.as_object().ok_or(RuntimeConfigError::InvalidOidc)?;
+    if object.len() != 1 || !object.contains_key("keys") {
+        return Err(RuntimeConfigError::InvalidOidc);
+    }
+    let keys = object
+        .get("keys")
+        .and_then(Value::as_array)
+        .ok_or(RuntimeConfigError::InvalidOidc)?;
+    if keys.is_empty() || keys.len() > MAX_LIST_ITEMS {
+        return Err(RuntimeConfigError::InvalidOidc);
+    }
+    let mut kids = HashSet::new();
+    for key in keys {
+        validate_static_jwk(key, allowed_algorithm, denied_kids, &mut kids)?;
+    }
+    serde_json::from_value::<JwkSet>(value).map_err(|_| RuntimeConfigError::InvalidOidc)
+}
+
+fn validate_static_jwk(
+    value: &Value,
+    allowed_algorithm: OidcAlgorithm,
+    denied_kids: &[String],
+    kids: &mut HashSet<String>,
+) -> Result<()> {
+    let object = value.as_object().ok_or(RuntimeConfigError::InvalidOidc)?;
+    validate_static_jwk_members(object)?;
+    validate_static_jwk_use(object)?;
+    validate_static_jwk_key_ops(object)?;
+    let kid = object
+        .get("kid")
+        .and_then(Value::as_str)
+        .ok_or(RuntimeConfigError::InvalidOidc)?;
+    validate_bounded_list(&[kid.to_owned()])?;
+    if denied_kids.iter().any(|denied| denied == kid) || !kids.insert(kid.to_owned()) {
+        return Err(RuntimeConfigError::InvalidOidc);
+    }
+    if object.get("alg").and_then(Value::as_str) != Some(allowed_algorithm.as_jwa_name()) {
+        return Err(RuntimeConfigError::InvalidOidc);
+    }
+    let public_jwk = PublicJwk::parse(
+        std::str::from_utf8(
+            &serde_json::to_vec(value).map_err(|_| RuntimeConfigError::InvalidOidc)?,
+        )
+        .map_err(|_| RuntimeConfigError::InvalidOidc)?,
+    )
+    .map_err(|_| RuntimeConfigError::InvalidOidc)?;
+    if public_jwk
+        .algorithm()
+        .map_err(|_| RuntimeConfigError::InvalidOidc)?
+        != allowed_algorithm.as_signing_algorithm()
+    {
+        return Err(RuntimeConfigError::InvalidOidc);
+    }
+    validate_static_jwk_shape(object, allowed_algorithm)?;
+    Ok(())
+}
+
+fn validate_static_jwk_members(object: &Map<String, Value>) -> Result<()> {
+    const ALLOWED: &[&str] = &[
+        "kty", "kid", "alg", "use", "key_ops", "crv", "x", "y", "n", "e",
+    ];
+    if object
+        .keys()
+        .any(|member| !ALLOWED.contains(&member.as_str()))
+    {
+        return Err(RuntimeConfigError::InvalidOidc);
+    }
+    Ok(())
+}
+
+fn validate_static_jwk_use(object: &Map<String, Value>) -> Result<()> {
+    match object.get("use") {
+        None => Ok(()),
+        Some(Value::String(value)) if value == "sig" => Ok(()),
+        Some(_) => Err(RuntimeConfigError::InvalidOidc),
+    }
+}
+
+fn validate_static_jwk_key_ops(object: &Map<String, Value>) -> Result<()> {
+    match object.get("key_ops") {
+        None => Ok(()),
+        Some(Value::Array(values)) => match values.as_slice() {
+            [Value::String(value)] if value == "verify" => Ok(()),
+            _ => Err(RuntimeConfigError::InvalidOidc),
+        },
+        Some(_) => Err(RuntimeConfigError::InvalidOidc),
+    }
+}
+
+fn validate_static_jwk_shape(
+    object: &Map<String, Value>,
+    allowed_algorithm: OidcAlgorithm,
+) -> Result<()> {
+    match allowed_algorithm {
+        OidcAlgorithm::EdDSA => {
+            if object.get("kty").and_then(Value::as_str) != Some("OKP")
+                || object.get("crv").and_then(Value::as_str) != Some("Ed25519")
+                || object.contains_key("y")
+                || object.contains_key("n")
+                || object.contains_key("e")
+            {
+                return Err(RuntimeConfigError::InvalidOidc);
+            }
+            decode_exact_jwk_member(object, "x", 32)?;
+        }
+        OidcAlgorithm::ES256 | OidcAlgorithm::ES384 => {
+            let (curve, coordinate_len) = match allowed_algorithm {
+                OidcAlgorithm::ES256 => ("P-256", 32),
+                OidcAlgorithm::ES384 => ("P-384", 48),
+                _ => unreachable!("only EC algorithms enter this branch"),
+            };
+            if object.get("kty").and_then(Value::as_str) != Some("EC")
+                || object.get("crv").and_then(Value::as_str) != Some(curve)
+                || object.contains_key("n")
+                || object.contains_key("e")
+            {
+                return Err(RuntimeConfigError::InvalidOidc);
+            }
+            decode_exact_jwk_member(object, "x", coordinate_len)?;
+            decode_exact_jwk_member(object, "y", coordinate_len)?;
+        }
+        OidcAlgorithm::RS256 | OidcAlgorithm::RS384 => {
+            if object.get("kty").and_then(Value::as_str) != Some("RSA")
+                || object.contains_key("crv")
+                || object.contains_key("x")
+                || object.contains_key("y")
+            {
+                return Err(RuntimeConfigError::InvalidOidc);
+            }
+            validate_static_rsa_members(object)?;
+        }
+    }
+    Ok(())
+}
+
+fn decode_exact_jwk_member(
+    object: &Map<String, Value>,
+    member: &'static str,
+    expected_len: usize,
+) -> Result<Vec<u8>> {
+    let value = object
+        .get(member)
+        .and_then(Value::as_str)
+        .ok_or(RuntimeConfigError::InvalidOidc)?;
+    let decoded = URL_SAFE_NO_PAD
+        .decode(value)
+        .map_err(|_| RuntimeConfigError::InvalidOidc)?;
+    if decoded.len() != expected_len {
+        return Err(RuntimeConfigError::InvalidOidc);
+    }
+    Ok(decoded)
+}
+
+fn validate_static_rsa_members(object: &Map<String, Value>) -> Result<()> {
+    let modulus = decode_nonempty_jwk_member(object, "n")?;
+    let significant_bits = significant_bit_len(&modulus);
+    if !(MIN_RSA_MODULUS_BITS..=MAX_RSA_MODULUS_BITS).contains(&significant_bits) {
+        return Err(RuntimeConfigError::InvalidOidc);
+    }
+    let exponent = decode_nonempty_jwk_member(object, "e")?;
+    if exponent.len() > MAX_RSA_EXPONENT_BYTES {
+        return Err(RuntimeConfigError::InvalidOidc);
+    }
+    let exponent_value = exponent
+        .iter()
+        .fold(0_u64, |acc, byte| (acc << 8) | u64::from(*byte));
+    if exponent_value < 3 || exponent_value % 2 == 0 {
+        return Err(RuntimeConfigError::InvalidOidc);
+    }
+    Ok(())
+}
+
+fn decode_nonempty_jwk_member(
+    object: &Map<String, Value>,
+    member: &'static str,
+) -> Result<Vec<u8>> {
+    let value = object
+        .get(member)
+        .and_then(Value::as_str)
+        .ok_or(RuntimeConfigError::InvalidOidc)?;
+    let decoded = URL_SAFE_NO_PAD
+        .decode(value)
+        .map_err(|_| RuntimeConfigError::InvalidOidc)?;
+    if decoded.is_empty() {
+        return Err(RuntimeConfigError::InvalidOidc);
+    }
+    Ok(decoded)
+}
+
+fn significant_bit_len(bytes: &[u8]) -> usize {
+    let first_non_zero = bytes
+        .iter()
+        .position(|byte| *byte != 0)
+        .unwrap_or(bytes.len());
+    let significant = &bytes[first_non_zero..];
+    significant
+        .first()
+        .map(|first| (significant.len() - 1) * 8 + (8 - first.leading_zeros() as usize))
+        .unwrap_or(0)
+}
+
+#[derive(Clone)]
+pub struct JwksCacheConfig {
+    cache_ttl: Duration,
+    negative_cache_ttl: Duration,
+    refresh_cooldown: Duration,
+    max_document_bytes: u64,
+    request_timeout: Duration,
+    outage_tolerance: Duration,
+}
+
+impl JwksCacheConfig {
+    fn from_raw(raw: RawJwksCacheConfig) -> Result<Self> {
+        if raw.max_document_bytes == 0 || raw.max_document_bytes > MAX_JWKS_DOCUMENT_BYTES {
+            return Err(RuntimeConfigError::InvalidOidc);
+        }
+        Ok(Self {
+            cache_ttl: seconds_bounded(raw.cache_ttl_seconds, 1, 86_400)?,
+            negative_cache_ttl: seconds_bounded(raw.negative_cache_ttl_seconds, 1, 3_600)?,
+            refresh_cooldown: seconds_bounded(raw.refresh_cooldown_seconds, 1, 3_600)?,
+            max_document_bytes: raw.max_document_bytes,
+            request_timeout: millis_bounded(raw.request_timeout_milliseconds, 1, 30_000)?,
+            outage_tolerance: seconds_bounded(raw.outage_tolerance_seconds, 0, 86_400)?,
+        })
+    }
+}
+
+impl fmt::Debug for JwksCacheConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("JwksCacheConfig")
+            .field("cache_ttl", &self.cache_ttl)
+            .field("negative_cache_ttl", &self.negative_cache_ttl)
+            .field("refresh_cooldown", &self.refresh_cooldown)
+            .field("max_document_bytes", &self.max_document_bytes)
+            .field("request_timeout", &self.request_timeout)
+            .field("outage_tolerance", &self.outage_tolerance)
+            .finish()
+    }
+}
+
+#[derive(Clone)]
+pub struct AuthorityClaimsConfig {
+    principal: String,
+    purpose: Option<String>,
+    row_boundary_claims: Vec<RowBoundaryClaimConfig>,
+}
+
+impl AuthorityClaimsConfig {
+    fn from_raw(raw: RawAuthorityClaimsConfig) -> Result<Self> {
+        validate_authority_claim_name(&raw.principal)?;
+        if let Some(purpose) = &raw.purpose {
+            validate_authority_claim_name(purpose)?;
+        }
+        if raw.row_boundary_claims.len() > MAX_LIST_ITEMS {
+            return Err(RuntimeConfigError::InvalidOidc);
+        }
+        let mut names = HashSet::new();
+        names.insert(raw.principal.as_str());
+        if let Some(purpose) = &raw.purpose {
+            if !names.insert(purpose.as_str()) {
+                return Err(RuntimeConfigError::InvalidOidc);
+            }
+        }
+        for mapping in &raw.row_boundary_claims {
+            validate_authority_claim_name(&mapping.name)?;
+            if !names.insert(mapping.name.as_str()) {
+                return Err(RuntimeConfigError::InvalidOidc);
+            }
+        }
+        Ok(Self {
+            principal: raw.principal,
+            purpose: raw.purpose,
+            row_boundary_claims: raw
+                .row_boundary_claims
+                .into_iter()
+                .map(RowBoundaryClaimConfig::from_raw)
+                .collect(),
+        })
+    }
+
+    fn to_platform_config(&self) -> AuthorityClaimConfig {
+        AuthorityClaimConfig::new(
+            self.principal.clone(),
+            self.purpose.clone(),
+            self.row_boundary_claims
+                .iter()
+                .map(RowBoundaryClaimConfig::to_platform_mapping)
+                .collect(),
+        )
+    }
+}
+
+impl fmt::Debug for AuthorityClaimsConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AuthorityClaimsConfig")
+            .field("principal", &"<redacted>")
+            .field("purpose", &self.purpose.as_ref().map(|_| "<redacted>"))
+            .field("row_boundary_claim_count", &self.row_boundary_claims.len())
+            .finish()
+    }
+}
+
+#[derive(Clone)]
+struct RowBoundaryClaimConfig {
+    name: String,
+    value_type: RowBoundaryClaimConfigType,
+}
+
+impl RowBoundaryClaimConfig {
+    fn from_raw(raw: RawRowBoundaryClaimConfig) -> Self {
+        Self {
+            name: raw.name,
+            value_type: raw.value_type,
+        }
+    }
+
+    fn to_platform_mapping(&self) -> RowBoundaryClaimMapping {
+        RowBoundaryClaimMapping::new(self.name.clone(), self.value_type.to_platform_type())
+    }
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum RowBoundaryClaimConfigType {
+    DirectString,
+    DirectStringSet,
+}
+
+impl RowBoundaryClaimConfigType {
+    fn to_platform_type(self) -> RowBoundaryClaimType {
+        match self {
+            Self::DirectString => RowBoundaryClaimType::DirectString,
+            Self::DirectStringSet => RowBoundaryClaimType::DirectStringSet,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct AuditConfig {
+    hash_key_ref: SecretReference,
+}
+
+impl AuditConfig {
+    fn from_raw(raw: RawAuditConfig) -> Result<Self> {
+        let hash_key_ref =
+            parse_secret_reference(raw.hash_key_ref, RuntimeConfigError::InvalidAudit)?;
+        Ok(Self { hash_key_ref })
+    }
+}
+
+impl fmt::Debug for AuditConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AuditConfig")
+            .field("hash_key_ref", &"<redacted>")
+            .finish()
+    }
+}
+
+#[derive(Clone)]
+pub struct CursorConfig {
+    secret_ref: SecretReference,
+    max_age: Duration,
+}
+
+impl CursorConfig {
+    fn from_raw(raw: RawCursorConfig) -> Result<Self> {
+        Ok(Self {
+            secret_ref: parse_secret_reference(raw.secret_ref, RuntimeConfigError::InvalidCursor)?,
+            max_age: seconds_bounded(raw.max_age_seconds, 1, 86_400)?,
+        })
+    }
+
+    pub fn max_age(&self) -> Duration {
+        self.max_age
+    }
+}
+
+impl fmt::Debug for CursorConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CursorConfig")
+            .field("secret_ref", &"<redacted>")
+            .field("max_age", &self.max_age)
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OperationalTimeouts {
+    pub http_request: Duration,
+    pub shutdown_grace: Duration,
+    pub record_lock: Duration,
+    pub migration_lock: Duration,
+    pub migration_statement: Duration,
+}
+
+impl OperationalTimeouts {
+    fn from_raw(raw: RawOperationalTimeouts) -> Result<Self> {
+        Ok(Self {
+            http_request: millis_bounded(raw.http_request_milliseconds, 1, 60_000)?,
+            shutdown_grace: millis_bounded(raw.shutdown_grace_milliseconds, 1, 300_000)?,
+            record_lock: millis_bounded(raw.record_lock_milliseconds, 1, 30_000)?,
+            migration_lock: millis_bounded(raw.migration_lock_milliseconds, 1, 300_000)?,
+            migration_statement: millis_bounded(
+                raw.migration_statement_milliseconds,
+                1,
+                3_600_000,
+            )?,
+        })
+    }
+}
+
+#[derive(Clone)]
+pub struct SqlRoles {
+    migration: SqlIdentifier,
+    runtime: SqlIdentifier,
+}
+
+impl SqlRoles {
+    fn from_raw(raw: RawSqlRoles) -> Result<Self> {
+        if raw.migration == raw.runtime {
+            return Err(RuntimeConfigError::InvalidDatabase);
+        }
+        Ok(Self {
+            migration: SqlIdentifier::parse(&raw.migration)
+                .map_err(|_| RuntimeConfigError::InvalidDatabase)?,
+            runtime: SqlIdentifier::parse(&raw.runtime)
+                .map_err(|_| RuntimeConfigError::InvalidDatabase)?,
+        })
+    }
+
+    pub fn migration(&self) -> &SqlIdentifier {
+        &self.migration
+    }
+
+    pub fn runtime(&self) -> &SqlIdentifier {
+        &self.runtime
+    }
+}
+
+impl fmt::Debug for SqlRoles {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SqlRoles")
+            .field("migration", &"<redacted>")
+            .field("runtime", &"<redacted>")
+            .finish()
+    }
+}
+
+impl DatabaseConfig {
+    pub fn roles(&self) -> &SqlRoles {
+        &self.roles
+    }
+}
+
+pub(crate) fn parse_secret_reference(
+    value: String,
+    error: RuntimeConfigError,
+) -> Result<SecretReference> {
+    SecretReference::parse(value).map_err(|_| error)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawRuntimeConfig {
+    listener: RawListenerConfig,
+    identity: RawDeploymentIdentity,
+    secret_providers: RawSecretProvidersConfig,
+    database: RawDatabaseConfig,
+    package: RawPackageConfig,
+    authentication: RawAuthenticationConfig,
+    audit: RawAuditConfig,
+    cursor: RawCursorConfig,
+    #[serde(default)]
+    event_destinations: RawEventDestinationConfigs,
+    operational_timeouts: RawOperationalTimeouts,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawListenerConfig {
+    bind: String,
+    trusted_proxy: TrustedProxyPosture,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawDeploymentIdentity {
+    environment: String,
+    instance_id: String,
+    database_id: String,
+    database_initialization_environment: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawSecretProvidersConfig {
+    environment: Option<RawEnvironmentSecretProviderConfig>,
+    file: Option<RawFileSecretProviderConfig>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawEnvironmentSecretProviderConfig {}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawFileSecretProviderConfig {
+    root: PathBuf,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawDatabaseConfig {
+    runtime_url_ref: String,
+    migration_url_ref: String,
+    pool: RawPoolBounds,
+    roles: RawSqlRoles,
+    #[serde(default)]
+    plaintext: Option<bool>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    password: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawPoolBounds {
+    max_size: usize,
+    wait_timeout_milliseconds: u64,
+    create_timeout_milliseconds: u64,
+    recycle_timeout_milliseconds: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawSqlRoles {
+    migration: String,
+    runtime: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawPackageConfig {
+    root: PathBuf,
+    trust_anchor_path: PathBuf,
+    compiler_source_revision: String,
+    active_revision: String,
+    active_sequence: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawAuthenticationConfig {
+    oidc: RawOidcVerifierConfig,
+    authority_claims: RawAuthorityClaimsConfig,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawOidcVerifierConfig {
+    issuer: String,
+    audience: String,
+    allowed_algorithm: OidcAlgorithm,
+    access_token_type: String,
+    scope_claim: String,
+    scope_separator: char,
+    #[serde(default)]
+    allowed_clients: Vec<String>,
+    #[serde(default)]
+    denied_kids: Vec<String>,
+    max_token_lifetime_seconds: u64,
+    leeway_milliseconds: u64,
+    jwks_cache: RawJwksCacheConfig,
+    #[serde(default)]
+    jwks_source: Option<RawOidcJwksSource>,
+}
+
+#[derive(Deserialize)]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields,
+    tag = "kind"
+)]
+enum RawOidcJwksSource {
+    Discovery {},
+    Static { document_ref: String },
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawJwksCacheConfig {
+    cache_ttl_seconds: u64,
+    negative_cache_ttl_seconds: u64,
+    refresh_cooldown_seconds: u64,
+    max_document_bytes: u64,
+    request_timeout_milliseconds: u64,
+    outage_tolerance_seconds: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawAuthorityClaimsConfig {
+    principal: String,
+    #[serde(default)]
+    purpose: Option<String>,
+    #[serde(default)]
+    row_boundary_claims: Vec<RawRowBoundaryClaimConfig>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawRowBoundaryClaimConfig {
+    name: String,
+    #[serde(rename = "type")]
+    value_type: RowBoundaryClaimConfigType,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawAuditConfig {
+    hash_key_ref: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawCursorConfig {
+    secret_ref: String,
+    max_age_seconds: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawOperationalTimeouts {
+    http_request_milliseconds: u64,
+    shutdown_grace_milliseconds: u64,
+    record_lock_milliseconds: u64,
+    migration_lock_milliseconds: u64,
+    migration_statement_milliseconds: u64,
+}
+
+fn read_bounded_runtime_config(path: &Path, maximum: u64) -> Result<Vec<u8>> {
+    let scanned = fs::symlink_metadata(path).map_err(|_| RuntimeConfigError::Unavailable)?;
+    if scanned.file_type().is_symlink() || !scanned.is_file() {
+        return Err(RuntimeConfigError::UnsafeFile);
+    }
+    if scanned.len() == 0 || scanned.len() > maximum {
+        return Err(RuntimeConfigError::Bounds);
+    }
+    let file = open_runtime_config_file(path)?;
+    let opened = file
+        .metadata()
+        .map_err(|_| RuntimeConfigError::Unavailable)?;
+    let current = fs::symlink_metadata(path).map_err(|_| RuntimeConfigError::Unavailable)?;
+    if current.file_type().is_symlink()
+        || !opened.is_file()
+        || !same_file(&scanned, &opened)
+        || !same_file(&opened, &current)
+    {
+        return Err(RuntimeConfigError::UnsafeFile);
+    }
+    if opened.len() == 0 || opened.len() > maximum {
+        return Err(RuntimeConfigError::Bounds);
+    }
+    let capacity = usize::try_from(opened.len()).map_err(|_| RuntimeConfigError::Bounds)?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve(capacity)
+        .map_err(|_| RuntimeConfigError::Bounds)?;
+    let mut reader = file.take(maximum + 1);
+    reader
+        .read_to_end(&mut bytes)
+        .map_err(|_| RuntimeConfigError::Unavailable)?;
+    let after = reader
+        .get_ref()
+        .metadata()
+        .map_err(|_| RuntimeConfigError::Unavailable)?;
+    if bytes.is_empty() || bytes.len() as u64 > maximum {
+        return Err(RuntimeConfigError::Bounds);
+    }
+    if !same_file(&opened, &after) || bytes.len() as u64 != after.len() {
+        return Err(RuntimeConfigError::UnsafeFile);
+    }
+    Ok(bytes)
+}
+
+fn open_runtime_config_file(path: &Path) -> Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+
+        options.custom_flags(runtime_config_no_follow_flag());
+    }
+    options.open(path).map_err(|_| {
+        fs::symlink_metadata(path).map_or(RuntimeConfigError::Unavailable, |metadata| {
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                RuntimeConfigError::UnsafeFile
+            } else {
+                RuntimeConfigError::Unavailable
+            }
+        })
+    })
+}
+
+#[cfg(unix)]
+fn runtime_config_no_follow_flag() -> i32 {
+    (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC).bits() as i32
+}
+
+#[cfg(unix)]
+fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+    left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.len() == right.len()
+        && left.permissions().mode() == right.permissions().mode()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+}
+
+#[cfg(not(unix))]
+fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.len() == right.len()
+        && left.permissions().readonly() == right.permissions().readonly()
+        && left.modified().ok() == right.modified().ok()
+        && left.created().ok() == right.created().ok()
+}
+
+fn validate_existing_directory(path: &Path, error: RuntimeConfigError) -> Result<()> {
+    reject_symlink_components(path, error)?;
+    let metadata = fs::symlink_metadata(path).map_err(|_| error)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn validate_existing_file(path: &Path, error: RuntimeConfigError) -> Result<()> {
+    reject_symlink_components(path, error)?;
+    let metadata = fs::symlink_metadata(path).map_err(|_| error)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn reject_symlink_components(path: &Path, error: RuntimeConfigError) -> Result<()> {
+    let mut checked = PathBuf::new();
+    for component in path.components() {
+        checked.push(component.as_os_str());
+        if matches!(component, Component::RootDir | Component::Prefix(_)) {
+            continue;
+        }
+        match fs::symlink_metadata(&checked) {
+            Ok(metadata) if metadata.file_type().is_symlink() => return Err(error),
+            Ok(_) => {}
+            Err(_) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+fn validate_absolute_lexical_path(path: &Path, error: RuntimeConfigError) -> Result<()> {
+    if path.as_os_str().is_empty()
+        || !path.is_absolute()
+        || path.to_string_lossy().len() > MAX_PATH_BYTES
+    {
+        return Err(error);
+    }
+    if path.components().any(|component| {
+        !matches!(
+            component,
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_)
+        )
+    }) {
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn validate_deployment_value(value: &str) -> Result<()> {
+    if value.trim().is_empty()
+        || value.trim() != value
+        || value.len() > MAX_DEPLOYMENT_VALUE_BYTES
+        || value.chars().any(char::is_control)
+    {
+        return Err(RuntimeConfigError::InvalidBinding);
+    }
+    Ok(())
+}
+
+fn validate_oidc_value(value: &str) -> Result<()> {
+    if value.trim().is_empty()
+        || value.trim() != value
+        || value.len() > MAX_OIDC_VALUE_BYTES
+        || value.chars().any(char::is_control)
+    {
+        return Err(RuntimeConfigError::InvalidOidc);
+    }
+    Ok(())
+}
+
+fn validate_claim_name(value: &str) -> Result<()> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value.is_ascii()
+        || value
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+    {
+        return Err(RuntimeConfigError::InvalidOidc);
+    }
+    Ok(())
+}
+
+fn validate_authority_claim_name(value: &str) -> Result<()> {
+    const REGISTERED: &[&str] = &[
+        "iss",
+        "aud",
+        "exp",
+        "iat",
+        "nbf",
+        "sub",
+        "client_id",
+        "azp",
+        "jti",
+        "cnf",
+    ];
+    validate_claim_name(value)?;
+    if REGISTERED.contains(&value) {
+        return Err(RuntimeConfigError::InvalidOidc);
+    }
+    Ok(())
+}
+
+fn validate_bounded_list(values: &[String]) -> Result<()> {
+    if values.len() > MAX_LIST_ITEMS {
+        return Err(RuntimeConfigError::InvalidOidc);
+    }
+    for value in values {
+        if value.is_empty()
+            || value.len() > MAX_LIST_VALUE_BYTES
+            || value
+                .bytes()
+                .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+        {
+            return Err(RuntimeConfigError::InvalidOidc);
+        }
+    }
+    Ok(())
+}
+
+fn millis(value: u64) -> Result<Duration> {
+    millis_bounded(value, 1, 60_000)
+}
+
+fn millis_bounded(value: u64, min: u64, max: u64) -> Result<Duration> {
+    if value < min || value > max {
+        return Err(RuntimeConfigError::InvalidBounds);
+    }
+    Ok(Duration::from_millis(value))
+}
+
+fn seconds_bounded(value: u64, min: u64, max: u64) -> Result<Duration> {
+    if value < min || value > max {
+        return Err(RuntimeConfigError::InvalidBounds);
+    }
+    Ok(Duration::from_secs(value))
+}

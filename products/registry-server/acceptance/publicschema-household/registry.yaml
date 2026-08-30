@@ -1,0 +1,47 @@
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: publicschema-household
+  version: 0.1.0
+  defaultLanguage: en
+package:
+  environment: acceptance
+  instanceId: publicschema-household-acceptance
+  sequence: 1
+  sourceRevision: publicschema-household-acceptance-0.1.0
+manifestProjection:
+  accessProfile: household-operator
+  classificationCeiling: restricted
+  catalog:
+    baseUrl: https://publicschema-household.example.gov
+    title: PublicSchema Household Registry Catalog
+    description: Portable metadata for household, person, and group membership records.
+    publisher:
+      name: PublicSchema Household Authority
+      iri: https://publicschema-household.example.gov/authority
+  dataset:
+    title: PublicSchema Household Registry
+    description: Household, person, and time-bounded group membership metadata.
+    owner: PublicSchema Household Authority
+    status: active
+modules:
+  - id: publicschema-household-core
+    version: 0.1.0
+    digest: sha256:9e681a1d27a3677aa8cd319df83ab70d794263a93a560dd65672319e1d89b231
+  - id: publicschema-household-demographics
+    version: 0.1.0
+    digest: sha256:aba9eeebcbf420de79306fb8f499dc52cce8ad838953d5b1fcaf1a878e5f046c
+accessProfiles:
+  - id: household-operator
+    principalClaim: registry_principal
+    requiredScopes: [registry:household:operate]
+    purposes: [household-administration]
+    grants:
+      - {entity: person, actions: [create, get, list, patch], readableFields: [person-code, legal-name, family-name, date-of-birth, residency-status, preferred-language], writableFields: [person-code, legal-name, family-name, date-of-birth, residency-status, preferred-language], filterableFields: [person-code, residency-status]}
+      - {entity: household, actions: [create, get, list, patch], readableFields: [household-code, household-name, administrative-area, household-type], writableFields: [household-code, household-name, administrative-area, household-type], filterableFields: [household-code, administrative-area, household-type]}
+      - {entity: group-membership, actions: [create, get, list, patch], readableFields: [person, household, relationship, valid-from, valid-to], writableFields: [person, household, relationship, valid-from, valid-to], filterableFields: [person, household, valid-from]}
+vocabularies:
+  - {id: household-relationship, values: [head, spouse, child, dependent, other]}
+  - {id: household-type, values: [private, collective, institutional]}
+  - {id: residency-status, values: [usual-resident, temporary-resident, departed]}
+  - {id: preferred-language, values: [en, es, fr]}

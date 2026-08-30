@@ -163,6 +163,23 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "Relay client source neutrality",
         "run: products/relay-v2/scripts/check-source-neutrality.sh",
     ),
+    ("Registry Server product contract gate", "registry-server-contracts:"),
+    (
+        "Registry Server contract consistency",
+        "run: products/registry-server/scripts/check-contracts.sh",
+    ),
+    (
+        "Registry Server PostgreSQL journeys",
+        "run: products/registry-server/scripts/test-postgres.sh",
+    ),
+    (
+        "Registry Server adopter workflow",
+        "run: products/registry-server/scripts/test-adopter-workflow.sh",
+    ),
+    (
+        "Registry Server PostgreSQL 17 image pin",
+        "postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675",
+    ),
     (
         "Release Linux Node client path filter",
         "release_linux_node_clients: ${{ steps.filter.outputs.release_linux_node_clients }}",

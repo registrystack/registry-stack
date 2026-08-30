@@ -1,0 +1,193 @@
+[package]
+name = "registry-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Domain-neutral compiled registry server and runtime."
+repository.workspace = true
+publish = false
+readme = "README.md"
+
+[[bin]]
+name = "registry-server"
+path = "src/main.rs"
+required-features = ["runtime"]
+
+[[test]]
+name = "postgres_kernel"
+path = "tests/postgres_kernel.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_tls"
+path = "tests/postgres_tls.rs"
+required-features = ["postgres-tls-test"]
+
+[[test]]
+name = "postgres_mutation"
+path = "tests/postgres_mutation.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_webhook_outbox"
+path = "tests/postgres_webhook_outbox.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_webhook_delivery"
+path = "tests/postgres_webhook_delivery.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_compiled_schema"
+path = "tests/postgres_compiled_schema.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_partial_unique"
+path = "tests/postgres_partial_unique.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_package"
+path = "tests/postgres_package.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_migration"
+path = "tests/postgres_migration.rs"
+required-features = ["postgres-test", "tooling"]
+
+[[test]]
+name = "postgres_read"
+path = "tests/postgres_read.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_revision_http"
+path = "tests/postgres_revision_http.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_batch"
+path = "tests/postgres_batch.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_pilot_acceptance"
+path = "tests/postgres_pilot_acceptance.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_constraint_races"
+path = "tests/postgres_constraint_races.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_data_farmer"
+path = "tests/postgres_data_farmer.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_data_export"
+path = "tests/postgres_data_export.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "fixture_tooling"
+path = "tests/fixture_tooling.rs"
+required-features = ["runtime", "tooling"]
+
+[[test]]
+name = "postgres_fixture_journeys"
+path = "tests/postgres_fixture_journeys.rs"
+required-features = ["postgres-test", "tooling"]
+
+[lints]
+workspace = true
+
+[features]
+default = []
+runtime = [
+    "dep:axum",
+    "dep:base64",
+    "dep:clap",
+    "dep:chacha20poly1305",
+    "dep:deadpool-postgres",
+    "dep:getrandom",
+    "dep:hex",
+    "dep:hmac",
+    "dep:ipnet",
+    "dep:jsonwebtoken",
+    "dep:registry-platform-audit",
+    "dep:registry-platform-authcommon",
+    "dep:registry-platform-buildinfo",
+    "dep:registry-platform-config",
+    "dep:registry-platform-crypto",
+    "dep:registry-platform-httpsec",
+    "dep:registry-platform-httputil",
+    "dep:registry-platform-oidc",
+    "dep:rustls",
+    "dep:rustix",
+    "dep:tokio",
+    "dep:tokio-postgres",
+    "dep:tokio-postgres-rustls",
+    "dep:tracing",
+    "dep:tracing-subscriber",
+    "dep:zeroize",
+]
+postgres-test = ["runtime", "dep:tower", "registry-platform-httputil/test-support"]
+postgres-tls-test = ["runtime"]
+schema = ["dep:schemars"]
+tooling = ["dep:pg_query", "dep:tempfile", "dep:tower"]
+
+[dependencies]
+axum = { workspace = true, optional = true }
+base64 = { workspace = true, optional = true }
+chacha20poly1305 = { workspace = true, optional = true }
+clap = { workspace = true, optional = true }
+deadpool-postgres = { workspace = true, optional = true }
+getrandom = { workspace = true, optional = true }
+hex = { workspace = true, optional = true }
+hmac = { workspace = true, optional = true }
+ipnet = { workspace = true, optional = true }
+jsonwebtoken = { workspace = true, optional = true }
+registry-platform-canonical-json.workspace = true
+registry-manifest-core.workspace = true
+registry-platform-audit = { workspace = true, optional = true }
+registry-platform-authcommon = { workspace = true, optional = true }
+registry-platform-buildinfo = { workspace = true, optional = true }
+registry-platform-config = { workspace = true, optional = true }
+registry-platform-crypto = { workspace = true, optional = true }
+registry-platform-httpsec = { workspace = true, features = ["server"], optional = true }
+registry-platform-httputil = { workspace = true, optional = true }
+registry-platform-oidc = { workspace = true, optional = true }
+jsonschema.workspace = true
+pg_query = { workspace = true, optional = true }
+rustls = { workspace = true, optional = true }
+rustix = { workspace = true, optional = true }
+schemars = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+serde_norway.workspace = true
+serde_path_to_error.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+tempfile = { workspace = true, optional = true }
+thiserror.workspace = true
+time.workspace = true
+tokio = { workspace = true, optional = true }
+tokio-postgres = { workspace = true, optional = true }
+tokio-postgres-rustls = { workspace = true, optional = true }
+tower = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, optional = true }
+uuid.workspace = true
+zeroize = { workspace = true, optional = true }
+
+[dev-dependencies]
+rcgen.workspace = true
+registry-platform-testing = { workspace = true, features = ["test-utils"] }
+tokio-rustls.workspace = true
+tower.workspace = true

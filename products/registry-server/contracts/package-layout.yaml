@@ -1,0 +1,23 @@
+apiVersion: registry.registrystack.org/product-contract/v1
+product: registry-server
+packageVersion: v1
+entries:
+  - {path: package.json, role: identity, required: true}
+  - {path: effective-model.json, role: governed-model, required: true}
+  - {path: inventories/physical-names.json, role: physical-name-inventory, required: true}
+  - {path: inventories/routes.json, role: route-inventory, required: true}
+  - {path: inventories/access.json, role: access-inventory, required: true}
+  - {path: inventories/queries.json, role: query-inventory, required: true}
+  - {path: inventories/events.json, role: event-inventory, required: true}
+  - {path: metadata/registry.json, role: caller-safe-metadata, required: true}
+  - {path: database/ddl.sql, role: generated-ddl, required: true}
+  - {path: database/migration-plan.json, role: migration-plan, required: true}
+  - {path: openapi/openapi.json, role: generated-openapi, required: true}
+  - {path: schemas, role: entity-json-schemas, required: true}
+  - {path: manifest/registry-manifest.json, role: lossy-manifest-projection, required: true}
+  - {path: tests/journeys.yaml, role: fixture-journeys, required: true}
+  - {path: signatures, role: package-signatures, required: false}
+
+# A deployment supplies its trust anchor and runtime bindings separately. They
+# must not be embedded in a Registry package or runtime image.
+forbiddenEmbeddedRoles: [deployment-trust-anchor, runtime-secret, migration-credential, signing-key]

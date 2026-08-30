@@ -25,6 +25,7 @@ SUPPORT = Path(__file__).resolve().parent
 
 
 def load_module():
+    sys.path.insert(0, str(SUPPORT))
     specification = importlib.util.spec_from_file_location(
         "demo_provision", SUPPORT / "provision.py"
     )
@@ -33,6 +34,8 @@ def load_module():
         specification.loader.exec_module(module)
     except ImportError as error:  # pragma: no cover - depends on the environment
         raise unittest.SkipTest(f"provision.py needs {error.name}") from None
+    finally:
+        sys.path.remove(str(SUPPORT))
     return module
 
 
@@ -89,6 +92,16 @@ class SecretFileModeTests(unittest.TestCase):
         self.assertEqual(expected, private["kid"])
         self.assertIn("d", private)
         self.assertNotIn("d", public)
+
+    def test_shared_key_helper_creates_owner_only_secret_and_refuses_replacement(self):
+        output = self.root / "secret"
+        key_material = sys.modules["key_material"]
+        key_material._generate_secret(output)
+
+        self.assertEqual(0o600, stat.S_IMODE(output.stat().st_mode))
+        self.assertEqual(64, len(output.read_text()))
+        with self.assertRaises(SystemExit):
+            key_material._generate_secret(output)
 
 
 if __name__ == "__main__":

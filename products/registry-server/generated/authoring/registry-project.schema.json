@@ -1,0 +1,1747 @@
+{
+  "$defs": {
+    "AccessGrantSource": {
+      "additionalProperties": false,
+      "properties": {
+        "actions": {
+          "items": {
+            "$ref": "#/$defs/Operation"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "allowDataExport": {
+          "default": false,
+          "type": "boolean"
+        },
+        "entity": {
+          "type": "string"
+        },
+        "filterableFields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "readableFields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "revisionAccess": {
+          "default": false,
+          "type": "boolean"
+        },
+        "rowBoundaries": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RowBoundarySource"
+          },
+          "type": "array"
+        },
+        "sortableFields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "writableFields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "entity",
+        "actions"
+      ],
+      "type": "object"
+    },
+    "AccessProfileSource": {
+      "additionalProperties": false,
+      "properties": {
+        "allowDataExport": {
+          "default": false,
+          "type": "boolean"
+        },
+        "anonymous": {
+          "default": false,
+          "type": "boolean"
+        },
+        "default": {
+          "default": false,
+          "type": "boolean"
+        },
+        "filterableFields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "id": {
+          "type": "string"
+        },
+        "operations": {
+          "items": {
+            "$ref": "#/$defs/Operation"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "principalClaim": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "readableFields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "requiredPurposes": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "requiredScopes": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "revisionAccess": {
+          "default": false,
+          "type": "boolean"
+        },
+        "rowBoundaries": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RowBoundarySource"
+          },
+          "type": "array"
+        },
+        "sortableFields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "writableFields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "id",
+        "operations"
+      ],
+      "type": "object"
+    },
+    "BatchSource": {
+      "additionalProperties": false,
+      "properties": {
+        "maximumBytes": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maximumItems": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "maximumItems",
+        "maximumBytes"
+      ],
+      "type": "object"
+    },
+    "BooleanFieldKindSchema": {
+      "enum": [
+        "boolean"
+      ],
+      "type": "string"
+    },
+    "BooleanFieldSourceSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "classification": {
+          "$ref": "#/$defs/Classification"
+        },
+        "id": {
+          "type": "string"
+        },
+        "required": {
+          "default": false,
+          "type": "boolean"
+        },
+        "type": {
+          "$ref": "#/$defs/BooleanFieldKindSchema"
+        },
+        "validTimeRole": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ValidTimeRole"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "classification"
+      ],
+      "type": "object"
+    },
+    "BoundaryOperator": {
+      "enum": [
+        "equals",
+        "in"
+      ],
+      "type": "string"
+    },
+    "Classification": {
+      "enum": [
+        "public",
+        "internal",
+        "restricted"
+      ],
+      "type": "string"
+    },
+    "ComparisonOperator": {
+      "enum": [
+        "less_than",
+        "less_than_or_equal",
+        "greater_than",
+        "greater_than_or_equal"
+      ],
+      "type": "string"
+    },
+    "ConstraintSource": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fields": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "id": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "unique",
+              "type": "string"
+            },
+            "when": {
+              "items": {
+                "$ref": "#/$defs/UniqueWhenPredicate"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "fields"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "compare",
+              "type": "string"
+            },
+            "left": {
+              "type": "string"
+            },
+            "operator": {
+              "$ref": "#/$defs/ComparisonOperator"
+            },
+            "right": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "left",
+            "operator",
+            "right"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "field": {
+              "type": "string"
+            },
+            "id": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "int_range",
+              "type": "string"
+            },
+            "maximum": {
+              "default": null,
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "minimum": {
+              "default": null,
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "field"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "field": {
+              "type": "string"
+            },
+            "id": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "vocabulary",
+              "type": "string"
+            },
+            "values": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "field",
+            "values"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "endField": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "temporal-non-overlap",
+              "type": "string"
+            },
+            "scopeFields": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "startField": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "scopeFields"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Crs84BboxSource": {
+      "additionalProperties": false,
+      "properties": {
+        "east": {
+          "type": "string"
+        },
+        "north": {
+          "type": "string"
+        },
+        "south": {
+          "type": "string"
+        },
+        "west": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "west",
+        "south",
+        "east",
+        "north"
+      ],
+      "type": "object"
+    },
+    "Crs84PointFieldKindSchema": {
+      "enum": [
+        "crs84-point"
+      ],
+      "type": "string"
+    },
+    "Crs84PointFieldSourceSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "bbox": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Crs84BboxSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "classification": {
+          "$ref": "#/$defs/Classification"
+        },
+        "id": {
+          "type": "string"
+        },
+        "precision": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "required": {
+          "default": false,
+          "type": "boolean"
+        },
+        "type": {
+          "$ref": "#/$defs/Crs84PointFieldKindSchema"
+        },
+        "validTimeRole": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ValidTimeRole"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "classification",
+        "precision"
+      ],
+      "type": "object"
+    },
+    "DateFieldKindSchema": {
+      "enum": [
+        "date"
+      ],
+      "type": "string"
+    },
+    "DateFieldSourceSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "classification": {
+          "$ref": "#/$defs/Classification"
+        },
+        "id": {
+          "type": "string"
+        },
+        "required": {
+          "default": false,
+          "type": "boolean"
+        },
+        "type": {
+          "$ref": "#/$defs/DateFieldKindSchema"
+        },
+        "validTimeRole": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ValidTimeRole"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "classification"
+      ],
+      "type": "object"
+    },
+    "DecimalFieldKindSchema": {
+      "enum": [
+        "decimal"
+      ],
+      "type": "string"
+    },
+    "DecimalFieldSourceSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "classification": {
+          "$ref": "#/$defs/Classification"
+        },
+        "id": {
+          "type": "string"
+        },
+        "maximum": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "minimum": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "precision": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "required": {
+          "default": false,
+          "type": "boolean"
+        },
+        "scale": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "type": {
+          "$ref": "#/$defs/DecimalFieldKindSchema"
+        },
+        "validTimeRole": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ValidTimeRole"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "classification",
+        "precision",
+        "scale"
+      ],
+      "type": "object"
+    },
+    "EntitySource": {
+      "additionalProperties": false,
+      "properties": {
+        "accessProfiles": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/AccessProfileSource"
+          },
+          "type": "array"
+        },
+        "batch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BatchSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "classification": {
+          "$ref": "#/$defs/Classification",
+          "default": "internal"
+        },
+        "constraints": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ConstraintSource"
+          },
+          "type": "array"
+        },
+        "events": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/EventSource"
+          },
+          "type": "array"
+        },
+        "fields": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/FieldSource"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "indexes": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/IndexSource"
+          },
+          "type": "array"
+        },
+        "mutationMode": {
+          "$ref": "#/$defs/MutationMode"
+        },
+        "route": {
+          "type": "string"
+        },
+        "temporal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TemporalSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "tombstone": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "route",
+        "mutationMode"
+      ],
+      "type": "object"
+    },
+    "EventSource": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "projection": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "trigger": {
+          "$ref": "#/$defs/EventTrigger"
+        },
+        "webhook": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WebhookSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "trigger",
+        "projection"
+      ],
+      "type": "object"
+    },
+    "EventTrigger": {
+      "enum": [
+        "created",
+        "patched",
+        "tombstoned"
+      ],
+      "type": "string"
+    },
+    "FieldSource": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/BooleanFieldSourceSchema"
+        },
+        {
+          "$ref": "#/$defs/StringFieldSourceSchema"
+        },
+        {
+          "$ref": "#/$defs/TextFieldSourceSchema"
+        },
+        {
+          "$ref": "#/$defs/Int64FieldSourceSchema"
+        },
+        {
+          "$ref": "#/$defs/DecimalFieldSourceSchema"
+        },
+        {
+          "$ref": "#/$defs/DateFieldSourceSchema"
+        },
+        {
+          "$ref": "#/$defs/TimestampFieldSourceSchema"
+        },
+        {
+          "$ref": "#/$defs/UuidFieldSourceSchema"
+        },
+        {
+          "$ref": "#/$defs/VocabularyCodeFieldSourceSchema"
+        },
+        {
+          "$ref": "#/$defs/ReferenceFieldSourceSchema"
+        },
+        {
+          "$ref": "#/$defs/Crs84PointFieldSourceSchema"
+        },
+        {
+          "$ref": "#/$defs/StructuredFieldSourceSchema"
+        }
+      ]
+    },
+    "IndexSource": {
+      "additionalProperties": false,
+      "properties": {
+        "fields": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "fields"
+      ],
+      "type": "object"
+    },
+    "Int64FieldKindSchema": {
+      "enum": [
+        "int64"
+      ],
+      "type": "string"
+    },
+    "Int64FieldSourceSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "classification": {
+          "$ref": "#/$defs/Classification"
+        },
+        "id": {
+          "type": "string"
+        },
+        "required": {
+          "default": false,
+          "type": "boolean"
+        },
+        "type": {
+          "$ref": "#/$defs/Int64FieldKindSchema"
+        },
+        "validTimeRole": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ValidTimeRole"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "classification"
+      ],
+      "type": "object"
+    },
+    "ManifestProjectionCatalogSource": {
+      "additionalProperties": false,
+      "properties": {
+        "baseUrl": {
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "participantId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "publisher": {
+          "$ref": "#/$defs/ManifestProjectionPublisherSource"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "baseUrl",
+        "title",
+        "publisher"
+      ],
+      "type": "object"
+    },
+    "ManifestProjectionDatasetSource": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "owner": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ManifestProjectionDatasetStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "title"
+      ],
+      "type": "object"
+    },
+    "ManifestProjectionDatasetStatus": {
+      "enum": [
+        "under_development",
+        "active",
+        "completed",
+        "deprecated",
+        "withdrawn"
+      ],
+      "type": "string"
+    },
+    "ManifestProjectionPublisherSource": {
+      "additionalProperties": false,
+      "properties": {
+        "authorityType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "iri": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "ManifestProjectionSource": {
+      "additionalProperties": false,
+      "properties": {
+        "accessProfile": {
+          "type": "string"
+        },
+        "catalog": {
+          "$ref": "#/$defs/ManifestProjectionCatalogSource"
+        },
+        "classificationCeiling": {
+          "$ref": "#/$defs/Classification"
+        },
+        "dataset": {
+          "$ref": "#/$defs/ManifestProjectionDatasetSource"
+        }
+      },
+      "required": [
+        "accessProfile",
+        "classificationCeiling",
+        "catalog",
+        "dataset"
+      ],
+      "type": "object"
+    },
+    "ModuleLockSource": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "type": "object"
+    },
+    "MutationMode": {
+      "enum": [
+        "mutable",
+        "create_only"
+      ],
+      "type": "string"
+    },
+    "Operation": {
+      "enum": [
+        "create",
+        "get",
+        "list",
+        "patch",
+        "tombstone",
+        "batch",
+        "revisions"
+      ],
+      "type": "string"
+    },
+    "PackageIdentitySource": {
+      "additionalProperties": false,
+      "properties": {
+        "environment": {
+          "type": "string"
+        },
+        "instanceId": {
+          "type": "string"
+        },
+        "sequence": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sourceRevision": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "environment",
+        "instanceId",
+        "sequence",
+        "sourceRevision"
+      ],
+      "type": "object"
+    },
+    "ProjectAccessProfileSource": {
+      "additionalProperties": false,
+      "properties": {
+        "default": {
+          "default": false,
+          "type": "boolean"
+        },
+        "grants": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/AccessGrantSource"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "principalClaim": {
+          "type": "string"
+        },
+        "purposes": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "requiredScopes": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "id",
+        "principalClaim"
+      ],
+      "type": "object"
+    },
+    "ReferenceDelete": {
+      "enum": [
+        "restrict"
+      ],
+      "type": "string"
+    },
+    "ReferenceFieldKindSchema": {
+      "enum": [
+        "reference"
+      ],
+      "type": "string"
+    },
+    "ReferenceFieldSourceSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "classification": {
+          "$ref": "#/$defs/Classification"
+        },
+        "id": {
+          "type": "string"
+        },
+        "onDelete": {
+          "$ref": "#/$defs/ReferenceDelete",
+          "default": "restrict"
+        },
+        "required": {
+          "default": false,
+          "type": "boolean"
+        },
+        "target": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/ReferenceFieldKindSchema"
+        },
+        "validTimeRole": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ValidTimeRole"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "classification",
+        "target"
+      ],
+      "type": "object"
+    },
+    "RegistryIdentitySource": {
+      "additionalProperties": false,
+      "properties": {
+        "defaultLanguage": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "defaultLanguage"
+      ],
+      "type": "object"
+    },
+    "RowBoundarySource": {
+      "additionalProperties": false,
+      "properties": {
+        "claim": {
+          "type": "string"
+        },
+        "field": {
+          "type": "string"
+        },
+        "operator": {
+          "$ref": "#/$defs/BoundaryOperator"
+        }
+      },
+      "required": [
+        "field",
+        "claim",
+        "operator"
+      ],
+      "type": "object"
+    },
+    "StringFieldKindSchema": {
+      "enum": [
+        "string"
+      ],
+      "type": "string"
+    },
+    "StringFieldSourceSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "classification": {
+          "$ref": "#/$defs/Classification"
+        },
+        "id": {
+          "type": "string"
+        },
+        "maxLength": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "minLength": {
+          "default": 0,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "required": {
+          "default": false,
+          "type": "boolean"
+        },
+        "type": {
+          "$ref": "#/$defs/StringFieldKindSchema"
+        },
+        "validTimeRole": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ValidTimeRole"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "classification",
+        "maxLength"
+      ],
+      "type": "object"
+    },
+    "StructuredFieldKindSchema": {
+      "enum": [
+        "structured"
+      ],
+      "type": "string"
+    },
+    "StructuredFieldSourceSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "classification": {
+          "$ref": "#/$defs/Classification"
+        },
+        "id": {
+          "type": "string"
+        },
+        "maxBytes": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "required": {
+          "default": false,
+          "type": "boolean"
+        },
+        "schema": true,
+        "type": {
+          "$ref": "#/$defs/StructuredFieldKindSchema"
+        },
+        "validTimeRole": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ValidTimeRole"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "classification",
+        "maxBytes",
+        "schema"
+      ],
+      "type": "object"
+    },
+    "TemporalSource": {
+      "additionalProperties": false,
+      "properties": {
+        "endField": {
+          "type": "string"
+        },
+        "scopeFields": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "startField": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "startField",
+        "endField",
+        "scopeFields"
+      ],
+      "type": "object"
+    },
+    "TextFieldKindSchema": {
+      "enum": [
+        "text"
+      ],
+      "type": "string"
+    },
+    "TextFieldSourceSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "classification": {
+          "$ref": "#/$defs/Classification"
+        },
+        "id": {
+          "type": "string"
+        },
+        "maxLength": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "required": {
+          "default": false,
+          "type": "boolean"
+        },
+        "type": {
+          "$ref": "#/$defs/TextFieldKindSchema"
+        },
+        "validTimeRole": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ValidTimeRole"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "classification",
+        "maxLength"
+      ],
+      "type": "object"
+    },
+    "TimestampFieldKindSchema": {
+      "enum": [
+        "timestamp"
+      ],
+      "type": "string"
+    },
+    "TimestampFieldSourceSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "classification": {
+          "$ref": "#/$defs/Classification"
+        },
+        "id": {
+          "type": "string"
+        },
+        "required": {
+          "default": false,
+          "type": "boolean"
+        },
+        "type": {
+          "$ref": "#/$defs/TimestampFieldKindSchema"
+        },
+        "validTimeRole": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ValidTimeRole"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "classification"
+      ],
+      "type": "object"
+    },
+    "UniqueWhenPredicate": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "field": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "field_equals",
+              "type": "string"
+            },
+            "value": true
+          },
+          "required": [
+            "kind",
+            "field",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "field": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "field_is_null",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "field"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "field": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "field_is_not_null",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "field"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "active_lifecycle",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "UuidFieldKindSchema": {
+      "enum": [
+        "uuid"
+      ],
+      "type": "string"
+    },
+    "UuidFieldSourceSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "classification": {
+          "$ref": "#/$defs/Classification"
+        },
+        "id": {
+          "type": "string"
+        },
+        "required": {
+          "default": false,
+          "type": "boolean"
+        },
+        "type": {
+          "$ref": "#/$defs/UuidFieldKindSchema"
+        },
+        "validTimeRole": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ValidTimeRole"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "classification"
+      ],
+      "type": "object"
+    },
+    "ValidTimeRole": {
+      "enum": [
+        "valid_from",
+        "valid_to"
+      ],
+      "type": "string"
+    },
+    "VocabularyCodeFieldKindSchema": {
+      "enum": [
+        "vocabulary-code"
+      ],
+      "type": "string"
+    },
+    "VocabularyCodeFieldSourceSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "classification": {
+          "$ref": "#/$defs/Classification"
+        },
+        "id": {
+          "type": "string"
+        },
+        "required": {
+          "default": false,
+          "type": "boolean"
+        },
+        "type": {
+          "$ref": "#/$defs/VocabularyCodeFieldKindSchema"
+        },
+        "validTimeRole": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ValidTimeRole"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "values": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "vocabulary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "classification",
+        "vocabulary"
+      ],
+      "type": "object"
+    },
+    "VocabularySource": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "values": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "values"
+      ],
+      "type": "object"
+    },
+    "WebhookAuthenticationProfile": {
+      "enum": [
+        "hmac_sha256_v1"
+      ],
+      "type": "string"
+    },
+    "WebhookDeadLetterMode": {
+      "enum": [
+        "required"
+      ],
+      "type": "string"
+    },
+    "WebhookDeliverySource": {
+      "additionalProperties": false,
+      "properties": {
+        "attemptTimeoutMs": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "deadLetter": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WebhookDeadLetterMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "initialBackoffMs": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maximumAttempts": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maximumBackoffMs": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "operatorReplay": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "attemptTimeoutMs",
+        "initialBackoffMs",
+        "maximumBackoffMs",
+        "maximumAttempts",
+        "operatorReplay"
+      ],
+      "type": "object"
+    },
+    "WebhookSource": {
+      "additionalProperties": false,
+      "description": "Governed, destination-neutral webhook subscription.\n\nDeployment configuration may bind `destination_id` to transport details\nand tighten these bounds, but cannot supply or widen this authority.",
+      "properties": {
+        "authenticationProfile": {
+          "$ref": "#/$defs/WebhookAuthenticationProfile"
+        },
+        "classificationCeiling": {
+          "$ref": "#/$defs/Classification"
+        },
+        "delivery": {
+          "$ref": "#/$defs/WebhookDeliverySource"
+        },
+        "destinationId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "destinationId",
+        "classificationCeiling",
+        "authenticationProfile",
+        "delivery"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/registry-server/authoring/registry-project.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "accessProfiles": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ProjectAccessProfileSource"
+      },
+      "type": "array"
+    },
+    "apiVersion": {
+      "type": "string"
+    },
+    "entities": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/EntitySource"
+      },
+      "type": "array"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "manifestProjection": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ManifestProjectionSource"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "modules": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ModuleLockSource"
+      },
+      "type": "array"
+    },
+    "package": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PackageIdentitySource"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "registry": {
+      "$ref": "#/$defs/RegistryIdentitySource"
+    },
+    "vocabularies": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/VocabularySource"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "registry"
+  ],
+  "title": "Registry Server authored project",
+  "type": "object"
+}

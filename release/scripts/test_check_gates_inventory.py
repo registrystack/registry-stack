@@ -714,6 +714,38 @@ class GateInventoryTest(unittest.TestCase):
                 text = self.workflow.replace(snippet, replacement)
                 self.assertIn(gate, self.module.missing_gates(text))
 
+    def test_missing_registry_server_product_gates_are_reported(self) -> None:
+        for snippet, replacement, gate in (
+            (
+                "registry-server-contracts:",
+                "registry-server-disabled:",
+                "Registry Server product contract gate",
+            ),
+            (
+                "run: products/registry-server/scripts/check-contracts.sh",
+                "run: true # Registry Server contracts disabled",
+                "Registry Server contract consistency",
+            ),
+            (
+                "run: products/registry-server/scripts/test-postgres.sh",
+                "run: true # Registry Server PostgreSQL disabled",
+                "Registry Server PostgreSQL journeys",
+            ),
+            (
+                "run: products/registry-server/scripts/test-adopter-workflow.sh",
+                "run: true # Registry Server adopter workflow disabled",
+                "Registry Server adopter workflow",
+            ),
+            (
+                "postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675",
+                "postgres:17.11",
+                "Registry Server PostgreSQL 17 image pin",
+            ),
+        ):
+            with self.subTest(gate=gate):
+                text = self.workflow.replace(snippet, replacement, 1)
+                self.assertIn(gate, self.module.missing_gates(text))
+
     def test_linux_node_release_proof_is_two_runner_read_only_and_aggregated(
         self,
     ) -> None:
