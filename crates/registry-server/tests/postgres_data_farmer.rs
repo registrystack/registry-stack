@@ -35,8 +35,8 @@ async fn real_postgres_farmer_import_is_authenticated_chunked_resumable_and_race
         "/v1/records/farmers",
         "data-farmer-seed",
         json!({
-            "farmer-code":"F-DATA", "display-name":"Data import operator",
-            "administrative-boundary":"north-district"
+            "farmerCode":"F-DATA", "displayName":"Data import operator",
+            "administrativeBoundary":"north-district"
         }),
     )
     .await;
@@ -46,9 +46,9 @@ async fn real_postgres_farmer_import_is_authenticated_chunked_resumable_and_race
         "/v1/records/holdings",
         "data-holding-seed",
         json!({
-            "holding-code":"H-DATA", "farmer":farmer_id, "tenure-type":"owned",
-            "tenure-start":"2026-01-01", "administrative-boundary":"north-district",
-            "import-source":"data-seed", "source-record-id":"holding"
+            "holdingCode":"H-DATA", "farmer":farmer_id, "tenureType":"owned",
+            "tenureStart":"2026-01-01", "administrativeBoundary":"north-district",
+            "importSource":"data-seed", "sourceRecordId":"holding"
         }),
     )
     .await;
@@ -290,11 +290,11 @@ fn plot_item(
     longitude: f64,
 ) -> Value {
     json!({"operation":"create", "data":{
-        "plot-code":plot_code, "holding":holding_id,
-        "administrative-boundary":"north-district",
+        "plotCode":plot_code, "holding":holding_id,
+        "administrativeBoundary":"north-district",
         "centroid":{"type":"Point","coordinates":[longitude,-9.5]},
-        "area-value":"1.2500", "area-unit":"hectare",
-        "import-source":source, "source-record-id":source_record_id
+        "areaValue":"1.2500", "areaUnit":"hectare",
+        "importSource":source, "sourceRecordId":source_record_id
     }})
 }
 

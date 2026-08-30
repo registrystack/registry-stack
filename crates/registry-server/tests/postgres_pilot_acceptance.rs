@@ -211,9 +211,11 @@ async fn household_journey(harness: &PilotHarness) {
             ["x-registry-vocabulary"],
         "residency-status"
     );
-    assert!(openapi["components"]["schemas"]["person"]["properties"]
-        .get("preferredLanguage")
-        .is_none());
+    assert_eq!(
+        openapi["components"]["schemas"]["person"]["properties"]["preferredLanguage"]
+            ["x-registry-vocabulary"],
+        "preferred-language"
+    );
 
     let person = create_record(
         harness,
@@ -307,7 +309,7 @@ async fn household_journey(harness: &PilotHarness) {
         .send(
             Method::GET,
             &format!(
-                "/v1/records/households/{}?accessProfile=household-operator&$select=household-code,head-count,single-headed,woman-headed",
+                "/v1/records/households/{}?accessProfile=household-operator&$select=householdCode,headCount,singleHeaded,womanHeaded",
                 current_household.id
             ),
             Some(&token),
@@ -317,16 +319,16 @@ async fn household_journey(harness: &PilotHarness) {
         .await;
     assert_eq!(household.status(), StatusCode::OK);
     let household = response_json(household).await;
-    assert_eq!(household["data"]["household-code"], "H-CURRENT");
-    assert_eq!(household["data"]["head-count"], 1);
-    assert_eq!(household["data"]["single-headed"], true);
-    assert_eq!(household["data"]["woman-headed"], true);
+    assert_eq!(household["data"]["householdCode"], "H-CURRENT");
+    assert_eq!(household["data"]["headCount"], 1);
+    assert_eq!(household["data"]["singleHeaded"], true);
+    assert_eq!(household["data"]["womanHeaded"], true);
 
     let people = harness
         .send(
             Method::GET,
             &format!(
-                "/v1/records/households/{}/people?accessProfile=household-operator&$select=person-code,person-sex&$filter=person-sex%20eq%20%27female%27&$count=true",
+                "/v1/records/households/{}/people?accessProfile=household-operator&$select=personCode,personSex&$filter=personSex%20eq%20%27female%27&$count=true",
                 current_household.id
             ),
             Some(&token),
@@ -337,8 +339,8 @@ async fn household_journey(harness: &PilotHarness) {
     assert_eq!(people.status(), StatusCode::OK);
     let people = response_json(people).await;
     assert_eq!(people["count"], 1);
-    assert_eq!(people["items"][0]["data"]["person-code"], "P-100");
-    assert_eq!(people["items"][0]["data"]["person-sex"], "female");
+    assert_eq!(people["items"][0]["data"]["personCode"], "P-100");
+    assert_eq!(people["items"][0]["data"]["personSex"], "female");
 
     let overlap = harness
         .send_json(

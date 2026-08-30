@@ -137,6 +137,10 @@ class DemoProvisioningTests(unittest.TestCase):
         self.assertNotIn(DEMO.WEBHOOK_MODULE_LOCK + "    digest:", project)
         self.assertIn("id: usual-resident-created-v1", module)
         self.assertIn("afterEquals: {residency-status: usual-resident}", module)
+        self.assertLess(
+            module.index("id: usual-resident-created-v1"),
+            module.index(DEMO.WEBHOOK_ENTITY_INSERTION),
+        )
         self.assertEqual(fixture_module.read_bytes(), original_fixture_module)
 
         digest = "sha256:" + "3" * 64
@@ -242,6 +246,39 @@ class DemoProvisioningTests(unittest.TestCase):
             (event_id, "person.usual-resident-created-v1.webhook", 1),
         )
 
+    def test_webhook_verification_covers_every_matching_seeded_person(self) -> None:
+        people, _, _ = DEMO.seed_spec()
+        events = {}
+        for index, person in enumerate(people, start=1):
+            if person["residencyStatus"] != "usual-resident":
+                continue
+            attempts = [{"generation": 1, "attempt": 1, "accepted": True}]
+            if index == 2:
+                attempts = [
+                    {"generation": 1, "attempt": 1, "accepted": False},
+                    {"generation": 1, "attempt": 2, "accepted": True},
+                ]
+            elif index == 3:
+                attempts = [
+                    {"generation": 1, "attempt": 1, "accepted": False},
+                    {"generation": 2, "attempt": 1, "accepted": True},
+                ]
+            events[f"event-{index}"] = {"slot": index, "attempts": attempts}
+        (self.root / "webhook-receiver-state.json").write_text(
+            json.dumps({"verificationFailures": 0, "events": events}),
+            encoding="utf-8",
+        )
+
+        DEMO.verify_webhook(self.root)
+
+        events.pop(next(reversed(events)))
+        (self.root / "webhook-receiver-state.json").write_text(
+            json.dumps({"verificationFailures": 0, "events": events}),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(DEMO.DemoError, "every matching seeded event"):
+            DEMO.verify_webhook(self.root)
+
     def test_schema_test_credentials_cover_every_packaged_journey_step(self) -> None:
         DEMO.prepare(self.root, self.fixture, 15432, 18081, 18080)
         journey_source = (self.root / "project/tests/journeys.yaml").read_text(
@@ -270,23 +307,32 @@ class DemoProvisioningTests(unittest.TestCase):
 
     def test_seed_is_referentially_closed_and_stable(self) -> None:
         people, households, memberships = DEMO.seed_spec()
-        person_codes = {person["person-code"] for person in people}
-        household_codes = {household["household-code"] for household in households}
+        person_codes = {person["personCode"] for person in people}
+        household_codes = {household["householdCode"] for household in households}
         self.assertEqual((len(people), len(households), len(memberships)), (8, 3, 8))
         self.assertEqual(len(person_codes), len(people))
         self.assertEqual(len(household_codes), len(households))
+        self.assertTrue(
+            all(
+                "-" not in key
+                for rows in (people, households, memberships)
+                for row in rows
+                for key in row
+            ),
+            "seed data must use compiled public API field names",
+        )
         self.assertEqual(
-            [household["local-household-number"] for household in households],
+            [household["localHouseholdNumber"] for household in households],
             [1001, 1002, 1003],
         )
-        self.assertTrue(all(row["person-code"] in person_codes for row in memberships))
-        self.assertTrue(all(row["household-code"] in household_codes for row in memberships))
+        self.assertTrue(all(row["personCode"] in person_codes for row in memberships))
+        self.assertTrue(all(row["householdCode"] in household_codes for row in memberships))
         self.assertEqual(
-            {person["person-sex"] for person in people},
+            {person["personSex"] for person in people},
             {"female", "male"},
         )
         self.assertEqual(
-            sum(person["residency-status"] == "usual-resident" for person in people),
+            sum(person["residencyStatus"] == "usual-resident" for person in people),
             8,
         )
 
@@ -349,7 +395,7 @@ class DemoProvisioningTests(unittest.TestCase):
             return {
                 "id": household_id,
                 "revision": 1,
-                "data": {"household-code": "HOUSEHOLD-DEMO-001"},
+                "data": {"householdCode": "HOUSEHOLD-DEMO-001"},
             }, {}
 
         with mock.patch.object(DEMO, "_request", side_effect=request), mock.patch.object(
@@ -386,7 +432,7 @@ class DemoProvisioningTests(unittest.TestCase):
                 return {
                     "id": household_id,
                     "revision": 1,
-                    "data": {"household-code": "HOUSEHOLD-DEMO-001"},
+                    "data": {"householdCode": "HOUSEHOLD-DEMO-001"},
                 }, {}
             return {"items": []}, {}
 
@@ -395,14 +441,35 @@ class DemoProvisioningTests(unittest.TestCase):
         ):
             DEMO.query(self.root, "operator")
 
+        query_paths = [call[1] for call in calls[:-1]]
+        self.assertIn("$select=personCode,legalName,personSex,residencyStatus", query_paths[0])
+        self.assertIn("$orderby=personCode", query_paths[0])
+        self.assertIn("$filter=administrativeArea%20eq", query_paths[1])
+        self.assertIn("$orderby=localHouseholdNumber", query_paths[1])
+        self.assertIn("$filter=singleHeaded%20eq", query_paths[2])
+        self.assertIn("childUnder5Count%20eq", query_paths[2])
+        self.assertIn("$filter=womanHeaded%20eq", query_paths[3])
+        self.assertTrue(
+            all(
+                internal_name not in path
+                for path in query_paths
+                for internal_name in (
+                    "person-code",
+                    "administrative-area",
+                    "local-household-number",
+                    "child-under-5-count",
+                    "woman-headed",
+                )
+            )
+        )
         self.assertEqual(calls[-1][0:2], ("POST", "/v1/records/households:lookup?accessProfile=household-operator"))
         self.assertEqual(
             calls[-1][2],
             {
                 "selector": "by-local-reference",
                 "values": {
-                    "administrative-area": "north-demo",
-                    "local-household-number": 1001,
+                    "administrativeArea": "north-demo",
+                    "localHouseholdNumber": 1001,
                 },
             },
         )

@@ -409,7 +409,15 @@ pub fn validate_fixture_journeys(
             validate_claims(&step.claims, profile, step.expect.outcome)?;
             validate_action_fields(&step.request, registry, entity, profile)?;
             validate_expectation(&step.expect, operation, profile, capture.is_some())?;
-            let response_readable_fields = match &step.request {
+            let response_entity = match &step.request {
+                ActionSource::ReadPath { path, .. } => entity
+                    .read_paths
+                    .get(path)
+                    .and_then(|read_path| registry.entities().get(&read_path.to))
+                    .ok_or(FixtureError::LogicalReferenceRefused)?,
+                _ => entity,
+            };
+            let response_readable_field_ids = match &step.request {
                 ActionSource::ReadPath { path, .. } => profile
                     .read_paths
                     .iter()
@@ -418,6 +426,10 @@ pub fn validate_fixture_journeys(
                     .ok_or(FixtureError::LogicalReferenceRefused)?,
                 _ => profile.readable_fields.clone(),
             };
+            let response_readable_fields =
+                externalize_field_set(response_entity, &response_readable_field_ids)?;
+            let action = externalize_action(&step.request, registry, entity)?;
+            let expect = externalize_expectation(&step.expect, response_entity)?;
             steps.push(ValidatedStep {
                 id: step.id,
                 entity: step.entity,
@@ -426,8 +438,8 @@ pub fn validate_fixture_journeys(
                 route,
                 profile: profile.clone(),
                 response_readable_fields,
-                action: step.request,
-                expect: step.expect,
+                action,
+                expect,
                 capture,
             });
         }
@@ -688,6 +700,136 @@ fn validate_structured_query(
 
 fn compiled_field_exists(entity: &crate::model::CompiledEntity, field: &str) -> bool {
     entity.fields.contains_key(field) || entity.derived_fields.contains_key(field)
+}
+
+fn field_api_name<'a>(entity: &'a crate::model::CompiledEntity, field_id: &str) -> Option<&'a str> {
+    if field_id == "id" {
+        return Some("id");
+    }
+    if field_id == "revision" {
+        return Some("revision");
+    }
+    entity
+        .stored_fields
+        .iter()
+        .map(|field| &field.logical)
+        .chain(entity.derived_fields.values().map(|field| &field.logical))
+        .find(|field| field.id == field_id)
+        .map(|field| field.api_name.as_str())
+}
+
+fn externalize_field_set(
+    entity: &crate::model::CompiledEntity,
+    fields: &BTreeSet<String>,
+) -> Result<BTreeSet<String>, FixtureError> {
+    fields
+        .iter()
+        .map(|field| {
+            field_api_name(entity, field)
+                .map(str::to_owned)
+                .ok_or(FixtureError::LogicalReferenceRefused)
+        })
+        .collect()
+}
+
+fn externalize_data(
+    entity: &crate::model::CompiledEntity,
+    data: &Map<String, Value>,
+) -> Result<Map<String, Value>, FixtureError> {
+    data.iter()
+        .map(|(field, value)| {
+            field_api_name(entity, field)
+                .map(|api_name| (api_name.to_owned(), value.clone()))
+                .ok_or(FixtureError::LogicalReferenceRefused)
+        })
+        .collect()
+}
+
+fn externalize_action(
+    action: &ActionSource,
+    registry: &CompiledRegistry,
+    entity: &crate::model::CompiledEntity,
+) -> Result<ActionSource, FixtureError> {
+    Ok(match action {
+        ActionSource::Create { data } => ActionSource::Create {
+            data: externalize_data(entity, data)?,
+        },
+        ActionSource::Get { record_ref } => ActionSource::Get {
+            record_ref: record_ref.clone(),
+        },
+        ActionSource::List => ActionSource::List,
+        ActionSource::Query { select, top, count } => ActionSource::Query {
+            select: externalize_field_set(entity, select)?,
+            top: *top,
+            count: *count,
+        },
+        ActionSource::Lookup { selector, values } => ActionSource::Lookup {
+            selector: selector.clone(),
+            values: externalize_data(entity, values)?,
+        },
+        ActionSource::ReadPath {
+            path,
+            record_ref,
+            select,
+            top,
+            count,
+        } => {
+            let target = entity
+                .read_paths
+                .get(path)
+                .and_then(|read_path| registry.entities().get(&read_path.to))
+                .ok_or(FixtureError::LogicalReferenceRefused)?;
+            ActionSource::ReadPath {
+                path: path.clone(),
+                record_ref: record_ref.clone(),
+                select: externalize_field_set(target, select)?,
+                top: *top,
+                count: *count,
+            }
+        }
+        ActionSource::Patch {
+            record_ref,
+            etag_ref,
+            changes,
+        } => ActionSource::Patch {
+            record_ref: record_ref.clone(),
+            etag_ref: etag_ref.clone(),
+            changes: changes
+                .iter()
+                .map(|change| {
+                    Ok(FieldChangeSource {
+                        field: field_api_name(entity, &change.field)
+                            .ok_or(FixtureError::LogicalReferenceRefused)?
+                            .to_owned(),
+                        value: change.value.clone(),
+                    })
+                })
+                .collect::<Result<Vec<_>, FixtureError>>()?,
+        },
+        ActionSource::Batch { items } => ActionSource::Batch {
+            items: items
+                .iter()
+                .map(|item| match item {
+                    BatchItemSource::Create { data } => {
+                        externalize_data(entity, data).map(|data| BatchItemSource::Create { data })
+                    }
+                })
+                .collect::<Result<Vec<_>, FixtureError>>()?,
+        },
+    })
+}
+
+fn externalize_expectation(
+    expectation: &ExpectationSource,
+    response_entity: &crate::model::CompiledEntity,
+) -> Result<ExpectationSource, FixtureError> {
+    Ok(ExpectationSource {
+        outcome: expectation.outcome,
+        status: expectation.status,
+        fields: externalize_data(response_entity, &expectation.fields)?,
+        count: expectation.count,
+        problem_code: expectation.problem_code.clone(),
+    })
 }
 
 fn validate_expectation(

@@ -44,6 +44,7 @@ WEBHOOK_DESTINATION_ID = "household-event-receiver"
 WEBHOOK_EVENT_ID = "usual-resident-created-v1"
 WEBHOOK_MODULE_ID = "publicschema-household-demographics"
 WEBHOOK_MODULE_LOCK = "  - id: publicschema-household-demographics\n    version: 0.1.0\n"
+WEBHOOK_ENTITY_INSERTION = "  - entity: household\n"
 WEBHOOK_MODULE_SOURCE = """    events:
       - id: usual-resident-created-v1
         trigger: created
@@ -131,9 +132,20 @@ def _local_project(root: Path, fixture: Path, webhook: bool) -> None:
         source = before_lock + WEBHOOK_MODULE_LOCK + after_digest
         module_path = target / f"modules/{WEBHOOK_MODULE_ID}/module.yaml"
         module_source = module_path.read_text(encoding="utf-8")
-        if "    events:\n" in module_source or not module_source.endswith("\n"):
+        if (
+            "    events:\n" in module_source
+            or module_source.count(WEBHOOK_ENTITY_INSERTION) != 1
+            or not module_source.endswith("\n")
+        ):
             raise DemoError("household demographics module cannot receive the demo event")
-        module_path.write_text(module_source + WEBHOOK_MODULE_SOURCE, encoding="utf-8")
+        module_path.write_text(
+            module_source.replace(
+                WEBHOOK_ENTITY_INSERTION,
+                WEBHOOK_MODULE_SOURCE + WEBHOOK_ENTITY_INSERTION,
+                1,
+            ),
+            encoding="utf-8",
+        )
     project_path.write_text(source, encoding="utf-8")
 
 
@@ -767,8 +779,12 @@ def verify_webhook(root: Path) -> None:
     root = _require_root(root)
     state = _read_json_object(root / "webhook-receiver-state.json")
     events = sorted(state.get("events", {}).values(), key=lambda event: event.get("slot", 0))
-    if state.get("verificationFailures") != 0 or len(events) != 4:
-        raise DemoError("the webhook receiver did not verify exactly four matching events")
+    people, _, _ = seed_spec()
+    expected_events = sum(
+        person.get("residencyStatus") == "usual-resident" for person in people
+    )
+    if state.get("verificationFailures") != 0 or len(events) != expected_events:
+        raise DemoError("the webhook receiver did not verify every matching seeded event")
     if not any(item.get("accepted") for item in events[0].get("attempts", [])):
         raise DemoError("the webhook receiver did not prove immediate success")
     if not any(
@@ -781,6 +797,16 @@ def verify_webhook(root: Path) -> None:
         for item in events[2].get("attempts", [])
     ):
         raise DemoError("the webhook receiver did not prove replay success")
+    if any(
+        not any(
+            item.get("accepted")
+            and item.get("generation") == 1
+            and item.get("attempt") == 1
+            for item in event.get("attempts", [])
+        )
+        for event in events[3:]
+    ):
+        raise DemoError("the webhook receiver did not accept the remaining seeded events")
 
 
 def _request(
@@ -836,29 +862,29 @@ def _create(root: Path, route: str, logical_key: str, data: dict[str, Any]) -> s
 
 def seed_spec() -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     people = [
-        {"person-code": "PERSON-DEMO-001", "legal-name": "Omar Example", "family-name": "Example", "date-of-birth": "1986-02-22", "person-sex": "male", "residency-status": "usual-resident", "preferred-language": "en"},
-        {"person-code": "PERSON-DEMO-002", "legal-name": "Lina Example", "family-name": "Example", "date-of-birth": "2023-03-14", "person-sex": "female", "residency-status": "usual-resident", "preferred-language": "en"},
-        {"person-code": "PERSON-DEMO-003", "legal-name": "Sofia Sample", "family-name": "Sample", "date-of-birth": "1980-11-02", "person-sex": "female", "residency-status": "usual-resident", "preferred-language": "es"},
-        {"person-code": "PERSON-DEMO-004", "legal-name": "Diego Sample", "family-name": "Sample", "date-of-birth": "2016-06-17", "person-sex": "male", "residency-status": "usual-resident", "preferred-language": "es"},
-        {"person-code": "PERSON-DEMO-005", "legal-name": "Rosa Sample", "family-name": "Sample", "date-of-birth": "1940-08-20", "person-sex": "female", "residency-status": "usual-resident", "preferred-language": "es"},
-        {"person-code": "PERSON-DEMO-006", "legal-name": "Karim Control", "family-name": "Control", "date-of-birth": "1975-01-09", "person-sex": "male", "residency-status": "usual-resident", "preferred-language": "fr"},
-        {"person-code": "PERSON-DEMO-007", "legal-name": "Hana Control", "family-name": "Control", "date-of-birth": "1977-09-23", "person-sex": "female", "residency-status": "usual-resident", "preferred-language": "fr"},
-        {"person-code": "PERSON-DEMO-008", "legal-name": "Noor Control", "family-name": "Control", "date-of-birth": "2018-05-06", "person-sex": "female", "residency-status": "usual-resident", "preferred-language": "fr"},
+        {"personCode": "PERSON-DEMO-001", "legalName": "Omar Example", "familyName": "Example", "dateOfBirth": "1986-02-22", "personSex": "male", "residencyStatus": "usual-resident", "preferredLanguage": "en"},
+        {"personCode": "PERSON-DEMO-002", "legalName": "Lina Example", "familyName": "Example", "dateOfBirth": "2023-03-14", "personSex": "female", "residencyStatus": "usual-resident", "preferredLanguage": "en"},
+        {"personCode": "PERSON-DEMO-003", "legalName": "Sofia Sample", "familyName": "Sample", "dateOfBirth": "1980-11-02", "personSex": "female", "residencyStatus": "usual-resident", "preferredLanguage": "es"},
+        {"personCode": "PERSON-DEMO-004", "legalName": "Diego Sample", "familyName": "Sample", "dateOfBirth": "2016-06-17", "personSex": "male", "residencyStatus": "usual-resident", "preferredLanguage": "es"},
+        {"personCode": "PERSON-DEMO-005", "legalName": "Rosa Sample", "familyName": "Sample", "dateOfBirth": "1940-08-20", "personSex": "female", "residencyStatus": "usual-resident", "preferredLanguage": "es"},
+        {"personCode": "PERSON-DEMO-006", "legalName": "Karim Control", "familyName": "Control", "dateOfBirth": "1975-01-09", "personSex": "male", "residencyStatus": "usual-resident", "preferredLanguage": "fr"},
+        {"personCode": "PERSON-DEMO-007", "legalName": "Hana Control", "familyName": "Control", "dateOfBirth": "1977-09-23", "personSex": "female", "residencyStatus": "usual-resident", "preferredLanguage": "fr"},
+        {"personCode": "PERSON-DEMO-008", "legalName": "Noor Control", "familyName": "Control", "dateOfBirth": "2018-05-06", "personSex": "female", "residencyStatus": "usual-resident", "preferredLanguage": "fr"},
     ]
     households = [
-        {"household-code": "HOUSEHOLD-DEMO-001", "local-household-number": 1001, "household-name": "Single Headed Under Five Household", "administrative-area": "north-demo", "household-type": "private"},
-        {"household-code": "HOUSEHOLD-DEMO-002", "local-household-number": 1002, "household-name": "Woman Headed Child Elderly Household", "administrative-area": "central-demo", "household-type": "private"},
-        {"household-code": "HOUSEHOLD-DEMO-003", "local-household-number": 1003, "household-name": "Isolation Control Household", "administrative-area": "south-demo", "household-type": "private"},
+        {"householdCode": "HOUSEHOLD-DEMO-001", "localHouseholdNumber": 1001, "householdName": "Single Headed Under Five Household", "administrativeArea": "north-demo", "householdType": "private"},
+        {"householdCode": "HOUSEHOLD-DEMO-002", "localHouseholdNumber": 1002, "householdName": "Woman Headed Child Elderly Household", "administrativeArea": "central-demo", "householdType": "private"},
+        {"householdCode": "HOUSEHOLD-DEMO-003", "localHouseholdNumber": 1003, "householdName": "Isolation Control Household", "administrativeArea": "south-demo", "householdType": "private"},
     ]
     memberships = [
-        {"person-code": "PERSON-DEMO-001", "household-code": "HOUSEHOLD-DEMO-001", "relationship": "head", "valid-from": "2026-01-01"},
-        {"person-code": "PERSON-DEMO-002", "household-code": "HOUSEHOLD-DEMO-001", "relationship": "child", "valid-from": "2026-01-01"},
-        {"person-code": "PERSON-DEMO-003", "household-code": "HOUSEHOLD-DEMO-002", "relationship": "head", "valid-from": "2026-01-01"},
-        {"person-code": "PERSON-DEMO-004", "household-code": "HOUSEHOLD-DEMO-002", "relationship": "child", "valid-from": "2026-01-01"},
-        {"person-code": "PERSON-DEMO-005", "household-code": "HOUSEHOLD-DEMO-002", "relationship": "dependent", "valid-from": "2026-01-01"},
-        {"person-code": "PERSON-DEMO-006", "household-code": "HOUSEHOLD-DEMO-003", "relationship": "head", "valid-from": "2026-01-01"},
-        {"person-code": "PERSON-DEMO-007", "household-code": "HOUSEHOLD-DEMO-003", "relationship": "spouse", "valid-from": "2026-01-01"},
-        {"person-code": "PERSON-DEMO-008", "household-code": "HOUSEHOLD-DEMO-003", "relationship": "child", "valid-from": "2026-01-01"},
+        {"personCode": "PERSON-DEMO-001", "householdCode": "HOUSEHOLD-DEMO-001", "relationship": "head", "validFrom": "2026-01-01"},
+        {"personCode": "PERSON-DEMO-002", "householdCode": "HOUSEHOLD-DEMO-001", "relationship": "child", "validFrom": "2026-01-01"},
+        {"personCode": "PERSON-DEMO-003", "householdCode": "HOUSEHOLD-DEMO-002", "relationship": "head", "validFrom": "2026-01-01"},
+        {"personCode": "PERSON-DEMO-004", "householdCode": "HOUSEHOLD-DEMO-002", "relationship": "child", "validFrom": "2026-01-01"},
+        {"personCode": "PERSON-DEMO-005", "householdCode": "HOUSEHOLD-DEMO-002", "relationship": "dependent", "validFrom": "2026-01-01"},
+        {"personCode": "PERSON-DEMO-006", "householdCode": "HOUSEHOLD-DEMO-003", "relationship": "head", "validFrom": "2026-01-01"},
+        {"personCode": "PERSON-DEMO-007", "householdCode": "HOUSEHOLD-DEMO-003", "relationship": "spouse", "validFrom": "2026-01-01"},
+        {"personCode": "PERSON-DEMO-008", "householdCode": "HOUSEHOLD-DEMO-003", "relationship": "child", "validFrom": "2026-01-01"},
     ]
     return people, households, memberships
 
@@ -867,12 +893,12 @@ def seed(root: Path) -> None:
     root = _require_root(root)
     people, households, memberships = seed_spec()
     person_ids = {
-        person["person-code"]: _create(root, "/v1/records/persons", person["person-code"].lower(), person)
+        person["personCode"]: _create(root, "/v1/records/persons", person["personCode"].lower(), person)
         for person in people
     }
     household_ids = {
-        household["household-code"]: _create(
-            root, "/v1/records/households", household["household-code"].lower(), household
+        household["householdCode"]: _create(
+            root, "/v1/records/households", household["householdCode"].lower(), household
         )
         for household in households
     }
@@ -882,10 +908,10 @@ def seed(root: Path) -> None:
             "/v1/records/group-memberships",
             f"membership-{index}",
             {
-                "person": person_ids[membership["person-code"]],
-                "household": household_ids[membership["household-code"]],
+                "person": person_ids[membership["personCode"]],
+                "household": household_ids[membership["householdCode"]],
                 "relationship": membership["relationship"],
-                "valid-from": membership["valid-from"],
+                "validFrom": membership["validFrom"],
             },
         )
     _write_json(root / "seed-record-ids.json", {"people": person_ids, "households": household_ids})
@@ -965,7 +991,7 @@ def _assert_bound_household(response: dict[str, Any], household_id: str, househo
     if (
         response.get("id") != household_id
         or not isinstance(data, dict)
-        or data.get("household-code") != household_code
+        or data.get("householdCode") != household_code
     ):
         raise DemoError("viewer read did not return its one bound household")
 
@@ -978,10 +1004,10 @@ def query(root: Path, suite: str = "all") -> None:
     encoded_household_id = urllib.parse.quote(household_id, safe="")
     if suite in ("all", "operator"):
         queries = [
-            ("People from one household", f"/v1/records/households/{encoded_household_id}/people?accessProfile=household-operator&$select=person-code,legal-name,person-sex,residency-status&$orderby=person-code&$top=20&$count=true"),
-            ("Derived stored and computed filter", "/v1/records/households?accessProfile=household-operator&$select=household-code,administrative-area,local-household-number,child-count&$filter=administrative-area%20eq%20%27north-demo%27%20and%20child-count%20eq%201&$orderby=local-household-number&$top=20&$count=true"),
-            ("Single headed with child under five", "/v1/records/households?accessProfile=household-operator&$select=household-code,child-under-5-count,single-headed&$filter=single-headed%20eq%20true%20and%20child-under-5-count%20eq%201&$top=20&$count=true"),
-            ("Woman headed with child and elderly", "/v1/records/households?accessProfile=household-operator&$select=household-code,woman-headed,child-count,elderly-count&$filter=woman-headed%20eq%20true%20and%20child-count%20eq%201%20and%20elderly-count%20eq%201&$top=20&$count=true"),
+            ("People from one household", f"/v1/records/households/{encoded_household_id}/people?accessProfile=household-operator&$select=personCode,legalName,personSex,residencyStatus&$orderby=personCode&$top=20&$count=true"),
+            ("Derived stored and computed filter", "/v1/records/households?accessProfile=household-operator&$select=householdCode,administrativeArea,localHouseholdNumber,childCount&$filter=administrativeArea%20eq%20%27north-demo%27%20and%20childCount%20eq%201&$orderby=localHouseholdNumber&$top=20&$count=true"),
+            ("Single headed with child under five", "/v1/records/households?accessProfile=household-operator&$select=householdCode,childUnder5Count,singleHeaded&$filter=singleHeaded%20eq%20true%20and%20childUnder5Count%20eq%201&$top=20&$count=true"),
+            ("Woman headed with child and elderly", "/v1/records/households?accessProfile=household-operator&$select=householdCode,womanHeaded,childCount,elderlyCount&$filter=womanHeaded%20eq%20true%20and%20childCount%20eq%201%20and%20elderlyCount%20eq%201&$top=20&$count=true"),
         ]
         for label, path in queries:
             response, _ = _request(root, "GET", path, "operator-token")
@@ -994,8 +1020,8 @@ def query(root: Path, suite: str = "all") -> None:
             {
                 "selector": "by-local-reference",
                 "values": {
-                    "administrative-area": "north-demo",
-                    "local-household-number": 1001,
+                    "administrativeArea": "north-demo",
+                    "localHouseholdNumber": 1001,
                 },
             },
         )

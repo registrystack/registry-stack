@@ -2099,18 +2099,6 @@ fn resolve_data_field_id<'a>(entity: &'a CompiledEntity, api_name: &str) -> Opti
         .chain(entity.derived_fields.values().map(|field| &field.logical))
         .find(|field| field.api_name == api_name)
         .map(|field| field.id.as_str())
-        .or_else(|| {
-            entity
-                .fields
-                .get_key_value(api_name)
-                .map(|(field_id, _)| field_id.as_str())
-        })
-        .or_else(|| {
-            entity
-                .derived_fields
-                .get_key_value(api_name)
-                .map(|(field_id, _)| field_id.as_str())
-        })
 }
 
 fn projection_plan(
@@ -2926,8 +2914,19 @@ fn lookup_request_values(
     selector: &crate::model::CompiledSelectorProfile,
     values: &BTreeMap<String, Value>,
 ) -> Result<Vec<LookupSelectorValue>, LookupResolutionError> {
-    let expected = selector.fields.iter().collect::<BTreeSet<_>>();
-    let actual = values.keys().collect::<BTreeSet<_>>();
+    let expected = selector
+        .fields
+        .iter()
+        .map(|field_id| {
+            entity
+                .stored_fields
+                .iter()
+                .find(|field| field.logical.id == *field_id)
+                .map(|field| field.logical.api_name.as_str())
+                .ok_or(LookupResolutionError::Unresolved)
+        })
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    let actual = values.keys().map(String::as_str).collect::<BTreeSet<_>>();
     if expected != actual {
         return Err(LookupResolutionError::InvalidRequest);
     }
@@ -2939,9 +2938,15 @@ fn lookup_request_values(
                 .fields
                 .get(field_id)
                 .ok_or(LookupResolutionError::Unresolved)?;
+            let api_name = entity
+                .stored_fields
+                .iter()
+                .find(|stored| stored.logical.id == *field_id)
+                .map(|stored| stored.logical.api_name.as_str())
+                .ok_or(LookupResolutionError::Unresolved)?;
             let value = lookup_json_scalar(
                 values
-                    .get(field_id)
+                    .get(api_name)
                     .ok_or(LookupResolutionError::InvalidRequest)?,
                 &field.field_type,
             )?;
@@ -3036,8 +3041,10 @@ fn filtered_schema(
     let readable_api_names = entity
         .stored_fields
         .iter()
-        .filter(|field| readable_fields.contains(&field.logical.id))
-        .map(|field| field.logical.api_name.as_str())
+        .map(|field| &field.logical)
+        .chain(entity.derived_fields.values().map(|field| &field.logical))
+        .filter(|field| readable_fields.contains(&field.id))
+        .map(|field| field.api_name.as_str())
         .collect::<BTreeSet<_>>();
     let path = format!("generated/schemas/{entity_id}.schema.json");
     let artifact = service.registry.artifacts().get(&path)?;

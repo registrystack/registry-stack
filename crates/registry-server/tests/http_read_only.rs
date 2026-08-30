@@ -422,13 +422,13 @@ async fn lookup_body_exactness_origin_types_and_unresolved_equivalence_are_value
     let accepted = harness
         .send_json(
             Method::POST,
-            "/v1/records/households:lookup?accessProfile=operator&$select=household-code",
+            "/v1/records/households:lookup?accessProfile=operator&$select=householdCode",
             operator_claims.clone(),
             json!({
                 "selector": "by-local-reference",
                 "values": {
-                    "administrative-area": "area-a",
-                    "local-household-number": 7
+                    "administrativeArea": "area-a",
+                    "localHouseholdNumber": 7
                 }
             }),
         )
@@ -462,9 +462,10 @@ async fn lookup_body_exactness_origin_types_and_unresolved_equivalence_are_value
 
     for body in [
         json!({"selector": "by-local-reference"}),
-        json!({"selector": "by-local-reference", "values": {"administrative-area": "area-a", "local-household-number": "7"}}),
-        json!({"selector": "by-local-reference", "values": {"administrative-area": "area-a", "local-household-number": 7, "private-note": "DO-NOT-LEAK"}}),
-        json!({"selector": "by-local-reference", "values": {"administrative-area": "area-a", "local-household-number": 7}, "extra": "DO-NOT-LEAK"}),
+        json!({"selector": "by-local-reference", "values": {"administrativeArea": "area-a", "localHouseholdNumber": "7"}}),
+        json!({"selector": "by-local-reference", "values": {"administrativeArea": "area-a", "localHouseholdNumber": 7, "privateNote": "DO-NOT-LEAK"}}),
+        json!({"selector": "by-local-reference", "values": {"administrativeArea": "area-a", "localHouseholdNumber": 7}, "extra": "DO-NOT-LEAK"}),
+        json!({"selector": "by-local-reference", "values": {"administrative-area": "area-a", "local-household-number": 7}}),
     ] {
         let before = harness.records.calls();
         let response = harness
@@ -483,7 +484,7 @@ async fn lookup_body_exactness_origin_types_and_unresolved_equivalence_are_value
     }
 
     let oversized_body = format!(
-        r#"{{"selector":"by-household-code","values":{{"household-code":"{}"}}}}"#,
+        r#"{{"selector":"by-household-code","values":{{"householdCode":"{}"}}}}"#,
         "x".repeat(17 * 1024)
     );
     let before = harness.records.calls();
@@ -505,7 +506,7 @@ async fn lookup_body_exactness_origin_types_and_unresolved_equivalence_are_value
             Method::POST,
             "/v1/records/households:lookup?accessProfile=operator",
             operator_claims.clone(),
-            json!({"selector": "missing-canary", "values": {"household-code": "DO-NOT-LEAK"}}),
+            json!({"selector": "missing-canary", "values": {"householdCode": "DO-NOT-LEAK"}}),
         )
         .await;
     let unknown_body = body_bytes(unknown).await;
@@ -514,7 +515,7 @@ async fn lookup_body_exactness_origin_types_and_unresolved_equivalence_are_value
             Method::POST,
             "/v1/records/households:lookup?accessProfile=operator",
             operator_claims.clone(),
-            json!({"selector": "by-private-note", "values": {"private-note": "DO-NOT-LEAK"}}),
+            json!({"selector": "by-private-note", "values": {"privateNote": "DO-NOT-LEAK"}}),
         )
         .await;
     let ungranted_body = body_bytes(ungranted).await;
@@ -572,7 +573,7 @@ async fn lookup_body_exactness_origin_types_and_unresolved_equivalence_are_value
                         .expect("claim value"),
                 )],
             )),
-            json!({"selector": "by-household-code", "values": {"household-code": "DO-NOT-LEAK"}}),
+            json!({"selector": "by-household-code", "values": {"householdCode": "DO-NOT-LEAK"}}),
         )
         .await;
     assert_eq!(claim_values_body.status(), StatusCode::BAD_REQUEST);
@@ -607,7 +608,7 @@ async fn relationship_route_uses_path_grant_not_direct_target_rights() {
         .send(
             Method::GET,
             &format!(
-                "/v1/records/households/{root}/people?accessProfile=operator&$select=person-code&$filter=startswith(person-code,'P-')&$orderby=person-code&$top=5&$count=true"
+                "/v1/records/households/{root}/people?accessProfile=operator&$select=personCode&$filter=startswith(personCode,'P-')&$orderby=personCode&$top=5&$count=true"
             ),
             Some(caseworker_claims("case-management")),
         )
@@ -653,7 +654,7 @@ async fn relationship_route_uses_path_grant_not_direct_target_rights() {
         .send(
             Method::GET,
             &format!(
-                "/v1/records/households/{root}/people?accessProfile=operator&$select=sensitive-note"
+                "/v1/records/households/{root}/people?accessProfile=operator&$select=sensitiveNote"
             ),
             Some(caseworker_claims("case-management")),
         )
@@ -661,7 +662,7 @@ async fn relationship_route_uses_path_grant_not_direct_target_rights() {
     assert_eq!(widened.status(), StatusCode::BAD_REQUEST);
     let widened_body = body_json(widened).await;
     assert_eq!(widened_body["code"], "query.invalid");
-    assert!(!widened_body.to_string().contains("sensitive-note"));
+    assert!(!widened_body.to_string().contains("sensitiveNote"));
     assert_eq!(harness.records.calls(), before);
 
     let unknown_path = harness
@@ -757,8 +758,8 @@ async fn relationship_discovery_uses_target_entity_and_unions_authorized_operati
     assert_eq!(
         openapi["components"]["schemas"]["person"]["properties"],
         json!({
-            "person-code": {"type": "string", "minLength": 0, "maxLength": 64},
-            "sensitive-note": {"type": "string", "minLength": 0, "maxLength": 64}
+            "personCode": {"type": "string", "minLength": 0, "maxLength": 64},
+            "sensitiveNote": {"type": "string", "minLength": 0, "maxLength": 64}
         })
     );
 
@@ -787,9 +788,9 @@ async fn relationship_discovery_uses_target_entity_and_unions_authorized_operati
     )
     .await;
     assert!(household_schema["properties"]
-        .get("household-code")
+        .get("householdCode")
         .is_some());
-    assert!(household_schema["properties"].get("person-code").is_none());
+    assert!(household_schema["properties"].get("personCode").is_none());
 
     let metadata = body_json(
         harness
@@ -848,7 +849,7 @@ async fn derived_fields_are_discoverable_as_read_only_response_properties() {
     )
     .await;
     assert_eq!(
-        schema["properties"]["eligibility-score"],
+        schema["properties"]["eligibilityScore"],
         json!({"type": "integer", "format": "int64", "readOnly": true})
     );
     assert_eq!(
@@ -860,7 +861,7 @@ async fn derived_fields_are_discoverable_as_read_only_response_properties() {
     let response = send_to(
         &app,
         Method::GET,
-        "/v1/records/benefit-records/00000000-0000-4000-8000-000000000001?accessProfile=operator&$select=eligibility-score",
+        "/v1/records/benefit-records/00000000-0000-4000-8000-000000000001?accessProfile=operator&$select=eligibilityScore",
         Some(caseworker_claims("case-management")),
     )
     .await;
@@ -1595,6 +1596,7 @@ async fn lower_camel_select_resolves_only_compiled_authorized_api_names() {
     for uri in [
         "/v1/records/logical-records/00000000-0000-4000-8000-000000000001?$select=unknownCanary",
         "/v1/records/logical-records/00000000-0000-4000-8000-000000000001?$select=privateCanary",
+        "/v1/records/logical-records/00000000-0000-4000-8000-000000000001?$select=household-code",
     ] {
         let refused = harness.send(Method::GET, uri, None).await;
         assert_eq!(refused.status(), StatusCode::NOT_FOUND, "{uri}");
@@ -1603,6 +1605,7 @@ async fn lower_camel_select_resolves_only_compiled_authorized_api_names() {
         let rendered = problem.to_string();
         assert!(!rendered.contains("unknownCanary"));
         assert!(!rendered.contains("privateCanary"));
+        assert!(!rendered.contains("household-code"));
     }
     assert_eq!(harness.records.calls(), before);
 

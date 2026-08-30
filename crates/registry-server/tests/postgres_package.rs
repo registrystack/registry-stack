@@ -2114,10 +2114,11 @@ async fn successor_apply_refuses_to_strand_retained_webhook_work() {
         )
         .await
         .expect("upgrade test expires one pending payload before retention cleanup");
+    let replayable_dead_letter_event = Uuid::new_v4();
     insert_upgrade_webhook_delivery(
         &database,
         &active,
-        Uuid::new_v4(),
+        replayable_dead_letter_event,
         "removed-dead-letter-destination",
         &fingerprint(32),
         data_schema,
@@ -2268,6 +2269,32 @@ async fn successor_apply_refuses_to_strand_retained_webhook_work() {
         target_inventory.binding_digest("neutral-events"),
         Some(exact_digest.as_str())
     );
+    let replayable_dead_letter_refused = apply_package_with_event_destination_compatibility(
+        &database,
+        &verified_second,
+        ApplyPrecondition::Successor { current: &active },
+        &target_inventory,
+    )
+    .await;
+    assert_eq!(
+        replayable_dead_letter_refused.err(),
+        Some(MigrationError::ApplyFailed)
+    );
+    assert_eq!(
+        registry_state_snapshot(&database.admin).await,
+        before_refusals,
+        "an incompatible retained replayable dead letter is refused before maintenance state changes"
+    );
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_webhook_deliveries
+             SET operator_replay = false
+             WHERE event_id = $1",
+            &[&replayable_dead_letter_event],
+        )
+        .await
+        .expect("upgrade test disables replay for one retained dead letter");
     let upgraded = apply_package_with_event_destination_compatibility(
         &database,
         &verified_second,

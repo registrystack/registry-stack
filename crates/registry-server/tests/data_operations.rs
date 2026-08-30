@@ -281,6 +281,82 @@ fn data_validate_and_chunk_plan_reuse_runtime_rules_and_compiled_batch_bounds() 
 }
 
 #[test]
+fn data_lifecycle_uses_exact_compiled_api_names() {
+    let registry = compile_source(json!({
+        "apiVersion": "registry.registrystack.org/v1alpha1",
+        "kind": "RegistryProject",
+        "registry": {"id": "data-logical-names", "version": "1", "defaultLanguage": "en"},
+        "entities": [{
+            "id": ENTITY,
+            "route": "records",
+            "mutationMode": "mutable",
+            "batch": {"maximumItems": 2, "maximumBytes": 400},
+            "fields": [{
+                "id": "record-code",
+                "apiName": "publicCode",
+                "type": "string",
+                "minLength": 2,
+                "maxLength": 16,
+                "required": true,
+                "classification": "internal"
+            }],
+            "accessProfiles": [{
+                "id": PROFILE,
+                "principalClaim": "principal",
+                "operations": ["create", "patch", "batch", "list"],
+                "readableFields": ["record-code"],
+                "writableFields": ["record-code"],
+                "allowDataExport": true
+            }]
+        }]
+    }))
+    .unwrap();
+
+    let create = b"{\"operation\":\"create\",\"data\":{\"publicCode\":\"AA\"}}\n";
+    let create_plan = DataImportPlan::from_jsonl(
+        &registry,
+        ENTITY,
+        DataImportOperation::Create,
+        PROFILE,
+        create,
+    )
+    .unwrap();
+    let canonical = parse_json_strict(create_plan.chunks()[0].canonical_body()).unwrap();
+    assert_eq!(canonical["items"][0]["data"]["publicCode"], "AA");
+    assert!(canonical["items"][0]["data"].get("record-code").is_none());
+
+    let internal_create = b"{\"operation\":\"create\",\"data\":{\"record-code\":\"AA\"}}\n";
+    assert_eq!(
+        DataImportPlan::from_jsonl(
+            &registry,
+            ENTITY,
+            DataImportOperation::Create,
+            PROFILE,
+            internal_create,
+        ),
+        Err(DataError::InvalidItem)
+    );
+
+    let patch = b"{\"operation\":\"patch\",\"recordId\":\"018f06d6-0248-7c7f-8a7e-df9dfbd83d2c\",\"ifMatch\":\"\\\"rs-revision\\\"\",\"patch\":[{\"op\":\"replace\",\"path\":\"/data/publicCode\",\"value\":\"BB\"}]}\n";
+    DataImportPlan::from_jsonl(
+        &registry,
+        ENTITY,
+        DataImportOperation::Patch,
+        PROFILE,
+        patch,
+    )
+    .unwrap();
+
+    let export = DataExportPlan::from_compiled(&registry, ENTITY, PROFILE, ["publicCode"])
+        .expect("the exact compiled API name is exportable");
+    assert_eq!(export.requested_fields(), &["publicCode"]);
+    assert_eq!(
+        DataExportPlan::from_compiled(&registry, ENTITY, PROFILE, ["record-code"]),
+        Err(DataError::InvalidBinding)
+    );
+}
+
+#[test]
 fn data_import_checkpoint_and_idempotency_are_exact_and_value_free() {
     let registry = compiled(true);
     let input = format!(

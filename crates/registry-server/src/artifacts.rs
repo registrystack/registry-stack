@@ -255,7 +255,7 @@ fn entity_schema(entity: &CompiledEntity) -> Value {
             .as_object_mut()
             .expect("field schemas are objects")
             .insert("readOnly".to_owned(), Value::Bool(true));
-        properties.insert(field.logical.id.clone(), schema);
+        properties.insert(field.logical.api_name.clone(), schema);
     }
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",

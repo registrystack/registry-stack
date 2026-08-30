@@ -1198,7 +1198,13 @@ async fn verify_retained_webhook_delivery_bindings(
               AND delivery.compiled_delivery_id = state.compiled_delivery_id
              JOIN registry_internal.registry_outbox AS outbox
                ON outbox.event_id = delivery.event_id
-             WHERE state.state IN ('pending', 'leased')
+             WHERE (
+                       state.state IN ('pending', 'leased')
+                       OR (
+                           state.state = 'dead_lettered'
+                           AND delivery.operator_replay
+                       )
+                   )
                AND outbox.payload IS NOT NULL
                AND outbox.payload_expires_at > transaction_timestamp()
                AND NOT EXISTS (

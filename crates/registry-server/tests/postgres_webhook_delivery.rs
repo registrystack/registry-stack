@@ -636,10 +636,11 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         "destination_binding_refused",
     )
     .await;
-    service
-        .verify_retained_bindings()
-        .await
-        .expect("a terminal dead letter never blocks successor startup");
+    assert_eq!(
+        service.verify_retained_bindings().await,
+        Err(WebhookDeliveryError::Unavailable),
+        "a retained replayable dead letter with an incompatible binding blocks startup"
+    );
     assert_eq!(
         service
             .replay(
@@ -651,6 +652,23 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         Err(WebhookDeliveryError::Unavailable),
         "replay fails closed when the current destination does not match the captured binding"
     );
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_webhook_deliveries
+             SET operator_replay = false
+             WHERE event_id = $1 AND compiled_delivery_id = $2",
+            &[
+                &binding_refused.event_id,
+                &binding_refused.compiled_delivery_id,
+            ],
+        )
+        .await
+        .expect("administrator disables replay for the incompatible dead letter");
+    service
+        .verify_retained_bindings()
+        .await
+        .expect("non-replayable and expired or erased dead letters do not block startup");
 
     let payload_refused = create_event(
         &database,

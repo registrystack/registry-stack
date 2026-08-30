@@ -79,10 +79,10 @@ bearer token or HMAC key.
 The exact paths, query parameters, selector bodies, and expected statuses live
 in `support/demo.py`, which `query.sh` invokes. This keeps the examples
 copyable without teaching people to expand bearer tokens into process-visible
-`curl` arguments. Field and selector IDs intentionally retain their configured
-kebab-case spelling. The operator selector body uses the exact `values`
-property, while the viewer's verified-claim selector correctly sends no
-caller-provided values.
+`curl` arguments. Public field names use their compiled lower-camel API names,
+while selector IDs retain their configured kebab-case spelling. The operator
+selector body uses the exact `values` property, while the viewer's
+verified-claim selector correctly sends no caller-provided values.
 
 ## Disposable state
 

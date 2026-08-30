@@ -22,7 +22,9 @@ use crate::contract::{
     valid_crs84_point, valid_decimal_value, valid_structured_value, FieldTypeSource, MutationMode,
     Operation,
 };
-use crate::model::{CompiledEntity, CompiledQueryKind, CompiledRegistry, HttpMethod};
+use crate::model::{
+    CompiledEntity, CompiledQueryKind, CompiledRegistry, CompiledStoredField, HttpMethod,
+};
 
 const DATA_API_VERSION: &str = "registry.registrystack.org/v1alpha1";
 const IMPORT_CHECKPOINT_KIND: &str = "RegistryDataImportCheckpoint";
@@ -416,9 +418,13 @@ impl DataImportPlan {
             response_fields: entity.access_profiles[profile_id]
                 .readable_fields
                 .iter()
-                .map(|field_id| {
-                    let field = &entity.fields[field_id];
-                    (field_id.clone(), (field.field_type.clone(), field.required))
+                .filter_map(|field_id| {
+                    let stored = stored_field_by_id(entity, field_id)?;
+                    let field = entity.fields.get(field_id)?;
+                    Some((
+                        stored.logical.api_name.clone(),
+                        (field.field_type.clone(), field.required),
+                    ))
                 })
                 .collect(),
         })
@@ -577,15 +583,19 @@ fn validate_create_data(
 ) -> Result<(), DataError> {
     let profile = &entity.access_profiles[profile_id];
     if entity
-        .fields
-        .values()
-        .any(|field| field.required && !data.contains_key(&field.id))
+        .stored_fields
+        .iter()
+        .any(|field| field.required && !data.contains_key(&field.logical.api_name))
     {
         return Err(DataError::InvalidItem);
     }
-    for (field_id, value) in data {
-        let field = entity.fields.get(field_id).ok_or(DataError::InvalidItem)?;
-        if !profile.writable_fields.contains(field_id)
+    for (api_name, value) in data {
+        let stored = stored_field_by_api_name(entity, api_name).ok_or(DataError::InvalidItem)?;
+        let field = entity
+            .fields
+            .get(&stored.logical.id)
+            .ok_or(DataError::InvalidItem)?;
+        if !profile.writable_fields.contains(&stored.logical.id)
             || value.is_null() && field.required
             || !value.is_null() && !validate_field_value(FieldValue::Json(value), &field.field_type)
         {
@@ -614,13 +624,15 @@ fn validate_patch(
             .get("path")
             .and_then(Value::as_str)
             .ok_or(DataError::InvalidItem)?;
-        let field_id = patch_field(path)?;
-        let field = entity.fields.get(&field_id).ok_or(DataError::InvalidItem)?;
+        let api_name = patch_field(path)?;
+        let stored = stored_field_by_api_name(entity, &api_name).ok_or(DataError::InvalidItem)?;
+        let field_id = &stored.logical.id;
+        let field = entity.fields.get(field_id).ok_or(DataError::InvalidItem)?;
         match name {
             "add" | "replace" => {
                 require_exact_keys(operation, &["op", "path", "value"])?;
                 let value = &operation["value"];
-                if !profile.writable_fields.contains(&field_id)
+                if !profile.writable_fields.contains(field_id)
                     || value.is_null() && field.required
                     || !value.is_null()
                         && !validate_field_value(FieldValue::Json(value), &field.field_type)
@@ -631,7 +643,7 @@ fn validate_patch(
             }
             "remove" => {
                 require_exact_keys(operation, &["op", "path"])?;
-                if field.required || !profile.writable_fields.contains(&field_id) {
+                if field.required || !profile.writable_fields.contains(field_id) {
                     return Err(DataError::InvalidItem);
                 }
                 mutated = true;
@@ -639,7 +651,7 @@ fn validate_patch(
             "test" => {
                 require_exact_keys(operation, &["op", "path", "value"])?;
                 let value = &operation["value"];
-                if !profile.readable_fields.contains(&field_id)
+                if !profile.readable_fields.contains(field_id)
                     || !value.is_null()
                         && !validate_field_value(FieldValue::Json(value), &field.field_type)
                 {
@@ -677,6 +689,26 @@ fn patch_field(path: &str) -> Result<String, DataError> {
         return Err(DataError::InvalidItem);
     }
     Ok(decoded)
+}
+
+fn stored_field_by_api_name<'a>(
+    entity: &'a CompiledEntity,
+    api_name: &str,
+) -> Option<&'a CompiledStoredField> {
+    entity
+        .stored_fields
+        .iter()
+        .find(|field| field.logical.api_name == api_name)
+}
+
+fn stored_field_by_id<'a>(
+    entity: &'a CompiledEntity,
+    field_id: &str,
+) -> Option<&'a CompiledStoredField> {
+    entity
+        .stored_fields
+        .iter()
+        .find(|field| field.logical.id == field_id)
 }
 
 fn require_exact_keys(object: &Map<String, Value>, expected: &[&str]) -> Result<(), DataError> {
@@ -1095,7 +1127,20 @@ impl DataExportPlan {
         {
             return Err(DataError::InvalidBinding);
         }
-        let requested = fields.iter().cloned().collect::<BTreeSet<_>>();
+        let requested_api_names = fields.iter().cloned().collect::<BTreeSet<_>>();
+        let requested = requested_api_names
+            .iter()
+            .map(|api_name| {
+                entity
+                    .stored_fields
+                    .iter()
+                    .map(|field| &field.logical)
+                    .chain(entity.derived_fields.values().map(|field| &field.logical))
+                    .find(|field| field.api_name == *api_name)
+                    .map(|field| field.id.clone())
+                    .ok_or(DataError::InvalidBinding)
+            })
+            .collect::<Result<BTreeSet<_>, _>>()?;
         let expected_projection = profile.readable_fields.iter().cloned().collect::<Vec<_>>();
         let access_matches = registry.access().entries.iter().any(|entry| {
             entry.entity_id == entity_id
@@ -1131,17 +1176,27 @@ impl DataExportPlan {
         {
             return Err(DataError::InvalidBinding);
         }
-        let response_fields = requested
+        let response_fields = requested_api_names
             .iter()
-            .map(|field_id| {
-                let field = &entity.fields[field_id];
-                (field_id.clone(), (field.field_type.clone(), field.required))
+            .map(|api_name| {
+                if let Some(field) = stored_field_by_api_name(entity, api_name) {
+                    return (
+                        api_name.clone(),
+                        (field.logical.field_type.clone(), field.required),
+                    );
+                }
+                let field = entity
+                    .derived_fields
+                    .values()
+                    .find(|field| field.logical.api_name == *api_name)
+                    .expect("requested fields were resolved against compiled data fields");
+                (api_name.clone(), (field.logical.field_type.clone(), false))
             })
             .collect();
         Ok(Self {
             entity_id: entity_id.to_owned(),
             profile_id: profile_id.to_owned(),
-            requested_fields: requested.into_iter().collect(),
+            requested_fields: requested_api_names.into_iter().collect(),
             route_path: route.expect("checked list route").path.clone(),
             maximum_page_size: query.expect("checked list query").max_page_size,
             response_fields,
