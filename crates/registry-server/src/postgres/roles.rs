@@ -44,12 +44,18 @@ impl fmt::Display for QuotedIdentifier<'_> {
     }
 }
 
-/// Admin-only provisioning of the two managed schemas.
+/// Admin-only provisioning of the managed schemas.
 pub async fn provision_managed_schemas(
     admin: &impl GenericClient,
     migration_role: &SqlIdentifier,
 ) -> Result<()> {
-    for schema in ["registry_internal", "registry_data"] {
+    for schema in [
+        "registry_internal",
+        "registry_data",
+        "registry_source",
+        "registry_derived",
+        "registry_context",
+    ] {
         admin
             .batch_execute(&format!(
                 "CREATE SCHEMA {schema} AUTHORIZATION {};\n\
@@ -125,11 +131,20 @@ pub async fn verify_runtime_role(
                     has_database_privilege(current_user, current_database(), 'CREATE'),
                     has_schema_privilege(current_user, 'registry_internal', 'CREATE'),
                     has_schema_privilege(current_user, 'registry_data', 'CREATE'),
+                    has_schema_privilege(current_user, 'registry_source', 'CREATE'),
+                    has_schema_privilege(current_user, 'registry_derived', 'CREATE'),
+                    has_schema_privilege(current_user, 'registry_context', 'CREATE'),
                     EXISTS (
                         SELECT 1
                         FROM pg_catalog.pg_class c
                         JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-                        WHERE n.nspname IN ('registry_internal', 'registry_data')
+                        WHERE n.nspname IN (
+                            'registry_internal',
+                            'registry_data',
+                            'registry_source',
+                            'registry_derived',
+                            'registry_context'
+                        )
                           AND c.relowner = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user)
                     )
              FROM pg_catalog.pg_roles
@@ -137,7 +152,7 @@ pub async fn verify_runtime_role(
             &[&migration_role.as_str()],
         )
         .await?;
-    let forbidden = (1..=10).any(|index| row.get::<_, bool>(index));
+    let forbidden = (1..=13).any(|index| row.get::<_, bool>(index));
     if forbidden {
         return Err(PostgresKernelError::RoleInvariant(
             "runtime role has ownership, bypass, or DDL authority",
@@ -178,7 +193,13 @@ async fn verify_schema_owner(
     client: &impl GenericClient,
     expected_role: &SqlIdentifier,
 ) -> Result<()> {
-    let managed_schemas: &[&str] = &["registry_data", "registry_internal"];
+    let managed_schemas: &[&str] = &[
+        "registry_data",
+        "registry_derived",
+        "registry_context",
+        "registry_internal",
+        "registry_source",
+    ];
     let rows = client
         .query(
             "SELECT n.nspname, r.rolname
@@ -189,7 +210,7 @@ async fn verify_schema_owner(
             &[&managed_schemas],
         )
         .await?;
-    if rows.len() != 2
+    if rows.len() != managed_schemas.len()
         || rows
             .iter()
             .any(|row| row.get::<_, String>(1) != expected_role.as_str())

@@ -75,6 +75,13 @@ fn classify_change(
 
     match change.code {
         Code::ConstraintAdded | Code::IndexAdded => DiffClassification::LockOrRewriteRisk,
+        Code::DerivedRelationChanged if change.class == BaseClass::CompatibleAdditive => {
+            DiffClassification::CompatibleAdditive
+        }
+        Code::DerivedRelationAdded => DiffClassification::CompatibleAdditive,
+        Code::DerivedRelationRemoved | Code::DerivedRelationChanged => {
+            DiffClassification::DestructiveOrIrreversible
+        }
         Code::EntityClassificationChanged | Code::FieldClassificationChanged => {
             classification_direction(baseline, candidate, change)
         }

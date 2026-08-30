@@ -1174,8 +1174,6 @@ authentication:
   authorityClaims:
     principal: registry_principal
     purpose: registry_purpose
-    rowBoundaryClaims:
-      - {{name: jurisdiction, type: directString}}
 audit:
   hashKeyRef: secret:file/audit-key
 cursor:

@@ -660,9 +660,13 @@ mod tests {
                 tombstone: false,
                 batch: None,
                 classification: Classification::Internal,
+                derived: Vec::new(),
+                selector_profiles: Vec::new(),
+                read_paths: Vec::new(),
                 fields: vec![
                     FieldSource {
                         id: "tenant".to_owned(),
+                        api_name: None,
                         field_type: FieldTypeSource::String {
                             min_length: 1,
                             max_length: 64,
@@ -673,6 +677,7 @@ mod tests {
                     },
                     FieldSource {
                         id: "region".to_owned(),
+                        api_name: None,
                         field_type: FieldTypeSource::String {
                             min_length: 1,
                             max_length: 64,
@@ -711,6 +716,9 @@ mod tests {
                     ],
                     revision_access: false,
                     allow_data_export: false,
+                    lookups: Vec::new(),
+                    read_paths: Vec::new(),
+                    allow_count: false,
                 }],
                 events: Vec::new(),
             }],

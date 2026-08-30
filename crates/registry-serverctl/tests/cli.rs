@@ -127,6 +127,7 @@ impl RuntimePackageFixture {
                     id: "core".to_owned(),
                     path: "source/modules/core/module.yaml".to_owned(),
                     bytes: module_bytes,
+                    assets: Vec::new(),
                 }],
                 fixture_journeys: PackageSourceFile {
                     path: "tests/journeys.yaml".to_owned(),
@@ -260,6 +261,7 @@ fn prepare_packaging_candidate(
             id: "core".to_owned(),
             path: "source/modules/core/module.yaml".to_owned(),
             bytes: module_bytes,
+            assets: Vec::new(),
         }],
         fixture_journeys: PackageSourceFile {
             path: FIXTURE_JOURNEYS_PATH.to_owned(),
@@ -846,10 +848,18 @@ fn explain_reports_are_derived_from_compiled_inventories() {
         "model",
         project.path().to_str().expect("path is UTF-8"),
     ]);
+    let queries = registry_serverctl(&[
+        "--format",
+        "json",
+        "explain",
+        "queries",
+        project.path().to_str().expect("path is UTF-8"),
+    ]);
 
     assert!(routes.status.success(), "{routes:?}");
     assert!(access.status.success(), "{access:?}");
     assert!(model.status.success(), "{model:?}");
+    assert!(queries.status.success(), "{queries:?}");
     assert_eq!(
         json_stdout(&routes)["explanation"]["routes"][0]["entityId"],
         "asset-item"
@@ -862,6 +872,99 @@ fn explain_reports_are_derived_from_compiled_inventories() {
         json_stdout(&model)["explanation"]["registryId"],
         "asset-site-placement"
     );
+    let queries_json = json_stdout(&queries);
+    let operations = queries_json["explanation"]["operations"]
+        .as_array()
+        .expect("query operations are an array");
+    assert!(operations
+        .windows(2)
+        .all(|window| window[0]["id"].as_str().expect("left id")
+            <= window[1]["id"].as_str().expect("right id")));
+    let planner_list = operations
+        .iter()
+        .find(|operation| operation["id"] == "records.asset-item.site-planner.list")
+        .expect("site planner list query is explained");
+    assert_eq!(planner_list["profile"], "site-planner");
+    assert_eq!(planner_list["routeId"], "records.asset-item.list");
+    assert_eq!(planner_list["apiFields"][0]["apiName"], "assetCode");
+    assert_eq!(planner_list["apiFields"][0]["sourceKind"], "stored");
+    assert_eq!(
+        planner_list["filterable"][0]["operators"],
+        json!(["equals", "in", "is_null", "is_not_null", "prefix"])
+    );
+    assert_eq!(planner_list["bounds"]["maxPageSize"], 100);
+    assert!(!String::from_utf8(queries.stdout)
+        .expect("queries JSON is UTF-8")
+        .contains("registry_data"));
+}
+
+#[test]
+fn check_reports_derived_sql_module_path_without_sql_values() {
+    let project = TestProject::from_registry_source(
+        br#"apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: derived-diagnostic-fixture
+  version: 1
+  defaultLanguage: en
+modules:
+  - id: core
+    version: 1
+"#,
+    );
+    let module_dir = project.path().join("modules/core");
+    fs::create_dir_all(module_dir.join("sql")).expect("module SQL directory creates");
+    fs::write(
+        module_dir.join("module.yaml"),
+        br#"id: core
+version: 1
+entities:
+  - id: record
+    route: records
+    mutationMode: create_only
+    fields:
+      - id: code
+        type: string
+        maxLength: 16
+        classification: internal
+    derived:
+      - id: summary
+        sql: sql/summary.sql
+        key: id
+        fields:
+          - id: summary
+            type: string
+            maxLength: 16
+            classification: internal
+    accessProfiles:
+      - id: reader
+        principalClaim: principal
+        operations: [list]
+        readableFields: [code, summary]
+"#,
+    )
+    .expect("module fixture writes");
+    fs::write(
+        module_dir.join("sql/summary.sql"),
+        b"SELECT SQL_VALUE_CANARY FROM",
+    )
+    .expect("SQL fixture writes");
+
+    let check = registry_serverctl(&["--format", "json", "check", path(project.path())]);
+
+    assert_eq!(check.status.code(), Some(1), "{check:?}");
+    let rendered = String::from_utf8_lossy(&check.stdout);
+    assert!(!rendered.contains("SQL_VALUE_CANARY"));
+    assert!(!rendered.contains("SELECT"));
+    let report = json_stdout(&check);
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "derived.sql.invalid");
+    assert_eq!(
+        diagnostic["path"],
+        "modules/core/module.yaml:entities[record].derived[summary].sql"
+    );
+    assert_eq!(diagnostic["artifact"], "registry_project");
+    assert_eq!(diagnostic["suggestedAction"], "correct_authoring_source");
 }
 
 #[test]
@@ -2742,6 +2845,7 @@ fn data_package_fixture() -> (TestProject, PathBuf) {
             id: "core".to_owned(),
             path: "source/modules/core/module.yaml".to_owned(),
             bytes: module_bytes,
+            assets: Vec::new(),
         }],
         fixture_journeys: PackageSourceFile {
             path: "tests/journeys.yaml".to_owned(),
@@ -2846,7 +2950,6 @@ authentication:
   authorityClaims:
     principal: registry_principal
     purpose: registry_purpose
-    rowBoundaryClaims: []
 audit:
   hashKeyRef: secret:file/{PACKAGE_VALUE_CANARY}
 cursor:

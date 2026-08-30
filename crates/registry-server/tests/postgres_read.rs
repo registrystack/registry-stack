@@ -101,7 +101,7 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
 
     let get = send(
         &app,
-        &format!("/v1/records/widgets/{VISIBLE_RECORD}?fields=label"),
+        &format!("/v1/records/widgets/{VISIBLE_RECORD}?$select=label"),
         Some(read_claims(["zone-a"])),
     )
     .await;
@@ -122,7 +122,7 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
 
     let decimal = send(
         &app,
-        &format!("/v1/records/widgets/{VISIBLE_RECORD}?fields=amount"),
+        &format!("/v1/records/widgets/{VISIBLE_RECORD}?$select=amount"),
         Some(read_claims(["zone-a"])),
     )
     .await;
@@ -138,7 +138,7 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
 
     let list = send(
         &app,
-        "/v1/records/widgets?fields=label",
+        "/v1/records/widgets?$select=label",
         Some(read_claims(["zone-a"])),
     )
     .await;
@@ -167,7 +167,7 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
 
     let repeated_in = send(
         &app,
-        "/v1/records/widgets?fields=label&filter=jurisdiction:in:zone-b&filter=jurisdiction:in:zone-a&pageSize=2",
+        "/v1/records/widgets?$select=label&$filter=jurisdiction%20in%20('zone-b','zone-a')&$top=2",
         Some(read_claims(["zone-a"])),
     )
     .await;
@@ -190,7 +190,7 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
 
     let prefix = send(
         &app,
-        "/v1/records/widgets?fields=label&filter=label:prefix:literal%25_%5C",
+        "/v1/records/widgets?$select=label&$filter=startswith(label,'literal%25_%5C')",
         Some(read_claims(["zone-a"])),
     )
     .await;
@@ -203,7 +203,7 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
 
     let continuation = send(
         &app,
-        &format!("/v1/records/widgets?cursor={next_cursor}"),
+        &format!("/v1/records/widgets?$skiptoken={next_cursor}"),
         Some(read_claims(["zone-a"])),
     )
     .await;
@@ -231,7 +231,7 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
     let tampered = String::from_utf8(tampered).expect("cursor remains UTF-8");
     let refused_cursor = send(
         &app,
-        &format!("/v1/records/widgets?cursor={tampered}"),
+        &format!("/v1/records/widgets?$skiptoken={tampered}"),
         Some(read_claims(["zone-a"])),
     )
     .await;
@@ -243,7 +243,7 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
 
     let concealed = send(
         &app,
-        &format!("/v1/records/widgets/{MISMATCH_RECORD}?fields=label"),
+        &format!("/v1/records/widgets/{MISMATCH_RECORD}?$select=label"),
         Some(read_claims(["zone-a"])),
     )
     .await;
@@ -255,7 +255,7 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
 
     let tombstoned = send(
         &app,
-        &format!("/v1/records/widgets/{TOMBSTONED_RECORD}?fields=label"),
+        &format!("/v1/records/widgets/{TOMBSTONED_RECORD}?$select=label"),
         Some(read_claims(["zone-a"])),
     )
     .await;
@@ -268,7 +268,7 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
     let uppercase = send(
         &app,
         &format!(
-            "/v1/records/widgets/{}?fields=label",
+            "/v1/records/widgets/{}?$select=label",
             ALPHA_RECORD.to_ascii_uppercase()
         ),
         Some(read_claims(["zone-a"])),
@@ -288,7 +288,7 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
     );
     let faulted = send(
         &faulting_app,
-        &format!("/v1/records/widgets/{VISIBLE_RECORD}?fields=label"),
+        &format!("/v1/records/widgets/{VISIBLE_RECORD}?$select=label"),
         Some(read_claims(["zone-a"])),
     )
     .await;
@@ -359,7 +359,7 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
         body_json(
             send(
                 &app,
-                "/v1/records/assignments:as-of?fields=label&asOf=2020-05-31T23:59:59Z",
+                "/v1/records/assignments:as-of?$select=label&asOf=2020-05-31T23:59:59Z",
                 Some(read_claims(["zone-a"])),
             )
             .await,
@@ -371,7 +371,7 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
         body_json(
             send(
                 &app,
-                "/v1/records/assignments:as-of?fields=label&asOf=2020-06-01T00:00:00Z",
+                "/v1/records/assignments:as-of?$select=label&asOf=2020-06-01T00:00:00Z",
                 Some(read_claims(["zone-a"])),
             )
             .await,
@@ -381,7 +381,7 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
     );
     let current = send(
         &app,
-        "/v1/records/assignments:current?fields=label,valid-from,valid-to",
+        "/v1/records/assignments:current?$select=label,valid-from,valid-to",
         Some(read_claims(["zone-a"])),
     )
     .await;
@@ -395,7 +395,7 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
 
     let sorted_first = send(
         &app,
-        "/v1/records/widgets?fields=label,rank&filter=label:prefix:sort-key-&sort=rank&pageSize=2",
+        "/v1/records/widgets?$select=label,rank&$filter=startswith(label,'sort-key-')&$orderby=rank&$top=2",
         Some(read_claims(["zone-a"])),
     )
     .await;
@@ -411,7 +411,7 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
         .to_owned();
     let sorted_second = send(
         &app,
-        &format!("/v1/records/widgets?cursor={sorted_second_cursor}"),
+        &format!("/v1/records/widgets?$skiptoken={sorted_second_cursor}"),
         Some(read_claims(["zone-a"])),
     )
     .await;
@@ -428,7 +428,7 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
         .to_owned();
     let sorted_third = send(
         &app,
-        &format!("/v1/records/widgets?cursor={sorted_third_cursor}"),
+        &format!("/v1/records/widgets?$skiptoken={sorted_third_cursor}"),
         Some(read_claims(["zone-a"])),
     )
     .await;
@@ -439,29 +439,29 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
 
     let replay_cursor = next_cursor(
         &app,
-        "/v1/records/widgets?fields=label,rank&filter=label:prefix:sort-key-&sort=rank&pageSize=2",
+        "/v1/records/widgets?$select=label,rank&$filter=startswith(label,'sort-key-')&$orderby=rank&$top=2",
         Some(read_claims(["zone-a"])),
     )
     .await;
     for (uri, claims) in [
         (
-            format!("/v1/records/widgets?cursor={replay_cursor}"),
+            format!("/v1/records/widgets?$skiptoken={replay_cursor}"),
             read_claims_with(PRINCIPAL_CANARY, "audit-review", ["zone-a"]),
         ),
         (
-            format!("/v1/records/widgets?cursor={replay_cursor}"),
+            format!("/v1/records/widgets?$skiptoken={replay_cursor}"),
             read_claims_with("other-principal-value", "case-management", ["zone-a"]),
         ),
         (
-            format!("/v1/records/widgets?cursor={replay_cursor}"),
+            format!("/v1/records/widgets?$skiptoken={replay_cursor}"),
             read_claims_with(PRINCIPAL_CANARY, "case-management", ["zone-b"]),
         ),
         (
-            format!("/v1/records/widgets?accessProfile=auditor&cursor={replay_cursor}"),
+            format!("/v1/records/widgets?accessProfile=auditor&$skiptoken={replay_cursor}"),
             read_claims(["zone-a"]),
         ),
         (
-            format!("/v1/records/assignments?cursor={replay_cursor}"),
+            format!("/v1/records/assignments?$skiptoken={replay_cursor}"),
             read_claims(["zone-a"]),
         ),
     ] {
@@ -483,14 +483,14 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
     );
     assert_cursor_invalid(
         &package_changed_app,
-        &format!("/v1/records/widgets?cursor={replay_cursor}"),
+        &format!("/v1/records/widgets?$skiptoken={replay_cursor}"),
         Some(read_claims(["zone-a"])),
     )
     .await;
 
     let projection_cursor = next_cursor(
         &app,
-        "/v1/records/widgets?fields=label,amount&filter=label:prefix:label-&sort=ordinal&pageSize=2",
+        "/v1/records/widgets?$select=label,amount&$filter=startswith(label,'label-')&$orderby=ordinal&$top=2",
         Some(read_claims(["zone-a"])),
     )
     .await;
@@ -506,7 +506,7 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
     );
     assert_cursor_invalid(
         &projection_changed_app,
-        &format!("/v1/records/widgets?cursor={projection_cursor}"),
+        &format!("/v1/records/widgets?$skiptoken={projection_cursor}"),
         Some(read_claims(["zone-a"])),
     )
     .await;
@@ -527,7 +527,7 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
         );
         assert_cursor_invalid(
             &changed_app,
-            &format!("/v1/records/widgets?cursor={replay_cursor}"),
+            &format!("/v1/records/widgets?$skiptoken={replay_cursor}"),
             Some(read_claims(["zone-a"])),
         )
         .await;
@@ -545,13 +545,13 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
     );
     let expired_cursor = next_cursor(
         &expiring_app,
-        "/v1/records/widgets?fields=label&sort=ordinal&pageSize=1",
+        "/v1/records/widgets?$select=label&$orderby=ordinal&$top=1",
         Some(read_claims(["zone-a"])),
     )
     .await;
     assert_cursor_invalid(
         &expiring_app,
-        &format!("/v1/records/widgets?cursor={expired_cursor}"),
+        &format!("/v1/records/widgets?$skiptoken={expired_cursor}"),
         Some(read_claims(["zone-a"])),
     )
     .await;

@@ -2,7 +2,7 @@ apiVersion: registry.registrystack.org/server-journeys/v1
 journeys:
   - id: household-person-lifecycle
     steps:
-      - id: create-person
+      - id: create-single-headed-head
         entity: person
         accessProfile: household-operator
         claims: &household_operator_claims
@@ -13,9 +13,10 @@ journeys:
           operation: create
           data:
             person-code: PERSON-SYNTH-001
-            legal-name: Synthetic Person One
+            legal-name: Omar Example
             family-name: Example
-            date-of-birth: 1990-01-15
+            date-of-birth: 1986-02-22
+            person-sex: male
             residency-status: usual-resident
             preferred-language: en
         expect:
@@ -23,39 +24,144 @@ journeys:
           status: 201
           fields:
             person-code: PERSON-SYNTH-001
-            legal-name: Synthetic Person One
-            family-name: Example
-            date-of-birth: 1990-01-15
+            legal-name: Omar Example
+            person-sex: male
             residency-status: usual-resident
-            preferred-language: en
-        capture: first-person
-      - id: get-person
-        entity: person
-        accessProfile: household-operator
-        claims: *household_operator_claims
-        request: {operation: get, recordRef: first-person}
-        expect:
-          outcome: success
-          status: 200
-          fields: {person-code: PERSON-SYNTH-001, residency-status: usual-resident}
-      - id: update-person-residency
+        capture: single-headed-head
+      - id: create-under-five-child
         entity: person
         accessProfile: household-operator
         claims: *household_operator_claims
         request:
-          operation: patch
-          recordRef: first-person
-          etagRef: first-person
-          changes:
-            - {field: residency-status, value: temporary-resident}
+          operation: create
+          data:
+            person-code: PERSON-SYNTH-002
+            legal-name: Lina Example
+            family-name: Example
+            date-of-birth: 2023-03-14
+            person-sex: female
+            residency-status: usual-resident
+            preferred-language: en
         expect:
           outcome: success
-          status: 200
-          fields:
-            person-code: PERSON-SYNTH-001
-            residency-status: temporary-resident
-        capture: updated-person
-      - id: create-household
+          status: 201
+          fields: {person-code: PERSON-SYNTH-002, person-sex: female, residency-status: usual-resident}
+        capture: under-five-child
+      - id: create-woman-headed-head
+        entity: person
+        accessProfile: household-operator
+        claims: *household_operator_claims
+        request:
+          operation: create
+          data:
+            person-code: PERSON-SYNTH-003
+            legal-name: Sofia Sample
+            family-name: Sample
+            date-of-birth: 1980-11-02
+            person-sex: female
+            residency-status: usual-resident
+            preferred-language: es
+        expect:
+          outcome: success
+          status: 201
+          fields: {person-code: PERSON-SYNTH-003, person-sex: female}
+        capture: woman-headed-head
+      - id: create-woman-headed-child
+        entity: person
+        accessProfile: household-operator
+        claims: *household_operator_claims
+        request:
+          operation: create
+          data:
+            person-code: PERSON-SYNTH-004
+            legal-name: Diego Sample
+            family-name: Sample
+            date-of-birth: 2016-06-17
+            person-sex: male
+            residency-status: usual-resident
+            preferred-language: es
+        expect:
+          outcome: success
+          status: 201
+          fields: {person-code: PERSON-SYNTH-004, person-sex: male}
+        capture: woman-headed-child
+      - id: create-woman-headed-elder
+        entity: person
+        accessProfile: household-operator
+        claims: *household_operator_claims
+        request:
+          operation: create
+          data:
+            person-code: PERSON-SYNTH-005
+            legal-name: Rosa Sample
+            family-name: Sample
+            date-of-birth: 1940-08-20
+            person-sex: female
+            residency-status: usual-resident
+            preferred-language: es
+        expect:
+          outcome: success
+          status: 201
+          fields: {person-code: PERSON-SYNTH-005, person-sex: female}
+        capture: woman-headed-elder
+      - id: create-isolation-head
+        entity: person
+        accessProfile: household-operator
+        claims: *household_operator_claims
+        request:
+          operation: create
+          data:
+            person-code: PERSON-SYNTH-006
+            legal-name: Karim Control
+            family-name: Control
+            date-of-birth: 1975-01-09
+            person-sex: male
+            residency-status: usual-resident
+            preferred-language: fr
+        expect:
+          outcome: success
+          status: 201
+          fields: {person-code: PERSON-SYNTH-006, person-sex: male}
+        capture: isolation-head
+      - id: create-isolation-spouse
+        entity: person
+        accessProfile: household-operator
+        claims: *household_operator_claims
+        request:
+          operation: create
+          data:
+            person-code: PERSON-SYNTH-007
+            legal-name: Hana Control
+            family-name: Control
+            date-of-birth: 1977-09-23
+            person-sex: female
+            residency-status: usual-resident
+            preferred-language: fr
+        expect:
+          outcome: success
+          status: 201
+          fields: {person-code: PERSON-SYNTH-007, person-sex: female}
+        capture: isolation-spouse
+      - id: create-isolation-child
+        entity: person
+        accessProfile: household-operator
+        claims: *household_operator_claims
+        request:
+          operation: create
+          data:
+            person-code: PERSON-SYNTH-008
+            legal-name: Noor Control
+            family-name: Control
+            date-of-birth: 2018-05-06
+            person-sex: female
+            residency-status: usual-resident
+            preferred-language: fr
+        expect:
+          outcome: success
+          status: 201
+          fields: {person-code: PERSON-SYNTH-008, person-sex: female}
+        capture: isolation-child
+      - id: create-single-headed-household
         entity: household
         accessProfile: household-operator
         claims: *household_operator_claims
@@ -63,24 +169,66 @@ journeys:
           operation: create
           data:
             household-code: HOUSEHOLD-SYNTH-001
-            household-name: Synthetic Example Household
-            administrative-area: demonstration-area
+            local-household-number: 1001
+            household-name: Single Headed Under Five Household
+            administrative-area: demonstration-north
             household-type: private
         expect:
           outcome: success
           status: 201
           fields:
             household-code: HOUSEHOLD-SYNTH-001
-            household-name: Synthetic Example Household
-            administrative-area: demonstration-area
-            household-type: private
-        capture: first-household
-      - id: list-people
-        entity: person
+            local-household-number: 1001
+            household-name: Single Headed Under Five Household
+        capture: single-headed-household
+      - id: create-woman-headed-household
+        entity: household
         accessProfile: household-operator
         claims: *household_operator_claims
-        request: {operation: list}
-        expect: {outcome: success, status: 200, count: 1}
+        request:
+          operation: create
+          data:
+            household-code: HOUSEHOLD-SYNTH-002
+            local-household-number: 1002
+            household-name: Woman Headed Child Elderly Household
+            administrative-area: demonstration-central
+            household-type: private
+        expect:
+          outcome: success
+          status: 201
+          fields:
+            household-code: HOUSEHOLD-SYNTH-002
+            local-household-number: 1002
+        capture: woman-headed-household
+      - id: create-isolation-household
+        entity: household
+        accessProfile: household-operator
+        claims: *household_operator_claims
+        request:
+          operation: create
+          data:
+            household-code: HOUSEHOLD-SYNTH-003
+            local-household-number: 1003
+            household-name: Isolation Control Household
+            administrative-area: demonstration-south
+            household-type: private
+        expect:
+          outcome: success
+          status: 201
+          fields:
+            household-code: HOUSEHOLD-SYNTH-003
+            local-household-number: 1003
+        capture: isolation-household
+      - id: query-household-demographics
+        entity: household
+        accessProfile: household-operator
+        claims: *household_operator_claims
+        request:
+          operation: query
+          select: [household-code, local-household-number, child-count, child-under-5-count, elderly-count, single-headed, woman-headed]
+          top: 3
+          count: true
+        expect: {outcome: success, status: 200, count: 3}
       - id: refuse-incomplete-membership
         entity: group-membership
         accessProfile: household-operator
@@ -98,7 +246,7 @@ journeys:
         claims:
           principal: synthetic-household-operator
           scopes: [registry:household:operate]
-        request: {operation: get, recordRef: updated-person}
+        request: {operation: get, recordRef: single-headed-head}
         expect:
           outcome: refusal
           status: 404

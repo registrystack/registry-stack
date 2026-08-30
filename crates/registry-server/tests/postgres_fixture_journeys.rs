@@ -362,6 +362,7 @@ async fn prepare_runner(
         id: "fixture-core",
         path: "sources/modules/fixture-core.yaml",
         bytes: MODULE_SOURCE,
+        assets: &[],
     }];
     PostgresFixtureTestRunner::prepare(
         &package.package,
@@ -574,6 +575,7 @@ fn package_fixture_with_journeys(
             id: "fixture-core".to_owned(),
             path: "sources/modules/fixture-core.yaml".to_owned(),
             bytes: MODULE_SOURCE.to_vec(),
+            assets: Vec::new(),
         }],
         fixture_journeys: PackageSourceFile {
             path: FIXTURE_JOURNEYS_PATH.to_owned(),
@@ -716,9 +718,6 @@ authentication:
   authorityClaims:
     principal: registry_principal
     purpose: purpose
-    rowBoundaryClaims:
-      - name: jurisdiction
-        type: directString
 audit:
   hashKeyRef: secret:file/audit-key
 cursor:

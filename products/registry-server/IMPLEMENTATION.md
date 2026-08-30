@@ -12,8 +12,9 @@ is `contracts/implementation-schedule.yaml`.
 4. **W3:** add the real REST router, request authorization, revisions,
    idempotency, audit ordering, and transactional outbox as one path.
 5. **W4:** add verified packages, migrations, activation, and recovery.
-6. **W5:** complete the pilot tooling, bounded data operations, webhooks, and
-   five coequal adopter journeys.
+6. **W5:** complete the pilot tooling, bounded data operations, webhooks,
+   generated baselines, selector/read-path samples, and five coequal adopter
+   journeys.
 
 No wave creates a generic storage framework, package framework, plugin runtime,
 workflow engine, or second database client abstraction merely in anticipation

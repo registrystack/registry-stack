@@ -140,7 +140,7 @@ runtime = [
 postgres-test = ["runtime", "dep:tower", "registry-platform-httputil/test-support"]
 postgres-tls-test = ["runtime"]
 schema = ["dep:schemars"]
-tooling = ["dep:pg_query", "dep:tempfile", "dep:tower"]
+tooling = ["dep:tempfile", "dep:tower"]
 
 [dependencies]
 axum = { workspace = true, optional = true }
@@ -164,7 +164,7 @@ registry-platform-httpsec = { workspace = true, features = ["server"], optional 
 registry-platform-httputil = { workspace = true, optional = true }
 registry-platform-oidc = { workspace = true, optional = true }
 jsonschema.workspace = true
-pg_query = { workspace = true, optional = true }
+pg_query.workspace = true
 rustls = { workspace = true, optional = true }
 rustix = { workspace = true, optional = true }
 schemars = { workspace = true, optional = true }

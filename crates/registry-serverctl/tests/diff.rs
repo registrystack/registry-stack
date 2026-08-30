@@ -485,6 +485,7 @@ fn publish_package(
             id: "core".to_owned(),
             path: "source/modules/core/module.yaml".to_owned(),
             bytes: module_bytes,
+            assets: Vec::new(),
         }],
         fixture_journeys: PackageSourceFile {
             path: "tests/journeys.yaml".to_owned(),
@@ -635,7 +636,6 @@ authentication:
   authorityClaims:
     principal: registry_principal
     purpose: registry_purpose
-    rowBoundaryClaims: []
 audit:
   hashKeyRef: secret:file/{VALUE_CANARY}
 cursor:

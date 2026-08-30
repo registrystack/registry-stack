@@ -14,6 +14,7 @@ pub mod contract;
 #[cfg(feature = "runtime")]
 pub mod cursor;
 pub mod data;
+pub mod derived_sql;
 pub mod diagnostics;
 #[cfg(feature = "runtime")]
 pub mod event_destination;
@@ -22,6 +23,7 @@ pub mod fixtures;
 pub mod generated_ddl;
 #[cfg(feature = "runtime")]
 pub mod idempotency;
+pub mod logical_names;
 pub mod manifest_adapter;
 #[cfg(feature = "runtime")]
 pub mod migration;
@@ -37,6 +39,7 @@ pub mod package;
 pub mod physical_names;
 #[cfg(feature = "runtime")]
 pub mod postgres;
+pub mod query;
 #[cfg(feature = "runtime")]
 pub mod revision;
 #[cfg(feature = "runtime")]
@@ -51,7 +54,7 @@ pub mod tooling;
 pub mod webhook;
 
 pub use artifacts::{GeneratedArtifact, GeneratedArtifacts};
-pub use compiler::{compile_project, CompileProfile};
+pub use compiler::{compile_project, compile_project_with_assets, CompileProfile};
 pub use contract::{
     parse_module_json, parse_module_yaml, parse_project_json, parse_project_yaml, RegistryModule,
     RegistryProject,

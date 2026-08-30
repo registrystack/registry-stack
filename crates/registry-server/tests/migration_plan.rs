@@ -791,6 +791,7 @@ fn prepare_reviewed_package(
             id: "core".to_owned(),
             path: "source/modules/core/module.yaml".to_owned(),
             bytes: source.module_bytes,
+            assets: Vec::new(),
         }],
         fixture_journeys: PackageSourceFile {
             path: "tests/journeys.yaml".to_owned(),

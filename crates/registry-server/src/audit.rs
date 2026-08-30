@@ -67,6 +67,7 @@ pub(crate) enum TerminalAuditOutcome {
     Replayed,
     Returned,
     Empty,
+    Unresolved,
     Refused,
 }
 
@@ -454,6 +455,7 @@ fn terminal_record(terminal: TerminalAudit) -> serde_json::Map<String, Value> {
                     TerminalAuditOutcome::Replayed => "replayed",
                     TerminalAuditOutcome::Returned => "returned",
                     TerminalAuditOutcome::Empty => "empty",
+                    TerminalAuditOutcome::Unresolved => "unresolved",
                     TerminalAuditOutcome::Refused => "refused",
                 }
                 .to_owned(),

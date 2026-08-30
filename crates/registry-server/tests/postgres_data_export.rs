@@ -21,9 +21,7 @@ use registry_platform_testing::{oidc_verifier_config, MockIdp};
 use registry_server::api::{
     authenticated_router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture,
 };
-use registry_server::auth::{
-    AuthorityClaimConfig, RegistryAuthenticator, RowBoundaryClaimMapping, RowBoundaryClaimType,
-};
+use registry_server::auth::{AuthorityClaimConfig, RegistryAuthenticator};
 use registry_server::compiler::{compile_project, CompileProfile};
 use registry_server::contract::parse_project_json;
 use registry_server::cursor::CursorCodec;
@@ -299,7 +297,7 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
     let widened_body = canonicalize_json(&json!({
         "items":[{"id":"00000000-0000-4000-8000-000000000001","revision":1,
                    "data":{"code":"ROW-000","secret":SECRET_CANARY}}],
-        "pageInfo":{"nextCursor":null}
+        "nextCursor":null
     }))
     .unwrap();
     let widened = execute_export_page(
@@ -434,14 +432,7 @@ fn authenticated_app(
             &registry,
             oidc_verifier_config(idp.issuer(), vec![AUDIENCE.to_owned()]),
             key_source,
-            AuthorityClaimConfig::new(
-                "registry_principal",
-                Some("purpose".to_owned()),
-                vec![RowBoundaryClaimMapping::new(
-                    "jurisdictions",
-                    RowBoundaryClaimType::DirectStringSet,
-                )],
-            ),
+            AuthorityClaimConfig::new("registry_principal", Some("purpose".to_owned())),
         )
         .expect("OIDC authority matches the compiled Registry"),
     );

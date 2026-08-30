@@ -137,7 +137,11 @@ selected access profile and classification ceiling. It does not infer or
 hardcode a domain model.
 
 The PublicSchema-shaped household fixture demonstrates Person, Household, and
-GroupMembership alignment entirely in configuration:
+GroupMembership alignment entirely in configuration. It also declares
+module-owned selector profiles, a household-to-people read path through group
+membership, and a reviewed live SQL asset that contributes derived household
+facts such as head count, child count, under-five child count, elderly count,
+single-headed, and woman-headed:
 
 ```bash
 registry-serverctl generate manifest \
@@ -148,6 +152,13 @@ registry-serverctl generate manifest \
 This produces the canonical Registry Manifest source and a DCAT JSON-LD
 catalogue. Registry Manifest owns the standards rendering, so Registry Server
 does not carry a second DCAT implementation.
+
+The REST query profile uses the native `$select`, `$filter`, `$orderby`,
+`$top`, `$count`, and `$skiptoken` keys. Selector values are exact lookup
+inputs only; they do not create authority. Relationship read paths are
+configured routes such as `/v1/records/households/{record_id}/people`, and the
+path grant explicitly limits the target fields, filters, ordering, and count
+support available through that traversal.
 
 Evidence can consume an authenticated Registry Server REST route through its
 existing bounded `http-json` source and an explicitly reviewed adapter. Relay

@@ -3,9 +3,11 @@
 
 mod context;
 mod service;
+#[allow(dead_code)]
+#[path = "../query.rs"]
+mod strict_query;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::fmt;
 use std::sync::Arc;
 
 use axum::body::{to_bytes, Body};
@@ -25,27 +27,35 @@ pub use context::{
     VerifiedRequestClaims, VerifiedRowBoundary,
 };
 pub use service::{
-    BatchMutationInput, CompiledReadQuery, ConditionalMutationInput, HeldReadResponse, HttpService,
-    ReadFilterClause, ReadRuntimeIdentity, ReadServiceError, ReadinessProbe, RecordReadRefusal,
-    RecordReadRequest, RecordReadService, RevisionReadRefusal, RevisionReadRequest,
-    RevisionReadService, ServiceFuture,
+    BatchMutationInput, CompiledLookupSelector, CompiledReadQuery, ConditionalMutationInput,
+    HeldReadResponse, HttpService, LookupSelectorValue, ReadFilterExpr, ReadFilterOperator,
+    ReadFilterPredicate, ReadLogicalOp, ReadOrderClause, ReadProjectionField, ReadRuntimeIdentity,
+    ReadServiceError, ReadinessProbe, RecordReadKind, RecordReadRefusal, RecordReadRequest,
+    RecordReadService, RevisionReadRefusal, RevisionReadRequest, RevisionReadService,
+    ServiceFuture,
 };
 
 use crate::auth::{authenticate_request, RegistryAuthenticator};
-use crate::contract::{AccessProfileSource, BoundaryOperator, Classification, Operation};
-use crate::cursor::{now_unix_seconds, CursorBinding, CursorError};
+use crate::contract::{
+    AccessProfileSource, BoundaryOperator, Classification, FieldTypeSource, LookupValueOrigin,
+    Operation,
+};
+use crate::cursor::{
+    now_unix_seconds, CursorBinding, CursorError, CursorFilterExpr, CursorFilterOperator,
+    CursorFilterPredicate, CursorLogicalOp, CursorOrderClause, CursorProjectionField,
+    CursorQueryScope,
+};
 use crate::idempotency::{HeldResponse, PermittedResponseHeader};
 use crate::model::{
-    CompiledEntity, CompiledMetadataEntity, CompiledMetadataEntry, CompiledQueryFilterOperator,
-    CompiledQueryKind, CompiledQueryOperation, CompiledRevisionKind, CompiledRoute,
-    MAX_REVISION_HISTORY_RECORDS,
+    CompiledEntity, CompiledMetadataEntity, CompiledMetadataEntry, CompiledQueryKind,
+    CompiledQueryOperation, CompiledQuerySortDirection, CompiledReadPath, CompiledRevisionKind,
+    CompiledRoute, MAX_REVISION_HISTORY_RECORDS,
 };
 use crate::mutation::{parse_json_patch_document, BatchMutationItem, MutationError};
 use uuid::Uuid;
 
-const MAX_FIELDS: usize = 128;
-const MAX_FIELD_BYTES: usize = 128;
 const MAX_MUTATION_BODY_BYTES: usize = 2 * 1024 * 1024;
+const MAX_LOOKUP_BODY_BYTES: usize = 16 * 1024;
 const MAX_IDEMPOTENCY_KEY_BYTES: usize = 256;
 const MAX_RAW_QUERY_BYTES: usize = 16 * 1024;
 const MAX_FILTER_CLAUSES: usize = 32;
@@ -73,6 +83,10 @@ fn route_set(service: Arc<HttpService>) -> Router {
             Operation::Get | Operation::List => app.route(
                 &route.path,
                 get(read_dispatch).layer(Extension(route.clone())),
+            ),
+            Operation::Lookup => app.route(
+                &route.path,
+                post(lookup_dispatch).layer(Extension(route.clone())),
             ),
             Operation::Revisions if service.revisions.is_some() => app.route(
                 &route.path,
@@ -170,7 +184,7 @@ async fn openapi(
         .map(|Extension(value)| value)
         .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let visible = visible_surfaces(&service, &claims, &options);
-    if options.access_profile.is_some() && visible.is_empty() {
+    if options.access_profile().is_some() && visible.is_empty() {
         return concealed();
     }
 
@@ -188,6 +202,10 @@ async fn openapi(
             (
                 "x-registry-entity".to_owned(),
                 json!(surface.route.entity_id),
+            ),
+            (
+                "x-registry-responseEntity".to_owned(),
+                json!(surface.response_entity.id),
             ),
             (
                 "x-registry-operation".to_owned(),
@@ -208,6 +226,9 @@ async fn openapi(
                 Value::String(query_kind_name(kind).to_owned()),
             );
             operation.insert("parameters".to_owned(), query_parameters(kind));
+        } else if surface.route.operation == Operation::Lookup {
+            operation.insert("parameters".to_owned(), lookup_parameters());
+            operation.insert("requestBody".to_owned(), lookup_request_body());
         } else if let Some(kind) = surface.route.revision_kind {
             operation.insert("parameters".to_owned(), revision_parameters(kind));
             operation.insert(
@@ -256,7 +277,7 @@ async fn openapi(
             Value::Object(operation),
         );
         readable_by_entity
-            .entry(surface.route.entity_id.clone())
+            .entry(surface.response_entity.id.clone())
             .and_modify(|fields| {
                 *fields = fields
                     .intersection(&surface.readable_fields)
@@ -293,7 +314,7 @@ async fn registry_metadata(
         .map(|Extension(value)| value)
         .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let visible = visible_metadata_entries(&service, &claims, &options);
-    if options.access_profile.is_some() && visible.is_empty() {
+    if options.access_profile().is_some() && visible.is_empty() {
         return concealed();
     }
 
@@ -357,7 +378,9 @@ async fn entity_schema(
         .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let surfaces = visible_surfaces(&service, &claims, &options)
         .into_iter()
-        .filter(|surface| surface.route.entity_id == entity_id)
+        .filter(|surface| {
+            surface.response_entity.id == entity_id || surface.route.entity_id == entity_id
+        })
         .collect::<Vec<_>>();
     let Some(first) = surfaces.first() else {
         return concealed();
@@ -372,7 +395,8 @@ async fn entity_schema(
                     .cloned()
                     .collect()
             });
-    match filtered_schema(&service, &entity_id, &readable) {
+    let schema_entity = first.response_entity.id.clone();
+    match filtered_schema(&service, &schema_entity, &readable) {
         Some(schema) => Json(schema).into_response(),
         None => concealed(),
     }
@@ -407,10 +431,10 @@ async fn read_dispatch(
                 .await;
         return response;
     };
-    let query = if route.operation == Operation::List {
-        match read_query(&service, &route, &surface, &options).await {
-            Ok(query) => query,
-            Err(ReadQueryError::Invalid) => {
+
+    match route.operation {
+        Operation::Get => {
+            if surface.read_path.is_some() || options.has_non_projection_query_members() {
                 return audited_read_refusal(
                     &service,
                     &route,
@@ -420,41 +444,61 @@ async fn read_dispatch(
                 )
                 .await;
             }
-            Err(ReadQueryError::CursorInvalid) => {
+            let Some(record_id) = path.get("record_id") else {
+                return audited_read_refusal(&service, &route, &surface, None, concealed()).await;
+            };
+            if !valid_canonical_record_uuid(record_id) {
                 return audited_read_refusal(
                     &service,
                     &route,
                     &surface,
-                    path.get("record_id"),
-                    cursor_invalid(),
+                    Some(record_id),
+                    concealed(),
                 )
                 .await;
             }
+            let readable_fields = match resolve_select(
+                surface.response_entity,
+                &surface.readable_fields,
+                options.select_clause(),
+            ) {
+                Ok(Some(fields)) => fields,
+                Ok(None) => surface.readable_fields.clone(),
+                Err(()) => {
+                    return audited_read_refusal(
+                        &service,
+                        &route,
+                        &surface,
+                        Some(record_id),
+                        concealed(),
+                    )
+                    .await;
+                }
+            };
+            let request = RecordReadRequest {
+                entity_id: route.entity_id.clone(),
+                operation_id: route.id.clone(),
+                method: route.method,
+                context: surface.context,
+                selected_fields: readable_fields,
+                kind: RecordReadKind::Get {
+                    id: record_id.clone(),
+                },
+                maximum_records: 1,
+            };
+            match service.records.get(request).await {
+                Ok(Some(record)) => exact_json(record),
+                Ok(None) => concealed(),
+                Err(ReadServiceError::Unavailable) => unavailable(),
+                Err(ReadServiceError::CursorInvalid) => cursor_invalid(),
+            }
         }
-    } else {
-        if options.has_list_query_members() {
-            return audited_read_refusal(
-                &service,
-                &route,
-                &surface,
-                path.get("record_id"),
-                invalid_query(),
-            )
-            .await;
-        }
-        None
-    };
-    let readable_fields = if let Some(query) = &query {
-        query
-            .cursor_binding
-            .selected_fields
-            .iter()
-            .cloned()
-            .collect::<BTreeSet<_>>()
-    } else {
-        match &options.fields {
-            Some(fields) if fields.is_subset(&surface.readable_fields) => fields.clone(),
-            Some(_) => {
+        Operation::List => {
+            if surface.read_path.is_some()
+                && !path
+                    .get("record_id")
+                    .is_some_and(|record_id| valid_canonical_record_uuid(record_id))
+            {
                 return audited_read_refusal(
                     &service,
                     &route,
@@ -464,45 +508,171 @@ async fn read_dispatch(
                 )
                 .await;
             }
-            None => surface.readable_fields.clone(),
+            let query = match read_query(
+                &service,
+                &route,
+                &surface,
+                &options,
+                path.get("record_id").map(String::as_str),
+            )
+            .await
+            {
+                Ok(Some(query)) => query,
+                Ok(None) => return unavailable(),
+                Err(ReadQueryError::Invalid) => {
+                    return audited_read_refusal(
+                        &service,
+                        &route,
+                        &surface,
+                        path.get("record_id"),
+                        invalid_query(),
+                    )
+                    .await;
+                }
+                Err(ReadQueryError::CursorInvalid) => {
+                    return audited_read_refusal(
+                        &service,
+                        &route,
+                        &surface,
+                        path.get("record_id"),
+                        cursor_invalid(),
+                    )
+                    .await;
+                }
+            };
+            let readable_fields = query
+                .cursor_binding
+                .selected_fields
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            if !readable_fields.is_subset(&surface.readable_fields) {
+                return audited_read_refusal(
+                    &service,
+                    &route,
+                    &surface,
+                    path.get("record_id"),
+                    concealed(),
+                )
+                .await;
+            }
+            let maximum_records = usize::from(query.page_size) + 1;
+            let kind = if let Some(read_path) = surface.read_path {
+                RecordReadKind::Relationship {
+                    root_id: path
+                        .get("record_id")
+                        .expect("relationship root id was validated")
+                        .clone(),
+                    path_id: read_path.id.clone(),
+                    plan: query,
+                }
+            } else {
+                RecordReadKind::List { plan: query }
+            };
+            let request = RecordReadRequest {
+                entity_id: route.entity_id.clone(),
+                operation_id: route.id.clone(),
+                method: route.method,
+                context: surface.context,
+                selected_fields: readable_fields,
+                kind,
+                maximum_records,
+            };
+            match service.records.list(request).await {
+                Ok(response) => exact_json_no_store(response),
+                Err(ReadServiceError::Unavailable) => unavailable(),
+                Err(ReadServiceError::CursorInvalid) => cursor_invalid(),
+            }
+        }
+        _ => concealed(),
+    }
+}
+
+async fn lookup_dispatch(
+    State(service): State<Arc<HttpService>>,
+    Extension(route): Extension<CompiledRoute>,
+    claims: Option<Extension<VerifiedRequestClaims>>,
+    RawQuery(raw_query): RawQuery,
+    headers: HeaderMap,
+    body: Body,
+) -> Response {
+    let claims = claims
+        .map(|Extension(value)| value)
+        .unwrap_or_else(VerifiedRequestClaims::anonymous);
+    let options = match QueryOptions::parse(raw_query.as_deref(), true) {
+        Ok(options) => options,
+        Err(QueryParseError::Invalid) => {
+            return audited_known_read_refusal(&service, &route, &claims, None, invalid_query())
+                .await;
+        }
+    };
+    let Some(surface) = authorize_route(&service, &route, &claims, &options) else {
+        return audited_read_concealment(&service, &route, &options, &claims, None).await;
+    };
+    if surface.read_path.is_some() || options.has_non_projection_query_members() {
+        return audited_read_refusal(&service, &route, &surface, None, invalid_query()).await;
+    }
+    let readable_fields = match resolve_select(
+        surface.response_entity,
+        &surface.readable_fields,
+        options.select_clause(),
+    ) {
+        Ok(Some(fields)) => fields,
+        Ok(None) => surface.readable_fields.clone(),
+        Err(()) => {
+            return audited_read_refusal(&service, &route, &surface, None, concealed()).await;
+        }
+    };
+    if !single_content_type(&headers, "application/json") {
+        return audited_read_refusal(&service, &route, &surface, None, unsupported_media_type())
+            .await;
+    }
+    let Ok(body) = bounded_body_to(body, MAX_LOOKUP_BODY_BYTES).await else {
+        return audited_read_refusal(&service, &route, &surface, None, invalid_request()).await;
+    };
+    let body = match parse_lookup_body(&body) {
+        Ok(body) => body,
+        Err(()) => {
+            return audited_read_refusal(&service, &route, &surface, None, invalid_request()).await;
+        }
+    };
+    let selector = match resolve_lookup_selector(&service, &route, &surface, &claims, &body) {
+        Ok(selector) => selector,
+        Err(LookupResolutionError::InvalidRequest) => {
+            return audited_read_refusal(&service, &route, &surface, None, invalid_request()).await;
+        }
+        Err(LookupResolutionError::Unresolved) => {
+            return audited_read_refusal(&service, &route, &surface, None, lookup_unresolved())
+                .await;
         }
     };
     if !readable_fields.is_subset(&surface.readable_fields) {
-        return audited_read_refusal(
-            &service,
-            &route,
-            &surface,
-            path.get("record_id"),
-            concealed(),
-        )
-        .await;
+        return audited_read_refusal(&service, &route, &surface, None, concealed()).await;
+    }
+    let Some(operation) =
+        lookup_query_operation_for_selector(&service, &route, &surface, &selector.selector_id)
+    else {
+        return audited_read_refusal(&service, &route, &surface, None, lookup_unresolved()).await;
+    };
+    if !readable_fields
+        .iter()
+        .all(|field| operation.projection_fields.contains(field))
+    {
+        return audited_read_refusal(&service, &route, &surface, None, concealed()).await;
     }
     let request = RecordReadRequest {
         entity_id: route.entity_id.clone(),
         operation_id: route.id.clone(),
         method: route.method,
-        record_id: path.get("record_id").cloned(),
         context: surface.context,
-        selected_fields: readable_fields.clone(),
-        maximum_records: query
-            .as_ref()
-            .map_or(1, |query| usize::from(query.page_size) + 1),
-        query,
+        selected_fields: readable_fields,
+        kind: RecordReadKind::Lookup { selector },
+        maximum_records: 2,
     };
-
-    match route.operation {
-        Operation::Get => match service.records.get(request).await {
-            Ok(Some(record)) => exact_json(record),
-            Ok(None) => concealed(),
-            Err(ReadServiceError::Unavailable) => unavailable(),
-            Err(ReadServiceError::CursorInvalid) => cursor_invalid(),
-        },
-        Operation::List => match service.records.list(request).await {
-            Ok(response) => exact_json_no_store(response),
-            Err(ReadServiceError::Unavailable) => unavailable(),
-            Err(ReadServiceError::CursorInvalid) => cursor_invalid(),
-        },
-        _ => concealed(),
+    match service.records.lookup(request).await {
+        Ok(Some(record)) => exact_json_no_store(record),
+        Ok(None) | Err(ReadServiceError::Unavailable) => lookup_unresolved(),
+        Err(ReadServiceError::CursorInvalid) => cursor_invalid(),
     }
 }
 
@@ -673,7 +843,7 @@ async fn audited_revision_concealment(
     claims: &VerifiedRequestClaims,
     target_record: Option<&String>,
 ) -> Response {
-    let selected_access_profile = options.access_profile.as_ref().and_then(|profile| {
+    let selected_access_profile = options.access_profile().and_then(|profile| {
         route
             .access_profiles
             .iter()
@@ -751,7 +921,7 @@ async fn audited_read_concealment(
     claims: &VerifiedRequestClaims,
     target_record: Option<&String>,
 ) -> Response {
-    let selected_access_profile = options.access_profile.as_ref().and_then(|profile| {
+    let selected_access_profile = options.access_profile().and_then(|profile| {
         route
             .access_profiles
             .iter()
@@ -1256,8 +1426,8 @@ async fn audited_mutation_concealment(
     target_record: Option<&str>,
 ) -> Response {
     let selected_profile = options
-        .access_profile
-        .as_deref()
+        .access_profile()
+        .map(String::as_str)
         .or(Some(route.default_access_profile.as_str()));
     match mutations
         .record_refusal(
@@ -1282,8 +1452,10 @@ async fn not_found() -> Response {
 struct AuthorizedSurface<'a> {
     route: &'a CompiledRoute,
     entity: &'a CompiledEntity,
+    response_entity: &'a CompiledEntity,
     context: AuthorizedRequestContext,
     readable_fields: BTreeSet<String>,
+    read_path: Option<&'a CompiledReadPath>,
 }
 
 fn visible_surfaces<'a>(
@@ -1336,13 +1508,29 @@ fn authorize_route<'a>(
     claims: &VerifiedRequestClaims,
     options: &QueryOptions,
 ) -> Option<AuthorizedSurface<'a>> {
-    let access =
-        service.registry.access().entries.iter().find(|entry| {
-            entry.entity_id == route.entity_id && entry.operation == route.operation
-        })?;
+    if let Some((read_path, response_entity)) = read_path_for_route(service, route) {
+        return authorize_read_path_route(
+            service,
+            route,
+            read_path,
+            response_entity,
+            claims,
+            options,
+        );
+    }
+    authorize_direct_route(service, route, claims, options)
+}
+
+fn authorize_direct_route<'a>(
+    service: &'a HttpService,
+    route: &'a CompiledRoute,
+    claims: &VerifiedRequestClaims,
+    options: &QueryOptions,
+) -> Option<AuthorizedSurface<'a>> {
+    let access = access_entry_for_route(service, route)?;
     let selected_profile = options
-        .access_profile
-        .as_deref()
+        .access_profile()
+        .map(String::as_str)
         .unwrap_or(&access.default_profile_id);
     if !access.profile_ids.contains(selected_profile)
         || !route
@@ -1407,6 +1595,7 @@ fn authorize_route<'a>(
     Some(AuthorizedSurface {
         route,
         entity,
+        response_entity: entity,
         context: AuthorizedRequestContext::new(
             claims.principal().map(str::to_owned),
             claims.purpose().map(str::to_owned),
@@ -1414,12 +1603,131 @@ fn authorize_route<'a>(
             row_boundaries,
         ),
         readable_fields,
+        read_path: None,
     })
+}
+
+fn authorize_read_path_route<'a>(
+    service: &'a HttpService,
+    route: &'a CompiledRoute,
+    read_path: &'a CompiledReadPath,
+    response_entity: &'a CompiledEntity,
+    claims: &VerifiedRequestClaims,
+    options: &QueryOptions,
+) -> Option<AuthorizedSurface<'a>> {
+    let access = access_entry_for_route(service, route)?;
+    let selected_profile = options
+        .access_profile()
+        .map(String::as_str)
+        .unwrap_or(&access.default_profile_id);
+    if !access.profile_ids.contains(selected_profile)
+        || !route
+            .access_profiles
+            .iter()
+            .any(|id| id == selected_profile)
+    {
+        return None;
+    }
+    let entity = service.registry.entities().get(&route.entity_id)?;
+    let profile = entity.access_profiles.get(selected_profile)?;
+    let grant = profile
+        .read_paths
+        .iter()
+        .find(|grant| grant.path == read_path.id)?;
+    if route.operation != Operation::List || route.query_kind != Some(CompiledQueryKind::List) {
+        return None;
+    }
+    if profile.anonymous {
+        if entity.classification != Classification::Public
+            || response_entity.classification != Classification::Public
+        {
+            return None;
+        }
+    } else {
+        let expected_claim = profile.principal_claim.as_deref()?;
+        if claims.principal_claim() != Some(expected_claim) || claims.principal().is_none() {
+            return None;
+        }
+    }
+    if !profile
+        .required_scopes
+        .iter()
+        .all(|scope| claims.has_scope(scope))
+    {
+        return None;
+    }
+    if !profile.required_purposes.is_empty()
+        && !claims
+            .purpose()
+            .is_some_and(|purpose| profile.required_purposes.contains(purpose))
+    {
+        return None;
+    }
+    let row_boundaries = verified_row_boundaries(profile, claims)?;
+    let readable_fields = grant
+        .readable_fields
+        .iter()
+        .filter(|field| {
+            !profile.anonymous
+                || response_entity
+                    .fields
+                    .get(*field)
+                    .is_some_and(|field| field.classification == Classification::Public)
+        })
+        .cloned()
+        .collect();
+    Some(AuthorizedSurface {
+        route,
+        entity,
+        response_entity,
+        context: AuthorizedRequestContext::new(
+            claims.principal().map(str::to_owned),
+            claims.purpose().map(str::to_owned),
+            selected_profile.to_owned(),
+            row_boundaries,
+        ),
+        readable_fields,
+        read_path: Some(read_path),
+    })
+}
+
+fn access_entry_for_route<'a>(
+    service: &'a HttpService,
+    route: &CompiledRoute,
+) -> Option<&'a crate::model::CompiledAccessEntry> {
+    service
+        .registry
+        .access()
+        .entries
+        .iter()
+        .find(|entry| entry.route_id == route.id && entry.operation == route.operation)
+        .or_else(|| {
+            if route.id.contains(".path.") {
+                return None;
+            }
+            service.registry.access().entries.iter().find(|entry| {
+                entry.entity_id == route.entity_id && entry.operation == route.operation
+            })
+        })
+}
+
+fn read_path_for_route<'a>(
+    service: &'a HttpService,
+    route: &CompiledRoute,
+) -> Option<(&'a CompiledReadPath, &'a CompiledEntity)> {
+    let entity = service.registry.entities().get(&route.entity_id)?;
+    let path = entity.read_paths.values().find(|path| {
+        route.id == format!("records.{}.path.{}", entity.id, path.id)
+            && route.path == format!("/v1/records/{}/{{record_id}}/{}", entity.route, path.route)
+    })?;
+    let response_entity = service.registry.entities().get(&path.to)?;
+    Some((path, response_entity))
 }
 
 fn served_operation(service: &HttpService, route: &CompiledRoute) -> bool {
     match route.operation {
         Operation::Get | Operation::List => true,
+        Operation::Lookup => true,
         Operation::Create => service.mutations.is_some(),
         Operation::Batch => {
             service.mutations.is_some()
@@ -1482,6 +1790,7 @@ async fn read_query(
     route: &CompiledRoute,
     surface: &AuthorizedSurface<'_>,
     options: &QueryOptions,
+    root_id: Option<&str>,
 ) -> Result<Option<CompiledReadQuery>, ReadQueryError> {
     let Some(kind) = route.query_kind else {
         return Ok(None);
@@ -1489,7 +1798,8 @@ async fn read_query(
     let Some(operation) = query_operation_for_route(service, route, surface, kind) else {
         return Err(ReadQueryError::Invalid);
     };
-    if let Some(token) = &options.cursor {
+    let scope = cursor_scope(surface, root_id)?;
+    if let Some(token) = options.skiptoken() {
         let payload = service
             .cursors
             .open_after_authorization(token, now_unix_seconds(), |payload| {
@@ -1497,6 +1807,10 @@ async fn read_query(
                     || payload.binding.query_operation_id != operation.id
                     || payload.binding.query_kind != kind
                     || payload.binding.selected_profile != surface.context.selected_profile()
+                    || payload.binding.include_count != payload.query.include_count
+                    || payload.binding.page_size != payload.query.page_size
+                    || payload.binding.temporal_instant != payload.query.temporal_instant
+                    || payload.query.scope != scope
                 {
                     return Err(CursorError::Mismatch);
                 }
@@ -1506,13 +1820,34 @@ async fn read_query(
                     .iter()
                     .cloned()
                     .collect::<BTreeSet<_>>();
-                let filters = cursor_filters_to_read_filters(&payload.query.filters)
+                let projection = read_projection_from_cursor(
+                    surface.response_entity,
+                    operation,
+                    &fields,
+                    &payload.query.projection,
+                )
+                .map_err(|_| CursorError::Mismatch)?;
+                let filter = payload
+                    .query
+                    .filter
+                    .as_ref()
+                    .map(|filter| read_filter_expr_from_cursor(surface.response_entity, filter))
+                    .transpose()
+                    .map_err(|_| CursorError::Mismatch)?;
+                let order = payload
+                    .query
+                    .order
+                    .as_ref()
+                    .map(|order| {
+                        read_order_clause_from_cursor(surface.response_entity, operation, order)
+                    })
+                    .transpose()
                     .map_err(|_| CursorError::Mismatch)?;
                 validate_query_shape(
-                    surface.entity,
+                    surface.response_entity,
                     operation,
-                    &filters,
-                    payload.query.sort.as_deref(),
+                    filter.as_ref(),
+                    order.as_ref(),
                     payload.binding.page_size,
                 )
                 .map_err(|_| CursorError::Mismatch)?;
@@ -1523,10 +1858,13 @@ async fn read_query(
                     operation,
                     CursorBindingQuery {
                         selected_fields: &fields,
-                        filters: &filters,
-                        sort: payload.query.sort.as_deref(),
+                        projection: &projection,
+                        filter: filter.as_ref(),
+                        order: order.as_ref(),
+                        include_count: payload.binding.include_count,
                         page_size: payload.binding.page_size,
                         temporal_instant: payload.binding.temporal_instant.as_deref(),
+                        scope: &scope,
                     },
                 )
             })
@@ -1540,37 +1878,92 @@ async fn read_query(
         if fields.is_empty() || !fields.is_subset(&surface.readable_fields) {
             return Err(ReadQueryError::CursorInvalid);
         }
-        let filters = cursor_filters_to_read_filters(&payload.query.filters)?;
+        let projection = read_projection_from_cursor(
+            surface.response_entity,
+            operation,
+            &fields,
+            &payload.query.projection,
+        )?;
+        let filter = payload
+            .query
+            .filter
+            .as_ref()
+            .map(|filter| read_filter_expr_from_cursor(surface.response_entity, filter))
+            .transpose()?;
+        let order = payload
+            .query
+            .order
+            .as_ref()
+            .map(|order| read_order_clause_from_cursor(surface.response_entity, operation, order))
+            .transpose()?;
         return Ok(Some(CompiledReadQuery {
             route_id: route.id.clone(),
             query_operation_id: operation.id.clone(),
             kind,
             cursor_binding: payload.binding.clone(),
             cursor_query: payload.query.clone(),
-            filters,
-            sort: payload.query.sort,
+            projection,
+            filter,
+            order,
+            include_count: payload.binding.include_count,
             page_size: payload.binding.page_size,
             temporal_instant: payload.binding.temporal_instant,
             continuation: Some(payload.continuation),
         }));
     }
 
-    let fields = match &options.fields {
-        Some(fields) if fields.is_subset(&surface.readable_fields) => fields.clone(),
-        Some(_) => return Err(ReadQueryError::Invalid),
-        None => operation.projection_fields.iter().cloned().collect(),
+    let query_options = options.query_options().ok_or(ReadQueryError::Invalid)?;
+    let fields = match resolve_select(
+        surface.response_entity,
+        &surface.readable_fields,
+        query_options.select.as_ref(),
+    ) {
+        Ok(Some(fields)) => fields,
+        Ok(None) => operation.projection_fields.iter().cloned().collect(),
+        Err(()) => return Err(ReadQueryError::Invalid),
     };
-    if fields.is_empty() || !fields.is_subset(&surface.readable_fields) {
+    if fields.is_empty()
+        || !fields.is_subset(&surface.readable_fields)
+        || !fields
+            .iter()
+            .all(|field| operation.projection_fields.contains(field))
+    {
         return Err(ReadQueryError::Invalid);
     }
-    let filters = first_page_filters(operation, &options.filters)?;
-    let sort = options.sort.clone();
-    let page_size = options.page_size.unwrap_or(operation.max_page_size);
-    validate_query_shape(
-        surface.entity,
+    let projection = projection_plan(surface.response_entity, &fields)?;
+    let filter = first_page_filter_expr(
+        surface.response_entity,
         operation,
-        &filters,
-        sort.as_deref(),
+        query_options.filter.as_ref(),
+    )?;
+    let order = match &query_options.orderby {
+        Some(orderby) => {
+            if orderby.direction != strict_query::OrderDirection::Asc {
+                return Err(ReadQueryError::Invalid);
+            }
+            Some(resolve_order_clause(
+                surface.response_entity,
+                operation,
+                orderby,
+            )?)
+        }
+        None => None,
+    };
+    let page_size = query_options
+        .top
+        .map(u16::try_from)
+        .transpose()
+        .map_err(|_| ReadQueryError::Invalid)?
+        .unwrap_or(operation.max_page_size);
+    let include_count = query_options.count.unwrap_or(false);
+    if include_count && !operation.allow_count {
+        return Err(ReadQueryError::Invalid);
+    }
+    validate_query_shape(
+        surface.response_entity,
+        operation,
+        filter.as_ref(),
+        order.as_ref(),
         page_size,
     )?;
     let temporal_instant = temporal_instant_for(kind, options)?;
@@ -1581,24 +1974,35 @@ async fn read_query(
         operation,
         CursorBindingQuery {
             selected_fields: &fields,
-            filters: &filters,
-            sort: sort.as_deref(),
+            projection: &projection,
+            filter: filter.as_ref(),
+            order: order.as_ref(),
+            include_count,
             page_size,
             temporal_instant: temporal_instant.as_deref(),
+            scope: &scope,
         },
     )
     .map_err(|_| ReadQueryError::Invalid)?;
+    let cursor_query = cursor_query_from_plan(
+        &projection,
+        filter.as_ref(),
+        order.as_ref(),
+        include_count,
+        page_size,
+        temporal_instant.clone(),
+        scope,
+    );
     Ok(Some(CompiledReadQuery {
         route_id: route.id.clone(),
         query_operation_id: operation.id.clone(),
         kind,
         cursor_binding: binding,
-        cursor_query: crate::cursor::CursorQuery {
-            filters: cursor_filters(&filters),
-            sort: sort.clone(),
-        },
-        filters,
-        sort,
+        cursor_query,
+        projection,
+        filter,
+        order,
+        include_count,
         page_size,
         temporal_instant,
         continuation: None,
@@ -1618,181 +2022,408 @@ fn query_operation_for_route<'a>(
         .iter()
         .find(|operation| {
             operation.route_id == route.id
-                && operation.entity_id == route.entity_id
+                && operation.entity_id == surface.response_entity.id
                 && operation.profile_id == surface.context.selected_profile()
                 && operation.kind == kind
         })
 }
 
-fn first_page_filters(
-    operation: &CompiledQueryOperation,
-    filters: &[RawFilterClause],
-) -> Result<Vec<ReadFilterClause>, ReadQueryError> {
-    let mut result = Vec::new();
-    let mut in_values: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    let mut non_in_fields = BTreeSet::new();
-    for filter in filters {
-        let field = operation
-            .filter_fields
-            .iter()
-            .find(|field| field.field == filter.field)
-            .ok_or(ReadQueryError::Invalid)?;
-        if !field.operators.contains(&filter.operator) {
-            return Err(ReadQueryError::Invalid);
-        }
-        let values = match filter.operator {
-            CompiledQueryFilterOperator::Equals | CompiledQueryFilterOperator::In => {
-                vec![filter.value.clone()]
-            }
-            CompiledQueryFilterOperator::Prefix => vec![filter.value.clone()],
-            CompiledQueryFilterOperator::Range => {
-                let (lower, upper) = filter
-                    .value
-                    .split_once("..")
-                    .ok_or(ReadQueryError::Invalid)?;
-                if lower.is_empty() || upper.is_empty() {
-                    return Err(ReadQueryError::Invalid);
-                }
-                vec![lower.to_owned(), upper.to_owned()]
-            }
-            CompiledQueryFilterOperator::IsNull | CompiledQueryFilterOperator::IsNotNull => {
-                if filter.value != "true" {
-                    return Err(ReadQueryError::Invalid);
-                }
-                vec!["true".to_owned()]
-            }
-        };
-        if filter.operator == CompiledQueryFilterOperator::In {
-            if non_in_fields.contains(&filter.field) {
-                return Err(ReadQueryError::Invalid);
-            }
-            in_values
-                .entry(filter.field.clone())
-                .or_default()
-                .insert(values[0].clone());
-            continue;
-        }
-        if in_values.contains_key(&filter.field) {
-            return Err(ReadQueryError::Invalid);
-        }
-        non_in_fields.insert(filter.field.clone());
-        result.push(ReadFilterClause {
-            field: filter.field.clone(),
-            operator: filter.operator,
-            values,
-        });
-    }
-    for (field, values) in in_values {
-        result.push(ReadFilterClause {
-            field,
-            operator: CompiledQueryFilterOperator::In,
-            values: values.into_iter().collect(),
-        });
-    }
-    result.sort_by(|left, right| (&left.field, left.operator).cmp(&(&right.field, right.operator)));
-    Ok(result)
+fn lookup_query_operation_for_selector<'a>(
+    service: &'a HttpService,
+    route: &CompiledRoute,
+    surface: &AuthorizedSurface<'_>,
+    selector_id: &str,
+) -> Option<&'a CompiledQueryOperation> {
+    let selector = surface.entity.selector_profiles.get(selector_id)?;
+    service
+        .registry
+        .queries()
+        .operations
+        .iter()
+        .find(|operation| {
+            operation.route_id == route.id
+                && operation.entity_id == surface.entity.id
+                && operation.profile_id == surface.context.selected_profile()
+                && operation.kind == CompiledQueryKind::List
+                && operation.read_path.is_none()
+                && operation.selector_fields == selector.fields
+        })
 }
 
-fn cursor_filters_to_read_filters(
-    filters: &[crate::cursor::CursorFilter],
-) -> Result<Vec<ReadFilterClause>, ReadQueryError> {
-    filters
+fn cursor_scope(
+    surface: &AuthorizedSurface<'_>,
+    root_id: Option<&str>,
+) -> Result<CursorQueryScope, ReadQueryError> {
+    match surface.read_path {
+        Some(read_path) => {
+            let root_id = root_id.ok_or(ReadQueryError::Invalid)?;
+            if !valid_canonical_record_uuid(root_id) {
+                return Err(ReadQueryError::Invalid);
+            }
+            Ok(CursorQueryScope::Relationship {
+                path_id: read_path.id.clone(),
+                root_id: root_id.to_owned(),
+            })
+        }
+        None => Ok(CursorQueryScope::Collection {}),
+    }
+}
+
+fn resolve_select(
+    entity: &CompiledEntity,
+    readable_fields: &BTreeSet<String>,
+    select: Option<&strict_query::SelectClause>,
+) -> Result<Option<BTreeSet<String>>, ()> {
+    let Some(select) = select else {
+        return Ok(None);
+    };
+    let mut fields = BTreeSet::new();
+    for field in select.fields() {
+        match field.as_str() {
+            "id" | "revision" => continue,
+            api_name => {
+                let field_id = resolve_data_field_id(entity, api_name).ok_or(())?;
+                if !readable_fields.contains(field_id) {
+                    return Err(());
+                }
+                fields.insert(field_id.to_owned());
+            }
+        }
+    }
+    if fields.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(fields))
+    }
+}
+
+fn resolve_data_field_id<'a>(entity: &'a CompiledEntity, api_name: &str) -> Option<&'a str> {
+    entity
+        .stored_fields
         .iter()
-        .map(|filter| {
-            let operator = match filter.operator.as_str() {
-                "equals" => CompiledQueryFilterOperator::Equals,
-                "in" => CompiledQueryFilterOperator::In,
-                "range" => CompiledQueryFilterOperator::Range,
-                "is_null" => CompiledQueryFilterOperator::IsNull,
-                "is_not_null" => CompiledQueryFilterOperator::IsNotNull,
-                "prefix" => CompiledQueryFilterOperator::Prefix,
-                _ => return Err(ReadQueryError::CursorInvalid),
-            };
-            Ok(ReadFilterClause {
-                field: filter.field.clone(),
-                operator,
-                values: filter.values.clone(),
+        .map(|field| &field.logical)
+        .chain(entity.derived_fields.values().map(|field| &field.logical))
+        .find(|field| field.api_name == api_name)
+        .map(|field| field.id.as_str())
+        .or_else(|| {
+            entity
+                .fields
+                .get_key_value(api_name)
+                .map(|(field_id, _)| field_id.as_str())
+        })
+}
+
+fn projection_plan(
+    entity: &CompiledEntity,
+    selected_fields: &BTreeSet<String>,
+) -> Result<Vec<ReadProjectionField>, ReadQueryError> {
+    selected_fields
+        .iter()
+        .map(|field_id| {
+            let field = entity.fields.get(field_id).ok_or(ReadQueryError::Invalid)?;
+            Ok(ReadProjectionField {
+                field_id: field_id.clone(),
+                field_type: field.field_type.clone(),
             })
         })
         .collect()
 }
 
+fn first_page_filter_expr(
+    entity: &CompiledEntity,
+    operation: &CompiledQueryOperation,
+    filter: Option<&strict_query::FilterExpr>,
+) -> Result<Option<ReadFilterExpr>, ReadQueryError> {
+    filter
+        .map(|filter| read_filter_expr(entity, operation, filter))
+        .transpose()
+}
+
+fn read_filter_expr(
+    entity: &CompiledEntity,
+    operation: &CompiledQueryOperation,
+    filter: &strict_query::FilterExpr,
+) -> Result<ReadFilterExpr, ReadQueryError> {
+    match filter {
+        strict_query::FilterExpr::Binary { op, left, right } => Ok(ReadFilterExpr::Binary {
+            op: match op {
+                strict_query::LogicalOp::And => ReadLogicalOp::And,
+                strict_query::LogicalOp::Or => ReadLogicalOp::Or,
+            },
+            left: Box::new(read_filter_expr(entity, operation, left)?),
+            right: Box::new(read_filter_expr(entity, operation, right)?),
+        }),
+        strict_query::FilterExpr::Not(expr) => Ok(ReadFilterExpr::Not(Box::new(read_filter_expr(
+            entity, operation, expr,
+        )?))),
+        strict_query::FilterExpr::Group(expr) => Ok(ReadFilterExpr::Group(Box::new(
+            read_filter_expr(entity, operation, expr)?,
+        ))),
+        strict_query::FilterExpr::Predicate(predicate) => Ok(ReadFilterExpr::Predicate(
+            read_filter_predicate(entity, operation, predicate)?,
+        )),
+    }
+}
+
+fn read_filter_predicate(
+    entity: &CompiledEntity,
+    operation: &CompiledQueryOperation,
+    predicate: &strict_query::FilterPredicate,
+) -> Result<ReadFilterPredicate, ReadQueryError> {
+    let (api_field, operator, literals) = match predicate {
+        strict_query::FilterPredicate::Compare { field, op, literal } => match (op, literal) {
+            (strict_query::ComparisonOp::Eq, strict_query::Literal::Null) => {
+                (field.as_str(), ReadFilterOperator::IsNull, Vec::new())
+            }
+            (strict_query::ComparisonOp::Ne, strict_query::Literal::Null) => {
+                (field.as_str(), ReadFilterOperator::IsNotNull, Vec::new())
+            }
+            (strict_query::ComparisonOp::Eq, literal) => {
+                (field.as_str(), ReadFilterOperator::Eq, vec![literal])
+            }
+            (strict_query::ComparisonOp::Ne, literal) => {
+                (field.as_str(), ReadFilterOperator::Ne, vec![literal])
+            }
+            (strict_query::ComparisonOp::Lt, literal) => {
+                (field.as_str(), ReadFilterOperator::Lt, vec![literal])
+            }
+            (strict_query::ComparisonOp::Le, literal) => {
+                (field.as_str(), ReadFilterOperator::Le, vec![literal])
+            }
+            (strict_query::ComparisonOp::Gt, literal) => {
+                (field.as_str(), ReadFilterOperator::Gt, vec![literal])
+            }
+            (strict_query::ComparisonOp::Ge, literal) => {
+                (field.as_str(), ReadFilterOperator::Ge, vec![literal])
+            }
+        },
+        strict_query::FilterPredicate::In { field, values } => (
+            field.as_str(),
+            ReadFilterOperator::In,
+            values.iter().collect::<Vec<_>>(),
+        ),
+        strict_query::FilterPredicate::Function {
+            function,
+            field,
+            literal,
+        } => {
+            let operator = match function {
+                strict_query::StringFunction::StartsWith => ReadFilterOperator::StartsWith,
+                strict_query::StringFunction::Contains => ReadFilterOperator::Contains,
+            };
+            (field.as_str(), operator, vec![literal])
+        }
+    };
+    let field_id = resolve_data_field_id(entity, api_field).ok_or(ReadQueryError::Invalid)?;
+    let field = entity.fields.get(field_id).ok_or(ReadQueryError::Invalid)?;
+    let capability = operation
+        .filter_fields
+        .iter()
+        .find(|candidate| candidate.field == field_id)
+        .ok_or(ReadQueryError::Invalid)?;
+    if !capability
+        .operators
+        .contains(&operator.compiled_capability())
+    {
+        return Err(ReadQueryError::Invalid);
+    }
+    let mut values = if matches!(
+        operator,
+        ReadFilterOperator::IsNull | ReadFilterOperator::IsNotNull
+    ) {
+        vec!["true".to_owned()]
+    } else {
+        literals
+            .into_iter()
+            .map(|literal| literal_to_field_value(literal, &field.field_type))
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    if operator == ReadFilterOperator::In {
+        let unique = values.iter().collect::<BTreeSet<_>>();
+        if values.is_empty() || values.len() > MAX_IN_VALUES || unique.len() != values.len() {
+            return Err(ReadQueryError::Invalid);
+        }
+        values.sort();
+    }
+    Ok(ReadFilterPredicate {
+        field_id: field_id.to_owned(),
+        field_type: field.field_type.clone(),
+        operator,
+        values,
+    })
+}
+
+fn literal_to_field_value(
+    literal: &strict_query::Literal,
+    field_type: &FieldTypeSource,
+) -> Result<String, ReadQueryError> {
+    let value = match literal {
+        strict_query::Literal::String(value)
+        | strict_query::Literal::Integer(value)
+        | strict_query::Literal::Decimal(value) => value.clone(),
+        strict_query::Literal::Boolean(value) => value.to_string(),
+        strict_query::Literal::Null => return Err(ReadQueryError::Invalid),
+    };
+    crate::postgres::validate_field_value(&value, field_type)
+        .map_err(|_| ReadQueryError::Invalid)?;
+    Ok(value)
+}
+
+fn resolve_order_clause(
+    entity: &CompiledEntity,
+    operation: &CompiledQueryOperation,
+    orderby: &strict_query::OrderByClause,
+) -> Result<ReadOrderClause, ReadQueryError> {
+    read_order_clause(entity, operation, Some(orderby.field.as_str()))?
+        .ok_or(ReadQueryError::Invalid)
+}
+
+fn read_order_clause(
+    entity: &CompiledEntity,
+    operation: &CompiledQueryOperation,
+    api_or_field: Option<&str>,
+) -> Result<Option<ReadOrderClause>, ReadQueryError> {
+    let Some(api_or_field) = api_or_field else {
+        return Ok(None);
+    };
+    let field_id = resolve_data_field_id(entity, api_or_field).ok_or(ReadQueryError::Invalid)?;
+    let field = entity.fields.get(field_id).ok_or(ReadQueryError::Invalid)?;
+    let sortable = operation.sort_fields.iter().any(|candidate| {
+        candidate.field == field_id
+            && candidate
+                .directions
+                .contains(&CompiledQuerySortDirection::Asc)
+    });
+    if !sortable {
+        return Err(ReadQueryError::Invalid);
+    }
+    Ok(Some(ReadOrderClause {
+        field_id: field_id.to_owned(),
+        field_type: field.field_type.clone(),
+        direction: CompiledQuerySortDirection::Asc,
+    }))
+}
+
 fn validate_query_shape(
     entity: &CompiledEntity,
     operation: &CompiledQueryOperation,
-    filters: &[ReadFilterClause],
-    sort: Option<&str>,
+    filter: Option<&ReadFilterExpr>,
+    order: Option<&ReadOrderClause>,
     page_size: u16,
 ) -> Result<(), ReadQueryError> {
-    if page_size == 0 || page_size > operation.max_page_size || filters.len() > MAX_FILTER_CLAUSES {
+    if page_size == 0 || page_size > operation.max_page_size {
         return Err(ReadQueryError::Invalid);
     }
-    let mut in_values = 0_usize;
-    for filter in filters {
-        let field = operation
-            .filter_fields
-            .iter()
-            .find(|field| field.field == filter.field)
-            .ok_or(ReadQueryError::Invalid)?;
-        if !field.operators.contains(&filter.operator) {
+    let mut stats = QueryShapeStats::default();
+    if let Some(filter) = filter {
+        validate_filter_shape(entity, operation, filter, &mut stats)?;
+        if stats.predicates > MAX_FILTER_CLAUSES || stats.in_values > MAX_IN_VALUES {
             return Err(ReadQueryError::Invalid);
         }
-        let compiled_field_type = entity
-            .fields
-            .get(&filter.field)
-            .map(|field| &field.field_type)
-            .ok_or(ReadQueryError::Invalid)?;
-        match filter.operator {
-            CompiledQueryFilterOperator::Equals | CompiledQueryFilterOperator::Prefix => {
-                if filter.values.len() != 1 {
-                    return Err(ReadQueryError::Invalid);
-                }
-                crate::postgres::validate_field_value(&filter.values[0], compiled_field_type)
-                    .map_err(|_| ReadQueryError::Invalid)?;
-            }
-            CompiledQueryFilterOperator::In => {
-                if filter.values.is_empty() {
-                    return Err(ReadQueryError::Invalid);
-                }
-                in_values += filter.values.len();
-                if in_values > MAX_IN_VALUES {
-                    return Err(ReadQueryError::Invalid);
-                }
-                let unique = filter.values.iter().collect::<BTreeSet<_>>();
-                if unique.len() != filter.values.len() {
-                    return Err(ReadQueryError::Invalid);
-                }
-                for value in &filter.values {
-                    crate::postgres::validate_field_value(value, compiled_field_type)
-                        .map_err(|_| ReadQueryError::Invalid)?;
-                }
-            }
-            CompiledQueryFilterOperator::Range => {
-                if filter.values.len() != 2 {
-                    return Err(ReadQueryError::Invalid);
-                }
-                for value in &filter.values {
-                    crate::postgres::validate_field_value(value, compiled_field_type)
-                        .map_err(|_| ReadQueryError::Invalid)?;
-                }
-            }
-            CompiledQueryFilterOperator::IsNull | CompiledQueryFilterOperator::IsNotNull => {
-                if filter.values.as_slice() != ["true"] {
-                    return Err(ReadQueryError::Invalid);
-                }
-            }
-        }
     }
-    if let Some(sort) = sort {
-        let sortable = operation
-            .sort_fields
-            .iter()
-            .any(|field| field.field == sort && field.directions.len() == 1);
-        if !sortable {
+    if let Some(order) = order {
+        let sortable = operation.sort_fields.iter().any(|field| {
+            field.field == order.field_id
+                && field.directions.contains(&CompiledQuerySortDirection::Asc)
+        });
+        if !sortable
+            || operation.stable_tie_breaker != "record_id"
+            || order.direction != CompiledQuerySortDirection::Asc
+            || entity
+                .fields
+                .get(&order.field_id)
+                .map(|field| &field.field_type)
+                != Some(&order.field_type)
+        {
             return Err(ReadQueryError::Invalid);
         }
     }
     Ok(())
+}
+
+#[derive(Default)]
+struct QueryShapeStats {
+    predicates: usize,
+    in_values: usize,
+}
+
+fn validate_filter_shape(
+    entity: &CompiledEntity,
+    operation: &CompiledQueryOperation,
+    filter: &ReadFilterExpr,
+    stats: &mut QueryShapeStats,
+) -> Result<(), ReadQueryError> {
+    match filter {
+        ReadFilterExpr::Binary { left, right, .. } => {
+            validate_filter_shape(entity, operation, left, stats)?;
+            validate_filter_shape(entity, operation, right, stats)
+        }
+        ReadFilterExpr::Not(expr) | ReadFilterExpr::Group(expr) => {
+            validate_filter_shape(entity, operation, expr, stats)
+        }
+        ReadFilterExpr::Predicate(predicate) => {
+            stats.predicates = stats
+                .predicates
+                .checked_add(1)
+                .ok_or(ReadQueryError::Invalid)?;
+            let field = entity
+                .fields
+                .get(&predicate.field_id)
+                .ok_or(ReadQueryError::Invalid)?;
+            let capability = operation
+                .filter_fields
+                .iter()
+                .find(|field| field.field == predicate.field_id)
+                .ok_or(ReadQueryError::Invalid)?;
+            if field.field_type != predicate.field_type
+                || !capability
+                    .operators
+                    .contains(&predicate.operator.compiled_capability())
+            {
+                return Err(ReadQueryError::Invalid);
+            }
+            match predicate.operator {
+                ReadFilterOperator::Eq
+                | ReadFilterOperator::Ne
+                | ReadFilterOperator::Lt
+                | ReadFilterOperator::Le
+                | ReadFilterOperator::Gt
+                | ReadFilterOperator::Ge
+                | ReadFilterOperator::StartsWith
+                | ReadFilterOperator::Contains => {
+                    if predicate.values.len() != 1 {
+                        return Err(ReadQueryError::Invalid);
+                    }
+                    crate::postgres::validate_field_value(&predicate.values[0], &field.field_type)
+                        .map_err(|_| ReadQueryError::Invalid)?;
+                }
+                ReadFilterOperator::In => {
+                    if predicate.values.is_empty()
+                        || predicate
+                            .values
+                            .windows(2)
+                            .any(|window| window[0] >= window[1])
+                    {
+                        return Err(ReadQueryError::Invalid);
+                    }
+                    stats.in_values = stats
+                        .in_values
+                        .checked_add(predicate.values.len())
+                        .ok_or(ReadQueryError::Invalid)?;
+                    for value in &predicate.values {
+                        crate::postgres::validate_field_value(value, &field.field_type)
+                            .map_err(|_| ReadQueryError::Invalid)?;
+                    }
+                }
+                ReadFilterOperator::IsNull | ReadFilterOperator::IsNotNull => {
+                    if predicate.values.as_slice() != ["true"] {
+                        return Err(ReadQueryError::Invalid);
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
 }
 
 fn temporal_instant_for(
@@ -1801,13 +2432,13 @@ fn temporal_instant_for(
 ) -> Result<Option<String>, ReadQueryError> {
     match kind {
         CompiledQueryKind::List => {
-            if options.as_of.is_some() {
+            if options.parsed.as_of.is_some() {
                 return Err(ReadQueryError::Invalid);
             }
             Ok(None)
         }
         CompiledQueryKind::Current => {
-            if options.as_of.is_some() {
+            if options.parsed.as_of.is_some() {
                 return Err(ReadQueryError::Invalid);
             }
             OffsetDateTime::now_utc()
@@ -1816,7 +2447,11 @@ fn temporal_instant_for(
                 .map_err(|_| ReadQueryError::Invalid)
         }
         CompiledQueryKind::AsOf => {
-            let value = options.as_of.as_deref().ok_or(ReadQueryError::Invalid)?;
+            let value = options
+                .parsed
+                .as_of
+                .as_deref()
+                .ok_or(ReadQueryError::Invalid)?;
             parse_strict_rfc3339_utc(value).map_err(|_| ReadQueryError::Invalid)?;
             Ok(Some(value.to_owned()))
         }
@@ -1846,7 +2481,7 @@ fn cursor_binding(
         .map(|principal| {
             service
                 .cursors
-                .binding_digest_bytes(b"registry-server-cursor-principal-v1", principal.as_bytes())
+                .binding_digest_bytes(b"registry-server-cursor-principal-v3", principal.as_bytes())
         })
         .transpose()?;
     let purpose_reference = surface
@@ -1855,11 +2490,11 @@ fn cursor_binding(
         .map(|purpose| {
             service
                 .cursors
-                .binding_digest_bytes(b"registry-server-cursor-purpose-v1", purpose.as_bytes())
+                .binding_digest_bytes(b"registry-server-cursor-purpose-v3", purpose.as_bytes())
         })
         .transpose()?;
     let row_boundary_reference = service.cursors.binding_digest(
-        b"registry-server-cursor-row-boundary-v1",
+        b"registry-server-cursor-row-boundary-v3",
         &json!(surface
             .context
             .row_boundaries()
@@ -1877,17 +2512,32 @@ fn cursor_binding(
             .collect::<Vec<_>>()),
     )?;
     let projection_reference = service.cursors.binding_digest(
-        b"registry-server-cursor-projection-v1",
-        &json!({"selectedFields": selected_fields_vec}),
+        b"registry-server-cursor-projection-v3",
+        &json!({"projection": query.projection.iter().map(projection_field_value).collect::<Vec<_>>()}),
     )?;
-    let cursor_filters = cursor_filters(query.filters);
     let query_reference = service.cursors.binding_digest(
-        b"registry-server-cursor-query-v1",
-        &json!({"filters": cursor_filters, "temporalInstant": query.temporal_instant}),
+        b"registry-server-cursor-query-v3",
+        &json!({
+            "routeId": route.id,
+            "queryOperationId": operation.id,
+            "queryKind": operation.kind,
+            "selectedProfile": surface.context.selected_profile(),
+            "projection": query.projection.iter().map(projection_field_value).collect::<Vec<_>>(),
+            "filter": query.filter.map(read_filter_expr_value),
+            "order": query.order.map(read_order_clause_value),
+            "pageSize": query.page_size,
+            "includeCount": query.include_count,
+            "temporalInstant": query.temporal_instant,
+            "scope": cursor_scope_value(query.scope),
+        }),
     )?;
     let sort_reference = service.cursors.binding_digest(
-        b"registry-server-cursor-sort-v1",
-        &json!({"sort": query.sort, "tieBreaker": operation.stable_tie_breaker}),
+        b"registry-server-cursor-sort-v3",
+        &json!({"order": query.order.map(read_order_clause_value), "tieBreaker": operation.stable_tie_breaker}),
+    )?;
+    let scope_reference = service.cursors.binding_digest(
+        b"registry-server-cursor-scope-v3",
+        &cursor_scope_value(query.scope),
     )?;
     Ok(CursorBinding {
         package_revision: service.identity.package_revision.clone(),
@@ -1903,7 +2553,9 @@ fn cursor_binding(
         projection_reference,
         query_reference,
         sort_reference,
+        scope_reference,
         page_size: query.page_size,
+        include_count: query.include_count,
         temporal_instant: query.temporal_instant.map(str::to_owned),
         selected_fields: selected_fields_vec,
     })
@@ -1911,32 +2563,465 @@ fn cursor_binding(
 
 struct CursorBindingQuery<'a> {
     selected_fields: &'a BTreeSet<String>,
-    filters: &'a [ReadFilterClause],
-    sort: Option<&'a str>,
+    projection: &'a [ReadProjectionField],
+    filter: Option<&'a ReadFilterExpr>,
+    order: Option<&'a ReadOrderClause>,
+    include_count: bool,
     page_size: u16,
     temporal_instant: Option<&'a str>,
+    scope: &'a CursorQueryScope,
 }
 
-fn cursor_filters(filters: &[ReadFilterClause]) -> Vec<crate::cursor::CursorFilter> {
-    filters
+fn projection_field_value(field: &ReadProjectionField) -> Value {
+    json!({
+        "fieldId": field.field_id,
+        "fieldType": field.field_type,
+    })
+}
+
+fn read_order_clause_value(order: &ReadOrderClause) -> Value {
+    json!({
+        "fieldId": order.field_id,
+        "fieldType": order.field_type,
+        "direction": order.direction,
+    })
+}
+
+fn cursor_scope_value(scope: &CursorQueryScope) -> Value {
+    match scope {
+        CursorQueryScope::Collection {} => json!({"kind": "collection"}),
+        CursorQueryScope::Relationship { path_id, root_id } => json!({
+            "kind": "relationship",
+            "pathId": path_id,
+            "rootId": root_id,
+        }),
+    }
+}
+
+fn read_filter_expr_value(filter: &ReadFilterExpr) -> Value {
+    match filter {
+        ReadFilterExpr::Binary { op, left, right } => json!({
+            "kind": "binary",
+            "op": match op {
+                ReadLogicalOp::And => "and",
+                ReadLogicalOp::Or => "or",
+            },
+            "left": read_filter_expr_value(left),
+            "right": read_filter_expr_value(right),
+        }),
+        ReadFilterExpr::Not(expr) => json!({
+            "kind": "not",
+            "op": "not",
+            "expr": read_filter_expr_value(expr),
+        }),
+        ReadFilterExpr::Group(expr) => json!({
+            "kind": "group",
+            "op": "group",
+            "expr": read_filter_expr_value(expr),
+        }),
+        ReadFilterExpr::Predicate(predicate) => json!({
+            "kind": "predicate",
+            "fieldId": predicate.field_id,
+            "fieldType": predicate.field_type,
+            "operator": read_filter_operator_name(predicate.operator),
+            "values": predicate.values,
+        }),
+    }
+}
+
+fn read_filter_operator_name(operator: ReadFilterOperator) -> &'static str {
+    match operator {
+        ReadFilterOperator::Eq => "eq",
+        ReadFilterOperator::Ne => "ne",
+        ReadFilterOperator::Lt => "lt",
+        ReadFilterOperator::Le => "le",
+        ReadFilterOperator::Gt => "gt",
+        ReadFilterOperator::Ge => "ge",
+        ReadFilterOperator::In => "in",
+        ReadFilterOperator::IsNull => "is_null",
+        ReadFilterOperator::IsNotNull => "is_not_null",
+        ReadFilterOperator::StartsWith => "startswith",
+        ReadFilterOperator::Contains => "contains",
+    }
+}
+
+fn cursor_query_from_plan(
+    projection: &[ReadProjectionField],
+    filter: Option<&ReadFilterExpr>,
+    order: Option<&ReadOrderClause>,
+    include_count: bool,
+    page_size: u16,
+    temporal_instant: Option<String>,
+    scope: CursorQueryScope,
+) -> crate::cursor::CursorQuery {
+    crate::cursor::CursorQuery {
+        projection: projection.iter().map(cursor_projection_from_read).collect(),
+        filter: filter.map(cursor_filter_expr_from_read),
+        order: order.map(cursor_order_from_read),
+        include_count,
+        page_size,
+        temporal_instant,
+        scope,
+    }
+}
+
+fn cursor_projection_from_read(field: &ReadProjectionField) -> CursorProjectionField {
+    CursorProjectionField {
+        field_id: field.field_id.clone(),
+        field_type: field.field_type.clone(),
+    }
+}
+
+fn cursor_order_from_read(order: &ReadOrderClause) -> CursorOrderClause {
+    CursorOrderClause {
+        field_id: order.field_id.clone(),
+        field_type: order.field_type.clone(),
+        direction: order.direction,
+    }
+}
+
+fn cursor_filter_expr_from_read(filter: &ReadFilterExpr) -> CursorFilterExpr {
+    match filter {
+        ReadFilterExpr::Binary { op, left, right } => CursorFilterExpr::Binary {
+            op: match op {
+                ReadLogicalOp::And => CursorLogicalOp::And,
+                ReadLogicalOp::Or => CursorLogicalOp::Or,
+            },
+            left: Box::new(cursor_filter_expr_from_read(left)),
+            right: Box::new(cursor_filter_expr_from_read(right)),
+        },
+        ReadFilterExpr::Not(expr) => CursorFilterExpr::Not {
+            expr: Box::new(cursor_filter_expr_from_read(expr)),
+        },
+        ReadFilterExpr::Group(expr) => CursorFilterExpr::Group {
+            expr: Box::new(cursor_filter_expr_from_read(expr)),
+        },
+        ReadFilterExpr::Predicate(predicate) => CursorFilterExpr::Predicate {
+            predicate: CursorFilterPredicate {
+                field_id: predicate.field_id.clone(),
+                field_type: predicate.field_type.clone(),
+                operator: cursor_operator_from_read(predicate.operator),
+                values: predicate.values.clone(),
+            },
+        },
+    }
+}
+
+fn read_projection_from_cursor(
+    entity: &CompiledEntity,
+    operation: &CompiledQueryOperation,
+    selected_fields: &BTreeSet<String>,
+    projection: &[CursorProjectionField],
+) -> Result<Vec<ReadProjectionField>, ReadQueryError> {
+    if projection.len() != selected_fields.len() {
+        return Err(ReadQueryError::CursorInvalid);
+    }
+    let expected = projection_plan(entity, selected_fields)?;
+    let actual = projection
         .iter()
-        .map(|filter| crate::cursor::CursorFilter {
-            field: filter.field.clone(),
-            operator: filter_operator_name(filter.operator).to_owned(),
-            values: filter.values.clone(),
+        .map(|field| {
+            if !operation.projection_fields.contains(&field.field_id) {
+                return Err(ReadQueryError::CursorInvalid);
+            }
+            Ok(ReadProjectionField {
+                field_id: field.field_id.clone(),
+                field_type: field.field_type.clone(),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if actual != expected {
+        return Err(ReadQueryError::CursorInvalid);
+    }
+    Ok(actual)
+}
+
+fn read_order_clause_from_cursor(
+    entity: &CompiledEntity,
+    operation: &CompiledQueryOperation,
+    order: &CursorOrderClause,
+) -> Result<ReadOrderClause, ReadQueryError> {
+    let field = entity
+        .fields
+        .get(&order.field_id)
+        .ok_or(ReadQueryError::CursorInvalid)?;
+    let sortable = operation.sort_fields.iter().any(|candidate| {
+        candidate.field == order.field_id
+            && candidate
+                .directions
+                .contains(&CompiledQuerySortDirection::Asc)
+    });
+    if !sortable
+        || field.field_type != order.field_type
+        || order.direction != CompiledQuerySortDirection::Asc
+    {
+        return Err(ReadQueryError::CursorInvalid);
+    }
+    Ok(ReadOrderClause {
+        field_id: order.field_id.clone(),
+        field_type: order.field_type.clone(),
+        direction: order.direction,
+    })
+}
+
+fn read_filter_expr_from_cursor(
+    entity: &CompiledEntity,
+    filter: &CursorFilterExpr,
+) -> Result<ReadFilterExpr, ReadQueryError> {
+    match filter {
+        CursorFilterExpr::Binary { op, left, right } => Ok(ReadFilterExpr::Binary {
+            op: match op {
+                CursorLogicalOp::And => ReadLogicalOp::And,
+                CursorLogicalOp::Or => ReadLogicalOp::Or,
+            },
+            left: Box::new(read_filter_expr_from_cursor(entity, left)?),
+            right: Box::new(read_filter_expr_from_cursor(entity, right)?),
+        }),
+        CursorFilterExpr::Not { expr } => Ok(ReadFilterExpr::Not(Box::new(
+            read_filter_expr_from_cursor(entity, expr)?,
+        ))),
+        CursorFilterExpr::Group { expr } => Ok(ReadFilterExpr::Group(Box::new(
+            read_filter_expr_from_cursor(entity, expr)?,
+        ))),
+        CursorFilterExpr::Predicate { predicate } => {
+            let field = entity
+                .fields
+                .get(&predicate.field_id)
+                .ok_or(ReadQueryError::CursorInvalid)?;
+            if field.field_type != predicate.field_type {
+                return Err(ReadQueryError::CursorInvalid);
+            }
+            Ok(ReadFilterExpr::Predicate(ReadFilterPredicate {
+                field_id: predicate.field_id.clone(),
+                field_type: predicate.field_type.clone(),
+                operator: read_operator_from_cursor(predicate.operator),
+                values: predicate.values.clone(),
+            }))
+        }
+    }
+}
+
+fn cursor_operator_from_read(operator: ReadFilterOperator) -> CursorFilterOperator {
+    match operator {
+        ReadFilterOperator::Eq => CursorFilterOperator::Eq,
+        ReadFilterOperator::Ne => CursorFilterOperator::Ne,
+        ReadFilterOperator::Lt => CursorFilterOperator::Lt,
+        ReadFilterOperator::Le => CursorFilterOperator::Le,
+        ReadFilterOperator::Gt => CursorFilterOperator::Gt,
+        ReadFilterOperator::Ge => CursorFilterOperator::Ge,
+        ReadFilterOperator::In => CursorFilterOperator::In,
+        ReadFilterOperator::IsNull => CursorFilterOperator::IsNull,
+        ReadFilterOperator::IsNotNull => CursorFilterOperator::IsNotNull,
+        ReadFilterOperator::StartsWith => CursorFilterOperator::StartsWith,
+        ReadFilterOperator::Contains => CursorFilterOperator::Contains,
+    }
+}
+
+fn read_operator_from_cursor(operator: CursorFilterOperator) -> ReadFilterOperator {
+    match operator {
+        CursorFilterOperator::Eq => ReadFilterOperator::Eq,
+        CursorFilterOperator::Ne => ReadFilterOperator::Ne,
+        CursorFilterOperator::Lt => ReadFilterOperator::Lt,
+        CursorFilterOperator::Le => ReadFilterOperator::Le,
+        CursorFilterOperator::Gt => ReadFilterOperator::Gt,
+        CursorFilterOperator::Ge => ReadFilterOperator::Ge,
+        CursorFilterOperator::In => ReadFilterOperator::In,
+        CursorFilterOperator::IsNull => ReadFilterOperator::IsNull,
+        CursorFilterOperator::IsNotNull => ReadFilterOperator::IsNotNull,
+        CursorFilterOperator::StartsWith => ReadFilterOperator::StartsWith,
+        CursorFilterOperator::Contains => ReadFilterOperator::Contains,
+    }
+}
+
+struct LookupBody {
+    selector_id: String,
+    values: Option<BTreeMap<String, Value>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LookupResolutionError {
+    InvalidRequest,
+    Unresolved,
+}
+
+fn parse_lookup_body(body: &[u8]) -> Result<LookupBody, ()> {
+    let value = parse_json_strict(body).map_err(|_| ())?;
+    let object = value.as_object().ok_or(())?;
+    let selector_id = object.get("selector").and_then(Value::as_str).ok_or(())?;
+    if selector_id.is_empty() {
+        return Err(());
+    }
+    let values = match object.get("values") {
+        Some(Value::Object(values)) => Some(
+            values
+                .iter()
+                .map(|(field, value)| (field.clone(), value.clone()))
+                .collect(),
+        ),
+        Some(_) => return Err(()),
+        None => None,
+    };
+    let expected_len = if values.is_some() { 2 } else { 1 };
+    if object.len() != expected_len {
+        return Err(());
+    }
+    Ok(LookupBody {
+        selector_id: selector_id.to_owned(),
+        values,
+    })
+}
+
+fn resolve_lookup_selector(
+    service: &HttpService,
+    route: &CompiledRoute,
+    surface: &AuthorizedSurface<'_>,
+    claims: &VerifiedRequestClaims,
+    body: &LookupBody,
+) -> Result<CompiledLookupSelector, LookupResolutionError> {
+    let selector = surface
+        .entity
+        .selector_profiles
+        .get(&body.selector_id)
+        .ok_or(LookupResolutionError::Unresolved)?;
+    let profile = surface
+        .entity
+        .access_profiles
+        .get(surface.context.selected_profile())
+        .ok_or(LookupResolutionError::Unresolved)?;
+    let grant = profile
+        .lookups
+        .iter()
+        .find(|lookup| lookup.selector == body.selector_id)
+        .ok_or(LookupResolutionError::Unresolved)?;
+    let operation = lookup_query_operation_for_selector(service, route, surface, &body.selector_id)
+        .ok_or(LookupResolutionError::Unresolved)?;
+    let values = match grant.value_origin {
+        LookupValueOrigin::Request => {
+            let values = body
+                .values
+                .as_ref()
+                .ok_or(LookupResolutionError::InvalidRequest)?;
+            lookup_request_values(surface.entity, selector, values)?
+        }
+        LookupValueOrigin::VerifiedClaim => {
+            if body.values.is_some() {
+                return Err(LookupResolutionError::InvalidRequest);
+            }
+            lookup_verified_claim_values(surface.entity, selector, grant, claims)?
+        }
+    };
+    Ok(CompiledLookupSelector {
+        route_id: route.id.clone(),
+        query_operation_id: operation.id.clone(),
+        selector_id: selector.id.clone(),
+        value_origin: grant.value_origin,
+        values,
+    })
+}
+
+fn lookup_request_values(
+    entity: &CompiledEntity,
+    selector: &crate::model::CompiledSelectorProfile,
+    values: &BTreeMap<String, Value>,
+) -> Result<Vec<LookupSelectorValue>, LookupResolutionError> {
+    let expected = selector.fields.iter().collect::<BTreeSet<_>>();
+    let actual = values.keys().collect::<BTreeSet<_>>();
+    if expected != actual {
+        return Err(LookupResolutionError::InvalidRequest);
+    }
+    selector
+        .fields
+        .iter()
+        .map(|field_id| {
+            let field = entity
+                .fields
+                .get(field_id)
+                .ok_or(LookupResolutionError::Unresolved)?;
+            let value = lookup_json_scalar(
+                values
+                    .get(field_id)
+                    .ok_or(LookupResolutionError::InvalidRequest)?,
+                &field.field_type,
+            )?;
+            Ok(LookupSelectorValue {
+                field_id: field_id.clone(),
+                field_type: field.field_type.clone(),
+                value,
+            })
         })
         .collect()
 }
 
-fn filter_operator_name(operator: CompiledQueryFilterOperator) -> &'static str {
-    match operator {
-        CompiledQueryFilterOperator::Equals => "equals",
-        CompiledQueryFilterOperator::In => "in",
-        CompiledQueryFilterOperator::Range => "range",
-        CompiledQueryFilterOperator::IsNull => "is_null",
-        CompiledQueryFilterOperator::IsNotNull => "is_not_null",
-        CompiledQueryFilterOperator::Prefix => "prefix",
-    }
+fn lookup_verified_claim_values(
+    entity: &CompiledEntity,
+    selector: &crate::model::CompiledSelectorProfile,
+    grant: &crate::contract::LookupGrantSource,
+    claims: &VerifiedRequestClaims,
+) -> Result<Vec<LookupSelectorValue>, LookupResolutionError> {
+    selector
+        .fields
+        .iter()
+        .map(|field_id| {
+            let field = entity
+                .fields
+                .get(field_id)
+                .ok_or(LookupResolutionError::Unresolved)?;
+            let claim_name = grant
+                .claim_mapping
+                .get(field_id)
+                .ok_or(LookupResolutionError::Unresolved)?;
+            let claim = claims
+                .direct_claim(claim_name)
+                .ok_or(LookupResolutionError::Unresolved)?;
+            let values = claim.values();
+            if values.len() != 1 {
+                return Err(LookupResolutionError::Unresolved);
+            }
+            let value = values
+                .into_iter()
+                .next()
+                .ok_or(LookupResolutionError::Unresolved)?;
+            crate::postgres::validate_field_value(&value, &field.field_type)
+                .map_err(|_| LookupResolutionError::Unresolved)?;
+            Ok(LookupSelectorValue {
+                field_id: field_id.clone(),
+                field_type: field.field_type.clone(),
+                value,
+            })
+        })
+        .collect()
+}
+
+fn lookup_json_scalar(
+    value: &Value,
+    field_type: &FieldTypeSource,
+) -> Result<String, LookupResolutionError> {
+    let value = match field_type {
+        FieldTypeSource::Boolean => value
+            .as_bool()
+            .map(|value| value.to_string())
+            .ok_or(LookupResolutionError::InvalidRequest)?,
+        FieldTypeSource::Int64 => value
+            .as_i64()
+            .map(|value| value.to_string())
+            .ok_or(LookupResolutionError::InvalidRequest)?,
+        FieldTypeSource::String { .. }
+        | FieldTypeSource::Text { .. }
+        | FieldTypeSource::Decimal { .. }
+        | FieldTypeSource::Date
+        | FieldTypeSource::Timestamp
+        | FieldTypeSource::Uuid
+        | FieldTypeSource::Reference { .. }
+        | FieldTypeSource::VocabularyCode { .. } => value
+            .as_str()
+            .map(str::to_owned)
+            .ok_or(LookupResolutionError::InvalidRequest)?,
+        FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. } => {
+            return Err(LookupResolutionError::InvalidRequest);
+        }
+    };
+    crate::postgres::validate_field_value(&value, field_type)
+        .map_err(|_| LookupResolutionError::InvalidRequest)?;
+    Ok(value)
 }
 
 fn filtered_schema(
@@ -1968,104 +3053,93 @@ struct MetadataEntity {
     schema_path: String,
 }
 
-#[derive(Default)]
 struct QueryOptions {
-    access_profile: Option<String>,
-    fields: Option<BTreeSet<String>>,
-    filters: Vec<RawFilterClause>,
-    sort: Option<String>,
-    page_size: Option<u16>,
-    as_of: Option<String>,
-    cursor: Option<String>,
+    parsed: strict_query::ParsedReadQuery,
 }
 
 impl QueryOptions {
-    fn parse(raw: Option<&str>, allow_fields: bool) -> Result<Self, QueryParseError> {
-        let mut result = Self::default();
+    fn parse(raw: Option<&str>, allow_read_query: bool) -> Result<Self, QueryParseError> {
         let Some(raw) = raw else {
-            return Ok(result);
+            return Ok(Self::default());
         };
         if raw.is_empty() || raw.len() > MAX_RAW_QUERY_BYTES {
             return Err(QueryParseError::Invalid);
         }
-        let mut in_values = 0_usize;
+        let mut pairs = Vec::new();
         for pair in raw.split('&') {
             let (name, value) = pair.split_once('=').ok_or(QueryParseError::Invalid)?;
             let name = percent_decode(name)?;
             let value = percent_decode(value)?;
-            match name.as_str() {
-                "accessProfile" if result.access_profile.is_none() && valid_id(&value) => {
-                    result.access_profile = Some(value);
-                }
-                "fields" if allow_fields && result.fields.is_none() => {
-                    result.fields = Some(parse_fields(&value)?);
-                }
-                "filter" if allow_fields => {
-                    if result.filters.len() >= MAX_FILTER_CLAUSES {
-                        return Err(QueryParseError::Invalid);
-                    }
-                    let filter = parse_raw_filter(&value)?;
-                    if filter.operator == CompiledQueryFilterOperator::In {
-                        in_values += 1;
-                        if in_values > MAX_IN_VALUES {
-                            return Err(QueryParseError::Invalid);
-                        }
-                    }
-                    result.filters.push(filter);
-                }
-                "sort" if allow_fields && result.sort.is_none() && valid_id(&value) => {
-                    result.sort = Some(value);
-                }
-                "pageSize" if allow_fields && result.page_size.is_none() => {
-                    let size = value.parse::<u16>().map_err(|_| QueryParseError::Invalid)?;
-                    result.page_size = Some(size);
-                }
-                "asOf" if allow_fields && result.as_of.is_none() => {
-                    parse_strict_rfc3339_utc(&value).map_err(|_| QueryParseError::Invalid)?;
-                    result.as_of = Some(value);
-                }
-                "cursor" if allow_fields && result.cursor.is_none() && !value.is_empty() => {
-                    result.cursor = Some(value);
-                }
-                _ => return Err(QueryParseError::Invalid),
-            }
+            pairs.push((name, value));
         }
-        if result.cursor.is_some()
-            && (result.fields.is_some()
-                || !result.filters.is_empty()
-                || result.sort.is_some()
-                || result.page_size.is_some()
-                || result.as_of.is_some())
-        {
+        let parsed = strict_query::parse_read_query(pairs).map_err(|_| QueryParseError::Invalid)?;
+        let result = Self { parsed };
+        if !allow_read_query && result.has_any_query_member() {
             return Err(QueryParseError::Invalid);
         }
         Ok(result)
     }
 
-    fn has_list_query_members(&self) -> bool {
-        self.cursor.is_some()
-            || !self.filters.is_empty()
-            || self.sort.is_some()
-            || self.page_size.is_some()
-            || self.as_of.is_some()
+    fn access_profile(&self) -> Option<&String> {
+        self.parsed.access_profile.as_ref()
+    }
+
+    fn select_clause(&self) -> Option<&strict_query::SelectClause> {
+        match &self.parsed.mode {
+            strict_query::ParsedReadQueryMode::Query(options) => options.select.as_ref(),
+            strict_query::ParsedReadQueryMode::SkipToken { .. } => None,
+        }
+    }
+
+    fn query_options(&self) -> Option<&strict_query::ReadQueryOptions> {
+        match &self.parsed.mode {
+            strict_query::ParsedReadQueryMode::Query(options) => Some(options),
+            strict_query::ParsedReadQueryMode::SkipToken { .. } => None,
+        }
+    }
+
+    fn skiptoken(&self) -> Option<&str> {
+        match &self.parsed.mode {
+            strict_query::ParsedReadQueryMode::SkipToken { token } => Some(token),
+            strict_query::ParsedReadQueryMode::Query(_) => None,
+        }
+    }
+
+    fn has_non_projection_query_members(&self) -> bool {
+        self.parsed.as_of.is_some()
+            || self.skiptoken().is_some()
+            || self.query_options().is_some_and(|options| {
+                options.filter.is_some()
+                    || options.orderby.is_some()
+                    || options.top.is_some()
+                    || options.count.is_some()
+            })
+    }
+
+    fn has_any_query_member(&self) -> bool {
+        self.parsed.as_of.is_some()
+            || self.skiptoken().is_some()
+            || self.query_options().is_some_and(|options| {
+                options.select.is_some()
+                    || options.filter.is_some()
+                    || options.orderby.is_some()
+                    || options.top.is_some()
+                    || options.count.is_some()
+            })
     }
 }
 
-#[derive(Clone, Eq, PartialEq)]
-struct RawFilterClause {
-    field: String,
-    operator: CompiledQueryFilterOperator,
-    value: String,
-}
-
-impl fmt::Debug for RawFilterClause {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("RawFilterClause")
-            .field("field", &self.field)
-            .field("operator", &self.operator)
-            .field("value", &"<redacted>")
-            .finish()
+impl Default for QueryOptions {
+    fn default() -> Self {
+        Self {
+            parsed: strict_query::ParsedReadQuery {
+                access_profile: None,
+                as_of: None,
+                mode: strict_query::ParsedReadQueryMode::Query(
+                    strict_query::ReadQueryOptions::default(),
+                ),
+            },
+        }
     }
 }
 
@@ -2115,58 +3189,11 @@ fn hex(value: u8) -> Option<u8> {
     }
 }
 
-fn valid_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 128
-        && value.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_' | b'.')
-        })
-}
-
-fn parse_fields(value: &str) -> Result<BTreeSet<String>, QueryParseError> {
-    if value.is_empty() {
-        return Err(QueryParseError::Invalid);
-    }
-    let mut fields = BTreeSet::new();
-    for field in value.split(',') {
-        if fields.len() >= MAX_FIELDS
-            || field.is_empty()
-            || field.len() > MAX_FIELD_BYTES
-            || !valid_id(field)
-            || !fields.insert(field.to_owned())
-        {
-            return Err(QueryParseError::Invalid);
-        }
-    }
-    Ok(fields)
-}
-
-fn parse_raw_filter(value: &str) -> Result<RawFilterClause, QueryParseError> {
-    let (field, rest) = value.split_once(':').ok_or(QueryParseError::Invalid)?;
-    let (operator, value) = rest.split_once(':').ok_or(QueryParseError::Invalid)?;
-    if field.is_empty() || value.is_empty() || !valid_id(field) {
-        return Err(QueryParseError::Invalid);
-    }
-    let operator = match operator {
-        "equals" => CompiledQueryFilterOperator::Equals,
-        "in" => CompiledQueryFilterOperator::In,
-        "range" => CompiledQueryFilterOperator::Range,
-        "is_null" => CompiledQueryFilterOperator::IsNull,
-        "is_not_null" => CompiledQueryFilterOperator::IsNotNull,
-        "prefix" => CompiledQueryFilterOperator::Prefix,
-        _ => return Err(QueryParseError::Invalid),
-    };
-    Ok(RawFilterClause {
-        field: field.to_owned(),
-        operator,
-        value: value.to_owned(),
-    })
-}
-
 fn operation_name(operation: Operation) -> &'static str {
     match operation {
         Operation::Get => "get",
         Operation::List => "list",
+        Operation::Lookup => "lookup",
         Operation::Create => "create",
         Operation::Patch => "patch",
         Operation::Tombstone => "tombstone",
@@ -2193,35 +3220,42 @@ fn query_parameters(kind: CompiledQueryKind) -> Value {
             "Select one compiled access profile.",
         ),
         query_parameter(
-            "fields",
+            "$select",
             false,
             false,
             json!({"type": "string"}),
-            "Comma-separated subset of readable fields.",
+            "Comma-separated subset of readable API property names.",
         ),
         query_parameter(
-            "filter",
-            false,
-            true,
-            json!({"type": "string"}),
-            "Repeatable field:operator:value filter clause.",
-        ),
-        query_parameter(
-            "sort",
+            "$filter",
             false,
             false,
             json!({"type": "string"}),
-            "One compiled sortable field, ascending only.",
+            "Strict Registry read filter expression over compiled filterable properties.",
         ),
         query_parameter(
-            "pageSize",
+            "$orderby",
             false,
             false,
-            json!({"type": "integer", "minimum": 1}),
-            "Bounded page size within the compiled maximum.",
+            json!({"type": "string"}),
+            "One compiled sortable property, ascending only.",
         ),
         query_parameter(
-            "cursor",
+            "$top",
+            false,
+            false,
+            json!({"type": "integer", "minimum": 1, "maximum": strict_query::MAX_TOP}),
+            "Bounded page size.",
+        ),
+        query_parameter(
+            "$count",
+            false,
+            false,
+            json!({"type": "boolean"}),
+            "Request a total count when the compiled operation allows it.",
+        ),
+        query_parameter(
+            "$skiptoken",
             false,
             false,
             json!({"type": "string"}),
@@ -2238,6 +3272,49 @@ fn query_parameters(kind: CompiledQueryKind) -> Value {
         ));
     }
     Value::Array(parameters)
+}
+
+fn lookup_parameters() -> Value {
+    Value::Array(vec![
+        query_parameter(
+            "accessProfile",
+            false,
+            false,
+            json!({"type": "string"}),
+            "Select one compiled access profile.",
+        ),
+        query_parameter(
+            "$select",
+            false,
+            false,
+            json!({"type": "string"}),
+            "Comma-separated subset of readable API property names.",
+        ),
+    ])
+}
+
+fn lookup_request_body() -> Value {
+    json!({
+        "required": true,
+        "content": {
+            "application/json": {
+                "schema": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["selector"],
+                    "properties": {
+                        "selector": {"type": "string"},
+                        "values": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": ["string", "integer", "boolean"]
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    })
 }
 
 fn revision_parameters(kind: CompiledRevisionKind) -> Value {
@@ -2338,6 +3415,14 @@ fn cursor_invalid() -> Response {
         StatusCode::BAD_REQUEST,
         "query.cursor_invalid",
         "The query cursor is invalid.",
+    )
+}
+
+fn lookup_unresolved() -> Response {
+    fixed_problem(
+        StatusCode::NOT_FOUND,
+        "lookup.unresolved",
+        "The lookup did not resolve exactly one record.",
     )
 }
 
@@ -2610,7 +3695,7 @@ fn invalid_request() -> Response {
     fixed_problem(
         StatusCode::BAD_REQUEST,
         "request.invalid",
-        "The mutation request is invalid.",
+        "The request is invalid.",
     )
 }
 

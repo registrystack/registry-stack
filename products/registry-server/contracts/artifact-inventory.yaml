@@ -21,6 +21,7 @@ artifacts:
   - {path: demo, kind: local-mint-server-demo, state: authored}
   - {path: generated/authoring/registry-project.schema.json, kind: generated-authoring-schema, state: authored}
   - {path: generated/asset-site-placement, kind: generated-baseline, state: authored}
+  - {path: generated/publicschema-household, kind: generated-baseline, state: authored}
   - {path: scripts/check-generated.sh, kind: generated-artifact-gate, state: authored}
   - {path: scripts/compare-generated-tree.py, kind: generated-tree-comparator, state: authored}
   - {path: scripts/test-postgres.sh, kind: real-postgresql-entrypoint, state: authored}

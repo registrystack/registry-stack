@@ -6,8 +6,17 @@ disability, farmer, and business registries. Their contract identifiers and
 delivery state are in `contracts/acceptance-scenario-matrix.yaml`.
 
 All five configuration projects pass the Production compiler and the same
-real-PostgreSQL pilot test. That test loads their locked module digests and
-executes configured behavior without domain-specific runtime concepts.
+real-PostgreSQL pilot test. That test loads their module source, rederives the
+package, and executes configured behavior without domain-specific runtime
+concepts.
+
+The PublicSchema household project is intentionally richer than a single
+stored-record smoke test. Its authored configuration adds person sex and a
+local household number, declares selector profiles, exposes household-to-person
+reads through group membership, and derives live demographic facts from a
+reviewed module-relative SQL file. The demo seed includes a single-headed
+household with a child under five, a woman-headed household with a child and
+elderly member, and a separate control household to prove row/path isolation.
 
 The non-person asset project also passes the public-binary adopter workflow.
 That workflow builds the two executables once, tests a candidate in an isolated

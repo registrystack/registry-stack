@@ -1574,7 +1574,7 @@ where
             &plan.route_path,
             &[
                 ("accessProfile", plan.profile_id.as_str()),
-                ("cursor", cursor),
+                ("$skiptoken", cursor),
             ],
         )
     } else {
@@ -1582,8 +1582,8 @@ where
             &plan.route_path,
             &[
                 ("accessProfile", plan.profile_id.as_str()),
-                ("fields", fields.as_str()),
-                ("pageSize", page_size.as_str()),
+                ("$select", fields.as_str()),
+                ("$top", page_size.as_str()),
             ],
         )
     };
@@ -1693,18 +1693,27 @@ fn validate_export_response(
     require_success_json(response)?;
     let value = parse_canonical_response(&response.body)?;
     let object = value.as_object().ok_or(DataError::InvalidResponse)?;
-    require_exact_keys(object, &["items", "pageInfo"]).map_err(|_| DataError::InvalidResponse)?;
+    if !(object.len() == 2 || object.len() == 3)
+        || !object.contains_key("items")
+        || !object.contains_key("nextCursor")
+        || (object.len() == 3 && !object.contains_key("count"))
+    {
+        return Err(DataError::InvalidResponse);
+    }
     let items = object["items"]
         .as_array()
         .ok_or(DataError::InvalidResponse)?;
     if items.len() > usize::from(plan.maximum_page_size) {
         return Err(DataError::InvalidResponse);
     }
-    let page_info = object["pageInfo"]
-        .as_object()
-        .ok_or(DataError::InvalidResponse)?;
-    require_exact_keys(page_info, &["nextCursor"]).map_err(|_| DataError::InvalidResponse)?;
-    let next_cursor = match &page_info["nextCursor"] {
+    if object.get("count").is_some_and(|count| {
+        !count
+            .as_u64()
+            .is_some_and(|count| count >= items.len() as u64)
+    }) {
+        return Err(DataError::InvalidResponse);
+    }
+    let next_cursor = match &object["nextCursor"] {
         Value::Null => None,
         Value::String(value) if !invalid_cursor(Some(value)) => Some(value.clone()),
         _ => return Err(DataError::InvalidResponse),

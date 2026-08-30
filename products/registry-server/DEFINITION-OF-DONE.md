@@ -25,5 +25,7 @@ real-PostgreSQL five-domain acceptance test with a clean public-binary lifecycle
 that exercises production checking, isolated schema tests, external signing,
 operator apply, authenticated serving, compatible additive upgrade, durable
 failed maintenance, exact fix-forward recovery, and restart with unchanged
-server bytes. This is a pilot exit claim, not a claim that a release has been
-published.
+server bytes. The household pilot fixture also exercises configured selector,
+derived-field, and relationship read-path surfaces without making household or
+person a runtime type. This is a pilot exit claim, not a claim that a release
+has been published.

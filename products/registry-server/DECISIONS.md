@@ -13,6 +13,10 @@
   An overlay may add localized labels, concept URIs, identifiers, relationship
   roles, and codelist metadata only for entities and fields visible through its
   selected access profile and classification ceiling.
+- Selector profiles and relationship read paths are governed model entries,
+  not runtime concepts. Selector values are exact inputs for a compiled lookup
+  and never grant authority. A read-path grant is confined to one configured
+  source, association entity, target, and target field capability set.
 - Registry Manifest remains the owner of standards-oriented metadata and DCAT
   rendering. Registry Server emits a one-way, lossy Manifest source plus its
   DCAT JSON-LD projection in the governed package. It does not maintain a

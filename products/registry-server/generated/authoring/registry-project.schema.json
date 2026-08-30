@@ -10,6 +10,9 @@
           "type": "array",
           "uniqueItems": true
         },
+        "allowCount": {
+          "type": "boolean"
+        },
         "allowDataExport": {
           "default": false,
           "type": "boolean"
@@ -24,6 +27,18 @@
           },
           "type": "array",
           "uniqueItems": true
+        },
+        "lookups": {
+          "items": {
+            "$ref": "#/$defs/LookupGrantSource"
+          },
+          "type": "array"
+        },
+        "readPaths": {
+          "items": {
+            "$ref": "#/$defs/ReadPathGrantSource"
+          },
+          "type": "array"
         },
         "readableFields": {
           "default": [],
@@ -70,6 +85,9 @@
     "AccessProfileSource": {
       "additionalProperties": false,
       "properties": {
+        "allowCount": {
+          "type": "boolean"
+        },
         "allowDataExport": {
           "default": false,
           "type": "boolean"
@@ -93,6 +111,12 @@
         "id": {
           "type": "string"
         },
+        "lookups": {
+          "items": {
+            "$ref": "#/$defs/LookupGrantSource"
+          },
+          "type": "array"
+        },
         "operations": {
           "items": {
             "$ref": "#/$defs/Operation"
@@ -106,6 +130,12 @@
             "string",
             "null"
           ]
+        },
+        "readPaths": {
+          "items": {
+            "$ref": "#/$defs/ReadPathGrantSource"
+          },
+          "type": "array"
         },
         "readableFields": {
           "default": [],
@@ -195,6 +225,13 @@
     "BooleanFieldSourceSchema": {
       "additionalProperties": false,
       "properties": {
+        "apiName": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "classification": {
           "$ref": "#/$defs/Classification"
         },
@@ -468,6 +505,13 @@
     "Crs84PointFieldSourceSchema": {
       "additionalProperties": false,
       "properties": {
+        "apiName": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "bbox": {
           "anyOf": [
             {
@@ -527,6 +571,13 @@
     "DateFieldSourceSchema": {
       "additionalProperties": false,
       "properties": {
+        "apiName": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "classification": {
           "$ref": "#/$defs/Classification"
         },
@@ -568,6 +619,13 @@
     "DecimalFieldSourceSchema": {
       "additionalProperties": false,
       "properties": {
+        "apiName": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "classification": {
           "$ref": "#/$defs/Classification"
         },
@@ -628,6 +686,299 @@
       ],
       "type": "object"
     },
+    "DerivedExecutionSource": {
+      "enum": [
+        "live"
+      ],
+      "type": "string"
+    },
+    "DerivedFieldSource": {
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "const": "boolean",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "maxLength": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "minLength": {
+              "default": 0,
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "string",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "maxLength"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "maxLength": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "maxLength"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "int64",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "maximum": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "minimum": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "precision": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "scale": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "decimal",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "precision",
+            "scale"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "date",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "timestamp",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "vocabulary-code",
+              "type": "string"
+            },
+            "values": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "vocabulary": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "vocabulary"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "onDelete": {
+              "$ref": "#/$defs/ReferenceDelete",
+              "default": "restrict"
+            },
+            "target": {
+              "type": "string"
+            },
+            "type": {
+              "const": "reference",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "target"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "bbox": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Crs84BboxSource"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "precision": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "crs84-point",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "precision"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "maxBytes": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "schema": true,
+            "type": {
+              "const": "structured",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "maxBytes",
+            "schema"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "apiName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "classification": {
+          "$ref": "#/$defs/Classification"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "classification"
+      ],
+      "type": "object",
+      "unevaluatedProperties": false
+    },
+    "DerivedSource": {
+      "additionalProperties": false,
+      "properties": {
+        "execution": {
+          "$ref": "#/$defs/DerivedExecutionSource",
+          "default": "live"
+        },
+        "fields": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DerivedFieldSource"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "sql": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "sql",
+        "key"
+      ],
+      "type": "object"
+    },
     "EntitySource": {
       "additionalProperties": false,
       "properties": {
@@ -660,6 +1011,12 @@
           },
           "type": "array"
         },
+        "derived": {
+          "items": {
+            "$ref": "#/$defs/DerivedSource"
+          },
+          "type": "array"
+        },
         "events": {
           "default": [],
           "items": {
@@ -687,8 +1044,20 @@
         "mutationMode": {
           "$ref": "#/$defs/MutationMode"
         },
+        "readPaths": {
+          "items": {
+            "$ref": "#/$defs/ReadPathSource"
+          },
+          "type": "array"
+        },
         "route": {
           "type": "string"
+        },
+        "selectorProfiles": {
+          "items": {
+            "$ref": "#/$defs/SelectorProfileSource"
+          },
+          "type": "array"
         },
         "temporal": {
           "anyOf": [
@@ -823,6 +1192,13 @@
     "Int64FieldSourceSchema": {
       "additionalProperties": false,
       "properties": {
+        "apiName": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "classification": {
           "$ref": "#/$defs/Classification"
         },
@@ -854,6 +1230,36 @@
         "classification"
       ],
       "type": "object"
+    },
+    "LookupGrantSource": {
+      "additionalProperties": false,
+      "properties": {
+        "claimMapping": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "type": "object"
+        },
+        "selector": {
+          "type": "string"
+        },
+        "valueOrigin": {
+          "$ref": "#/$defs/LookupValueOrigin"
+        }
+      },
+      "required": [
+        "selector",
+        "valueOrigin"
+      ],
+      "type": "object"
+    },
+    "LookupValueOrigin": {
+      "enum": [
+        "request",
+        "verified_claim"
+      ],
+      "type": "string"
     },
     "ManifestProjectionApplicationProfileSource": {
       "additionalProperties": false,
@@ -1364,6 +1770,7 @@
       "enum": [
         "create",
         "get",
+        "lookup",
         "list",
         "patch",
         "tombstone",
@@ -1441,6 +1848,70 @@
       ],
       "type": "object"
     },
+    "ReadPathGrantSource": {
+      "additionalProperties": false,
+      "properties": {
+        "allowCount": {
+          "default": false,
+          "type": "boolean"
+        },
+        "filterableFields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "path": {
+          "type": "string"
+        },
+        "readableFields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "sortableFields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "ReadPathSource": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "route": {
+          "type": "string"
+        },
+        "through": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "through",
+        "to",
+        "route"
+      ],
+      "type": "object"
+    },
     "ReferenceDelete": {
       "enum": [
         "restrict"
@@ -1456,6 +1927,13 @@
     "ReferenceFieldSourceSchema": {
       "additionalProperties": false,
       "properties": {
+        "apiName": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "classification": {
           "$ref": "#/$defs/Classification"
         },
@@ -1536,6 +2014,25 @@
       ],
       "type": "object"
     },
+    "SelectorProfileSource": {
+      "additionalProperties": false,
+      "properties": {
+        "fields": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "fields"
+      ],
+      "type": "object"
+    },
     "StringFieldKindSchema": {
       "enum": [
         "string"
@@ -1545,6 +2042,13 @@
     "StringFieldSourceSchema": {
       "additionalProperties": false,
       "properties": {
+        "apiName": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "classification": {
           "$ref": "#/$defs/Classification"
         },
@@ -1598,6 +2102,13 @@
     "StructuredFieldSourceSchema": {
       "additionalProperties": false,
       "properties": {
+        "apiName": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "classification": {
           "$ref": "#/$defs/Classification"
         },
@@ -1670,6 +2181,13 @@
     "TextFieldSourceSchema": {
       "additionalProperties": false,
       "properties": {
+        "apiName": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "classification": {
           "$ref": "#/$defs/Classification"
         },
@@ -1717,6 +2235,13 @@
     "TimestampFieldSourceSchema": {
       "additionalProperties": false,
       "properties": {
+        "apiName": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "classification": {
           "$ref": "#/$defs/Classification"
         },
@@ -1828,6 +2353,13 @@
     "UuidFieldSourceSchema": {
       "additionalProperties": false,
       "properties": {
+        "apiName": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "classification": {
           "$ref": "#/$defs/Classification"
         },
@@ -1876,6 +2408,13 @@
     "VocabularyCodeFieldSourceSchema": {
       "additionalProperties": false,
       "properties": {
+        "apiName": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "classification": {
           "$ref": "#/$defs/Classification"
         },

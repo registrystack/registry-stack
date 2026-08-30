@@ -10,7 +10,7 @@ This local demo starts four real components:
   verification.
 
 It then asks Mint for short-lived operator and negative-test tokens and creates
-five synthetic people, two households, and five effective-dated memberships
+eight synthetic people, three households, and eight effective-dated memberships
 through Registry Server's ordinary authenticated REST API.
 
 ## Run it
@@ -40,6 +40,43 @@ without waiting:
 ```bash
 products/registry-server/demo/run.sh --smoke
 ```
+
+## Copyable requests
+
+The query helper runs the GET shapes against the local server. The examples
+below also show the selector lookup and viewer-denial requests with synthetic
+bearer placeholders and deterministic logical IDs; when using the demo
+directly, read the generated household UUID from
+`demo/.run/seed-record-ids.json`.
+
+```bash
+curl -sS -H 'Authorization: Bearer <operator-token>' \
+  'http://127.0.0.1:18080/v1/records/households/<household-id>/people?accessProfile=household-operator&$select=person-code,legal-name,person-sex,residency-status&$orderby=person-code&$top=20&$count=true'
+
+curl -sS -H 'Authorization: Bearer <operator-token>' \
+  'http://127.0.0.1:18080/v1/records/households?accessProfile=household-operator&$select=household-code,administrative-area,local-household-number,child-count&$filter=administrative-area%20eq%20%27north-demo%27%20and%20child-count%20eq%201&$orderby=local-household-number&$top=20&$count=true'
+
+curl -sS -H 'Authorization: Bearer <operator-token>' \
+  'http://127.0.0.1:18080/v1/records/households?accessProfile=household-operator&$select=household-code,child-under-5-count,single-headed&$filter=single-headed%20eq%20true%20and%20child-under-5-count%20eq%201&$top=20&$count=true'
+
+curl -sS -H 'Authorization: Bearer <operator-token>' \
+  'http://127.0.0.1:18080/v1/records/households?accessProfile=household-operator&$select=household-code,woman-headed,child-count,elderly-count&$filter=woman-headed%20eq%20true%20and%20child-count%20eq%201%20and%20elderly-count%20eq%201&$top=20&$count=true'
+
+curl -sS -X POST -H 'Authorization: Bearer <operator-token>' \
+  -H 'Content-Type: application/json' \
+  --data '{"selector":"by-local-reference","value":{"administrative-area":"north-demo","local-household-number":1001}}' \
+  'http://127.0.0.1:18080/v1/records/households:lookup?accessProfile=household-operator'
+
+curl -sS -H 'Authorization: Bearer <viewer-token-bound-to-one-household>' \
+  'http://127.0.0.1:18080/v1/records/households?accessProfile=household-viewer'
+
+curl -sS -H 'Authorization: Bearer <operator-token>' \
+  'http://127.0.0.1:18080/v1/records/households?accessProfile=household-operator&$skiptoken=<nextCursor>'
+```
+
+The `household-viewer` profile is intentionally get and lookup only. A list
+attempt is expected to return the same concealed absence class as an
+unauthorized resource.
 
 ## Disposable state
 

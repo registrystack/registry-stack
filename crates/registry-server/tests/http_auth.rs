@@ -23,7 +23,6 @@ use registry_server::api::{
 };
 use registry_server::auth::{
     AuthenticationConfigError, AuthenticationError, AuthorityClaimConfig, RegistryAuthenticator,
-    RowBoundaryClaimMapping, RowBoundaryClaimType,
 };
 use registry_server::cursor::CursorCodec;
 use registry_server::{compile_project, parse_project_yaml, CompileProfile, CompiledRegistry};
@@ -36,6 +35,7 @@ const PRINCIPAL: &str = "principal-value-never-rendered";
 const PURPOSE: &str = "case-management-never-rendered";
 const JURISDICTION: &str = "area-a-never-rendered";
 const TENANT: &str = "tenant-a-never-rendered";
+const RECORD_ID: &str = "00000000-0000-4000-8000-000000000001";
 
 const PROJECT: &str = r#"
 apiVersion: registry.registrystack.org/v1alpha1
@@ -89,7 +89,7 @@ impl RecordReadService for RecordingReadService {
         Box::pin(async move {
             Ok(Some(held(project_fixture(
                 json!({
-                    "id": "case-1",
+                    "id": RECORD_ID,
                     "revision": 1,
                     "data": {
                         "label": "Visible",
@@ -107,6 +107,14 @@ impl RecordReadService for RecordingReadService {
     ) -> ServiceFuture<'_, Result<HeldReadResponse, ReadServiceError>> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Box::pin(async { Ok(held(json!({"items": []}))) })
+    }
+
+    fn lookup(
+        &self,
+        _request: RecordReadRequest,
+    ) -> ServiceFuture<'_, Result<Option<HeldReadResponse>, ReadServiceError>> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Ok(None) })
     }
 }
 
@@ -236,7 +244,7 @@ async fn verified_direct_authority_reaches_the_protected_record_service() {
     let token = harness.valid_token();
     let response = harness
         .send(
-            "/v1/records/cases/case-1?accessProfile=caseworker",
+            "/v1/records/cases/00000000-0000-4000-8000-000000000001?accessProfile=caseworker",
             &[bearer(&token)],
             None,
         )
@@ -402,7 +410,11 @@ async fn malformed_or_duplicate_bearer_never_downgrades_to_anonymous() {
     ] {
         let before = harness.records.calls.load(Ordering::SeqCst);
         let response = harness
-            .send("/v1/records/cases/case-1", &values, None)
+            .send(
+                "/v1/records/cases/00000000-0000-4000-8000-000000000001",
+                &values,
+                None,
+            )
             .await;
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(body_json(response).await["code"], "authentication.refused");
@@ -413,14 +425,20 @@ async fn malformed_or_duplicate_bearer_never_downgrades_to_anonymous() {
 #[tokio::test]
 async fn anonymous_without_a_token_succeeds_but_injected_authority_is_removed() {
     let harness = Harness::new().await;
-    let public = harness.send("/v1/records/cases/case-1", &[], None).await;
+    let public = harness
+        .send(
+            "/v1/records/cases/00000000-0000-4000-8000-000000000001",
+            &[],
+            None,
+        )
+        .await;
     assert_eq!(public.status(), StatusCode::OK);
     assert_eq!(body_json(public).await["data"], json!({"label": "Visible"}));
 
     let before = harness.records.calls.load(Ordering::SeqCst);
     let missing = harness
         .send(
-            "/v1/records/cases/case-1?accessProfile=caseworker",
+            "/v1/records/cases/00000000-0000-4000-8000-000000000001?accessProfile=caseworker",
             &[],
             None,
         )
@@ -439,7 +457,7 @@ async fn anonymous_without_a_token_succeeds_but_injected_authority_is_removed() 
     let before = harness.records.calls.load(Ordering::SeqCst);
     let response = harness
         .send(
-            "/v1/records/cases/case-1?accessProfile=caseworker",
+            "/v1/records/cases/00000000-0000-4000-8000-000000000001?accessProfile=caseworker",
             &[],
             Some(injected),
         )
@@ -466,7 +484,11 @@ async fn refusals_and_debug_output_are_value_free() {
 
     let before = harness.records.calls.load(Ordering::SeqCst);
     let response = harness
-        .send("/v1/records/cases/case-1", &[bearer(&token)], None)
+        .send(
+            "/v1/records/cases/00000000-0000-4000-8000-000000000001",
+            &[bearer(&token)],
+            None,
+        )
         .await;
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     let body = body_json(response).await.to_string();
@@ -497,27 +519,9 @@ async fn refusals_and_debug_output_are_value_free() {
 async fn constructor_rejects_empty_duplicate_reserved_and_incomplete_mappings() {
     let harness = Harness::new().await;
     let invalid = [
-        AuthorityClaimConfig::new("", Some("purpose".to_owned()), row_claims()),
-        AuthorityClaimConfig::new("sub", Some("purpose".to_owned()), row_claims()),
-        AuthorityClaimConfig::new(
-            "registry_principal",
-            Some("registry_principal".to_owned()),
-            row_claims(),
-        ),
-        AuthorityClaimConfig::new(
-            "registry_principal",
-            Some("purpose".to_owned()),
-            vec![
-                RowBoundaryClaimMapping::new(
-                    "jurisdictions",
-                    RowBoundaryClaimType::DirectStringSet,
-                ),
-                RowBoundaryClaimMapping::new(
-                    "jurisdictions",
-                    RowBoundaryClaimType::DirectStringSet,
-                ),
-            ],
-        ),
+        AuthorityClaimConfig::new("", Some("purpose".to_owned())),
+        AuthorityClaimConfig::new("sub", Some("purpose".to_owned())),
+        AuthorityClaimConfig::new("registry_principal", Some("registry_principal".to_owned())),
     ];
     for claims in invalid {
         let error = authenticator(&harness.registry, &harness.idp, claims)
@@ -526,23 +530,8 @@ async fn constructor_rejects_empty_duplicate_reserved_and_incomplete_mappings() 
     }
 
     for claims in [
-        AuthorityClaimConfig::new("registry_principal", None, row_claims()),
-        AuthorityClaimConfig::new(
-            "registry_principal",
-            Some("purpose".to_owned()),
-            vec![RowBoundaryClaimMapping::new(
-                "jurisdictions",
-                RowBoundaryClaimType::DirectStringSet,
-            )],
-        ),
-        AuthorityClaimConfig::new(
-            "registry_principal",
-            Some("purpose".to_owned()),
-            vec![
-                RowBoundaryClaimMapping::new("jurisdictions", RowBoundaryClaimType::DirectString),
-                RowBoundaryClaimMapping::new("tenant", RowBoundaryClaimType::DirectString),
-            ],
-        ),
+        AuthorityClaimConfig::new("registry_principal", None),
+        AuthorityClaimConfig::new("wrong_principal", Some("purpose".to_owned())),
     ] {
         let error = authenticator(&harness.registry, &harness.idp, claims)
             .expect_err("incomplete compiled authority mapping is refused");
@@ -588,7 +577,7 @@ async fn assert_refused_without_record_call(harness: &Harness, token: &str) {
     let before = harness.records.calls.load(Ordering::SeqCst);
     let response = harness
         .send(
-            "/v1/records/cases/case-1?accessProfile=caseworker",
+            "/v1/records/cases/00000000-0000-4000-8000-000000000001?accessProfile=caseworker",
             &[bearer(token)],
             None,
         )
@@ -650,18 +639,7 @@ fn verifier_config(idp: &MockIdp) -> TokenVerifierConfig {
 }
 
 fn authority_claims() -> AuthorityClaimConfig {
-    AuthorityClaimConfig::new(
-        "registry_principal",
-        Some("purpose".to_owned()),
-        row_claims(),
-    )
-}
-
-fn row_claims() -> Vec<RowBoundaryClaimMapping> {
-    vec![
-        RowBoundaryClaimMapping::new("jurisdictions", RowBoundaryClaimType::DirectStringSet),
-        RowBoundaryClaimMapping::new("tenant", RowBoundaryClaimType::DirectString),
-    ]
+    AuthorityClaimConfig::new("registry_principal", Some("purpose".to_owned()))
 }
 
 fn valid_claims() -> Value {

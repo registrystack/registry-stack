@@ -27,9 +27,10 @@ use zeroize::Zeroizing;
 use crate::api::{HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture};
 use crate::api::{VerifiedClaimValue, VerifiedRequestClaims};
 use crate::auth::RegistryAuthenticator;
-use crate::compiler::{compile_project, module_digest, CompileProfile};
-use crate::contract::{parse_module_yaml, parse_project_yaml};
+use crate::compiler::{compile_project_with_assets, module_digest_with_assets, CompileProfile};
+use crate::contract::{parse_module_yaml, parse_project_yaml, ModuleAssetSource};
 use crate::contract::{AccessProfileSource, Operation};
+use crate::derived_sql::MAX_DERIVED_SQL_BYTES;
 use crate::model::CompiledRoute;
 use crate::model::{CompiledRegistry, HttpMethod};
 #[cfg(any(test, feature = "postgres-test"))]
@@ -150,6 +151,27 @@ enum ActionSource {
         record_ref: String,
     },
     List,
+    Query {
+        #[serde(default)]
+        select: BTreeSet<String>,
+        #[serde(default)]
+        top: Option<u16>,
+        #[serde(default)]
+        count: bool,
+    },
+    Lookup {
+        selector: String,
+        value: Value,
+    },
+    ReadPath {
+        path: String,
+        #[serde(default)]
+        select: BTreeSet<String>,
+        #[serde(default)]
+        top: Option<u16>,
+        #[serde(default)]
+        count: bool,
+    },
     Patch {
         record_ref: String,
         etag_ref: String,
@@ -165,7 +187,8 @@ impl ActionSource {
         match self {
             Self::Create { .. } => Operation::Create,
             Self::Get { .. } => Operation::Get,
-            Self::List => Operation::List,
+            Self::List | Self::Query { .. } | Self::ReadPath { .. } => Operation::List,
+            Self::Lookup { .. } => Operation::Lookup,
             Self::Patch { .. } => Operation::Patch,
             Self::Batch { .. } => Operation::Batch,
         }
@@ -402,7 +425,12 @@ fn validate_action_references(
             etag_ref,
             ..
         } => &[record_ref, etag_ref],
-        ActionSource::Create { .. } | ActionSource::List | ActionSource::Batch { .. } => &[],
+        ActionSource::Create { .. }
+        | ActionSource::List
+        | ActionSource::Query { .. }
+        | ActionSource::Lookup { .. }
+        | ActionSource::ReadPath { .. }
+        | ActionSource::Batch { .. } => &[],
     };
     if references
         .iter()
@@ -486,6 +514,29 @@ fn validate_action_fields(
     match action {
         ActionSource::Create { data } => validate_data(data),
         ActionSource::Get { .. } | ActionSource::List => Ok(()),
+        ActionSource::Query { select, top, count } => {
+            validate_structured_query(entity, profile, None, select, *top, *count)
+        }
+        ActionSource::Lookup { selector, value } => {
+            if selector.is_empty()
+                || selector.len() > MAX_IDENTIFIER_BYTES
+                || !entity.selector_profiles.contains_key(selector)
+                || !profile
+                    .lookups
+                    .iter()
+                    .any(|lookup| lookup.selector == *selector)
+                || canonical_size(value)? > MAX_BINDING_BYTES
+            {
+                return Err(FixtureError::LogicalReferenceRefused);
+            }
+            Ok(())
+        }
+        ActionSource::ReadPath {
+            path,
+            select,
+            top,
+            count,
+        } => validate_structured_query(entity, profile, Some(path), select, *top, *count),
         ActionSource::Patch { changes, .. } => {
             if changes.is_empty() || changes.len() > entity.fields.len() {
                 return Err(FixtureError::JourneyBoundsRefused);
@@ -543,6 +594,38 @@ fn validate_action_fields(
     }
 }
 
+fn validate_structured_query(
+    entity: &crate::model::CompiledEntity,
+    profile: &AccessProfileSource,
+    read_path: Option<&str>,
+    select: &BTreeSet<String>,
+    top: Option<u16>,
+    count: bool,
+) -> Result<(), FixtureError> {
+    if top.is_some_and(|top| top == 0 || top > 100) || (count && !profile.allow_count) {
+        return Err(FixtureError::JourneyBoundsRefused);
+    }
+    if select
+        .iter()
+        .any(|field| !profile.readable_fields.contains(field) || !entity.fields.contains_key(field))
+    {
+        return Err(FixtureError::LogicalReferenceRefused);
+    }
+    if let Some(path) = read_path {
+        if path.is_empty()
+            || path.len() > MAX_IDENTIFIER_BYTES
+            || !entity.read_paths.contains_key(path)
+            || !profile
+                .read_paths
+                .iter()
+                .any(|grant| grant.path == path && select.is_subset(&grant.readable_fields))
+        {
+            return Err(FixtureError::LogicalReferenceRefused);
+        }
+    }
+    Ok(())
+}
+
 fn validate_expectation(
     expectation: &ExpectationSource,
     operation: Operation,
@@ -561,7 +644,11 @@ fn validate_expectation(
         ExpectedOutcome::Success => {
             let expected = match operation {
                 Operation::Create => 201,
-                Operation::Get | Operation::List | Operation::Patch | Operation::Batch => 200,
+                Operation::Get
+                | Operation::List
+                | Operation::Lookup
+                | Operation::Patch
+                | Operation::Batch => 200,
                 Operation::Tombstone | Operation::Revisions => {
                     return Err(FixtureError::LogicalReferenceRefused)
                 }
@@ -1307,6 +1394,7 @@ fn fixture_request(
     let mut body = Body::empty();
     let mut content_type = None;
     let mut if_match = None;
+    let mut extra_query_options = Vec::new();
     match &step.action {
         ActionSource::Create { data } => {
             method = Method::POST;
@@ -1320,6 +1408,19 @@ fn fixture_request(
             path = path.replace("{record_id}", &observed.record_id);
         }
         ActionSource::List => {}
+        ActionSource::Query { select, top, count } => {
+            extra_query_options = fixture_query_options(step, None, select, *top, *count)?;
+        }
+        ActionSource::Lookup { .. } => return Err(FixtureError::ExecutionRefused),
+        ActionSource::ReadPath {
+            path: read_path,
+            select,
+            top,
+            count,
+        } => {
+            extra_query_options =
+                fixture_query_options(step, Some(read_path), select, *top, *count)?;
+        }
         ActionSource::Patch {
             record_ref,
             etag_ref,
@@ -1355,6 +1456,12 @@ fn fixture_request(
     }
     path.push_str("?accessProfile=");
     path.push_str(&step.access_profile);
+    for (name, value) in extra_query_options {
+        path.push('&');
+        path.push_str(name);
+        path.push('=');
+        path.push_str(&value);
+    }
     let mut request = Request::builder()
         .method(method)
         .uri(path)
@@ -1398,6 +1505,35 @@ fn fixture_request(
         request.extensions_mut().insert(verified_claims(step)?);
     }
     Ok(request)
+}
+
+fn fixture_query_options(
+    step: &ValidatedStep,
+    read_path: Option<&str>,
+    select: &BTreeSet<String>,
+    top: Option<u16>,
+    count: bool,
+) -> Result<Vec<(&'static str, String)>, FixtureError> {
+    let mut parameters = Vec::new();
+    if !select.is_empty() {
+        parameters.push((
+            "$select",
+            select.iter().cloned().collect::<Vec<_>>().join(","),
+        ));
+    }
+    if let Some(top) = top {
+        parameters.push(("$top", top.to_string()));
+    }
+    if count {
+        parameters.push(("$count", "true".to_owned()));
+    }
+    if let Some(read_path) = read_path {
+        parameters.push(("readPath", read_path.to_owned()));
+    }
+    if step.access_profile.is_empty() {
+        return Err(FixtureError::RequestConstructionRefused);
+    }
+    Ok(parameters)
 }
 
 fn json_body(value: &Value) -> Result<Body, FixtureError> {
@@ -1515,19 +1651,13 @@ fn assert_response(
             }
         }
         ExpectedOutcome::Success => match step.action {
-            ActionSource::List => {
-                let object = exact_object(document, &["items", "pageInfo"])?;
+            ActionSource::List | ActionSource::Query { .. } | ActionSource::ReadPath { .. } => {
+                let object = exact_object(document, &["items", "nextCursor"])?;
                 let items = object
                     .get("items")
                     .and_then(Value::as_array)
                     .ok_or(FixtureError::ResponseShapeRefused)?;
-                let page_info = exact_object(
-                    object
-                        .get("pageInfo")
-                        .ok_or(FixtureError::ResponseShapeRefused)?,
-                    &["nextCursor"],
-                )?;
-                if !page_info.get("nextCursor").is_some_and(|cursor| {
+                if !object.get("nextCursor").is_some_and(|cursor| {
                     cursor.is_null()
                         || cursor.as_str().is_some_and(|value| {
                             !value.is_empty() && value.len() <= MAX_BINDING_BYTES
@@ -1567,7 +1697,10 @@ fn assert_response(
                     assert_record_members(object, &step.profile.readable_fields, &Map::new())?;
                 }
             }
-            ActionSource::Create { .. } | ActionSource::Get { .. } | ActionSource::Patch { .. } => {
+            ActionSource::Create { .. }
+            | ActionSource::Get { .. }
+            | ActionSource::Lookup { .. }
+            | ActionSource::Patch { .. } => {
                 assert_record_shape(document, &step.profile.readable_fields, &step.expect.fields)?;
             }
         },
@@ -1678,6 +1811,14 @@ pub struct FixtureSourceFile<'a> {
 #[cfg(any(test, feature = "postgres-test"))]
 pub struct FixtureModuleSource<'a> {
     pub id: &'a str,
+    pub path: &'a str,
+    pub bytes: &'a [u8],
+    pub assets: &'a [FixtureModuleAssetSource<'a>],
+}
+
+/// One exact module asset source in deterministic module-relative order.
+#[cfg(any(test, feature = "postgres-test"))]
+pub struct FixtureModuleAssetSource<'a> {
     pub path: &'a str,
     pub bytes: &'a [u8],
 }
@@ -1965,7 +2106,9 @@ fn validate_schema_test_candidate(
     {
         return Err(FixtureError::CandidateBindingRefused);
     }
+    validate_manifest_source_asset_inventory(manifest)?;
     let mut modules = Vec::with_capacity(sources.modules.len());
+    let mut module_assets = Vec::new();
     for ((captured, locked), source) in manifest
         .sources
         .modules
@@ -1989,7 +2132,8 @@ fn validate_schema_test_candidate(
         }
         let module =
             parse_module_yaml(source.bytes).map_err(|_| FixtureError::CandidateBindingRefused)?;
-        let digest = module_digest(&module);
+        let assets = validate_source_module_assets(manifest, captured, source)?;
+        let digest = module_digest_with_assets(&module, &assets);
         if module.id != source.id
             || module.version != locked.version
             || locked.digest.as_deref() != Some(digest.as_str())
@@ -1997,10 +2141,16 @@ fn validate_schema_test_candidate(
             return Err(FixtureError::CandidateBindingRefused);
         }
         modules.push(module);
+        module_assets.extend(assets);
     }
 
-    let compiled = compile_project(&project, &modules, CompileProfile::Production)
-        .map_err(|_| FixtureError::CandidateBindingRefused)?;
+    let compiled = compile_project_with_assets(
+        &project,
+        &modules,
+        &module_assets,
+        CompileProfile::Production,
+    )
+    .map_err(|_| FixtureError::CandidateBindingRefused)?;
     if compiled != *package.registry() {
         return Err(FixtureError::CandidateBindingRefused);
     }
@@ -2106,7 +2256,9 @@ fn derive_prepared_schema_test_candidate(
     if project.modules.len() != manifest.sources.modules.len() {
         return Err(FixtureError::CandidateBindingRefused);
     }
+    validate_manifest_source_asset_inventory(manifest)?;
     let mut modules = Vec::with_capacity(manifest.sources.modules.len());
+    let mut module_assets = Vec::new();
     for (locked, captured) in project.modules.iter().zip(&manifest.sources.modules) {
         if locked.id != captured.id {
             return Err(FixtureError::CandidateBindingRefused);
@@ -2117,18 +2269,26 @@ fn derive_prepared_schema_test_candidate(
         if module_bytes.is_empty() || module_bytes.len() > MAX_SOURCE_BYTES {
             return Err(FixtureError::CandidateBindingRefused);
         }
+        let assets = prepared_module_assets(captured, files)?;
         let module =
             parse_module_yaml(module_bytes).map_err(|_| FixtureError::CandidateBindingRefused)?;
         if module.id != captured.id
             || module.version != locked.version
-            || locked.digest.as_deref() != Some(module_digest(&module).as_str())
+            || locked.digest.as_deref()
+                != Some(module_digest_with_assets(&module, &assets).as_str())
         {
             return Err(FixtureError::CandidateBindingRefused);
         }
         modules.push(module);
+        module_assets.extend(assets);
     }
-    let compiled = compile_project(&project, &modules, CompileProfile::Production)
-        .map_err(|_| FixtureError::CandidateBindingRefused)?;
+    let compiled = compile_project_with_assets(
+        &project,
+        &modules,
+        &module_assets,
+        CompileProfile::Production,
+    )
+    .map_err(|_| FixtureError::CandidateBindingRefused)?;
     let project_identity = compiled
         .package()
         .ok_or(FixtureError::CandidateBindingRefused)?;
@@ -2201,6 +2361,119 @@ fn prepared_files_match_manifest(package: &PreparedPackage) -> bool {
     })
 }
 
+fn validate_manifest_source_asset_inventory(
+    manifest: &crate::package::PackageManifest,
+) -> Result<(), FixtureError> {
+    let mut declared_paths = BTreeSet::new();
+    for module in &manifest.sources.modules {
+        let mut prior_asset = None;
+        for asset in &module.assets {
+            let package_path = source_module_asset_package_path(&module.id, asset)?;
+            if prior_asset.is_some_and(|prior: &str| prior >= asset.as_str())
+                || !declared_paths.insert(package_path)
+            {
+                return Err(FixtureError::CandidateBindingRefused);
+            }
+            prior_asset = Some(asset.as_str());
+        }
+    }
+    let file_paths = manifest
+        .files
+        .iter()
+        .filter(|file| file.role == PackageFileRole::SourceModuleAsset)
+        .map(|file| file.path.clone())
+        .collect::<BTreeSet<_>>();
+    if declared_paths != file_paths {
+        return Err(FixtureError::CandidateBindingRefused);
+    }
+    Ok(())
+}
+
+#[cfg(any(test, feature = "postgres-test"))]
+fn validate_source_module_assets(
+    manifest: &crate::package::PackageManifest,
+    captured: &crate::package::CapturedModule,
+    source: &FixtureModuleSource<'_>,
+) -> Result<Vec<ModuleAssetSource>, FixtureError> {
+    if source.assets.len() != captured.assets.len() {
+        return Err(FixtureError::CandidateBindingRefused);
+    }
+    let mut assets = Vec::with_capacity(source.assets.len());
+    let mut seen = BTreeSet::new();
+    for (expected, asset) in captured.assets.iter().zip(source.assets) {
+        let package_path = source_module_asset_package_path(&captured.id, asset.path)?;
+        if asset.path != expected
+            || asset.bytes.is_empty()
+            || asset.bytes.len() > MAX_DERIVED_SQL_BYTES
+            || !seen.insert(asset.path)
+            || !manifest_file_matches(
+                manifest,
+                PackageFileRole::SourceModuleAsset,
+                &package_path,
+                asset.bytes,
+            )
+        {
+            return Err(FixtureError::CandidateBindingRefused);
+        }
+        assets.push(ModuleAssetSource {
+            module: Some(source.id.to_owned()),
+            path: asset.path.to_owned(),
+            bytes: asset.bytes.to_vec(),
+        });
+    }
+    Ok(assets)
+}
+
+fn prepared_module_assets(
+    captured: &crate::package::CapturedModule,
+    files: &BTreeMap<String, Vec<u8>>,
+) -> Result<Vec<ModuleAssetSource>, FixtureError> {
+    let mut assets = Vec::with_capacity(captured.assets.len());
+    for asset in &captured.assets {
+        let package_path = source_module_asset_package_path(&captured.id, asset)?;
+        let bytes = files
+            .get(&package_path)
+            .ok_or(FixtureError::CandidateBindingRefused)?;
+        if bytes.is_empty() || bytes.len() > MAX_DERIVED_SQL_BYTES {
+            return Err(FixtureError::CandidateBindingRefused);
+        }
+        assets.push(ModuleAssetSource {
+            module: Some(captured.id.clone()),
+            path: asset.clone(),
+            bytes: bytes.clone(),
+        });
+    }
+    Ok(assets)
+}
+
+fn source_module_asset_package_path(
+    module_id: &str,
+    asset_path: &str,
+) -> Result<String, FixtureError> {
+    if !valid_stable_id(module_id)
+        || asset_path.is_empty()
+        || asset_path.len() > 256
+        || asset_path.contains('\\')
+        || asset_path.starts_with('/')
+        || asset_path.ends_with('/')
+        || !asset_path.ends_with(".sql")
+        || asset_path == "module.yaml"
+    {
+        return Err(FixtureError::CandidateBindingRefused);
+    }
+    let mut components = 0usize;
+    for component in asset_path.split('/') {
+        components += 1;
+        if component.is_empty() || component == "." || component == ".." {
+            return Err(FixtureError::CandidateBindingRefused);
+        }
+    }
+    if components > 12 {
+        return Err(FixtureError::CandidateBindingRefused);
+    }
+    Ok(format!("source/modules/{module_id}/{asset_path}"))
+}
+
 fn manifest_file_matches(
     manifest: &crate::package::PackageManifest,
     role: PackageFileRole,
@@ -2230,6 +2503,10 @@ fn source_closure_sha256(
     for source in sources.modules {
         digest_part(&mut digest, source.id.as_bytes(), source.path.as_bytes());
         digest_part(&mut digest, source.path.as_bytes(), source.bytes);
+        for asset in source.assets {
+            let path = format!("source/modules/{}/{}", source.id, asset.path);
+            digest_part(&mut digest, path.as_bytes(), asset.bytes);
+        }
     }
     digest_part(
         &mut digest,
@@ -2258,6 +2535,13 @@ fn source_closure_sha256_from_package(package: &PreparedPackage) -> Result<Strin
             .ok_or(FixtureError::CandidateBindingRefused)?;
         digest_part(&mut digest, module.id.as_bytes(), module.path.as_bytes());
         digest_part(&mut digest, module.path.as_bytes(), bytes);
+        for asset in &module.assets {
+            let path = format!("source/modules/{}/{}", module.id, asset);
+            let bytes = files
+                .get(&path)
+                .ok_or(FixtureError::CandidateBindingRefused)?;
+            digest_part(&mut digest, path.as_bytes(), bytes);
+        }
     }
     let journeys = files
         .get(FIXTURE_JOURNEYS_PATH)
@@ -2314,7 +2598,9 @@ fn valid_stable_id(value: &str) -> bool {
 fn operation_method(operation: Operation) -> HttpMethod {
     match operation {
         Operation::Create | Operation::Batch => HttpMethod::Post,
-        Operation::Get | Operation::List | Operation::Revisions => HttpMethod::Get,
+        Operation::Get | Operation::List | Operation::Lookup | Operation::Revisions => {
+            HttpMethod::Get
+        }
         Operation::Patch => HttpMethod::Patch,
         Operation::Tombstone => HttpMethod::Delete,
     }
@@ -2339,6 +2625,7 @@ fn encoded_sha256(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
+    use crate::compiler::module_digest;
     use crate::package::{
         load_package, prepare_package, PackageBuildRequest, PackageIntent, PackageLoadContext,
         PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile, SignaturePolicy,
@@ -2625,6 +2912,7 @@ mod tests {
             id: "fixture-core",
             path: "sources/modules/fixture-core.yaml",
             bytes: &fixture.module,
+            assets: &[],
         }];
         let changed_project_sources = SchemaTestSources {
             project: FixtureSourceFile {
@@ -2652,6 +2940,7 @@ mod tests {
             id: "fixture-core",
             path: "sources/modules/fixture-core.yaml",
             bytes: &changed_module,
+            assets: &[],
         }];
         let changed_module_sources = SchemaTestSources {
             project: FixtureSourceFile {
@@ -2829,7 +3118,7 @@ mod tests {
 
         let malformed_list = json!({
             "items": [{"id": identifier, "revision": 1, "data": {"record_id": "canary"}}],
-            "pageInfo": {"nextCursor": null}
+            "nextCursor": null
         });
         assert!(
             assert_response(&suite.journeys[0].steps[2], StatusCode::OK, &malformed_list,).is_err()
@@ -2877,6 +3166,7 @@ mod tests {
             id: "fixture-core",
             path: "sources/modules/fixture-core.yaml",
             bytes: &fixture.module,
+            assets: &[],
         }];
         validate_schema_test_candidate(
             &fixture.package,
@@ -2929,6 +3219,7 @@ mod tests {
                 id: "fixture-core".to_owned(),
                 path: "sources/modules/fixture-core.yaml".to_owned(),
                 bytes: MODULE_SOURCE.to_vec(),
+                assets: Vec::new(),
             }],
             fixture_journeys: PackageSourceFile {
                 path: FIXTURE_JOURNEYS_PATH.to_owned(),
@@ -3000,6 +3291,7 @@ mod tests {
                 id: "fixture-core".to_owned(),
                 path: "sources/modules/fixture-core.yaml".to_owned(),
                 bytes: MODULE_SOURCE.to_vec(),
+                assets: Vec::new(),
             }],
             fixture_journeys: PackageSourceFile {
                 path: FIXTURE_JOURNEYS_PATH.to_owned(),
@@ -3104,7 +3396,7 @@ mod tests {
             ),
             2 => (
                 200,
-                json!({"items":[{"id":id,"revision":1,"data":{"jurisdiction":"zone-a","label":"first","note":"initial","quantity":1}}],"pageInfo":{"nextCursor":null}}),
+                json!({"items":[{"id":id,"revision":1,"data":{"jurisdiction":"zone-a","label":"first","note":"initial","quantity":1}}],"nextCursor":null}),
                 None,
             ),
             3 => (

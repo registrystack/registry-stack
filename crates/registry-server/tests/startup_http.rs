@@ -87,6 +87,13 @@ impl RecordReadService for NoopRecords {
                 .map_err(|_| ReadServiceError::Unavailable)
         })
     }
+
+    fn lookup(
+        &self,
+        _request: RecordReadRequest,
+    ) -> ServiceFuture<'_, Result<Option<HeldReadResponse>, ReadServiceError>> {
+        Box::pin(async { Ok(None) })
+    }
 }
 
 struct SlowReadiness;
@@ -404,7 +411,7 @@ async fn provenance_operational_logs_metrics_and_traces_are_separate_closed_and_
                 JwkSet { keys: Vec::new() },
                 JwksFetcherConfig::defaults(),
             )),
-            AuthorityClaimConfig::new("registry_principal", None, Vec::new()),
+            AuthorityClaimConfig::new("registry_principal", None),
         )
         .expect("anonymous Registry has a valid production authenticator"),
     );
@@ -729,9 +736,6 @@ authentication:
   authorityClaims:
     principal: registry_principal
     purpose: registry_purpose
-    rowBoundaryClaims:
-      - {{name: jurisdiction, type: directStringSet}}
-      - {{name: tenant, type: directString}}
 audit:
   hashKeyRef: secret:file/audit-key
 cursor:

@@ -17,7 +17,7 @@ scenarios:
     state: enforced
     domain: household
     fixture: acceptance/publicschema-household
-    doneWhen: "Household, two persons, and current and historical membership run without privileged runtime concepts."
+    doneWhen: "Household, person, membership, selector, derived demographic, and read-path surfaces run without privileged runtime concepts."
     evidence: [{path: crates/registry-server/tests/postgres_pilot_acceptance.rs, name: real_postgres_five_domain_pilot_is_configured_production_closed_and_source_neutral}]
   - id: RS-J04
     state: enforced

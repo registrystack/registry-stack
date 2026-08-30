@@ -14,11 +14,13 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::artifacts::REGISTRY_METADATA_ARTIFACT_PATH;
-use crate::compiler::{compile_project, CompileProfile};
+use crate::compiler::{compile_project_with_assets, CompileProfile};
 use crate::contract::{
-    parse_module_yaml, parse_project_yaml, FieldTypeSource, RegistryModule, RegistryProject,
+    parse_module_yaml, parse_project_yaml, FieldTypeSource, ModuleAssetSource, RegistryModule,
+    RegistryProject,
 };
-use crate::generated_ddl::{add_column_statement, DdlStatement};
+use crate::derived_sql::MAX_DERIVED_SQL_BYTES;
+use crate::generated_ddl::{add_column_statement, DdlStatement, DdlStatementKind};
 #[cfg(feature = "tooling")]
 use crate::migration_plan::{
     prepare_reviewed_migration_plan, validate_reviewed_migration_plan,
@@ -118,6 +120,8 @@ pub struct CapturedSources {
 pub struct CapturedModule {
     pub id: String,
     pub path: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assets: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -134,6 +138,7 @@ pub struct PackageFile {
 pub enum PackageFileRole {
     SourceProject,
     SourceModule,
+    SourceModuleAsset,
     FixtureJourneys,
     GovernedModel,
     PhysicalNameInventory,
@@ -248,6 +253,9 @@ pub enum CompiledRegistryChangeCode {
     FieldRequirednessChanged,
     FieldClassificationChanged,
     FieldTemporalRoleChanged,
+    DerivedRelationAdded,
+    DerivedRelationRemoved,
+    DerivedRelationChanged,
     ReferenceTargetChanged,
     ConstraintAdded,
     ConstraintRemoved,
@@ -283,6 +291,7 @@ pub enum CompiledRegistryChangeTargetKind {
     Registry,
     Entity,
     Field,
+    DerivedRelation,
     Constraint,
     Index,
     AccessProfile,
@@ -689,6 +698,7 @@ pub struct PackageModuleSource {
     pub id: String,
     pub path: String,
     pub bytes: Vec<u8>,
+    pub assets: Vec<PackageSourceFile>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -981,6 +991,7 @@ fn compare_entities(
             );
         }
         compare_fields(entity_id, previous_entity, candidate_entity, changes);
+        compare_derived_relations(entity_id, previous_entity, candidate_entity, changes);
         compare_map(
             entity_id,
             &previous_entity.constraints,
@@ -1045,6 +1056,64 @@ fn compare_entities(
                     CompiledRegistryChangeTargetKind::Entity,
                     Some(entity_id.as_str()),
                     None,
+                ),
+            );
+        }
+    }
+}
+
+fn compare_derived_relations(
+    entity_id: &str,
+    previous: &CompiledEntity,
+    candidate: &CompiledEntity,
+    changes: &mut Vec<CompiledRegistryChange>,
+) {
+    for (relation_id, previous_relation) in &previous.derived_relations {
+        match candidate.derived_relations.get(relation_id) {
+            Some(candidate_relation) if previous_relation == candidate_relation => {}
+            Some(candidate_relation) => {
+                let class = if previous_relation.sql_path == candidate_relation.sql_path
+                    && previous_relation.key_field == candidate_relation.key_field
+                    && previous_relation.execution == candidate_relation.execution
+                    && previous_relation.fields == candidate_relation.fields
+                {
+                    CompiledRegistryChangeClass::CompatibleAdditive
+                } else {
+                    CompiledRegistryChangeClass::DestructiveOrIrreversible
+                };
+                push_change(
+                    changes,
+                    class,
+                    CompiledRegistryChangeCode::DerivedRelationChanged,
+                    target(
+                        CompiledRegistryChangeTargetKind::DerivedRelation,
+                        Some(entity_id),
+                        Some(relation_id.as_str()),
+                    ),
+                );
+            }
+            None => push_change(
+                changes,
+                CompiledRegistryChangeClass::DestructiveOrIrreversible,
+                CompiledRegistryChangeCode::DerivedRelationRemoved,
+                target(
+                    CompiledRegistryChangeTargetKind::DerivedRelation,
+                    Some(entity_id),
+                    Some(relation_id.as_str()),
+                ),
+            ),
+        }
+    }
+    for relation_id in candidate.derived_relations.keys() {
+        if !previous.derived_relations.contains_key(relation_id) {
+            push_change(
+                changes,
+                CompiledRegistryChangeClass::CompatibleAdditive,
+                CompiledRegistryChangeCode::DerivedRelationAdded,
+                target(
+                    CompiledRegistryChangeTargetKind::DerivedRelation,
+                    Some(entity_id),
+                    Some(relation_id.as_str()),
                 ),
             );
         }
@@ -1372,6 +1441,7 @@ fn additive_migration_plan(
     changes: Vec<CompiledRegistryChange>,
 ) -> MigrationPlan {
     let mut new_statement_ids = BTreeSet::<String>::new();
+    let mut replacement_view_statement_ids = BTreeSet::<String>::new();
     let mut added_columns = BTreeMap::<String, Vec<DdlStatement>>::new();
 
     for (entity_id, candidate_entity) in candidate.entities() {
@@ -1398,6 +1468,29 @@ fn additive_migration_plan(
                     new_statement_ids
                         .insert(format!("entity.{entity_id}.field.{field_id}.reference"));
                 }
+                let source_view_id = format!("entity.{entity_id}.source-view");
+                replacement_view_statement_ids.insert(source_view_id.clone());
+                new_statement_ids.insert(source_view_id);
+            }
+        }
+        for (relation_id, relation) in &candidate_entity.derived_relations {
+            match previous_entity.derived_relations.get(relation_id) {
+                Some(previous)
+                    if previous.sql_path == relation.sql_path
+                        && previous.key_field == relation.key_field
+                        && previous.execution == relation.execution
+                        && previous.fields == relation.fields
+                        && previous != relation =>
+                {
+                    let derived_view_id = format!("entity.{entity_id}.derived.{relation_id}.view");
+                    replacement_view_statement_ids.insert(derived_view_id.clone());
+                    new_statement_ids.insert(derived_view_id);
+                }
+                None => {
+                    new_statement_ids
+                        .insert(format!("entity.{entity_id}.derived.{relation_id}.view"));
+                }
+                _ => {}
             }
         }
         for constraint_id in candidate_entity.constraints.keys() {
@@ -1420,7 +1513,13 @@ fn additive_migration_plan(
             }
         }
         if new_statement_ids.contains(statement.id.as_str()) {
-            statements.push(statement.clone());
+            statements.push(
+                if replacement_view_statement_ids.contains(statement.id.as_str()) {
+                    replacement_statement(statement)
+                } else {
+                    statement.clone()
+                },
+            );
         }
     }
     MigrationPlan {
@@ -1430,6 +1529,20 @@ fn additive_migration_plan(
         statements,
         reviewed_descriptors: Vec::new(),
         prior_schema_fingerprint: None,
+    }
+}
+
+fn replacement_statement(statement: &DdlStatement) -> DdlStatement {
+    if statement.kind != DdlStatementKind::View {
+        return statement.clone();
+    }
+    DdlStatement {
+        id: statement.id.clone(),
+        kind: statement.kind,
+        sql: statement.sql.strip_prefix("CREATE VIEW ").map_or_else(
+            || statement.sql.clone(),
+            |suffix| format!("CREATE OR REPLACE VIEW {suffix}"),
+        ),
     }
 }
 
@@ -1521,7 +1634,15 @@ fn target(
     }
 }
 
-pub fn prepare_package(request: PackageBuildRequest) -> Result<PreparedPackage> {
+pub fn prepare_package(mut request: PackageBuildRequest) -> Result<PreparedPackage> {
+    request
+        .modules
+        .sort_by(|left, right| left.id.cmp(&right.id));
+    for module in &mut request.modules {
+        module
+            .assets
+            .sort_by(|left, right| left.path.cmp(&right.path));
+    }
     validate_build_identity(&request)?;
     validate_relative(&request.project.path)?;
     if request.fixture_journeys.path != FIXTURE_JOURNEYS_PATH
@@ -1547,8 +1668,14 @@ pub fn prepare_package(request: PackageBuildRequest) -> Result<PreparedPackage> 
             Ok(module)
         })
         .collect::<Result<Vec<_>>>()?;
-    let compiled = compile_project(&project, &modules, CompileProfile::Production)
-        .map_err(|_| PackageError::Derivation)?;
+    let module_assets = package_module_assets(&request.modules)?;
+    let compiled = compile_project_with_assets(
+        &project,
+        &modules,
+        &module_assets,
+        CompileProfile::Production,
+    )
+    .map_err(|_| PackageError::Derivation)?;
     validate_build_bindings(&request, &project, &compiled)?;
 
     let (migration_plan, reviewed_files): (MigrationPlan, BTreeMap<String, Vec<u8>>) = match request
@@ -1636,6 +1763,12 @@ pub fn prepare_package(request: PackageBuildRequest) -> Result<PreparedPackage> 
         {
             return Err(PackageError::Closure);
         }
+        for asset in &module.assets {
+            let path = package_module_asset_path(&module.id, &asset.path)?;
+            if files.insert(path, asset.bytes.clone()).is_some() {
+                return Err(PackageError::Closure);
+            }
+        }
     }
     if files
         .insert(
@@ -1666,6 +1799,14 @@ pub fn prepare_package(request: PackageBuildRequest) -> Result<PreparedPackage> 
             PackageFileRole::SourceModule,
             &module.bytes,
         )?);
+        for asset in &module.assets {
+            let path = package_module_asset_path(&module.id, &asset.path)?;
+            entries.push(file_entry(
+                &path,
+                PackageFileRole::SourceModuleAsset,
+                &asset.bytes,
+            )?);
+        }
     }
     entries.push(file_entry(
         &request.fixture_journeys.path,
@@ -1676,6 +1817,12 @@ pub fn prepare_package(request: PackageBuildRequest) -> Result<PreparedPackage> 
         if path == &request.project.path
             || path == &request.fixture_journeys.path
             || request.modules.iter().any(|module| module.path == *path)
+            || request.modules.iter().any(|module| {
+                module.assets.iter().any(|asset| {
+                    package_module_asset_path(&module.id, &asset.path)
+                        .is_ok_and(|asset_path| asset_path == *path)
+                })
+            })
         {
             continue;
         }
@@ -1705,6 +1852,7 @@ pub fn prepare_package(request: PackageBuildRequest) -> Result<PreparedPackage> 
                 .modules
                 .into_iter()
                 .map(|module| CapturedModule {
+                    assets: module.assets.into_iter().map(|asset| asset.path).collect(),
                     id: module.id,
                     path: module.path,
                 })
@@ -1724,6 +1872,42 @@ pub fn prepare_package(request: PackageBuildRequest) -> Result<PreparedPackage> 
         files,
         signed_bytes,
     })
+}
+
+fn package_module_assets(modules: &[PackageModuleSource]) -> Result<Vec<ModuleAssetSource>> {
+    let mut assets = Vec::new();
+    let mut paths = BTreeSet::new();
+    for module in modules {
+        validate_relative(&module.id)?;
+        for asset in &module.assets {
+            validate_relative(&asset.path)?;
+            if !asset.path.ends_with(".sql")
+                || asset.path == "module.yaml"
+                || asset.bytes.is_empty()
+                || asset.bytes.len() > MAX_DERIVED_SQL_BYTES
+                || !paths.insert((module.id.as_str(), asset.path.as_str()))
+            {
+                return Err(PackageError::Derivation);
+            }
+            assets.push(ModuleAssetSource {
+                module: Some(module.id.clone()),
+                path: asset.path.clone(),
+                bytes: asset.bytes.clone(),
+            });
+        }
+    }
+    Ok(assets)
+}
+
+fn package_module_asset_path(module_id: &str, asset_path: &str) -> Result<String> {
+    validate_relative(module_id)?;
+    validate_relative(asset_path)?;
+    if !asset_path.ends_with(".sql") || asset_path == "module.yaml" {
+        return Err(PackageError::Derivation);
+    }
+    let path = format!("source/modules/{module_id}/{asset_path}");
+    validate_relative(&path)?;
+    Ok(path)
 }
 
 /// Return the exact canonical bytes signed by every package signer.
@@ -1864,6 +2048,12 @@ fn package_role_for_path(path: &str) -> Result<PackageFileRole> {
     }
     Ok(match path {
         FIXTURE_JOURNEYS_PATH => PackageFileRole::FixtureJourneys,
+        path if path.starts_with("source/modules/")
+            && path.ends_with(".sql")
+            && !path.ends_with("/module.yaml") =>
+        {
+            PackageFileRole::SourceModuleAsset
+        }
         "effective-model.json" => PackageFileRole::GovernedModel,
         "inventories/physical-names.json" => PackageFileRole::PhysicalNameInventory,
         "inventories/routes.json" => PackageFileRole::RouteInventory,
@@ -2531,9 +2721,15 @@ fn rederive(
                 .and_then(|bytes| parse_module_yaml(bytes).map_err(|_| PackageError::Derivation))
         })
         .collect::<Result<Vec<RegistryModule>>>()?;
+    let module_assets = captured_module_assets(manifest, loaded)?;
     validate_captured_bindings(manifest, &project, &modules)?;
-    let compiled = compile_project(&project, &modules, CompileProfile::Production)
-        .map_err(|_| PackageError::Derivation)?;
+    let compiled = compile_project_with_assets(
+        &project,
+        &modules,
+        &module_assets,
+        CompileProfile::Production,
+    )
+    .map_err(|_| PackageError::Derivation)?;
     if compiled.registry_id() != manifest.package_id {
         return Err(PackageError::Derivation);
     }
@@ -2547,6 +2743,7 @@ fn rederive(
                 entry.role,
                 PackageFileRole::SourceProject
                     | PackageFileRole::SourceModule
+                    | PackageFileRole::SourceModuleAsset
                     | PackageFileRole::FixtureJourneys
             ) && !reviewed_package_role(entry.role)
         })
@@ -2568,6 +2765,31 @@ fn rederive(
     validate_migration_plan(manifest, &compiled)?;
     let reviewed_migration_plan = rederive_reviewed_migration_plan(manifest, loaded, &compiled)?;
     Ok((compiled, reviewed_migration_plan))
+}
+
+fn captured_module_assets(
+    manifest: &PackageManifest,
+    loaded: &BTreeMap<String, Vec<u8>>,
+) -> Result<Vec<ModuleAssetSource>> {
+    let mut assets = Vec::new();
+    for module in &manifest.sources.modules {
+        for asset_path in &module.assets {
+            let package_path = package_module_asset_path(&module.id, asset_path)?;
+            let bytes = loaded
+                .get(&package_path)
+                .ok_or(PackageError::Derivation)?
+                .clone();
+            if bytes.is_empty() || bytes.len() > MAX_DERIVED_SQL_BYTES {
+                return Err(PackageError::Derivation);
+            }
+            assets.push(ModuleAssetSource {
+                module: Some(module.id.clone()),
+                path: asset_path.clone(),
+                bytes,
+            });
+        }
+    }
+    Ok(assets)
 }
 
 fn reviewed_artifact_files(
@@ -2679,6 +2901,7 @@ fn validate_source_inventory(manifest: &PackageManifest) -> Result<()> {
     }
     let mut prior_id = None;
     let mut module_paths = BTreeSet::new();
+    let mut asset_paths = BTreeSet::new();
     for module in &manifest.sources.modules {
         validate_relative(&module.path)?;
         if module.id.is_empty()
@@ -2686,6 +2909,16 @@ fn validate_source_inventory(manifest: &PackageManifest) -> Result<()> {
             || !module_paths.insert(module.path.as_str())
         {
             return Err(PackageError::Derivation);
+        }
+        let mut prior_asset = None;
+        for asset in &module.assets {
+            let package_path = package_module_asset_path(&module.id, asset)?;
+            if prior_asset.is_some_and(|prior: &str| prior >= asset.as_str())
+                || !asset_paths.insert(package_path)
+            {
+                return Err(PackageError::Derivation);
+            }
+            prior_asset = Some(asset.as_str());
         }
         prior_id = Some(module.id.as_str());
     }
@@ -2704,11 +2937,21 @@ fn validate_source_inventory(manifest: &PackageManifest) -> Result<()> {
     if declared_paths != file_paths {
         return Err(PackageError::Derivation);
     }
+    let file_asset_paths = manifest
+        .files
+        .iter()
+        .filter(|entry| entry.role == PackageFileRole::SourceModuleAsset)
+        .map(|entry| entry.path.clone())
+        .collect::<BTreeSet<_>>();
+    if asset_paths != file_asset_paths {
+        return Err(PackageError::Derivation);
+    }
     for entry in &manifest.files {
         if matches!(
             entry.role,
             PackageFileRole::SourceProject
                 | PackageFileRole::SourceModule
+                | PackageFileRole::SourceModuleAsset
                 | PackageFileRole::FixtureJourneys
         ) {
             continue;

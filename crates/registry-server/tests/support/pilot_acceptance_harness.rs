@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -17,7 +16,7 @@ use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
 use registry_platform_testing::MockIdp;
 use registry_server::compiler::{compile_project, CompileProfile};
 use registry_server::contract::{
-    parse_module_yaml, parse_project_yaml, BoundaryOperator, Operation, RegistryProject,
+    parse_module_yaml, parse_project_yaml, Operation, RegistryProject,
 };
 use registry_server::package::{
     load_package, PackageBuildRequest, PackageIntent, PackageLoadContext,
@@ -374,6 +373,7 @@ impl PublishedPackage {
                     id: id.clone(),
                     path: format!("source/modules/{id}/module.yaml"),
                     bytes: bytes.clone(),
+                    assets: Vec::new(),
                 })
                 .collect(),
             fixture_journeys: PackageSourceFile {
@@ -512,7 +512,7 @@ fn write_runtime_config(
     database_id: &str,
     database: &TestDatabase,
     idp: &MockIdp,
-    registry: &CompiledRegistry,
+    _registry: &CompiledRegistry,
 ) -> PathBuf {
     let secrets = root.join("secrets");
     fs::create_dir(&secrets).expect("pilot secret root creates");
@@ -522,7 +522,6 @@ fn write_runtime_config(
     );
     write_secret(&secrets.join("audit-key"), &[0x6b; 32]);
     write_secret(&secrets.join("cursor-key"), &[0x43; 32]);
-    let row_boundary_claims = runtime_row_boundary_claims(registry);
     let path = root.join("runtime.yaml");
     fs::write(
         &path,
@@ -574,7 +573,7 @@ authentication:
       outageToleranceSeconds: 0
   authorityClaims:
     principal: registry_principal
-    purpose: purpose{row_boundary_claims}
+    purpose: purpose
 audit:
   hashKeyRef: secret:file/audit-key
 cursor:
@@ -604,36 +603,6 @@ operationalTimeouts:
     .expect("strict pilot runtime configuration writes");
     set_private_permissions(&path);
     path
-}
-
-fn runtime_row_boundary_claims(registry: &CompiledRegistry) -> String {
-    let mut claims = BTreeMap::new();
-    for entity in registry.entities().values() {
-        for profile in entity.access_profiles.values() {
-            for boundary in &profile.row_boundaries {
-                let value_type = match boundary.operator {
-                    BoundaryOperator::Equals => "directString",
-                    BoundaryOperator::In => "directStringSet",
-                };
-                if let Some(previous) = claims.insert(boundary.claim.as_str(), value_type) {
-                    assert_eq!(
-                        previous, value_type,
-                        "one verified authority claim cannot have conflicting compiled types"
-                    );
-                }
-            }
-        }
-    }
-    if claims.is_empty() {
-        return String::new();
-    }
-    let mut yaml = String::from("\n    rowBoundaryClaims:");
-    for (name, value_type) in claims {
-        yaml.push_str(&format!(
-            "\n      - name: {name}\n        type: {value_type}"
-        ));
-    }
-    yaml
 }
 
 fn write_secret(path: &Path, bytes: &[u8]) {

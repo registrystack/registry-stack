@@ -14,18 +14,23 @@ use tokio_postgres::types::ToSql;
 use uuid::Uuid;
 
 use crate::api::{
-    AuthorizedRequestContext, HeldReadResponse, ReadServiceError, RecordReadRequest,
-    RecordReadService, RowBoundaryOperator as ApiRowBoundaryOperator, ServiceFuture,
+    AuthorizedRequestContext, HeldReadResponse, LookupSelectorValue, ReadFilterExpr,
+    ReadFilterOperator, ReadFilterPredicate, ReadLogicalOp, ReadOrderClause, ReadProjectionField,
+    ReadServiceError, RecordReadKind, RecordReadRequest, RecordReadService,
+    RowBoundaryOperator as ApiRowBoundaryOperator, ServiceFuture,
 };
 use crate::audit::{
     append_read_terminal_audit, profile_is_keyed, record_pre_io_audit, PreIoAudit, PreIoAuditKind,
     ReadTerminalAudit, TerminalAudit, TerminalAuditOutcome,
 };
 use crate::contract::{FieldTypeSource, Operation};
-use crate::cursor::{now_unix_seconds, CursorCodec, CursorContinuation};
+use crate::cursor::{
+    now_unix_seconds, CursorCodec, CursorContinuation, CursorFilterExpr, CursorFilterOperator,
+    CursorLogicalOp, CursorOrderClause, CursorProjectionField, CursorQueryScope,
+};
 use crate::model::{
-    CompiledEntity, CompiledQueryFilterOperator, CompiledQueryKind, CompiledQueryOperation,
-    CompiledQuerySortDirection, CompiledRegistry,
+    CompiledEntity, CompiledQueryKind, CompiledQueryOperation, CompiledQuerySortDirection,
+    CompiledReadPath, CompiledRegistry,
 };
 use crate::mutation::strong_record_etag;
 
@@ -80,14 +85,12 @@ impl PostgresRecordReadService {
         self
     }
 
-    async fn execute(
-        &self,
-        request: RecordReadRequest,
-        operation: Operation,
-    ) -> Result<ReadResult, ReadServiceError> {
+    async fn execute(&self, request: RecordReadRequest) -> Result<ReadResult, ReadServiceError> {
         if !profile_is_keyed(&self.audit_profile) {
             return Err(ReadServiceError::Unavailable);
         }
+        let operation = request_operation(&request.kind);
+        let target_record = target_record(&request.kind);
         let mut client = self
             .pool
             .get()
@@ -99,7 +102,6 @@ impl PostgresRecordReadService {
             &self.expected,
             self.cursors.as_ref(),
             &request,
-            operation,
         ) {
             Ok(plan) => plan,
             Err(()) => {
@@ -114,7 +116,7 @@ impl PostgresRecordReadService {
                         kind: PreIoAuditKind::Refusal,
                         method: request.method,
                         operation_id: &request.operation_id,
-                        target_record: request.record_id.as_deref(),
+                        target_record,
                     },
                 )
                 .await
@@ -122,12 +124,7 @@ impl PostgresRecordReadService {
                 return Ok(ReadResult::empty_get());
             }
         };
-        if operation == Operation::Get
-            && !request
-                .record_id
-                .as_deref()
-                .is_some_and(valid_canonical_uuid)
-        {
+        if operation == Operation::Get && !target_record.is_some_and(valid_canonical_uuid) {
             record_pre_io_audit(
                 &mut client,
                 self.lock_key,
@@ -139,7 +136,7 @@ impl PostgresRecordReadService {
                     kind: PreIoAuditKind::Refusal,
                     method: request.method,
                     operation_id: &request.operation_id,
-                    target_record: request.record_id.as_deref(),
+                    target_record,
                 },
             )
             .await
@@ -158,7 +155,7 @@ impl PostgresRecordReadService {
                 kind: PreIoAuditKind::Attempt,
                 method: request.method,
                 operation_id: &request.operation_id,
-                target_record: request.record_id.as_deref(),
+                target_record,
             },
         )
         .await
@@ -189,10 +186,7 @@ impl PostgresRecordReadService {
         let mut held = ReadResult::from_materialized(plan.operation, materialized)?;
         if plan.operation == Operation::Get && held.response.is_some() {
             let response = held.response.take().ok_or(ReadServiceError::Unavailable)?;
-            let record_id = request
-                .record_id
-                .as_deref()
-                .ok_or(ReadServiceError::Unavailable)?;
+            let record_id = target_record.ok_or(ReadServiceError::Unavailable)?;
             let record_revision = held.record_revision.ok_or(ReadServiceError::Unavailable)?;
             let etag = strong_record_etag(
                 &self.audit_profile,
@@ -206,10 +200,10 @@ impl PostgresRecordReadService {
             held.response = Some(response.with_strong_etag(etag));
         }
         self.fault.fail_at(ReadFaultPoint::BeforeTerminalAudit)?;
-        let outcome = if held.result_count == 0 {
-            TerminalAuditOutcome::Empty
-        } else {
-            TerminalAuditOutcome::Returned
+        let outcome = match (plan.operation, held.result_count) {
+            (Operation::Lookup, 0) => TerminalAuditOutcome::Unresolved,
+            (_, 0) => TerminalAuditOutcome::Empty,
+            _ => TerminalAuditOutcome::Returned,
         };
         self.record_read_terminal_audit(
             &mut client,
@@ -250,13 +244,9 @@ impl PostgresRecordReadService {
             &self.audit_profile,
             ReadTerminalAudit {
                 terminal,
-                query_reference: request
-                    .query
-                    .as_ref()
+                query_reference: request_query(&request.kind)
                     .map(|query| query.cursor_binding.query_reference.clone()),
-                row_boundary_reference: request
-                    .query
-                    .as_ref()
+                row_boundary_reference: request_query(&request.kind)
                     .map(|query| query.cursor_binding.row_boundary_reference.clone()),
             },
         )
@@ -283,31 +273,53 @@ impl PostgresRecordReadService {
         )
         .await
         .map_err(|_| ReadServiceError::Unavailable)?;
-        let selected_fields = request.selected_fields.iter().cloned().collect::<Vec<_>>();
-        let projection = projection(
-            &plan.entity,
-            &selected_fields,
-            request
-                .query
+        let query = request_query(&request.kind);
+        install_evaluation_date(transaction.transaction(), query).await?;
+        if let RecordReadKind::Relationship {
+            root_id, path_id, ..
+        } = &request.kind
+        {
+            install_read_path_context(transaction.transaction(), path_id, root_id).await?;
+        }
+        let selected_fields = if let Some(query) = query {
+            query
+                .projection
+                .iter()
+                .map(|field| field.field_id.clone())
+                .collect::<Vec<_>>()
+        } else {
+            request.selected_fields.iter().cloned().collect::<Vec<_>>()
+        };
+        let relations = if let Some(path) = &plan.read_path {
+            let root_id = match &request.kind {
+                RecordReadKind::Relationship {
+                    root_id, path_id, ..
+                } if path_id == &path.id => root_id.as_str(),
+                _ => return Err(ReadServiceError::Unavailable),
+            };
+            let through = plan
+                .through_entity
                 .as_ref()
-                .and_then(|query| query.sort.as_deref()),
-        )?;
-        let table = quote_identifier(&plan.entity.physical_table);
+                .ok_or(ReadServiceError::Unavailable)?;
+            ReadRelations::relationship(&plan.source_entity, through, &plan.entity, path, root_id)?
+        } else {
+            ReadRelations::collection(&plan.entity)?
+        };
+        let projection = projection(&plan.entity, &relations, &selected_fields, query)?;
         let limit =
             i64::try_from(request.maximum_records).map_err(|_| ReadServiceError::Unavailable)?;
+        let mut total_count = None;
         let rows = match plan.operation {
             Operation::Get => {
                 let sql = format!(
                     "SELECT {projection}
-                     FROM registry_data.{table}
-                     WHERE record_id = $1::text::uuid
-                       AND record_lifecycle = 'active'
-                     LIMIT 1"
+                     FROM {}
+                     WHERE {} = $1::text::uuid
+                     LIMIT 1",
+                    relations.from_sql, relations.id_expression
                 );
-                let record_id = request
-                    .record_id
-                    .as_deref()
-                    .ok_or(ReadServiceError::Unavailable)?;
+                let record_id =
+                    target_record(&request.kind).ok_or(ReadServiceError::Unavailable)?;
                 transaction
                     .transaction()
                     .query(&sql, &[&record_id])
@@ -315,15 +327,48 @@ impl PostgresRecordReadService {
                     .map_err(|_| ReadServiceError::Unavailable)?
             }
             Operation::List => {
-                let query = request
-                    .query
-                    .as_ref()
-                    .ok_or(ReadServiceError::Unavailable)?;
+                let query = query.ok_or(ReadServiceError::Unavailable)?;
                 let _compiled_query = plan
                     .query_operation
                     .as_ref()
                     .ok_or(ReadServiceError::Unavailable)?;
-                let (sql, values) = list_sql(&plan.entity, query, &projection, &table)?;
+                let (sql, count_sql, values) =
+                    list_sql(&plan.entity, &relations, query, &projection)?;
+                if query.include_count {
+                    let refs = values
+                        .iter()
+                        .map(|value| value as &(dyn ToSql + Sync))
+                        .collect::<Vec<_>>();
+                    total_count = Some(
+                        transaction
+                            .transaction()
+                            .query_one(&count_sql, &refs)
+                            .await
+                            .map_err(|_| ReadServiceError::Unavailable)?
+                            .get::<_, i64>(0),
+                    );
+                }
+                let mut params = values
+                    .into_iter()
+                    .map(|value| Box::new(value) as Box<dyn ToSql + Sync + Send>)
+                    .collect::<Vec<_>>();
+                params.push(Box::new(limit));
+                let refs = params
+                    .iter()
+                    .map(|value| &**value as &(dyn ToSql + Sync))
+                    .collect::<Vec<_>>();
+                transaction
+                    .transaction()
+                    .query(&sql, &refs)
+                    .await
+                    .map_err(|_| ReadServiceError::Unavailable)?
+            }
+            Operation::Lookup => {
+                let values = match &request.kind {
+                    RecordReadKind::Lookup { selector } => &selector.values,
+                    _ => return Err(ReadServiceError::Unavailable),
+                };
+                let (sql, values) = lookup_sql(&plan.entity, &relations, values, &projection)?;
                 let mut params = values
                     .into_iter()
                     .map(|value| Box::new(value) as Box<dyn ToSql + Sync + Send>)
@@ -341,12 +386,9 @@ impl PostgresRecordReadService {
             }
             _ => return Err(ReadServiceError::Unavailable),
         };
-        let page_size = request
-            .query
-            .as_ref()
-            .map_or(request.maximum_records, |query| {
-                usize::from(query.page_size)
-            });
+        let page_size = query.map_or(request.maximum_records, |query| {
+            usize::from(query.page_size)
+        });
         let has_more = plan.operation == Operation::List && rows.len() > page_size;
         let rows = if has_more {
             &rows[..page_size]
@@ -354,10 +396,7 @@ impl PostgresRecordReadService {
             rows.as_slice()
         };
         let next_cursor = if has_more {
-            let query = request
-                .query
-                .as_ref()
-                .ok_or(ReadServiceError::Unavailable)?;
+            let query = query.ok_or(ReadServiceError::Unavailable)?;
             rows.last()
                 .map(|row| self.next_cursor(row, &selected_fields, query))
                 .transpose()?
@@ -372,7 +411,11 @@ impl PostgresRecordReadService {
             .commit()
             .await
             .map_err(|_| ReadServiceError::Unavailable)?;
-        Ok(MaterializedRead { rows, next_cursor })
+        Ok(MaterializedRead {
+            rows,
+            next_cursor,
+            total_count,
+        })
     }
 
     fn next_cursor(
@@ -384,7 +427,7 @@ impl PostgresRecordReadService {
         let last_record_id = row
             .try_get::<_, String>(0)
             .map_err(|_| ReadServiceError::Unavailable)?;
-        let sort_value = if query.sort.is_some() {
+        let sort_value = if query.order.is_some() {
             row.try_get::<_, Option<Value>>(selected_fields.len() + 2)
                 .map_err(|_| ReadServiceError::Unavailable)?
                 .and_then(cursor_sort_value)
@@ -429,9 +472,7 @@ impl PostgresRecordReadService {
             })
             .transpose()
             .map_err(|_| ReadServiceError::Unavailable)?;
-        let record_reference = request
-            .record_id
-            .as_deref()
+        let record_reference = target_record(&request.kind)
             .map(|record_id| {
                 key_hasher.audit_reference_hash(
                     "registry-server-record-v1",
@@ -457,7 +498,7 @@ impl PostgresRecordReadService {
             principal_reference,
             record_reference,
             record_revision,
-            result_count: Some(result_count),
+            result_count: (outcome != TerminalAuditOutcome::Unresolved).then_some(result_count),
             field_set_reference: Some(field_set_reference),
         })
     }
@@ -469,7 +510,7 @@ impl RecordReadService for PostgresRecordReadService {
         request: RecordReadRequest,
     ) -> ServiceFuture<'_, Result<Option<HeldReadResponse>, ReadServiceError>> {
         Box::pin(async move {
-            let result = self.execute(request, Operation::Get).await?;
+            let result = self.execute(request).await?;
             Ok(result.response)
         })
     }
@@ -479,10 +520,20 @@ impl RecordReadService for PostgresRecordReadService {
         request: RecordReadRequest,
     ) -> ServiceFuture<'_, Result<HeldReadResponse, ReadServiceError>> {
         Box::pin(async move {
-            self.execute(request, Operation::List)
+            self.execute(request)
                 .await?
                 .response
                 .ok_or(ReadServiceError::Unavailable)
+        })
+    }
+
+    fn lookup(
+        &self,
+        request: RecordReadRequest,
+    ) -> ServiceFuture<'_, Result<Option<HeldReadResponse>, ReadServiceError>> {
+        Box::pin(async move {
+            let result = self.execute(request).await?;
+            Ok(result.response)
         })
     }
 
@@ -552,14 +603,35 @@ impl ReadResult {
             }
             Operation::List => {
                 let result_count = materialized.rows.len();
-                let response = HeldReadResponse::from_json(&json!({
+                let mut body = json!({
                     "items": materialized.rows,
                     "pageInfo": {"nextCursor": materialized.next_cursor},
-                }))?;
+                });
+                if let Some(count) = materialized.total_count {
+                    body["count"] = json!(count);
+                }
+                let response = HeldReadResponse::from_json(&body)?;
                 Ok(Self {
                     response: Some(response),
                     result_count,
                     record_revision: None,
+                })
+            }
+            Operation::Lookup => {
+                let mut rows = materialized.rows.into_iter();
+                let Some(record) = rows.next() else {
+                    return Ok(Self::empty_get());
+                };
+                if rows.next().is_some() {
+                    return Ok(Self::empty_get());
+                }
+                let revision =
+                    i64::try_from(record.revision).map_err(|_| ReadServiceError::Unavailable)?;
+                let response = HeldReadResponse::from_json(&json!(record))?;
+                Ok(Self {
+                    response: Some(response),
+                    result_count: 1,
+                    record_revision: Some(revision),
                 })
             }
             _ => Err(ReadServiceError::Unavailable),
@@ -570,6 +642,7 @@ impl ReadResult {
 struct MaterializedRead {
     rows: Vec<RecordEnvelope>,
     next_cursor: Option<String>,
+    total_count: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -580,10 +653,56 @@ struct RecordEnvelope {
     data: Map<String, Value>,
 }
 
+fn request_operation(kind: &RecordReadKind) -> Operation {
+    match kind {
+        RecordReadKind::Get { .. } => Operation::Get,
+        RecordReadKind::List { .. } | RecordReadKind::Relationship { .. } => Operation::List,
+        RecordReadKind::Lookup { .. } => Operation::Lookup,
+    }
+}
+
+fn request_query(kind: &RecordReadKind) -> Option<&crate::api::CompiledReadQuery> {
+    match kind {
+        RecordReadKind::List { plan } | RecordReadKind::Relationship { plan, .. } => Some(plan),
+        RecordReadKind::Get { .. } | RecordReadKind::Lookup { .. } => None,
+    }
+}
+
+fn target_record(kind: &RecordReadKind) -> Option<&str> {
+    match kind {
+        RecordReadKind::Get { id } | RecordReadKind::Relationship { root_id: id, .. } => {
+            Some(id.as_str())
+        }
+        RecordReadKind::List { .. } | RecordReadKind::Lookup { .. } => None,
+    }
+}
+
 struct ReadPlan {
     operation: Operation,
+    source_entity: CompiledEntity,
     entity: CompiledEntity,
     query_operation: Option<CompiledQueryOperation>,
+    read_path: Option<CompiledReadPath>,
+    through_entity: Option<CompiledEntity>,
+}
+
+fn validate_lookup_values(
+    entity: &CompiledEntity,
+    selector: &crate::model::CompiledSelectorProfile,
+    values: &[LookupSelectorValue],
+) -> Result<(), ()> {
+    if selector.fields.len() != values.len() {
+        return Err(());
+    }
+    for (expected_field, value) in selector.fields.iter().zip(values) {
+        if expected_field != &value.field_id
+            || compiled_field_type(entity, &value.field_id) != Some(&value.field_type)
+            || validate_field_value(&value.value, &value.field_type).is_err()
+        {
+            return Err(());
+        }
+    }
+    Ok(())
 }
 
 impl ReadPlan {
@@ -592,49 +711,148 @@ impl ReadPlan {
         expected: &ExpectedRegistryIdentity,
         cursors: &CursorCodec,
         request: &RecordReadRequest,
-        operation: Operation,
     ) -> Result<Self, ()> {
+        let operation = request_operation(&request.kind);
         let route = registry
             .routes()
             .routes
             .iter()
             .find(|route| route.id == request.operation_id)
             .ok_or(())?;
-        let entity = registry.entities().get(&request.entity_id).ok_or(())?;
-        let profile = entity
+        let source_entity = registry.entities().get(&request.entity_id).ok_or(())?;
+        let profile = source_entity
             .access_profiles
             .get(request.context.selected_profile())
             .ok_or(())?;
-        let inventory = registry
-            .physical_names()
-            .entities
-            .get(&request.entity_id)
-            .ok_or(())?;
-        let query_operation = if operation == Operation::List {
-            let Some(query) = request.query.as_ref() else {
-                return Err(());
-            };
-            if route.query_kind != Some(query.kind) || query.route_id != route.id {
-                return Err(());
+        let mut entity = source_entity;
+        let mut read_path = None;
+        let mut through_entity = None;
+        let query_operation = match &request.kind {
+            RecordReadKind::Get { id } => {
+                if operation != Operation::Get || !valid_canonical_uuid(id) {
+                    return Err(());
+                }
+                None
             }
-            let Some(operation) = registry.queries().operations.iter().find(|operation| {
-                operation.id == query.query_operation_id
-                    && operation.route_id == route.id
-                    && operation.entity_id == request.entity_id
-                    && operation.profile_id == request.context.selected_profile()
-                    && operation.kind == query.kind
-            }) else {
-                return Err(());
-            };
-            validate_compiled_query_request(
-                registry, expected, cursors, entity, operation, request, query,
-            )?;
-            Some(operation.clone())
-        } else {
-            if request.query.is_some() {
-                return Err(());
+            RecordReadKind::List { plan } => {
+                if operation != Operation::List
+                    || route.query_kind != Some(plan.kind)
+                    || plan.route_id != route.id
+                {
+                    return Err(());
+                }
+                let compiled_query = registry
+                    .queries()
+                    .operations
+                    .iter()
+                    .find(|operation| {
+                        operation.id == plan.query_operation_id
+                            && operation.route_id == route.id
+                            && operation.entity_id == source_entity.id
+                            && operation.profile_id == request.context.selected_profile()
+                            && operation.kind == plan.kind
+                            && operation.read_path.is_none()
+                            && operation.selector_fields.is_empty()
+                    })
+                    .ok_or(())?;
+                validate_compiled_query_request(
+                    registry,
+                    expected,
+                    cursors,
+                    source_entity,
+                    compiled_query,
+                    request,
+                    plan,
+                )?;
+                Some(compiled_query.clone())
             }
-            None
+            RecordReadKind::Lookup { selector } => {
+                if operation != Operation::Lookup || route.id != selector.route_id {
+                    return Err(());
+                }
+                let selector_profile = source_entity
+                    .selector_profiles
+                    .get(&selector.selector_id)
+                    .ok_or(())?;
+                let grant = profile
+                    .lookups
+                    .iter()
+                    .find(|lookup| lookup.selector == selector.selector_id)
+                    .ok_or(())?;
+                if grant.value_origin != selector.value_origin {
+                    return Err(());
+                }
+                validate_lookup_values(source_entity, selector_profile, &selector.values)?;
+                let compiled_query = registry
+                    .queries()
+                    .operations
+                    .iter()
+                    .find(|operation| {
+                        operation.id == selector.query_operation_id
+                            && operation.route_id == route.id
+                            && operation.entity_id == source_entity.id
+                            && operation.profile_id == request.context.selected_profile()
+                            && operation.kind == CompiledQueryKind::List
+                            && operation.read_path.is_none()
+                            && operation.selector_fields == selector_profile.fields
+                    })
+                    .ok_or(())?;
+                Some(compiled_query.clone())
+            }
+            RecordReadKind::Relationship {
+                root_id,
+                path_id,
+                plan,
+            } => {
+                if operation != Operation::List
+                    || !valid_canonical_uuid(root_id)
+                    || route.query_kind != Some(plan.kind)
+                    || plan.route_id != route.id
+                {
+                    return Err(());
+                }
+                let path = source_entity.read_paths.get(path_id).ok_or(())?;
+                if route.id != format!("records.{}.path.{}", source_entity.id, path.id) {
+                    return Err(());
+                }
+                let through = registry.entities().get(&path.through).ok_or(())?;
+                let target_entity = registry.entities().get(&path.to).ok_or(())?;
+                let grant = profile
+                    .read_paths
+                    .iter()
+                    .find(|grant| grant.path == path.id)
+                    .ok_or(())?;
+                if !request.selected_fields.is_subset(&grant.readable_fields) {
+                    return Err(());
+                }
+                let compiled_query = registry
+                    .queries()
+                    .operations
+                    .iter()
+                    .find(|operation| {
+                        operation.id == plan.query_operation_id
+                            && operation.route_id == route.id
+                            && operation.entity_id == target_entity.id
+                            && operation.profile_id == request.context.selected_profile()
+                            && operation.kind == plan.kind
+                            && operation.read_path.as_deref() == Some(path.id.as_str())
+                            && operation.selector_fields.is_empty()
+                    })
+                    .ok_or(())?;
+                validate_compiled_query_request(
+                    registry,
+                    expected,
+                    cursors,
+                    target_entity,
+                    compiled_query,
+                    request,
+                    plan,
+                )?;
+                entity = target_entity;
+                read_path = Some(path.clone());
+                through_entity = Some(through.clone());
+                Some(compiled_query.clone())
+            }
         };
         if route.operation != operation
             || route.method != request.method
@@ -643,30 +861,46 @@ impl ReadPlan {
                 .access_profiles
                 .iter()
                 .any(|profile| profile == request.context.selected_profile())
-            || !profile.operations.contains(&operation)
+            || (read_path.is_none() && !profile.operations.contains(&operation))
             || request.maximum_records == 0
             || request.maximum_records > MAX_SQL_LIMIT
             || operation == Operation::Get && request.maximum_records != 1
-            || inventory.table != entity.physical_table
-            || !valid_physical_identifier(&entity.physical_table)
-            || entity.fields.iter().any(|(id, field)| {
-                inventory.fields.get(id) != Some(&field.physical_name)
-                    || !valid_physical_identifier(&field.physical_name)
-            })
-            || !request.selected_fields.is_subset(&profile.readable_fields)
+            || operation == Operation::Lookup && request.maximum_records != 2
+            || operation == Operation::List
+                && request_query(&request.kind)
+                    .and_then(|query| usize::from(query.page_size).checked_add(1))
+                    != Some(request.maximum_records)
+            || !valid_entity_inventory(registry, source_entity)
+            || !valid_entity_inventory(registry, entity)
+            || (read_path.is_none() && !request.selected_fields.is_subset(&profile.readable_fields))
             || request
                 .selected_fields
                 .iter()
-                .any(|field| !entity.fields.contains_key(field))
+                .any(|field| compiled_field_type(entity, field).is_none())
         {
             return Err(());
         }
         Ok(Self {
             operation,
+            source_entity: source_entity.clone(),
             entity: entity.clone(),
             query_operation,
+            read_path,
+            through_entity,
         })
     }
+}
+
+fn valid_entity_inventory(registry: &CompiledRegistry, entity: &CompiledEntity) -> bool {
+    let Some(inventory) = registry.physical_names().entities.get(&entity.id) else {
+        return false;
+    };
+    inventory.table == entity.physical_table
+        && valid_physical_identifier(&entity.physical_table)
+        && entity.fields.iter().all(|(id, field)| {
+            inventory.fields.get(id) == Some(&field.physical_name)
+                && valid_physical_identifier(&field.physical_name)
+        })
 }
 
 fn validate_compiled_query_request(
@@ -692,6 +926,7 @@ fn validate_compiled_query_request(
         || query.cursor_binding.query_kind != query.kind
         || query.cursor_binding.selected_profile != request.context.selected_profile()
         || query.cursor_binding.page_size != query.page_size
+        || query.cursor_binding.include_count != query.include_count
         || query.cursor_binding.temporal_instant != query.temporal_instant
         || query.cursor_binding.selected_fields != selected_fields
         || !valid_optional_cursor_reference(query.cursor_binding.principal_reference.as_deref())
@@ -700,6 +935,7 @@ fn validate_compiled_query_request(
         || !valid_cursor_reference(&query.cursor_binding.projection_reference)
         || !valid_cursor_reference(&query.cursor_binding.query_reference)
         || !valid_cursor_reference(&query.cursor_binding.sort_reference)
+        || !valid_cursor_reference(&query.cursor_binding.scope_reference)
         || !request
             .selected_fields
             .iter()
@@ -707,7 +943,7 @@ fn validate_compiled_query_request(
         || !operation
             .projection_fields
             .iter()
-            .all(|field| entity.fields.contains_key(field))
+            .all(|field| compiled_field_type(entity, field).is_some())
     {
         return Err(());
     }
@@ -729,79 +965,27 @@ fn validate_compiled_query_request(
             }
         }
     }
-    if query.filters.len() > 32 {
-        return Err(());
-    }
-    let mut total_in_values = 0_usize;
-    for filter in &query.filters {
-        let Some(compiled_filter) = operation
-            .filter_fields
-            .iter()
-            .find(|candidate| candidate.field == filter.field)
-        else {
-            return Err(());
-        };
-        if !compiled_filter.operators.contains(&filter.operator)
-            || !entity.fields.contains_key(&filter.field)
-        {
+    validate_projection(entity, operation, &query.projection)?;
+    if let Some(filter) = &query.filter {
+        let mut stats = FilterStats::default();
+        validate_filter_expr(entity, operation, filter, &mut stats)?;
+        if stats.predicates > 32 || stats.in_values > 100 {
             return Err(());
         }
-        let field_type = &entity.fields[&filter.field].field_type;
-        match filter.operator {
-            CompiledQueryFilterOperator::Equals | CompiledQueryFilterOperator::Prefix => {
-                if filter.values.len() != 1
-                    || validate_field_value(&filter.values[0], field_type).is_err()
-                {
-                    return Err(());
-                }
-            }
-            CompiledQueryFilterOperator::In => {
-                if filter.values.is_empty() {
-                    return Err(());
-                }
-                total_in_values = total_in_values.checked_add(filter.values.len()).ok_or(())?;
-                if total_in_values > 100
-                    || filter
-                        .values
-                        .windows(2)
-                        .any(|window| window[0] >= window[1])
-                    || filter
-                        .values
-                        .iter()
-                        .any(|value| validate_field_value(value, field_type).is_err())
-                {
-                    return Err(());
-                }
-            }
-            CompiledQueryFilterOperator::Range => {
-                if filter.values.len() != 2
-                    || filter
-                        .values
-                        .iter()
-                        .any(|value| validate_field_value(value, field_type).is_err())
-                {
-                    return Err(());
-                }
-            }
-            CompiledQueryFilterOperator::IsNull | CompiledQueryFilterOperator::IsNotNull => {
-                if filter.values.len() != 1 || filter.values[0] != "true" {
-                    return Err(());
-                }
-            }
-        }
     }
-    if let Some(sort) = &query.sort {
+    if let Some(order) = &query.order {
         let Some(compiled_sort) = operation
             .sort_fields
             .iter()
-            .find(|candidate| candidate.field == *sort)
+            .find(|candidate| candidate.field == order.field_id)
         else {
             return Err(());
         };
         if !compiled_sort
             .directions
             .contains(&CompiledQuerySortDirection::Asc)
-            || !entity.fields.contains_key(sort)
+            || compiled_field_type(entity, &order.field_id) != Some(&order.field_type)
+            || order.direction != CompiledQuerySortDirection::Asc
         {
             return Err(());
         }
@@ -810,12 +994,9 @@ fn validate_compiled_query_request(
         if !valid_canonical_uuid(&continuation.last_record_id) {
             return Err(());
         }
-        match (&query.sort, &continuation.sort_value) {
-            (Some(sort), Some(value)) => {
-                let Some(field) = entity.fields.get(sort) else {
-                    return Err(());
-                };
-                if validate_field_value(value, &field.field_type).is_err() {
+        match (&query.order, &continuation.sort_value) {
+            (Some(order), Some(value)) => {
+                if validate_field_value(value, &order.field_type).is_err() {
                     return Err(());
                 }
             }
@@ -823,16 +1004,7 @@ fn validate_compiled_query_request(
             (None, Some(_)) => return Err(()),
         }
     }
-    let expected_filters = query
-        .filters
-        .iter()
-        .map(|filter| crate::cursor::CursorFilter {
-            field: filter.field.clone(),
-            operator: query_filter_operator_name(filter.operator).to_owned(),
-            values: filter.values.clone(),
-        })
-        .collect::<Vec<_>>();
-    if query.cursor_query.filters != expected_filters || query.cursor_query.sort != query.sort {
+    if !cursor_query_matches_request(query, request)? {
         return Err(());
     }
     let references = cursor_binding_references(cursors, request, operation, query)?;
@@ -842,6 +1014,7 @@ fn validate_compiled_query_request(
         || query.cursor_binding.projection_reference != references.projection
         || query.cursor_binding.query_reference != references.query
         || query.cursor_binding.sort_reference != references.sort
+        || query.cursor_binding.scope_reference != references.scope
     {
         return Err(());
     }
@@ -855,6 +1028,7 @@ struct CursorBindingReferences {
     projection: String,
     query: String,
     sort: String,
+    scope: String,
 }
 
 fn cursor_binding_references(
@@ -867,7 +1041,7 @@ fn cursor_binding_references(
         .context
         .principal()
         .map(|value| {
-            cursors.binding_digest_bytes(b"registry-server-cursor-principal-v1", value.as_bytes())
+            cursors.binding_digest_bytes(b"registry-server-cursor-principal-v3", value.as_bytes())
         })
         .transpose()
         .map_err(|_| ())?;
@@ -875,13 +1049,13 @@ fn cursor_binding_references(
         .context
         .purpose()
         .map(|value| {
-            cursors.binding_digest_bytes(b"registry-server-cursor-purpose-v1", value.as_bytes())
+            cursors.binding_digest_bytes(b"registry-server-cursor-purpose-v3", value.as_bytes())
         })
         .transpose()
         .map_err(|_| ())?;
     let row_boundary = cursors
         .binding_digest(
-            b"registry-server-cursor-row-boundary-v1",
+            b"registry-server-cursor-row-boundary-v3",
             &json!(request
                 .context
                 .row_boundaries()
@@ -899,29 +1073,40 @@ fn cursor_binding_references(
                 .collect::<Vec<_>>()),
         )
         .map_err(|_| ())?;
-    let selected_fields = request.selected_fields.iter().cloned().collect::<Vec<_>>();
     let projection = cursors
         .binding_digest(
-            b"registry-server-cursor-projection-v1",
-            &json!({"selectedFields": selected_fields}),
+            b"registry-server-cursor-projection-v3",
+            &json!({"projection": query.projection.iter().map(projection_field_value).collect::<Vec<_>>()}),
         )
         .map_err(|_| ())?;
     let query_reference = cursors
         .binding_digest(
-            b"registry-server-cursor-query-v1",
+            b"registry-server-cursor-query-v3",
             &json!({
-                "filters": query.cursor_query.filters,
+                "routeId": query.route_id,
+                "queryOperationId": operation.id,
+                "queryKind": operation.kind,
+                "selectedProfile": request.context.selected_profile(),
+                "projection": query.projection.iter().map(projection_field_value).collect::<Vec<_>>(),
+                "filter": query.filter.as_ref().map(read_filter_expr_value),
+                "order": query.order.as_ref().map(read_order_clause_value),
+                "pageSize": query.page_size,
+                "includeCount": query.include_count,
                 "temporalInstant": query.temporal_instant,
+                "scope": cursor_scope_value(&query.cursor_query.scope),
             }),
         )
         .map_err(|_| ())?;
     let sort = cursors
         .binding_digest(
-            b"registry-server-cursor-sort-v1",
-            &json!({
-                "sort": query.sort,
-                "tieBreaker": operation.stable_tie_breaker,
-            }),
+            b"registry-server-cursor-sort-v3",
+            &json!({"order": query.order.as_ref().map(read_order_clause_value), "tieBreaker": operation.stable_tie_breaker}),
+        )
+        .map_err(|_| ())?;
+    let scope = cursors
+        .binding_digest(
+            b"registry-server-cursor-scope-v3",
+            &cursor_scope_value(&query.cursor_query.scope),
         )
         .map_err(|_| ())?;
     Ok(CursorBindingReferences {
@@ -931,17 +1116,100 @@ fn cursor_binding_references(
         projection,
         query: query_reference,
         sort,
+        scope,
     })
 }
 
-fn query_filter_operator_name(operator: CompiledQueryFilterOperator) -> &'static str {
-    match operator {
-        CompiledQueryFilterOperator::Equals => "equals",
-        CompiledQueryFilterOperator::In => "in",
-        CompiledQueryFilterOperator::Range => "range",
-        CompiledQueryFilterOperator::IsNull => "is_null",
-        CompiledQueryFilterOperator::IsNotNull => "is_not_null",
-        CompiledQueryFilterOperator::Prefix => "prefix",
+fn cursor_query_matches_request(
+    query: &crate::api::CompiledReadQuery,
+    request: &RecordReadRequest,
+) -> Result<bool, ()> {
+    let expected_scope = match &request.kind {
+        RecordReadKind::List { .. } => CursorQueryScope::Collection {},
+        RecordReadKind::Relationship {
+            root_id, path_id, ..
+        } => CursorQueryScope::Relationship {
+            path_id: path_id.clone(),
+            root_id: root_id.clone(),
+        },
+        RecordReadKind::Get { .. } | RecordReadKind::Lookup { .. } => return Ok(false),
+    };
+    Ok(
+        query.cursor_query.projection == cursor_projection_from_read(&query.projection)
+            && query.cursor_query.filter == query.filter.as_ref().map(cursor_filter_expr_from_read)
+            && query.cursor_query.order == query.order.as_ref().map(cursor_order_from_read)
+            && query.cursor_query.include_count == query.include_count
+            && query.cursor_query.page_size == query.page_size
+            && query.cursor_query.temporal_instant == query.temporal_instant
+            && query.cursor_query.scope == expected_scope,
+    )
+}
+
+fn cursor_projection_from_read(projection: &[ReadProjectionField]) -> Vec<CursorProjectionField> {
+    projection
+        .iter()
+        .map(|field| CursorProjectionField {
+            field_id: field.field_id.clone(),
+            field_type: field.field_type.clone(),
+        })
+        .collect()
+}
+
+fn cursor_order_from_read(order: &ReadOrderClause) -> CursorOrderClause {
+    CursorOrderClause {
+        field_id: order.field_id.clone(),
+        field_type: order.field_type.clone(),
+        direction: order.direction,
+    }
+}
+
+fn cursor_filter_expr_from_read(filter: &ReadFilterExpr) -> CursorFilterExpr {
+    match filter {
+        ReadFilterExpr::Binary { op, left, right } => CursorFilterExpr::Binary {
+            op: match op {
+                ReadLogicalOp::And => CursorLogicalOp::And,
+                ReadLogicalOp::Or => CursorLogicalOp::Or,
+            },
+            left: Box::new(cursor_filter_expr_from_read(left)),
+            right: Box::new(cursor_filter_expr_from_read(right)),
+        },
+        ReadFilterExpr::Not(expr) => CursorFilterExpr::Not {
+            expr: Box::new(cursor_filter_expr_from_read(expr)),
+        },
+        ReadFilterExpr::Group(expr) => CursorFilterExpr::Group {
+            expr: Box::new(cursor_filter_expr_from_read(expr)),
+        },
+        ReadFilterExpr::Predicate(predicate) => CursorFilterExpr::Predicate {
+            predicate: crate::cursor::CursorFilterPredicate {
+                field_id: predicate.field_id.clone(),
+                field_type: predicate.field_type.clone(),
+                operator: match predicate.operator {
+                    ReadFilterOperator::Eq => CursorFilterOperator::Eq,
+                    ReadFilterOperator::Ne => CursorFilterOperator::Ne,
+                    ReadFilterOperator::Lt => CursorFilterOperator::Lt,
+                    ReadFilterOperator::Le => CursorFilterOperator::Le,
+                    ReadFilterOperator::Gt => CursorFilterOperator::Gt,
+                    ReadFilterOperator::Ge => CursorFilterOperator::Ge,
+                    ReadFilterOperator::In => CursorFilterOperator::In,
+                    ReadFilterOperator::IsNull => CursorFilterOperator::IsNull,
+                    ReadFilterOperator::IsNotNull => CursorFilterOperator::IsNotNull,
+                    ReadFilterOperator::StartsWith => CursorFilterOperator::StartsWith,
+                    ReadFilterOperator::Contains => CursorFilterOperator::Contains,
+                },
+                values: predicate.values.clone(),
+            },
+        },
+    }
+}
+
+fn cursor_scope_value(scope: &CursorQueryScope) -> Value {
+    match scope {
+        CursorQueryScope::Collection {} => json!({"kind": "collection"}),
+        CursorQueryScope::Relationship { path_id, root_id } => json!({
+            "kind": "relationship",
+            "pathId": path_id,
+            "rootId": root_id,
+        }),
     }
 }
 
@@ -996,101 +1264,480 @@ fn strict_claim_context(
     .map_err(|_| ReadServiceError::Unavailable)
 }
 
-fn projection(
-    entity: &CompiledEntity,
-    selected_fields: &[String],
-    sort: Option<&str>,
-) -> Result<String, ReadServiceError> {
-    let mut expressions = vec!["record_id::text".to_owned(), "record_revision".to_owned()];
-    for field in selected_fields {
-        let Some(compiled_field) = entity.fields.get(field) else {
+async fn install_evaluation_date(
+    transaction: &tokio_postgres::Transaction<'_>,
+    query: Option<&crate::api::CompiledReadQuery>,
+) -> Result<(), ReadServiceError> {
+    let instant = query
+        .and_then(|query| query.temporal_instant.as_deref())
+        .map(parse_rfc3339_utc)
+        .transpose()?
+        .unwrap_or_else(time::OffsetDateTime::now_utc);
+    let evaluation_date = instant.date().to_string();
+    transaction
+        .execute(
+            "SELECT set_config('registry.evaluation_date', $1, true)",
+            &[&evaluation_date],
+        )
+        .await
+        .map_err(|_| ReadServiceError::Unavailable)?;
+    Ok(())
+}
+
+async fn install_read_path_context(
+    transaction: &tokio_postgres::Transaction<'_>,
+    path_id: &str,
+    root_id: &str,
+) -> Result<(), ReadServiceError> {
+    if path_id.is_empty() || path_id.len() > 256 || !valid_canonical_uuid(root_id) {
+        return Err(ReadServiceError::Unavailable);
+    }
+    transaction
+        .execute(
+            "SELECT set_config('registry.read_path_id', $1, true),
+                    set_config('registry.read_path_root_id', $2, true)",
+            &[&path_id, &root_id],
+        )
+        .await
+        .map_err(|_| ReadServiceError::Unavailable)?;
+    Ok(())
+}
+
+fn parse_rfc3339_utc(value: &str) -> Result<time::OffsetDateTime, ReadServiceError> {
+    let parsed = time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+        .map_err(|_| ReadServiceError::Unavailable)?;
+    if parsed.offset() != time::UtcOffset::UTC {
+        return Err(ReadServiceError::Unavailable);
+    }
+    Ok(parsed)
+}
+
+struct ReadRelations {
+    base_alias: &'static str,
+    source_alias: &'static str,
+    id_expression: String,
+    from_sql: String,
+    base_predicates: Vec<String>,
+    derived_aliases: BTreeMap<String, String>,
+}
+
+impl ReadRelations {
+    fn collection(entity: &CompiledEntity) -> Result<Self, ReadServiceError> {
+        let base_alias = "base_record";
+        let source_alias = "source_record";
+        if !valid_physical_identifier(&entity.physical_table)
+            || !valid_physical_identifier(&entity.source_relation.sql_name)
+        {
             return Err(ReadServiceError::Unavailable);
-        };
-        let column = quote_identifier(&compiled_field.physical_name);
-        if matches!(compiled_field.field_type, FieldTypeSource::Decimal { .. }) {
-            expressions.push(format!("to_jsonb({column}::text)"));
-        } else {
-            expressions.push(format!("to_jsonb({column})"));
+        }
+        let mut derived_aliases = BTreeMap::new();
+        let mut from_sql = format!(
+            "registry_source.{} AS {source_alias}
+             JOIN registry_data.{} AS {base_alias}
+               ON {base_alias}.record_id = {source_alias}.id",
+            quote_identifier(&entity.source_relation.sql_name),
+            quote_identifier(&entity.physical_table),
+        );
+        for (index, relation) in entity.derived_relations.values().enumerate() {
+            let alias = format!("derived_{index}");
+            let view_name = crate::generated_ddl::derived_view_name(
+                &entity.source_relation.sql_name,
+                &relation.id,
+            );
+            if !valid_physical_identifier(&view_name) {
+                return Err(ReadServiceError::Unavailable);
+            }
+            from_sql.push_str(&format!(
+                " LEFT JOIN registry_derived.{} AS {alias}
+                    ON {alias}.{} = {source_alias}.id",
+                quote_identifier(&view_name),
+                quote_identifier(&entity.canonical_id.sql_name),
+            ));
+            derived_aliases.insert(relation.id.clone(), alias);
+        }
+        Ok(Self {
+            base_alias,
+            source_alias,
+            id_expression: format!(
+                "{source_alias}.{}",
+                quote_identifier(&entity.canonical_id.sql_name)
+            ),
+            from_sql,
+            base_predicates: Vec::new(),
+            derived_aliases,
+        })
+    }
+
+    fn relationship(
+        source: &CompiledEntity,
+        through: &CompiledEntity,
+        target: &CompiledEntity,
+        path: &CompiledReadPath,
+        root_id: &str,
+    ) -> Result<Self, ReadServiceError> {
+        if !valid_canonical_uuid(root_id) {
+            return Err(ReadServiceError::Unavailable);
+        }
+        for entity in [source, through, target] {
+            if !valid_physical_identifier(&entity.physical_table)
+                || !valid_physical_identifier(&entity.source_relation.sql_name)
+            {
+                return Err(ReadServiceError::Unavailable);
+            }
+        }
+        let base_alias = "base_record";
+        let source_alias = "target_source_record";
+        let path_source_alias = "path_source_record";
+        let path_through_alias = "path_through_record";
+        let source_id = format!(
+            "{path_source_alias}.{}",
+            quote_identifier(&source.canonical_id.sql_name)
+        );
+        let target_id = format!(
+            "{source_alias}.{}",
+            quote_identifier(&target.canonical_id.sql_name)
+        );
+        let through_source_ref =
+            source_view_field_expression(through, path_through_alias, &path.source_ref)?;
+        let through_target_ref =
+            source_view_field_expression(through, path_through_alias, &path.target_ref)?;
+        let mut from_sql = format!(
+            "registry_source.{} AS {path_source_alias}
+             JOIN registry_source.{} AS {path_through_alias}
+               ON {through_source_ref} = {source_id}
+             JOIN registry_source.{} AS {source_alias}
+               ON {target_id} = {through_target_ref}
+             JOIN registry_data.{} AS {base_alias}
+               ON {base_alias}.record_id = {target_id}",
+            quote_identifier(&source.source_relation.sql_name),
+            quote_identifier(&through.source_relation.sql_name),
+            quote_identifier(&target.source_relation.sql_name),
+            quote_identifier(&target.physical_table),
+        );
+        let mut derived_aliases = BTreeMap::new();
+        for (index, relation) in target.derived_relations.values().enumerate() {
+            let alias = format!("derived_{index}");
+            let view_name = crate::generated_ddl::derived_view_name(
+                &target.source_relation.sql_name,
+                &relation.id,
+            );
+            if !valid_physical_identifier(&view_name) {
+                return Err(ReadServiceError::Unavailable);
+            }
+            from_sql.push_str(&format!(
+                " LEFT JOIN registry_derived.{} AS {alias}
+                    ON {alias}.{} = {target_id}",
+                quote_identifier(&view_name),
+                quote_identifier(&target.canonical_id.sql_name),
+            ));
+            derived_aliases.insert(relation.id.clone(), alias);
+        }
+        Ok(Self {
+            base_alias,
+            source_alias,
+            id_expression: target_id,
+            from_sql,
+            base_predicates: vec![
+                format!("{source_id} = NULLIF(current_setting('registry.read_path_root_id', true), '')::uuid"),
+                format!(
+                    "NULLIF(current_setting('registry.read_path_id', true), '') = {}",
+                    sql_quote_literal(&path.id)
+                ),
+            ],
+            derived_aliases,
+        })
+    }
+
+    fn field_expression(
+        &self,
+        entity: &CompiledEntity,
+        field_id: &str,
+    ) -> Result<FieldExpression, ReadServiceError> {
+        if field_id == "id" {
+            return Ok(FieldExpression {
+                sql: self.id_expression.clone(),
+                field_type: entity.canonical_id.field_type.clone(),
+            });
+        }
+        if let Some(field) = entity
+            .stored_fields
+            .iter()
+            .find(|field| field.logical.id == field_id)
+        {
+            return Ok(FieldExpression {
+                sql: format!(
+                    "{}.{}",
+                    self.source_alias,
+                    quote_identifier(&field.logical.sql_name)
+                ),
+                field_type: field.logical.field_type.clone(),
+            });
+        }
+        if let Some(field) = entity.derived_fields.get(field_id) {
+            let alias = self
+                .derived_aliases
+                .get(&field.derivation_id)
+                .ok_or(ReadServiceError::Unavailable)?;
+            return Ok(FieldExpression {
+                sql: format!("{alias}.{}", quote_identifier(&field.logical.sql_name)),
+                field_type: field.logical.field_type.clone(),
+            });
+        }
+        Err(ReadServiceError::Unavailable)
+    }
+}
+
+fn source_view_field_expression(
+    entity: &CompiledEntity,
+    alias: &str,
+    field_id: &str,
+) -> Result<String, ReadServiceError> {
+    let field = entity
+        .stored_fields
+        .iter()
+        .find(|field| field.logical.id == field_id)
+        .ok_or(ReadServiceError::Unavailable)?;
+    if !valid_physical_identifier(&field.logical.sql_name) {
+        return Err(ReadServiceError::Unavailable);
+    }
+    Ok(format!(
+        "{alias}.{}",
+        quote_identifier(&field.logical.sql_name)
+    ))
+}
+
+struct FieldExpression {
+    sql: String,
+    field_type: FieldTypeSource,
+}
+
+fn compiled_field_type<'a>(
+    entity: &'a CompiledEntity,
+    field_id: &str,
+) -> Option<&'a FieldTypeSource> {
+    if field_id == "id" {
+        return Some(&entity.canonical_id.field_type);
+    }
+    entity
+        .stored_fields
+        .iter()
+        .find(|field| field.logical.id == field_id)
+        .map(|field| &field.logical.field_type)
+        .or_else(|| {
+            entity
+                .derived_fields
+                .get(field_id)
+                .map(|field| &field.logical.field_type)
+        })
+}
+
+fn validate_projection(
+    entity: &CompiledEntity,
+    operation: &CompiledQueryOperation,
+    projection: &[ReadProjectionField],
+) -> Result<(), ()> {
+    if projection.is_empty() || projection.len() > operation.projection_fields.len() {
+        return Err(());
+    }
+    let mut seen = BTreeSet::new();
+    for field in projection {
+        if !seen.insert(field.field_id.as_str())
+            || !operation.projection_fields.contains(&field.field_id)
+            || compiled_field_type(entity, &field.field_id) != Some(&field.field_type)
+        {
+            return Err(());
         }
     }
-    if let Some(sort) = sort {
-        let Some(compiled_field) = entity.fields.get(sort) else {
-            return Err(ReadServiceError::Unavailable);
-        };
-        let column = quote_identifier(&compiled_field.physical_name);
-        if matches!(compiled_field.field_type, FieldTypeSource::Decimal { .. }) {
-            expressions.push(format!("to_jsonb({column}::text)"));
-        } else {
-            expressions.push(format!("to_jsonb({column})"));
+    Ok(())
+}
+
+#[derive(Default)]
+struct FilterStats {
+    predicates: usize,
+    in_values: usize,
+}
+
+fn validate_filter_expr(
+    entity: &CompiledEntity,
+    operation: &CompiledQueryOperation,
+    filter: &ReadFilterExpr,
+    stats: &mut FilterStats,
+) -> Result<(), ()> {
+    match filter {
+        ReadFilterExpr::Binary { left, right, .. } => {
+            validate_filter_expr(entity, operation, left, stats)?;
+            validate_filter_expr(entity, operation, right, stats)
         }
+        ReadFilterExpr::Not(expr) | ReadFilterExpr::Group(expr) => {
+            validate_filter_expr(entity, operation, expr, stats)
+        }
+        ReadFilterExpr::Predicate(predicate) => {
+            validate_filter_predicate(entity, operation, predicate, stats)
+        }
+    }
+}
+
+fn validate_filter_predicate(
+    entity: &CompiledEntity,
+    operation: &CompiledQueryOperation,
+    predicate: &ReadFilterPredicate,
+    stats: &mut FilterStats,
+) -> Result<(), ()> {
+    stats.predicates = stats.predicates.checked_add(1).ok_or(())?;
+    let Some(field_type) = compiled_field_type(entity, &predicate.field_id) else {
+        return Err(());
+    };
+    let Some(compiled_filter) = operation
+        .filter_fields
+        .iter()
+        .find(|candidate| candidate.field == predicate.field_id)
+    else {
+        return Err(());
+    };
+    if !compiled_filter
+        .operators
+        .contains(&predicate.operator.compiled_capability())
+        || field_type != &predicate.field_type
+    {
+        return Err(());
+    }
+    match predicate.operator {
+        ReadFilterOperator::Eq
+        | ReadFilterOperator::Ne
+        | ReadFilterOperator::Lt
+        | ReadFilterOperator::Le
+        | ReadFilterOperator::Gt
+        | ReadFilterOperator::Ge
+        | ReadFilterOperator::StartsWith
+        | ReadFilterOperator::Contains => {
+            if predicate.values.len() != 1
+                || validate_field_value(&predicate.values[0], field_type).is_err()
+            {
+                return Err(());
+            }
+        }
+        ReadFilterOperator::In => {
+            if predicate.values.is_empty() {
+                return Err(());
+            }
+            stats.in_values = stats
+                .in_values
+                .checked_add(predicate.values.len())
+                .ok_or(())?;
+            if predicate
+                .values
+                .windows(2)
+                .any(|window| window[0] >= window[1])
+                || predicate
+                    .values
+                    .iter()
+                    .any(|value| validate_field_value(value, field_type).is_err())
+            {
+                return Err(());
+            }
+        }
+        ReadFilterOperator::IsNull | ReadFilterOperator::IsNotNull => {
+            if predicate.values.as_slice() != ["true"] {
+                return Err(());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn projection_field_value(field: &ReadProjectionField) -> Value {
+    json!({
+        "fieldId": field.field_id,
+        "fieldType": field.field_type,
+    })
+}
+
+fn read_order_clause_value(order: &ReadOrderClause) -> Value {
+    json!({
+        "fieldId": order.field_id,
+        "fieldType": order.field_type,
+        "direction": order.direction,
+    })
+}
+
+fn read_filter_expr_value(filter: &ReadFilterExpr) -> Value {
+    match filter {
+        ReadFilterExpr::Binary { op, left, right } => json!({
+            "kind": "binary",
+            "op": match op {
+                ReadLogicalOp::And => "and",
+                ReadLogicalOp::Or => "or",
+            },
+            "left": read_filter_expr_value(left),
+            "right": read_filter_expr_value(right),
+        }),
+        ReadFilterExpr::Not(expr) => json!({
+            "kind": "not",
+            "op": "not",
+            "expr": read_filter_expr_value(expr),
+        }),
+        ReadFilterExpr::Group(expr) => json!({
+            "kind": "group",
+            "op": "group",
+            "expr": read_filter_expr_value(expr),
+        }),
+        ReadFilterExpr::Predicate(predicate) => json!({
+            "kind": "predicate",
+            "fieldId": predicate.field_id,
+            "fieldType": predicate.field_type,
+            "operator": read_filter_operator_name(predicate.operator),
+            "values": predicate.values,
+        }),
+    }
+}
+
+fn read_filter_operator_name(operator: ReadFilterOperator) -> &'static str {
+    match operator {
+        ReadFilterOperator::Eq => "eq",
+        ReadFilterOperator::Ne => "ne",
+        ReadFilterOperator::Lt => "lt",
+        ReadFilterOperator::Le => "le",
+        ReadFilterOperator::Gt => "gt",
+        ReadFilterOperator::Ge => "ge",
+        ReadFilterOperator::In => "in",
+        ReadFilterOperator::IsNull => "is_null",
+        ReadFilterOperator::IsNotNull => "is_not_null",
+        ReadFilterOperator::StartsWith => "startswith",
+        ReadFilterOperator::Contains => "contains",
+    }
+}
+
+fn projection(
+    entity: &CompiledEntity,
+    relations: &ReadRelations,
+    selected_fields: &[String],
+    query: Option<&crate::api::CompiledReadQuery>,
+) -> Result<String, ReadServiceError> {
+    let mut expressions = vec![
+        format!("{}::text", relations.id_expression),
+        format!("{}.record_revision", relations.base_alias),
+    ];
+    for field in selected_fields {
+        let expression = relations.field_expression(entity, field)?;
+        expressions.push(json_expression(&expression.sql, &expression.field_type));
+    }
+    if let Some(order) = query.and_then(|query| query.order.as_ref()) {
+        let expression = relations.field_expression(entity, &order.field_id)?;
+        expressions.push(json_expression(&expression.sql, &expression.field_type));
     }
     Ok(expressions.join(", "))
 }
 
 fn list_sql(
     entity: &CompiledEntity,
+    relations: &ReadRelations,
     query: &crate::api::CompiledReadQuery,
     projection: &str,
-    table: &str,
-) -> Result<(String, Vec<String>), ReadServiceError> {
+) -> Result<(String, String, Vec<String>), ReadServiceError> {
     let mut values = Vec::new();
-    let mut predicates = vec!["record_lifecycle = 'active'".to_owned()];
-    let mut grouped_in: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
-    for filter in &query.filters {
-        let Some(compiled_field) = entity.fields.get(&filter.field) else {
-            return Err(ReadServiceError::Unavailable);
-        };
-        let column = quote_identifier(&compiled_field.physical_name);
-        let cast = postgres_cast(&compiled_field.field_type);
-        match filter.operator {
-            CompiledQueryFilterOperator::Equals => {
-                let parameter = push_value(&mut values, &filter.values[0]);
-                predicates.push(format!("{column} = ${parameter}::text::{cast}"));
-            }
-            CompiledQueryFilterOperator::In => {
-                if filter.values.is_empty() {
-                    return Err(ReadServiceError::Unavailable);
-                }
-                grouped_in
-                    .entry(&filter.field)
-                    .or_default()
-                    .extend(filter.values.iter().map(String::as_str));
-            }
-            CompiledQueryFilterOperator::Range => {
-                let lower = push_value(&mut values, &filter.values[0]);
-                let upper = push_value(&mut values, &filter.values[1]);
-                predicates.push(format!(
-                    "{column} >= ${lower}::text::{cast} AND {column} <= ${upper}::text::{cast}"
-                ));
-            }
-            CompiledQueryFilterOperator::IsNull => predicates.push(format!("{column} IS NULL")),
-            CompiledQueryFilterOperator::IsNotNull => {
-                predicates.push(format!("{column} IS NOT NULL"));
-            }
-            CompiledQueryFilterOperator::Prefix => {
-                let parameter =
-                    push_value(&mut values, &format!("{}%", escape_like(&filter.values[0])));
-                predicates.push(format!("{column} LIKE ${parameter}::text ESCAPE '\\'"));
-            }
-        }
-    }
-    for (field, finite_values) in grouped_in {
-        if finite_values.is_empty() {
-            return Err(ReadServiceError::Unavailable);
-        }
-        let Some(compiled_field) = entity.fields.get(field) else {
-            return Err(ReadServiceError::Unavailable);
-        };
-        let column = quote_identifier(&compiled_field.physical_name);
-        let cast = postgres_cast(&compiled_field.field_type);
-        let placeholders = finite_values
-            .iter()
-            .map(|value| {
-                let parameter = push_value(&mut values, value);
-                format!("${parameter}::text::{cast}")
-            })
-            .collect::<Vec<_>>();
-        predicates.push(format!("{column} IN ({})", placeholders.join(", ")));
+    let mut predicates = relations.base_predicates.clone();
+    if let Some(filter) = &query.filter {
+        predicates.push(filter_sql(entity, relations, filter, &mut values)?);
     }
     if let Some(instant) = &query.temporal_instant {
         let temporal = entity
@@ -1105,8 +1752,10 @@ fn list_sql(
             .fields
             .get(&temporal.end_field)
             .ok_or(ReadServiceError::Unavailable)?;
-        let start = quote_identifier(&start_field.physical_name);
-        let end = quote_identifier(&end_field.physical_name);
+        let start = relations
+            .field_expression(entity, &temporal.start_field)?
+            .sql;
+        let end = relations.field_expression(entity, &temporal.end_field)?.sql;
         let parameter = push_value(&mut values, instant);
         let instant_expression =
             temporal_instant_expression(&start_field.field_type, &end_field.field_type, parameter)?;
@@ -1124,53 +1773,206 @@ fn list_sql(
             return Err(ReadServiceError::CursorInvalid);
         }
         let record_parameter = push_value(&mut values, &continuation.last_record_id);
-        if let Some(sort) = &query.sort {
-            let Some(compiled_field) = entity.fields.get(sort) else {
-                return Err(ReadServiceError::Unavailable);
-            };
-            let column = quote_identifier(&compiled_field.physical_name);
-            let cast = postgres_cast(&compiled_field.field_type);
+        if let Some(order) = &query.order {
+            let field = relations.field_expression(entity, &order.field_id)?;
+            let cast = postgres_cast(&field.field_type);
             match &continuation.sort_value {
                 Some(value) => {
-                    validate_field_value(value, &compiled_field.field_type)
+                    validate_field_value(value, &field.field_type)
                         .map_err(|_| ReadServiceError::CursorInvalid)?;
                     let sort_parameter = push_value(&mut values, value);
                     predicates.push(format!(
-                        "({column} > ${sort_parameter}::text::{cast} OR {column} IS NULL OR ({column} = ${sort_parameter}::text::{cast} AND record_id > ${record_parameter}::text::uuid))"
+                        "({column} > ${sort_parameter}::text::{cast} OR {column} IS NULL OR ({column} = ${sort_parameter}::text::{cast} AND {id} > ${record_parameter}::text::uuid))",
+                        column = field.sql,
+                        id = relations.id_expression
                     ));
                 }
                 None => predicates.push(format!(
-                    "({column} IS NULL AND record_id > ${record_parameter}::text::uuid)"
+                    "({column} IS NULL AND {id} > ${record_parameter}::text::uuid)",
+                    column = field.sql,
+                    id = relations.id_expression
                 )),
             }
         } else {
-            predicates.push(format!("record_id > ${record_parameter}::text::uuid"));
+            predicates.push(format!(
+                "{} > ${record_parameter}::text::uuid",
+                relations.id_expression
+            ));
         }
     }
-    let order = if let Some(sort) = &query.sort {
-        let column = quote_identifier(
-            &entity
-                .fields
-                .get(sort)
-                .ok_or(ReadServiceError::Unavailable)?
-                .physical_name,
-        );
-        format!("{column} ASC NULLS LAST, record_id ASC")
+    let where_sql = if predicates.is_empty() {
+        "TRUE".to_owned()
     } else {
-        "record_id ASC".to_owned()
+        predicates.join(" AND ")
+    };
+    let order = if let Some(order) = &query.order {
+        let field = relations.field_expression(entity, &order.field_id)?;
+        format!(
+            "{} ASC NULLS LAST, {} ASC",
+            field.sql, relations.id_expression
+        )
+    } else {
+        format!("{} ASC", relations.id_expression)
     };
     let limit_parameter = values.len() + 1;
     Ok((
         format!(
             "SELECT {projection}
-             FROM registry_data.{table}
-             WHERE {}
+             FROM {}
+             WHERE {where_sql}
              ORDER BY {order}
              LIMIT ${limit_parameter}::bigint",
-            predicates.join(" AND ")
+            relations.from_sql
+        ),
+        format!(
+            "SELECT count(*)::bigint
+             FROM {}
+             WHERE {where_sql}",
+            relations.from_sql
         ),
         values,
     ))
+}
+
+fn lookup_sql(
+    entity: &CompiledEntity,
+    relations: &ReadRelations,
+    selector_values: &[LookupSelectorValue],
+    projection: &str,
+) -> Result<(String, Vec<String>), ReadServiceError> {
+    if selector_values.is_empty() {
+        return Err(ReadServiceError::Unavailable);
+    }
+    let mut values = Vec::new();
+    let mut predicates = relations.base_predicates.clone();
+    for selector in selector_values {
+        let field = relations.field_expression(entity, &selector.field_id)?;
+        if field.field_type != selector.field_type {
+            return Err(ReadServiceError::Unavailable);
+        }
+        validate_field_value(&selector.value, &field.field_type)
+            .map_err(|_| ReadServiceError::Unavailable)?;
+        let parameter = push_value(&mut values, &selector.value);
+        predicates.push(format!(
+            "{} = ${parameter}::text::{}",
+            field.sql,
+            postgres_cast(&field.field_type)
+        ));
+    }
+    let where_sql = predicates.join(" AND ");
+    let limit_parameter = values.len() + 1;
+    Ok((
+        format!(
+            "SELECT {projection}
+             FROM {}
+             WHERE {where_sql}
+             ORDER BY {}
+             LIMIT ${limit_parameter}::bigint",
+            relations.from_sql, relations.id_expression,
+        ),
+        values,
+    ))
+}
+
+fn json_expression(expression: &str, field_type: &FieldTypeSource) -> String {
+    if matches!(field_type, FieldTypeSource::Decimal { .. }) {
+        format!("to_jsonb({expression}::text)")
+    } else {
+        format!("to_jsonb({expression})")
+    }
+}
+
+fn filter_sql(
+    entity: &CompiledEntity,
+    relations: &ReadRelations,
+    filter: &ReadFilterExpr,
+    values: &mut Vec<String>,
+) -> Result<String, ReadServiceError> {
+    match filter {
+        ReadFilterExpr::Binary { op, left, right } => {
+            let operator = match op {
+                ReadLogicalOp::And => "AND",
+                ReadLogicalOp::Or => "OR",
+            };
+            Ok(format!(
+                "({} {operator} {})",
+                filter_sql(entity, relations, left, values)?,
+                filter_sql(entity, relations, right, values)?
+            ))
+        }
+        ReadFilterExpr::Not(expr) => Ok(format!(
+            "(NOT {})",
+            filter_sql(entity, relations, expr, values)?
+        )),
+        ReadFilterExpr::Group(expr) => Ok(format!(
+            "({})",
+            filter_sql(entity, relations, expr, values)?
+        )),
+        ReadFilterExpr::Predicate(predicate) => predicate_sql(entity, relations, predicate, values),
+    }
+}
+
+fn predicate_sql(
+    entity: &CompiledEntity,
+    relations: &ReadRelations,
+    predicate: &ReadFilterPredicate,
+    values: &mut Vec<String>,
+) -> Result<String, ReadServiceError> {
+    let field = relations.field_expression(entity, &predicate.field_id)?;
+    if field.field_type != predicate.field_type {
+        return Err(ReadServiceError::Unavailable);
+    }
+    let cast = postgres_cast(&field.field_type);
+    match predicate.operator {
+        ReadFilterOperator::Eq => {
+            let parameter = push_value(values, &predicate.values[0]);
+            Ok(format!("{} = ${parameter}::text::{cast}", field.sql))
+        }
+        ReadFilterOperator::Ne => {
+            let parameter = push_value(values, &predicate.values[0]);
+            Ok(format!("{} <> ${parameter}::text::{cast}", field.sql))
+        }
+        ReadFilterOperator::Lt => {
+            let parameter = push_value(values, &predicate.values[0]);
+            Ok(format!("{} < ${parameter}::text::{cast}", field.sql))
+        }
+        ReadFilterOperator::Le => {
+            let parameter = push_value(values, &predicate.values[0]);
+            Ok(format!("{} <= ${parameter}::text::{cast}", field.sql))
+        }
+        ReadFilterOperator::Gt => {
+            let parameter = push_value(values, &predicate.values[0]);
+            Ok(format!("{} > ${parameter}::text::{cast}", field.sql))
+        }
+        ReadFilterOperator::Ge => {
+            let parameter = push_value(values, &predicate.values[0]);
+            Ok(format!("{} >= ${parameter}::text::{cast}", field.sql))
+        }
+        ReadFilterOperator::In => {
+            if predicate.values.is_empty() {
+                return Err(ReadServiceError::Unavailable);
+            }
+            let placeholders = predicate
+                .values
+                .iter()
+                .map(|value| {
+                    let parameter = push_value(values, value);
+                    format!("${parameter}::text::{cast}")
+                })
+                .collect::<Vec<_>>();
+            Ok(format!("{} IN ({})", field.sql, placeholders.join(", ")))
+        }
+        ReadFilterOperator::IsNull => Ok(format!("{} IS NULL", field.sql)),
+        ReadFilterOperator::IsNotNull => Ok(format!("{} IS NOT NULL", field.sql)),
+        ReadFilterOperator::StartsWith => {
+            let parameter = push_value(values, &format!("{}%", escape_like(&predicate.values[0])));
+            Ok(format!("{} LIKE ${parameter}::text ESCAPE '\\'", field.sql))
+        }
+        ReadFilterOperator::Contains => {
+            let parameter = push_value(values, &format!("%{}%", escape_like(&predicate.values[0])));
+            Ok(format!("{} LIKE ${parameter}::text ESCAPE '\\'", field.sql))
+        }
+    }
 }
 
 fn temporal_instant_expression(
@@ -1247,7 +2049,7 @@ fn row_to_record(
     let revision = u64::try_from(revision).map_err(|_| ReadServiceError::Unavailable)?;
     let mut data = Map::new();
     for (index, field) in selected_fields.iter().enumerate() {
-        if !entity.fields.contains_key(field) {
+        if compiled_field_type(entity, field).is_none() {
             return Err(ReadServiceError::Unavailable);
         }
         let value = row
@@ -1293,6 +2095,10 @@ fn quote_identifier(value: &str) -> String {
     format!("\"{value}\"")
 }
 
+fn sql_quote_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
 fn valid_canonical_uuid(value: &str) -> bool {
     value.len() == 36
         && value.bytes().enumerate().all(|(index, byte)| match index {
@@ -1308,12 +2114,18 @@ mod tests {
     use std::time::Duration;
 
     use crate::api::{
-        AuthorizedRequestContext, CompiledReadQuery, ReadFilterClause, RecordReadRequest,
+        AuthorizedRequestContext, CompiledReadQuery, ReadFilterExpr, ReadFilterOperator,
+        ReadFilterPredicate, ReadOrderClause, ReadProjectionField, RecordReadKind,
+        RecordReadRequest,
     };
     use crate::compiler::{compile_project, CompileProfile};
-    use crate::contract::{parse_project_json, FieldTypeSource, Operation};
-    use crate::cursor::{CursorBinding, CursorCodec, CursorContinuation, CursorQuery};
-    use crate::model::{CompiledQueryFilterOperator, CompiledQueryKind, HttpMethod};
+    use crate::contract::{parse_project_json, FieldTypeSource};
+    use crate::cursor::{
+        CursorBinding, CursorCodec, CursorContinuation, CursorFilterExpr, CursorFilterOperator,
+        CursorFilterPredicate, CursorOrderClause, CursorProjectionField, CursorQuery,
+        CursorQueryScope,
+    };
+    use crate::model::{CompiledQueryKind, CompiledQuerySortDirection, HttpMethod};
     use zeroize::Zeroizing;
 
     use super::{
@@ -1391,113 +2203,154 @@ mod tests {
             entity_id: "case".to_owned(),
             operation_id: "records.case.list".to_owned(),
             method: HttpMethod::Get,
-            record_id: None,
             context: AuthorizedRequestContext::new(None, None, "public".to_owned(), Vec::new()),
             selected_fields: BTreeSet::from(["label".to_owned()]),
-            query: Some(CompiledReadQuery {
-                route_id: operation.route_id.clone(),
-                query_operation_id: operation.id.clone(),
-                kind: CompiledQueryKind::List,
-                cursor_binding: CursorBinding {
-                    package_revision: expected.package_revision.clone(),
-                    schema_fingerprint: expected.schema_fingerprint.clone(),
-                    registry_revision: registry.revision().to_owned(),
+            kind: RecordReadKind::List {
+                plan: CompiledReadQuery {
                     route_id: operation.route_id.clone(),
                     query_operation_id: operation.id.clone(),
-                    query_kind: CompiledQueryKind::List,
-                    selected_profile: "public".to_owned(),
-                    principal_reference: None,
-                    purpose_reference: None,
-                    row_boundary_reference: digest(),
-                    projection_reference: digest(),
-                    query_reference: digest(),
-                    sort_reference: digest(),
+                    kind: CompiledQueryKind::List,
+                    cursor_binding: CursorBinding {
+                        package_revision: expected.package_revision.clone(),
+                        schema_fingerprint: expected.schema_fingerprint.clone(),
+                        registry_revision: registry.revision().to_owned(),
+                        route_id: operation.route_id.clone(),
+                        query_operation_id: operation.id.clone(),
+                        query_kind: CompiledQueryKind::List,
+                        selected_profile: "public".to_owned(),
+                        principal_reference: None,
+                        purpose_reference: None,
+                        row_boundary_reference: digest(),
+                        projection_reference: digest(),
+                        query_reference: digest(),
+                        sort_reference: digest(),
+                        scope_reference: digest(),
+                        page_size: 10,
+                        include_count: false,
+                        temporal_instant: None,
+                        selected_fields: vec!["label".to_owned()],
+                    },
+                    cursor_query: CursorQuery {
+                        projection: vec![CursorProjectionField {
+                            field_id: "label".to_owned(),
+                            field_type: FieldTypeSource::String {
+                                min_length: 0,
+                                max_length: 32,
+                            },
+                        }],
+                        filter: Some(CursorFilterExpr::Predicate {
+                            predicate: CursorFilterPredicate {
+                                field_id: "secret".to_owned(),
+                                field_type: FieldTypeSource::String {
+                                    min_length: 0,
+                                    max_length: 32,
+                                },
+                                operator: CursorFilterOperator::Eq,
+                                values: vec!["hidden".to_owned()],
+                            },
+                        }),
+                        order: None,
+                        include_count: false,
+                        page_size: 10,
+                        temporal_instant: None,
+                        scope: CursorQueryScope::Collection {},
+                    },
+                    projection: vec![ReadProjectionField {
+                        field_id: "label".to_owned(),
+                        field_type: FieldTypeSource::String {
+                            min_length: 0,
+                            max_length: 32,
+                        },
+                    }],
+                    filter: Some(ReadFilterExpr::Predicate(ReadFilterPredicate {
+                        field_id: "secret".to_owned(),
+                        field_type: FieldTypeSource::String {
+                            min_length: 0,
+                            max_length: 32,
+                        },
+                        operator: ReadFilterOperator::Eq,
+                        values: vec!["hidden".to_owned()],
+                    })),
+                    order: None,
+                    include_count: false,
                     page_size: 10,
                     temporal_instant: None,
-                    selected_fields: vec!["label".to_owned()],
+                    continuation: None,
                 },
-                cursor_query: CursorQuery {
-                    filters: Vec::new(),
-                    sort: None,
-                },
-                filters: vec![ReadFilterClause {
-                    field: "secret".to_owned(),
-                    operator: CompiledQueryFilterOperator::Equals,
-                    values: vec!["hidden".to_owned()],
-                }],
-                sort: None,
-                page_size: 10,
-                temporal_instant: None,
-                continuation: None,
-            }),
+            },
             maximum_records: 11,
         };
-        assert!(
-            ReadPlan::from_request(&registry, &expected, &cursors, &request, Operation::List)
-                .is_err()
-        );
+        assert!(ReadPlan::from_request(&registry, &expected, &cursors, &request).is_err());
 
-        let query = request.query.as_mut().expect("query present");
-        query.filters.clear();
-        query.sort = Some("secret".to_owned());
-        query.cursor_query.sort = Some("secret".to_owned());
-        assert!(
-            ReadPlan::from_request(&registry, &expected, &cursors, &request, Operation::List)
-                .is_err()
-        );
+        let query = query_mut(&mut request);
+        query.filter = None;
+        query.cursor_query.filter = None;
+        query.order = Some(ReadOrderClause {
+            field_id: "secret".to_owned(),
+            field_type: FieldTypeSource::String {
+                min_length: 0,
+                max_length: 32,
+            },
+            direction: CompiledQuerySortDirection::Asc,
+        });
+        query.cursor_query.order = Some(CursorOrderClause {
+            field_id: "secret".to_owned(),
+            field_type: FieldTypeSource::String {
+                min_length: 0,
+                max_length: 32,
+            },
+            direction: CompiledQuerySortDirection::Asc,
+        });
+        assert!(ReadPlan::from_request(&registry, &expected, &cursors, &request).is_err());
 
-        let query = request.query.as_mut().expect("query present");
-        query.sort = None;
-        query.cursor_query.sort = None;
+        let query = query_mut(&mut request);
+        query.order = None;
+        query.cursor_query.order = None;
         query.cursor_binding.query_reference = "hidden-raw-query-value".to_owned();
-        assert!(
-            ReadPlan::from_request(&registry, &expected, &cursors, &request, Operation::List)
-                .is_err()
-        );
+        assert!(ReadPlan::from_request(&registry, &expected, &cursors, &request).is_err());
 
-        let query = request.query.as_mut().expect("query present");
+        let query = query_mut(&mut request);
         query.cursor_binding.query_reference = digest();
         query.continuation = Some(CursorContinuation {
             last_record_id: "not-a-canonical-uuid".to_owned(),
             sort_value: None,
         });
-        assert!(
-            ReadPlan::from_request(&registry, &expected, &cursors, &request, Operation::List)
-                .is_err()
-        );
+        assert!(ReadPlan::from_request(&registry, &expected, &cursors, &request).is_err());
 
-        let query = request.query.as_mut().expect("query present");
+        let query = query_mut(&mut request);
         query.continuation = None;
-        let references = cursor_binding_references(
-            &cursors,
-            &request,
-            operation,
-            request.query.as_ref().expect("query present"),
-        )
-        .expect("bounded request context has cursor references");
-        let query = request.query.as_mut().expect("query present");
+        let references =
+            cursor_binding_references(&cursors, &request, operation, query_ref(&request))
+                .expect("bounded request context has cursor references");
+        let query = query_mut(&mut request);
         query.cursor_binding.principal_reference = references.principal;
         query.cursor_binding.purpose_reference = references.purpose;
         query.cursor_binding.row_boundary_reference = references.row_boundary;
         query.cursor_binding.projection_reference = references.projection;
         query.cursor_binding.query_reference = references.query;
         query.cursor_binding.sort_reference = references.sort;
-        assert!(
-            ReadPlan::from_request(&registry, &expected, &cursors, &request, Operation::List)
-                .is_ok()
-        );
+        query.cursor_binding.scope_reference = references.scope;
+        assert!(ReadPlan::from_request(&registry, &expected, &cursors, &request).is_ok());
 
-        request
-            .query
-            .as_mut()
-            .expect("query present")
-            .cursor_binding
-            .query_reference = digest();
+        query_mut(&mut request).cursor_binding.query_reference = digest();
         assert!(
-            ReadPlan::from_request(&registry, &expected, &cursors, &request, Operation::List)
-                .is_err(),
+            ReadPlan::from_request(&registry, &expected, &cursors, &request).is_err(),
             "a well-shaped forged binding digest fails before SQL construction"
         );
+    }
+
+    fn query_ref(request: &RecordReadRequest) -> &CompiledReadQuery {
+        match &request.kind {
+            RecordReadKind::List { plan } => plan,
+            _ => unreachable!("test request is a list"),
+        }
+    }
+
+    fn query_mut(request: &mut RecordReadRequest) -> &mut CompiledReadQuery {
+        match &mut request.kind {
+            RecordReadKind::List { plan } => plan,
+            _ => unreachable!("test request is a list"),
+        }
     }
 
     fn digest() -> String {

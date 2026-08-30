@@ -814,6 +814,7 @@ fn build_request(
             id: "core".to_owned(),
             path: "source/modules/core/module.yaml".to_owned(),
             bytes: module_bytes,
+            assets: Vec::new(),
         }],
         fixture_journeys: PackageSourceFile {
             path: "tests/journeys.yaml".to_owned(),

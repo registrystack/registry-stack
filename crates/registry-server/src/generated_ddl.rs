@@ -19,11 +19,14 @@ pub enum DdlStatementKind {
     Schema,
     Table,
     Column,
+    View,
+    Function,
     Reference,
     Constraint,
     Index,
     RowSecurity,
     Policy,
+    Grant,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -85,6 +88,25 @@ pub struct DdlTable {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct DdlView {
+    pub id: String,
+    pub schema: String,
+    pub name: String,
+    pub runtime_privileges: BTreeSet<TablePrivilege>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct DdlFunction {
+    pub id: String,
+    pub schema: String,
+    pub name: String,
+    pub arguments: String,
+    pub runtime_execute: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DdlStatement {
     pub id: String,
     pub kind: DdlStatementKind,
@@ -97,6 +119,10 @@ pub struct DdlInventory {
     pub requires_btree_gist: bool,
     pub statements: Vec<DdlStatement>,
     pub tables: Vec<DdlTable>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub views: Vec<DdlView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub functions: Vec<DdlFunction>,
 }
 
 impl DdlInventory {
@@ -119,6 +145,26 @@ pub(crate) fn generate_ddl(
         kind: DdlStatementKind::Schema,
         sql: "CREATE SCHEMA IF NOT EXISTS registry_data".to_owned(),
     }];
+    for schema in ["registry_source", "registry_derived", "registry_context"] {
+        statements.push(DdlStatement {
+            id: format!("schema.{schema}"),
+            kind: DdlStatementKind::Schema,
+            sql: format!("CREATE SCHEMA IF NOT EXISTS {schema}"),
+        });
+    }
+    statements.push(DdlStatement {
+        id: "function.registry_context.evaluation_date".to_owned(),
+        kind: DdlStatementKind::Function,
+        sql: "CREATE OR REPLACE FUNCTION registry_context.evaluation_date()
+              RETURNS date
+              LANGUAGE sql
+              STABLE
+              SECURITY INVOKER
+              AS $registry_server_function$
+                  SELECT NULLIF(current_setting('registry.evaluation_date', true), '')::date
+              $registry_server_function$"
+            .to_owned(),
+    });
 
     for entity in entities.values() {
         let mut columns = vec![
@@ -202,9 +248,17 @@ pub(crate) fn generate_ddl(
     }
 
     let mut tables = Vec::new();
+    let mut views = Vec::new();
+    let functions = vec![DdlFunction {
+        id: "registry_context.evaluation_date".to_owned(),
+        schema: "registry_context".to_owned(),
+        name: "evaluation_date".to_owned(),
+        arguments: String::new(),
+        runtime_execute: true,
+    }];
     for entity in entities.values() {
-        let runtime_privileges = runtime_privileges(entity);
-        let policies = policies(entity);
+        let runtime_privileges = runtime_privileges(entity, entities);
+        let policies = policies(entity, entities);
         let table = quote_identifier(&entity.physical_table);
         statements.push(DdlStatement {
             id: format!("entity.{}.rls.enable", entity.id),
@@ -218,12 +272,7 @@ pub(crate) fn generate_ddl(
         });
         for policy in &policies {
             statements.push(DdlStatement {
-                id: format!(
-                    "entity.{}.policy.{}.{}",
-                    entity.id,
-                    policy.access_profile,
-                    policy.command.as_sql().to_ascii_lowercase()
-                ),
+                id: format!("entity.{}.policy.{}", entity.id, policy.name),
                 kind: DdlStatementKind::Policy,
                 sql: policy_sql(&table, policy),
             });
@@ -234,6 +283,85 @@ pub(crate) fn generate_ddl(
             runtime_privileges,
             policies,
         });
+
+        let source_view = quote_identifier(&entity.source_relation.sql_name);
+        let mut source_columns = vec!["record_id AS id".to_owned()];
+        for field_id in &entity.source_relation.stored_fields {
+            let field = entity
+                .stored_fields
+                .iter()
+                .find(|field| field.logical.id == *field_id)
+                .expect("compiled source relation names only stored fields");
+            source_columns.push(format!(
+                "{} AS {}",
+                quote_identifier(&field.physical_name),
+                quote_identifier(&field.logical.sql_name)
+            ));
+        }
+        statements.push(DdlStatement {
+            id: format!("entity.{}.source-view", entity.id),
+            kind: DdlStatementKind::View,
+            sql: format!(
+                "CREATE VIEW registry_source.{source_view}
+                 WITH (security_invoker=true, security_barrier=true)
+                 AS SELECT {}
+                    FROM registry_data.{}
+                   WHERE record_lifecycle = 'active'",
+                source_columns.join(", "),
+                quote_identifier(&entity.physical_table),
+            ),
+        });
+        views.push(DdlView {
+            id: format!("entity.{}.source", entity.id),
+            schema: "registry_source".to_owned(),
+            name: entity.source_relation.sql_name.clone(),
+            runtime_privileges: BTreeSet::from([TablePrivilege::Select]),
+        });
+
+        for relation in entity.derived_relations.values() {
+            let derived_view_name =
+                derived_view_name(&entity.source_relation.sql_name, &relation.id);
+            let view = quote_identifier(&derived_view_name);
+            let sql = std::str::from_utf8(&relation.sql_bytes)
+                .expect("derived SQL asset was UTF-8 validated")
+                .trim()
+                .trim_end_matches(';');
+            let mut columns = vec![format!(
+                "{}::{} AS {}",
+                quote_identifier(&relation.key_field.replace('-', "_")),
+                sql_type(&entity.canonical_id.field_type),
+                quote_identifier(&entity.canonical_id.sql_name)
+            )];
+            for field_id in &relation.fields {
+                let field = entity
+                    .derived_fields
+                    .get(field_id)
+                    .expect("compiled relation names only derived fields");
+                columns.push(format!(
+                    "{}::{} AS {}",
+                    quote_identifier(&field.logical.sql_name),
+                    sql_type(&field.logical.field_type),
+                    quote_identifier(&field.logical.sql_name)
+                ));
+            }
+            statements.push(DdlStatement {
+                id: format!("entity.{}.derived.{}.view", entity.id, relation.id),
+                kind: DdlStatementKind::View,
+                sql: format!(
+                    "CREATE VIEW registry_derived.{view}
+                     WITH (security_invoker=true, security_barrier=true)
+                     AS SELECT {}
+                        FROM ({sql}) AS trusted_derived",
+                    columns.join(", "),
+                ),
+            });
+            views.push(DdlView {
+                id: format!("entity.{}.derived.{}", entity.id, relation.id),
+                schema: "registry_derived".to_owned(),
+                name: derived_view_name,
+                runtime_privileges: BTreeSet::from([TablePrivilege::Select]),
+            });
+        }
     }
 
     DdlInventory {
@@ -245,7 +373,19 @@ pub(crate) fn generate_ddl(
         }),
         statements,
         tables,
+        views,
+        functions,
     }
+}
+
+pub(crate) fn derived_view_name(source_relation: &str, derived_relation: &str) -> String {
+    let slug = derived_relation.replace('-', "_");
+    let candidate = format!("{source_relation}__{slug}");
+    if candidate.len() <= 63 {
+        return candidate;
+    }
+    let digest = Sha256::digest(format!("registry-server/derived-view/{candidate}").as_bytes());
+    format!("{}_{}", &candidate[..46], hex_prefix(&digest, 8))
 }
 
 #[cfg(feature = "runtime")]
@@ -278,7 +418,10 @@ fn column_definition(field: &crate::model::CompiledField) -> String {
     column
 }
 
-fn runtime_privileges(entity: &CompiledEntity) -> BTreeSet<TablePrivilege> {
+fn runtime_privileges(
+    entity: &CompiledEntity,
+    entities: &BTreeMap<String, CompiledEntity>,
+) -> BTreeSet<TablePrivilege> {
     let operations = entity
         .access_profiles
         .values()
@@ -288,9 +431,14 @@ fn runtime_privileges(entity: &CompiledEntity) -> BTreeSet<TablePrivilege> {
     if operations.iter().any(|operation| {
         matches!(
             operation,
-            Operation::Get | Operation::List | Operation::Batch | Operation::Revisions
+            Operation::Get
+                | Operation::Lookup
+                | Operation::List
+                | Operation::Batch
+                | Operation::Revisions
         )
-    }) {
+    }) || path_select_entities(entities).contains(&entity.id)
+    {
         privileges.insert(TablePrivilege::Select);
     }
     if operations.contains(&Operation::Create) {
@@ -305,7 +453,10 @@ fn runtime_privileges(entity: &CompiledEntity) -> BTreeSet<TablePrivilege> {
     privileges
 }
 
-fn policies(entity: &CompiledEntity) -> Vec<DdlPolicy> {
+fn policies(
+    entity: &CompiledEntity,
+    entities: &BTreeMap<String, CompiledEntity>,
+) -> Vec<DdlPolicy> {
     let mut policies = Vec::new();
     for profile in entity.access_profiles.values() {
         for command in [
@@ -347,6 +498,7 @@ fn policies(entity: &CompiledEntity) -> Vec<DdlPolicy> {
             });
         }
     }
+    policies.extend(read_path_policies_for_table(entity, entities));
     policies
 }
 
@@ -355,7 +507,11 @@ fn profile_supports_command(operations: &BTreeSet<Operation>, command: PolicyCom
         PolicyCommand::Select => operations.iter().any(|operation| {
             matches!(
                 operation,
-                Operation::Get | Operation::List | Operation::Batch | Operation::Revisions
+                Operation::Get
+                    | Operation::Lookup
+                    | Operation::List
+                    | Operation::Batch
+                    | Operation::Revisions
             )
         }),
         PolicyCommand::Insert => operations.contains(&Operation::Create),
@@ -365,9 +521,167 @@ fn profile_supports_command(operations: &BTreeSet<Operation>, command: PolicyCom
     }
 }
 
+fn path_select_entities(entities: &BTreeMap<String, CompiledEntity>) -> BTreeSet<String> {
+    let mut selected = BTreeSet::new();
+    for source in entities.values() {
+        for profile in source.access_profiles.values() {
+            for grant in &profile.read_paths {
+                let Some(path) = source.read_paths.get(&grant.path) else {
+                    continue;
+                };
+                selected.insert(source.id.clone());
+                selected.insert(path.through.clone());
+                selected.insert(path.to.clone());
+            }
+        }
+    }
+    selected
+}
+
+fn read_path_policies_for_table(
+    table_entity: &CompiledEntity,
+    entities: &BTreeMap<String, CompiledEntity>,
+) -> Vec<DdlPolicy> {
+    let mut policies = Vec::new();
+    for source in entities.values() {
+        for profile in source.access_profiles.values() {
+            for grant in &profile.read_paths {
+                let Some(path) = source.read_paths.get(&grant.path) else {
+                    continue;
+                };
+                if table_entity.id == source.id {
+                    policies.push(read_path_source_policy(table_entity, profile, path));
+                } else if table_entity.id == path.through {
+                    policies.push(read_path_through_policy(
+                        table_entity,
+                        source,
+                        profile,
+                        path,
+                    ));
+                } else if table_entity.id == path.to {
+                    let Some(through) = entities.get(&path.through) else {
+                        continue;
+                    };
+                    policies.push(read_path_target_policy(
+                        table_entity,
+                        through,
+                        source,
+                        profile,
+                        path,
+                    ));
+                }
+            }
+        }
+    }
+    policies
+}
+
+fn read_path_source_policy(
+    source: &CompiledEntity,
+    profile: &crate::contract::AccessProfileSource,
+    path: &crate::model::CompiledReadPath,
+) -> DdlPolicy {
+    let root_id = "NULLIF(current_setting('registry.read_path_root_id', true), '')::uuid";
+    DdlPolicy {
+        name: read_path_policy_name(&source.id, &source.id, &profile.id, &path.id, "source"),
+        command: PolicyCommand::Select,
+        access_profile: profile.id.clone(),
+        using_expression: Some(format!(
+            "({}) AND {} AND record_id = {root_id} AND record_lifecycle = 'active'",
+            policy_authority_expression(source, profile),
+            read_path_setting_expression(path),
+        )),
+        check_expression: None,
+    }
+}
+
+fn read_path_through_policy(
+    through: &CompiledEntity,
+    source: &CompiledEntity,
+    profile: &crate::contract::AccessProfileSource,
+    path: &crate::model::CompiledReadPath,
+) -> DdlPolicy {
+    let source_ref = field_name(through, &path.source_ref);
+    let root_id = "NULLIF(current_setting('registry.read_path_root_id', true), '')::uuid";
+    let source_authority =
+        policy_authority_expression_for_alias(source, profile, Some("path_source"));
+    DdlPolicy {
+        name: read_path_policy_name(&through.id, &source.id, &profile.id, &path.id, "through"),
+        command: PolicyCommand::Select,
+        access_profile: profile.id.clone(),
+        using_expression: Some(format!(
+            "({}) AND {} AND record_lifecycle = 'active' AND {source_ref} = {root_id}
+             AND EXISTS (
+                 SELECT 1
+                   FROM registry_data.{} AS path_source
+                  WHERE path_source.record_id = {source_ref}
+                    AND path_source.record_lifecycle = 'active'
+                    AND ({source_authority})
+             )",
+            session_authority_expression(profile),
+            read_path_setting_expression(path),
+            quote_identifier(&source.physical_table),
+        )),
+        check_expression: None,
+    }
+}
+
+fn read_path_target_policy(
+    target: &CompiledEntity,
+    through: &CompiledEntity,
+    source: &CompiledEntity,
+    profile: &crate::contract::AccessProfileSource,
+    path: &crate::model::CompiledReadPath,
+) -> DdlPolicy {
+    let through_source_ref = format!("path_edge.{}", field_name(through, &path.source_ref));
+    let through_target_ref = format!("path_edge.{}", field_name(through, &path.target_ref));
+    let root_id = "NULLIF(current_setting('registry.read_path_root_id', true), '')::uuid";
+    let source_authority =
+        policy_authority_expression_for_alias(source, profile, Some("path_source"));
+    DdlPolicy {
+        name: read_path_policy_name(&target.id, &source.id, &profile.id, &path.id, "target"),
+        command: PolicyCommand::Select,
+        access_profile: profile.id.clone(),
+        using_expression: Some(format!(
+            "({}) AND {} AND record_lifecycle = 'active'
+             AND EXISTS (
+                 SELECT 1
+                   FROM registry_data.{} AS path_edge
+                   JOIN registry_data.{} AS path_source
+                     ON path_source.record_id = {through_source_ref}
+                  WHERE {through_target_ref} = record_id
+                    AND {through_source_ref} = {root_id}
+                    AND path_edge.record_lifecycle = 'active'
+                    AND path_source.record_lifecycle = 'active'
+                    AND ({source_authority})
+             )",
+            session_authority_expression(profile),
+            read_path_setting_expression(path),
+            quote_identifier(&through.physical_table),
+            quote_identifier(&source.physical_table),
+        )),
+        check_expression: None,
+    }
+}
+
+fn read_path_setting_expression(path: &crate::model::CompiledReadPath) -> String {
+    format!(
+        "NULLIF(current_setting('registry.read_path_id', true), '') = {}",
+        quote_literal(&path.id)
+    )
+}
+
 fn policy_authority_expression(
     entity: &CompiledEntity,
     profile: &crate::contract::AccessProfileSource,
+) -> String {
+    policy_authority_expression_for_alias(entity, profile, None)
+}
+
+fn policy_authority_expression_for_alias(
+    entity: &CompiledEntity,
+    profile: &crate::contract::AccessProfileSource,
+    alias: Option<&str>,
 ) -> String {
     let mut predicates = vec![format!(
         "NULLIF(current_setting('registry.access_profile', true), '') = {}",
@@ -414,8 +728,8 @@ fn policy_authority_expression(
             })
         ));
         predicates.push(format!("jsonb_typeof({values}) = 'array'"));
-        let column = field_name(entity, &boundary.field);
-        let value_type = policy_value_type(&entity.fields[&boundary.field].field_type);
+        let column = field_name_with_alias(entity, &boundary.field, alias);
+        let value_type = policy_value_type(&logical_field_type(entity, &boundary.field));
         match boundary.operator {
             BoundaryOperator::Equals => {
                 predicates.push(format!("jsonb_array_length({values}) = 1"));
@@ -428,6 +742,29 @@ fn policy_authority_expression(
                 ));
             }
         }
+    }
+    predicates.join(" AND ")
+}
+
+fn session_authority_expression(profile: &crate::contract::AccessProfileSource) -> String {
+    let mut predicates = vec![format!(
+        "NULLIF(current_setting('registry.access_profile', true), '') = {}",
+        quote_literal(&profile.id)
+    )];
+    if !profile.anonymous {
+        predicates
+            .push("NULLIF(current_setting('registry.principal', true), '') IS NOT NULL".to_owned());
+    }
+    if !profile.required_purposes.is_empty() {
+        let purposes = profile
+            .required_purposes
+            .iter()
+            .map(|purpose| quote_literal(purpose))
+            .collect::<Vec<_>>()
+            .join(", ");
+        predicates.push(format!(
+            "NULLIF(current_setting('registry.purpose', true), '') IN ({purposes})"
+        ));
     }
     predicates.join(" AND ")
 }
@@ -465,6 +802,27 @@ fn policy_name(entity_id: &str, profile_id: &str, command: PolicyCommand) -> Str
         command.as_sql().to_ascii_lowercase(),
         suffix
     )
+}
+
+fn read_path_policy_name(
+    table_entity_id: &str,
+    source_entity_id: &str,
+    profile_id: &str,
+    path_id: &str,
+    role: &str,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"registry-server/read-path-rls-policy/v1");
+    for value in [table_entity_id, source_entity_id, profile_id, path_id, role] {
+        hasher.update((value.len() as u64).to_be_bytes());
+        hasher.update(value.as_bytes());
+    }
+    let digest = hasher.finalize();
+    let suffix = digest[..12]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("registry_path_rls_select_{suffix}")
 }
 
 fn policy_sql(table: &str, policy: &DdlPolicy) -> String {
@@ -813,7 +1171,25 @@ fn field_list(entity: &CompiledEntity, fields: &[String]) -> String {
 }
 
 fn field_name(entity: &CompiledEntity, field: &str) -> String {
+    if field == "id" {
+        return quote_identifier(&entity.canonical_id.sql_name);
+    }
     quote_identifier(&entity.fields[field].physical_name)
+}
+
+fn logical_field_type(entity: &CompiledEntity, field: &str) -> FieldTypeSource {
+    if field == "id" {
+        return entity.canonical_id.field_type.clone();
+    }
+    entity.fields[field].field_type.clone()
+}
+
+fn field_name_with_alias(entity: &CompiledEntity, field: &str, alias: Option<&str>) -> String {
+    let field = field_name(entity, field);
+    match alias {
+        Some(alias) => format!("{alias}.{field}"),
+        None => field,
+    }
 }
 
 fn comparison_operator(operator: ComparisonOperator) -> &'static str {

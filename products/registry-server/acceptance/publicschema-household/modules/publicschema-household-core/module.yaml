@@ -10,6 +10,7 @@ entities:
       - {id: legal-name, type: string, required: true, maxLength: 160, classification: restricted}
       - {id: family-name, type: string, required: false, maxLength: 120, classification: restricted}
       - {id: date-of-birth, type: date, required: false, classification: restricted}
+      - {id: person-sex, type: vocabulary-code, vocabulary: person-sex, required: true, classification: restricted}
     constraints:
       - {kind: unique, fields: [person-code]}
   - id: household
@@ -18,11 +19,18 @@ entities:
     classification: restricted
     fields:
       - {id: household-code, type: string, required: true, maxLength: 64, classification: restricted}
+      - {id: local-household-number, type: int64, required: true, classification: restricted}
       - {id: household-name, type: string, required: true, maxLength: 160, classification: restricted}
       - {id: administrative-area, type: string, required: true, maxLength: 80, classification: restricted}
       - {id: household-type, type: vocabulary-code, vocabulary: household-type, required: true, classification: restricted}
     constraints:
       - {kind: unique, fields: [household-code]}
+      - {kind: unique, fields: [administrative-area, local-household-number]}
+    selectorProfiles:
+      - {id: by-local-reference, fields: [administrative-area, local-household-number]}
+      - {id: by-household-code, fields: [household-code]}
+    readPaths:
+      - {id: people, through: group-membership, to: person, route: people}
   - id: group-membership
     route: group-memberships
     mutationMode: mutable
