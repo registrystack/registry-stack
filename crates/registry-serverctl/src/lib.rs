@@ -2248,6 +2248,11 @@ fn load_module_files(
                 "module sources cannot be read",
             )
         })?;
+        // Finder metadata is not an authored module. Ignore only this exact
+        // regular file; every other unexpected entry remains fail-closed.
+        if entry.file_name() == ".DS_Store" && file_type.is_file() {
+            continue;
+        }
         if file_type.is_symlink() || !file_type.is_dir() {
             return Err(diagnostic(
                 "source.modules.invalid",
@@ -2399,9 +2404,7 @@ fn selected_artifacts(
         .filter(|artifact| match selector {
             ArtifactSelector::Openapi => artifact.path == "generated/openapi.json",
             ArtifactSelector::Schemas => artifact.path.starts_with("generated/schemas/"),
-            ArtifactSelector::Manifest => {
-                artifact.path == "generated/manifest/registry-manifest.json"
-            }
+            ArtifactSelector::Manifest => artifact.path.starts_with("generated/manifest/"),
             ArtifactSelector::Metadata => artifact.path == "generated/metadata/registry.json",
             ArtifactSelector::Sql => artifact.path == "generated/postgres/schema.sql",
         })

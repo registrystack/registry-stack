@@ -15,6 +15,7 @@ entries:
   - {path: openapi/openapi.json, role: generated-openapi, required: true}
   - {path: schemas, role: entity-json-schemas, required: true}
   - {path: manifest/registry-manifest.json, role: lossy-manifest-projection, required: true}
+  - {path: manifest/dcat.jsonld, role: dcat-catalog-projection, required: true}
   - {path: tests/journeys.yaml, role: fixture-journeys, required: true}
   - {path: signatures, role: package-signatures, required: false}
 

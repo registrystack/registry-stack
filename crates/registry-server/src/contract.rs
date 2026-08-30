@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use jsonschema::{Draft, JSONSchema};
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
@@ -60,6 +60,20 @@ pub struct ManifestProjectionSource {
     pub classification_ceiling: Classification,
     pub catalog: ManifestProjectionCatalogSource,
     pub dataset: ManifestProjectionDatasetSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_service: Option<ManifestProjectionDataServiceSource>,
+    #[serde(default)]
+    pub entities: Vec<ManifestProjectionEntitySource>,
+    #[serde(default)]
+    pub vocabularies: Vec<ManifestProjectionVocabularySource>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ManifestProjectionTextSource {
+    Plain(String),
+    Localized(BTreeMap<String, String>),
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -67,12 +81,38 @@ pub struct ManifestProjectionSource {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ManifestProjectionCatalogSource {
     pub base_url: String,
-    pub title: String,
+    pub title: ManifestProjectionTextSource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
+    pub description: Option<ManifestProjectionTextSource>,
     pub publisher: ManifestProjectionPublisherSource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub participant_id: Option<String>,
+    #[serde(default)]
+    pub conforms_to: Vec<String>,
+    #[serde(default)]
+    pub standards: ManifestProjectionStandardsSource,
+    #[serde(default)]
+    pub application_profiles: Vec<ManifestProjectionApplicationProfileSource>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ManifestProjectionStandardsSource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dcat: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shacl: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub json_schema: Option<String>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ManifestProjectionApplicationProfileSource {
+    pub id: String,
+    pub version: String,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -90,13 +130,105 @@ pub struct ManifestProjectionPublisherSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ManifestProjectionDatasetSource {
-    pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
+    pub id: Option<String>,
+    pub title: ManifestProjectionTextSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<ManifestProjectionTextSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<ManifestProjectionDatasetStatus>,
+    #[serde(default)]
+    pub conforms_to: Vec<String>,
+    #[serde(default)]
+    pub applicable_legislation: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spatial_coverage: Option<String>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ManifestProjectionDataServiceSource {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub iri: Option<String>,
+    pub title: ManifestProjectionTextSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<ManifestProjectionTextSource>,
+    pub endpoint_url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint_description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conforms_to: Option<String>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ManifestProjectionEntitySource {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<ManifestProjectionTextSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<ManifestProjectionTextSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub concept_uri: Option<String>,
+    #[serde(default)]
+    pub identifiers: Vec<ManifestProjectionIdentifierSource>,
+    #[serde(default)]
+    pub fields: Vec<ManifestProjectionFieldSource>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ManifestProjectionIdentifierSource {
+    pub field: String,
+    pub kind: String,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ManifestProjectionFieldSource {
+    pub id: String,
+    #[serde(default)]
+    pub concepts: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relationship_role: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relationship_concept_uri: Option<String>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ManifestProjectionVocabularySource {
+    pub id: String,
+    pub scheme_iri: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_ref: Option<String>,
+    #[serde(default)]
+    pub concepts: Vec<ManifestProjectionVocabularyConceptSource>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ManifestProjectionVocabularyConceptSource {
+    pub code: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub iri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<ManifestProjectionTextSource>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

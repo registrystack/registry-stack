@@ -373,8 +373,42 @@ fn all_acceptance_fixtures_compile_manifest_projection_under_production() {
             .unwrap_or_else(|| panic!("{domain} Manifest projection is generated"));
         let manifest: MetadataManifest = serde_json::from_slice(&artifact.bytes)
             .unwrap_or_else(|error| panic!("{domain} Manifest projection parses: {error}"));
-        compile_manifest(&manifest)
+        let manifest = compile_manifest(&manifest)
             .unwrap_or_else(|error| panic!("{domain} Manifest projection compiles: {error:?}"));
+        let dcat = compiled
+            .artifacts()
+            .get("generated/manifest/dcat.jsonld")
+            .unwrap_or_else(|| panic!("{domain} DCAT projection is generated"));
+        let dcat = parse_json_strict(&dcat.bytes)
+            .unwrap_or_else(|error| panic!("{domain} DCAT projection parses: {error}"));
+
+        if domain == "publicschema-household" {
+            let dataset = manifest
+                .dataset("household-registry")
+                .expect("configured dataset id is preserved");
+            assert_eq!(
+                dataset.entities["person"].concept_uri.as_deref(),
+                Some("https://publicschema.org/Person")
+            );
+            assert_eq!(
+                dataset.entities["group-membership"]
+                    .relationships
+                    .iter()
+                    .find(|relationship| relationship.name == "household")
+                    .expect("household relationship is projected")
+                    .concept_uri
+                    .as_deref(),
+                Some("https://publicschema.org/group")
+            );
+            assert_eq!(manifest.data_services().count(), 1);
+            assert!(manifest
+                .codelists()
+                .any(|codelist| codelist.id == "household-relationship"));
+            assert_eq!(
+                dcat["dcat:service"][0]["dcat:endpointURL"],
+                "https://publicschema-household.example.gov/v1"
+            );
+        }
     }
 }
 
@@ -440,6 +474,54 @@ fn manifest_projection_filters_by_selected_profile_and_classification_ceiling() 
         .relationships
         .iter()
         .any(|relationship| relationship.name == "hidden-ref"));
+}
+
+#[test]
+fn manifest_projection_metadata_cannot_describe_hidden_entities_or_fields() {
+    let project = parse_project_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"public-slice","version":"1","defaultLanguage":"en"},
+          "manifestProjection":{
+            "accessProfile":"reader",
+            "classificationCeiling":"restricted",
+            "catalog":{"baseUrl":"https://public-slice.example.test","title":"Public Slice","publisher":{"name":"Publisher"}},
+            "dataset":{"title":"Public Slice Dataset"},
+            "entities":[
+              {"id":"record","fields":[
+                {"id":"secret-note","concepts":["https://example.test/secret-note"]},
+                {"id":"profile","concepts":["https://example.test/Profile"]}
+              ]},
+              {"id":"secret-record","conceptUri":"https://example.test/SecretRecord"}
+            ]
+          },
+          "entities":[
+            {"id":"record","route":"records","mutationMode":"create_only","classification":"public",
+             "fields":[
+               {"id":"name","type":"string","maxLength":64,"classification":"public"},
+               {"id":"secret-note","type":"string","maxLength":64,"classification":"restricted"},
+               {"id":"profile","type":"structured","maxBytes":1024,"schema":{"type":"object","additionalProperties":false},"classification":"public"}
+             ],
+             "accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get"],"readableFields":["name","profile"]}]},
+            {"id":"secret-record","route":"secret-records","mutationMode":"create_only","classification":"restricted",
+             "fields":[{"id":"name","type":"string","maxLength":64,"classification":"restricted"}],
+             "accessProfiles":[{"id":"other-reader","principalClaim":"principal","operations":["get"],"readableFields":["name"]}]}
+          ]
+        }"#,
+    )
+    .expect("project parses");
+    let failure = compile_project(&project, &[], CompileProfile::Authoring)
+        .expect_err("metadata outside the projected disclosure slice is refused");
+    let codes = failure
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| diagnostic.code.as_str())
+        .collect::<BTreeSet<_>>();
+
+    assert!(codes.contains("manifest_projection.field.not_visible"));
+    assert!(codes.contains("manifest_projection.field.not_representable"));
+    assert!(codes.contains("manifest_projection.entity.not_visible"));
 }
 
 #[test]

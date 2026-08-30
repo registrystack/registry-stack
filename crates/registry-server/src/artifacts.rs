@@ -12,7 +12,7 @@ use crate::contract::{
 };
 use crate::diagnostics::Diagnostic;
 use crate::generated_ddl::DdlInventory;
-use crate::manifest_adapter::project_manifest_bytes;
+use crate::manifest_adapter::project_manifest_artifacts;
 use crate::model::{
     CompiledAccessInventory, CompiledEntity, CompiledEventDeliveryInventory,
     CompiledMetadataInventory, CompiledModuleIdentity, CompiledQueryInventory, CompiledQueryKind,
@@ -136,11 +136,18 @@ pub(crate) fn generate_artifacts(
     let openapi = openapi_document(registry_id, version, entities, routes, &schemas);
     insert_json_value(&mut artifacts, "generated/openapi.json", &openapi)?;
     if let Some(projection) = manifest_projection {
+        let projected = project_manifest_artifacts(registry_id, projection, entities)?;
         insert_bytes(
             &mut artifacts,
             "generated/manifest/registry-manifest.json",
             "application/json",
-            project_manifest_bytes(registry_id, projection, entities)?,
+            projected.manifest,
+        );
+        insert_bytes(
+            &mut artifacts,
+            "generated/manifest/dcat.jsonld",
+            "application/ld+json",
+            projected.dcat,
         );
     }
     Ok(GeneratedArtifacts { artifacts })

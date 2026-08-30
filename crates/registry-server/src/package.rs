@@ -147,6 +147,7 @@ pub enum PackageFileRole {
     GeneratedOpenapi,
     EntityJsonSchema,
     LossyManifestProjection,
+    DcatCatalogProjection,
     ReviewedMigrationDescriptor,
     ReviewedMigrationStepSql,
     ReviewedMigrationAssertionSql,
@@ -1795,6 +1796,16 @@ fn add_compiled_artifacts(
             .bytes
             .clone(),
     )?;
+    insert_generated(
+        files,
+        "manifest/dcat.jsonld",
+        compiled
+            .artifacts()
+            .get("generated/manifest/dcat.jsonld")
+            .ok_or(PackageError::Derivation)?
+            .bytes
+            .clone(),
+    )?;
     for (path, artifact) in compiled.artifacts().entries() {
         let Some(schema_name) = path.strip_prefix("generated/schemas/") else {
             continue;
@@ -1867,6 +1878,7 @@ fn package_role_for_path(path: &str) -> Result<PackageFileRole> {
             PackageFileRole::EntityJsonSchema
         }
         "manifest/registry-manifest.json" => PackageFileRole::LossyManifestProjection,
+        "manifest/dcat.jsonld" => PackageFileRole::DcatCatalogProjection,
         _ => return Err(PackageError::Closure),
     })
 }

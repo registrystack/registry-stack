@@ -122,6 +122,34 @@ products/registry-server/demo/run.sh
 The launcher retains every key and token in an ignored owner-only directory
 and prints a separate query helper rather than printing bearer credentials.
 
+## Portable metadata and composition
+
+Domain-semantic entries in `manifestProjection` are optional overlays on the
+configured data model. They can declare localized catalogue text, dataset and
+API metadata, entity concept URIs, identifiers, field concepts, relationship
+roles, and codelist schemes. The compiler refuses overlay entries outside the
+selected access profile and classification ceiling. It does not infer or
+hardcode a domain model.
+
+The PublicSchema-shaped household fixture demonstrates Person, Household, and
+GroupMembership alignment entirely in configuration:
+
+```bash
+registry-serverctl generate manifest \
+  products/registry-server/acceptance/publicschema-household \
+  --output ./household-metadata
+```
+
+This produces the canonical Registry Manifest source and a DCAT JSON-LD
+catalogue. Registry Manifest owns the standards rendering, so Registry Server
+does not carry a second DCAT implementation.
+
+Evidence can consume an authenticated Registry Server REST route through its
+existing bounded `http-json` source and an explicitly reviewed adapter. Relay
+remains a separate publication boundary. A direct Relay source adapter should
+be added only for a concrete publication journey, rather than coupling either
+product to Registry Server internals.
+
 ## Relationship to Registry Stack
 
 Registry Server is a writable source-of-truth product. Registry Relay remains

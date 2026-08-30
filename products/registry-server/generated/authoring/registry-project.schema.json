@@ -855,16 +855,50 @@
       ],
       "type": "object"
     },
+    "ManifestProjectionApplicationProfileSource": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "type": "object"
+    },
     "ManifestProjectionCatalogSource": {
       "additionalProperties": false,
       "properties": {
+        "applicationProfiles": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ManifestProjectionApplicationProfileSource"
+          },
+          "type": "array"
+        },
         "baseUrl": {
           "type": "string"
         },
+        "conformsTo": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "description": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ManifestProjectionTextSource"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "participantId": {
@@ -876,8 +910,12 @@
         "publisher": {
           "$ref": "#/$defs/ManifestProjectionPublisherSource"
         },
+        "standards": {
+          "$ref": "#/$defs/ManifestProjectionStandardsSource",
+          "default": {}
+        },
         "title": {
-          "type": "string"
+          "$ref": "#/$defs/ManifestProjectionTextSource"
         }
       },
       "required": [
@@ -887,16 +925,94 @@
       ],
       "type": "object"
     },
+    "ManifestProjectionDataServiceSource": {
+      "additionalProperties": false,
+      "properties": {
+        "conformsTo": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ManifestProjectionTextSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "endpointDescription": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "endpointUrl": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "iri": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "$ref": "#/$defs/ManifestProjectionTextSource"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "endpointUrl"
+      ],
+      "type": "object"
+    },
     "ManifestProjectionDatasetSource": {
       "additionalProperties": false,
       "properties": {
+        "applicableLegislation": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "conformsTo": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "description": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ManifestProjectionTextSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
           "type": [
             "string",
             "null"
           ]
         },
         "owner": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "spatialCoverage": {
           "type": [
             "string",
             "null"
@@ -913,7 +1029,7 @@
           ]
         },
         "title": {
-          "type": "string"
+          "$ref": "#/$defs/ManifestProjectionTextSource"
         }
       },
       "required": [
@@ -930,6 +1046,117 @@
         "withdrawn"
       ],
       "type": "string"
+    },
+    "ManifestProjectionEntitySource": {
+      "additionalProperties": false,
+      "properties": {
+        "conceptUri": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ManifestProjectionTextSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fields": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ManifestProjectionFieldSource"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "identifiers": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ManifestProjectionIdentifierSource"
+          },
+          "type": "array"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ManifestProjectionTextSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "ManifestProjectionFieldSource": {
+      "additionalProperties": false,
+      "properties": {
+        "concepts": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "language": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "relationshipConceptUri": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "relationshipRole": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "ManifestProjectionIdentifierSource": {
+      "additionalProperties": false,
+      "properties": {
+        "field": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "field",
+        "kind"
+      ],
+      "type": "object"
     },
     "ManifestProjectionPublisherSource": {
       "additionalProperties": false,
@@ -967,8 +1194,32 @@
         "classificationCeiling": {
           "$ref": "#/$defs/Classification"
         },
+        "dataService": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ManifestProjectionDataServiceSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "dataset": {
           "$ref": "#/$defs/ManifestProjectionDatasetSource"
+        },
+        "entities": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ManifestProjectionEntitySource"
+          },
+          "type": "array"
+        },
+        "vocabularies": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ManifestProjectionVocabularySource"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -976,6 +1227,106 @@
         "classificationCeiling",
         "catalog",
         "dataset"
+      ],
+      "type": "object"
+    },
+    "ManifestProjectionStandardsSource": {
+      "additionalProperties": false,
+      "properties": {
+        "dcat": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "jsonSchema": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "shacl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ManifestProjectionTextSource": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "ManifestProjectionVocabularyConceptSource": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "iri": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ManifestProjectionTextSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "code"
+      ],
+      "type": "object"
+    },
+    "ManifestProjectionVocabularySource": {
+      "additionalProperties": false,
+      "properties": {
+        "concepts": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ManifestProjectionVocabularyConceptSource"
+          },
+          "type": "array"
+        },
+        "externalRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "schemeIri": {
+          "type": "string"
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "schemeIri"
       ],
       "type": "object"
     },

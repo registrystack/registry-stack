@@ -2794,6 +2794,13 @@ pub fn render_base_dcat(compiled: &CompiledMetadata) -> Value {
             .map(|dataset| base_dcat_dataset(compiled, dataset))
             .collect::<Vec<_>>(),
     });
+    let data_services = compiled
+        .data_services()
+        .map(|service| data_service_node(compiled, service))
+        .collect::<Vec<_>>();
+    if !data_services.is_empty() {
+        catalog["dcat:service"] = Value::Array(data_services);
+    }
     let mut included = standard_reference_nodes(compiled);
     included.extend(dcat_range_reference_nodes(&catalog));
     append_included_nodes(&mut catalog, included);

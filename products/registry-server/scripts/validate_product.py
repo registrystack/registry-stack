@@ -55,6 +55,7 @@ PACKAGE_LAYOUT_ENTRIES = {
     ("openapi/openapi.json", "generated-openapi", True),
     ("schemas", "entity-json-schemas", True),
     ("manifest/registry-manifest.json", "lossy-manifest-projection", True),
+    ("manifest/dcat.jsonld", "dcat-catalog-projection", True),
     ("tests/journeys.yaml", "fixture-journeys", True),
     ("signatures", "package-signatures", False),
 }

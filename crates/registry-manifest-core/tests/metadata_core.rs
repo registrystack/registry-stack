@@ -1426,6 +1426,23 @@ fn cpsv_ap_service_first_fixture_matches_contract_golden() {
     }));
 }
 
+#[test]
+fn base_dcat_includes_declared_data_services() {
+    let compiled = compile_manifest(&service_first_fixture()).expect("compile");
+    let dcat = render_base_dcat(&compiled);
+    let services = dcat["dcat:service"]
+        .as_array()
+        .expect("base DCAT catalog data services");
+
+    assert!(!services.is_empty());
+    assert!(services
+        .iter()
+        .all(|service| service["@type"] == "dcat:DataService"));
+    assert!(services.iter().any(|service| {
+        service["dcat:endpointURL"] == "https://health.example.gov/api/coverage/verify"
+    }));
+}
+
 fn has_json_type(node: &Value, expected: &str) -> bool {
     match node.get("@type") {
         Some(Value::String(kind)) => kind == expected,

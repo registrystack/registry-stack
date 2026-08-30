@@ -132,6 +132,10 @@ fn package_layout_contract_required_manifest_projection_is_in_prepared_closure()
             && layout.contains("lossy-manifest-projection"),
         "package-layout.yaml requires a lossy manifest projection"
     );
+    assert!(
+        layout.contains("manifest/dcat.jsonld") && layout.contains("dcat-catalog-projection"),
+        "package-layout.yaml requires a DCAT catalog projection"
+    );
 
     let module_bytes = module_bytes(PlanChoice::Schema);
     let module = parse_module_yaml(&module_bytes).expect("fixture module parses");
@@ -159,6 +163,10 @@ fn package_layout_contract_required_manifest_projection_is_in_prepared_closure()
     assert!(package
         .file_bytes()
         .contains_key("manifest/registry-manifest.json"));
+    assert!(package.manifest().files.iter().any(|entry| {
+        entry.path == "manifest/dcat.jsonld" && entry.role == PackageFileRole::DcatCatalogProjection
+    }));
+    assert!(package.file_bytes().contains_key("manifest/dcat.jsonld"));
     assert!(package
         .manifest()
         .files
@@ -203,6 +211,7 @@ fn package_layout_contract_required_manifest_projection_is_in_prepared_closure()
             "inventories/physical-names.json",
             "inventories/queries.json",
             "inventories/routes.json",
+            "manifest/dcat.jsonld",
             "manifest/registry-manifest.json",
             "metadata/registry.json",
             "openapi/openapi.json",

@@ -10,6 +10,7 @@ from pathlib import Path
 
 EXPECTED_PATHS = (
     "generated/manifest/registry-manifest.json",
+    "generated/manifest/dcat.jsonld",
     "generated/metadata/registry.json",
     "generated/openapi.json",
     "generated/postgres/schema.sql",

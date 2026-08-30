@@ -13,8 +13,9 @@ use crate::artifacts::generate_artifacts;
 use crate::contract::{
     parsed_bbox, valid_decimal_bounds, valid_structured_schema, AccessProfileSource,
     Classification, ConstraintSource, EntityExtensionSource, EntitySource, EventTrigger,
-    FieldSource, FieldTypeSource, MutationMode, Operation, RegistryModule, RegistryProject,
-    UniqueWhenPredicate, ValidTimeRole, WebhookDeadLetterMode, MAX_STRUCTURED_VALUE_BYTES,
+    FieldSource, FieldTypeSource, ManifestProjectionTextSource, MutationMode, Operation,
+    RegistryModule, RegistryProject, UniqueWhenPredicate, ValidTimeRole, WebhookDeadLetterMode,
+    MAX_STRUCTURED_VALUE_BYTES,
 };
 use crate::diagnostics::{CompileFailure, Diagnostic};
 use crate::generated_ddl::generate_ddl;
@@ -230,10 +231,9 @@ fn validate_project_header(
                 "manifest_projection.catalog.base_url.empty",
                 errors,
             );
-            nonempty(
+            validate_projection_text(
                 &projection.catalog.title,
                 "project.manifestProjection.catalog.title",
-                "manifest_projection.catalog.title.empty",
                 errors,
             );
             nonempty(
@@ -242,34 +242,23 @@ fn validate_project_header(
                 "manifest_projection.catalog.publisher.name_empty",
                 errors,
             );
-            if projection
-                .catalog
-                .description
-                .as_deref()
-                .is_some_and(|value| value.trim().is_empty())
-            {
-                errors.push(Diagnostic::error(
-                    "manifest_projection.catalog.description_empty",
+            if let Some(description) = projection.catalog.description.as_ref() {
+                validate_projection_text(
+                    description,
                     "project.manifestProjection.catalog.description",
-                    "optional Registry Manifest projection text must not be empty",
-                ));
+                    errors,
+                );
             }
-            if projection
-                .dataset
-                .description
-                .as_deref()
-                .is_some_and(|value| value.trim().is_empty())
-            {
-                errors.push(Diagnostic::error(
-                    "manifest_projection.dataset.description_empty",
+            if let Some(description) = projection.dataset.description.as_ref() {
+                validate_projection_text(
+                    description,
                     "project.manifestProjection.dataset.description",
-                    "optional Registry Manifest projection text must not be empty",
-                ));
+                    errors,
+                );
             }
-            nonempty(
+            validate_projection_text(
                 &projection.dataset.title,
                 "project.manifestProjection.dataset.title",
-                "manifest_projection.dataset.title.empty",
                 errors,
             );
             if projection
@@ -283,6 +272,31 @@ fn validate_project_header(
                     "project.manifestProjection.dataset.owner",
                     "optional Registry Manifest projection text must not be empty",
                 ));
+            }
+            if let Some(service) = projection.data_service.as_ref() {
+                validate_id(
+                    &service.id,
+                    "project.manifestProjection.dataService.id",
+                    errors,
+                );
+                validate_projection_text(
+                    &service.title,
+                    "project.manifestProjection.dataService.title",
+                    errors,
+                );
+                if let Some(description) = service.description.as_ref() {
+                    validate_projection_text(
+                        description,
+                        "project.manifestProjection.dataService.description",
+                        errors,
+                    );
+                }
+                nonempty(
+                    &service.endpoint_url,
+                    "project.manifestProjection.dataService.endpointUrl",
+                    "manifest_projection.data_service.endpoint_url_empty",
+                    errors,
+                );
             }
         }
     }
@@ -346,6 +360,155 @@ fn validate_manifest_projection(
             "project.manifestProjection.accessProfile",
             "the Registry Manifest projection access profile must have one disclosure mode",
         ));
+    }
+
+    let visible = entities
+        .values()
+        .filter(|entity| entity.classification <= projection.classification_ceiling)
+        .filter_map(|entity| {
+            let profile = entity.access_profiles.get(&projection.access_profile)?;
+            (profile.operations.contains(&Operation::Get)
+                || profile.operations.contains(&Operation::List))
+            .then(|| {
+                let fields = entity
+                    .fields
+                    .values()
+                    .filter(|field| profile.readable_fields.contains(&field.id))
+                    .filter(|field| field.classification <= projection.classification_ceiling)
+                    .map(|field| (field.id.as_str(), field))
+                    .collect::<BTreeMap<_, _>>();
+                (entity.id.as_str(), (entity, fields))
+            })
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    let mut entity_ids = BTreeSet::new();
+    for metadata in &projection.entities {
+        let path = format!("project.manifestProjection.entities[{}]", metadata.id);
+        if !entity_ids.insert(metadata.id.as_str()) {
+            errors.push(Diagnostic::error(
+                "manifest_projection.entity.duplicate",
+                path,
+                "Registry Manifest entity metadata must be unique",
+            ));
+            continue;
+        }
+        let Some((_entity, visible_fields)) = visible.get(metadata.id.as_str()) else {
+            errors.push(Diagnostic::error(
+                "manifest_projection.entity.not_visible",
+                path,
+                "Registry Manifest metadata may describe only an entity visible through the selected access profile",
+            ));
+            continue;
+        };
+        if let Some(title) = metadata.title.as_ref() {
+            validate_projection_text(title, &format!("{path}.title"), errors);
+        }
+        if let Some(description) = metadata.description.as_ref() {
+            validate_projection_text(description, &format!("{path}.description"), errors);
+        }
+        let mut identifier_fields = BTreeSet::new();
+        for identifier in &metadata.identifiers {
+            let field_is_projected = visible_fields
+                .get(identifier.field.as_str())
+                .is_some_and(|field| manifest_projects_field(field));
+            if !identifier_fields.insert(identifier.field.as_str())
+                || !field_is_projected
+                || identifier.kind.trim().is_empty()
+            {
+                errors.push(Diagnostic::error(
+                    "manifest_projection.identifier.invalid",
+                    format!("{path}.identifiers[{}]", identifier.field),
+                    "Registry Manifest identifiers must uniquely reference visible fields and declare a kind",
+                ));
+            }
+        }
+        let mut field_ids = BTreeSet::new();
+        for field_metadata in &metadata.fields {
+            let field_path = format!("{path}.fields[{}]", field_metadata.id);
+            if !field_ids.insert(field_metadata.id.as_str()) {
+                errors.push(Diagnostic::error(
+                    "manifest_projection.field.duplicate",
+                    field_path,
+                    "Registry Manifest field metadata must be unique within an entity",
+                ));
+                continue;
+            }
+            let Some(field) = visible_fields.get(field_metadata.id.as_str()) else {
+                errors.push(Diagnostic::error(
+                    "manifest_projection.field.not_visible",
+                    field_path,
+                    "Registry Manifest metadata may describe only a field visible through the selected access profile",
+                ));
+                continue;
+            };
+            let is_reference = matches!(&field.field_type, FieldTypeSource::Reference { .. });
+            if !is_reference && !manifest_projects_field(field) {
+                errors.push(Diagnostic::error(
+                    "manifest_projection.field.not_representable",
+                    field_path,
+                    "Registry Manifest field metadata may describe only a field representable by the portable Manifest model",
+                ));
+                continue;
+            }
+            let has_scalar_metadata = !field_metadata.concepts.is_empty()
+                || field_metadata.unit.is_some()
+                || field_metadata.language.is_some();
+            let has_relationship_metadata = field_metadata.relationship_role.is_some()
+                || field_metadata.relationship_concept_uri.is_some();
+            if (is_reference && has_scalar_metadata) || (!is_reference && has_relationship_metadata)
+            {
+                errors.push(Diagnostic::error(
+                    "manifest_projection.field.metadata_kind",
+                    field_path,
+                    "Registry Manifest scalar and relationship metadata must match the configured field type",
+                ));
+            }
+        }
+    }
+
+    let visible_vocabularies = visible
+        .values()
+        .flat_map(|(_entity, fields)| fields.values())
+        .filter_map(|field| match &field.field_type {
+            FieldTypeSource::VocabularyCode { vocabulary, values } => {
+                Some((vocabulary.as_str(), values.as_slice()))
+            }
+            _ => None,
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut vocabulary_ids = BTreeSet::new();
+    for metadata in &projection.vocabularies {
+        let path = format!("project.manifestProjection.vocabularies[{}]", metadata.id);
+        if !vocabulary_ids.insert(metadata.id.as_str()) {
+            errors.push(Diagnostic::error(
+                "manifest_projection.vocabulary.duplicate",
+                path,
+                "Registry Manifest vocabulary metadata must be unique",
+            ));
+            continue;
+        }
+        let Some(values) = visible_vocabularies.get(metadata.id.as_str()) else {
+            errors.push(Diagnostic::error(
+                "manifest_projection.vocabulary.not_visible",
+                path,
+                "Registry Manifest metadata may describe only a vocabulary used by a visible field",
+            ));
+            continue;
+        };
+        let mut codes = BTreeSet::new();
+        for concept in &metadata.concepts {
+            if !codes.insert(concept.code.as_str()) || !values.contains(&concept.code) {
+                errors.push(Diagnostic::error(
+                    "manifest_projection.vocabulary.concept_invalid",
+                    format!("{path}.concepts[{}]", concept.code),
+                    "Registry Manifest vocabulary concepts must uniquely reference configured codes",
+                ));
+            }
+            if let Some(label) = concept.label.as_ref() {
+                validate_projection_text(label, &format!("{path}.concepts[].label"), errors);
+            }
+        }
     }
 }
 
@@ -2732,6 +2895,35 @@ fn validate_language(value: &str, errors: &mut Vec<Diagnostic>) {
             "the default language tag is invalid",
         ));
     }
+}
+
+fn validate_projection_text(
+    value: &ManifestProjectionTextSource,
+    path: &str,
+    errors: &mut Vec<Diagnostic>,
+) {
+    let invalid = match value {
+        ManifestProjectionTextSource::Plain(value) => value.trim().is_empty(),
+        ManifestProjectionTextSource::Localized(values) => {
+            values.is_empty() || values.values().any(|value| value.trim().is_empty())
+        }
+    };
+    if invalid {
+        errors.push(Diagnostic::error(
+            "manifest_projection.text.empty",
+            path,
+            "Registry Manifest projection text and every localized value must not be empty",
+        ));
+    }
+}
+
+fn manifest_projects_field(field: &CompiledField) -> bool {
+    !matches!(
+        &field.field_type,
+        FieldTypeSource::Reference { .. }
+            | FieldTypeSource::Crs84Point { .. }
+            | FieldTypeSource::Structured { .. }
+    )
 }
 
 fn nonempty(value: &str, path: &str, code: &str, errors: &mut Vec<Diagnostic>) {

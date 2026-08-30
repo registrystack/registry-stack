@@ -742,10 +742,49 @@ fn manifest_selector_requires_the_compiled_manifest_projection() {
     assert!(output_root
         .join("generated/manifest/registry-manifest.json")
         .is_file());
+    assert!(output_root.join("generated/manifest/dcat.jsonld").is_file());
     let report = json_stdout(&output);
+    let artifacts = report["artifacts"]
+        .as_array()
+        .expect("artifacts is an array");
     assert_eq!(
-        report["artifacts"][0]["path"],
-        "generated/manifest/registry-manifest.json"
+        artifacts
+            .iter()
+            .map(|artifact| artifact["path"].as_str().expect("artifact path"))
+            .collect::<Vec<_>>(),
+        vec![
+            "generated/manifest/dcat.jsonld",
+            "generated/manifest/registry-manifest.json"
+        ]
+    );
+}
+
+#[test]
+fn module_discovery_ignores_only_regular_finder_metadata() {
+    let project = TestProject::asset_fixture();
+    fs::create_dir(project.path().join("modules")).expect("modules directory creates");
+    fs::write(project.path().join("modules/.DS_Store"), b"finder metadata")
+        .expect("Finder metadata writes");
+    let accepted = registry_serverctl(&[
+        "--format",
+        "json",
+        "check",
+        project.path().to_str().expect("path is UTF-8"),
+    ]);
+    assert!(accepted.status.success(), "{accepted:?}");
+
+    fs::write(project.path().join("modules/notes.txt"), b"unexpected")
+        .expect("unexpected entry writes");
+    let refused = registry_serverctl(&[
+        "--format",
+        "json",
+        "check",
+        project.path().to_str().expect("path is UTF-8"),
+    ]);
+    assert_eq!(refused.status.code(), Some(1));
+    assert_eq!(
+        json_stdout(&refused)["diagnostics"][0]["code"],
+        "source.modules.invalid"
     );
 }
 

@@ -8,6 +8,18 @@
 - Packages contain governed model and generated artifacts. Runtime
   configuration binds deployment-specific values and secrets and is not part of
   the signed model.
+- Domain semantics are optional configuration overlays. Registry Server does
+  not hardcode Person, Household, GroupMembership, or any other domain model.
+  An overlay may add localized labels, concept URIs, identifiers, relationship
+  roles, and codelist metadata only for entities and fields visible through its
+  selected access profile and classification ceiling.
+- Registry Manifest remains the owner of standards-oriented metadata and DCAT
+  rendering. Registry Server emits a one-way, lossy Manifest source plus its
+  DCAT JSON-LD projection in the governed package. It does not maintain a
+  second catalogue model or claim conformance that was not explicitly authored.
+- Evidence and Relay integrations use their published protocol surfaces and
+  platform primitives. Registry Server does not depend on their product crates
+  or duplicate their policy, disclosure, credential, or publication engines.
 - Registry Server accepts one PostgreSQL client path: `tokio-postgres` 0.7.18,
   `deadpool-postgres` 0.14.2, and `tokio-postgres-rustls` 0.14.0. The real
   PostgreSQL kernel proves dynamic result handling, transactions, cancellation,
