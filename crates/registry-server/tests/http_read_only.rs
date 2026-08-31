@@ -314,18 +314,28 @@ entities:
     classification: public
     fields:
       - {id: import-source, type: string, required: true, maxLength: 64, classification: public}
+      - {id: source-record-id, type: string, required: true, maxLength: 64, classification: public}
       - {id: permit-number, type: string, required: true, maxLength: 64, classification: public}
       - {id: display-token, type: string, required: true, maxLength: 64, classification: public}
       - {id: hidden-permit-key, type: string, required: true, maxLength: 64, classification: public}
+      - {id: valid-from, type: date, required: true, classification: public}
+      - {id: valid-to, type: date, classification: public}
+    temporal:
+      startField: valid-from
+      endField: valid-to
+      scopeFields: [permit-number]
     constraints:
       - {kind: unique, fields: [hidden-permit-key]}
-      - {kind: unique, fields: [permit-number]}
+      - {kind: unique, fields: [permit-number, valid-from]}
+      - {kind: unique, fields: [import-source, source-record-id]}
+      - {kind: temporal-non-overlap, scopeFields: [permit-number], startField: valid-from, endField: valid-to}
   - id: inspection
     route: inspections
     mutationMode: mutable
     classification: public
     fields:
       - {id: import-source, type: string, required: true, maxLength: 64, classification: public}
+      - {id: source-record-id, type: string, required: true, maxLength: 64, classification: public}
       - {id: inspection-code, type: text, required: true, maxLength: 64, classification: public}
       - {id: hidden-inspection-key, type: string, required: true, maxLength: 64, classification: public}
       - {id: valid-from, type: date, required: true, classification: public, validTimeRole: valid_from}
@@ -335,8 +345,9 @@ entities:
       endField: valid-to
       scopeFields: [inspection-code]
     constraints:
-      - {kind: unique, fields: [hidden-inspection-key]}
-      - {kind: unique, fields: [inspection-code]}
+      - {kind: unique, fields: [hidden-inspection-key, valid-from]}
+      - {kind: unique, fields: [inspection-code, valid-from]}
+      - {kind: unique, fields: [import-source, source-record-id]}
       - {kind: temporal-non-overlap, scopeFields: [inspection-code], startField: valid-from, endField: valid-to}
   - id: finding
     route: findings
@@ -344,6 +355,17 @@ entities:
     classification: public
     fields:
       - {id: inspection, type: reference, target: inspection, required: true, classification: public}
+  - id: certificate
+    route: certificates
+    mutationMode: mutable
+    classification: public
+    fields:
+      - {id: import-source, type: string, required: true, maxLength: 64, classification: public}
+      - {id: certificate-code, type: text, required: true, maxLength: 64, classification: public}
+      - {id: hidden-certificate-key, type: string, required: true, maxLength: 64, classification: public}
+    constraints:
+      - {kind: unique, fields: [hidden-certificate-key]}
+      - {kind: unique, fields: [certificate-code]}
 accessProfiles:
   - id: operator
     default: true
@@ -351,12 +373,24 @@ accessProfiles:
     grants:
       - entity: permit
         operations: [get, list]
-        readableFields: [import-source, permit-number, display-token]
+        readableFields: [import-source, source-record-id, permit-number, display-token, valid-from, valid-to]
       - entity: inspection
         operations: [get, list]
-        readableFields: [import-source, inspection-code, valid-from, valid-to]
+        readableFields: [import-source, source-record-id, inspection-code, valid-from, valid-to]
         filterableFields: [inspection-code]
         sortableFields: [inspection-code]
+      - entity: finding
+        operations: [get]
+        readableFields: [inspection]
+      - entity: certificate
+        operations: [get, list]
+        readableFields: [import-source, certificate-code]
+  - id: redacted-reader
+    anonymous: true
+    grants:
+      - entity: inspection
+        operations: [get]
+        readableFields: [import-source, valid-from]
       - entity: finding
         operations: [get]
         readableFields: [inspection]
@@ -2445,20 +2479,26 @@ async fn workspace_metadata_title_fields_prefer_readable_unique_text_or_string_b
     assert_eq!(
         permit_get["titleFields"],
         json!(["display-token"]),
-        "authored manifest identifiers keep precedence over compiled unique keys"
+        "authored manifest identifiers keep precedence over compiled temporal labels"
     );
 
     let inspection_get = metadata_operation(&document, "records.inspection.get");
     assert_eq!(
         inspection_get["titleFields"],
         json!(["inspection-code"]),
-        "readable single-field unique text keys are preferred over arbitrary readable strings"
+        "readable single-field temporal scopes are preferred over arbitrary readable strings"
     );
     let inspection_current = metadata_operation(&document, "records.inspection.current");
     assert_eq!(inspection_current["query"]["kind"], "current");
     assert_eq!(
         inspection_current["titleFields"],
         json!(["inspection-code"])
+    );
+    let certificate_get = metadata_operation(&document, "records.certificate.get");
+    assert_eq!(
+        certificate_get["titleFields"],
+        json!(["certificate-code"]),
+        "non-temporal readable single-field unique text keys stay above arbitrary readable strings"
     );
 
     let finding = metadata_operation(&document, "records.finding.get");
@@ -2471,9 +2511,38 @@ async fn workspace_metadata_title_fields_prefer_readable_unique_text_or_string_b
         .any(|operation| operation["labelFields"] == json!(["inspection-code"])));
 
     let rendered = document.to_string();
-    for hidden in ["hidden-permit-key", "hidden-inspection-key"] {
+    for hidden in [
+        "hidden-permit-key",
+        "hidden-inspection-key",
+        "hidden-certificate-key",
+    ] {
         assert!(!rendered.contains(hidden), "metadata leaked {hidden}");
     }
+
+    let redacted = body_json(
+        harness
+            .send(
+                Method::GET,
+                "/v1/registry?accessProfile=redacted-reader",
+                None,
+            )
+            .await,
+    )
+    .await;
+    let redacted_inspection = metadata_operation(&redacted, "records.inspection.get");
+    assert_eq!(redacted_inspection["titleFields"], json!(["import-source"]));
+    assert_eq!(
+        redacted_inspection["readableFields"],
+        json!(["import-source", "valid-from"])
+    );
+    let redacted_reference =
+        &metadata_operation(&redacted, "records.finding.get")["fields"][0]["reference"];
+    assert!(redacted_reference["operations"]
+        .as_array()
+        .expect("redacted reference operations")
+        .iter()
+        .all(|operation| operation["labelFields"] == json!(["import-source"])));
+    assert!(!redacted.to_string().contains("inspection-code"));
     assert_eq!(harness.records.calls(), 0);
 }
 

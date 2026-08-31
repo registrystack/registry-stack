@@ -276,11 +276,6 @@ fn projection<'a>(
 }
 
 fn title_fields(service: &HttpService, surface: &AuthorizedSurface<'_>) -> Vec<String> {
-    let readable_string = |id: &str| {
-        surface.readable_fields.contains(id)
-            && logical_field(surface.response_entity, id)
-                .is_some_and(|field| matches!(field.field_type, FieldTypeSource::String { .. }))
-    };
     let authored = projection(service, surface)
         .and_then(|projection| {
             projection
@@ -292,20 +287,45 @@ fn title_fields(service: &HttpService, surface: &AuthorizedSurface<'_>) -> Vec<S
             entity
                 .identifiers
                 .iter()
-                .find(|identifier| readable_string(&identifier.field))
+                .find(|identifier| readable_string(surface, &identifier.field))
         })
         .map(|identifier| identifier.field.clone());
     authored
+        .or_else(|| temporal_scope_title_field(surface))
         .or_else(|| unique_title_field(surface))
         .or_else(|| {
             surface
                 .readable_fields
                 .iter()
-                .find(|id| readable_string(id))
+                .find(|id| readable_string(surface, id))
                 .cloned()
         })
         .into_iter()
         .collect()
+}
+
+fn readable_string(surface: &AuthorizedSurface<'_>, id: &str) -> bool {
+    surface.readable_fields.contains(id)
+        && logical_field(surface.response_entity, id)
+            .is_some_and(|field| matches!(field.field_type, FieldTypeSource::String { .. }))
+}
+
+fn readable_text_or_string(surface: &AuthorizedSurface<'_>, id: &str) -> bool {
+    surface.readable_fields.contains(id)
+        && logical_field(surface.response_entity, id).is_some_and(|field| {
+            matches!(
+                field.field_type,
+                FieldTypeSource::String { .. } | FieldTypeSource::Text { .. }
+            )
+        })
+}
+
+fn temporal_scope_title_field(surface: &AuthorizedSurface<'_>) -> Option<String> {
+    let temporal = surface.response_entity.temporal.as_ref()?;
+    let [field] = temporal.scope_fields.as_slice() else {
+        return None;
+    };
+    readable_text_or_string(surface, field).then(|| field.clone())
 }
 
 fn unique_title_field(surface: &AuthorizedSurface<'_>) -> Option<String> {
@@ -323,16 +343,7 @@ fn unique_title_field(surface: &AuthorizedSurface<'_>) -> Option<String> {
             let [field] = fields.as_slice() else {
                 return None;
             };
-            if !surface.readable_fields.contains(field) {
-                return None;
-            }
-            logical_field(surface.response_entity, field).and_then(|logical| {
-                matches!(
-                    logical.field_type,
-                    FieldTypeSource::String { .. } | FieldTypeSource::Text { .. }
-                )
-                .then(|| field.clone())
-            })
+            readable_text_or_string(surface, field).then(|| field.clone())
         })
 }
 
