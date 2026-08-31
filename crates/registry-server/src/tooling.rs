@@ -111,13 +111,13 @@ fn classify_change(
         | Code::AccessProfileAdded
         | Code::AccessProfileRemoved
         | Code::EntityAccessRequirementsChanged
+        | Code::QueryInventoryChanged
         | Code::RouteAdded
         | Code::RouteRemoved
         | Code::RouteChanged => DiffClassification::AccessChange,
-        Code::QueryInventoryChanged
-        | Code::EventAdded
-        | Code::EventRemoved
-        | Code::EventChanged => DiffClassification::Unsupported,
+        Code::EventAdded | Code::EventRemoved | Code::EventChanged => {
+            DiffClassification::Unsupported
+        }
         _ => match change.class {
             BaseClass::CompatibleAdditive => DiffClassification::CompatibleAdditive,
             BaseClass::DataBackfillRequired => DiffClassification::DataBackfillRequired,
@@ -272,14 +272,14 @@ fn access_profile_direction(
     let mut after_without_disclosure = after.clone();
     after_without_disclosure.readable_fields.clear();
     if before_without_disclosure != after_without_disclosure {
-        return DiffClassification::Unsupported;
+        return DiffClassification::AccessChange;
     }
     if before.readable_fields.is_subset(&after.readable_fields) {
         DiffClassification::DisclosureWidening
     } else if after.readable_fields.is_subset(&before.readable_fields) {
         DiffClassification::DisclosureNarrowing
     } else {
-        DiffClassification::Unsupported
+        DiffClassification::AccessChange
     }
 }
 

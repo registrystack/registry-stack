@@ -3540,6 +3540,15 @@
               "environment": null
             },
             {
+              "display": "--reviewed-migrations <DIRECTORY>",
+              "description": "Directory containing reviewed migration descriptors and evidence in package layout. Used identically by test and package; requires a verified baseline",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--signature-threshold <COUNT>",
               "description": "Production signature threshold. Local packages require zero",
               "always_required": false,
@@ -3619,7 +3628,15 @@
               "environment": null
             }
           ],
-          "constraints": [],
+          "constraints": [
+            {
+              "kind": "requires_all",
+              "when": "--reviewed-migrations <DIRECTORY>",
+              "arguments": [
+                "--baseline-runtime-config <ABSOLUTE_FILE>"
+              ]
+            }
+          ],
           "subcommands": []
         },
         {
@@ -3652,6 +3669,15 @@
             {
               "display": "--baseline-runtime-config <ABSOLUTE_FILE>",
               "description": "Runtime configuration selecting the verified active baseline for a successor",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--reviewed-migrations <DIRECTORY>",
+              "description": "Directory containing reviewed migration descriptors and evidence in package layout. Used identically by test and package; requires a verified baseline",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -3729,7 +3755,15 @@
               "environment": null
             }
           ],
-          "constraints": [],
+          "constraints": [
+            {
+              "kind": "requires_all",
+              "when": "--reviewed-migrations <DIRECTORY>",
+              "arguments": [
+                "--baseline-runtime-config <ABSOLUTE_FILE>"
+              ]
+            }
+          ],
           "subcommands": []
         },
         {

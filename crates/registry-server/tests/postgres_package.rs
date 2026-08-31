@@ -5,6 +5,9 @@
 #[path = "support/postgres_harness.rs"]
 mod postgres_harness;
 
+#[path = "postgres_package/fingerprint.rs"]
+mod fingerprint_tests;
+
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};

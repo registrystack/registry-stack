@@ -326,14 +326,91 @@ upgrade, and recovery exercise.
 
 For a successor, compare against the active package with
 `diff <project> --runtime-config <absolute-file>`.
-Then repeat test, package, signing, and apply using `--baseline-runtime-config` for test and package.
+Use the active package's runtime file as `--baseline-runtime-config` for both test and package.
 The diff includes before/after access settings and the direction of individual scope, purpose,
 row-boundary, field, count, history, and export changes. Related-record and other mixed changes
 remain marked for review rather than receiving an inferred overall direction.
 Entity requirement changes are included even when the existing profiles still satisfy them.
-Requirements-only changes use the reviewed metadata-only migration path, without dummy SQL.
 Review the migration plan even when a change appears additive. A required field on existing records
 needs a data migration; adding an optional field is not the same operation.
+
+Adding an optional field without changing grants can use the automatic successor path.
+Adding that field to `readableFields` also changes disclosure and requires review.
+If test or package reports `migration.review.required`, prepare a reviewed migration directory:
+
+```text
+reviewed-migrations/
+  modules/<module-id>/migrations/<migration-id>/
+    descriptor.json
+    rehearsal.json
+    steps/<step-id>.sql             if the descriptor declares SQL steps
+    assertions/<assertion-id>.sql   if the descriptor declares assertions
+    fixtures/<fixture-id>.jsonl     if the rehearsal references fixtures
+    backup.json                    for destructive changes
+```
+
+The descriptor names the change class, the exact change codes and targets it covers, timeouts,
+recovery mode, and its evidence paths. Use the codes and targets from `diff --format json`.
+JSON artifacts must use canonical JSON: sorted keys, no extra whitespace, and no duplicate keys.
+Keep only referenced artifacts in this directory; symbolic links and unrelated files are refused.
+Module IDs group migration artifacts and do not have to name a declared model module.
+
+The rehearsal receipt binds the prior package and schema, descriptor and SQL hashes, the measured
+target schema, and applicable timeout and recovery proofs. Your migration rehearsal process must
+produce that evidence. The CLI reads and validates the files; it does not perform the review or
+generate this migration receipt. A metadata-only permission or entity-requirement change can have
+empty steps and assertions, without dummy SQL. It still needs rehearsal evidence.
+
+Pass the same reviewed directory to both commands:
+
+```sh
+target/debug/registry-serverctl test ./my-registry \
+  --baseline-runtime-config "<absolute-active-runtime-file>" \
+  --reviewed-migrations ./reviewed-migrations \
+  --runtime-config "<absolute-test-runtime-file>" \
+  --credentials "<absolute-test-credentials-file>" \
+  --database-id "<database-id>" \
+  --signature-threshold 1 --signature-key-id "<signer-key-id>" \
+  --output "<absolute-schema-test-receipt-file>"
+
+target/debug/registry-serverctl package ./my-registry \
+  --baseline-runtime-config "<absolute-active-runtime-file>" \
+  --reviewed-migrations ./reviewed-migrations \
+  --database-id "<database-id>" \
+  --schema-fingerprint "<fingerprint-from-test>" \
+  --test-receipt "<absolute-schema-test-receipt-file>" \
+  --signature-threshold 1 --signature-key-id "<signer-key-id>" \
+  --output "<package-build-directory>"
+```
+
+The test runtime must select a separate, empty test database. Test measures the target schema,
+checks it against the reviewed fingerprint, runs the fixture journeys, and writes a schema-test
+receipt. This receipt is distinct from the migration rehearsal receipt in the reviewed directory.
+Package then prepares the signing input. Complete detached signing and apply as for the initial
+deployment, omitting `--initial` on apply.
+
+Use CLI and Server binaries from the same build for testing and deployment.
+New schema fingerprints identify table columns by name, so a fresh installation and an in-place
+upgrade can match even when PostgreSQL stores their columns in a different order.
+Existing packages retain their recorded fingerprints and signatures and still verify using the
+original rules. A package measured with the updated algorithm needs the updated Server binary.
+
+{/* Evidence: crates/registry-server/src/postgres/catalog.rs, CatalogFingerprintVersion;
+    crates/registry-server/tests/postgres_package/fingerprint.rs,
+    signed_legacy_fingerprint_starts_and_upgrades_without_rewriting_package_bytes. */}
+
+If any source, reviewed artifact, baseline, or signature-policy input changes, repeat test and
+signing. Package refuses a schema-test receipt for a different candidate.
+For `migration.review.refused`, check exact change coverage and the artifact hashes and bindings.
+For `migration.review.fingerprint_mismatch`, rehearse the exact candidate and correct its evidence.
+Reviewed artifacts cannot authorize a change classified as unsupported by the migration planner.
+
+{/* Evidence: crates/registry-serverctl/src/lib.rs, PackageCandidateArgs and capture_candidate();
+    crates/registry-serverctl/src/reviewed_migrations.rs;
+    crates/registry-serverctl/src/test_lifecycle.rs;
+    crates/registry-server/src/migration_plan.rs, ReviewedMigrationDescriptor and MigrationRehearsalReceipt;
+    crates/registry-serverctl/tests/cli/reviewed_migrations.rs;
+    products/registry-server/scripts/test-adopter-workflow.sh. */}
 
 :::caution[Rehearse migration and recovery]
 Activation can change persistent data and enter maintenance. Test the exact successor and retain

@@ -25,6 +25,9 @@ use sha2::{Digest, Sha256};
 
 static TEMPORARY_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+#[path = "cli/reviewed_migrations.rs"]
+mod reviewed_migration_tests;
+
 #[test]
 fn access_review_example_explains_simulates_and_refuses_footguns_without_live_data() {
     let project = TestProject::from_registry_source(include_bytes!(

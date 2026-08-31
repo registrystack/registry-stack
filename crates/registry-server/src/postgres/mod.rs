@@ -17,7 +17,7 @@ mod schema;
 #[doc(hidden)]
 pub use catalog::{
     initialize_kernel_registry_state_for_test, initialize_registry_state_for_catalog_test,
-    RegistryStateTestIdentity,
+    legacy_schema_fingerprint_for_test, RegistryStateTestIdentity,
 };
 pub use catalog::{
     install_kernel_schema, kernel_schema_fingerprint, managed_schema_fingerprint,

@@ -18,13 +18,19 @@ Build a deterministic production-profile signing input or publish its externally
 
 ## Contract status
 
-This page is generated from the public Clap command tree for Registry Stack source version `0.25.0` and catalog SHA-256 `a7f603630f6a7f9f9d0b164fbf130d90735053c1f3f1be8d79592d79a7e2eee4`. Hidden implementation commands are omitted.
+This page is generated from the public Clap command tree for Registry Stack source version `0.25.0` and catalog SHA-256 `af6f16dcd323bcdb3860c7e5e0979569d6b3ae752e27d7e169c5e0cf4101f190`. Hidden implementation commands are omitted.
 
 ## Usage
 
 ```text
 registry-serverctl package [OPTIONS] --database-id <ID> --schema-fingerprint <SHA256> --test-receipt <ABSOLUTE_FILE> --output <DIRECTORY> <PROJECT>
 ```
+
+## Constraints
+
+| Condition | Requirement |
+| --- | --- |
+| `--reviewed-migrations <DIRECTORY>` is present | `--baseline-runtime-config <ABSOLUTE_FILE>` is required. |
 
 ## Arguments
 
@@ -38,6 +44,7 @@ registry-serverctl package [OPTIONS] --database-id <ID> --schema-fingerprint <SH
 | --- | --- | --- | --- | --- | --- | --- |
 | `--database-id <ID>` | Yes | No | n/a | n/a | n/a | Stable deployment database identity recorded in the package |
 | `--baseline-runtime-config <ABSOLUTE_FILE>` | No | No | n/a | n/a | n/a | Runtime configuration selecting the verified active baseline for a successor |
+| `--reviewed-migrations <DIRECTORY>` | No | No | n/a | n/a | n/a | Directory containing reviewed migration descriptors and evidence in package layout. Used identically by test and package; requires a verified baseline |
 | `--signature-threshold <COUNT>` | No | No | `0` | n/a | n/a | Production signature threshold. Local packages require zero |
 | `--signature-key-id <KEY_ID>` | No | Yes | n/a | n/a | n/a | Allowed package-signing key id. Repeat once per trust-anchor key |
 | `--schema-fingerprint <SHA256>` | Yes | No | n/a | n/a | n/a | Exact managed-catalog SHA-256 produced by the reviewed PostgreSQL rehearsal |

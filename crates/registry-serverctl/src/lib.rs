@@ -39,6 +39,7 @@ mod data_lifecycle;
 mod doctor;
 mod package_inspection;
 mod package_lifecycle;
+mod reviewed_migrations;
 mod test_lifecycle;
 mod webhook_lifecycle;
 
@@ -213,6 +214,10 @@ struct PackageCandidateArgs {
     /// Runtime configuration selecting the verified active baseline for a successor.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     baseline_runtime_config: Option<PathBuf>,
+
+    /// Directory containing reviewed migration descriptors and evidence in package layout. Used identically by test and package; requires a verified baseline.
+    #[arg(long, value_name = "DIRECTORY", requires = "baseline_runtime_config")]
+    reviewed_migrations: Option<PathBuf>,
 
     /// Production signature threshold. Local packages require zero.
     #[arg(long, default_value_t = 0, value_name = "COUNT")]
@@ -915,6 +920,7 @@ struct CapturedPackageCandidate {
     modules: Vec<PackageModuleSource>,
     fixture_journeys: PackageSourceFile,
     migration_plan: PackageMigrationPlanInput,
+    prevalidation_schema_fingerprint: Option<String>,
 }
 
 impl CapturedPackageCandidate {
@@ -944,7 +950,12 @@ impl CapturedPackageCandidate {
         const PLACEHOLDER_SCHEMA_FINGERPRINT: &str =
             "sha256:0000000000000000000000000000000000000000000000000000000000000000";
         self.clone()
-            .prepare(PLACEHOLDER_SCHEMA_FINGERPRINT.to_owned())
+            .prepare(
+                self.prevalidation_schema_fingerprint
+                    .as_deref()
+                    .unwrap_or(PLACEHOLDER_SCHEMA_FINGERPRINT)
+                    .to_owned(),
+            )
             .map(|_| ())
     }
 
@@ -1631,16 +1642,55 @@ fn capture_candidate(
             SuggestedAction::CorrectAuthoringSource,
         )],
     })?;
+    let mut prevalidation_schema_fingerprint = None;
     let (prior_revision, migration_plan) = match args.baseline_runtime_config.as_deref() {
         Some(runtime_config) => {
             let baseline = inspect_runtime_package(runtime_config)
                 .map_err(|error| inspection_failure(command, "package.baseline", error))?;
-            (
-                Some(baseline.package_revision().to_owned()),
+            let plan = if let Some(directory) = &args.reviewed_migrations {
+                let review = reviewed_migrations::capture(directory).map_err(|diagnostic| {
+                    source_failure(
+                        command,
+                        diagnostic,
+                        DiagnosticArtifact::DatabaseMigration,
+                        SuggestedAction::CorrectPackageBuild,
+                    )
+                })?;
+                prevalidation_schema_fingerprint = Some(review.declared_schema_fingerprint);
+                PackageMigrationPlanInput::ReviewedSuccessor {
+                    prior_registry: Box::new(baseline.registry().clone()),
+                    prior_schema_fingerprint: baseline.schema_fingerprint().to_owned(),
+                    migrations: review.sources,
+                }
+            } else {
+                let changes = registry_server::package::compiled_registry_change_set(
+                    baseline.registry(),
+                    &compiled,
+                    baseline.package_revision(),
+                );
+                if changes
+                    .changes
+                    .iter()
+                    .any(|change| change.class == CompiledRegistryChangeClass::Unsupported)
+                {
+                    return Err(candidate_failure(command, "migration.change.unsupported", "candidate",
+                        "the successor contains a change the migration planner does not support; inspect diff and revise the candidate. Reviewed artifacts cannot authorize unsupported changes",
+                        DiagnosticArtifact::DatabaseMigration, SuggestedAction::CorrectPackageBuild));
+                }
+                if changes
+                    .changes
+                    .iter()
+                    .any(|change| change.class != CompiledRegistryChangeClass::CompatibleAdditive)
+                {
+                    return Err(candidate_failure(command, "migration.review.required", "reviewedMigrations",
+                        "the successor contains changes that cannot be applied automatically; run diff, review the migration and its rehearsal evidence, then provide --reviewed-migrations to both test and package",
+                        DiagnosticArtifact::DatabaseMigration, SuggestedAction::CorrectPackageBuild));
+                }
                 PackageMigrationPlanInput::Successor {
                     prior_registry: Box::new(baseline.registry().clone()),
-                },
-            )
+                }
+            };
+            (Some(baseline.package_revision().to_owned()), plan)
         }
         None => (None, PackageMigrationPlanInput::InitialCompiledDdl),
     };
@@ -1656,7 +1706,7 @@ fn capture_candidate(
             SuggestedAction::CorrectPackageBuild,
         ));
     }
-    Ok(CapturedPackageCandidate {
+    let candidate = CapturedPackageCandidate {
         compiled,
         environment,
         instance_id,
@@ -1678,7 +1728,14 @@ fn capture_candidate(
             bytes: fixture_journey_bytes,
         },
         migration_plan,
-    })
+        prevalidation_schema_fingerprint,
+    };
+    if args.reviewed_migrations.is_some() {
+        candidate.prevalidate().map_err(|_| candidate_failure(command, "migration.review.refused", "reviewedMigrations",
+            "the reviewed plan was refused; check exact change coverage, canonical JSON, artifact hashes, prior package/schema bindings, and target fingerprint. Use the same reviewed directory for test and package",
+            DiagnosticArtifact::DatabaseMigration, SuggestedAction::CorrectPackageBuild))?;
+    }
+    Ok(candidate)
 }
 
 fn apply(args: &ApplyArgs) -> Result<ApplySuccessReport, FailureReport> {
@@ -1790,6 +1847,13 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
             "the packaged schema-test journey suite was refused",
             DiagnosticArtifact::FixtureJourneys,
             SuggestedAction::CorrectFixtureJourneys,
+        ),
+        TestLifecycleError::ReviewFingerprint => (
+            "migration.review.fingerprint_mismatch",
+            "reviewedMigrations",
+            "the reviewed target fingerprint does not match the schema measured on the disposable database; rehearse the exact candidate and correct the review evidence before retrying",
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::CorrectPackageBuild,
         ),
         TestLifecycleError::Credentials => (
             "test.credentials.refused",

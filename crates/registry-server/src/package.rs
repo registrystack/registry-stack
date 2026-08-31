@@ -45,8 +45,8 @@ pub const MAX_PACKAGE_SOURCE_FILE_BYTES: u64 = 16 * 1024 * 1024;
 const MANIFEST_PATH: &str = "package.json";
 const MAX_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_FILE_BYTES: u64 = MAX_PACKAGE_SOURCE_FILE_BYTES;
-const MAX_PACKAGE_BYTES: u64 = 64 * 1024 * 1024;
-const MAX_PACKAGE_FILES: usize = 1_024;
+pub const MAX_PACKAGE_BYTES: u64 = 64 * 1024 * 1024;
+pub const MAX_PACKAGE_FILES: usize = 1_024;
 const MAX_PATH_BYTES: usize = 512;
 const MAX_PATH_COMPONENTS: usize = 16;
 const MAX_MIGRATION_STATEMENTS: usize = 1_024;
@@ -591,6 +591,7 @@ impl ReviewedChunkedStepBounds {
 /// Unlike [`VerifiedPackage`], this type cannot authorize startup or apply.
 pub struct IntegrityInspectedPackage {
     package_revision: String,
+    schema_fingerprint: String,
     registry: CompiledRegistry,
     #[cfg(feature = "tooling")]
     migration: MigrationInspectionSummary,
@@ -599,6 +600,11 @@ pub struct IntegrityInspectedPackage {
 impl IntegrityInspectedPackage {
     pub fn package_revision(&self) -> &str {
         &self.package_revision
+    }
+
+    /// The fingerprint bound by the inspected package, not a measurement of a live database.
+    pub fn schema_fingerprint(&self) -> &str {
+        &self.schema_fingerprint
     }
 
     pub fn registry(&self) -> &CompiledRegistry {
@@ -2408,6 +2414,7 @@ fn inspect_package(
 
     Ok(IntegrityInspectedPackage {
         package_revision: envelope.signed.package_revision,
+        schema_fingerprint: envelope.signed.schema_fingerprint,
         registry,
         #[cfg(feature = "tooling")]
         migration,
