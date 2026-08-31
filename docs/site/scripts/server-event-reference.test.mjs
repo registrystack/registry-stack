@@ -50,6 +50,7 @@ test('trigger matrix covers the schema enum and the trigger-specific snapshot ru
   assert.deepEqual(rows.map((row) => row.slice(1)), [
     ['Not allowed', 'Not allowed', 'Allowed', 'After'],
     ['Allowed', 'Allowed', 'Allowed', 'After'],
+    ['Not allowed', 'Not allowed', 'Not allowed', 'Request at transition'],
     ['Not allowed', 'Allowed', 'Not allowed', 'Before'],
   ]);
 });

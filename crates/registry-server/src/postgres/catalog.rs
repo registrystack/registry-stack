@@ -142,6 +142,13 @@ impl ExpectedManagedCatalog {
             "registry_internal.registry_outbox_outbox_id_seq",
             ["SELECT", "USAGE"],
         );
+        for (table, privileges) in crate::request_store::REQUEST_TABLES {
+            catalog.table(
+                &format!("registry_internal.{table}"),
+                privileges.iter().copied(),
+                Some((false, false)),
+            );
+        }
 
         for table in &registry.ddl().tables {
             let name = format!("registry_data.{}", table.physical_name);
@@ -733,9 +740,11 @@ async fn verify_managed_owners_for_catalog(
     migration_role: &SqlIdentifier,
     expected_catalog: &ExpectedManagedCatalog,
 ) -> Result<()> {
+    // PostgreSQL otherwise resolves this UNION column to the 63-byte `name`
+    // type and truncates schema-qualified identifiers that are valid as text.
     let rows = client
         .query(
-            "SELECT 'schema', n.nspname, r.rolname
+            "SELECT 'schema', n.nspname::text, r.rolname
              FROM pg_catalog.pg_namespace n
              JOIN pg_catalog.pg_roles r ON r.oid = n.nspowner
              WHERE n.nspname = ANY($1::text[])
@@ -870,7 +879,7 @@ async fn query_categorized_acl(
         .query(
             "WITH managed_objects(object_kind, object_name, owner_oid, acl) AS (
                  SELECT 'schema'::text,
-                        n.nspname,
+                        n.nspname::text,
                         n.nspowner,
                         COALESCE(n.nspacl, pg_catalog.acldefault('n', n.nspowner))
                  FROM pg_catalog.pg_namespace n

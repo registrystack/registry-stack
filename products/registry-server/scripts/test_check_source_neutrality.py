@@ -38,6 +38,11 @@ class SourceNeutralityTests(unittest.TestCase):
             "/v1/records/persons",
             "/v1/records/assessment-episodes",
             "/v1/records/farmers",
+            "/v1/records/facilities",
+            "/v1/records/businesses",
+            "/v1/records/establishments",
+            "business-establishment-summary",
+            "/v1/records/authorities",
             "/v1/records/legal-entities",
         ):
             with self.subTest(route=route), tempfile.TemporaryDirectory() as temporary:

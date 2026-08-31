@@ -15,22 +15,22 @@ scenarios:
     evidence: [{path: crates/registry-server/tests/package_change_plan.rs, name: new_optional_scalar_field_emits_only_closed_add_column}, {path: crates/registry-serverctl/tests/diff.rs, name: diff_inventory_is_deterministic_and_classification_direction_is_exact}, {path: products/registry-server/scripts/test-adopter-workflow.sh, name: test-adopter-workflow.sh}]
   - id: RS-J03
     state: enforced
-    domain: household
-    fixture: acceptance/publicschema-household
-    doneWhen: "Household, person, membership, selector, derived demographic, and read-path surfaces run without privileged runtime concepts."
+    domain: business-establishments
+    fixture: acceptance/business-establishments
+    doneWhen: "Business, establishment, assignment, selector, derived summary, and read-path surfaces run without privileged runtime concepts."
     evidence: [{path: crates/registry-server/tests/postgres_pilot_acceptance.rs, name: real_postgres_five_domain_pilot_is_configured_production_closed_and_source_neutral}]
   - id: RS-J04
     state: enforced
-    domain: disability
-    fixture: acceptance/disability
-    doneWhen: "Assessment, observation, certification, protected metadata, and correction provenance run as configured records."
+    domain: inspection
+    fixture: acceptance/inspection
+    doneWhen: "Inspection, observation, permit, protected metadata, and correction provenance run as configured records."
     evidence: [{path: crates/registry-server/tests/postgres_pilot_acceptance.rs, name: real_postgres_five_domain_pilot_is_configured_production_closed_and_source_neutral}]
   - id: RS-J05
     state: enforced
-    domain: farmer
-    fixture: acceptance/farmer
-    doneWhen: "Farmer records prove point, unit, temporal, resumable import, and administrative-boundary behavior."
-    evidence: [{path: crates/registry-server/tests/postgres_pilot_acceptance.rs, name: real_postgres_five_domain_pilot_is_configured_production_closed_and_source_neutral}, {path: crates/registry-server/tests/postgres_data_farmer.rs, name: real_postgres_farmer_import_is_authenticated_chunked_resumable_and_race_safe}]
+    domain: facility
+    fixture: acceptance/facility
+    doneWhen: "Facility records prove point, unit, temporal, resumable import, and administrative-boundary behavior."
+    evidence: [{path: crates/registry-server/tests/postgres_pilot_acceptance.rs, name: real_postgres_five_domain_pilot_is_configured_production_closed_and_source_neutral}, {path: crates/registry-server/tests/postgres_data_facility.rs, name: real_postgres_facility_import_is_authenticated_chunked_resumable_and_race_safe}]
   - id: RS-J06
     state: enforced
     domain: business

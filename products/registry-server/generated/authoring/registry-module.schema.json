@@ -109,6 +109,171 @@
       ],
       "type": "string"
     },
+    "ChangeControlSource": {
+      "additionalProperties": false,
+      "properties": {
+        "requiredFor": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Operation"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "type": "object"
+    },
+    "ChangeRequestEffectSource": {
+      "additionalProperties": false,
+      "properties": {
+        "clear": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operation": {
+          "$ref": "#/$defs/Operation"
+        },
+        "set": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ChangeRequestValueSource"
+          },
+          "default": {},
+          "type": "object"
+        },
+        "target": {
+          "$ref": "#/$defs/ChangeRequestTargetSource"
+        }
+      },
+      "required": [
+        "target",
+        "operation"
+      ],
+      "type": "object"
+    },
+    "ChangeRequestRetentionModeSource": {
+      "enum": [
+        "retain",
+        "operator_erase"
+      ],
+      "type": "string"
+    },
+    "ChangeRequestRetentionSource": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/ChangeRequestRetentionModeSource",
+          "default": "retain"
+        }
+      },
+      "type": "object"
+    },
+    "ChangeRequestReviewSource": {
+      "additionalProperties": false,
+      "properties": {
+        "stages": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ChangeRequestReviewStageSource"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "ChangeRequestReviewStageSource": {
+      "additionalProperties": false,
+      "properties": {
+        "approvals": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "excludeSubmitter": {
+          "default": false,
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "approvals"
+      ],
+      "type": "object"
+    },
+    "ChangeRequestSource": {
+      "additionalProperties": false,
+      "properties": {
+        "effects": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ChangeRequestEffectSource"
+          },
+          "type": "array"
+        },
+        "retention": {
+          "$ref": "#/$defs/ChangeRequestRetentionSource",
+          "default": {
+            "mode": "retain"
+          }
+        },
+        "review": {
+          "$ref": "#/$defs/ChangeRequestReviewSource"
+        }
+      },
+      "required": [
+        "review"
+      ],
+      "type": "object"
+    },
+    "ChangeRequestTargetSource": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fromField": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ChangeRequestValueSource": {
+      "additionalProperties": false,
+      "properties": {
+        "fromEffect": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fromField": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "Classification": {
       "enum": [
         "public",
@@ -831,6 +996,26 @@
           ],
           "description": "Add mandatory requirements only when the entity has none; replacing them is refused."
         },
+        "changeControl": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChangeControlSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "changeRequest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChangeRequestSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "constraints": {
           "default": [],
           "items": {
@@ -910,6 +1095,26 @@
             }
           ],
           "default": null
+        },
+        "changeControl": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChangeControlSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "changeRequest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChangeRequestSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "classification": {
           "$ref": "#/$defs/Classification",
@@ -1033,6 +1238,43 @@
             "kind"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "request_lifecycle",
+              "type": "string"
+            },
+            "stages": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array",
+              "uniqueItems": true
+            },
+            "toStates": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array",
+              "uniqueItems": true
+            },
+            "transitions": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array",
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -1106,7 +1348,8 @@
       "enum": [
         "created",
         "patched",
-        "tombstoned"
+        "tombstoned",
+        "request_lifecycle"
       ],
       "type": "string"
     },
@@ -1221,6 +1464,26 @@
       "enum": [
         "mutable",
         "create_only"
+      ],
+      "type": "string"
+    },
+    "Operation": {
+      "enum": [
+        "create",
+        "get",
+        "lookup",
+        "list",
+        "patch",
+        "tombstone",
+        "batch",
+        "revisions",
+        "submit_request",
+        "approve_request",
+        "reject_request",
+        "request_revision",
+        "revise_request",
+        "cancel_request",
+        "apply_request"
       ],
       "type": "string"
     },

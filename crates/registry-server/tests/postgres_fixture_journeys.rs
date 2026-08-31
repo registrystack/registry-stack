@@ -283,7 +283,11 @@ async fn production_schema_test_executor_uses_only_prepared_database_and_private
         )
         .await
         .unwrap_err(),
-        FixtureError::AuthorityWideningRefused
+        FixtureError::StepFailed {
+            journey_index: 0,
+            step_index: 0,
+            error: Box::new(FixtureError::AuthorityWideningRefused),
+        }
     );
 
     let substituted = TestDatabase::create(8).await;
@@ -339,7 +343,14 @@ async fn production_schema_test_executor_uses_only_prepared_database_and_private
         )
         .await
         .unwrap_err(),
-        FixtureError::ExpectationMismatch
+        FixtureError::StepFailed {
+            journey_index: 0,
+            step_index: 1,
+            error: Box::new(FixtureError::ResponseStatusMismatch {
+                expected: 201,
+                actual: 409,
+            }),
+        }
     );
 
     first.cleanup().await;

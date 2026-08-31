@@ -30,6 +30,9 @@ pub use context::{
     begin_record_transaction, ClaimContext, GuardedTransaction, RowBoundaryContext,
     RowBoundaryOperator,
 };
+pub(crate) use context::{
+    ChangeRequestActionContext, ChangeRequestTargetBinding, ChangeRequestTargetContext,
+};
 #[cfg(feature = "postgres-test")]
 pub use interlock::DedicatedApplyConnection;
 pub use interlock::RegistryLockKey;

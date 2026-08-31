@@ -136,6 +136,10 @@ impl DedicatedApplyConnection {
         .await
     }
 
+    pub(crate) fn client_for_request_retention_guard(&self) -> &Client {
+        &self.client
+    }
+
     async fn acquire_inner(
         config: &ConnectionConfig,
         lock_key: RegistryLockKey,

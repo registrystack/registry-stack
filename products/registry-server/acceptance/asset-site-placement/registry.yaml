@@ -32,59 +32,211 @@ entities:
   - id: asset-item
     route: assets
     mutationMode: mutable
-    batch: {maximumItems: 4, maximumBytes: 16384}
+    batch:
+      maximumItems: 4
+      maximumBytes: 16384
     fields:
-      - {id: asset-code, type: string, required: true, maxLength: 64, classification: internal}
-      - {id: label, type: string, required: true, maxLength: 200, classification: internal}
-      - {id: asset-class, type: vocabulary-code, vocabulary: asset-classification, required: true, classification: internal}
+      - id: asset-code
+        type: string
+        required: true
+        maxLength: 64
+        classification: internal
+      - id: label
+        type: string
+        required: true
+        maxLength: 200
+        classification: internal
+      - id: asset-class
+        type: vocabulary-code
+        vocabulary: asset-classification
+        required: true
+        classification: internal
     constraints:
-      - {kind: unique, fields: [asset-code]}
+      - kind: unique
+        fields:
+          - asset-code
   - id: asset-site
     route: sites
     mutationMode: mutable
     fields:
-      - {id: site-code, type: string, required: true, maxLength: 64, classification: internal}
-      - {id: label, type: string, required: true, maxLength: 200, classification: internal}
+      - id: site-code
+        type: string
+        required: true
+        maxLength: 64
+        classification: internal
+      - id: label
+        type: string
+        required: true
+        maxLength: 200
+        classification: internal
     constraints:
-      - {kind: unique, fields: [site-code]}
+      - kind: unique
+        fields:
+          - site-code
   - id: asset-placement
     route: placements
     mutationMode: mutable
     fields:
-      - {id: asset, type: reference, target: asset-item, required: true, classification: internal}
-      - {id: site, type: reference, target: asset-site, required: true, classification: internal}
-      - {id: valid-from, type: date, required: true, classification: internal}
-      - {id: valid-to, type: date, required: false, classification: internal}
+      - id: asset
+        type: reference
+        target: asset-item
+        required: true
+        classification: internal
+      - id: site
+        type: reference
+        target: asset-site
+        required: true
+        classification: internal
+      - id: valid-from
+        type: date
+        required: true
+        classification: internal
+      - id: valid-to
+        type: date
+        required: false
+        classification: internal
     temporal:
       startField: valid-from
       endField: valid-to
-      scopeFields: [asset]
+      scopeFields:
+        - asset
     constraints:
-      - {kind: temporal-non-overlap, scopeFields: [asset], startField: valid-from, endField: valid-to}
+      - kind: temporal-non-overlap
+        scopeFields:
+          - asset
+        startField: valid-from
+        endField: valid-to
   - id: inspection-event
     route: inspections
     mutationMode: create_only
     fields:
-      - {id: asset, type: reference, target: asset-item, required: true, classification: internal}
-      - {id: observed-at, type: timestamp, required: true, classification: internal}
-      - {id: result, type: vocabulary-code, vocabulary: inspection-result, required: true, classification: internal}
+      - id: asset
+        type: reference
+        target: asset-item
+        required: true
+        classification: internal
+      - id: observed-at
+        type: timestamp
+        required: true
+        classification: internal
+      - id: result
+        type: vocabulary-code
+        vocabulary: inspection-result
+        required: true
+        classification: internal
 accessProfiles:
   - id: asset-operator
     default: true
     principalClaim: registry_principal
-    requiredPurposes: [asset-management]
+    requiredPurposes:
+      - asset-management
     grants:
-      - {entity: asset-item, operations: [create, get, list, patch, batch], readableFields: [asset-code, label, asset-class], writableFields: [asset-code, label, asset-class]}
-      - {entity: asset-site, operations: [create, get, list, patch], readableFields: [site-code, label], writableFields: [site-code, label]}
-      - {entity: asset-placement, operations: [create, get, list, patch], readableFields: [asset, site, valid-from, valid-to], writableFields: [asset, site, valid-from, valid-to]}
-      - {entity: inspection-event, operations: [create, get, list], readableFields: [asset, observed-at, result], writableFields: [asset, observed-at, result]}
+      - entity: asset-item
+        operations:
+          - create
+          - get
+          - list
+          - patch
+          - batch
+        readableFields:
+          - asset-code
+          - label
+          - asset-class
+        writableFields:
+          - asset-code
+          - label
+          - asset-class
+      - entity: asset-site
+        operations:
+          - create
+          - get
+          - list
+          - patch
+        readableFields:
+          - site-code
+          - label
+        writableFields:
+          - site-code
+          - label
+      - entity: asset-placement
+        operations:
+          - create
+          - get
+          - list
+          - patch
+        readableFields:
+          - asset
+          - site
+          - valid-from
+          - valid-to
+        writableFields:
+          - asset
+          - site
+          - valid-from
+          - valid-to
+      - entity: inspection-event
+        operations:
+          - create
+          - get
+          - list
+        readableFields:
+          - asset
+          - observed-at
+          - result
+        writableFields:
+          - asset
+          - observed-at
+          - result
   - id: site-planner
     principalClaim: registry_principal
-    requiredPurposes: [site-planning]
+    requiredPurposes:
+      - site-planning
     grants:
-      - {entity: asset-item, operations: [get, list], readableFields: [asset-code, label], filterableFields: [asset-code]}
-      - {entity: asset-site, operations: [get, list], readableFields: [site-code, label], filterableFields: [site-code]}
-      - {entity: asset-placement, operations: [create, get, list, patch], readableFields: [asset, site, valid-from, valid-to], writableFields: [asset, site, valid-from, valid-to], filterableFields: [asset, site, valid-from]}
+      - entity: asset-item
+        operations:
+          - get
+          - list
+        readableFields:
+          - asset-code
+          - label
+        filterableFields:
+          - asset-code
+      - entity: asset-site
+        operations:
+          - get
+          - list
+        readableFields:
+          - site-code
+          - label
+        filterableFields:
+          - site-code
+      - entity: asset-placement
+        operations:
+          - create
+          - get
+          - list
+          - patch
+        readableFields:
+          - asset
+          - site
+          - valid-from
+          - valid-to
+        writableFields:
+          - asset
+          - site
+          - valid-from
+          - valid-to
+        filterableFields:
+          - asset
+          - site
+          - valid-from
 vocabularies:
-  - {id: asset-classification, values: [equipment, vehicle, furniture]}
-  - {id: inspection-result, values: [passed, failed]}
+  - id: asset-classification
+    values:
+      - equipment
+      - vehicle
+      - furniture
+  - id: inspection-result
+    values:
+      - passed
+      - failed

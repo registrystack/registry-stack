@@ -246,6 +246,7 @@ test('keeps the Server guide and references in one adoption path', () => {
     'explanation/configuration-defined-registry',
     'explanation/registry-modeling-patterns',
     'tutorials/first-registry-server',
+    'tutorials/review-registry-changes',
     'configure/registry-server',
     'configure/registry-server-webhooks',
     'reference/registry-server-configuration',

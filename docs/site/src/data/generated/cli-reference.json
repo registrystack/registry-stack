@@ -3363,6 +3363,7 @@
                 "access",
                 "routes",
                 "queries",
+                "change-requests",
                 "events"
               ],
               "environment": null
@@ -4540,6 +4541,257 @@
                 {
                   "display": "--expected-generation <NUMBER>",
                   "description": "Current generation shown by `webhook list`",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
+          "name": "request-retention",
+          "invocation": "registry-serverctl request-retention",
+          "about": "Inspect and erase eligible change-request retention detail",
+          "long_about": null,
+          "usage": "registry-serverctl request-retention [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "list",
+              "invocation": "registry-serverctl request-retention list",
+              "about": "List bounded value-free change-request retention rows",
+              "long_about": null,
+              "usage": "registry-serverctl request-retention list [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Absolute Registry Server runtime configuration file",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--request-entity <ENTITY>",
+                  "description": "Limit the value-free listing to one compiled change-request entity",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--after-cursor <CURSOR>",
+                  "description": "Cursor returned by the previous bounded list response",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--limit <COUNT>",
+                  "description": "Maximum number of request retention rows to return",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "50"
+                  ],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "dry-run",
+              "invocation": "registry-serverctl request-retention dry-run",
+              "about": "Count exactly what one request retention erase would remove",
+              "long_about": null,
+              "usage": "registry-serverctl request-retention dry-run [OPTIONS] --runtime-config <ABSOLUTE_FILE> --request-entity <ENTITY> --request-id <UUID> --proposal-version <VERSION>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Absolute Registry Server runtime configuration file",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--request-entity <ENTITY>",
+                  "description": "Compiled change-request entity identifier",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--request-id <UUID>",
+                  "description": "Exact request record UUID",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--proposal-version <VERSION>",
+                  "description": "Exact proposal version to inspect or erase",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "erase",
+              "invocation": "registry-serverctl request-retention erase",
+              "about": "Erase eligible payload detail for one exact request proposal version",
+              "long_about": null,
+              "usage": "registry-serverctl request-retention erase [OPTIONS] --runtime-config <ABSOLUTE_FILE> --request-entity <ENTITY> --request-id <UUID> --proposal-version <VERSION>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Absolute Registry Server runtime configuration file",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--request-entity <ENTITY>",
+                  "description": "Compiled change-request entity identifier",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--request-id <UUID>",
+                  "description": "Exact request record UUID",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--proposal-version <VERSION>",
+                  "description": "Exact proposal version to inspect or erase",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],

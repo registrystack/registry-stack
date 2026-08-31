@@ -29,7 +29,7 @@ test('Server reference includes module extensions, event conditions, and runtime
   const module = fields('module');
   const runtime = fields('runtime');
   assert.ok(project.has('accessProfiles[].grants[].entity'));
-  assert.deepEqual(module.get('extendEntities[].events[].trigger').values, ['created', 'patched', 'tombstoned']);
+  assert.deepEqual(module.get('extendEntities[].events[].trigger').values, ['created', 'patched', 'request_lifecycle', 'tombstoned']);
   for (const path of ['changed[]', 'beforeEquals.*', 'afterEquals.*']) {
     assert.ok(module.has(`extendEntities[].events[].when.${path}`), path);
   }

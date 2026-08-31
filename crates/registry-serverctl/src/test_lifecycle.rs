@@ -13,6 +13,7 @@ use registry_server::fixtures::{
 use registry_server::runtime_config::{load_runtime_config, RuntimeConfig, RuntimeConfigError};
 use registry_server::startup;
 use serde::Deserialize;
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
@@ -57,6 +58,8 @@ pub(crate) enum TestLifecycleError {
     Candidate,
     ReviewFingerprint,
     Journeys,
+    JourneySyntax { path: String, message: &'static str },
+    JourneyStep { path: String, message: String },
     Credentials,
     Database,
     Execution,
@@ -159,11 +162,18 @@ pub(crate) fn run(
         .candidate
         .prevalidate()
         .map_err(|_| TestLifecycleError::Candidate)?;
-    let suite = validate_fixture_journeys(
+    let suite = match validate_fixture_journeys(
         request.candidate.fixture_journeys(),
         request.candidate.registry(),
-    )
-    .map_err(|_| TestLifecycleError::Journeys)?;
+    ) {
+        Ok(suite) => suite,
+        Err(_) => {
+            return Err(
+                diagnose_fixture_journey_shape(request.candidate.fixture_journeys())
+                    .unwrap_or(TestLifecycleError::Journeys),
+            );
+        }
+    };
     let credentials = load_credentials(request.credentials, &config, &suite)?;
 
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -210,6 +220,33 @@ pub(crate) fn run(
         receipt_sha256: sha256(&receipt_bytes),
         receipt_bytes: receipt_bytes.len(),
     })
+}
+
+fn diagnose_fixture_journey_shape(bytes: &[u8]) -> Option<TestLifecycleError> {
+    let value: Value = serde_norway::from_slice(bytes).ok()?;
+    let journeys = value.get("journeys")?.as_array()?;
+    for (journey_index, journey) in journeys.iter().enumerate() {
+        let steps = journey.get("steps")?.as_array()?;
+        for (step_index, step) in steps.iter().enumerate() {
+            let request = step.get("request")?.as_object()?;
+            if request.get("operation").and_then(Value::as_str) != Some("revise_request") {
+                continue;
+            }
+            if request.contains_key("data") {
+                return Some(TestLifecycleError::JourneySyntax {
+                    path: format!("journeys[{journey_index}].steps[{step_index}].request.data"),
+                    message: "revise_request fixture steps require rebase directly under request; remove the data wrapper",
+                });
+            }
+            if !request.get("rebase").is_some_and(Value::is_boolean) {
+                return Some(TestLifecycleError::JourneySyntax {
+                    path: format!("journeys[{journey_index}].steps[{step_index}].request.rebase"),
+                    message: "revise_request fixture steps require a boolean rebase field",
+                });
+            }
+        }
+    }
+    None
 }
 
 fn load_test_runtime_config(path: &Path) -> Result<RuntimeConfig, TestLifecycleError> {
@@ -302,6 +339,14 @@ fn read_credentials(path: &Path) -> Result<Vec<u8>, TestLifecycleError> {
 
 fn execution_error(error: FixtureError) -> TestLifecycleError {
     match error {
+        FixtureError::StepFailed {
+            journey_index,
+            step_index,
+            error,
+        } => TestLifecycleError::JourneyStep {
+            path: format!("journeys[{journey_index}].steps[{step_index}]"),
+            message: error.to_string(),
+        },
         FixtureError::CandidateBindingRefused => TestLifecycleError::Database,
         _ => TestLifecycleError::Execution,
     }
@@ -495,5 +540,69 @@ mod tests {
                     .starts_with(".registry-serverctl-test-receipt-")),
             "temporary receipt files are cleaned up"
         );
+    }
+
+    #[test]
+    fn failed_step_reports_location_and_http_status_without_payload_or_database_advice() {
+        let error = execution_error(FixtureError::StepFailed {
+            journey_index: 1,
+            step_index: 25,
+            error: Box::new(FixtureError::ResponseStatusMismatch {
+                expected: 409,
+                actual: 412,
+            }),
+        });
+        let report = serde_json::to_value(crate::test_lifecycle_failure(error))
+            .expect("step failure report serializes");
+        assert_eq!(report["diagnostics"][0]["code"], "test.step.failed");
+        assert_eq!(report["diagnostics"][0]["path"], "journeys[1].steps[25]");
+        assert_eq!(
+            report["diagnostics"][0]["message"],
+            "expected HTTP 409, received HTTP 412"
+        );
+        assert!(!report.to_string().contains("recreate"));
+    }
+
+    #[test]
+    fn revise_request_data_body_reports_field_path() {
+        let source = br#"apiVersion: registry.registrystack.org/server-journeys/v1
+journeys:
+  - id: stale-flow
+    steps:
+      - id: rebase-primary-request
+        request:
+          operation: revise_request
+          data: {rebase: true}
+"#;
+
+        let error = diagnose_fixture_journey_shape(source).expect("specific diagnostic");
+        match error {
+            TestLifecycleError::JourneySyntax { path, message } => {
+                assert_eq!(path, "journeys[0].steps[0].request.data");
+                assert!(message.contains("remove the data wrapper"));
+            }
+            other => panic!("unexpected diagnostic: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn revise_request_missing_rebase_reports_field_path() {
+        let source = br#"apiVersion: registry.registrystack.org/server-journeys/v1
+journeys:
+  - id: stale-flow
+    steps:
+      - id: rebase-primary-request
+        request:
+          operation: revise_request
+"#;
+
+        let error = diagnose_fixture_journey_shape(source).expect("specific diagnostic");
+        match error {
+            TestLifecycleError::JourneySyntax { path, message } => {
+                assert_eq!(path, "journeys[0].steps[0].request.rebase");
+                assert!(message.contains("boolean rebase"));
+            }
+            other => panic!("unexpected diagnostic: {other:?}"),
+        }
     }
 }

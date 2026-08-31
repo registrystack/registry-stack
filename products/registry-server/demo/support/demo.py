@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Provision and exercise the disposable Registry Server household demo."""
+"""Provision and exercise disposable Registry Server demos."""
 
 from __future__ import annotations
 
@@ -31,6 +31,13 @@ AUDIENCE = "urn:registry-server:household-demo"
 OPERATOR_CLIENT = "household-demo"
 NO_PURPOSE_CLIENT = "household-demo-no-purpose"
 VIEWER_CLIENT = "household-demo-viewer"
+BUSINESS_DATABASE_ID = "business-establishments-demo"
+BUSINESS_INSTANCE_ID = "business-establishments-local"
+BUSINESS_SOURCE_REVISION = "business-establishments-local-0.1.0"
+BUSINESS_AUDIENCE = "urn:registry-server:business-demo"
+BUSINESS_OPERATOR_CLIENT = "business-demo"
+BUSINESS_NO_PURPOSE_CLIENT = "business-demo-no-purpose"
+BUSINESS_VIEWER_CLIENT = "business-demo-viewer"
 ASSET_SITE_DATABASE_ID = "asset-site-placement-demo"
 ASSET_SITE_INSTANCE_ID = "asset-site-placement-local"
 ASSET_SITE_SOURCE_REVISION = "asset-site-placement-local-0.1.0"
@@ -40,6 +47,7 @@ ASSET_PLANNER_CLIENT = "asset-site-demo-planner"
 ASSET_PLANNER_NO_PURPOSE_CLIENT = "asset-site-demo-planner-no-purpose"
 ASSET_OPERATOR_SCOPE = "registry:asset:operate"
 ASSET_PLANNER_SCOPE = "registry:asset:plan"
+DEFAULT_FIXTURE_KIND = "business-establishments"
 DEFAULT_TOKEN_LIFETIME_SECONDS = 300
 MIN_TOKEN_LIFETIME_SECONDS = 60
 MAX_TOKEN_LIFETIME_SECONDS = 900
@@ -56,6 +64,11 @@ ASSET_SITE_PROJECT_REPLACEMENTS = {
     "  environment: acceptance": "  environment: local",
     "  instanceId: asset-site-placement-acceptance": f"  instanceId: {ASSET_SITE_INSTANCE_ID}",
     "  sourceRevision: asset-site-placement-acceptance-0.1.0": f"  sourceRevision: {ASSET_SITE_SOURCE_REVISION}",
+}
+BUSINESS_PROJECT_REPLACEMENTS = {
+    "  environment: acceptance": "  environment: local",
+    "  instanceId: business-establishments-acceptance": f"  instanceId: {BUSINESS_INSTANCE_ID}",
+    "  sourceRevision: business-establishments-acceptance-0.1.0": f"  sourceRevision: {BUSINESS_SOURCE_REVISION}",
 }
 WEBHOOK_DESTINATION_ID = "household-event-receiver"
 WEBHOOK_EVENT_ID = "usual-resident-created-v1"
@@ -81,6 +94,53 @@ class DemoError(RuntimeError):
 
 
 FIXTURE_CONFIGS: dict[str, dict[str, Any]] = {
+    "business-establishments": {
+        "registry_id": "business-establishments",
+        "database_id": BUSINESS_DATABASE_ID,
+        "instance_id": BUSINESS_INSTANCE_ID,
+        "source_revision": BUSINESS_SOURCE_REVISION,
+        "audience": BUSINESS_AUDIENCE,
+        "replacements": BUSINESS_PROJECT_REPLACEMENTS,
+        "allowed_clients": [
+            BUSINESS_OPERATOR_CLIENT,
+            BUSINESS_NO_PURPOSE_CLIENT,
+            BUSINESS_VIEWER_CLIENT,
+        ],
+        "personas": [
+            {
+                "id": "business-operator",
+                "label": "Business operator",
+                "token_name": "operator-token",
+                "access_profile": "business-operator",
+            },
+            {
+                "id": "business-viewer",
+                "label": "Business viewer",
+                "token_name": "viewer-token",
+                "access_profile": "business-viewer",
+            },
+        ],
+        "webhook": {
+            "destination_id": "business-event-receiver",
+            "event_id": "operating-created-v1",
+            "module_id": "business-establishment-summary",
+            "module_lock": "  - id: business-establishment-summary\n    version: 0.1.0\n",
+            "entity_insertion": "  - entity: business\n",
+            "module_source": """    events:
+      - id: operating-created-v1
+        trigger: created
+        projection: [establishment-code, operating-status]
+        when:
+          kind: fields
+          afterEquals:
+            operating-status: operating
+        webhook:
+          destinationId: business-event-receiver
+""",
+            "entity": "establishment",
+            "event_values": {"establishment-code", "operating-status"},
+        },
+    },
     "household": {
         "registry_id": "publicschema-household",
         "database_id": DATABASE_ID,
@@ -103,6 +163,16 @@ FIXTURE_CONFIGS: dict[str, dict[str, Any]] = {
                 "access_profile": "household-viewer",
             },
         ],
+        "webhook": {
+            "destination_id": WEBHOOK_DESTINATION_ID,
+            "event_id": WEBHOOK_EVENT_ID,
+            "module_id": WEBHOOK_MODULE_ID,
+            "module_lock": WEBHOOK_MODULE_LOCK,
+            "entity_insertion": WEBHOOK_ENTITY_INSERTION,
+            "module_source": WEBHOOK_MODULE_SOURCE,
+            "entity": "person",
+            "event_values": {"person-code", "residency-status"},
+        },
     },
     "asset-site": {
         "registry_id": "asset-site-placement",
@@ -138,7 +208,22 @@ def _fixture_config(fixture_kind: str) -> dict[str, Any]:
     try:
         return FIXTURE_CONFIGS[fixture_kind]
     except KeyError as error:
-        raise DemoError("fixture must be household or asset-site") from error
+        raise DemoError("fixture must be business-establishments, household, or asset-site") from error
+
+
+def _fixture_kind_for_root(root: Path) -> str:
+    marker = root / "fixture-kind"
+    if not marker.exists():
+        return DEFAULT_FIXTURE_KIND
+    return marker.read_text(encoding="ascii").strip()
+
+
+def _webhook_config(fixture_kind: str) -> dict[str, Any]:
+    config = _fixture_config(fixture_kind)
+    webhook = config.get("webhook")
+    if not isinstance(webhook, dict):
+        raise DemoError(f"the webhook demo is not available for the {fixture_kind} fixture")
+    return webhook
 
 
 def _validated_token_lifetime_seconds(value: int) -> int:
@@ -190,7 +275,12 @@ def reserve_ports(count: int = 3) -> tuple[int, ...]:
             listener.close()
 
 
-def _local_project(root: Path, fixture: Path, webhook: bool, fixture_kind: str = "household") -> None:
+def _local_project(
+    root: Path,
+    fixture: Path,
+    webhook: bool,
+    fixture_kind: str = DEFAULT_FIXTURE_KIND,
+) -> None:
     target = root / "project"
     shutil.copytree(fixture, target, ignore=shutil.ignore_patterns(".DS_Store"))
     project_path = target / "registry.yaml"
@@ -201,11 +291,11 @@ def _local_project(root: Path, fixture: Path, webhook: bool, fixture_kind: str =
             raise DemoError(f"{fixture_kind} fixture no longer has the expected package line: {expected.strip()}")
         source = source.replace(expected, replacement, 1)
     if webhook:
-        if fixture_kind != "household":
-            raise DemoError("the webhook demo is available only for the household fixture")
-        if source.count(WEBHOOK_MODULE_LOCK) != 1:
-            raise DemoError("household fixture no longer has the expected demographics module lock")
-        before_lock, after_lock = source.split(WEBHOOK_MODULE_LOCK, 1)
+        hook = _webhook_config(fixture_kind)
+        module_lock = hook["module_lock"]
+        if source.count(module_lock) != 1:
+            raise DemoError(f"{fixture_kind} fixture no longer has the expected webhook module lock")
+        before_lock, after_lock = source.split(module_lock, 1)
         digest_line, separator, after_digest = after_lock.partition("\n")
         digest = digest_line.removeprefix("    digest: ")
         if (
@@ -213,22 +303,20 @@ def _local_project(root: Path, fixture: Path, webhook: bool, fixture_kind: str =
             or not digest.startswith("sha256:")
             or len(digest) != 71
         ):
-            raise DemoError(
-                "household fixture no longer has the expected demographics module digest"
-            )
-        source = before_lock + WEBHOOK_MODULE_LOCK + after_digest
-        module_path = target / f"modules/{WEBHOOK_MODULE_ID}/module.yaml"
+            raise DemoError(f"{fixture_kind} fixture no longer has the expected webhook module digest")
+        source = before_lock + module_lock + after_digest
+        module_path = target / f"modules/{hook['module_id']}/module.yaml"
         module_source = module_path.read_text(encoding="utf-8")
         if (
             "    events:\n" in module_source
-            or module_source.count(WEBHOOK_ENTITY_INSERTION) != 1
+            or module_source.count(hook["entity_insertion"]) != 1
             or not module_source.endswith("\n")
         ):
-            raise DemoError("household demographics module cannot receive the demo event")
+            raise DemoError(f"{fixture_kind} webhook module cannot receive the demo event")
         module_path.write_text(
             module_source.replace(
-                WEBHOOK_ENTITY_INSERTION,
-                WEBHOOK_MODULE_SOURCE + WEBHOOK_ENTITY_INSERTION,
+                hook["entity_insertion"],
+                hook["module_source"] + hook["entity_insertion"],
                 1,
             ),
             encoding="utf-8",
@@ -282,8 +370,14 @@ def _local_project(root: Path, fixture: Path, webhook: bool, fixture_kind: str =
     project_path.write_text(source, encoding="utf-8")
 
 
-def bind_webhook_module(root: Path, explain_report: Path) -> None:
+def bind_webhook_module(
+    root: Path,
+    explain_report: Path,
+    fixture_kind: str | None = None,
+) -> None:
     root = _require_root(root)
+    fixture_kind = fixture_kind or _fixture_kind_for_root(root)
+    hook = _webhook_config(fixture_kind)
     report = _read_json_object(explain_report)
     closure = report.get("explanation", {}).get("moduleClosure")
     if not isinstance(closure, list):
@@ -291,7 +385,7 @@ def bind_webhook_module(root: Path, explain_report: Path) -> None:
     matching = [
         entry
         for entry in closure
-        if isinstance(entry, dict) and entry.get("id") == WEBHOOK_MODULE_ID
+        if isinstance(entry, dict) and entry.get("id") == hook["module_id"]
     ]
     if len(matching) != 1:
         raise DemoError("compiled model report does not identify the demo webhook module")
@@ -300,11 +394,12 @@ def bind_webhook_module(root: Path, explain_report: Path) -> None:
         raise DemoError("compiled model report has no canonical demo webhook module digest")
     project_path = root / "project/registry.yaml"
     source = project_path.read_text(encoding="utf-8")
-    if source.count(WEBHOOK_MODULE_LOCK) != 1:
+    module_lock = hook["module_lock"]
+    if source.count(module_lock) != 1:
         raise DemoError("demo webhook module lock is not ready for its compiled digest")
     source = source.replace(
-        WEBHOOK_MODULE_LOCK,
-        WEBHOOK_MODULE_LOCK + f"    digest: {digest}\n",
+        module_lock,
+        module_lock + f"    digest: {digest}\n",
         1,
     )
     project_path.write_text(source, encoding="utf-8")
@@ -340,16 +435,17 @@ def _runtime_config(
     revision: str,
     bind: str,
     webhook: bool = False,
-    fixture_kind: str = "household",
+    fixture_kind: str = DEFAULT_FIXTURE_KIND,
     token_lifetime_seconds: int = DEFAULT_TOKEN_LIFETIME_SECONDS,
 ) -> str:
     config = _fixture_config(fixture_kind)
     token_lifetime_seconds = _validated_token_lifetime_seconds(token_lifetime_seconds)
     secrets = root / "secrets"
     if webhook:
+        hook = _webhook_config(fixture_kind)
         receiver_origin = root.joinpath("receiver-origin").read_text(encoding="ascii").strip()
         event_destinations = f"""eventDestinations:
-  {WEBHOOK_DESTINATION_ID}:
+  {hook["destination_id"]}:
     origin: {receiver_origin}
     path: /events
     networkProfile: loopbackDevelopmentHttp
@@ -442,7 +538,7 @@ def prepare(
     server_port: int,
     webhook: bool = False,
     receiver_port: int | None = None,
-    fixture_kind: str = "household",
+    fixture_kind: str = DEFAULT_FIXTURE_KIND,
     token_lifetime_seconds: int = DEFAULT_TOKEN_LIFETIME_SECONDS,
 ) -> None:
     root = _require_root(root)
@@ -463,7 +559,7 @@ def prepare(
     operator_public = _read_json_object(root / "keys/operator-public.jwk.json")
     no_purpose_public = (
         _read_json_object(root / "keys/no-purpose-public.jwk.json")
-        if fixture_kind == "household"
+        if fixture_kind in ("business-establishments", "household")
         else None
     )
     kid = mint_public.get("kid")
@@ -478,7 +574,31 @@ def prepare(
         _write_new(root / "receiver-origin", f"http://127.0.0.1:{receiver_port}\n")
     _write_json(root / "secrets/mint-jwks", {"keys": [mint_public]}, 0o600)
     _write_json(root / f"mint/public-keys/{kid}.jwk.json", mint_public)
-    if fixture_kind == "household":
+    if fixture_kind == "business-establishments":
+        if no_purpose_public is None:
+            raise DemoError("business no-purpose key material is missing")
+        _write_new(
+            root / f"mint/clients/{BUSINESS_OPERATOR_CLIENT}.yaml",
+            _mint_client(
+                BUSINESS_OPERATOR_CLIENT,
+                operator_public,
+                ["registry:business:operate"],
+                {
+                    "registry_principal": "synthetic-business-operator",
+                    "registry_purpose": "business-administration",
+                },
+            ),
+        )
+        _write_new(
+            root / f"mint/clients/{BUSINESS_NO_PURPOSE_CLIENT}.yaml",
+            _mint_client(
+                BUSINESS_NO_PURPOSE_CLIENT,
+                no_purpose_public,
+                ["registry:business:operate"],
+                {"registry_principal": "synthetic-business-operator"},
+            ),
+        )
+    elif fixture_kind == "household":
         if no_purpose_public is None:
             raise DemoError("household no-purpose key material is missing")
         _write_new(
@@ -502,7 +622,7 @@ def prepare(
                 {"registry_principal": "synthetic-household-operator"},
             ),
         )
-    else:
+    elif fixture_kind == "asset-site":
         planner_public = _read_json_object(root / "keys/planner-public.jwk.json")
         planner_no_purpose_public = _read_json_object(
             root / "keys/planner-no-purpose-public.jwk.json"
@@ -540,6 +660,8 @@ def prepare(
                 {"registry_principal": "synthetic-site-planner"},
             ),
         )
+    else:
+        raise AssertionError(fixture_kind)
     _write_new(
         root / "mint/mint.yaml",
         f"""version: 1
@@ -644,7 +766,28 @@ REVOKE ALL ON SCHEMA registry_internal, registry_data, registry_source, registry
         "secret:file/migration-database-url", "secret:file/test-migration-database-url"
     )
     _write_new(root / "runtime-test.yaml", test_runtime)
-    if fixture_kind == "household":
+    if fixture_kind == "business-establishments":
+        credentials = f"""apiVersion: registry.registrystack.org/server-schema-test-credentials/v1
+kind: SchemaTestCredentials
+bindings:
+  - {{journeyId: business-establishment-lifecycle, stepId: create-north-head-office, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: business-establishment-lifecycle, stepId: create-production-branch, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: business-establishment-lifecycle, stepId: create-central-head-office, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: business-establishment-lifecycle, stepId: create-central-branch, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: business-establishment-lifecycle, stepId: create-central-depot, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: business-establishment-lifecycle, stepId: create-isolation-head-office, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: business-establishment-lifecycle, stepId: create-isolation-regional-office, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: business-establishment-lifecycle, stepId: create-isolation-branch, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: business-establishment-lifecycle, stepId: create-north-business, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: business-establishment-lifecycle, stepId: create-central-business, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: business-establishment-lifecycle, stepId: create-isolation-business, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: business-establishment-lifecycle, stepId: lookup-north-business, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: business-establishment-lifecycle, stepId: read-establishments-from-north-business, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: business-establishment-lifecycle, stepId: query-establishment-summary, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: business-establishment-lifecycle, stepId: refuse-incomplete-assignment, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: business-establishment-lifecycle, stepId: operator-without-purpose-is-concealed, credential: {{type: bearer, tokenRef: secret:file/no-purpose-token}}}}
+"""
+    elif fixture_kind == "household":
         credentials = f"""apiVersion: registry.registrystack.org/server-schema-test-credentials/v1
 kind: SchemaTestCredentials
 bindings:
@@ -665,7 +808,7 @@ bindings:
   - {{journeyId: household-person-lifecycle, stepId: refuse-incomplete-membership, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
   - {{journeyId: household-person-lifecycle, stepId: operator-without-purpose-is-concealed, credential: {{type: bearer, tokenRef: secret:file/no-purpose-token}}}}
 """
-    else:
+    elif fixture_kind == "asset-site":
         credentials = """apiVersion: registry.registrystack.org/server-schema-test-credentials/v1
 kind: SchemaTestCredentials
 bindings:
@@ -678,6 +821,8 @@ bindings:
   - {journeyId: asset-and-site-caller-surfaces, stepId: planner-lists-sites, credential: {type: bearer, tokenRef: secret:file/planner-token}}
   - {journeyId: asset-and-site-caller-surfaces, stepId: planner-without-purpose-is-concealed, credential: {type: bearer, tokenRef: secret:file/planner-no-purpose-token}}
 """
+    else:
+        raise AssertionError(fixture_kind)
     _write_new(root / "schema-test-credentials.yaml", credentials)
 
 
@@ -685,7 +830,7 @@ def render_runtime(
     root: Path,
     revision: str,
     webhook: bool = False,
-    fixture_kind: str = "household",
+    fixture_kind: str = DEFAULT_FIXTURE_KIND,
     token_lifetime_seconds: int = DEFAULT_TOKEN_LIFETIME_SECONDS,
 ) -> None:
     root = _require_root(root)
@@ -781,7 +926,10 @@ def _verify_webhook_request(
     path: str,
     headers: dict[str, str],
     body: bytes,
+    fixture_kind: str = DEFAULT_FIXTURE_KIND,
 ) -> tuple[str, int, int, str]:
+    config = _fixture_config(fixture_kind)
+    hook = _webhook_config(fixture_kind)
     required = {
         "accept",
         "content-type",
@@ -806,14 +954,17 @@ def _verify_webhook_request(
     ):
         raise DemoError("the receiver refused the CloudEvents profile")
     event_uuid = str(uuid.UUID(headers["ce-id"]))
-    if event_uuid != headers["ce-id"] or headers["ce-type"] != WEBHOOK_EVENT_ID:
+    if event_uuid != headers["ce-id"] or headers["ce-type"] != hook["event_id"]:
         raise DemoError("the receiver refused the CloudEvents identity")
-    expected_source = f"urn:registrystack:registry:publicschema-household:instance:{INSTANCE_ID}"
+    expected_source = (
+        f"urn:registrystack:registry:{config['registry_id']}:"
+        f"instance:{config['instance_id']}"
+    )
     if headers["ce-source"] != expected_source:
         raise DemoError("the receiver refused the CloudEvents source")
     expected_schema_prefix = (
-        "urn:registry-server:event-schema:publicschema-household:person:"
-        f"{WEBHOOK_EVENT_ID}:sha256:"
+        f"urn:registry-server:event-schema:{config['registry_id']}:{hook['entity']}:"
+        f"{hook['event_id']}:sha256:"
     )
     if not headers["ce-dataschema"].startswith(expected_schema_prefix):
         raise DemoError("the receiver refused the CloudEvents data schema")
@@ -839,7 +990,7 @@ def _verify_webhook_request(
     if set(document) != {"entity", "recordId", "revision", "trigger", "packageRevision", "values"}:
         raise DemoError("the receiver refused the webhook body shape")
     if (
-        document["entity"] != "person"
+        document["entity"] != hook["entity"]
         or document["trigger"] != "created"
         or not isinstance(document["revision"], int)
         or document["revision"] < 1
@@ -847,7 +998,7 @@ def _verify_webhook_request(
         or not document["packageRevision"].startswith("sha256:")
         or str(uuid.UUID(document["recordId"])) != document["recordId"]
         or not isinstance(document["values"], dict)
-        or set(document["values"]) != {"person-code", "residency-status"}
+        or set(document["values"]) != hook["event_values"]
     ):
         raise DemoError("the receiver refused the event data contract")
     expected_signature = _expected_webhook_signature(key, headers, body)
@@ -879,8 +1030,9 @@ class WebhookReceiver(http.server.BaseHTTPRequestHandler):
                 raise DemoError("the receiver refused the webhook length")
             body = self.rfile.read(length)
             headers = {name.lower(): value for name, value in self.headers.items()}
+            fixture_kind: str = self.server.fixture_kind  # type: ignore[attr-defined]
             event_id, generation, attempt, idempotency_key = _verify_webhook_request(
-                key, self.path, headers, body
+                key, self.path, headers, body, fixture_kind
             )
         except (DemoError, KeyError, TypeError, ValueError, UnicodeError, json.JSONDecodeError):
             state = _read_json_object(state_path)
@@ -922,6 +1074,8 @@ class WebhookReceiver(http.server.BaseHTTPRequestHandler):
 
 def serve_webhook_receiver(root: Path) -> None:
     root = _require_root(root)
+    fixture_kind = _fixture_kind_for_root(root)
+    _webhook_config(fixture_kind)
     origin = urllib.parse.urlparse((root / "receiver-origin").read_text(encoding="ascii").strip())
     if origin.scheme != "http" or origin.hostname != "127.0.0.1" or origin.port is None:
         raise DemoError("the webhook receiver origin must be exact loopback HTTP")
@@ -936,6 +1090,7 @@ def serve_webhook_receiver(root: Path) -> None:
     server = http.server.HTTPServer(("127.0.0.1", origin.port), WebhookReceiver)
     server.state_path = state_path  # type: ignore[attr-defined]
     server.webhook_key = key  # type: ignore[attr-defined]
+    server.fixture_kind = fixture_kind  # type: ignore[attr-defined]
     server.serve_forever(poll_interval=0.1)
 
 
@@ -994,12 +1149,21 @@ def select_dead_letter(report_path: Path) -> tuple[str, str, int]:
 
 def verify_webhook(root: Path) -> None:
     root = _require_root(root)
+    fixture_kind = _fixture_kind_for_root(root)
     state = _read_json_object(root / "webhook-receiver-state.json")
     events = sorted(state.get("events", {}).values(), key=lambda event: event.get("slot", 0))
-    people, _, _ = seed_spec()
-    expected_events = sum(
-        person.get("residencyStatus") == "usual-resident" for person in people
-    )
+    if fixture_kind == "business-establishments":
+        establishments, _, _ = business_seed_spec()
+        expected_events = sum(
+            item.get("operatingStatus") == "operating" for item in establishments
+        )
+    elif fixture_kind == "household":
+        people, _, _ = seed_spec()
+        expected_events = sum(
+            person.get("residencyStatus") == "usual-resident" for person in people
+        )
+    else:
+        raise DemoError(f"the webhook demo is not available for the {fixture_kind} fixture")
     if state.get("verificationFailures") != 0 or len(events) != expected_events:
         raise DemoError("the webhook receiver did not verify every matching seeded event")
     if not any(item.get("accepted") for item in events[0].get("attempts", [])):
@@ -1082,6 +1246,108 @@ def _create(
     if not isinstance(identifier, str):
         raise DemoError(f"created {logical_key} has no record id")
     return identifier
+
+
+def business_seed_spec() -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    establishments = [
+        {"establishmentCode": "ESTABLISHMENT-DEMO-001", "siteName": "North Quay Head Office", "locality": "North Quay", "openedOn": "1986-02-22", "establishmentKind": "office", "operatingStatus": "operating", "preferredLanguage": "en"},
+        {"establishmentCode": "ESTABLISHMENT-DEMO-002", "siteName": "North Quay Riverside Works", "locality": "North Quay", "openedOn": "2023-03-14", "establishmentKind": "production", "operatingStatus": "operating", "preferredLanguage": "en"},
+        {"establishmentCode": "ESTABLISHMENT-DEMO-003", "siteName": "Central Fabrication Works", "locality": "Central District", "openedOn": "1980-11-02", "establishmentKind": "production", "operatingStatus": "operating", "preferredLanguage": "es"},
+        {"establishmentCode": "ESTABLISHMENT-DEMO-004", "siteName": "Central Distribution Branch", "locality": "Central District", "openedOn": "2016-06-17", "establishmentKind": "warehouse", "operatingStatus": "operating", "preferredLanguage": "es"},
+        {"establishmentCode": "ESTABLISHMENT-DEMO-005", "siteName": "Central Storage Depot", "locality": "Central District", "openedOn": "1940-08-20", "establishmentKind": "warehouse", "operatingStatus": "suspended", "preferredLanguage": "es"},
+        {"establishmentCode": "ESTABLISHMENT-DEMO-006", "siteName": "South Harbour Head Office", "locality": "South Harbour", "openedOn": "1975-01-09", "establishmentKind": "office", "operatingStatus": "operating", "preferredLanguage": "fr"},
+        {"establishmentCode": "ESTABLISHMENT-DEMO-007", "siteName": "South Harbour Regional Office", "locality": "South Harbour", "openedOn": "1977-09-23", "establishmentKind": "office", "operatingStatus": "operating", "preferredLanguage": "fr"},
+        {"establishmentCode": "ESTABLISHMENT-DEMO-008", "siteName": "South Harbour Branch", "locality": "South Harbour", "openedOn": "2018-05-06", "establishmentKind": "warehouse", "operatingStatus": "operating", "preferredLanguage": "fr"},
+    ]
+    businesses = [
+        {"businessCode": "BUSINESS-DEMO-001", "localRegistrationNumber": 1001, "registeredName": "North Quay Engineering Ltd", "administrativeArea": "north-demo", "businessType": "private"},
+        {"businessCode": "BUSINESS-DEMO-002", "localRegistrationNumber": 1002, "registeredName": "Central Fabrication Ltd", "administrativeArea": "central-demo", "businessType": "private"},
+        {"businessCode": "BUSINESS-DEMO-003", "localRegistrationNumber": 1003, "registeredName": "South Harbour Logistics Ltd", "administrativeArea": "south-demo", "businessType": "private"},
+    ]
+    assignments = [
+        {"establishmentCode": "ESTABLISHMENT-DEMO-001", "businessCode": "BUSINESS-DEMO-001", "relationship": "head-office", "validFrom": "2026-01-01"},
+        {"establishmentCode": "ESTABLISHMENT-DEMO-002", "businessCode": "BUSINESS-DEMO-001", "relationship": "branch", "validFrom": "2026-01-01"},
+        {"establishmentCode": "ESTABLISHMENT-DEMO-003", "businessCode": "BUSINESS-DEMO-002", "relationship": "head-office", "validFrom": "2026-01-01"},
+        {"establishmentCode": "ESTABLISHMENT-DEMO-004", "businessCode": "BUSINESS-DEMO-002", "relationship": "branch", "validFrom": "2026-01-01"},
+        {"establishmentCode": "ESTABLISHMENT-DEMO-005", "businessCode": "BUSINESS-DEMO-002", "relationship": "depot", "validFrom": "2026-01-01"},
+        {"establishmentCode": "ESTABLISHMENT-DEMO-006", "businessCode": "BUSINESS-DEMO-003", "relationship": "head-office", "validFrom": "2026-01-01"},
+        {"establishmentCode": "ESTABLISHMENT-DEMO-007", "businessCode": "BUSINESS-DEMO-003", "relationship": "regional-office", "validFrom": "2026-01-01"},
+        {"establishmentCode": "ESTABLISHMENT-DEMO-008", "businessCode": "BUSINESS-DEMO-003", "relationship": "branch", "validFrom": "2026-01-01"},
+    ]
+    return establishments, businesses, assignments
+
+
+def seed_business(root: Path) -> None:
+    root = _require_root(root)
+    establishments, businesses, assignments = business_seed_spec()
+    establishment_ids = {
+        establishment["establishmentCode"]: _create(
+            root,
+            "/v1/records/establishments",
+            establishment["establishmentCode"].lower(),
+            establishment,
+            "business-operator",
+            "operator-token",
+        )
+        for establishment in establishments
+    }
+    business_ids = {
+        business["businessCode"]: _create(
+            root,
+            "/v1/records/businesses",
+            business["businessCode"].lower(),
+            business,
+            "business-operator",
+            "operator-token",
+        )
+        for business in businesses
+    }
+    for index, assignment in enumerate(assignments, start=1):
+        _create(
+            root,
+            "/v1/records/operator-assignments",
+            f"assignment-{index}",
+            {
+                "establishment": establishment_ids[assignment["establishmentCode"]],
+                "business": business_ids[assignment["businessCode"]],
+                "relationship": assignment["relationship"],
+                "validFrom": assignment["validFrom"],
+            },
+            "business-operator",
+            "operator-token",
+        )
+    _write_json(
+        root / "seed-record-ids.json",
+        {"establishments": establishment_ids, "businesses": business_ids},
+    )
+    establishments_response, _ = _request(
+        root,
+        "GET",
+        "/v1/records/establishments?accessProfile=business-operator&$top=20",
+        "operator-token",
+    )
+    business_response, _ = _request(
+        root,
+        "GET",
+        "/v1/records/businesses?accessProfile=business-operator&$top=20",
+        "operator-token",
+    )
+    assignment_response, _ = _request(
+        root,
+        "GET",
+        "/v1/records/operator-assignments:current?accessProfile=business-operator&$top=20",
+        "operator-token",
+    )
+    if [len(response.get("items", [])) for response in (establishments_response, business_response, assignment_response)] != [8, 3, 8]:
+        raise DemoError("seeded list counts did not match the expected 8 establishments, 3 businesses, and 8 assignments")
+    _request(
+        root,
+        "GET",
+        f"/v1/records/establishments/{establishment_ids['ESTABLISHMENT-DEMO-001']}?accessProfile=business-operator",
+        "no-purpose-token",
+        expected=404,
+    )
+    print("Seeded 8 synthetic establishments, 3 businesses, and 8 current assignments.")
 
 
 def seed_spec() -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
@@ -1251,10 +1517,48 @@ def _bound_household(root: Path) -> tuple[str, str]:
     return household_id, household_code
 
 
-def configure_viewer(root: Path) -> None:
+def _bound_business(root: Path) -> tuple[str, str]:
+    seed_ids = _read_json_object(root / "seed-record-ids.json")
+    businesses = seed_ids.get("businesses")
+    business_code = "BUSINESS-DEMO-001"
+    business_id = businesses.get(business_code) if isinstance(businesses, dict) else None
+    if not isinstance(business_id, str):
+        raise DemoError("seed record identifiers are missing; run the demo seed first")
+    try:
+        parsed = uuid.UUID(business_id)
+    except ValueError as error:
+        raise DemoError("the bound business identifier is not a UUID") from error
+    if str(parsed) != business_id:
+        raise DemoError("the bound business identifier is not canonical")
+    return business_id, business_code
+
+
+def configure_viewer(
+    root: Path,
+    fixture_kind: str = DEFAULT_FIXTURE_KIND,
+) -> None:
     root = _require_root(root)
-    household_id, household_code = _bound_household(root)
     viewer_public = _read_json_object(root / "keys/viewer-public.jwk.json")
+    if fixture_kind == "business-establishments":
+        business_id, business_code = _bound_business(root)
+        _write_new(
+            root / f"mint/clients/{BUSINESS_VIEWER_CLIENT}.yaml",
+            _mint_client(
+                BUSINESS_VIEWER_CLIENT,
+                viewer_public,
+                ["registry:business:view"],
+                {
+                    "business_code": business_code,
+                    "business_id": business_id,
+                    "registry_principal": "synthetic-business-viewer",
+                    "registry_purpose": "business-view",
+                },
+            ),
+        )
+        return
+    if fixture_kind != "household":
+        raise DemoError(f"the viewer demo is not available for the {fixture_kind} fixture")
+    household_id, household_code = _bound_household(root)
     _write_new(
         root / f"mint/clients/{VIEWER_CLIENT}.yaml",
         _mint_client(
@@ -1284,6 +1588,105 @@ def _assert_bound_household(response: dict[str, Any], household_id: str, househo
         or data.get("householdCode") != household_code
     ):
         raise DemoError("viewer read did not return its one bound household")
+
+
+def _assert_bound_business(response: dict[str, Any], business_id: str, business_code: str) -> None:
+    data = response.get("data")
+    if (
+        response.get("id") != business_id
+        or not isinstance(data, dict)
+        or data.get("businessCode") != business_code
+    ):
+        raise DemoError("viewer read did not return its one bound business")
+
+
+def query_business(root: Path, suite: str = "all") -> None:
+    root = _require_root(root)
+    if suite not in ("all", "operator", "viewer"):
+        raise DemoError("query suite must be all, operator, or viewer")
+    business_id, business_code = _bound_business(root)
+    encoded_business_id = urllib.parse.quote(business_id, safe="")
+    if suite in ("all", "operator"):
+        queries = [
+            ("Establishments from one business", f"/v1/records/businesses/{encoded_business_id}/establishments?accessProfile=business-operator&$select=establishmentCode,siteName,establishmentKind,operatingStatus&$orderby=establishmentCode&$top=20&$count=true"),
+            ("Derived stored and computed filter", "/v1/records/businesses?accessProfile=business-operator&$select=businessCode,administrativeArea,localRegistrationNumber,branchCount&$filter=administrativeArea%20eq%20%27north-demo%27%20and%20branchCount%20eq%201&$orderby=localRegistrationNumber&$top=20&$count=true"),
+            ("Production sites without a suspended establishment", "/v1/records/businesses?accessProfile=business-operator&$select=businessCode,productionSiteCount,suspendedSiteCount,hasProductionSite&$filter=hasProductionSite%20eq%20true%20and%20suspendedSiteCount%20eq%200&$top=20&$count=true"),
+            ("Businesses with a suspended establishment", "/v1/records/businesses?accessProfile=business-operator&$select=businessCode,hasProductionSite,branchCount,suspendedSiteCount&$filter=hasProductionSite%20eq%20true%20and%20branchCount%20eq%201%20and%20suspendedSiteCount%20eq%201&$top=20&$count=true"),
+        ]
+        expected_rows = [
+            [
+                {"establishmentCode": "ESTABLISHMENT-DEMO-001", "siteName": "North Quay Head Office", "establishmentKind": "office", "operatingStatus": "operating"},
+                {"establishmentCode": "ESTABLISHMENT-DEMO-002", "siteName": "North Quay Riverside Works", "establishmentKind": "production", "operatingStatus": "operating"},
+            ],
+            [{"businessCode": "BUSINESS-DEMO-001", "administrativeArea": "north-demo", "localRegistrationNumber": 1001, "branchCount": 1}],
+            [{"businessCode": "BUSINESS-DEMO-001", "productionSiteCount": 1, "suspendedSiteCount": 0, "hasProductionSite": True}],
+            [{"businessCode": "BUSINESS-DEMO-002", "hasProductionSite": True, "branchCount": 1, "suspendedSiteCount": 1}],
+        ]
+        for (label, path), expected in zip(queries, expected_rows, strict=True):
+            response, _ = _request(root, "GET", path, "operator-token")
+            rows = response.get("items")
+            if (
+                not isinstance(rows, list)
+                or any(not isinstance(row, dict) for row in rows)
+                or [row.get("data") for row in rows] != expected
+                or response.get("count") != len(expected)
+            ):
+                raise DemoError(f"{label} returned unexpected records, fields, or derived counts")
+            _print_query(label, response)
+        operator_lookup, _ = _request(
+            root,
+            "POST",
+            "/v1/records/businesses:lookup?accessProfile=business-operator",
+            "operator-token",
+            {
+                "selector": "by-local-reference",
+                "values": {
+                    "administrativeArea": "north-demo",
+                    "localRegistrationNumber": 1001,
+                },
+            },
+        )
+        _assert_bound_business(operator_lookup, business_id, business_code)
+        _print_query("Exact request-value selector lookup", operator_lookup)
+
+    if suite in ("all", "viewer"):
+        viewer_get, _ = _request(
+            root,
+            "GET",
+            f"/v1/records/businesses/{encoded_business_id}?accessProfile=business-viewer",
+            "viewer-token",
+        )
+        _assert_bound_business(viewer_get, business_id, business_code)
+        _print_query("Viewer get bound by verified business ID claim", viewer_get)
+
+        viewer_lookup, _ = _request(
+            root,
+            "POST",
+            "/v1/records/businesses:lookup?accessProfile=business-viewer",
+            "viewer-token",
+            {"selector": "by-business-code"},
+        )
+        _assert_bound_business(viewer_lookup, business_id, business_code)
+        _print_query("Viewer lookup using its verified business code claim", viewer_lookup)
+
+        denied = [
+            (
+                "Viewer list is concealed",
+                "/v1/records/businesses?accessProfile=business-viewer",
+            ),
+            (
+                "Viewer relationship path is concealed",
+                f"/v1/records/businesses/{encoded_business_id}/establishments?accessProfile=business-viewer",
+            ),
+        ]
+        for label, path in denied:
+            response, _ = _request(root, "GET", path, "viewer-token", expected=404)
+            if response.get("code") != "resource.not_found":
+                raise DemoError("viewer denial did not use the concealed resource response")
+            rendered = json.dumps(response, sort_keys=True)
+            if business_id in rendered or business_code in rendered:
+                raise DemoError("viewer denial exposed a bound business value")
+            _print_query(label, response)
 
 
 def query(root: Path, suite: str = "all") -> None:
@@ -1467,6 +1870,7 @@ def wait_http(url: str, timeout_seconds: float) -> None:
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser()
     commands = result.add_subparsers(dest="command", required=True)
+    fixture_choices = ("business-establishments", "household", "asset-site")
     ports_parser = commands.add_parser("ports")
     ports_parser.add_argument("--count", type=int, choices=(3, 4), default=3)
     prepare_parser = commands.add_parser("prepare")
@@ -1477,7 +1881,7 @@ def parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument("--server-port", required=True, type=int)
     prepare_parser.add_argument("--receiver-port", type=int)
     prepare_parser.add_argument("--webhook", action="store_true")
-    prepare_parser.add_argument("--fixture-kind", choices=("household", "asset-site"), default="household")
+    prepare_parser.add_argument("--fixture-kind", choices=fixture_choices, default=DEFAULT_FIXTURE_KIND)
     prepare_parser.add_argument(
         "--token-lifetime-seconds",
         type=int,
@@ -1487,7 +1891,7 @@ def parser() -> argparse.ArgumentParser:
     runtime_parser.add_argument("--root", required=True, type=Path)
     runtime_parser.add_argument("--revision", required=True)
     runtime_parser.add_argument("--webhook", action="store_true")
-    runtime_parser.add_argument("--fixture-kind", choices=("household", "asset-site"), default="household")
+    runtime_parser.add_argument("--fixture-kind", choices=fixture_choices, default=DEFAULT_FIXTURE_KIND)
     runtime_parser.add_argument(
         "--token-lifetime-seconds",
         type=int,
@@ -1498,16 +1902,17 @@ def parser() -> argparse.ArgumentParser:
     bind_parser.add_argument("--report", required=True, type=Path)
     seed_parser = commands.add_parser("seed")
     seed_parser.add_argument("--root", required=True, type=Path)
-    seed_parser.add_argument("--fixture-kind", choices=("household", "asset-site"), default="household")
+    seed_parser.add_argument("--fixture-kind", choices=fixture_choices, default=DEFAULT_FIXTURE_KIND)
     viewer_parser = commands.add_parser("configure-viewer")
     viewer_parser.add_argument("--root", required=True, type=Path)
+    viewer_parser.add_argument("--fixture-kind", choices=fixture_choices, default=DEFAULT_FIXTURE_KIND)
     query_parser = commands.add_parser("query")
     query_parser.add_argument("--root", required=True, type=Path)
-    query_parser.add_argument("--fixture-kind", choices=("household", "asset-site"), default="household")
+    query_parser.add_argument("--fixture-kind", choices=fixture_choices, default=DEFAULT_FIXTURE_KIND)
     query_parser.add_argument("--suite", default="all")
     handoff_parser = commands.add_parser("handoff")
     handoff_parser.add_argument("--root", required=True, type=Path)
-    handoff_parser.add_argument("--fixture-kind", choices=("household", "asset-site"), default="household")
+    handoff_parser.add_argument("--fixture-kind", choices=fixture_choices, default=DEFAULT_FIXTURE_KIND)
     handoff_parser.add_argument("--out", required=True, type=Path)
     wait_parser = commands.add_parser("wait-http")
     wait_parser.add_argument("--url", required=True)
@@ -1557,17 +1962,25 @@ def main() -> int:
         elif args.command == "bind-webhook-module":
             bind_webhook_module(args.root, args.report)
         elif args.command == "seed":
-            if args.fixture_kind == "household":
+            if args.fixture_kind == "business-establishments":
+                seed_business(args.root)
+            elif args.fixture_kind == "household":
                 seed(args.root)
-            else:
+            elif args.fixture_kind == "asset-site":
                 seed_asset_site(args.root)
-        elif args.command == "configure-viewer":
-            configure_viewer(args.root)
-        elif args.command == "query":
-            if args.fixture_kind == "household":
-                query(args.root, args.suite)
             else:
+                raise AssertionError(args.fixture_kind)
+        elif args.command == "configure-viewer":
+            configure_viewer(args.root, args.fixture_kind)
+        elif args.command == "query":
+            if args.fixture_kind == "business-establishments":
+                query_business(args.root, args.suite)
+            elif args.fixture_kind == "household":
+                query(args.root, args.suite)
+            elif args.fixture_kind == "asset-site":
                 query_asset_site(args.root, args.suite)
+            else:
+                raise AssertionError(args.fixture_kind)
         elif args.command == "handoff":
             write_handoff(args.root, args.fixture_kind, args.out)
         elif args.command == "wait-http":

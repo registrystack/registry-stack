@@ -164,14 +164,14 @@ For the complete field list, including every default, see the
 Add one file per client under the directory named in `clients.directory`:
 
 ```yaml
-clientId: health-desk
-principal: service:health-desk
+clientId: permit-desk
+principal: service:permit-desk
 evidenceAudience: https://evidence.example.org
-requesterTags: [health-desk, region-north]
+requesterTags: [permit-desk, region-north]
 keys:
   - kty: OKP
     crv: Ed25519
-    kid: health-desk-2026-01
+    kid: permit-desk-2026-01
     x: "<public-key-x-coordinate>"
 ```
 
@@ -294,7 +294,7 @@ tool: it signs with the caller's own key and never touches Registry Mint's signi
 
 ```sh
 mint token --url https://mint.example.org/token \
-  --client-id health-desk --key ./dev/health-desk.jwk
+  --client-id permit-desk --key ./dev/permit-desk.jwk
 ```
 
 It prints the access token alone on stdout, so `TOKEN=$(mint token ...)` is the whole usage.

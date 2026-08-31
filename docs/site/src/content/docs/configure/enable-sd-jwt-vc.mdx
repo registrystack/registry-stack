@@ -70,18 +70,18 @@ To make the direct fields of a reviewed structure independently encoded disclosu
 
 ```yaml
 concepts:
-  - id: urn:example:concept:birth-certificate:v1
+  - id: urn:example:concept:business-registration:v1
     form: reviewed-structured-value
     required: true
     constraints:
-      schema: urn:example:schema:birth-certificate:v1
+      schema: urn:example:schema:business-registration:v1
       maximumSerializedBytes: 2048
     sdJwtVc:
-      claim: birthCertificate
+      claim: businessRegistration
       disclosure: top-level
 ```
 
-`birthCertificate` is adopter configuration, not a built-in Evidence Gateway claim. A direct
+`businessRegistration` is adopter configuration, not a built-in Evidence Gateway claim. A direct
 nested object remains one atomic disclosure. Review the complete and combined disclosure surfaces
 before widening a production requirement.
 

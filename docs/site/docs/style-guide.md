@@ -108,6 +108,14 @@ Preferred terms.
 | Legacy repo paths     | `registry_relay` and `decentralized-evidence-demo` appear only in historical pages or `rename_status` fields. Never in prose on a `current` page without explicit rename context. |
 | Standards             | Use the official acronym after spelling on first use. `DCAT`, `SHACL`, `OGC API Records`, `SD-JWT VC`, `CCCEV`. Never translate. |
 
+## Choosing examples
+
+Use business registrations, establishments, environmental facilities, permits, and public authorities
+for general explanations and default product examples. Do not use health, social protection,
+farmer registries, or civil registration and CRVS as generic examples.
+Keep dedicated external-system integration documentation and historical references accurate;
+do not relabel an existing integration as a different domain.
+
 ## Lists
 
 - Ordered list for steps that must run in sequence. Unordered list for items with no order.

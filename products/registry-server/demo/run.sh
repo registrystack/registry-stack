@@ -5,19 +5,21 @@ demo_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 product_dir=$(cd -- "$demo_dir/.." && pwd)
 repository_root=$(cd -- "$product_dir/../.." && pwd)
 support="$demo_dir/support/demo.py"
-fixture="$product_dir/acceptance/publicschema-household"
+fixture="$product_dir/acceptance/business-establishments"
 run_dir="$demo_dir/.run"
 mint_key_material="$repository_root/crates/registry-mint/demo/support/key_material.py"
 postgres_image='postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675'
 mode=serve
 webhook=false
-fixture_kind=household
+fixture_kind=business-establishments
+webhook_event='operating-created-v1'
+viewer_client='business-demo-viewer'
 state_dir=""
 handoff_path=""
 token_lifetime_seconds=300
 
 usage() {
-  printf '%s\n' 'usage: products/registry-server/demo/run.sh [--smoke] [--webhook] [--fixture household|asset-site] [--state-dir PATH] [--handoff PATH] [--token-lifetime-seconds 60..900]' >&2
+  printf '%s\n' 'usage: products/registry-server/demo/run.sh [--smoke] [--webhook] [--fixture business-establishments|household|asset-site] [--state-dir PATH] [--handoff PATH] [--token-lifetime-seconds 60..900]' >&2
 }
 
 while [[ $# -gt 0 ]]; do
@@ -78,15 +80,23 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$fixture_kind" in
+  business-establishments)
+    fixture="$product_dir/acceptance/business-establishments"
+    database_id='business-establishments-demo'
+    webhook_event='operating-created-v1'
+    viewer_client='business-demo-viewer'
+    ;;
   household)
     fixture="$product_dir/acceptance/publicschema-household"
     database_id='publicschema-household-demo'
+    webhook_event='usual-resident-created-v1'
+    viewer_client='household-demo-viewer'
     ;;
   asset-site)
     fixture="$product_dir/acceptance/asset-site-placement"
     database_id='asset-site-placement-demo'
     if [[ "$webhook" == true ]]; then
-      printf '%s\n' 'the --webhook option is only supported for the household fixture.' >&2
+      printf '%s\n' 'the --webhook option is not supported for the asset-site fixture.' >&2
       exit 2
     fi
     ;;
@@ -216,17 +226,17 @@ uv run --quiet "$mint_key_material" p256 \
 uv run --quiet "$mint_key_material" p256 \
   --private-out "$run_dir/keys/operator/signing-p256-private-jwk" \
   --public-out "$run_dir/keys/operator-public.jwk.json"
-if [[ "$fixture_kind" == household ]]; then
-  uv run --quiet "$mint_key_material" p256 \
-    --private-out "$run_dir/keys/no-purpose/signing-p256-private-jwk" \
-    --public-out "$run_dir/keys/no-purpose-public.jwk.json"
-else
+if [[ "$fixture_kind" == asset-site ]]; then
   uv run --quiet "$mint_key_material" p256 \
     --private-out "$run_dir/keys/planner/signing-p256-private-jwk" \
     --public-out "$run_dir/keys/planner-public.jwk.json"
   uv run --quiet "$mint_key_material" p256 \
     --private-out "$run_dir/keys/planner-no-purpose/signing-p256-private-jwk" \
     --public-out "$run_dir/keys/planner-no-purpose-public.jwk.json"
+else
+  uv run --quiet "$mint_key_material" p256 \
+    --private-out "$run_dir/keys/no-purpose/signing-p256-private-jwk" \
+    --public-out "$run_dir/keys/no-purpose-public.jwk.json"
 fi
 uv run --quiet "$mint_key_material" secret-hex \
   --out "$run_dir/keys/mint/audit-hmac-key"
@@ -263,7 +273,7 @@ if [[ "$webhook" == true ]]; then
     --root "$run_dir" \
     --report "$run_dir/webhook-model-report.json"
   "$registry_serverctl" --format json webhook sample "$run_dir/project" \
-    --event usual-resident-created-v1 \
+    --event "$webhook_event" \
     >"$run_dir/webhook-sample.json"
 fi
 
@@ -342,7 +352,18 @@ printf '%s\n' '== Starting Registry Mint and obtaining short-lived tokens'
 mint_pid=$!
 python3 "$support" wait-http --url "http://127.0.0.1:${mint_port}/ready" --timeout 30
 
-if [[ "$fixture_kind" == household ]]; then
+if [[ "$fixture_kind" == business-establishments ]]; then
+  "$mint" token \
+    --url "http://127.0.0.1:${mint_port}/token" \
+    --client-id business-demo \
+    --key "$run_dir/keys/operator/signing-p256-private-jwk" |
+    python3 "$support" store-token --out "$run_dir/secrets/operator-token"
+  "$mint" token \
+    --url "http://127.0.0.1:${mint_port}/token" \
+    --client-id business-demo-no-purpose \
+    --key "$run_dir/keys/no-purpose/signing-p256-private-jwk" |
+    python3 "$support" store-token --out "$run_dir/secrets/no-purpose-token"
+elif [[ "$fixture_kind" == household ]]; then
   "$mint" token \
     --url "http://127.0.0.1:${mint_port}/token" \
     --client-id household-demo \
@@ -353,7 +374,7 @@ if [[ "$fixture_kind" == household ]]; then
     --client-id household-demo-no-purpose \
     --key "$run_dir/keys/no-purpose/signing-p256-private-jwk" |
     python3 "$support" store-token --out "$run_dir/secrets/no-purpose-token"
-else
+elif [[ "$fixture_kind" == asset-site ]]; then
   "$mint" token \
     --url "http://127.0.0.1:${mint_port}/token" \
     --client-id asset-site-demo-operator \
@@ -369,6 +390,9 @@ else
     --client-id asset-site-demo-planner-no-purpose \
     --key "$run_dir/keys/planner-no-purpose/signing-p256-private-jwk" |
     python3 "$support" store-token --out "$run_dir/secrets/planner-no-purpose-token"
+else
+  usage
+  exit 2
 fi
 
 printf '%s\n' "== Testing, packaging, and activating the ${fixture_kind} Registry"
@@ -422,12 +446,16 @@ if [[ "$webhook" == true ]]; then
 fi
 python3 "$support" seed --root "$run_dir" --fixture-kind "$fixture_kind"
 
-if [[ "$fixture_kind" == household ]]; then
-  printf '%s\n' '== Binding a viewer credential to the first seeded household'
+if [[ "$fixture_kind" == business-establishments || "$fixture_kind" == household ]]; then
+  if [[ "$fixture_kind" == business-establishments ]]; then
+    printf '%s\n' '== Binding a viewer credential to the first seeded business'
+  else
+    printf '%s\n' '== Binding a viewer credential to the first seeded household'
+  fi
   uv run --quiet "$mint_key_material" p256 \
     --private-out "$run_dir/keys/viewer/signing-p256-private-jwk" \
     --public-out "$run_dir/keys/viewer-public.jwk.json"
-  python3 "$support" configure-viewer --root "$run_dir"
+  python3 "$support" configure-viewer --root "$run_dir" --fixture-kind "$fixture_kind"
 
   kill "$mint_pid"
   wait "$mint_pid" || true
@@ -437,7 +465,7 @@ if [[ "$fixture_kind" == household ]]; then
   python3 "$support" wait-http --url "http://127.0.0.1:${mint_port}/ready" --timeout 30
   "$mint" token \
     --url "http://127.0.0.1:${mint_port}/token" \
-    --client-id household-demo-viewer \
+    --client-id "$viewer_client" \
     --key "$run_dir/keys/viewer/signing-p256-private-jwk" |
     python3 "$support" store-token --out "$run_dir/secrets/viewer-token"
 fi
@@ -493,7 +521,9 @@ if [[ "$webhook" == true ]]; then
   printf '%s\n' 'Webhook delivery, retry, dead-letter inspection, and replay passed.'
 fi
 
-if [[ "$fixture_kind" == household ]]; then
+if [[ "$fixture_kind" == business-establishments ]]; then
+  printf '\n%s\n' 'Registry Server business demo is ready.'
+elif [[ "$fixture_kind" == household ]]; then
   printf '\n%s\n' 'Registry Server household demo is ready.'
 else
   printf '\n%s\n' 'Registry Server asset-site demo is ready.'
@@ -501,7 +531,7 @@ fi
 printf '  Registry Server: http://127.0.0.1:%s\n' "$server_port"
 printf '  Registry Mint:   http://127.0.0.1:%s\n' "$mint_port"
 printf '  Operator token:  %s\n' "$run_dir/secrets/operator-token"
-if [[ "$fixture_kind" == household ]]; then
+if [[ "$fixture_kind" == business-establishments || "$fixture_kind" == household ]]; then
   printf '  Viewer token:    %s\n' "$run_dir/secrets/viewer-token"
 else
   printf '  Planner token:   %s\n' "$run_dir/secrets/planner-token"

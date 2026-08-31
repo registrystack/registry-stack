@@ -39,6 +39,7 @@ mod data_lifecycle;
 mod doctor;
 mod package_inspection;
 mod package_lifecycle;
+mod request_retention;
 mod reviewed_migrations;
 mod test_lifecycle;
 mod webhook_lifecycle;
@@ -50,6 +51,10 @@ use data_lifecycle::{
 use package_inspection::{inspect_runtime_package, RuntimePackageInspectionError};
 use package_lifecycle::{PackageLifecycleError, PackageLifecycleState};
 use registry_server::data::DataError;
+use request_retention::{
+    RequestRetentionCliError, RequestRetentionDryRunOutcome, RequestRetentionEraseOutcome,
+    RequestRetentionListOutcome,
+};
 use test_lifecycle::{TestLifecycleError, TestLifecycleRequest};
 use webhook_lifecycle::{
     WebhookLifecycleError, WebhookListOutcome, WebhookReplayOutcome, WebhookSampleOutcome,
@@ -111,6 +116,8 @@ enum Command {
     Data(DataArgs),
     /// Inspect and operate configured webhook deliveries.
     Webhook(WebhookArgs),
+    /// Inspect and erase eligible change-request retention detail.
+    RequestRetention(RequestRetentionArgs),
 }
 
 #[derive(Debug, Args)]
@@ -316,6 +323,12 @@ struct WebhookArgs {
     command: WebhookCommand,
 }
 
+#[derive(Debug, Args)]
+struct RequestRetentionArgs {
+    #[command(subcommand)]
+    command: RequestRetentionCommand,
+}
+
 #[derive(Debug, Subcommand)]
 enum WebhookCommand {
     /// Render one deterministic exact CloudEvents request with synthetic values.
@@ -324,6 +337,54 @@ enum WebhookCommand {
     List(WebhookListArgs),
     /// Replay one eligible retained dead-letter using optimistic generation binding.
     Replay(WebhookReplayArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum RequestRetentionCommand {
+    /// List bounded value-free change-request retention rows.
+    List(RequestRetentionListArgs),
+    /// Count exactly what one request retention erase would remove.
+    DryRun(RequestRetentionExactArgs),
+    /// Erase eligible payload detail for one exact request proposal version.
+    Erase(RequestRetentionExactArgs),
+}
+
+#[derive(Debug, Args)]
+struct RequestRetentionListArgs {
+    /// Absolute Registry Server runtime configuration file.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
+
+    /// Limit the value-free listing to one compiled change-request entity.
+    #[arg(long, value_name = "ENTITY")]
+    request_entity: Option<String>,
+
+    /// Cursor returned by the previous bounded list response.
+    #[arg(long, value_name = "CURSOR")]
+    after_cursor: Option<String>,
+
+    /// Maximum number of request retention rows to return.
+    #[arg(long, value_name = "COUNT", default_value_t = 50)]
+    limit: u16,
+}
+
+#[derive(Debug, Args)]
+struct RequestRetentionExactArgs {
+    /// Absolute Registry Server runtime configuration file.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
+
+    /// Compiled change-request entity identifier.
+    #[arg(long, value_name = "ENTITY")]
+    request_entity: String,
+
+    /// Exact request record UUID.
+    #[arg(long, value_name = "UUID")]
+    request_id: String,
+
+    /// Exact proposal version to inspect or erase.
+    #[arg(long, value_name = "VERSION")]
+    proposal_version: i64,
 }
 
 #[derive(Debug, Args)]
@@ -553,6 +614,7 @@ enum ExplainSubject {
     Access,
     Routes,
     Queries,
+    ChangeRequests,
     Events,
 }
 
@@ -648,6 +710,7 @@ enum DiagnosticArtifact {
     DataTransport,
     WebhookSample,
     WebhookOperations,
+    RequestRetentionOperation,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -680,6 +743,7 @@ enum SuggestedAction {
     SupplyExternalSignatures,
     VerifyMigrationAuthority,
     ReconcileFailedMigration,
+    ResolveActiveRequestProposals,
     VerifyStartupDependencies,
     CorrectDataBinding,
     CorrectDataInput,
@@ -687,6 +751,7 @@ enum SuggestedAction {
     VerifyDataTransport,
     SelectWebhookEvent,
     VerifyWebhookOperation,
+    VerifyRequestRetentionOperation,
 }
 
 #[derive(Serialize)]
@@ -836,6 +901,33 @@ struct WebhookReplaySuccessReport {
     command: &'static str,
     #[serde(flatten)]
     outcome: WebhookReplayOutcome,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RequestRetentionListSuccessReport {
+    ok: bool,
+    command: &'static str,
+    #[serde(flatten)]
+    outcome: RequestRetentionListOutcome,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RequestRetentionDryRunSuccessReport {
+    ok: bool,
+    command: &'static str,
+    #[serde(flatten)]
+    outcome: RequestRetentionDryRunOutcome,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RequestRetentionEraseSuccessReport {
+    ok: bool,
+    command: &'static str,
+    #[serde(flatten)]
+    outcome: RequestRetentionEraseOutcome,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -1167,11 +1259,113 @@ where
                 },
             };
         }
+        Command::RequestRetention(args) => {
+            return match args.command {
+                RequestRetentionCommand::List(args) => match request_retention_list(&args) {
+                    Ok(report) => {
+                        write_request_retention_list_success(&report, format, stdout, stderr)
+                    }
+                    Err(failure) => write_failure(&failure, format, stdout, stderr),
+                },
+                RequestRetentionCommand::DryRun(args) => match request_retention_dry_run(&args) {
+                    Ok(report) => {
+                        write_request_retention_dry_run_success(&report, format, stdout, stderr)
+                    }
+                    Err(failure) => write_failure(&failure, format, stdout, stderr),
+                },
+                RequestRetentionCommand::Erase(args) => match request_retention_erase(&args) {
+                    Ok(report) => {
+                        write_request_retention_erase_success(&report, format, stdout, stderr)
+                    }
+                    Err(failure) => write_failure(&failure, format, stdout, stderr),
+                },
+            };
+        }
     };
 
     match result {
         Ok(report) => write_success(&report, format, stdout, stderr),
         Err(failure) => write_failure(&failure, format, stdout, stderr),
+    }
+}
+
+fn request_retention_list(
+    args: &RequestRetentionListArgs,
+) -> Result<RequestRetentionListSuccessReport, FailureReport> {
+    let outcome = request_retention::list(
+        &args.runtime_config,
+        args.request_entity.as_deref(),
+        args.after_cursor.as_deref(),
+        args.limit,
+    )
+    .map_err(|error| request_retention_failure("request-retention list", error))?;
+    Ok(RequestRetentionListSuccessReport {
+        ok: true,
+        command: "request-retention list",
+        outcome,
+    })
+}
+
+fn request_retention_dry_run(
+    args: &RequestRetentionExactArgs,
+) -> Result<RequestRetentionDryRunSuccessReport, FailureReport> {
+    let outcome = request_retention::dry_run(
+        &args.runtime_config,
+        &args.request_entity,
+        &args.request_id,
+        args.proposal_version,
+    )
+    .map_err(|error| request_retention_failure("request-retention dry-run", error))?;
+    Ok(RequestRetentionDryRunSuccessReport {
+        ok: true,
+        command: "request-retention dry-run",
+        outcome,
+    })
+}
+
+fn request_retention_erase(
+    args: &RequestRetentionExactArgs,
+) -> Result<RequestRetentionEraseSuccessReport, FailureReport> {
+    let outcome = request_retention::erase(
+        &args.runtime_config,
+        &args.request_entity,
+        &args.request_id,
+        args.proposal_version,
+    )
+    .map_err(|error| request_retention_failure("request-retention erase", error))?;
+    Ok(RequestRetentionEraseSuccessReport {
+        ok: true,
+        command: "request-retention erase",
+        outcome,
+    })
+}
+
+fn request_retention_failure(
+    command: &'static str,
+    error: RequestRetentionCliError,
+) -> FailureReport {
+    let (code, message) = match error {
+        RequestRetentionCliError::Operator => (
+            "request_retention.operation.refused",
+            "the request retention operation was refused",
+        ),
+        RequestRetentionCliError::ActiveDetailPinned => (
+            "request_retention.detail.pinned",
+            "active request detail is still pinned",
+        ),
+        RequestRetentionCliError::RetainMode => (
+            "request_retention.mode.retain",
+            "the request retention policy does not permit operator erasure",
+        ),
+    };
+    FailureReport {
+        ok: false,
+        command,
+        diagnostics: vec![tool_diagnostic(
+            diagnostic(code, "requestRetention", message),
+            DiagnosticArtifact::RequestRetentionOperation,
+            SuggestedAction::VerifyRequestRetentionOperation,
+        )],
     }
 }
 
@@ -1820,8 +2014,30 @@ fn package_lifecycle_failure(error: PackageLifecycleError) -> FailureReport {
 
 fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
     let error = match error {
+        TestLifecycleError::JourneyStep { path, message } => {
+            return FailureReport {
+                ok: false,
+                command: "test",
+                diagnostics: vec![tool_diagnostic(
+                    diagnostic("test.step.failed", &path, &message),
+                    DiagnosticArtifact::FixtureJourneys,
+                    SuggestedAction::CorrectFixtureJourneys,
+                )],
+            }
+        }
         TestLifecycleError::RuntimeConfig(error) => {
             return runtime_config_failure("test", "test", error)
+        }
+        TestLifecycleError::JourneySyntax { path, message } => {
+            return FailureReport {
+                ok: false,
+                command: "test",
+                diagnostics: vec![tool_diagnostic(
+                    diagnostic("test.journeys.refused", &path, message),
+                    DiagnosticArtifact::FixtureJourneys,
+                    SuggestedAction::CorrectFixtureJourneys,
+                )],
+            }
         }
         error => error,
     };
@@ -1834,6 +2050,8 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
             SuggestedAction::CorrectRuntimeConfiguration,
         ),
         TestLifecycleError::RuntimeConfig(_) => unreachable!("handled before match"),
+        TestLifecycleError::JourneySyntax { .. } => unreachable!("handled before match"),
+        TestLifecycleError::JourneyStep { .. } => unreachable!("handled before match"),
         TestLifecycleError::Candidate => (
             "test.candidate.refused",
             "candidate",
@@ -1998,6 +2216,13 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
                 "the Registry package apply failed and requires exact-target reconciliation",
                 DiagnosticArtifact::DatabaseMigration,
                 SuggestedAction::ReconcileFailedMigration,
+            ),
+            registry_server::migration::MigrationError::ActiveRequestProposals => (
+                "apply.request_proposals.active",
+                "changeRequest",
+                "active request proposals require explicit rebase or cancellation before activating changed request contracts",
+                DiagnosticArtifact::PackageActivation,
+                SuggestedAction::ResolveActiveRequestProposals,
             ),
         },
     };
@@ -2559,6 +2784,7 @@ fn explain(
         }
         ExplainSubject::Routes => serde_json::to_value(compiled.routes()),
         ExplainSubject::Queries => explain_queries(&compiled),
+        ExplainSubject::ChangeRequests => explain_change_requests(&compiled),
         ExplainSubject::Events => serde_json::to_value(compiled.event_deliveries()),
     }
     .map_err(|_| FailureReport {
@@ -3317,6 +3543,127 @@ fn explain_model(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
     }))
 }
 
+fn explain_change_requests(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
+    let requests = compiled
+        .entities()
+        .values()
+        .filter_map(|entity| {
+            let request = entity.change_request.as_ref()?;
+            Some(json!({
+                "requestEntity": entity.id,
+                "requestRoute": entity.route,
+                "contractFingerprint": request.contract_fingerprint,
+                "bounds": {
+                    "maximumTargets": request.maximum_targets,
+                    "maximumFieldMutations": request.maximum_field_mutations,
+                    "maximumSnapshotBytes": request.maximum_snapshot_bytes,
+                },
+                "stages": request.stages.iter().map(|stage| json!({
+                    "id": stage.id,
+                    "approvals": stage.approvals,
+                    "excludeSubmitter": stage.exclude_submitter,
+                })).collect::<Vec<_>>(),
+                "effects": request.effects.iter().map(|effect| {
+                    let target = compiled.entities().get(&effect.target.entity_id);
+                    json!({
+                        "id": effect.id,
+                        "operation": operation_wire_name(effect.operation),
+                        "target": {
+                            "entity": effect.target.entity_id,
+                            "binding": match &effect.target.binding {
+                                registry_server::model::CompiledChangeRequestTargetBinding::Existing { from_field } => {
+                                    json!({"kind": "existing", "fromField": field_summary(entity, from_field)})
+                                }
+                                registry_server::model::CompiledChangeRequestTargetBinding::ReservedCreate { effect } => {
+                                    json!({"kind": "reserved_create", "effect": effect})
+                                }
+                            },
+                        },
+                        "fields": effect.mutations.iter().map(|mutation| match mutation {
+                            registry_server::model::CompiledChangeRequestMutation::Set { field, value } => json!({
+                                "kind": "set",
+                                "target": field_summary_optional(target, field),
+                                "value": match value {
+                                    registry_server::model::CompiledChangeRequestValue::FromField { field } => {
+                                        json!({"kind": "from_field", "field": field_summary(entity, field)})
+                                    }
+                                    registry_server::model::CompiledChangeRequestValue::FromEffect { effect, target_entity_id } => {
+                                        json!({"kind": "from_effect", "effect": effect, "targetEntity": target_entity_id})
+                                    }
+                                },
+                            }),
+                            registry_server::model::CompiledChangeRequestMutation::Clear { field } => json!({
+                                "kind": "clear",
+                                "target": field_summary_optional(target, field),
+                            }),
+                        }).collect::<Vec<_>>(),
+                        "dependsOn": effect.depends_on.iter().collect::<Vec<_>>(),
+                    })
+                }).collect::<Vec<_>>(),
+                "actions": request.actions.iter().map(|action| json!({
+                    "operation": operation_wire_name(action.operation.access_operation()),
+                    "stage": action.review_stage,
+                    "routeId": compiled.routes().routes.iter()
+                        .find(|route| route.entity_id == entity.id
+                            && route.operation == action.operation.access_operation()
+                            && route.request_stage == action.review_stage)
+                        .map(|route| route.id.as_str()),
+                    "method": "POST",
+                    "preconditions": request_action_preconditions(action.operation.access_operation()),
+                })).collect::<Vec<_>>(),
+                "reviewGrants": request.review_grants.iter().map(|grant| json!({
+                    "profile": grant.profile_id,
+                    "stage": grant.stage,
+                    "targetEntity": grant.target_entity_id,
+                    "readableFields": grant.readable_fields.iter()
+                        .map(|field| field_summary_optional(compiled.entities().get(&grant.target_entity_id), field))
+                        .collect::<Vec<_>>(),
+                    "rowBoundaries": grant.row_boundaries,
+                })).collect::<Vec<_>>(),
+                "applyGrants": request.apply_grants.iter().map(|grant| json!({
+                    "profile": grant.profile_id,
+                    "targetEntity": grant.target_entity_id,
+                    "rowBoundaries": grant.row_boundaries,
+                })).collect::<Vec<_>>(),
+                "presenceGrants": request.presence_grants.iter().map(|grant| json!({
+                    "profile": grant.profile_id,
+                    "targetEntity": grant.target_entity_id,
+                    "requestRowBoundaries": grant.request_row_boundaries,
+                })).collect::<Vec<_>>(),
+            }))
+        })
+        .collect::<Vec<_>>();
+    let controlled_writes = compiled
+        .entities()
+        .values()
+        .filter_map(|entity| {
+            let control = entity.change_control.as_ref()?;
+            let eligible = requests
+                .iter()
+                .filter(|request| {
+                    request["effects"]
+                        .as_array()
+                        .is_some_and(|effects| effects.iter().any(|effect| {
+                            effect["target"]["entity"].as_str() == Some(entity.id.as_str())
+                        }))
+                })
+                .map(|request| request["requestEntity"].clone())
+                .collect::<Vec<_>>();
+            Some(json!({
+                "entity": entity.id,
+                "route": entity.route,
+                "requiredFor": control.required_for.iter().map(|operation| operation_wire_name(*operation)).collect::<Vec<_>>(),
+                "eligibleRequestTypes": eligible,
+                "directWriteRestriction": "controlled operations are absent from ordinary grants and require compiled apply_request context",
+            }))
+        })
+        .collect::<Vec<_>>();
+    serde_json::to_value(json!({
+        "requests": requests,
+        "controlledWrites": controlled_writes,
+    }))
+}
+
 fn explain_queries(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
     let operations = compiled
         .queries()
@@ -3456,6 +3803,80 @@ fn query_field_identity<'a>(
                     field_type: &field.logical.field_type,
                 })
         })
+}
+
+fn field_summary(entity: &registry_server::model::CompiledEntity, field_id: &str) -> Value {
+    field_summary_optional(Some(entity), field_id)
+}
+
+fn field_summary_optional(
+    entity: Option<&registry_server::model::CompiledEntity>,
+    field_id: &str,
+) -> Value {
+    let api_name = entity
+        .and_then(|entity| field_api_name(entity, field_id))
+        .unwrap_or(field_id);
+    json!({
+        "field": field_id,
+        "apiName": api_name,
+    })
+}
+
+fn field_api_name<'a>(
+    entity: &'a registry_server::model::CompiledEntity,
+    field_id: &str,
+) -> Option<&'a str> {
+    entity
+        .stored_fields
+        .iter()
+        .find(|field| field.logical.id == field_id)
+        .map(|field| field.logical.api_name.as_str())
+        .or_else(|| {
+            entity
+                .derived_fields
+                .get(field_id)
+                .map(|field| field.logical.api_name.as_str())
+        })
+        .or_else(|| {
+            (entity.canonical_id.id == field_id).then_some(entity.canonical_id.api_name.as_str())
+        })
+}
+
+fn request_action_preconditions(
+    operation: registry_server::contract::Operation,
+) -> Vec<&'static str> {
+    let mut preconditions = vec!["Idempotency-Key", "If-Match"];
+    if matches!(
+        operation,
+        registry_server::contract::Operation::ApproveRequest
+            | registry_server::contract::Operation::RejectRequest
+            | registry_server::contract::Operation::RequestRevision
+            | registry_server::contract::Operation::ApplyRequest
+    ) {
+        preconditions.push("proposalVersion");
+        preconditions.push("effectDigest");
+    }
+    preconditions
+}
+
+fn operation_wire_name(operation: registry_server::contract::Operation) -> &'static str {
+    match operation {
+        registry_server::contract::Operation::Create => "create",
+        registry_server::contract::Operation::Get => "get",
+        registry_server::contract::Operation::Lookup => "lookup",
+        registry_server::contract::Operation::List => "list",
+        registry_server::contract::Operation::Patch => "patch",
+        registry_server::contract::Operation::Tombstone => "tombstone",
+        registry_server::contract::Operation::Batch => "batch",
+        registry_server::contract::Operation::Revisions => "revisions",
+        registry_server::contract::Operation::SubmitRequest => "submit_request",
+        registry_server::contract::Operation::ApproveRequest => "approve_request",
+        registry_server::contract::Operation::RejectRequest => "reject_request",
+        registry_server::contract::Operation::RequestRevision => "request_revision",
+        registry_server::contract::Operation::ReviseRequest => "revise_request",
+        registry_server::contract::Operation::CancelRequest => "cancel_request",
+        registry_server::contract::Operation::ApplyRequest => "apply_request",
+    }
 }
 
 struct QueryFieldIdentity<'a> {
@@ -4665,6 +5086,109 @@ fn write_webhook_replay_success(
     write_result(result, stderr)
 }
 
+fn write_request_retention_list_success(
+    report: &RequestRetentionListSuccessReport,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format == OutputFormat::Json {
+        serde_json::to_writer_pretty(&mut *stdout, report)
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout))
+    } else {
+        writeln!(stdout, "request-retention list succeeded").and_then(|()| {
+            for item in &report.outcome.page.requests {
+                let rendered = serde_json::to_string(item).map_err(io::Error::other)?;
+                writeln!(stdout, "request: {rendered}")?;
+            }
+            if let Some(cursor) = &report.outcome.page.next_cursor {
+                writeln!(stdout, "next cursor: {cursor}")?;
+            }
+            Ok(())
+        })
+    };
+    write_result(result, stderr)
+}
+
+fn write_request_retention_dry_run_success(
+    report: &RequestRetentionDryRunSuccessReport,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format == OutputFormat::Json {
+        serde_json::to_writer_pretty(&mut *stdout, report)
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout))
+    } else {
+        writeln!(stdout, "request-retention dry-run succeeded").and_then(|()| {
+            let rendered =
+                serde_json::to_string(&report.outcome.dry_run.erasure).map_err(io::Error::other)?;
+            writeln!(
+                stdout,
+                "request entity: {}",
+                report.outcome.dry_run.request_entity_id
+            )?;
+            writeln!(stdout, "request id: {}", report.outcome.dry_run.request_id)?;
+            writeln!(
+                stdout,
+                "proposal version: {}",
+                report.outcome.dry_run.proposal_version
+            )?;
+            writeln!(
+                stdout,
+                "retention mode: {}",
+                report.outcome.dry_run.retention_mode
+            )?;
+            writeln!(stdout, "pinned: {}", report.outcome.dry_run.pinned)?;
+            writeln!(
+                stdout,
+                "eligible for erasure: {}",
+                report.outcome.dry_run.eligible_for_erasure
+            )?;
+            writeln!(stdout, "erasure: {rendered}")
+        })
+    };
+    write_result(result, stderr)
+}
+
+fn write_request_retention_erase_success(
+    report: &RequestRetentionEraseSuccessReport,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format == OutputFormat::Json {
+        serde_json::to_writer_pretty(&mut *stdout, report)
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout))
+    } else {
+        writeln!(stdout, "request-retention erase succeeded").and_then(|()| {
+            let rendered =
+                serde_json::to_string(&report.outcome.erase.erasure).map_err(io::Error::other)?;
+            writeln!(
+                stdout,
+                "request entity: {}",
+                report.outcome.erase.request_entity_id
+            )?;
+            writeln!(stdout, "request id: {}", report.outcome.erase.request_id)?;
+            writeln!(
+                stdout,
+                "proposal version: {}",
+                report.outcome.erase.proposal_version
+            )?;
+            writeln!(
+                stdout,
+                "retention mode: {}",
+                report.outcome.erase.retention_mode
+            )?;
+            writeln!(stdout, "erased: {rendered}")
+        })
+    };
+    write_result(result, stderr)
+}
+
 fn data_operation_name(operation: DataOperationArg) -> &'static str {
     match operation {
         DataOperationArg::Create => "create",
@@ -4948,7 +5472,8 @@ mod tests {
                 "verify",
                 "migration",
                 "data",
-                "webhook"
+                "webhook",
+                "request-retention"
             ]
         );
     }

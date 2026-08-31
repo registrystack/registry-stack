@@ -752,8 +752,18 @@ from pathlib import Path
 path = Path(sys.argv[1])
 source = path.read_text(encoding="utf-8")
 source = source.replace("  sequence: 1\n", "  sequence: 2\n", 1)
-needle = "      - {id: asset-class, type: vocabulary-code, vocabulary: asset-classification, required: true, classification: internal}\n"
-replacement = needle + "      - {id: placement-review-note, type: string, required: false, maxLength: 120, classification: restricted}\n"
+needle = """      - id: asset-class
+        type: vocabulary-code
+        vocabulary: asset-classification
+        required: true
+        classification: internal
+"""
+replacement = needle + """      - id: placement-review-note
+        type: string
+        required: false
+        maxLength: 120
+        classification: restricted
+"""
 if needle not in source:
     raise SystemExit("asset item field insertion point was not found")
 path.write_text(source.replace(needle, replacement, 1), encoding="utf-8")
@@ -944,12 +954,30 @@ import sys
 from pathlib import Path
 path = Path(sys.argv[1])
 source = path.read_text(encoding="utf-8").replace("  sequence: 2\n", "  sequence: 3\n", 1)
-needle = "      - {id: placement-review-note, type: string, required: false, maxLength: 120, classification: restricted}\n"
-grant = "readableFields: [asset-code, label, asset-class], writableFields: [asset-code, label, asset-class]"
+needle = """      - id: placement-review-note
+        type: string
+        required: false
+        maxLength: 120
+        classification: restricted
+"""
+grant = """        readableFields:
+          - asset-code
+          - label
+          - asset-class
+        writableFields:
+          - asset-code
+          - label
+          - asset-class
+"""
 if needle not in source or grant not in source:
     raise SystemExit("reviewed successor insertion points were not found")
-source = source.replace(needle, needle + "      - {id: maintenance-note, type: string, required: false, maxLength: 120, classification: internal}\n", 1)
-source = source.replace(grant, "readableFields: [asset-code, label, asset-class, maintenance-note], writableFields: [asset-code, label, asset-class, maintenance-note]", 1)
+source = source.replace(needle, needle + """      - id: maintenance-note
+        type: string
+        required: false
+        maxLength: 120
+        classification: internal
+""", 1)
+source = source.replace(grant, grant.replace("          - asset-class\n", "          - asset-class\n          - maintenance-note\n"), 1)
 path.write_text(source, encoding="utf-8")
 PY
 render_runtime_config "$temporary_root/runtime-test-v3.yaml" "$temporary_root/build-v2/package" \

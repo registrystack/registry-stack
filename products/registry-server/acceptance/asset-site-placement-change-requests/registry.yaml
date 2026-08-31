@@ -1,0 +1,167 @@
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: asset-site-placement-change-requests
+  version: 0.1.0
+  defaultLanguage: en
+package:
+  environment: acceptance
+  instanceId: asset-site-placement-change-requests-acceptance
+  sequence: 1
+  sourceRevision: asset-site-placement-change-requests-acceptance-0.1.0
+manifestProjection:
+  accessProfile: asset-operator
+  classificationCeiling: internal
+  catalog:
+    baseUrl: https://asset-site-placement.example.gov
+    title: Asset Site Placement Catalog
+    description: Portable metadata for the asset site placement registry.
+    publisher:
+      name: Asset Site Placement Authority
+      iri: https://asset-site-placement.example.gov/authority
+  dataset:
+    title: Asset Site Placement Registry
+    description: Asset placement, site, item, and inspection metadata.
+    owner: Asset Site Placement Authority
+    status: active
+modules:
+  - id: asset-site-placement-core
+    version: 0.1.0
+    digest: sha256:6bfb23a7780219187d3f30fab0a37d51e739bb0a26669e4c162b59c1f502ebf3
+entities:
+  - id: asset-item
+    route: assets
+    mutationMode: mutable
+    batch: {maximumItems: 4, maximumBytes: 16384}
+    fields:
+      - {id: asset-code, type: string, required: true, maxLength: 64, classification: internal}
+      - {id: label, type: string, required: true, maxLength: 200, classification: internal}
+      - {id: asset-class, type: vocabulary-code, vocabulary: asset-classification, required: true, classification: internal}
+    constraints:
+      - {kind: unique, fields: [asset-code]}
+  - id: asset-site
+    route: sites
+    mutationMode: mutable
+    fields:
+      - {id: site-code, type: string, required: true, maxLength: 64, classification: internal}
+      - {id: label, type: string, required: true, maxLength: 200, classification: internal}
+    constraints:
+      - {kind: unique, fields: [site-code]}
+  - id: asset-placement
+    route: placements
+    mutationMode: mutable
+    changeControl:
+      requiredFor: [patch]
+    fields:
+      - {id: asset, type: reference, target: asset-item, required: true, classification: internal}
+      - {id: site, type: reference, target: asset-site, required: true, classification: internal}
+      - {id: valid-from, type: date, required: true, classification: internal}
+      - {id: valid-to, type: date, required: false, classification: internal}
+    temporal:
+      startField: valid-from
+      endField: valid-to
+      scopeFields: [asset]
+    constraints:
+      - {kind: temporal-non-overlap, scopeFields: [asset], startField: valid-from, endField: valid-to}
+  - id: placement-correction-request
+    route: placement-correction-requests
+    mutationMode: mutable
+    classification: internal
+    fields:
+      - {id: placement, type: reference, target: asset-placement, required: true, classification: internal}
+      - {id: proposed-site, type: reference, target: asset-site, required: true, classification: internal}
+      - {id: reason, type: text, maxLength: 1000, required: true, classification: internal}
+    changeRequest:
+      retention:
+        mode: operator_erase
+      effects:
+        - target: {fromField: placement}
+          operation: patch
+          set:
+            site: {fromField: proposed-site}
+      review:
+        stages:
+          - {id: review, approvals: 1, excludeSubmitter: true}
+          - {id: final-approval, approvals: 1, excludeSubmitter: true}
+  - id: inspection-event
+    route: inspections
+    mutationMode: create_only
+    fields:
+      - {id: asset, type: reference, target: asset-item, required: true, classification: internal}
+      - {id: observed-at, type: timestamp, required: true, classification: internal}
+      - {id: result, type: vocabulary-code, vocabulary: inspection-result, required: true, classification: internal}
+accessProfiles:
+  - id: asset-operator
+    default: true
+    principalClaim: registry_principal
+    requiredPurposes: [asset-management]
+    grants:
+      - {entity: asset-item, operations: [create, get, list, patch, batch], readableFields: [asset-code, label, asset-class], writableFields: [asset-code, label, asset-class]}
+      - {entity: asset-site, operations: [create, get, list, patch], readableFields: [site-code, label], writableFields: [site-code, label]}
+      - entity: asset-placement
+        operations: [create, get, list]
+        readableFields: [asset, site, valid-from, valid-to]
+        writableFields: [asset, site, valid-from, valid-to]
+        requestPresence:
+          - {requestType: placement-correction-request}
+      - {entity: inspection-event, operations: [create, get, list], readableFields: [asset, observed-at, result], writableFields: [asset, observed-at, result]}
+  - id: site-planner
+    principalClaim: registry_principal
+    requiredPurposes: [site-planning]
+    grants:
+      - {entity: asset-item, operations: [get, list], readableFields: [asset-code, label], filterableFields: [asset-code]}
+      - {entity: asset-site, operations: [get, list], readableFields: [site-code, label], filterableFields: [site-code]}
+      - entity: asset-placement
+        operations: [create, get, list]
+        readableFields: [asset, site, valid-from, valid-to]
+        writableFields: [asset, site, valid-from, valid-to]
+        filterableFields: [asset, site, valid-from]
+        requestPresence:
+          - {requestType: placement-correction-request}
+  - id: correction-submitter
+    principalClaim: registry_principal
+    requiredScopes: [registry:corrections:submit]
+    requiredPurposes: [asset-correction]
+    grants:
+      - entity: placement-correction-request
+        operations: [create, get, patch, submit_request, revise_request, cancel_request]
+        readableFields: [placement, proposed-site, reason]
+        writableFields: [placement, proposed-site, reason]
+  - id: correction-reviewer
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: [registry:corrections:review]
+    requiredPurposes: [asset-correction-review]
+    grants:
+      - entity: placement-correction-request
+        operations: [get, list, approve_request, reject_request, request_revision]
+        readableFields: [placement, proposed-site, reason]
+        reviewStages:
+          - stage: review
+            targets:
+              - {entity: asset-placement, readableFields: [site], rowBoundaries: []}
+  - id: correction-supervisor
+    principalClaim: registry_principal
+    requiredScopes: [registry:corrections:supervise]
+    requiredPurposes: [asset-correction-review]
+    grants:
+      - entity: placement-correction-request
+        operations: [get, approve_request, reject_request, request_revision]
+        readableFields: [placement, proposed-site, reason]
+        reviewStages:
+          - stage: final-approval
+            targets:
+              - {entity: asset-placement, readableFields: [site], rowBoundaries: []}
+  - id: correction-applier
+    principalClaim: registry_principal
+    requiredScopes: [registry:corrections:apply]
+    requiredPurposes: [asset-correction-apply]
+    grants:
+      - entity: placement-correction-request
+        operations: [get, apply_request]
+        readableFields: [placement, proposed-site, reason]
+        applyTargets:
+          - {entity: asset-placement, rowBoundaries: []}
+vocabularies:
+  - {id: asset-classification, values: [equipment, vehicle, furniture]}
+  - {id: inspection-result, values: [passed, failed]}

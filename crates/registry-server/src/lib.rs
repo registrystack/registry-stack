@@ -13,6 +13,7 @@ pub mod artifacts;
 pub mod audit;
 #[cfg(feature = "runtime")]
 pub mod auth;
+pub mod change_request;
 #[cfg(feature = "runtime")]
 pub mod cli;
 pub mod compiler;
@@ -48,6 +49,15 @@ pub mod physical_names;
 #[cfg(feature = "runtime")]
 pub mod postgres;
 pub mod query;
+#[cfg(feature = "runtime")]
+pub mod request_events;
+#[cfg(feature = "runtime")]
+mod request_prepare;
+#[cfg(feature = "runtime")]
+pub mod request_retention;
+#[cfg(feature = "runtime")]
+mod request_store;
+pub mod request_workflow;
 #[cfg(feature = "runtime")]
 pub mod revision;
 #[cfg(feature = "runtime")]

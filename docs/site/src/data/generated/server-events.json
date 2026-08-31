@@ -25,6 +25,13 @@
         "After"
       ],
       [
+        "`request_lifecycle`",
+        "Not allowed",
+        "Not allowed",
+        "Not allowed",
+        "Request at transition"
+      ],
+      [
         "`tombstoned`",
         "Not allowed",
         "Allowed",
@@ -135,8 +142,8 @@
       ],
       [
         "`trigger`",
-        "`created`, `patched`, or `tombstoned`",
-        "Captured mutation trigger."
+        "`created`, `patched`, `request_lifecycle`, or `tombstoned`",
+        "Captured mutation or request-transition trigger."
       ],
       [
         "`packageRevision`",
@@ -147,6 +154,11 @@
         "`values`",
         "Object",
         "Exactly the declared projection, using authored field IDs; unset optional fields are null."
+      ],
+      [
+        "`request`",
+        "Object; required only for `request_lifecycle`",
+        "Proposal and workflow identity, transition, states, optional stage and effect digest, and stable deduplication key."
       ]
     ]
   },

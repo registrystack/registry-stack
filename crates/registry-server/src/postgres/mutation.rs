@@ -25,6 +25,9 @@ use super::{
     ClaimContext, ExpectedRegistryIdentity, RegistryLockKey, RowBoundaryContext, RuntimePool,
 };
 
+const REQUEST_ACTION_TIMEOUT: Duration = Duration::from_secs(30);
+const REQUEST_ACTION_CANCEL_TIMEOUT: Duration = Duration::from_secs(2);
+
 #[derive(Clone)]
 pub struct PostgresRecordMutationService {
     pool: RuntimePool,
@@ -38,6 +41,44 @@ pub struct PostgresRecordMutationService {
 }
 
 impl PostgresRecordMutationService {
+    pub async fn request_action(
+        &self,
+        input: crate::api::RequestActionInput<'_>,
+    ) -> Result<MutationOutcome, MutationError> {
+        let claims = strict_claim_context(&self.registry, input.context, input.entity_id)?;
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+        let fault = match self.fault {
+            #[cfg(feature = "postgres-test")]
+            MutationFaultControl::At(point) => crate::mutation::FaultControl::At(point),
+            _ => crate::mutation::FaultControl::Disabled,
+        };
+        let mut guard = RequestActionCancellationGuard::new(self.pool.clone(), client);
+        match tokio::time::timeout(
+            REQUEST_ACTION_TIMEOUT,
+            self.coordinator.execute_request_action(
+                guard.client(),
+                &self.registry,
+                input,
+                &claims,
+                fault,
+            ),
+        )
+        .await
+        {
+            Ok(result) => {
+                guard.disarm();
+                result
+            }
+            Err(_) => {
+                guard.cancel_and_discard().await;
+                Err(MutationError::Unavailable)
+            }
+        }
+    }
     #[must_use]
     pub fn new(
         pool: RuntimePool,
@@ -244,6 +285,66 @@ impl PostgresRecordMutationService {
         }
         let _ = self.fault;
         self.coordinator.execute(client, request).await
+    }
+}
+
+struct RequestActionCancellationGuard {
+    pool: RuntimePool,
+    client: Option<deadpool_postgres::Client>,
+    cancel_token: tokio_postgres::CancelToken,
+    armed: bool,
+}
+
+impl RequestActionCancellationGuard {
+    fn new(pool: RuntimePool, client: deadpool_postgres::Client) -> Self {
+        let cancel_token = client.cancel_token();
+        Self {
+            pool,
+            client: Some(client),
+            cancel_token,
+            armed: true,
+        }
+    }
+
+    fn client(&mut self) -> &mut deadpool_postgres::Client {
+        self.client
+            .as_mut()
+            .expect("request action client is present while guarded")
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+
+    async fn cancel_and_discard(&mut self) {
+        self.discard();
+        let _ = tokio::time::timeout(
+            REQUEST_ACTION_CANCEL_TIMEOUT,
+            self.pool.cancel_query(self.cancel_token.clone()),
+        )
+        .await;
+        self.armed = false;
+    }
+
+    fn discard(&mut self) {
+        if let Some(client) = self.client.take() {
+            self.pool.discard(client);
+        }
+    }
+}
+
+impl Drop for RequestActionCancellationGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            self.discard();
+            let pool = self.pool.clone();
+            let token = self.cancel_token.clone();
+            tokio::spawn(async move {
+                let _ =
+                    tokio::time::timeout(REQUEST_ACTION_CANCEL_TIMEOUT, pool.cancel_query(token))
+                        .await;
+            });
+        }
     }
 }
 

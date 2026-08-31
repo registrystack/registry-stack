@@ -1,0 +1,386 @@
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: facility
+  version: 0.1.0
+  defaultLanguage: en
+package:
+  environment: acceptance
+  instanceId: facility-acceptance
+  sequence: 1
+  sourceRevision: facility-acceptance-0.1.0
+manifestProjection:
+  accessProfile: facility-operator
+  classificationCeiling: restricted
+  catalog:
+    baseUrl: https://facility-registry.example.gov
+    title: Environmental Facility Registry Catalog
+    description: Facility, operating permit, installation, and discharge reporting metadata.
+    publisher:
+      name: Environmental Authority
+      iri: https://facility-registry.example.gov/authority
+  dataset:
+    title: Environmental Facility Registry
+    description: Facilities, operating permits, installations, and dated discharge reports.
+    owner: Environmental Authority
+    status: active
+modules:
+  - id: facility-core
+    version: 0.1.0
+    digest: sha256:1cae6ebbdfd4ce1f800cbfd1ead40926cda05e89d05285c6975adbc4801dbfe8
+
+entities:
+  - id: facility
+    route: facilities
+    mutationMode: mutable
+    accessRequirements:
+      allowedPurposes:
+        - facility-registry
+      rowBoundaries:
+        - field: administrative-boundary
+          claim: administrative_boundaries
+          operator: in
+    fields:
+      - id: facility-code
+        type: string
+        required: true
+        maxLength: 64
+        classification: restricted
+      - id: display-name
+        type: string
+        required: true
+        maxLength: 160
+        classification: restricted
+      - id: administrative-boundary
+        type: vocabulary-code
+        vocabulary: administrative-boundary
+        required: true
+        classification: internal
+    constraints:
+      - kind: unique
+        fields:
+          - facility-code
+  - id: permit
+    route: permits
+    mutationMode: mutable
+    fields:
+      - id: permit-number
+        type: string
+        required: true
+        maxLength: 64
+        classification: internal
+      - id: facility
+        type: reference
+        target: facility
+        required: true
+        classification: restricted
+      - id: permit-type
+        type: vocabulary-code
+        vocabulary: permit-type
+        required: true
+        classification: internal
+      - id: valid-from
+        type: date
+        required: true
+        classification: internal
+      - id: valid-to
+        type: date
+        required: false
+        classification: internal
+      - id: administrative-boundary
+        type: vocabulary-code
+        vocabulary: administrative-boundary
+        required: true
+        classification: internal
+      - id: import-source
+        type: string
+        required: true
+        maxLength: 80
+        classification: internal
+      - id: source-record-id
+        type: string
+        required: true
+        maxLength: 120
+        classification: internal
+    temporal:
+      startField: valid-from
+      endField: valid-to
+      scopeFields:
+        - permit-number
+    constraints:
+      - kind: unique
+        fields:
+          - permit-number
+          - valid-from
+      - kind: unique
+        fields:
+          - import-source
+          - source-record-id
+      - kind: temporal-non-overlap
+        scopeFields:
+          - permit-number
+        startField: valid-from
+        endField: valid-to
+  - id: installation
+    route: installations
+    mutationMode: mutable
+    batch:
+      maximumItems: 4
+      maximumBytes: 16384
+    fields:
+      - id: installation-code
+        type: string
+        required: true
+        maxLength: 64
+        classification: internal
+      - id: permit
+        type: reference
+        target: permit
+        required: true
+        classification: restricted
+      - id: administrative-boundary
+        type: vocabulary-code
+        vocabulary: administrative-boundary
+        required: true
+        classification: internal
+      - id: centroid
+        type: crs84-point
+        precision: 7
+        bbox:
+          west: "30.0000000"
+          south: "-10.0000000"
+          east: "31.0000000"
+          north: "-9.0000000"
+        required: true
+        classification: internal
+      - id: area-value
+        type: decimal
+        precision: 12
+        scale: 4
+        minimum: "0.0000"
+        required: true
+        classification: internal
+      - id: area-unit
+        type: vocabulary-code
+        vocabulary: area-unit
+        required: true
+        classification: internal
+      - id: import-source
+        type: string
+        required: true
+        maxLength: 80
+        classification: internal
+      - id: source-record-id
+        type: string
+        required: true
+        maxLength: 120
+        classification: internal
+    constraints:
+      - kind: unique
+        fields:
+          - installation-code
+      - kind: unique
+        fields:
+          - import-source
+          - source-record-id
+  - id: discharge-report
+    route: discharge-reports
+    mutationMode: mutable
+    fields:
+      - id: installation
+        type: reference
+        target: installation
+        required: true
+        classification: restricted
+      - id: administrative-boundary
+        type: vocabulary-code
+        vocabulary: administrative-boundary
+        required: true
+        classification: internal
+      - id: substance-code
+        type: vocabulary-code
+        vocabulary: substance-code
+        required: true
+        classification: internal
+      - id: period-start
+        type: date
+        required: true
+        classification: internal
+      - id: period-end
+        type: date
+        required: false
+        classification: internal
+      - id: quantity-value
+        type: decimal
+        precision: 12
+        scale: 3
+        minimum: "0.000"
+        required: false
+        classification: internal
+      - id: quantity-unit
+        type: vocabulary-code
+        vocabulary: quantity-unit
+        required: false
+        classification: internal
+    temporal:
+      startField: period-start
+      endField: period-end
+      scopeFields:
+        - installation
+        - substance-code
+    constraints:
+      - kind: temporal-non-overlap
+        scopeFields:
+          - installation
+          - substance-code
+        startField: period-start
+        endField: period-end
+accessProfiles:
+  - id: facility-operator
+    principalClaim: registry_principal
+    requiredPurposes:
+      - facility-registry
+    grants:
+      - entity: facility
+        operations:
+          - create
+          - get
+          - list
+          - patch
+        readableFields:
+          - facility-code
+          - display-name
+          - administrative-boundary
+        writableFields:
+          - facility-code
+          - display-name
+          - administrative-boundary
+        filterableFields:
+          - facility-code
+          - administrative-boundary
+        rowBoundaries:
+          - field: administrative-boundary
+            claim: administrative_boundaries
+            operator: in
+      - entity: permit
+        operations:
+          - create
+          - get
+          - list
+          - patch
+        readableFields:
+          - permit-number
+          - facility
+          - permit-type
+          - valid-from
+          - valid-to
+          - administrative-boundary
+          - import-source
+          - source-record-id
+        writableFields:
+          - permit-number
+          - facility
+          - permit-type
+          - valid-from
+          - valid-to
+          - administrative-boundary
+          - import-source
+          - source-record-id
+        filterableFields:
+          - facility
+          - administrative-boundary
+          - import-source
+          - valid-from
+        rowBoundaries:
+          - field: administrative-boundary
+            claim: administrative_boundaries
+            operator: in
+      - entity: installation
+        operations:
+          - create
+          - get
+          - list
+          - patch
+          - batch
+        readableFields:
+          - installation-code
+          - permit
+          - administrative-boundary
+          - centroid
+          - area-value
+          - area-unit
+          - import-source
+          - source-record-id
+        writableFields:
+          - installation-code
+          - permit
+          - administrative-boundary
+          - centroid
+          - area-value
+          - area-unit
+          - import-source
+          - source-record-id
+        filterableFields:
+          - permit
+          - administrative-boundary
+          - import-source
+        rowBoundaries:
+          - field: administrative-boundary
+            claim: administrative_boundaries
+            operator: in
+      - entity: discharge-report
+        operations:
+          - create
+          - get
+          - list
+          - patch
+        readableFields:
+          - installation
+          - administrative-boundary
+          - substance-code
+          - period-start
+          - period-end
+          - quantity-value
+          - quantity-unit
+        writableFields:
+          - installation
+          - administrative-boundary
+          - substance-code
+          - period-start
+          - period-end
+          - quantity-value
+          - quantity-unit
+        filterableFields:
+          - installation
+          - administrative-boundary
+          - substance-code
+          - period-start
+        rowBoundaries:
+          - field: administrative-boundary
+            claim: administrative_boundaries
+            operator: in
+vocabularies:
+  - id: administrative-boundary
+    values:
+      - north-district
+      - south-district
+      - central-district
+  - id: permit-type
+    values:
+      - water-discharge
+      - air-emissions
+      - waste-treatment
+  - id: area-unit
+    values:
+      - hectare
+      - square-meter
+  - id: substance-code
+    values:
+      - nitrogen
+      - phosphorus
+      - solids
+  - id: quantity-unit
+    values:
+      - kilogram
+      - litre
+      - headcount

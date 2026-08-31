@@ -428,6 +428,7 @@ export default defineConfig({
             { label: 'Registry Server overview', slug: 'explanation/configuration-defined-registry' },
             { label: 'Modeling patterns', slug: 'explanation/registry-modeling-patterns' },
             { label: 'Create and query your first registry', slug: 'tutorials/first-registry-server' },
+            { label: 'Review changes before updating a registry', slug: 'tutorials/review-registry-changes' },
             { label: 'Configure your registry', slug: 'configure/registry-server' },
             { label: 'Configure webhooks', slug: 'configure/registry-server-webhooks' },
             { label: 'Configuration reference', slug: 'reference/registry-server-configuration' },

@@ -129,43 +129,114 @@ fn operations_for(compiled: &CompiledRegistry, entity_id: &str) -> Vec<Operation
 }
 
 #[test]
-fn household_pilot_fixture_compiles_person_household_and_time_bounded_membership() {
-    let compiled = compile_fixture("publicschema-household");
-    assert_eq!(compiled.registry_id(), "publicschema-household");
+fn asset_placement_change_request_fixture_compiles_site_correction_plan() {
+    let compiled = compile_fixture("asset-site-placement-change-requests");
+    assert_eq!(
+        compiled.registry_id(),
+        "asset-site-placement-change-requests"
+    );
+    assert_eq!(compiled.entities().len(), 5);
+
+    let placement = entity(&compiled, "asset-placement");
+    assert_eq!(
+        placement.change_control.as_ref().map(|control| {
+            control
+                .required_for
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>()
+        }),
+        Some(BTreeSet::from([Operation::Patch]))
+    );
+
+    let request = entity(&compiled, "placement-correction-request");
+    let request_plan = request
+        .change_request
+        .as_ref()
+        .expect("asset placement correction request compiles to a request plan");
+    assert_eq!(request_plan.effects.len(), 1);
+    assert_eq!(request_plan.stages.len(), 2);
+    assert_eq!(
+        request_plan.target_entities,
+        ["asset-placement"].into_iter().map(str::to_owned).collect()
+    );
+}
+
+#[test]
+fn business_pilot_fixture_compiles_establishment_business_and_time_bounded_assignment() {
+    let compiled = compile_fixture("business-establishments");
+    assert_eq!(compiled.registry_id(), "business-establishments");
     assert_eq!(compiled.entities().len(), 3);
 
-    let person = entity(&compiled, "person");
-    assert!(person.fields.contains_key("residency-status"));
-    assert!(person.fields.contains_key("preferred-language"));
+    let establishment = entity(&compiled, "establishment");
+    assert!(establishment.fields.contains_key("operating-status"));
+    assert!(establishment.fields.contains_key("preferred-language"));
 
-    let membership = entity(&compiled, "group-membership");
-    assert_eq!(membership.mutation_mode, MutationMode::Mutable);
+    let assignment = entity(&compiled, "operator-assignment");
+    assert_eq!(assignment.mutation_mode, MutationMode::Mutable);
     assert!(has_unique(
-        membership,
-        &["person", "household", "valid-from"]
+        assignment,
+        &["establishment", "business", "valid-from"]
     ));
-    assert!(has_temporal_non_overlap(membership, &["person"]));
+    assert!(has_temporal_non_overlap(assignment, &["establishment"]));
     assert_eq!(
-        field(membership, "valid-from").valid_time_role,
+        field(assignment, "valid-from").valid_time_role,
         Some(ValidTimeRole::ValidFrom)
     );
     assert_eq!(
-        field(membership, "valid-to").valid_time_role,
+        field(assignment, "valid-to").valid_time_role,
         Some(ValidTimeRole::ValidTo)
     );
     assert!(compiled.ddl().requires_btree_gist);
     assert!(compiled.routes().routes.iter().any(|route| {
-        route.entity_id == "group-membership"
+        route.entity_id == "operator-assignment"
             && route.operation == Operation::Patch
-            && route.path == "/v1/records/group-memberships/{record_id}"
+            && route.path == "/v1/records/operator-assignments/{record_id}"
     }));
 }
 
 #[test]
-fn household_pilot_fixture_journeys_preflight_against_the_exact_compiled_registry() {
-    let compiled = compile_fixture("publicschema-household");
-    let journeys = fs::read(fixture_root("publicschema-household").join("tests/journeys.yaml"))
-        .expect("committed household journeys are readable");
+fn household_change_request_fixture_compiles_contact_registration_plan() {
+    let compiled = compile_fixture("publicschema-household-change-requests");
+    assert_eq!(
+        compiled.registry_id(),
+        "publicschema-household-change-requests"
+    );
+    assert_eq!(compiled.entities().len(), 4);
+
+    let person = entity(&compiled, "person");
+    assert!(person.change_control.is_some());
+    assert!(person.fields.contains_key("residency-status"));
+    assert!(person.fields.contains_key("preferred-language"));
+
+    let household = entity(&compiled, "household");
+    assert!(household.change_control.is_some());
+    assert!(household.fields.contains_key("contact-person"));
+
+    let membership = entity(&compiled, "group-membership");
+    assert!(membership.change_control.is_some());
+
+    let request = entity(&compiled, "register-household-contact-request");
+    let request_plan = request
+        .change_request
+        .as_ref()
+        .expect("household contact request compiles to a request plan");
+    assert_eq!(request_plan.effects.len(), 3);
+    assert_eq!(request_plan.stages.len(), 2);
+    assert_eq!(
+        request_plan.target_entities,
+        ["group-membership", "household", "person"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    );
+}
+
+#[test]
+fn business_pilot_fixture_journeys_preflight_against_the_exact_compiled_registry() {
+    let compiled = compile_fixture("business-establishments");
+    let journeys = fs::read(fixture_root("business-establishments").join("tests/journeys.yaml"))
+        .expect("committed business journeys are readable");
     if let Err(error) = validate_fixture_journeys(&journeys, &compiled) {
         let document: serde_json::Value =
             serde_norway::from_slice(&journeys).expect("journey YAML has a generic value shape");
@@ -182,19 +253,53 @@ fn household_pilot_fixture_journeys_preflight_against_the_exact_compiled_registr
             if let Err(prefix_error) = validate_fixture_journeys(source.as_bytes(), &compiled) {
                 let step = steps[length - 1]["id"].as_str().unwrap_or("unknown");
                 panic!(
-                    "household journey first fails at step {step}: {prefix_error:?}; full error: {error:?}"
+                    "business journey first fails at step {step}: {prefix_error:?}; full error: {error:?}"
                 );
             }
         }
-        panic!("household journey validation failed after every prefix passed: {error:?}");
+        panic!("business journey validation failed after every prefix passed: {error:?}");
     }
 }
 
 #[test]
-fn disability_pilot_fixture_compiles_protected_observations_and_create_only_certification() {
-    let compiled = compile_fixture("disability");
-    assert_eq!(compiled.registry_id(), "disability");
-    assert_eq!(compiled.entities().len(), 3);
+fn change_request_pilot_fixture_journeys_preflight_against_their_exact_registries() {
+    for fixture in [
+        "asset-site-placement-change-requests",
+        "publicschema-household-change-requests",
+    ] {
+        let compiled = compile_fixture(fixture);
+        let journeys = fs::read(fixture_root(fixture).join("tests/journeys.yaml"))
+            .expect("committed change request journeys are readable");
+        if let Err(error) = validate_fixture_journeys(&journeys, &compiled) {
+            let document: serde_json::Value = serde_norway::from_slice(&journeys)
+                .expect("journey YAML has a generic value shape");
+            let steps = document["journeys"][0]["steps"]
+                .as_array()
+                .expect("journey steps are an array");
+            for length in 1..=steps.len() {
+                let mut prefix = document.clone();
+                prefix["journeys"][0]["steps"]
+                    .as_array_mut()
+                    .expect("journey steps remain an array")
+                    .truncate(length);
+                let source = serde_norway::to_string(&prefix).expect("journey prefix serializes");
+                if let Err(prefix_error) = validate_fixture_journeys(source.as_bytes(), &compiled) {
+                    let step = steps[length - 1]["id"].as_str().unwrap_or("unknown");
+                    panic!(
+                        "{fixture} journey first fails at step {step}: {prefix_error:?}; full error: {error:?}"
+                    );
+                }
+            }
+            panic!("{fixture} journey validation failed after every prefix passed: {error:?}");
+        }
+    }
+}
+
+#[test]
+fn inspection_pilot_fixture_compiles_protected_observations_and_create_only_permit() {
+    let compiled = compile_fixture("inspection");
+    assert_eq!(compiled.registry_id(), "inspection");
+    assert_eq!(compiled.entities().len(), 4);
     assert!(compiled
         .entities()
         .values()
@@ -206,7 +311,7 @@ fn disability_pilot_fixture_compiles_protected_observations_and_create_only_cert
             .all(|profile| !profile.anonymous)
     }));
 
-    let observation = entity(&compiled, "functioning-observation");
+    let observation = entity(&compiled, "inspection-observation");
     assert!(observation.constraints.values().any(|constraint| {
         matches!(
             constraint,
@@ -215,68 +320,73 @@ fn disability_pilot_fixture_compiles_protected_observations_and_create_only_cert
                 minimum: Some(0),
                 maximum: Some(4),
                 ..
-            } if field == "severity-score"
+            } if field == "finding-grade"
         )
     }));
 
-    let certification = entity(&compiled, "certification");
-    assert_eq!(certification.mutation_mode, MutationMode::CreateOnly);
-    assert!(certification.fields.contains_key("corrected-certification"));
-    assert!(certification.fields.contains_key("correction-reason"));
-    assert!(certification.fields.contains_key("provenance-note"));
-    assert!(has_temporal_non_overlap(
-        certification,
-        &["assessment-episode"]
-    ));
+    assert!(entity(&compiled, "public-authority")
+        .fields
+        .contains_key("jurisdiction"));
+    let permit = entity(&compiled, "permit");
+    assert!(permit.fields.contains_key("issuing-authority"));
+    assert_eq!(permit.mutation_mode, MutationMode::CreateOnly);
+    assert!(permit.fields.contains_key("corrected-permit"));
+    assert!(permit.fields.contains_key("correction-reason"));
+    assert!(permit.fields.contains_key("provenance-note"));
+    // Corrections retain the original effective period in an append-only record.
+    assert!(!has_temporal_non_overlap(permit, &["inspection"]));
     assert_eq!(
-        operations_for(&compiled, "certification"),
+        operations_for(&compiled, "permit"),
         [Operation::Create, Operation::Get, Operation::List]
     );
 }
 
 #[test]
-fn farmer_pilot_fixture_compiles_bounded_crs84_scalars_imports_and_temporal_activity() {
-    let compiled = compile_fixture("farmer");
-    assert_eq!(compiled.registry_id(), "farmer");
+fn facility_pilot_fixture_compiles_bounded_crs84_scalars_imports_and_temporal_activity() {
+    let compiled = compile_fixture("facility");
+    assert_eq!(compiled.registry_id(), "facility");
     assert_eq!(compiled.entities().len(), 4);
 
-    let plot = entity(&compiled, "plot");
+    let installation = entity(&compiled, "installation");
     assert!(matches!(
-        field(plot, "centroid").field_type,
+        field(installation, "centroid").field_type,
         FieldTypeSource::Crs84Point {
             precision: 7,
             bbox: Some(_)
         }
     ));
     assert!(matches!(
-        field(plot, "area-value").field_type,
+        field(installation, "area-value").field_type,
         FieldTypeSource::Decimal {
             precision: 12,
             scale: 4,
             ..
         }
     ));
-    assert!(has_unique(plot, &["import-source", "source-record-id"]));
+    assert!(has_unique(
+        installation,
+        &["import-source", "source-record-id"]
+    ));
     assert!(matches!(
-        field(plot, "area-unit").field_type,
+        field(installation, "area-unit").field_type,
         FieldTypeSource::VocabularyCode { .. }
     ));
     assert!(matches!(
-        field(plot, "administrative-boundary").field_type,
+        field(installation, "administrative-boundary").field_type,
         FieldTypeSource::VocabularyCode { .. }
     ));
 
-    let activity = entity(&compiled, "seasonal-activity");
+    let activity = entity(&compiled, "discharge-report");
     assert!(has_temporal_non_overlap(
         activity,
-        &["plot", "activity-type"]
+        &["installation", "substance-code"]
     ));
     assert_eq!(
-        field(activity, "season-start").valid_time_role,
+        field(activity, "period-start").valid_time_role,
         Some(ValidTimeRole::ValidFrom)
     );
     assert_eq!(
-        field(activity, "season-end").valid_time_role,
+        field(activity, "period-end").valid_time_role,
         Some(ValidTimeRole::ValidTo)
     );
     assert!(matches!(

@@ -103,7 +103,7 @@ pub(crate) fn validate_access_requirements(
     }
 }
 
-fn check_profile(
+pub(crate) fn check_profile(
     requirements: &AccessRequirementsSource,
     profile: &AccessProfileSource,
     path: &str,

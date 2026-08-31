@@ -4,6 +4,7 @@
   rows:
     - ['`created`', 'Not allowed', 'Not allowed', 'Allowed', 'After']
     - ['`patched`', 'Allowed', 'Allowed', 'Allowed', 'After']
+    - ['`request_lifecycle`', 'Not allowed', 'Not allowed', 'Not allowed', 'Request at transition']
     - ['`tombstoned`', 'Not allowed', 'Allowed', 'Not allowed', 'Before']
 - id: headers
   title: Webhook request headers
@@ -29,9 +30,10 @@
     - ['`entity`', 'String', 'Authored entity ID.']
     - ['`recordId`', 'UUID string', 'Record identity.']
     - ['`revision`', 'Positive integer', 'Record revision after the mutation.']
-    - ['`trigger`', '`created`, `patched`, or `tombstoned`', 'Captured mutation trigger.']
+    - ['`trigger`', '`created`, `patched`, `request_lifecycle`, or `tombstoned`', 'Captured mutation or request-transition trigger.']
     - ['`packageRevision`', '`sha256:<digest>` string', 'Package active at capture time.']
     - ['`values`', 'Object', 'Exactly the declared projection, using authored field IDs; unset optional fields are null.']
+    - ['`request`', 'Object; required only for `request_lifecycle`', 'Proposal and workflow identity, transition, states, optional stage and effect digest, and stable deduplication key.']
 - id: delivery
   title: Delivery limits and outcomes
   columns: [Property, Contract]

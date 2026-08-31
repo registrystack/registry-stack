@@ -26,15 +26,20 @@ use crate::logical_names::{
     default_api_name, default_sql_name, reserved_logical_name, valid_api_name,
 };
 use crate::model::{
-    CompiledAccessEntry, CompiledAccessInventory, CompiledDerivedField, CompiledDerivedRelation,
-    CompiledEntity, CompiledEventDelivery, CompiledEventDeliveryInventory, CompiledField,
-    CompiledLogicalField, CompiledMetadataEntity, CompiledMetadataEntry, CompiledMetadataInventory,
-    CompiledModuleIdentity, CompiledQueryFilterField, CompiledQueryFilterOperator,
-    CompiledQueryInventory, CompiledQueryKind, CompiledQueryOperation, CompiledQuerySortDirection,
-    CompiledQuerySortField, CompiledQueryTemporalBinding, CompiledQueryTemporalSemantics,
-    CompiledReadPath, CompiledRegistry, CompiledRevisionKind, CompiledRoute,
-    CompiledRouteInventory, CompiledSelectorProfile, CompiledSourceRelation, CompiledStoredField,
-    CompiledTemporal, CompiledWebhookDeliveryMode, CompiledWebhookRetryProfile, HttpMethod,
+    request_query_field_id_for_api, request_state_query_filter_fields,
+    request_state_query_sort_fields,
+};
+use crate::model::{
+    ChangeRequestOperation, CompiledAccessEntry, CompiledAccessInventory, CompiledChangeControl,
+    CompiledDerivedField, CompiledDerivedRelation, CompiledEntity, CompiledEventDelivery,
+    CompiledEventDeliveryInventory, CompiledField, CompiledLogicalField, CompiledMetadataEntity,
+    CompiledMetadataEntry, CompiledMetadataInventory, CompiledModuleIdentity,
+    CompiledQueryFilterField, CompiledQueryFilterOperator, CompiledQueryInventory,
+    CompiledQueryKind, CompiledQueryOperation, CompiledQuerySortDirection, CompiledQuerySortField,
+    CompiledQueryTemporalBinding, CompiledQueryTemporalSemantics, CompiledReadPath,
+    CompiledRegistry, CompiledRevisionKind, CompiledRoute, CompiledRouteInventory,
+    CompiledSelectorProfile, CompiledSourceRelation, CompiledStoredField, CompiledTemporal,
+    CompiledWebhookDeliveryMode, CompiledWebhookRetryProfile, HttpMethod,
     MAX_REVISION_HISTORY_RECORDS,
 };
 use crate::physical_names::{
@@ -118,7 +123,9 @@ pub fn compile_project_with_assets(
         return Err(CompileFailure::from_errors(diagnostics));
     }
 
-    let (entities, physical_names) = compile_entities(&sources, &derived_origins, assets)?;
+    let (mut entities, physical_names) = compile_entities(&sources, &derived_origins, assets)?;
+    crate::change_request::compile_change_requests(&sources, &mut entities)
+        .map_err(CompileFailure::from_errors)?;
     let (route_inventory, access_inventory) = compile_routes_and_access(&entities)?;
     let metadata_inventory = compile_metadata_inventory(
         &project.registry.id,
@@ -985,6 +992,22 @@ fn merge_extension(
         "a read path identifier is contributed more than once",
         errors,
     );
+    merge_optional_capability(
+        &mut entity.change_control,
+        &extension.change_control,
+        "extension.change_control.duplicate",
+        "modules[].extendEntities[].changeControl",
+        "a change-control capability is contributed more than once",
+        errors,
+    );
+    merge_optional_capability(
+        &mut entity.change_request,
+        &extension.change_request,
+        "extension.change_request.duplicate",
+        "modules[].extendEntities[].changeRequest",
+        "a change-request capability is contributed more than once",
+        errors,
+    );
 
     let mut known: BTreeSet<String> = entity
         .constraints
@@ -1001,6 +1024,24 @@ fn merge_extension(
                 "a constraint identifier is contributed more than once",
             ));
         }
+    }
+}
+
+fn merge_optional_capability<T: Clone>(
+    target: &mut Option<T>,
+    contributed: &Option<T>,
+    code: &str,
+    path: &str,
+    message: &str,
+    errors: &mut Vec<Diagnostic>,
+) {
+    let Some(value) = contributed else {
+        return;
+    };
+    if target.is_some() {
+        errors.push(Diagnostic::error(code, path, message));
+    } else {
+        *target = Some(value.clone());
     }
 }
 
@@ -1123,6 +1164,9 @@ fn expand_project_access(
                 row_boundaries: grant.row_boundaries.clone(),
                 lookups: grant.lookups.clone(),
                 read_paths: grant.read_paths.clone(),
+                review_stages: grant.review_stages.clone(),
+                apply_targets: grant.apply_targets.clone(),
+                request_presence: grant.request_presence.clone(),
                 allow_count: grant.allow_count,
                 revision_access: grant.revision_access,
                 allow_data_export: grant.allow_data_export,
@@ -1485,6 +1529,13 @@ fn validate_logical_names(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
                 "field.api_name.invalid",
                 "entities[].fields[].apiName",
                 "a field API name must be a non-reserved lower camelCase identifier",
+            ));
+        }
+        if entity.change_request.is_some() && request_query_field_id_for_api(&api_name).is_some() {
+            errors.push(Diagnostic::error(
+                "change_request.field.api_name_reserved",
+                "entities[].fields[].apiName",
+                "request entities cannot reuse server-owned request state API names",
             ));
         }
         if !api_names.insert(api_name) {
@@ -2147,6 +2198,7 @@ fn validate_profiles(
             if (entity.mutation_mode == MutationMode::CreateOnly
                 && matches!(operation, Operation::Patch | Operation::Tombstone))
                 || (*operation == Operation::Tombstone && !entity.tombstone)
+                || (is_request_operation(*operation) && entity.change_request.is_none())
             {
                 errors.push(Diagnostic::error(
                     "access_profile.operation.unavailable",
@@ -2171,7 +2223,17 @@ fn validate_profiles(
             && access.operations.iter().any(|operation| {
                 matches!(
                     operation,
-                    Operation::Create | Operation::Patch | Operation::Tombstone | Operation::Batch
+                    Operation::Create
+                        | Operation::Patch
+                        | Operation::Tombstone
+                        | Operation::Batch
+                        | Operation::SubmitRequest
+                        | Operation::ApproveRequest
+                        | Operation::RejectRequest
+                        | Operation::RequestRevision
+                        | Operation::ReviseRequest
+                        | Operation::CancelRequest
+                        | Operation::ApplyRequest
                 )
             })
         {
@@ -2587,7 +2649,7 @@ fn validate_events(
             ));
         }
         let maximum_payload_bytes =
-            maximum_event_payload_bytes(&entity.id, &event.projection, |field| {
+            maximum_event_payload_bytes(&entity.id, event.trigger, &event.projection, |field| {
                 fields
                     .get(field)
                     .map(|field| (&field.field_type, field.required))
@@ -2608,6 +2670,13 @@ fn validate_events(
                 "event.trigger.unavailable",
                 "entities[].events[].trigger",
                 "a tombstone event requires tombstone behavior",
+            ));
+        }
+        if event.trigger == EventTrigger::RequestLifecycle && entity.change_request.is_none() {
+            errors.push(Diagnostic::error(
+                "event.trigger.request_lifecycle_requires_change_request",
+                "entities[].events[].trigger",
+                "a request lifecycle event can be declared only on a change-request entity",
             ));
         }
         validate_event_condition(event, &fields, errors);
@@ -2645,68 +2714,132 @@ fn validate_event_condition(
     fields: &BTreeMap<&str, &FieldSource>,
     errors: &mut Vec<Diagnostic>,
 ) {
-    let Some(EventConditionSource::Fields {
-        changed,
-        before_equals,
-        after_equals,
-    }) = event.when.as_ref()
-    else {
-        return;
-    };
-    if changed.is_empty() && before_equals.is_empty() && after_equals.is_empty() {
-        errors.push(Diagnostic::error(
-            "event.when.empty",
-            "entities[].events[].when",
-            "a field event condition requires at least one predicate",
-        ));
-    }
-    let compatible = match event.trigger {
-        EventTrigger::Created => changed.is_empty() && before_equals.is_empty(),
-        EventTrigger::Patched => true,
-        EventTrigger::Tombstoned => changed.is_empty() && after_equals.is_empty(),
-    };
-    if !compatible {
-        errors.push(Diagnostic::error(
-            "event.when.trigger_incompatible",
-            "entities[].events[].when",
-            "the field predicates are unavailable for this event trigger",
-        ));
-    }
-    for field in changed {
-        if !fields.contains_key(field.as_str()) {
-            errors.push(Diagnostic::error(
-                "event.when.field_unknown",
-                "entities[].events[].when.changed",
-                "an event condition refers to an unknown field",
-            ));
-        }
-    }
-    for (path, predicates) in [
-        ("entities[].events[].when.beforeEquals", before_equals),
-        ("entities[].events[].when.afterEquals", after_equals),
-    ] {
-        for (field, value) in predicates {
-            let Some(source) = fields.get(field.as_str()) else {
+    match event.when.as_ref() {
+        Some(EventConditionSource::Fields {
+            changed,
+            before_equals,
+            after_equals,
+        }) => {
+            if changed.is_empty() && before_equals.is_empty() && after_equals.is_empty() {
                 errors.push(Diagnostic::error(
-                    "event.when.field_unknown",
-                    path,
-                    "an event condition refers to an unknown field",
+                    "event.when.empty",
+                    "entities[].events[].when",
+                    "a field event condition requires at least one predicate",
                 ));
-                continue;
+            }
+            let compatible = match event.trigger {
+                EventTrigger::Created => changed.is_empty() && before_equals.is_empty(),
+                EventTrigger::Patched => true,
+                EventTrigger::Tombstoned => changed.is_empty() && after_equals.is_empty(),
+                EventTrigger::RequestLifecycle => false,
             };
-            if matches!(value, EventScalarValue::Null) {
-                continue;
-            }
-            let value = serde_json::to_value(value).expect("event scalar value serializes");
-            if canonical_field_literal(&value, &source.field_type).is_none() {
+            if !compatible {
                 errors.push(Diagnostic::error(
-                    "event.when.value_invalid",
-                    path,
-                    "an event comparison value must be canonical for its declared field type",
+                    "event.when.trigger_incompatible",
+                    "entities[].events[].when",
+                    "field predicates are unavailable for this event trigger",
                 ));
             }
+            for field in changed {
+                if !fields.contains_key(field.as_str()) {
+                    errors.push(Diagnostic::error(
+                        "event.when.field_unknown",
+                        "entities[].events[].when.changed",
+                        "an event condition refers to an unknown field",
+                    ));
+                }
+            }
+            for (path, predicates) in [
+                ("entities[].events[].when.beforeEquals", before_equals),
+                ("entities[].events[].when.afterEquals", after_equals),
+            ] {
+                for (field, value) in predicates {
+                    let Some(source) = fields.get(field.as_str()) else {
+                        errors.push(Diagnostic::error(
+                            "event.when.field_unknown",
+                            path,
+                            "an event condition refers to an unknown field",
+                        ));
+                        continue;
+                    };
+                    if matches!(value, EventScalarValue::Null) {
+                        continue;
+                    }
+                    let value = serde_json::to_value(value).expect("event scalar value serializes");
+                    if canonical_field_literal(&value, &source.field_type).is_none() {
+                        errors.push(Diagnostic::error(
+                            "event.when.value_invalid",
+                            path,
+                            "an event comparison value must be canonical for its declared field type",
+                        ));
+                    }
+                }
+            }
         }
+        Some(EventConditionSource::RequestLifecycle {
+            transitions,
+            to_states,
+            stages,
+        }) => {
+            if transitions.is_empty() && to_states.is_empty() && stages.is_empty() {
+                errors.push(Diagnostic::error(
+                    "event.when.empty",
+                    "entities[].events[].when",
+                    "a request lifecycle event condition requires at least one predicate",
+                ));
+            }
+            if event.trigger != EventTrigger::RequestLifecycle {
+                errors.push(Diagnostic::error(
+                    "event.when.trigger_incompatible",
+                    "entities[].events[].when",
+                    "request lifecycle predicates are available only for request lifecycle events",
+                ));
+            }
+            for transition in transitions {
+                if !valid_request_lifecycle_transition(transition) {
+                    errors.push(Diagnostic::error(
+                        "event.when.request_lifecycle_transition_unknown",
+                        "entities[].events[].when.transitions",
+                        "a request lifecycle event condition refers to an unknown transition",
+                    ));
+                }
+            }
+            for state in to_states {
+                if !valid_request_lifecycle_state(state) {
+                    errors.push(Diagnostic::error(
+                        "event.when.request_lifecycle_state_unknown",
+                        "entities[].events[].when.toStates",
+                        "a request lifecycle event condition refers to an unknown request state",
+                    ));
+                }
+            }
+            for stage in stages {
+                validate_id(stage, "entities[].events[].when.stages", errors);
+            }
+        }
+        None => {}
     }
+}
+
+fn valid_request_lifecycle_transition(value: &str) -> bool {
+    matches!(
+        value,
+        "submit"
+            | "approve"
+            | "reject"
+            | "request_revision"
+            | "revise"
+            | "rebase"
+            | "cancel"
+            | "apply"
+    )
+}
+
+fn valid_request_lifecycle_state(value: &str) -> bool {
+    matches!(
+        value,
+        "draft" | "submitted" | "approved" | "needs_changes" | "rejected" | "canceled" | "applied"
+    )
 }
 
 fn valid_logical_destination_id(value: &str) -> bool {
@@ -2723,28 +2856,81 @@ fn valid_logical_destination_id(value: &str) -> bool {
 
 fn maximum_event_payload_bytes<'a>(
     entity_id: &str,
+    trigger: EventTrigger,
     projection: &BTreeSet<String>,
     field: impl Fn(&str) -> Option<(&'a FieldTypeSource, bool)>,
 ) -> Option<u64> {
     let values = maximum_event_values_bytes(projection, field)?;
-    // Canonical body object braces, five separators, and the six fixed key
+    let fixed_keys: &[&str] = if trigger == EventTrigger::RequestLifecycle {
+        &[
+            "entity",
+            "recordId",
+            "revision",
+            "trigger",
+            "packageRevision",
+            "request",
+            "values",
+        ]
+    } else {
+        &[
+            "entity",
+            "recordId",
+            "revision",
+            "trigger",
+            "packageRevision",
+            "values",
+        ]
+    };
+    // Canonical body object braces, one comma between members, and fixed key
     // encodings (two quotes plus a colon per key).
-    let mut total = 2_u64.checked_add(5)?;
-    for key in [
-        "entity",
-        "recordId",
-        "revision",
-        "trigger",
-        "packageRevision",
-        "values",
-    ] {
+    let mut total = 2_u64.checked_add(fixed_keys.len().saturating_sub(1) as u64)?;
+    for key in fixed_keys {
         total = total.checked_add(key.len() as u64 + 3)?;
+    }
+    if trigger == EventTrigger::RequestLifecycle {
+        // The request lifecycle envelope contains bounded ASCII state/stage/
+        // digest fields plus integer proposal/workflow revisions and a stable
+        // deduplication key. The exact runtime payload is still checked against
+        // the compiled delivery maximum before insert.
+        let request_keys = [
+            "proposalVersion",
+            "workflowRevision",
+            "transition",
+            "fromState",
+            "toState",
+            "stage",
+            "effectDigest",
+            "deduplicationKey",
+        ];
+        total = total
+            .checked_add(2)?
+            .checked_add(request_keys.len() as u64 - 1)?;
+        for key in request_keys {
+            total = total.checked_add(key.len() as u64 + 3)?;
+        }
+        total = total
+            .checked_add(10)?
+            .checked_add(20)?
+            .checked_add(34)?
+            .checked_add(16)?
+            .checked_add(16)?
+            .checked_add(258)?
+            .checked_add(73)?
+            .checked_add(512)?;
     }
     // Entity ids and triggers use the compiler's closed ASCII grammars.
     total = total.checked_add(entity_id.len() as u64 + 2)?;
     // A UUID string, the largest positive i64 revision, and the longest
     // trigger string, including JSON quotes where applicable.
-    total = total.checked_add(38)?.checked_add(19)?.checked_add(12)?;
+    let maximum_trigger_bytes = if trigger == EventTrigger::RequestLifecycle {
+        21
+    } else {
+        12
+    };
+    total = total
+        .checked_add(38)?
+        .checked_add(19)?
+        .checked_add(maximum_trigger_bytes)?;
     // Persisted package revisions are bounded to 256 bytes. Six bytes per
     // byte plus quotes safely covers JSON's longest control-character escape.
     total = total.checked_add(
@@ -2784,12 +2970,13 @@ pub(crate) fn maximum_compiled_event_payload_bytes(
     entity: &CompiledEntity,
     event: &crate::contract::EventSource,
 ) -> Option<u32> {
-    let maximum = maximum_event_payload_bytes(&entity.id, &event.projection, |field| {
-        entity
-            .fields
-            .get(field)
-            .map(|field| (&field.field_type, field.required))
-    })?;
+    let maximum =
+        maximum_event_payload_bytes(&entity.id, event.trigger, &event.projection, |field| {
+            entity
+                .fields
+                .get(field)
+                .map(|field| (&field.field_type, field.required))
+        })?;
     u32::try_from(maximum).ok()
 }
 
@@ -2847,12 +3034,18 @@ fn compile_event_delivery_inventory(
         })
         .map(|(entity, event, webhook)| {
             let binding = event_data_schema_binding(registry_id, entity, event)?;
-            let classification_ceiling = event
+            let mut classifications = event
                 .projection
                 .iter()
                 .chain(event_condition_fields(event))
                 .filter_map(|field| entity.fields.get(field))
                 .map(|field| field.classification)
+                .collect::<Vec<_>>();
+            if event.trigger == EventTrigger::RequestLifecycle {
+                classifications.push(entity.classification);
+            }
+            let classification_ceiling = classifications
+                .into_iter()
                 .max()
                 .expect("validated event projection is non-empty");
             Ok(CompiledEventDelivery {
@@ -2905,7 +3098,7 @@ fn event_condition_fields(
                 .chain(before_equals.keys())
                 .chain(after_equals.keys()),
         ),
-        None => Box::new(std::iter::empty()),
+        Some(EventConditionSource::RequestLifecycle { .. }) | None => Box::new(std::iter::empty()),
     }
 }
 
@@ -3215,6 +3408,12 @@ fn compile_entities(
                 source_relation,
                 selector_profiles,
                 read_paths,
+                change_control: source.change_control.clone().map(|change_control| {
+                    CompiledChangeControl {
+                        required_for: change_control.required_for,
+                    }
+                }),
+                change_request: None,
                 fields,
                 constraints,
                 indexes,
@@ -3236,8 +3435,9 @@ fn compile_routes_and_access(
 ) -> Result<(CompiledRouteInventory, CompiledAccessInventory), CompileFailure> {
     let mut routes = Vec::new();
     let mut entries = Vec::new();
+    let mut errors = Vec::new();
     for entity in entities.values() {
-        for operation in all_operations() {
+        for operation in routed_operations() {
             if operation == Operation::Batch && entity.batch.is_none() {
                 continue;
             }
@@ -3273,6 +3473,7 @@ fn compile_routes_and_access(
                 operation,
                 query_kind: (operation == Operation::List).then_some(CompiledQueryKind::List),
                 revision_kind: None,
+                request_stage: None,
                 maximum_records: None,
                 access_profiles: profile_ids.iter().cloned().collect(),
                 default_access_profile: default.id.clone(),
@@ -3304,6 +3505,7 @@ fn compile_routes_and_access(
                         operation,
                         query_kind: Some(kind),
                         revision_kind: None,
+                        request_stage: None,
                         maximum_records: None,
                         access_profiles: profile_ids.iter().cloned().collect(),
                         default_access_profile: default.id.clone(),
@@ -3317,6 +3519,15 @@ fn compile_routes_and_access(
                 profile_ids,
                 default_profile_id: default.id.clone(),
             });
+        }
+        if let Some(plan) = &entity.change_request {
+            compile_change_request_routes_and_access(
+                entity,
+                plan,
+                &mut routes,
+                &mut entries,
+                &mut errors,
+            );
         }
         for read_path in entity.read_paths.values() {
             let profiles: Vec<&AccessProfileSource> = entity
@@ -3355,6 +3566,7 @@ fn compile_routes_and_access(
                 operation: Operation::List,
                 query_kind: Some(CompiledQueryKind::List),
                 revision_kind: None,
+                request_stage: None,
                 maximum_records: None,
                 access_profiles: profile_ids.iter().cloned().collect(),
                 default_access_profile: default.id.clone(),
@@ -3372,12 +3584,212 @@ fn compile_routes_and_access(
         (&left.path, left.method, &left.id).cmp(&(&right.path, right.method, &right.id))
     });
     entries.sort_by(|left, right| {
-        (&left.entity_id, left.operation).cmp(&(&right.entity_id, right.operation))
+        (&left.entity_id, left.operation, &left.route_id).cmp(&(
+            &right.entity_id,
+            right.operation,
+            &right.route_id,
+        ))
     });
+    if !errors.is_empty() {
+        return Err(CompileFailure::from_errors(errors));
+    }
     Ok((
         CompiledRouteInventory { routes },
         CompiledAccessInventory { entries },
     ))
+}
+
+fn compile_change_request_routes_and_access(
+    entity: &CompiledEntity,
+    plan: &crate::model::CompiledChangeRequest,
+    routes: &mut Vec<CompiledRoute>,
+    entries: &mut Vec<CompiledAccessEntry>,
+    errors: &mut Vec<Diagnostic>,
+) {
+    for action in &plan.actions {
+        let operation = action.operation.access_operation();
+        let route_id =
+            change_request_route_id(entity, action.operation, action.review_stage.as_deref());
+        let profiles = change_request_route_profiles(
+            entity,
+            plan,
+            action.operation,
+            action.review_stage.as_deref(),
+        );
+        if profiles.is_empty() {
+            continue;
+        }
+        let Some(default) = route_default_profile(&profiles, &route_id, errors) else {
+            continue;
+        };
+        let profile_ids: BTreeSet<String> =
+            profiles.iter().map(|profile| profile.id.clone()).collect();
+        routes.push(CompiledRoute {
+            id: route_id.clone(),
+            entity_id: entity.id.clone(),
+            method: HttpMethod::Post,
+            path: change_request_route_path(
+                entity,
+                action.operation,
+                action.review_stage.as_deref(),
+            ),
+            operation,
+            query_kind: None,
+            revision_kind: None,
+            request_stage: action.review_stage.clone(),
+            maximum_records: Some(1),
+            access_profiles: profile_ids.iter().cloned().collect(),
+            default_access_profile: default.id.clone(),
+        });
+        entries.push(CompiledAccessEntry {
+            route_id,
+            entity_id: entity.id.clone(),
+            operation,
+            profile_ids,
+            default_profile_id: default.id.clone(),
+        });
+    }
+}
+
+fn change_request_route_profiles<'a>(
+    entity: &'a CompiledEntity,
+    plan: &crate::model::CompiledChangeRequest,
+    operation: ChangeRequestOperation,
+    review_stage: Option<&str>,
+) -> Vec<&'a AccessProfileSource> {
+    entity
+        .access_profiles
+        .values()
+        .filter(|profile| {
+            profile.operations.contains(&operation.access_operation())
+                && match operation {
+                    ChangeRequestOperation::SubmitRequest
+                    | ChangeRequestOperation::ReviseRequest
+                    | ChangeRequestOperation::CancelRequest => true,
+                    ChangeRequestOperation::ApproveRequest
+                    | ChangeRequestOperation::RejectRequest
+                    | ChangeRequestOperation::RequestRevision => {
+                        review_stage.is_some_and(|stage| {
+                            review_route_profile_covers_stage(plan, &profile.id, stage)
+                        })
+                    }
+                    ChangeRequestOperation::ApplyRequest => {
+                        apply_route_profile_covers_targets(plan, &profile.id)
+                    }
+                }
+        })
+        .collect()
+}
+
+fn review_route_profile_covers_stage(
+    plan: &crate::model::CompiledChangeRequest,
+    profile_id: &str,
+    stage: &str,
+) -> bool {
+    plan.target_entities.iter().all(|target| {
+        plan.review_grants.iter().any(|grant| {
+            grant.profile_id == profile_id
+                && grant.stage == stage
+                && grant.target_entity_id == *target
+        })
+    })
+}
+
+fn apply_route_profile_covers_targets(
+    plan: &crate::model::CompiledChangeRequest,
+    profile_id: &str,
+) -> bool {
+    plan.target_entities.iter().all(|target| {
+        plan.apply_grants
+            .iter()
+            .any(|grant| grant.profile_id == profile_id && grant.target_entity_id == *target)
+    })
+}
+
+fn route_default_profile<'a>(
+    profiles: &[&'a AccessProfileSource],
+    _route_id: &str,
+    errors: &mut Vec<Diagnostic>,
+) -> Option<&'a AccessProfileSource> {
+    if profiles.len() == 1 {
+        return Some(profiles[0]);
+    }
+    if let Some(default) = profiles.iter().copied().find(|profile| profile.default) {
+        return Some(default);
+    }
+    errors.push(Diagnostic::error(
+        "change_request.route_access.default_missing",
+        "entities[].accessProfiles[].default",
+        "request action route has multiple profiles but no route-eligible default",
+    ));
+    None
+}
+
+fn change_request_route_id(
+    entity: &CompiledEntity,
+    operation: ChangeRequestOperation,
+    review_stage: Option<&str>,
+) -> String {
+    match operation {
+        ChangeRequestOperation::ApproveRequest
+        | ChangeRequestOperation::RejectRequest
+        | ChangeRequestOperation::RequestRevision => format!(
+            "records.{}.request.stages.{}.{}",
+            entity.id,
+            review_stage.expect("review route stage is compiled"),
+            request_action_id(operation)
+        ),
+        _ => format!(
+            "records.{}.request.{}",
+            entity.id,
+            request_action_id(operation)
+        ),
+    }
+}
+
+fn change_request_route_path(
+    entity: &CompiledEntity,
+    operation: ChangeRequestOperation,
+    review_stage: Option<&str>,
+) -> String {
+    let base = format!("/v1/records/{}/{{record_id}}/actions", entity.route);
+    match operation {
+        ChangeRequestOperation::SubmitRequest => format!("{base}/submit"),
+        ChangeRequestOperation::ApproveRequest
+        | ChangeRequestOperation::RejectRequest
+        | ChangeRequestOperation::RequestRevision => format!(
+            "{base}/stages/{}/{}",
+            review_stage.expect("review route stage is compiled"),
+            request_action_path_segment(operation)
+        ),
+        ChangeRequestOperation::ReviseRequest => format!("{base}/revise"),
+        ChangeRequestOperation::CancelRequest => format!("{base}/cancel"),
+        ChangeRequestOperation::ApplyRequest => format!("{base}/apply"),
+    }
+}
+
+fn request_action_id(operation: ChangeRequestOperation) -> &'static str {
+    match operation {
+        ChangeRequestOperation::SubmitRequest => "submit",
+        ChangeRequestOperation::ApproveRequest => "approve",
+        ChangeRequestOperation::RejectRequest => "reject",
+        ChangeRequestOperation::RequestRevision => "request_revision",
+        ChangeRequestOperation::ReviseRequest => "revise",
+        ChangeRequestOperation::CancelRequest => "cancel",
+        ChangeRequestOperation::ApplyRequest => "apply",
+    }
+}
+
+fn request_action_path_segment(operation: ChangeRequestOperation) -> &'static str {
+    match operation {
+        ChangeRequestOperation::SubmitRequest => "submit",
+        ChangeRequestOperation::ApproveRequest => "approve",
+        ChangeRequestOperation::RejectRequest => "reject",
+        ChangeRequestOperation::RequestRevision => "request-revision",
+        ChangeRequestOperation::ReviseRequest => "revise",
+        ChangeRequestOperation::CancelRequest => "cancel",
+        ChangeRequestOperation::ApplyRequest => "apply",
+    }
 }
 
 fn compile_metadata_inventory(
@@ -3736,6 +4148,7 @@ fn query_operation(
             query_filter_field(field_type, field, errors)
         })
         .collect::<Vec<_>>();
+    let mut filter_fields = filter_fields;
     let sort_fields = profile
         .sortable_fields
         .iter()
@@ -3744,6 +4157,27 @@ fn query_operation(
             query_sort_field(field_type, field, errors)
         })
         .collect::<Vec<_>>();
+    let mut sort_fields = sort_fields;
+    if entity.change_request.is_some() && kind == CompiledQueryKind::List {
+        // A proposal digest commits to the full frozen packet, including
+        // private values. Anonymous polling must not become a hash oracle.
+        filter_fields.extend(
+            request_state_query_filter_fields()
+                .into_iter()
+                .filter(|field| {
+                    !profile.anonymous
+                        || field.field != crate::model::REQUEST_EFFECT_DIGEST_QUERY_FIELD
+                }),
+        );
+        sort_fields.extend(
+            request_state_query_sort_fields()
+                .into_iter()
+                .filter(|field| {
+                    !profile.anonymous
+                        || field.field != crate::model::REQUEST_EFFECT_DIGEST_QUERY_FIELD
+                }),
+        );
+    }
     let mut processing_fields = profile.readable_fields.clone();
     processing_fields.extend(profile.filterable_fields.iter().cloned());
     processing_fields.extend(profile.sortable_fields.iter().cloned());
@@ -3913,10 +4347,17 @@ fn route_shape(entity: &CompiledEntity, operation: Operation) -> (HttpMethod, St
         Operation::Tombstone => (HttpMethod::Delete, format!("{base}/{{record_id}}")),
         Operation::Batch => (HttpMethod::Post, format!("{base}:batch")),
         Operation::Revisions => (HttpMethod::Get, format!("{base}/{{record_id}}/revisions")),
+        Operation::SubmitRequest
+        | Operation::ApproveRequest
+        | Operation::RejectRequest
+        | Operation::RequestRevision
+        | Operation::ReviseRequest
+        | Operation::CancelRequest
+        | Operation::ApplyRequest => unreachable!("request actions use compiled action metadata"),
     }
 }
 
-fn all_operations() -> [Operation; 8] {
+fn routed_operations() -> [Operation; 8] {
     [
         Operation::Create,
         Operation::Get,
@@ -3929,6 +4370,39 @@ fn all_operations() -> [Operation; 8] {
     ]
 }
 
+fn all_operations() -> [Operation; 15] {
+    [
+        Operation::Create,
+        Operation::Get,
+        Operation::Lookup,
+        Operation::List,
+        Operation::Patch,
+        Operation::Tombstone,
+        Operation::Batch,
+        Operation::Revisions,
+        Operation::SubmitRequest,
+        Operation::ApproveRequest,
+        Operation::RejectRequest,
+        Operation::RequestRevision,
+        Operation::ReviseRequest,
+        Operation::CancelRequest,
+        Operation::ApplyRequest,
+    ]
+}
+
+fn is_request_operation(operation: Operation) -> bool {
+    matches!(
+        operation,
+        Operation::SubmitRequest
+            | Operation::ApproveRequest
+            | Operation::RejectRequest
+            | Operation::RequestRevision
+            | Operation::ReviseRequest
+            | Operation::CancelRequest
+            | Operation::ApplyRequest
+    )
+}
+
 fn operation_id(operation: Operation) -> &'static str {
     match operation {
         Operation::Create => "create",
@@ -3939,6 +4413,13 @@ fn operation_id(operation: Operation) -> &'static str {
         Operation::Tombstone => "tombstone",
         Operation::Batch => "batch",
         Operation::Revisions => "revisions",
+        Operation::SubmitRequest => "submit_request",
+        Operation::ApproveRequest => "approve_request",
+        Operation::RejectRequest => "reject_request",
+        Operation::RequestRevision => "request_revision",
+        Operation::ReviseRequest => "revise_request",
+        Operation::CancelRequest => "cancel_request",
+        Operation::ApplyRequest => "apply_request",
     }
 }
 

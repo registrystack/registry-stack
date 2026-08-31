@@ -10,6 +10,12 @@
           "default": false,
           "type": "boolean"
         },
+        "applyTargets": {
+          "items": {
+            "$ref": "#/$defs/ApplyTargetGrantSource"
+          },
+          "type": "array"
+        },
         "entity": {
           "type": "string"
         },
@@ -47,6 +53,18 @@
           },
           "type": "array",
           "uniqueItems": true
+        },
+        "requestPresence": {
+          "items": {
+            "$ref": "#/$defs/RequestPresenceGrantSource"
+          },
+          "type": "array"
+        },
+        "reviewStages": {
+          "items": {
+            "$ref": "#/$defs/ReviewStageGrantSource"
+          },
+          "type": "array"
         },
         "revisionAccess": {
           "default": false,
@@ -113,6 +131,25 @@
           "type": "array"
         }
       },
+      "type": "object"
+    },
+    "ApplyTargetGrantSource": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "type": "string"
+        },
+        "rowBoundaries": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RowBoundarySource"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "entity"
+      ],
       "type": "object"
     },
     "BatchSource": {
@@ -190,6 +227,171 @@
         "in"
       ],
       "type": "string"
+    },
+    "ChangeControlSource": {
+      "additionalProperties": false,
+      "properties": {
+        "requiredFor": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Operation"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "type": "object"
+    },
+    "ChangeRequestEffectSource": {
+      "additionalProperties": false,
+      "properties": {
+        "clear": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operation": {
+          "$ref": "#/$defs/Operation"
+        },
+        "set": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ChangeRequestValueSource"
+          },
+          "default": {},
+          "type": "object"
+        },
+        "target": {
+          "$ref": "#/$defs/ChangeRequestTargetSource"
+        }
+      },
+      "required": [
+        "target",
+        "operation"
+      ],
+      "type": "object"
+    },
+    "ChangeRequestRetentionModeSource": {
+      "enum": [
+        "retain",
+        "operator_erase"
+      ],
+      "type": "string"
+    },
+    "ChangeRequestRetentionSource": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/ChangeRequestRetentionModeSource",
+          "default": "retain"
+        }
+      },
+      "type": "object"
+    },
+    "ChangeRequestReviewSource": {
+      "additionalProperties": false,
+      "properties": {
+        "stages": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ChangeRequestReviewStageSource"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "ChangeRequestReviewStageSource": {
+      "additionalProperties": false,
+      "properties": {
+        "approvals": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "excludeSubmitter": {
+          "default": false,
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "approvals"
+      ],
+      "type": "object"
+    },
+    "ChangeRequestSource": {
+      "additionalProperties": false,
+      "properties": {
+        "effects": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ChangeRequestEffectSource"
+          },
+          "type": "array"
+        },
+        "retention": {
+          "$ref": "#/$defs/ChangeRequestRetentionSource",
+          "default": {
+            "mode": "retain"
+          }
+        },
+        "review": {
+          "$ref": "#/$defs/ChangeRequestReviewSource"
+        }
+      },
+      "required": [
+        "review"
+      ],
+      "type": "object"
+    },
+    "ChangeRequestTargetSource": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fromField": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ChangeRequestValueSource": {
+      "additionalProperties": false,
+      "properties": {
+        "fromEffect": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fromField": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
     },
     "Classification": {
       "enum": [
@@ -924,6 +1126,26 @@
           ],
           "default": null
         },
+        "changeControl": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChangeControlSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "changeRequest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChangeRequestSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "classification": {
           "$ref": "#/$defs/Classification",
           "default": "internal"
@@ -1046,6 +1268,43 @@
             "kind"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "request_lifecycle",
+              "type": "string"
+            },
+            "stages": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array",
+              "uniqueItems": true
+            },
+            "toStates": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array",
+              "uniqueItems": true
+            },
+            "transitions": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array",
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -1119,7 +1378,8 @@
       "enum": [
         "created",
         "patched",
-        "tombstoned"
+        "tombstoned",
+        "request_lifecycle"
       ],
       "type": "string"
     },
@@ -1774,7 +2034,14 @@
         "patch",
         "tombstone",
         "batch",
-        "revisions"
+        "revisions",
+        "submit_request",
+        "approve_request",
+        "reject_request",
+        "request_revision",
+        "revise_request",
+        "cancel_request",
+        "apply_request"
       ],
       "type": "string"
     },
@@ -1999,6 +2266,71 @@
         "id",
         "version",
         "defaultLanguage"
+      ],
+      "type": "object"
+    },
+    "RequestPresenceGrantSource": {
+      "additionalProperties": false,
+      "properties": {
+        "requestType": {
+          "type": "string"
+        },
+        "rowBoundaries": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RowBoundarySource"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "requestType"
+      ],
+      "type": "object"
+    },
+    "ReviewStageGrantSource": {
+      "additionalProperties": false,
+      "properties": {
+        "stage": {
+          "type": "string"
+        },
+        "targets": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ReviewStageTargetGrantSource"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "stage"
+      ],
+      "type": "object"
+    },
+    "ReviewStageTargetGrantSource": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "type": "string"
+        },
+        "readableFields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "rowBoundaries": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RowBoundarySource"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "entity"
       ],
       "type": "object"
     },

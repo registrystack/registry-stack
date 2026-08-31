@@ -23,10 +23,9 @@ configuration-defined writable registry backed by PostgreSQL.
 
 Use Evidence Gateway when the caller needs to learn only a fact, not to read a record.
 It answers one bounded question about one subject and signs the answer,
-releasing the answer rather than the row behind it. Adult status, residence
-region, professional licence status, and legal-parent relationship are coequal
-acceptance definitions; you author whichever one your institution needs, the
-same way.
+releasing the answer rather than the row behind it. For example, a licensing authority can
+answer whether a professional licence is active. Requirements and their permitted outputs
+come from reviewed configuration.
 
 [Evidence Gateway overview](start/evidence-quickstart/) explains the source, assertion,
 verification, and audit boundaries. Continue with
@@ -62,6 +61,9 @@ Start with the [Registry Server overview](explanation/configuration-defined-regi
 [create and query your first registry](tutorials/first-registry-server/). Continue with
 [configure your registry](configure/registry-server/) to extend the model and prepare a tested
 deployment handoff.
+
+Follow [review changes before updating records](tutorials/review-registry-changes/) to configure
+change requests, approval stages, and controlled writes.
 
 Use [modeling patterns](explanation/registry-modeling-patterns/) to choose identifier, relationship,
 declaration, provenance, and document-reference structures for your registry.

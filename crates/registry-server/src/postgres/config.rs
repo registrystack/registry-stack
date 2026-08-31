@@ -5,7 +5,7 @@ use std::{fmt, str::FromStr, time::Duration};
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod, Runtime};
 #[cfg(feature = "postgres-test")]
 use tokio_postgres::NoTls;
-use tokio_postgres::{config::SslMode, Config};
+use tokio_postgres::{config::SslMode, CancelToken, Config};
 use tokio_postgres_rustls::MakeRustlsConnect;
 
 use super::{PostgresKernelError, Result};
@@ -216,7 +216,10 @@ impl ConnectionConfig {
             .runtime(Runtime::Tokio1)
             .build()
             .map_err(|_| PostgresKernelError::PoolBuild)?;
-        Ok(RuntimePool { pool })
+        Ok(RuntimePool {
+            pool,
+            transport: self.transport.clone(),
+        })
     }
 }
 
@@ -271,6 +274,7 @@ fn custom_ca_connector(ca_der: &[u8]) -> Result<MakeRustlsConnect> {
 #[derive(Clone)]
 pub struct RuntimePool {
     pool: Pool,
+    transport: Transport,
 }
 
 impl RuntimePool {
@@ -286,6 +290,19 @@ impl RuntimePool {
         let client = self.get().await?;
         client.simple_query("SELECT 1").await?;
         Ok(())
+    }
+
+    pub(crate) async fn cancel_query(&self, token: CancelToken) -> Result<()> {
+        match &self.transport {
+            Transport::Tls { connector, .. } => token.cancel_query(connector.clone()).await?,
+            #[cfg(feature = "postgres-test")]
+            Transport::TestOnlyPlaintext => token.cancel_query(NoTls).await?,
+        }
+        Ok(())
+    }
+
+    pub(crate) fn discard(&self, client: deadpool_postgres::Client) {
+        let _ = deadpool_postgres::Object::take(client);
     }
 
     #[cfg(any(feature = "postgres-test", feature = "postgres-tls-test"))]

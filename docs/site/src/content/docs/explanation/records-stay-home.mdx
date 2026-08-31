@@ -14,10 +14,10 @@ standards_referenced:
   - sd-jwt-vc
 ---
 
-An institution that runs a civil registry, a social-protection database, or a health
-registry already holds the records it needs.
-Registry Stack lets it **answer bounded questions about those records** (*is this person an
-adult? does this licence hold? is this person a legal parent of that child?*) and return a
+An institution that runs a business register, a facility registry, or a public-authority
+directory already holds the records it needs.
+Registry Stack lets it **answer bounded questions about those records** (*is this business registered?
+is this permit active? does this authority have responsibility for this jurisdiction?*) and return a
 result another system can trust, while the records themselves are **read where they already
 live, never written back, and not copied into a central exchange**.
 This page explains what that means in practice: what stays inside the institution's
@@ -42,14 +42,13 @@ It receives one signed assertion carrying the values the requirement declares, a
 else (`products/evidence/contracts/evidence.schema.yaml`).
 The source record the answer was computed from stays behind.
 
-Four questions carry equal weight in the Evidence Gateway contract, and none of them is the
-canonical one: adult status, residence region, professional licence status, and
-legal-parent relationship. All four run the same path, and none is a built-in type or a
-special route (`products/evidence/README.md`, `products/evidence/CONCEPT.md`). The
-legal-parent question shows the shape most plainly: the caller already holds a reference to
-a child and a reference to a candidate parent, and asks whether the relationship holds. The
-answer is one boolean. The register's list of that child's parents never travels
-(`products/evidence/fixtures/acceptance/legal-parent-relationship/`).
+A professional-licence question illustrates the boundary: the caller supplies a reference,
+and the configured source returns the facts needed to answer whether the licence is active.
+The assertion carries the selected answer instead of the full licence record. This uses the
+same runtime as other configured questions, without a built-in licensing endpoint.
+
+{/* Evidence: products/evidence/fixtures/acceptance/professional-licence/;
+    products/evidence/README.md; products/evidence/CONCEPT.md. */}
 
 ## The boundary
 

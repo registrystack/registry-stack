@@ -2137,6 +2137,13 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::Tombstone => "tombstone",
         Operation::Batch => "batch",
         Operation::Revisions => "revisions",
+        Operation::SubmitRequest => "submit_request",
+        Operation::ApproveRequest => "approve_request",
+        Operation::RejectRequest => "reject_request",
+        Operation::RequestRevision => "request_revision",
+        Operation::ReviseRequest => "revise_request",
+        Operation::CancelRequest => "cancel_request",
+        Operation::ApplyRequest => "apply_request",
     }
 }
 

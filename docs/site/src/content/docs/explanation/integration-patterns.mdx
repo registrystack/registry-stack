@@ -54,7 +54,7 @@ The patterns that follow describe Relay and Evidence Gateway.
 
 At country scale, the same two surfaces can sit next to several domain platforms.
 Each authority keeps custody of its own data and exposes a bounded output; consuming systems such
-as a social-protection management information system receive answers and do not become raw-record
+as a business-registration portal or environmental permitting system receive answers and do not become raw-record
 readers.
 
 Which surface fits depends first on what the caller needs back, and then on what the authority
@@ -66,8 +66,7 @@ holds:
   read-only, and holds no upstream credential because it makes no upstream call.
 - Where the caller needs one signed answer rather than the records, **Evidence Gateway** returns
   only the values a reviewed requirement declares, and reaches its source over either of two
-  coequal transports. A domain platform with its own API, such as a FHIR server or a DHIS2
-  instance, is read over a fixed HTTP JSON request to a fixed origin. A SQLite extract the
+  coequal transports. A domain platform with its own API, such as a business register or facility directory, is read over a fixed HTTP JSON request to a fixed origin. A SQLite extract the
   authority publishes is read directly, by one reviewed SQL statement against a read-only file
   mounted beside the process, with no origin, credential, or network hop involved.
   {/* Evidence: "A fixed source request reaches its source over one of two coequal transports",
@@ -75,7 +74,7 @@ holds:
       network path, `transport_absences` in
       products/evidence/contracts/sqlite-extract-source-contract.yaml (frozen). */}
 
-Civil registration, social protection, agriculture, and education systems each keep their own
+Business registration, environmental permitting, and public-organisation systems each keep their own
 authoritative store either way; neither surface copies the record into a central store.
 
 The two products are authored by two separate tools, `relayctl` and `evidencectl`, and neither
@@ -101,16 +100,13 @@ own fixed sources, and the declared disclosure that requirement carries.
 The evidence consumer determines how the evidence is used, and the decision owner remains
 accountable for requirements, decisions, workflow, and action.
 
-The maintained DHIS2 health-evidence reference project makes that boundary visible.
-DHIS2 remains the system of record.
-Evidence Gateway reaches it through its own fixed HTTP source contract, using bounded reviewed
-Rhai for request preparation and extraction, and exposes bounded facts as reusable requirements:
-that project reads two Tracker programmes for two independent requirements, adult status and
-professional licence status, and a caller authorized for one learns nothing about the other.
-Relay is not in that path at all, and could not be: it makes no outbound source request.
-In this example, a public-health programme is both the evidence consumer and the decision owner.
-It can compute an outreach or follow-up priority without moving either decision into Relay or
-Evidence Gateway.
+For example, a licensing authority can answer whether a professional licence is active through a
+configured Evidence Gateway requirement. The licence register remains the system of record, and
+Evidence Gateway reads it through its own fixed source contract. A business registration service
+can consume that answer alongside its own requirements and application state. That service owns
+the registration decision and follow-up, not Evidence Gateway.
+Relay is not required in that path: it makes no outbound source request.
+This is an example of the ownership boundary, not a supplied registration workflow.
 
 The reviewed contract keeps a positive fact, its negative, an absent value, no match, ambiguity,
 and source failure distinct. Missing evidence is not a negative fact. Offline synthetic fixtures
@@ -124,14 +120,13 @@ Evidence Gateway has no general policy engine and no eligibility or workflow eng
 answer restates a decision an authoritative source already made must say so in its review
 documentation, and Evidence Gateway does not recompute that decision.
 
-{/* Evidence: products/evidence/reference/request-adapter/deployment-projects/dhis2-tracker-evidence/
-    and products/evidence/contracts/README.md. */}
+{/* Evidence: products/evidence/fixtures/acceptance/professional-licence/;
+    products/evidence/contracts/README.md; crates/registry-relay-v2/src/contract.rs. */}
 
 ## Domain registry platforms
 
-Examples: [OpenCRVS](https://www.opencrvs.org/) (civil registration), [OpenSPP](https://openspp.org/)
-(social-protection household and programme management), [DHIS2](https://dhis2.org/) (health
-management information), [OpenIMIS](https://openimis.org/) (health insurance information).
+A business-registration system, an environmental-permit system, or a public-organisation
+directory can own the authoritative records for its domain.
 
 These platforms own storage, business rules, correction workflows, user interfaces, and a runtime
 API for their domain.

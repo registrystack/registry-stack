@@ -315,6 +315,10 @@ pub struct EntitySource {
     pub selector_profiles: Vec<SelectorProfileSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub read_paths: Vec<ReadPathSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub change_control: Option<ChangeControlSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub change_request: Option<ChangeRequestSource>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -352,6 +356,10 @@ pub struct EntityExtensionSource {
     pub selector_profiles: Vec<SelectorProfileSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub read_paths: Vec<ReadPathSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub change_control: Option<ChangeControlSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub change_request: Option<ChangeRequestSource>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -360,6 +368,94 @@ pub struct EntityExtensionSource {
 pub enum MutationMode {
     Mutable,
     CreateOnly,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ChangeControlSource {
+    #[serde(default)]
+    pub required_for: BTreeSet<Operation>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ChangeRequestSource {
+    #[serde(default)]
+    pub effects: Vec<ChangeRequestEffectSource>,
+    pub review: ChangeRequestReviewSource,
+    #[serde(default)]
+    pub retention: ChangeRequestRetentionSource,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+pub enum ChangeRequestRetentionModeSource {
+    #[default]
+    Retain,
+    OperatorErase,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ChangeRequestRetentionSource {
+    #[serde(default)]
+    pub mode: ChangeRequestRetentionModeSource,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ChangeRequestEffectSource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub target: ChangeRequestTargetSource,
+    pub operation: Operation,
+    #[serde(default)]
+    pub set: BTreeMap<String, ChangeRequestValueSource>,
+    #[serde(default)]
+    pub clear: BTreeSet<String>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ChangeRequestTargetSource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_field: Option<String>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ChangeRequestValueSource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_field: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_effect: Option<String>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ChangeRequestReviewSource {
+    #[serde(default)]
+    pub stages: Vec<ChangeRequestReviewStageSource>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ChangeRequestReviewStageSource {
+    pub id: String,
+    pub approvals: u16,
+    #[serde(default)]
+    pub exclude_submitter: bool,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1539,6 +1635,12 @@ pub struct AccessProfileSource {
     pub lookups: Vec<LookupGrantSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub read_paths: Vec<ReadPathGrantSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub review_stages: Vec<ReviewStageGrantSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub apply_targets: Vec<ApplyTargetGrantSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub request_presence: Vec<RequestPresenceGrantSource>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub allow_count: bool,
     #[serde(default)]
@@ -1559,6 +1661,13 @@ pub enum Operation {
     Tombstone,
     Batch,
     Revisions,
+    SubmitRequest,
+    ApproveRequest,
+    RejectRequest,
+    RequestRevision,
+    ReviseRequest,
+    CancelRequest,
+    ApplyRequest,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1635,6 +1744,14 @@ pub enum EventConditionSource {
         /// Required values after the change. Valid with created and patched triggers.
         #[serde(default)]
         after_equals: BTreeMap<String, EventScalarValue>,
+    },
+    RequestLifecycle {
+        #[serde(default)]
+        transitions: BTreeSet<String>,
+        #[serde(default)]
+        to_states: BTreeSet<String>,
+        #[serde(default)]
+        stages: BTreeSet<String>,
     },
 }
 
@@ -1719,6 +1836,12 @@ pub struct AccessGrantSource {
     pub lookups: Vec<LookupGrantSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub read_paths: Vec<ReadPathGrantSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub review_stages: Vec<ReviewStageGrantSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub apply_targets: Vec<ApplyTargetGrantSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub request_presence: Vec<RequestPresenceGrantSource>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub allow_count: bool,
     #[serde(default)]
@@ -1763,6 +1886,44 @@ pub struct ReadPathGrantSource {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ReviewStageGrantSource {
+    pub stage: String,
+    #[serde(default)]
+    pub targets: Vec<ReviewStageTargetGrantSource>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ReviewStageTargetGrantSource {
+    pub entity: String,
+    #[serde(default)]
+    pub readable_fields: BTreeSet<String>,
+    #[serde(default)]
+    pub row_boundaries: Vec<RowBoundarySource>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ApplyTargetGrantSource {
+    pub entity: String,
+    #[serde(default)]
+    pub row_boundaries: Vec<RowBoundarySource>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RequestPresenceGrantSource {
+    pub request_type: String,
+    #[serde(default)]
+    pub row_boundaries: Vec<RowBoundarySource>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct VocabularySource {
     pub id: String,
     pub values: Vec<String>,
@@ -1775,6 +1936,7 @@ pub enum EventTrigger {
     Created,
     Patched,
     Tombstoned,
+    RequestLifecycle,
 }
 
 pub fn parse_project_json(bytes: &[u8]) -> Result<RegistryProject, CompileFailure> {

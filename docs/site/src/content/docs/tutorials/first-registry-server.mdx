@@ -18,10 +18,10 @@ standards_referenced:
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-If you are evaluating Registry Server, start with a registry of equipment records.
-You will create a water pump record, change its label, try requests the server refuses, and add a
+If you are evaluating Registry Server, start with a small business directory.
+You will create a business record, change its label, try requests the server refuses, and add a
 notes field to an editable project. The records use two configured fields, `code` and `label`;
-equipment is the example you supply, not a built-in server type.
+business registration is the example you supply, not a built-in server type.
 An optional final exercise sends a signed webhook to a local receiver.
 
 <QuickstartMeta
@@ -134,14 +134,14 @@ The refused requests in this tutorial omit `--fail-with-body` so you can inspect
 
 ## Create a record
 
-Create the water pump record and save the response:
+Create the business record and save the response:
 
 ```sh
 curl --silent --show-error --fail-with-body \
   --header @tutorial-work/authorization.header \
   --header 'Content-Type: application/json' \
   --header 'Idempotency-Key: tutorial-create-1' \
-  --data '{"data":{"code":"DEMO-002","label":"Water pump"}}' \
+  --data '{"data":{"code":"DEMO-002","label":"North Quay Engineering"}}' \
   --output tutorial-work/created.json --write-out 'HTTP %{http_code}\n' \
   "$registry_url/v1/records/records?accessProfile=operator"
 ```
@@ -162,7 +162,7 @@ The server generates the ID, shown as `<record-id>`:
 {
   "data": {
     "code": "DEMO-002",
-    "label": "Water pump"
+    "label": "North Quay Engineering"
   },
   "id": "<record-id>",
   "revision": 1
@@ -246,11 +246,11 @@ curl --silent --show-error --fail-with-body \
   --header 'Idempotency-Key: tutorial-patch-1' \
   --header "If-Match: $record_etag" \
   --request PATCH \
-  --data '[{"op":"replace","path":"/data/label","value":"Water pump, repaired"}]' \
+  --data '[{"op":"replace","path":"/data/label","value":"North Quay Engineering Ltd"}]' \
   "$registry_url/v1/records/records/$record_id?accessProfile=operator" | python3 -m json.tool
 ```
 
-The response has the same ID, `revision: 2`, and label `Water pump, repaired`.
+The response has the same ID, `revision: 2`, and label `North Quay Engineering Ltd`.
 Try a different update while still using the old ETag:
 
 ```sh
@@ -260,7 +260,7 @@ curl --silent --show-error \
   --header 'Idempotency-Key: tutorial-patch-2' \
   --header "If-Match: $record_etag" \
   --request PATCH \
-  --data '[{"op":"replace","path":"/data/label","value":"Water pump, inspected"}]' \
+  --data '[{"op":"replace","path":"/data/label","value":"North Quay Engineering Group Ltd"}]' \
   --output tutorial-work/problem.json --write-out 'HTTP %{http_code}\n' \
   "$registry_url/v1/records/records/$record_id?accessProfile=operator"
 ```
@@ -269,7 +269,7 @@ curl --silent --show-error \
 HTTP 412
 ```
 
-The problem code is `precondition.failed`; the label remains `Water pump, repaired`.
+The problem code is `precondition.failed`; the label remains `North Quay Engineering Ltd`.
 In an application, fetch the current record and let the user reconcile the change before retrying.
 A new idempotency key does not bypass the version check.
 
@@ -286,7 +286,7 @@ curl --silent --show-error \
   --header @tutorial-work/authorization.header \
   --header 'Content-Type: application/json' \
   --header 'Idempotency-Key: tutorial-missing-code' \
-  --data '{"data":{"label":"Solar dryer"}}' \
+  --data '{"data":{"label":"South Harbour Logistics"}}' \
   --output tutorial-work/problem.json --write-out 'HTTP %{http_code}\n' \
   "$registry_url/v1/records/records?accessProfile=operator"
 ```
@@ -428,7 +428,7 @@ Your separate project adds a field through a module and generates the schema app
 ## Try a webhook (optional)
 
 Allow another ten minutes for this exercise. Use the same checkout and terminals.
-The household demo supplies a configured person model and a receiver that checks webhook signatures.
+The business demo supplies a configured establishment model and a receiver that checks webhook signatures.
 
 :::caution[This is a separate disposable database]
 The demo replaces `products/registry-server/demo/.run/` on each launch.
@@ -445,10 +445,11 @@ Wait for these lines; other setup output is omitted:
 
 ```text
 Webhook delivery, retry, dead-letter inspection, and replay passed.
-Registry Server household demo is ready.
+Registry Server business demo is ready.
 ```
 
-The launcher created eight people and delivered their configured events.
+The launcher created eight establishments. Seven are operating and emit the configured event;
+the suspended depot does not match the condition.
 Its receiver deliberately refused some attempts so you can inspect retries and a replay.
 Leave this terminal running.
 
@@ -461,36 +462,37 @@ webhook_run="$PWD/products/registry-server/demo/.run"
 target/debug/registry-serverctl explain events "$webhook_run/project"
 ```
 
-Find `usual-resident-created-v1`. Open
-`products/registry-server/demo/.run/project/modules/publicschema-household-demographics/module.yaml`
+Find `operating-created-v1`. Open
+`products/registry-server/demo/.run/project/modules/business-establishment-summary/module.yaml`
 and compare its `events` entry with the report:
 
 ```yaml
 events:
-  - id: usual-resident-created-v1
+  - id: operating-created-v1
     trigger: created
-    projection: [person-code, residency-status]
+    projection: [establishment-code, operating-status]
     when:
       kind: fields
-      afterEquals: {residency-status: usual-resident}
+      afterEquals:
+        operating-status: operating
     webhook:
-      destinationId: household-event-receiver
+      destinationId: business-event-receiver
 ```
 
-The condition selects new usual residents. The projection sends two fields, not the person's name
-or date of birth. Open `products/registry-server/demo/.run/runtime.yaml` to find the matching
-`eventDestinations.household-event-receiver`: that is where the URL, key reference, and retry limits live.
+The condition selects new operating establishments. The projection sends two fields, not the establishment's name
+or opening date. Open `products/registry-server/demo/.run/runtime.yaml` to find the matching
+`eventDestinations.business-event-receiver`: that is where the URL, key reference, and retry limits live.
 Do not edit these running deployment files; changes need a checked package and restart.
 
 Preview the request without sending it:
 
 ```sh
 target/debug/registry-serverctl --format json webhook sample "$webhook_run/project" \
-  --event usual-resident-created-v1
+  --event operating-created-v1
 ```
 
 The report shows CloudEvents headers and a JSON body. The `values` keys use the authored
-`person-code` and `residency-status` spellings. Its signature is a placeholder; the running
+`establishment-code` and `operating-status` spellings. Its signature is a placeholder; the running
 worker signs actual deliveries with the shared key.
 
 ### Cause a delivery
@@ -502,7 +504,7 @@ webhook_url=$(cat "$webhook_run/server-origin")
 umask 077
 target/debug/mint token \
   --url "$(cat "$webhook_run/mint-origin")/token" \
-  --client-id household-demo \
+  --client-id business-demo \
   --key "$webhook_run/keys/operator/signing-p256-private-jwk" \
   > "$webhook_run/secrets/operator-token" &&
 sed 's/^/Authorization: Bearer /' "$webhook_run/secrets/operator-token" \
@@ -511,16 +513,16 @@ sed 's/^/Authorization: Bearer /' "$webhook_run/secrets/operator-token" \
 
 Success prints nothing. This token lasts five minutes; repeat this command if a later request
 returns `401`. Keep the first terminal running so Mint can issue the replacement.
-Create another synthetic person:
+Create another synthetic establishment:
 
 ```sh
 curl --silent --show-error --fail-with-body \
   --header @tutorial-work/webhook-authorization.header \
   --header 'Content-Type: application/json' \
-  --header 'Idempotency-Key: tutorial-person-9' \
-  --data '{"data":{"personCode":"PERSON-TUTORIAL-009","legalName":"Sam Example","personSex":"male","residencyStatus":"usual-resident"}}' \
-  --output tutorial-work/person.json --write-out 'HTTP %{http_code}\n' \
-  "$webhook_url/v1/records/persons?accessProfile=household-operator"
+  --header 'Idempotency-Key: tutorial-establishment-9' \
+  --data '{"data":{"establishmentCode":"ESTABLISHMENT-TUTORIAL-009","siteName":"North Quay Annex","establishmentKind":"warehouse","operatingStatus":"operating"}}' \
+  --output tutorial-work/establishment.json --write-out 'HTTP %{http_code}\n' \
+  "$webhook_url/v1/records/establishments?accessProfile=business-operator"
 ```
 
 ```text
@@ -534,9 +536,9 @@ python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["events"]))'
   "$webhook_run/webhook-receiver-state.json"
 ```
 
-The count reaches `9`. Delivery is asynchronous; if you still see `8`, repeat the count command.
+The count reaches `8`. Delivery is asynchronous; if you still see `7`, repeat the count command.
 Repeat the same create request with its original idempotency key. It returns the same record;
-the event count stays `9`.
+the event count stays `8`.
 
 ### Read delivery history
 
@@ -549,7 +551,7 @@ python3 -m json.tool "$webhook_run/webhook-receiver-state.json"
 `verificationFailures` is `0`. Each event has attempts with a `generation`, `attempt`, and
 `accepted` result. Find an automatic retry: the attempt increases within generation `1`.
 Then find the replay: its generation increases to `2`, with a different idempotency key.
-The report records no person values.
+The report records no establishment values.
 
 Inspect the dead-letter snapshot saved before the launcher's replay:
 
@@ -583,6 +585,7 @@ a receiver's payload validation, signature verification, and deduplication.
 
 ## Next
 
+- [Review changes before updating records](../review-registry-changes/) to test a configurable approval workflow.
 - [Configure your registry](../../configure/registry-server/) to model relationships and prepare a deployment.
 - [Read the Registry Server overview](../../explanation/configuration-defined-registry/) for storage and integration choices.
 - [Configure Registry Mint](../../configure/mint/) when your deployment needs its own token issuer.

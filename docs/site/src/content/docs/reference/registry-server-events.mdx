@@ -39,6 +39,7 @@ Compiler rules:
 - Production compilation requires a webhook destination.
 - Conditions and projections use authored field IDs, not the record API's camel-case property names.
 - Event classification is the highest classification of every projected or condition field.
+- Lifecycle events are at least as classified as their request entity.
 
 Destination URLs, keys, network policy, and operational ceilings belong in runtime
 `eventDestinations`, keyed by `webhook.destinationId`.
@@ -57,18 +58,24 @@ destination fields and `eventDelivery.payloadRetentionDays`.
 
 <EventReferenceTable id="triggers" />
 
-A create-only entity permits only `created`; `tombstoned` also requires tombstone support.
+A create-only entity refuses `patched` and `tombstoned`; `tombstoned` also requires tombstone support.
+Only a change-request entity permits `request_lifecycle`.
 Omitting `when` selects every matching trigger.
 When present, `kind: fields` requires at least one nonempty test.
 All tests combine with AND, including every field within each test.
 `changed` compares before and after values, not whether a field appeared in the patch.
 Comparison literals must be scalar or null and valid for the declared field type.
 
+For `request_lifecycle`, use `when.kind: request_lifecycle` with at least one of
+`transitions`, `toStates`, or `stages`. Each nonempty list must match; field predicates are
+unavailable. The projection contains request fields, not canonical target values.
+
 Capture and mutation commit in one transaction.
 Delivery uses the captured projection; subsequent record or package changes do not recompute it.
 
 {/* Evidence: crates/registry-server/src/compiler.rs, validate_event_condition();
     crates/registry-server/src/outbox.rs, condition_matches() and insert_configured_events();
+    crates/registry-server/src/request_events.rs, lifecycle_condition_matches() and insert_request_lifecycle_events();
     crates/registry-server/src/mutation.rs. */}
 
 ## HTTP request
@@ -90,9 +97,15 @@ Record identifiers appear in the body, not in CloudEvents headers.
 
 ### Payload fields
 
-All six members are required. Additional top-level members and unprojected values are excluded.
+The six common members are required. Lifecycle events also require `request`.
+Other top-level members and unprojected values are excluded.
 
 <EventReferenceTable id="payload" />
+
+The lifecycle `request` object requires `proposalVersion` and `workflowRevision` (positive
+integers), `transition`, `fromState`, `toState`, and `deduplicationKey` (strings), plus `stage`
+and `effectDigest` (strings or null). The deduplication key remains stable across retries and
+operator replay. Receiving a lifecycle event grants no authority to approve or apply a request.
 
 Example shape, formatted for reading:
 
@@ -108,6 +121,7 @@ Example shape, formatted for reading:
 ```
 
 {/* Evidence: crates/registry-server/src/outbox.rs, insert_configured_events();
+    crates/registry-server/src/request_events.rs, insert_request_lifecycle_events();
     crates/registry-server/src/artifacts.rs, event_data_schema_binding(). */}
 
 ## Signature format
@@ -217,9 +231,9 @@ The JSON result contains a `deliveries` array. Each entry has these fields and n
 ## Sources
 
 This source-preview contract is not a released or frozen compatibility promise.
-The [event contract and implementation at f806b222](https://github.com/registrystack/registry-stack/blob/f806b222f628717c0e6c5d2c14fc0d2bbf7a96f1/products/registry-server/EVENTS-AND-WEBHOOKS.md)
-are the source of truth. Configuration fields are schema-generated; protocol tables are
-manually maintained data, checked against that implementation.
+The event implementation and generated event schemas in the same source checkout are the
+source of truth. Configuration fields are schema-generated; protocol tables are manually
+maintained data, checked against that implementation.
 
 {/* Protocol tables generated from docs/site/src/data/server-events.yaml by
     docs/site/scripts/generate-data.mjs. Run npm run generate from docs/site. */}

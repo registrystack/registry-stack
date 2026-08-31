@@ -132,7 +132,7 @@ with open("client-signing-private-jwk", encoding="utf-8") as handle:
 
 assertion = sign_client_assertion(
     private_jwk,
-    client_id="health-desk",
+    client_id="permit-desk",
     audience="https://mint.example.org/token",
 )
 token = request_access_token("https://mint.example.org/token", assertion)

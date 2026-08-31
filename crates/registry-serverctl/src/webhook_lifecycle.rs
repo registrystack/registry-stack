@@ -263,6 +263,7 @@ fn trigger_name(trigger: EventTrigger) -> &'static str {
         EventTrigger::Created => "created",
         EventTrigger::Patched => "patched",
         EventTrigger::Tombstoned => "tombstoned",
+        EventTrigger::RequestLifecycle => "request_lifecycle",
     }
 }
 

@@ -8,7 +8,9 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use super::context::AuthorizedRequestContext;
+use super::context::{
+    AuthorizedRequestContext, VerifiedRequestTargetAuthority, VerifiedRowBoundary,
+};
 use crate::contract::FieldTypeSource;
 use crate::correlation::RequestCorrelation;
 use crate::cursor::{CursorBinding, CursorCodec, CursorContinuation, CursorQuery};
@@ -88,6 +90,65 @@ pub struct BatchMutationInput<'a> {
     pub correlation: &'a RequestCorrelation,
 }
 
+/// Strictly parsed HTTP body for one compiled change-request action route.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RequestActionBody {
+    Submit,
+    Approve {
+        proposal_version: u32,
+        effect_digest: String,
+    },
+    Reject {
+        proposal_version: u32,
+        effect_digest: String,
+    },
+    RequestRevision {
+        proposal_version: u32,
+        effect_digest: String,
+    },
+    Revise {
+        rebase: bool,
+    },
+    Cancel,
+    Apply {
+        proposal_version: u32,
+        effect_digest: String,
+    },
+}
+
+/// Target authority derived from the selected review/apply grant row
+/// boundaries. It contains only values copied from verified token claims.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RequestActionTargetAuthority {
+    pub target_entity_id: String,
+    pub readable_fields: BTreeSet<String>,
+    pub row_boundaries: Vec<VerifiedRowBoundary>,
+}
+
+impl From<&VerifiedRequestTargetAuthority> for RequestActionTargetAuthority {
+    fn from(authority: &VerifiedRequestTargetAuthority) -> Self {
+        Self {
+            target_entity_id: authority.target_entity_id().to_owned(),
+            readable_fields: authority.readable_fields().clone(),
+            row_boundaries: authority.row_boundaries().to_vec(),
+        }
+    }
+}
+
+/// Compiler-authorized input for one finite change-request action.
+pub struct RequestActionInput<'a> {
+    pub route_id: &'a str,
+    pub idempotency_key: &'a str,
+    pub if_match: &'a str,
+    pub context: &'a AuthorizedRequestContext,
+    pub entity_id: &'a str,
+    pub record_id: &'a str,
+    pub action: RequestActionBody,
+    pub response_fields: BTreeSet<String>,
+    pub target_authority: Vec<RequestActionTargetAuthority>,
+    pub correlation: &'a RequestCorrelation,
+}
+
 #[derive(Clone)]
 pub struct RecordReadRequest {
     pub entity_id: String,
@@ -103,6 +164,9 @@ pub struct RecordReadRequest {
     /// Hard source-execution result bound. Implementations must apply it in
     /// the database plan before rows are materialized.
     pub maximum_records: usize,
+    /// Bounded request-proposal history continuation for a single request GET.
+    /// This is never accepted on list/cursor or canonical entity reads.
+    pub request_history_after_proposal_version: Option<i64>,
     pub correlation: RequestCorrelation,
 }
 
