@@ -22,10 +22,13 @@ operation additionally has `readPath: {id, label}`. Its source identifies the
 record whose path is followed; its response identifies the returned records.
 Private join definitions are never included.
 
-`requiredCapabilities` is empty for this baseline. A client must disable an
-operation when it does not understand any required capability. Unknown optional
-operation kinds can be ignored. A writable field list never permits a client to
-bypass a future required mutation or record-state capability.
+`requiredCapabilities` is empty for generic read and direct mutation operations.
+Request lifecycle actions use `change_request_lifecycle`; a client must disable
+an operation when it does not understand any required capability. Unknown
+optional operation kinds can be ignored. Controlled entity writes remain
+request-only: metadata must not expose controlled target mutations as direct
+create or patch grants, and a writable field list never permits a client to
+bypass a required mutation or record-state capability.
 
 `fields` contains only the union of this operation's readable and applicable
 writable fields. `readableFields`, `createWritableFields`, `patchWritableFields`,

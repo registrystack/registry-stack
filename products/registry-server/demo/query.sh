@@ -11,7 +11,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --fixture)
       if [[ $# -lt 2 ]]; then
-        printf '%s\n' 'usage: products/registry-server/demo/query.sh [--fixture household|asset-site] [all|operator|viewer|planner]' >&2
+        printf '%s\n' "$usage" >&2
         exit 2
       fi
       fixture_kind="$2"
@@ -22,7 +22,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     *)
-      printf '%s\n' 'usage: products/registry-server/demo/query.sh [--fixture household|asset-site] [all|operator|viewer|planner]' >&2
+      printf '%s\n' "$usage" >&2
       exit 2
       ;;
   esac

@@ -59,7 +59,7 @@ fn operation(
         "sourceEntity": surface.entity.id,
         "responseEntity": surface.response_entity.id,
         "accessProfile": surface.context.selected_profile(),
-        "requiredCapabilities": [],
+        "requiredCapabilities": required_capabilities(surface.route.operation),
         "entityLabel": entity_label(service, surface),
         "identifier": {"apiName": "id", "location": "envelope"},
         "titleFields": title_fields(service, surface),
@@ -75,6 +75,23 @@ fn operation(
         value["readPath"] = json!({"id": path.id, "label": humanize(&path.id)});
     }
     value
+}
+
+fn required_capabilities(operation: Operation) -> Vec<&'static str> {
+    if matches!(
+        operation,
+        Operation::SubmitRequest
+            | Operation::ApproveRequest
+            | Operation::RejectRequest
+            | Operation::RequestRevision
+            | Operation::ReviseRequest
+            | Operation::CancelRequest
+            | Operation::ApplyRequest
+    ) {
+        vec!["change_request_lifecycle"]
+    } else {
+        Vec::new()
+    }
 }
 
 fn field(
@@ -375,5 +392,30 @@ fn humanize(id: &str) -> String {
     match chars.next() {
         Some(first) => first.to_uppercase().chain(chars).collect(),
         None => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_lifecycle_operations_require_an_explicit_workspace_capability() {
+        for operation in [
+            Operation::SubmitRequest,
+            Operation::ApproveRequest,
+            Operation::RejectRequest,
+            Operation::RequestRevision,
+            Operation::ReviseRequest,
+            Operation::CancelRequest,
+            Operation::ApplyRequest,
+        ] {
+            assert_eq!(
+                required_capabilities(operation),
+                ["change_request_lifecycle"]
+            );
+        }
+        assert!(required_capabilities(Operation::Create).is_empty());
+        assert!(required_capabilities(Operation::Patch).is_empty());
     }
 }

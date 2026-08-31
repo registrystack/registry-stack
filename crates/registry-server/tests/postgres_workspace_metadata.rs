@@ -2,6 +2,8 @@
 
 #![cfg(feature = "postgres-test")]
 
+use std::collections::BTreeSet;
+
 #[path = "support/pilot_acceptance_harness.rs"]
 mod pilot_acceptance_harness;
 #[path = "support/postgres_harness.rs"]
@@ -20,6 +22,88 @@ fn operation<'a>(document: &'a Value, id: &str) -> &'a Value {
         .iter()
         .find(|operation| operation["id"] == id)
         .expect("authorized operation")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_workspace_metadata_marks_request_lifecycle_without_direct_controlled_writes()
+{
+    let harness = PilotHarness::start("asset-site-placement-change-requests").await;
+    let token = harness.token("asset-management", &[]);
+    let metadata = response_json(
+        harness
+            .send(
+                Method::GET,
+                "/v1/registry?accessProfile=asset-operator",
+                Some(&token),
+                &[],
+                Vec::new(),
+            )
+            .await,
+    )
+    .await;
+    let operation_ids = metadata["operations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|operation| operation["id"].as_str().unwrap())
+        .collect::<BTreeSet<_>>();
+    assert!(operation_ids.contains("records.asset-placement.create"));
+    assert!(
+        !operation_ids.contains("records.asset-placement.patch"),
+        "controlled placement patch must be absent as a direct operation"
+    );
+    assert_eq!(
+        operation(&metadata, "records.asset-placement.create")["request"]["mutationSemantics"],
+        "direct"
+    );
+    assert_eq!(
+        metadata["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entity| entity["id"] == "asset-placement")
+            .unwrap()["changeControl"],
+        json!({
+            "controlledOperations": ["patch"],
+            "eligibleRequestTypes": [{"id": "placement-correction-request", "route": "placement-correction-requests"}]
+        })
+    );
+
+    let submitter_token =
+        harness.token_with_scopes("asset-correction", &[], &["registry:corrections:submit"]);
+    let submitter = response_json(
+        harness
+            .send(
+                Method::GET,
+                "/v1/registry?accessProfile=correction-submitter",
+                Some(&submitter_token),
+                &[],
+                Vec::new(),
+            )
+            .await,
+    )
+    .await;
+    assert_eq!(
+        operation(&submitter, "records.placement-correction-request.create")["request"]
+            ["mutationSemantics"],
+        "direct"
+    );
+    for operation_id in [
+        "records.placement-correction-request.request.submit",
+        "records.placement-correction-request.request.revise",
+        "records.placement-correction-request.request.cancel",
+    ] {
+        let operation = operation(&submitter, operation_id);
+        assert_eq!(
+            operation["requiredCapabilities"],
+            json!(["change_request_lifecycle"])
+        );
+        assert!(
+            operation["request"].get("mutationSemantics").is_none(),
+            "{operation_id} must not look like a generic direct mutation"
+        );
+    }
+    harness.finish().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
