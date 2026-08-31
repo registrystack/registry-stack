@@ -288,6 +288,80 @@ vocabularies:
     values: [single, extended]
 "#;
 
+const METADATA_LABEL_PROJECT: &str = r#"
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: metadata-labels
+  version: 1
+  defaultLanguage: en
+manifestProjection:
+  accessProfile: operator
+  classificationCeiling: public
+  catalog:
+    baseUrl: https://metadata-labels.example.test
+    title: Metadata Labels
+    publisher: {name: Publisher}
+  dataset: {title: Metadata Labels}
+  entities:
+    - id: permit
+      identifiers:
+        - {field: display-token, kind: display}
+entities:
+  - id: permit
+    route: permits
+    mutationMode: mutable
+    classification: public
+    fields:
+      - {id: import-source, type: string, required: true, maxLength: 64, classification: public}
+      - {id: permit-number, type: string, required: true, maxLength: 64, classification: public}
+      - {id: display-token, type: string, required: true, maxLength: 64, classification: public}
+      - {id: hidden-permit-key, type: string, required: true, maxLength: 64, classification: public}
+    constraints:
+      - {kind: unique, fields: [hidden-permit-key]}
+      - {kind: unique, fields: [permit-number]}
+  - id: inspection
+    route: inspections
+    mutationMode: mutable
+    classification: public
+    fields:
+      - {id: import-source, type: string, required: true, maxLength: 64, classification: public}
+      - {id: inspection-code, type: text, required: true, maxLength: 64, classification: public}
+      - {id: hidden-inspection-key, type: string, required: true, maxLength: 64, classification: public}
+      - {id: valid-from, type: date, required: true, classification: public, validTimeRole: valid_from}
+      - {id: valid-to, type: date, classification: public, validTimeRole: valid_to}
+    temporal:
+      startField: valid-from
+      endField: valid-to
+      scopeFields: [inspection-code]
+    constraints:
+      - {kind: unique, fields: [hidden-inspection-key]}
+      - {kind: unique, fields: [inspection-code]}
+      - {kind: temporal-non-overlap, scopeFields: [inspection-code], startField: valid-from, endField: valid-to}
+  - id: finding
+    route: findings
+    mutationMode: mutable
+    classification: public
+    fields:
+      - {id: inspection, type: reference, target: inspection, required: true, classification: public}
+accessProfiles:
+  - id: operator
+    default: true
+    anonymous: true
+    grants:
+      - entity: permit
+        operations: [get, list]
+        readableFields: [import-source, permit-number, display-token]
+      - entity: inspection
+        operations: [get, list]
+        readableFields: [import-source, inspection-code, valid-from, valid-to]
+        filterableFields: [inspection-code]
+        sortableFields: [inspection-code]
+      - entity: finding
+        operations: [get]
+        readableFields: [inspection]
+"#;
+
 #[derive(Default)]
 struct RecordingReadService {
     calls: AtomicUsize,
@@ -2359,6 +2433,48 @@ fn metadata_operation<'a>(document: &'a Value, id: &str) -> &'a Value {
         .iter()
         .find(|operation| operation["id"] == id)
         .expect("authorized operation")
+}
+
+#[tokio::test]
+async fn workspace_metadata_title_fields_prefer_readable_unique_text_or_string_before_generic_fallback(
+) {
+    let harness = Harness::from_project(METADATA_LABEL_PROJECT, true);
+    let document = body_json(harness.send(Method::GET, "/v1/registry", None).await).await;
+
+    let permit_get = metadata_operation(&document, "records.permit.get");
+    assert_eq!(
+        permit_get["titleFields"],
+        json!(["display-token"]),
+        "authored manifest identifiers keep precedence over compiled unique keys"
+    );
+
+    let inspection_get = metadata_operation(&document, "records.inspection.get");
+    assert_eq!(
+        inspection_get["titleFields"],
+        json!(["inspection-code"]),
+        "readable single-field unique text keys are preferred over arbitrary readable strings"
+    );
+    let inspection_current = metadata_operation(&document, "records.inspection.current");
+    assert_eq!(inspection_current["query"]["kind"], "current");
+    assert_eq!(
+        inspection_current["titleFields"],
+        json!(["inspection-code"])
+    );
+
+    let finding = metadata_operation(&document, "records.finding.get");
+    let reference = &finding["fields"][0]["reference"];
+    assert_eq!(reference["targetEntity"], "inspection");
+    assert!(reference["operations"]
+        .as_array()
+        .expect("reference operations")
+        .iter()
+        .any(|operation| operation["labelFields"] == json!(["inspection-code"])));
+
+    let rendered = document.to_string();
+    for hidden in ["hidden-permit-key", "hidden-inspection-key"] {
+        assert!(!rendered.contains(hidden), "metadata leaked {hidden}");
+    }
+    assert_eq!(harness.records.calls(), 0);
 }
 
 #[tokio::test]

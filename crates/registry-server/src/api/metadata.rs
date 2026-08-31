@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::artifacts::{field_schema, field_value_schema};
-use crate::contract::{ManifestProjectionSource, ManifestProjectionTextSource};
+use crate::contract::{ConstraintSource, ManifestProjectionSource, ManifestProjectionTextSource};
 use crate::model::CompiledLogicalField;
 
 /// Wrap authentication as well as handlers. Even refusals must not persist in an HTTP cache.
@@ -296,6 +296,7 @@ fn title_fields(service: &HttpService, surface: &AuthorizedSurface<'_>) -> Vec<S
         })
         .map(|identifier| identifier.field.clone());
     authored
+        .or_else(|| unique_title_field(surface))
         .or_else(|| {
             surface
                 .readable_fields
@@ -305,6 +306,34 @@ fn title_fields(service: &HttpService, surface: &AuthorizedSurface<'_>) -> Vec<S
         })
         .into_iter()
         .collect()
+}
+
+fn unique_title_field(surface: &AuthorizedSurface<'_>) -> Option<String> {
+    surface
+        .response_entity
+        .constraints
+        .values()
+        .find_map(|constraint| {
+            let ConstraintSource::Unique {
+                fields, when: None, ..
+            } = constraint
+            else {
+                return None;
+            };
+            let [field] = fields.as_slice() else {
+                return None;
+            };
+            if !surface.readable_fields.contains(field) {
+                return None;
+            }
+            logical_field(surface.response_entity, field).and_then(|logical| {
+                matches!(
+                    logical.field_type,
+                    FieldTypeSource::String { .. } | FieldTypeSource::Text { .. }
+                )
+                .then(|| field.clone())
+            })
+        })
 }
 
 fn entity_label(service: &HttpService, surface: &AuthorizedSurface<'_>) -> String {
