@@ -85,7 +85,7 @@ function seatedSlugs() {
   // `draft: true`, which is the same state in which the generated CLI pages are
   // themselves draft and so are not published either.
   //
-  // That group seats the index and the six binaries, not the subcommand pages
+  // That group seats the index and the binaries, not the subcommand pages
   // under them. Publishing the command-line reference will therefore make this
   // test name every subcommand page at once, and seating them is part of that
   // publish rather than a fault in this gate.
@@ -138,6 +138,7 @@ test('publishes one overview route for every task-flow section that has one', ()
     ['Start', "link: '/'"],
     ['Answer a bounded question', "slug: 'start/evidence-quickstart'"],
     ['Connect an existing registry', "slug: 'configure'"],
+    ['Build a registry', "slug: 'explanation/configuration-defined-registry'"],
     ['Operate and secure', "slug: 'operate/advanced'"],
     ['Reference', "slug: 'reference'"],
   ]) {
@@ -236,6 +237,25 @@ test('gives Evidence Gateway a lane on both front doors without a retired Notary
   assert.match(homepageSource, /\]\(start\/evidence-quickstart\/\)/);
   assert.match(homepageSource, /tutorials\/first-evidence-assertion/);
   assert.doesNotMatch(homepageSource, /Expose Notary|verify-claim-registry-api/);
+});
+
+test('keeps the Server guide and references in one adoption path', () => {
+  const server = topLevelSection(sidebarSource, 'Build a registry');
+  const slugs = [...server.matchAll(/slug: '([^']+)'/g)].map((match) => match[1]);
+  assert.deepEqual(slugs, [
+    'explanation/configuration-defined-registry',
+    'explanation/registry-modeling-patterns',
+    'tutorials/first-registry-server',
+    'tutorials/review-registry-changes',
+    'configure/registry-server',
+    'configure/registry-server-webhooks',
+    'reference/registry-server-configuration',
+    'reference/registry-server-events',
+  ]);
+  for (const slug of slugs) {
+    assert.ok(hasDocForSlug(slug), `${slug} must be reachable from the Server journey`);
+    assert.ok(homepageSource.includes(`](${slug}/)`), `${slug} must be linked from the homepage`);
+  }
 });
 
 test('organizes Evidence Gateway tasks without publishing the obsolete Relay composition', () => {

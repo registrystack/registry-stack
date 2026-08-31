@@ -320,7 +320,7 @@ pub(crate) struct PreparedReviewedMigrationPlan {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ReviewedArtifactKind {
+pub enum ReviewedArtifactKind {
     Descriptor,
     StepSql,
     AssertionSql,
@@ -545,7 +545,8 @@ pub(crate) fn validate_reviewed_migration_plan(
     Ok(ValidatedReviewedMigrationPlan { migrations })
 }
 
-pub(crate) fn reviewed_artifact_kind(path: &str) -> Option<ReviewedArtifactKind> {
+/// Classify a permitted package-relative reviewed artifact path before reading it.
+pub fn reviewed_artifact_kind(path: &str) -> Option<ReviewedArtifactKind> {
     let components = path.split('/').collect::<Vec<_>>();
     match components.as_slice() {
         ["modules", module, "migrations", migration, "descriptor.json"]
@@ -1579,6 +1580,7 @@ fn covers_are_metadata_only(covers: &[ReviewedChangeCover]) -> bool {
             CompiledRegistryChangeCode::EntityRouteChanged
                 | CompiledRegistryChangeCode::EntityMutationModeChanged
                 | CompiledRegistryChangeCode::EntityClassificationChanged
+                | CompiledRegistryChangeCode::EntityAccessRequirementsChanged
                 | CompiledRegistryChangeCode::FieldClassificationChanged
                 | CompiledRegistryChangeCode::FieldTemporalRoleChanged
                 | CompiledRegistryChangeCode::AccessProfileAdded

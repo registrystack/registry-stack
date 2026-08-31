@@ -31,9 +31,9 @@ ACCEPTANCE_JOURNEY_IDS = tuple(f"RS-J{index:02d}" for index in range(1, 18))
 ACCEPTANCE_FIXTURES = {
     "RS-J01": ("asset-site-placement", "acceptance/asset-site-placement"),
     "RS-J02": ("asset-site-placement", "acceptance/asset-site-placement"),
-    "RS-J03": ("household", "acceptance/publicschema-household"),
-    "RS-J04": ("disability", "acceptance/disability"),
-    "RS-J05": ("farmer", "acceptance/farmer"),
+    "RS-J03": ("business-establishments", "acceptance/business-establishments"),
+    "RS-J04": ("inspection", "acceptance/inspection"),
+    "RS-J05": ("facility", "acceptance/facility"),
     "RS-J06": ("business", "acceptance/business"),
 }
 RUST_TEST = re.compile(
@@ -84,7 +84,7 @@ POSTGRES_TEST_COMMANDS = (
     "cargo test --locked -p registry-server --features postgres-test --test postgres_webhook_outbox",
     "cargo test --locked -p registry-server --features postgres-test --test postgres_webhook_delivery",
     "cargo test --locked -p registry-server --features postgres-test --test postgres_batch",
-    "cargo test --locked -p registry-server --features postgres-test --test postgres_data_farmer",
+    "cargo test --locked -p registry-server --features postgres-test --test postgres_data_facility",
     "cargo test --locked -p registry-server --features postgres-test --test postgres_data_export",
     "cargo test --locked -p registry-server --features postgres-test --test postgres_change_requests",
     "cargo test --locked -p registry-server --features postgres-test --test postgres_request_authority",
@@ -524,7 +524,7 @@ def validate_security(waves: set[str], errors: list[str]) -> None:
     invariants = as_list(matrix.get("invariants"), "security matrix.invariants", errors)
     rows = {row.get("id"): row for row in invariants if isinstance(row, dict) and isinstance(row.get("id"), str)}
     unique_ids(invariants, "security matrix.invariants", errors)
-    if set(rows) != {f"RS-SEC-{index:02d}" for index in range(1, 22)}:
+    if set(rows) != {f"RS-SEC-{index:02d}" for index in range(1, 23)}:
         errors.append("security matrix: must contain the complete closed product invariant identifiers")
     negatives: set[str] = set()
     for index, raw in enumerate(invariants):

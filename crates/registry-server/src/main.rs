@@ -1,25 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Registry Server process entry point.
 
-use std::path::PathBuf;
-
 use clap::Parser;
+use registry_server::cli::Arguments;
 use registry_server::startup::{
     operational_log_level, prepare, serve, OperationalEvent, OperationalLogLevel,
 };
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::prelude::*;
-
-#[derive(Debug, Parser)]
-#[command(
-    name = "registry-server",
-    about = "Serve one verified Registry Server package",
-    version = registry_platform_buildinfo::DISPLAY_VERSION
-)]
-struct Arguments {
-    #[arg(long, value_name = "ABSOLUTE_FILE")]
-    config: PathBuf,
-}
 
 #[tokio::main]
 async fn main() {

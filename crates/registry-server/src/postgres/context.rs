@@ -2005,6 +2005,7 @@ mod tests {
                 tombstone: false,
                 batch: None,
                 classification: Classification::Internal,
+                access_requirements: None,
                 derived: Vec::new(),
                 selector_profiles: Vec::new(),
                 read_paths: Vec::new(),

@@ -650,8 +650,23 @@ pub(crate) async fn verify_managed_catalog(
     verify_exact_acl(client, runtime_role, expected_catalog).await?;
     verify_row_security(client, expected_catalog).await?;
     verify_policies(client, expected_catalog).await?;
-    let actual = fingerprint_catalog(client, runtime_role).await?;
-    if actual != expected.schema_fingerprint {
+    let actual = fingerprint_catalog(
+        client,
+        runtime_role,
+        CatalogFingerprintVersion::NamedTableColumns,
+    )
+    .await?;
+    // Existing signed packages retain their original fingerprint and physical
+    // column-order checks. Never reinterpret an old hash as a normalized hash.
+    if actual != expected.schema_fingerprint
+        && fingerprint_catalog(
+            client,
+            runtime_role,
+            CatalogFingerprintVersion::LegacyPhysicalColumns,
+        )
+        .await?
+            != expected.schema_fingerprint
+    {
         return Err(PostgresKernelError::RegistryUnavailable);
     }
     Ok(())
@@ -964,6 +979,7 @@ async fn verify_exact_acl(
 
 /// Computes a deterministic fingerprint over the exact expected managed
 /// catalog, including sequences, indexes, constraints, policies, and ACLs.
+/// Table columns are identified by name, not their physical PostgreSQL slots.
 pub async fn managed_schema_fingerprint(
     client: &impl GenericClient,
     runtime_role: &SqlIdentifier,
@@ -975,13 +991,41 @@ pub async fn managed_schema_fingerprint(
     verify_exact_acl(client, runtime_role, expected_catalog).await?;
     verify_row_security(client, expected_catalog).await?;
     verify_policies(client, expected_catalog).await?;
-    fingerprint_catalog(client, runtime_role).await
+    fingerprint_catalog(
+        client,
+        runtime_role,
+        CatalogFingerprintVersion::NamedTableColumns,
+    )
+    .await
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum CatalogFingerprintVersion {
+    LegacyPhysicalColumns,
+    NamedTableColumns,
+}
+
+/// Produce the pre-normalization fingerprint for compatibility regression tests.
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub async fn legacy_schema_fingerprint_for_test(
+    client: &impl GenericClient,
+    runtime_role: &SqlIdentifier,
+) -> Result<String> {
+    fingerprint_catalog(
+        client,
+        runtime_role,
+        CatalogFingerprintVersion::LegacyPhysicalColumns,
+    )
+    .await
 }
 
 async fn fingerprint_catalog(
     client: &impl GenericClient,
     runtime_role: &SqlIdentifier,
+    version: CatalogFingerprintVersion,
 ) -> Result<String> {
+    let named_table_columns = version == CatalogFingerprintVersion::NamedTableColumns;
     let prior_search_path: String = client
         .query_one("SELECT pg_catalog.current_setting('search_path')", &[])
         .await?
@@ -1011,8 +1055,10 @@ async fn fingerprint_catalog(
                ON d.adrelid = c.oid AND d.adnum = a.attnum
              WHERE n.nspname = ANY($1::text[])
                AND c.relkind IN ('r', 'v', 'S')
-             ORDER BY n.nspname, c.relname, a.attnum",
-            &[&MANAGED_SCHEMAS],
+             ORDER BY n.nspname, c.relname,
+                      CASE WHEN $2 AND c.relkind = 'r' THEN a.attname END COLLATE \"C\",
+                      a.attnum",
+            &[&MANAGED_SCHEMAS, &named_table_columns],
         )
         .await?;
     let constraint_rows = client
@@ -1122,7 +1168,16 @@ async fn fingerprint_catalog(
         )
         .await?;
     let mut hasher = Sha256::new();
-    hasher.update(b"registry-server/catalog/v3/columns");
+    // Runtime statements address table columns explicitly by name. ALTER TABLE
+    // appends physical slots, whereas a fresh install uses compiler field order.
+    // v5 hashes the same named table schema for both histories, including after
+    // dropped-column gaps. View/sequence order and every other catalog input
+    // remain covered. The distinct domain preserves exact legacy verification.
+    hasher.update(if named_table_columns {
+        b"registry-server/catalog/v5/columns"
+    } else {
+        b"registry-server/catalog/v3/columns"
+    });
     for row in column_rows {
         for index in [0, 1, 2, 7, 8, 10] {
             hash_text(&mut hasher, &row.get::<_, String>(index));
@@ -1130,7 +1185,9 @@ async fn fingerprint_catalog(
         for index in [3, 4, 5, 9] {
             hash_bool(&mut hasher, row.get(index));
         }
-        hasher.update(row.get::<_, i16>(6).to_be_bytes());
+        if !named_table_columns || row.get::<_, &str>(2) != "r" {
+            hasher.update(row.get::<_, i16>(6).to_be_bytes());
+        }
     }
     hasher.update(b"registry-server/catalog/v3/constraints");
     for row in constraint_rows {

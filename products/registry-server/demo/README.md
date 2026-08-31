@@ -1,19 +1,19 @@
-# Registry Server household demo
+# Registry Server business demo
 
 This local demo starts four real components:
 
 - PostgreSQL 17 with TLS, separate migration and runtime roles, and disposable
   databases;
 - Registry Mint as the OIDC token issuer;
-- Registry Server configured from the PublicSchema-shaped household project;
+- Registry Server configured from the business-establishments project;
 - `registry-serverctl` for schema testing, packaging, activation, and
   verification.
 
 It then asks Mint for short-lived operator and negative-test tokens and creates
-eight synthetic people, three households, and eight effective-dated memberships
+eight synthetic establishments, three businesses, and eight effective-dated operator assignments
 through Registry Server's ordinary authenticated REST API. Once the first
-household has a server UUID, the demo creates a separate viewer key and Mint
-client whose verified claims bind it to that UUID and household code.
+business has a server UUID, the demo creates a separate viewer key and Mint
+client whose verified claims bind it to that UUID and business code.
 
 ## Run it
 
@@ -39,10 +39,11 @@ products/registry-server/demo/query.sh viewer
 ```
 
 These are the real requests against the running server. The operator suite
-shows relationship traversal, composable derived-field filters, and an exact
-request-value selector lookup. The viewer suite proves that one claim-bound
-household can be fetched by UUID or looked up from its verified household-code
-claim, while list and household-to-people path requests return the concealed
+shows establishments belonging to one business, production-site and suspended-site
+counts, combined stored and derived filters, and an exact request-value selector
+lookup. The viewer suite proves that one claim-bound
+business can be fetched by UUID or looked up from its verified business-code
+claim, while list and business-to-establishments path requests return the concealed
 `resource.not_found` response.
 
 The helper reads bearer tokens from owner-only files inside `.run/`. It does
@@ -65,7 +66,7 @@ products/registry-server/demo/run.sh --webhook --smoke
 ```
 
 Webhook mode extends only the disposable project copy with a conditional
-person event. It leaves the shared acceptance fixture unchanged, generates an
+establishment event. It leaves the shared acceptance fixture unchanged, generates an
 owner-only HMAC key, and uses Registry Server's loopback-development outbound
 policy. The receiver verifies the exact CloudEvents request and HMAC contract,
 then deterministically proves immediate delivery, automatic retry,
@@ -78,7 +79,7 @@ bearer token or HMAC key.
 
 The exact paths, query parameters, selector bodies, and expected statuses live
 in `support/demo.py`, which `query.sh` invokes. This keeps the examples
-copyable without teaching people to expand bearer tokens into process-visible
+copyable without teaching readers to expand bearer tokens into process-visible
 `curl` arguments. Public field names use their compiled lower-camel API names,
 while selector IDs retain their configured kebab-case spelling. The operator
 selector body uses the exact `values` property, while the viewer's
@@ -99,12 +100,20 @@ PostgreSQL service.
 
 ## Demo data
 
+North Quay Engineering has an office and a production branch. Central Fabrication
+has a production site, a distribution branch, and a suspended storage depot.
+South Harbour Logistics has three separate establishments used to test isolation.
+All names and records are synthetic. Summary counts use currently effective
+operator assignments; a suspended site still belongs to its operating business.
+The `operating-created-v1` webhook selects only establishments created with
+`operating-status: operating`, so the suspended depot produces no event.
+
 The data is a small curated relational fixture rather than random names. This
-makes the household memberships and expected query results stable and easy to
+makes the business assignments and expected query results stable and easy to
 understand. The existing Evidence source-mock generator is not reused here
 because it generates isolated HTTP responses from OpenAPI; it does not create
 referentially coherent Registry records.
 
 The seed still follows the real application boundary: Mint owns the authority
-claims, Registry Server validates every write, and memberships use the server
-UUIDs returned for their person and household records.
+claims, Registry Server validates every write, and assignments use the server
+UUIDs returned for their establishment and business records.

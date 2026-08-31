@@ -85,8 +85,8 @@ path = "tests/postgres_constraint_races.rs"
 required-features = ["postgres-test"]
 
 [[test]]
-name = "postgres_data_farmer"
-path = "tests/postgres_data_farmer.rs"
+name = "postgres_data_facility"
+path = "tests/postgres_data_facility.rs"
 required-features = ["postgres-test"]
 
 [[test]]

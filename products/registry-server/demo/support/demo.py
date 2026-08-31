@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Provision and exercise the disposable Registry Server household demo."""
+"""Provision and exercise the disposable Registry Server business demo."""
 
 from __future__ import annotations
 
@@ -24,36 +24,37 @@ from pathlib import Path
 from typing import Any
 
 
-DATABASE_ID = "publicschema-household-demo"
-INSTANCE_ID = "publicschema-household-local"
-SOURCE_REVISION = "publicschema-household-local-0.1.0"
-AUDIENCE = "urn:registry-server:household-demo"
-OPERATOR_CLIENT = "household-demo"
-NO_PURPOSE_CLIENT = "household-demo-no-purpose"
-VIEWER_CLIENT = "household-demo-viewer"
+DATABASE_ID = "business-establishments-demo"
+INSTANCE_ID = "business-establishments-local"
+SOURCE_REVISION = "business-establishments-local-0.1.0"
+AUDIENCE = "urn:registry-server:business-demo"
+OPERATOR_CLIENT = "business-demo"
+NO_PURPOSE_CLIENT = "business-demo-no-purpose"
+VIEWER_CLIENT = "business-demo-viewer"
 MIGRATION_ROLE = "registry_demo_migration"
 RUNTIME_ROLE = "registry_demo_runtime"
 TEST_DATABASE = "registry_demo_test"
 RUNTIME_DATABASE = "registry_demo"
 EXPECTED_PROJECT_REPLACEMENTS = {
     "  environment: acceptance": "  environment: local",
-    "  instanceId: publicschema-household-acceptance": f"  instanceId: {INSTANCE_ID}",
-    "  sourceRevision: publicschema-household-acceptance-0.1.0": f"  sourceRevision: {SOURCE_REVISION}",
+    "  instanceId: business-establishments-acceptance": f"  instanceId: {INSTANCE_ID}",
+    "  sourceRevision: business-establishments-acceptance-0.1.0": f"  sourceRevision: {SOURCE_REVISION}",
 }
-WEBHOOK_DESTINATION_ID = "household-event-receiver"
-WEBHOOK_EVENT_ID = "usual-resident-created-v1"
-WEBHOOK_MODULE_ID = "publicschema-household-demographics"
-WEBHOOK_MODULE_LOCK = "  - id: publicschema-household-demographics\n    version: 0.1.0\n"
-WEBHOOK_ENTITY_INSERTION = "  - entity: household\n"
+WEBHOOK_DESTINATION_ID = "business-event-receiver"
+WEBHOOK_EVENT_ID = "operating-created-v1"
+WEBHOOK_MODULE_ID = "business-establishment-summary"
+WEBHOOK_MODULE_LOCK = "  - id: business-establishment-summary\n    version: 0.1.0\n"
+WEBHOOK_ENTITY_INSERTION = "  - entity: business\n"
 WEBHOOK_MODULE_SOURCE = """    events:
-      - id: usual-resident-created-v1
+      - id: operating-created-v1
         trigger: created
-        projection: [person-code, residency-status]
+        projection: [establishment-code, operating-status]
         when:
           kind: fields
-          afterEquals: {residency-status: usual-resident}
+          afterEquals:
+            operating-status: operating
         webhook:
-          destinationId: household-event-receiver
+          destinationId: business-event-receiver
 """
 WEBHOOK_SIGNATURE_DOMAIN = b"registry-server-webhook-signature-v1"
 WEBHOOK_RECEIVER_MAX_BODY_BYTES = 1024 * 1024
@@ -113,11 +114,11 @@ def _local_project(root: Path, fixture: Path, webhook: bool) -> None:
     source = project_path.read_text(encoding="utf-8")
     for expected, replacement in EXPECTED_PROJECT_REPLACEMENTS.items():
         if source.count(expected) != 1:
-            raise DemoError(f"household fixture no longer has the expected package line: {expected.strip()}")
+            raise DemoError(f"business fixture no longer has the expected package line: {expected.strip()}")
         source = source.replace(expected, replacement, 1)
     if webhook:
         if source.count(WEBHOOK_MODULE_LOCK) != 1:
-            raise DemoError("household fixture no longer has the expected demographics module lock")
+            raise DemoError("business fixture no longer has the expected summary module lock")
         before_lock, after_lock = source.split(WEBHOOK_MODULE_LOCK, 1)
         digest_line, separator, after_digest = after_lock.partition("\n")
         digest = digest_line.removeprefix("    digest: ")
@@ -127,7 +128,7 @@ def _local_project(root: Path, fixture: Path, webhook: bool) -> None:
             or len(digest) != 71
         ):
             raise DemoError(
-                "household fixture no longer has the expected demographics module digest"
+                "business fixture no longer has the expected summary module digest"
             )
         source = before_lock + WEBHOOK_MODULE_LOCK + after_digest
         module_path = target / f"modules/{WEBHOOK_MODULE_ID}/module.yaml"
@@ -137,7 +138,7 @@ def _local_project(root: Path, fixture: Path, webhook: bool) -> None:
             or module_source.count(WEBHOOK_ENTITY_INSERTION) != 1
             or not module_source.endswith("\n")
         ):
-            raise DemoError("household demographics module cannot receive the demo event")
+            raise DemoError("business summary module cannot receive the demo event")
         module_path.write_text(
             module_source.replace(
                 WEBHOOK_ENTITY_INSERTION,
@@ -309,7 +310,7 @@ def prepare(
     root = _require_root(root)
     fixture = fixture.resolve()
     if not (fixture / "registry.yaml").is_file():
-        raise DemoError("household fixture is missing registry.yaml")
+        raise DemoError("business fixture is missing registry.yaml")
     password_path = root / "secrets/database-password"
     password = password_path.read_text(encoding="ascii").strip()
     if not password or any(character not in "0123456789abcdef" for character in password):
@@ -338,10 +339,10 @@ def prepare(
         _mint_client(
             OPERATOR_CLIENT,
             operator_public,
-            ["registry:household:operate"],
+            ["registry:business:operate"],
             {
-                "registry_principal": "synthetic-household-operator",
-                "registry_purpose": "household-administration",
+                "registry_principal": "synthetic-business-operator",
+                "registry_purpose": "business-administration",
             },
         ),
     )
@@ -350,8 +351,8 @@ def prepare(
         _mint_client(
             NO_PURPOSE_CLIENT,
             no_purpose_public,
-            ["registry:household:operate"],
-            {"registry_principal": "synthetic-household-operator"},
+            ["registry:business:operate"],
+            {"registry_principal": "synthetic-business-operator"},
         ),
     )
     _write_new(
@@ -461,22 +462,22 @@ REVOKE ALL ON SCHEMA registry_internal, registry_data, registry_source, registry
         f"""apiVersion: registry.registrystack.org/server-schema-test-credentials/v1
 kind: SchemaTestCredentials
 bindings:
-  - {{journeyId: household-person-lifecycle, stepId: create-single-headed-head, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: household-person-lifecycle, stepId: create-under-five-child, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: household-person-lifecycle, stepId: create-woman-headed-head, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: household-person-lifecycle, stepId: create-woman-headed-child, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: household-person-lifecycle, stepId: create-woman-headed-elder, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: household-person-lifecycle, stepId: create-isolation-head, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: household-person-lifecycle, stepId: create-isolation-spouse, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: household-person-lifecycle, stepId: create-isolation-child, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: household-person-lifecycle, stepId: create-single-headed-household, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: household-person-lifecycle, stepId: create-woman-headed-household, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: household-person-lifecycle, stepId: create-isolation-household, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: household-person-lifecycle, stepId: lookup-single-headed-household, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: household-person-lifecycle, stepId: read-people-from-single-headed-household, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: household-person-lifecycle, stepId: query-household-demographics, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: household-person-lifecycle, stepId: refuse-incomplete-membership, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: household-person-lifecycle, stepId: operator-without-purpose-is-concealed, credential: {{type: bearer, tokenRef: secret:file/no-purpose-token}}}}
+  - {{journeyId: business-establishment-lifecycle, stepId: create-north-head-office, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: business-establishment-lifecycle, stepId: create-production-branch, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: business-establishment-lifecycle, stepId: create-central-head-office, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: business-establishment-lifecycle, stepId: create-central-branch, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: business-establishment-lifecycle, stepId: create-central-depot, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: business-establishment-lifecycle, stepId: create-isolation-head-office, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: business-establishment-lifecycle, stepId: create-isolation-regional-office, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: business-establishment-lifecycle, stepId: create-isolation-branch, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: business-establishment-lifecycle, stepId: create-north-business, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: business-establishment-lifecycle, stepId: create-central-business, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: business-establishment-lifecycle, stepId: create-isolation-business, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: business-establishment-lifecycle, stepId: lookup-north-business, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: business-establishment-lifecycle, stepId: read-establishments-from-north-business, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: business-establishment-lifecycle, stepId: query-establishment-summary, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: business-establishment-lifecycle, stepId: refuse-incomplete-assignment, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
+  - {{journeyId: business-establishment-lifecycle, stepId: operator-without-purpose-is-concealed, credential: {{type: bearer, tokenRef: secret:file/no-purpose-token}}}}
 """,
     )
 
@@ -593,11 +594,11 @@ def _verify_webhook_request(
     event_uuid = str(uuid.UUID(headers["ce-id"]))
     if event_uuid != headers["ce-id"] or headers["ce-type"] != WEBHOOK_EVENT_ID:
         raise DemoError("the receiver refused the CloudEvents identity")
-    expected_source = f"urn:registrystack:registry:publicschema-household:instance:{INSTANCE_ID}"
+    expected_source = f"urn:registrystack:registry:business-establishments:instance:{INSTANCE_ID}"
     if headers["ce-source"] != expected_source:
         raise DemoError("the receiver refused the CloudEvents source")
     expected_schema_prefix = (
-        "urn:registry-server:event-schema:publicschema-household:person:"
+        "urn:registry-server:event-schema:business-establishments:establishment:"
         f"{WEBHOOK_EVENT_ID}:sha256:"
     )
     if not headers["ce-dataschema"].startswith(expected_schema_prefix):
@@ -624,7 +625,7 @@ def _verify_webhook_request(
     if set(document) != {"entity", "recordId", "revision", "trigger", "packageRevision", "values"}:
         raise DemoError("the receiver refused the webhook body shape")
     if (
-        document["entity"] != "person"
+        document["entity"] != "establishment"
         or document["trigger"] != "created"
         or not isinstance(document["revision"], int)
         or document["revision"] < 1
@@ -632,7 +633,7 @@ def _verify_webhook_request(
         or not document["packageRevision"].startswith("sha256:")
         or str(uuid.UUID(document["recordId"])) != document["recordId"]
         or not isinstance(document["values"], dict)
-        or set(document["values"]) != {"person-code", "residency-status"}
+        or set(document["values"]) != {"establishment-code", "operating-status"}
     ):
         raise DemoError("the receiver refused the event data contract")
     expected_signature = _expected_webhook_signature(key, headers, body)
@@ -781,9 +782,9 @@ def verify_webhook(root: Path) -> None:
     root = _require_root(root)
     state = _read_json_object(root / "webhook-receiver-state.json")
     events = sorted(state.get("events", {}).values(), key=lambda event: event.get("slot", 0))
-    people, _, _ = seed_spec()
+    establishments, _, _ = seed_spec()
     expected_events = sum(
-        person.get("residencyStatus") == "usual-resident" for person in people
+        establishment.get("operatingStatus") == "operating" for establishment in establishments
     )
     if state.get("verificationFailures") != 0 or len(events) != expected_events:
         raise DemoError("the webhook receiver did not verify every matching seeded event")
@@ -850,7 +851,7 @@ def _create(root: Path, route: str, logical_key: str, data: dict[str, Any]) -> s
     response, _ = _request(
         root,
         "POST",
-        route + "?accessProfile=household-operator",
+        route + "?accessProfile=business-operator",
         "operator-token",
         {"data": data},
         f"demo-{logical_key}",
@@ -863,121 +864,121 @@ def _create(root: Path, route: str, logical_key: str, data: dict[str, Any]) -> s
 
 
 def seed_spec() -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
-    people = [
-        {"personCode": "PERSON-DEMO-001", "legalName": "Omar Example", "familyName": "Example", "dateOfBirth": "1986-02-22", "personSex": "male", "residencyStatus": "usual-resident", "preferredLanguage": "en"},
-        {"personCode": "PERSON-DEMO-002", "legalName": "Lina Example", "familyName": "Example", "dateOfBirth": "2023-03-14", "personSex": "female", "residencyStatus": "usual-resident", "preferredLanguage": "en"},
-        {"personCode": "PERSON-DEMO-003", "legalName": "Sofia Sample", "familyName": "Sample", "dateOfBirth": "1980-11-02", "personSex": "female", "residencyStatus": "usual-resident", "preferredLanguage": "es"},
-        {"personCode": "PERSON-DEMO-004", "legalName": "Diego Sample", "familyName": "Sample", "dateOfBirth": "2016-06-17", "personSex": "male", "residencyStatus": "usual-resident", "preferredLanguage": "es"},
-        {"personCode": "PERSON-DEMO-005", "legalName": "Rosa Sample", "familyName": "Sample", "dateOfBirth": "1940-08-20", "personSex": "female", "residencyStatus": "usual-resident", "preferredLanguage": "es"},
-        {"personCode": "PERSON-DEMO-006", "legalName": "Karim Control", "familyName": "Control", "dateOfBirth": "1975-01-09", "personSex": "male", "residencyStatus": "usual-resident", "preferredLanguage": "fr"},
-        {"personCode": "PERSON-DEMO-007", "legalName": "Hana Control", "familyName": "Control", "dateOfBirth": "1977-09-23", "personSex": "female", "residencyStatus": "usual-resident", "preferredLanguage": "fr"},
-        {"personCode": "PERSON-DEMO-008", "legalName": "Noor Control", "familyName": "Control", "dateOfBirth": "2018-05-06", "personSex": "female", "residencyStatus": "usual-resident", "preferredLanguage": "fr"},
+    establishments = [
+        {"establishmentCode": "ESTABLISHMENT-DEMO-001", "siteName": "North Quay Head Office", "locality": "North Quay", "openedOn": "1986-02-22", "establishmentKind": "office", "operatingStatus": "operating", "preferredLanguage": "en"},
+        {"establishmentCode": "ESTABLISHMENT-DEMO-002", "siteName": "North Quay Riverside Works", "locality": "North Quay", "openedOn": "2023-03-14", "establishmentKind": "production", "operatingStatus": "operating", "preferredLanguage": "en"},
+        {"establishmentCode": "ESTABLISHMENT-DEMO-003", "siteName": "Central Fabrication Works", "locality": "Central District", "openedOn": "1980-11-02", "establishmentKind": "production", "operatingStatus": "operating", "preferredLanguage": "es"},
+        {"establishmentCode": "ESTABLISHMENT-DEMO-004", "siteName": "Central Distribution Branch", "locality": "Central District", "openedOn": "2016-06-17", "establishmentKind": "warehouse", "operatingStatus": "operating", "preferredLanguage": "es"},
+        {"establishmentCode": "ESTABLISHMENT-DEMO-005", "siteName": "Central Storage Depot", "locality": "Central District", "openedOn": "1940-08-20", "establishmentKind": "warehouse", "operatingStatus": "suspended", "preferredLanguage": "es"},
+        {"establishmentCode": "ESTABLISHMENT-DEMO-006", "siteName": "South Harbour Head Office", "locality": "South Harbour", "openedOn": "1975-01-09", "establishmentKind": "office", "operatingStatus": "operating", "preferredLanguage": "fr"},
+        {"establishmentCode": "ESTABLISHMENT-DEMO-007", "siteName": "South Harbour Regional Office", "locality": "South Harbour", "openedOn": "1977-09-23", "establishmentKind": "office", "operatingStatus": "operating", "preferredLanguage": "fr"},
+        {"establishmentCode": "ESTABLISHMENT-DEMO-008", "siteName": "South Harbour Branch", "locality": "South Harbour", "openedOn": "2018-05-06", "establishmentKind": "warehouse", "operatingStatus": "operating", "preferredLanguage": "fr"},
     ]
-    households = [
-        {"householdCode": "HOUSEHOLD-DEMO-001", "localHouseholdNumber": 1001, "householdName": "Single Headed Under Five Household", "administrativeArea": "north-demo", "householdType": "private"},
-        {"householdCode": "HOUSEHOLD-DEMO-002", "localHouseholdNumber": 1002, "householdName": "Woman Headed Child Elderly Household", "administrativeArea": "central-demo", "householdType": "private"},
-        {"householdCode": "HOUSEHOLD-DEMO-003", "localHouseholdNumber": 1003, "householdName": "Isolation Control Household", "administrativeArea": "south-demo", "householdType": "private"},
+    businesses = [
+        {"businessCode": "BUSINESS-DEMO-001", "localRegistrationNumber": 1001, "registeredName": "North Quay Engineering Ltd", "administrativeArea": "north-demo", "businessType": "private"},
+        {"businessCode": "BUSINESS-DEMO-002", "localRegistrationNumber": 1002, "registeredName": "Central Fabrication Ltd", "administrativeArea": "central-demo", "businessType": "private"},
+        {"businessCode": "BUSINESS-DEMO-003", "localRegistrationNumber": 1003, "registeredName": "South Harbour Logistics Ltd", "administrativeArea": "south-demo", "businessType": "private"},
     ]
-    memberships = [
-        {"personCode": "PERSON-DEMO-001", "householdCode": "HOUSEHOLD-DEMO-001", "relationship": "head", "validFrom": "2026-01-01"},
-        {"personCode": "PERSON-DEMO-002", "householdCode": "HOUSEHOLD-DEMO-001", "relationship": "child", "validFrom": "2026-01-01"},
-        {"personCode": "PERSON-DEMO-003", "householdCode": "HOUSEHOLD-DEMO-002", "relationship": "head", "validFrom": "2026-01-01"},
-        {"personCode": "PERSON-DEMO-004", "householdCode": "HOUSEHOLD-DEMO-002", "relationship": "child", "validFrom": "2026-01-01"},
-        {"personCode": "PERSON-DEMO-005", "householdCode": "HOUSEHOLD-DEMO-002", "relationship": "dependent", "validFrom": "2026-01-01"},
-        {"personCode": "PERSON-DEMO-006", "householdCode": "HOUSEHOLD-DEMO-003", "relationship": "head", "validFrom": "2026-01-01"},
-        {"personCode": "PERSON-DEMO-007", "householdCode": "HOUSEHOLD-DEMO-003", "relationship": "spouse", "validFrom": "2026-01-01"},
-        {"personCode": "PERSON-DEMO-008", "householdCode": "HOUSEHOLD-DEMO-003", "relationship": "child", "validFrom": "2026-01-01"},
+    assignments = [
+        {"establishmentCode": "ESTABLISHMENT-DEMO-001", "businessCode": "BUSINESS-DEMO-001", "relationship": "head-office", "validFrom": "2026-01-01"},
+        {"establishmentCode": "ESTABLISHMENT-DEMO-002", "businessCode": "BUSINESS-DEMO-001", "relationship": "branch", "validFrom": "2026-01-01"},
+        {"establishmentCode": "ESTABLISHMENT-DEMO-003", "businessCode": "BUSINESS-DEMO-002", "relationship": "head-office", "validFrom": "2026-01-01"},
+        {"establishmentCode": "ESTABLISHMENT-DEMO-004", "businessCode": "BUSINESS-DEMO-002", "relationship": "branch", "validFrom": "2026-01-01"},
+        {"establishmentCode": "ESTABLISHMENT-DEMO-005", "businessCode": "BUSINESS-DEMO-002", "relationship": "depot", "validFrom": "2026-01-01"},
+        {"establishmentCode": "ESTABLISHMENT-DEMO-006", "businessCode": "BUSINESS-DEMO-003", "relationship": "head-office", "validFrom": "2026-01-01"},
+        {"establishmentCode": "ESTABLISHMENT-DEMO-007", "businessCode": "BUSINESS-DEMO-003", "relationship": "regional-office", "validFrom": "2026-01-01"},
+        {"establishmentCode": "ESTABLISHMENT-DEMO-008", "businessCode": "BUSINESS-DEMO-003", "relationship": "branch", "validFrom": "2026-01-01"},
     ]
-    return people, households, memberships
+    return establishments, businesses, assignments
 
 
 def seed(root: Path) -> None:
     root = _require_root(root)
-    people, households, memberships = seed_spec()
-    person_ids = {
-        person["personCode"]: _create(root, "/v1/records/persons", person["personCode"].lower(), person)
-        for person in people
+    establishments, businesses, assignments = seed_spec()
+    establishment_ids = {
+        establishment["establishmentCode"]: _create(root, "/v1/records/establishments", establishment["establishmentCode"].lower(), establishment)
+        for establishment in establishments
     }
-    household_ids = {
-        household["householdCode"]: _create(
-            root, "/v1/records/households", household["householdCode"].lower(), household
+    business_ids = {
+        business["businessCode"]: _create(
+            root, "/v1/records/businesses", business["businessCode"].lower(), business
         )
-        for household in households
+        for business in businesses
     }
-    for index, membership in enumerate(memberships, start=1):
+    for index, assignment in enumerate(assignments, start=1):
         _create(
             root,
-            "/v1/records/group-memberships",
-            f"membership-{index}",
+            "/v1/records/operator-assignments",
+            f"assignment-{index}",
             {
-                "person": person_ids[membership["personCode"]],
-                "household": household_ids[membership["householdCode"]],
-                "relationship": membership["relationship"],
-                "validFrom": membership["validFrom"],
+                "establishment": establishment_ids[assignment["establishmentCode"]],
+                "business": business_ids[assignment["businessCode"]],
+                "relationship": assignment["relationship"],
+                "validFrom": assignment["validFrom"],
             },
         )
-    _write_json(root / "seed-record-ids.json", {"people": person_ids, "households": household_ids})
-    people_response, _ = _request(
+    _write_json(root / "seed-record-ids.json", {"establishments": establishment_ids, "businesses": business_ids})
+    establishments_response, _ = _request(
         root,
         "GET",
-        "/v1/records/persons?accessProfile=household-operator&$top=20",
+        "/v1/records/establishments?accessProfile=business-operator&$top=20",
         "operator-token",
     )
-    household_response, _ = _request(
+    business_response, _ = _request(
         root,
         "GET",
-        "/v1/records/households?accessProfile=household-operator&$top=20",
+        "/v1/records/businesses?accessProfile=business-operator&$top=20",
         "operator-token",
     )
-    membership_response, _ = _request(
+    assignment_response, _ = _request(
         root,
         "GET",
-        "/v1/records/group-memberships:current?accessProfile=household-operator&$top=20",
+        "/v1/records/operator-assignments:current?accessProfile=business-operator&$top=20",
         "operator-token",
     )
-    if [len(response.get("items", [])) for response in (people_response, household_response, membership_response)] != [8, 3, 8]:
-        raise DemoError("seeded list counts did not match the expected 8 people, 3 households, and 8 memberships")
+    if [len(response.get("items", [])) for response in (establishments_response, business_response, assignment_response)] != [8, 3, 8]:
+        raise DemoError("seeded list counts did not match the expected 8 establishments, 3 businesses, and 8 assignments")
     _request(
         root,
         "GET",
-        f"/v1/records/persons/{person_ids['PERSON-DEMO-001']}?accessProfile=household-operator",
+        f"/v1/records/establishments/{establishment_ids['ESTABLISHMENT-DEMO-001']}?accessProfile=business-operator",
         "no-purpose-token",
         expected=404,
     )
-    print("Seeded 8 synthetic people, 3 households, and 8 current memberships.")
+    print("Seeded 8 synthetic establishments, 3 businesses, and 8 current assignments.")
 
 
-def _bound_household(root: Path) -> tuple[str, str]:
+def _bound_business(root: Path) -> tuple[str, str]:
     seed_ids = _read_json_object(root / "seed-record-ids.json")
-    households = seed_ids.get("households")
-    household_code = "HOUSEHOLD-DEMO-001"
-    household_id = households.get(household_code) if isinstance(households, dict) else None
-    if not isinstance(household_id, str):
+    businesses = seed_ids.get("businesses")
+    business_code = "BUSINESS-DEMO-001"
+    business_id = businesses.get(business_code) if isinstance(businesses, dict) else None
+    if not isinstance(business_id, str):
         raise DemoError("seed record identifiers are missing; run the demo seed first")
     try:
-        parsed = uuid.UUID(household_id)
+        parsed = uuid.UUID(business_id)
     except ValueError as error:
-        raise DemoError("the bound household identifier is not a UUID") from error
-    if str(parsed) != household_id:
-        raise DemoError("the bound household identifier is not canonical")
-    return household_id, household_code
+        raise DemoError("the bound business identifier is not a UUID") from error
+    if str(parsed) != business_id:
+        raise DemoError("the bound business identifier is not canonical")
+    return business_id, business_code
 
 
 def configure_viewer(root: Path) -> None:
     root = _require_root(root)
-    household_id, household_code = _bound_household(root)
+    business_id, business_code = _bound_business(root)
     viewer_public = _read_json_object(root / "keys/viewer-public.jwk.json")
     _write_new(
         root / f"mint/clients/{VIEWER_CLIENT}.yaml",
         _mint_client(
             VIEWER_CLIENT,
             viewer_public,
-            ["registry:household:view"],
+            ["registry:business:view"],
             {
-                "household_code": household_code,
-                "household_id": household_id,
-                "registry_principal": "synthetic-household-viewer",
-                "registry_purpose": "household-view",
+                "business_code": business_code,
+                "business_id": business_id,
+                "registry_principal": "synthetic-business-viewer",
+                "registry_purpose": "business-view",
             },
         ),
     )
@@ -988,76 +989,93 @@ def _print_query(label: str, response: dict[str, Any]) -> None:
     print(json.dumps(response, indent=2, sort_keys=True))
 
 
-def _assert_bound_household(response: dict[str, Any], household_id: str, household_code: str) -> None:
+def _assert_bound_business(response: dict[str, Any], business_id: str, business_code: str) -> None:
     data = response.get("data")
     if (
-        response.get("id") != household_id
+        response.get("id") != business_id
         or not isinstance(data, dict)
-        or data.get("householdCode") != household_code
+        or data.get("businessCode") != business_code
     ):
-        raise DemoError("viewer read did not return its one bound household")
+        raise DemoError("viewer read did not return its one bound business")
 
 
 def query(root: Path, suite: str = "all") -> None:
     root = _require_root(root)
     if suite not in ("all", "operator", "viewer"):
         raise DemoError("query suite must be all, operator, or viewer")
-    household_id, household_code = _bound_household(root)
-    encoded_household_id = urllib.parse.quote(household_id, safe="")
+    business_id, business_code = _bound_business(root)
+    encoded_business_id = urllib.parse.quote(business_id, safe="")
     if suite in ("all", "operator"):
         queries = [
-            ("People from one household", f"/v1/records/households/{encoded_household_id}/people?accessProfile=household-operator&$select=personCode,legalName,personSex,residencyStatus&$orderby=personCode&$top=20&$count=true"),
-            ("Derived stored and computed filter", "/v1/records/households?accessProfile=household-operator&$select=householdCode,administrativeArea,localHouseholdNumber,childCount&$filter=administrativeArea%20eq%20%27north-demo%27%20and%20childCount%20eq%201&$orderby=localHouseholdNumber&$top=20&$count=true"),
-            ("Single headed with child under five", "/v1/records/households?accessProfile=household-operator&$select=householdCode,childUnder5Count,singleHeaded&$filter=singleHeaded%20eq%20true%20and%20childUnder5Count%20eq%201&$top=20&$count=true"),
-            ("Woman headed with child and elderly", "/v1/records/households?accessProfile=household-operator&$select=householdCode,womanHeaded,childCount,elderlyCount&$filter=womanHeaded%20eq%20true%20and%20childCount%20eq%201%20and%20elderlyCount%20eq%201&$top=20&$count=true"),
+            ("Establishments from one business", f"/v1/records/businesses/{encoded_business_id}/establishments?accessProfile=business-operator&$select=establishmentCode,siteName,establishmentKind,operatingStatus&$orderby=establishmentCode&$top=20&$count=true"),
+            ("Derived stored and computed filter", "/v1/records/businesses?accessProfile=business-operator&$select=businessCode,administrativeArea,localRegistrationNumber,branchCount&$filter=administrativeArea%20eq%20%27north-demo%27%20and%20branchCount%20eq%201&$orderby=localRegistrationNumber&$top=20&$count=true"),
+            ("Production sites without a suspended establishment", "/v1/records/businesses?accessProfile=business-operator&$select=businessCode,productionSiteCount,suspendedSiteCount,hasProductionSite&$filter=hasProductionSite%20eq%20true%20and%20suspendedSiteCount%20eq%200&$top=20&$count=true"),
+            ("Businesses with a suspended establishment", "/v1/records/businesses?accessProfile=business-operator&$select=businessCode,hasProductionSite,branchCount,suspendedSiteCount&$filter=hasProductionSite%20eq%20true%20and%20branchCount%20eq%201%20and%20suspendedSiteCount%20eq%201&$top=20&$count=true"),
         ]
-        for label, path in queries:
+        expected_rows = [
+            [
+                {"establishmentCode": "ESTABLISHMENT-DEMO-001", "siteName": "North Quay Head Office", "establishmentKind": "office", "operatingStatus": "operating"},
+                {"establishmentCode": "ESTABLISHMENT-DEMO-002", "siteName": "North Quay Riverside Works", "establishmentKind": "production", "operatingStatus": "operating"},
+            ],
+            [{"businessCode": "BUSINESS-DEMO-001", "administrativeArea": "north-demo", "localRegistrationNumber": 1001, "branchCount": 1}],
+            [{"businessCode": "BUSINESS-DEMO-001", "productionSiteCount": 1, "suspendedSiteCount": 0, "hasProductionSite": True}],
+            [{"businessCode": "BUSINESS-DEMO-002", "hasProductionSite": True, "branchCount": 1, "suspendedSiteCount": 1}],
+        ]
+        for (label, path), expected in zip(queries, expected_rows, strict=True):
             response, _ = _request(root, "GET", path, "operator-token")
+            rows = response.get("items")
+            if (
+                not isinstance(rows, list)
+                or any(not isinstance(row, dict) for row in rows)
+                or [row.get("data") for row in rows] != expected
+                or response.get("count") != len(expected)
+            ):
+                raise DemoError(f"{label} returned unexpected records, fields, or derived counts")
             _print_query(label, response)
         operator_lookup, _ = _request(
             root,
             "POST",
-            "/v1/records/households:lookup?accessProfile=household-operator",
+            "/v1/records/businesses:lookup?accessProfile=business-operator",
             "operator-token",
             {
                 "selector": "by-local-reference",
                 "values": {
                     "administrativeArea": "north-demo",
-                    "localHouseholdNumber": 1001,
+                    "localRegistrationNumber": 1001,
                 },
             },
         )
-        _assert_bound_household(operator_lookup, household_id, household_code)
+        _assert_bound_business(operator_lookup, business_id, business_code)
         _print_query("Exact request-value selector lookup", operator_lookup)
 
     if suite in ("all", "viewer"):
         viewer_get, _ = _request(
             root,
             "GET",
-            f"/v1/records/households/{encoded_household_id}?accessProfile=household-viewer",
+            f"/v1/records/businesses/{encoded_business_id}?accessProfile=business-viewer",
             "viewer-token",
         )
-        _assert_bound_household(viewer_get, household_id, household_code)
-        _print_query("Viewer get bound by verified household ID claim", viewer_get)
+        _assert_bound_business(viewer_get, business_id, business_code)
+        _print_query("Viewer get bound by verified business ID claim", viewer_get)
 
         viewer_lookup, _ = _request(
             root,
             "POST",
-            "/v1/records/households:lookup?accessProfile=household-viewer",
+            "/v1/records/businesses:lookup?accessProfile=business-viewer",
             "viewer-token",
-            {"selector": "by-household-code"},
+            {"selector": "by-business-code"},
         )
-        _assert_bound_household(viewer_lookup, household_id, household_code)
-        _print_query("Viewer lookup using its verified household code claim", viewer_lookup)
+        _assert_bound_business(viewer_lookup, business_id, business_code)
+        _print_query("Viewer lookup using its verified business code claim", viewer_lookup)
 
         denied = [
             (
                 "Viewer list is concealed",
-                "/v1/records/households?accessProfile=household-viewer",
+                "/v1/records/businesses?accessProfile=business-viewer",
             ),
             (
                 "Viewer relationship path is concealed",
-                f"/v1/records/households/{encoded_household_id}/people?accessProfile=household-viewer",
+                f"/v1/records/businesses/{encoded_business_id}/establishments?accessProfile=business-viewer",
             ),
         ]
         for label, path in denied:
@@ -1065,8 +1083,8 @@ def query(root: Path, suite: str = "all") -> None:
             if response.get("code") != "resource.not_found":
                 raise DemoError("viewer denial did not use the concealed resource response")
             rendered = json.dumps(response, sort_keys=True)
-            if household_id in rendered or household_code in rendered:
-                raise DemoError("viewer denial exposed a bound household value")
+            if business_id in rendered or business_code in rendered:
+                raise DemoError("viewer denial exposed a bound business value")
             _print_query(label, response)
 
 

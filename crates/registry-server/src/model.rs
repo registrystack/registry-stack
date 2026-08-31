@@ -252,6 +252,8 @@ pub struct CompiledEntity {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub batch: Option<BatchSource>,
     pub classification: Classification,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_requirements: Option<crate::contract::AccessRequirementsSource>,
     pub physical_table: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temporal: Option<CompiledTemporal>,

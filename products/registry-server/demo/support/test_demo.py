@@ -48,7 +48,7 @@ class DemoProvisioningTests(unittest.TestCase):
             (self.root / f"keys/{name}-public.jwk.json").write_text(
                 json.dumps(public_jwk(f"{name}-key")), encoding="utf-8"
             )
-        self.fixture = MODULE_PATH.parents[2] / "acceptance/publicschema-household"
+        self.fixture = MODULE_PATH.parents[2] / "acceptance/business-establishments"
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -59,21 +59,21 @@ class DemoProvisioningTests(unittest.TestCase):
         project = (self.root / "project/registry.yaml").read_text(encoding="utf-8")
         self.assertIn("environment: local", project)
         self.assertIn(f"instanceId: {DEMO.INSTANCE_ID}", project)
-        self.assertNotIn("publicschema-household-acceptance", project)
+        self.assertNotIn("business-establishments-acceptance", project)
         self.assertFalse(any((self.root / "project").rglob(".DS_Store")))
 
         mint = (self.root / "mint/mint.yaml").read_text(encoding="utf-8")
         self.assertIn("validationMode: supervised-local-development", mint)
-        self.assertIn("audiences: [urn:registry-server:household-demo]", mint)
+        self.assertIn("audiences: [urn:registry-server:business-demo]", mint)
         self.assertIn("algorithms: [ES256]", mint)
         self.assertNotIn("database-password", mint)
-        operator = (self.root / "mint/clients/household-demo.yaml").read_text(encoding="utf-8")
-        self.assertIn('registry_principal: "synthetic-household-operator"', operator)
-        self.assertIn('registry_purpose: "household-administration"', operator)
-        no_purpose = (self.root / "mint/clients/household-demo-no-purpose.yaml").read_text(
+        operator = (self.root / "mint/clients/business-demo.yaml").read_text(encoding="utf-8")
+        self.assertIn('registry_principal: "synthetic-business-operator"', operator)
+        self.assertIn('registry_purpose: "business-administration"', operator)
+        no_purpose = (self.root / "mint/clients/business-demo-no-purpose.yaml").read_text(
             encoding="utf-8"
         )
-        self.assertIn('registry_principal: "synthetic-household-operator"', no_purpose)
+        self.assertIn('registry_principal: "synthetic-business-operator"', no_purpose)
         self.assertNotIn("registry_purpose", no_purpose)
 
         runtime = (self.root / "runtime-test.yaml").read_text(encoding="utf-8")
@@ -84,7 +84,7 @@ class DemoProvisioningTests(unittest.TestCase):
         self.assertIn("documentRef: secret:file/mint-jwks", runtime)
         self.assertIn("principal: registry_principal", runtime)
         self.assertIn("purpose: registry_purpose", runtime)
-        self.assertIn("household-demo-viewer", runtime)
+        self.assertIn("business-demo-viewer", runtime)
         self.assertNotIn("a" * 48, runtime)
         self.assertEqual(
             json.loads((self.root / "secrets/mint-jwks").read_text(encoding="utf-8"))["keys"][0]["kid"],
@@ -125,7 +125,7 @@ class DemoProvisioningTests(unittest.TestCase):
         webhook_key = self.root / "secrets/webhook-key"
         webhook_key.write_bytes(b"k" * 32)
         webhook_key.chmod(0o600)
-        fixture_module = self.fixture / "modules/publicschema-household-demographics/module.yaml"
+        fixture_module = self.fixture / "modules/business-establishment-summary/module.yaml"
         original_fixture_module = fixture_module.read_bytes()
 
         DEMO.prepare(self.root, self.fixture, 15432, 18081, 18080, True, 18082)
@@ -133,14 +133,14 @@ class DemoProvisioningTests(unittest.TestCase):
         project_path = self.root / "project/registry.yaml"
         project = project_path.read_text(encoding="utf-8")
         module = (
-            self.root / "project/modules/publicschema-household-demographics/module.yaml"
+            self.root / "project/modules/business-establishment-summary/module.yaml"
         ).read_text(encoding="utf-8")
         self.assertIn(DEMO.WEBHOOK_MODULE_LOCK, project)
         self.assertNotIn(DEMO.WEBHOOK_MODULE_LOCK + "    digest:", project)
-        self.assertIn("id: usual-resident-created-v1", module)
-        self.assertIn("afterEquals: {residency-status: usual-resident}", module)
+        self.assertIn("id: operating-created-v1", module)
+        self.assertIn("afterEquals:\n            operating-status: operating", module)
         self.assertLess(
-            module.index("id: usual-resident-created-v1"),
+            module.index("id: operating-created-v1"),
             module.index(DEMO.WEBHOOK_ENTITY_INSERTION),
         )
         self.assertEqual(fixture_module.read_bytes(), original_fixture_module)
@@ -178,14 +178,14 @@ class DemoProvisioningTests(unittest.TestCase):
         event_id = str(uuid.UUID("00000000-0000-4000-8000-000000000001"))
         body = json.dumps(
             {
-                "entity": "person",
+                "entity": "establishment",
                 "packageRevision": "sha256:" + "4" * 64,
                 "recordId": "00000000-0000-4000-8000-000000000002",
                 "revision": 1,
                 "trigger": "created",
                 "values": {
-                    "person-code": "PERSON-DEMO-001",
-                    "residency-status": "usual-resident",
+                    "establishment-code": "ESTABLISHMENT-DEMO-001",
+                    "operating-status": "operating",
                 },
             },
             sort_keys=True,
@@ -197,13 +197,13 @@ class DemoProvisioningTests(unittest.TestCase):
             "ce-specversion": "1.0",
             "ce-id": event_id,
             "ce-source": (
-                "urn:registrystack:registry:publicschema-household:"
+                "urn:registrystack:registry:business-establishments:"
                 f"instance:{DEMO.INSTANCE_ID}"
             ),
             "ce-type": DEMO.WEBHOOK_EVENT_ID,
             "ce-time": "2026-01-01T00:00:00Z",
             "ce-dataschema": (
-                "urn:registry-server:event-schema:publicschema-household:person:"
+                "urn:registry-server:event-schema:business-establishments:establishment:"
                 f"{DEMO.WEBHOOK_EVENT_ID}:sha256:" + "5" * 64
             ),
             "x-registry-event-generation": "1",
@@ -232,7 +232,7 @@ class DemoProvisioningTests(unittest.TestCase):
                     "deliveries": [
                         {
                             "eventId": event_id,
-                            "deliveryId": "person.usual-resident-created-v1.webhook",
+                            "deliveryId": "establishment.operating-created-v1.webhook",
                             "generation": 1,
                             "state": "dead_lettered",
                             "replayEligible": True,
@@ -245,14 +245,14 @@ class DemoProvisioningTests(unittest.TestCase):
 
         self.assertEqual(
             DEMO.select_dead_letter(report),
-            (event_id, "person.usual-resident-created-v1.webhook", 1),
+            (event_id, "establishment.operating-created-v1.webhook", 1),
         )
 
-    def test_webhook_verification_covers_every_matching_seeded_person(self) -> None:
-        people, _, _ = DEMO.seed_spec()
+    def test_webhook_verification_covers_every_matching_seeded_establishment(self) -> None:
+        establishments, _, _ = DEMO.seed_spec()
         events = {}
-        for index, person in enumerate(people, start=1):
-            if person["residencyStatus"] != "usual-resident":
+        for index, establishment in enumerate(establishments, start=1):
+            if establishment["operatingStatus"] != "operating":
                 continue
             attempts = [{"generation": 1, "attempt": 1, "accepted": True}]
             if index == 2:
@@ -308,44 +308,44 @@ class DemoProvisioningTests(unittest.TestCase):
         self.assertEqual(actual, expected)
 
     def test_seed_is_referentially_closed_and_stable(self) -> None:
-        people, households, memberships = DEMO.seed_spec()
-        person_codes = {person["personCode"] for person in people}
-        household_codes = {household["householdCode"] for household in households}
-        self.assertEqual((len(people), len(households), len(memberships)), (8, 3, 8))
-        self.assertEqual(len(person_codes), len(people))
-        self.assertEqual(len(household_codes), len(households))
+        establishments, businesses, assignments = DEMO.seed_spec()
+        establishment_codes = {establishment["establishmentCode"] for establishment in establishments}
+        business_codes = {business["businessCode"] for business in businesses}
+        self.assertEqual((len(establishments), len(businesses), len(assignments)), (8, 3, 8))
+        self.assertEqual(len(establishment_codes), len(establishments))
+        self.assertEqual(len(business_codes), len(businesses))
         self.assertTrue(
             all(
                 "-" not in key
-                for rows in (people, households, memberships)
+                for rows in (establishments, businesses, assignments)
                 for row in rows
                 for key in row
             ),
             "seed data must use compiled public API field names",
         )
         self.assertEqual(
-            [household["localHouseholdNumber"] for household in households],
+            [business["localRegistrationNumber"] for business in businesses],
             [1001, 1002, 1003],
         )
-        self.assertTrue(all(row["personCode"] in person_codes for row in memberships))
-        self.assertTrue(all(row["householdCode"] in household_codes for row in memberships))
+        self.assertTrue(all(row["establishmentCode"] in establishment_codes for row in assignments))
+        self.assertTrue(all(row["businessCode"] in business_codes for row in assignments))
         self.assertEqual(
-            {person["personSex"] for person in people},
-            {"female", "male"},
+            {establishment["establishmentKind"] for establishment in establishments},
+            {"production", "warehouse", "office"},
         )
         self.assertEqual(
-            sum(person["residencyStatus"] == "usual-resident" for person in people),
-            8,
+            sum(establishment["operatingStatus"] == "operating" for establishment in establishments),
+            7,
         )
 
-    def test_viewer_registration_is_created_only_after_a_household_id_is_known(self) -> None:
+    def test_viewer_registration_is_created_only_after_a_business_id_is_known(self) -> None:
         DEMO.prepare(self.root, self.fixture, 15432, 18081, 18080)
-        household_id = "0198f0f5-0877-7ae2-a853-09f2d47b6840"
+        business_id = "0198f0f5-0877-7ae2-a853-09f2d47b6840"
         (self.root / "seed-record-ids.json").write_text(
             json.dumps(
                 {
-                    "people": {},
-                    "households": {"HOUSEHOLD-DEMO-001": household_id},
+                    "establishments": {},
+                    "businesses": {"BUSINESS-DEMO-001": business_id},
                 }
             ),
             encoding="utf-8",
@@ -353,20 +353,20 @@ class DemoProvisioningTests(unittest.TestCase):
 
         DEMO.configure_viewer(self.root)
 
-        viewer = (self.root / "mint/clients/household-demo-viewer.yaml").read_text(
+        viewer = (self.root / "mint/clients/business-demo-viewer.yaml").read_text(
             encoding="utf-8"
         )
-        self.assertIn('scopes: ["registry:household:view"]', viewer)
-        self.assertIn(f'household_id: "{household_id}"', viewer)
-        self.assertIn('household_code: "HOUSEHOLD-DEMO-001"', viewer)
-        self.assertIn('registry_purpose: "household-view"', viewer)
+        self.assertIn('scopes: ["registry:business:view"]', viewer)
+        self.assertIn(f'business_id: "{business_id}"', viewer)
+        self.assertIn('business_code: "BUSINESS-DEMO-001"', viewer)
+        self.assertIn('registry_purpose: "business-view"', viewer)
         self.assertIn("viewer-key", viewer)
         self.assertNotIn("signing-p256-private-jwk", viewer)
 
     def test_viewer_registration_refuses_a_non_uuid_bound_record(self) -> None:
         DEMO.prepare(self.root, self.fixture, 15432, 18081, 18080)
         (self.root / "seed-record-ids.json").write_text(
-            json.dumps({"households": {"HOUSEHOLD-DEMO-001": "not-a-record-id"}}),
+            json.dumps({"businesses": {"BUSINESS-DEMO-001": "not-a-record-id"}}),
             encoding="utf-8",
         )
 
@@ -374,9 +374,9 @@ class DemoProvisioningTests(unittest.TestCase):
             DEMO.configure_viewer(self.root)
 
     def test_viewer_queries_prove_bound_get_claim_lookup_and_concealed_denials(self) -> None:
-        household_id = "0198f0f5-0877-7ae2-a853-09f2d47b6840"
+        business_id = "0198f0f5-0877-7ae2-a853-09f2d47b6840"
         (self.root / "seed-record-ids.json").write_text(
-            json.dumps({"households": {"HOUSEHOLD-DEMO-001": household_id}}),
+            json.dumps({"businesses": {"BUSINESS-DEMO-001": business_id}}),
             encoding="utf-8",
         )
         calls: list[tuple[str, str, str, object, object]] = []
@@ -395,9 +395,9 @@ class DemoProvisioningTests(unittest.TestCase):
             if expected == 404:
                 return {"code": "resource.not_found"}, {}
             return {
-                "id": household_id,
+                "id": business_id,
                 "revision": 1,
-                "data": {"householdCode": "HOUSEHOLD-DEMO-001"},
+                "data": {"businessCode": "BUSINESS-DEMO-001"},
             }, {}
 
         with mock.patch.object(DEMO, "_request", side_effect=request), mock.patch.object(
@@ -406,16 +406,16 @@ class DemoProvisioningTests(unittest.TestCase):
             DEMO.query(self.root, "viewer")
 
         self.assertEqual(len(calls), 4)
-        self.assertEqual(calls[0][0:3], ("GET", f"/v1/records/households/{household_id}?accessProfile=household-viewer", "viewer-token"))
-        self.assertEqual(calls[1][0:3], ("POST", "/v1/records/households:lookup?accessProfile=household-viewer", "viewer-token"))
-        self.assertEqual(calls[1][3], {"selector": "by-household-code"})
+        self.assertEqual(calls[0][0:3], ("GET", f"/v1/records/businesses/{business_id}?accessProfile=business-viewer", "viewer-token"))
+        self.assertEqual(calls[1][0:3], ("POST", "/v1/records/businesses:lookup?accessProfile=business-viewer", "viewer-token"))
+        self.assertEqual(calls[1][3], {"selector": "by-business-code"})
         self.assertTrue(all(call[2] == "viewer-token" for call in calls))
         self.assertEqual([call[4] for call in calls], [200, 200, 404, 404])
 
     def test_operator_selector_query_uses_the_exact_values_property(self) -> None:
-        household_id = "0198f0f5-0877-7ae2-a853-09f2d47b6840"
+        business_id = "0198f0f5-0877-7ae2-a853-09f2d47b6840"
         (self.root / "seed-record-ids.json").write_text(
-            json.dumps({"households": {"HOUSEHOLD-DEMO-001": household_id}}),
+            json.dumps({"businesses": {"BUSINESS-DEMO-001": business_id}}),
             encoding="utf-8",
         )
         calls: list[tuple[str, str, object]] = []
@@ -432,11 +432,20 @@ class DemoProvisioningTests(unittest.TestCase):
             calls.append((method, path, body))
             if method == "POST":
                 return {
-                    "id": household_id,
+                    "id": business_id,
                     "revision": 1,
-                    "data": {"householdCode": "HOUSEHOLD-DEMO-001"},
+                    "data": {"businessCode": "BUSINESS-DEMO-001"},
                 }, {}
-            return {"items": []}, {}
+            rows = [
+                [
+                    {"establishmentCode": "ESTABLISHMENT-DEMO-001", "siteName": "North Quay Head Office", "establishmentKind": "office", "operatingStatus": "operating"},
+                    {"establishmentCode": "ESTABLISHMENT-DEMO-002", "siteName": "North Quay Riverside Works", "establishmentKind": "production", "operatingStatus": "operating"},
+                ],
+                [{"businessCode": "BUSINESS-DEMO-001", "administrativeArea": "north-demo", "localRegistrationNumber": 1001, "branchCount": 1}],
+                [{"businessCode": "BUSINESS-DEMO-001", "productionSiteCount": 1, "suspendedSiteCount": 0, "hasProductionSite": True}],
+                [{"businessCode": "BUSINESS-DEMO-002", "hasProductionSite": True, "branchCount": 1, "suspendedSiteCount": 1}],
+            ][len(calls) - 1]
+            return {"items": [{"data": row} for row in rows], "count": len(rows)}, {}
 
         with mock.patch.object(DEMO, "_request", side_effect=request), mock.patch.object(
             DEMO, "_print_query"
@@ -444,34 +453,34 @@ class DemoProvisioningTests(unittest.TestCase):
             DEMO.query(self.root, "operator")
 
         query_paths = [call[1] for call in calls[:-1]]
-        self.assertIn("$select=personCode,legalName,personSex,residencyStatus", query_paths[0])
-        self.assertIn("$orderby=personCode", query_paths[0])
+        self.assertIn("$select=establishmentCode,siteName,establishmentKind,operatingStatus", query_paths[0])
+        self.assertIn("$orderby=establishmentCode", query_paths[0])
         self.assertIn("$filter=administrativeArea%20eq", query_paths[1])
-        self.assertIn("$orderby=localHouseholdNumber", query_paths[1])
-        self.assertIn("$filter=singleHeaded%20eq", query_paths[2])
-        self.assertIn("childUnder5Count%20eq", query_paths[2])
-        self.assertIn("$filter=womanHeaded%20eq", query_paths[3])
+        self.assertIn("$orderby=localRegistrationNumber", query_paths[1])
+        self.assertIn("$filter=hasProductionSite%20eq", query_paths[2])
+        self.assertIn("suspendedSiteCount%20eq%200", query_paths[2])
+        self.assertIn("$filter=hasProductionSite%20eq", query_paths[3])
         self.assertTrue(
             all(
                 internal_name not in path
                 for path in query_paths
                 for internal_name in (
-                    "person-code",
+                    "establishment-code",
                     "administrative-area",
-                    "local-household-number",
-                    "child-under-5-count",
-                    "woman-headed",
+                    "local-registration-number",
+                    "production-site-count",
+                    "has-production-site",
                 )
             )
         )
-        self.assertEqual(calls[-1][0:2], ("POST", "/v1/records/households:lookup?accessProfile=household-operator"))
+        self.assertEqual(calls[-1][0:2], ("POST", "/v1/records/businesses:lookup?accessProfile=business-operator"))
         self.assertEqual(
             calls[-1][2],
             {
                 "selector": "by-local-reference",
                 "values": {
                     "administrativeArea": "north-demo",
-                    "localHouseholdNumber": 1001,
+                    "localRegistrationNumber": 1001,
                 },
             },
         )

@@ -718,6 +718,194 @@ fn change_request_retention_mode_is_a_strict_enum() {
         .any(|diagnostic| diagnostic.path.contains("changeRequest")));
 }
 
+fn correction_with_target_access_requirements() -> serde_json::Value {
+    let mut source: serde_json::Value = serde_json::from_slice(&change_request_correction_project(
+        "request-target-requirements",
+        "",
+        "",
+        "internal",
+        "internal",
+        "[]",
+        "[]",
+        "[]",
+    ))
+    .unwrap();
+    let boundary = serde_json::json!({"field":"site","claim":"allowed_sites","operator":"in"});
+    source["entities"][1]["accessRequirements"] = serde_json::json!({
+        "requiredScopes":["target:manage"],
+        "allowedPurposes":["target-management"],
+        "rowBoundaries":[boundary.clone()]
+    });
+    for profile in source["accessProfiles"].as_array_mut().unwrap() {
+        profile["requiredScopes"] = serde_json::json!(["target:manage"]);
+        profile["requiredPurposes"] = serde_json::json!(["target-management"]);
+    }
+    source["accessProfiles"][0]["grants"][0]["rowBoundaries"] =
+        serde_json::json!([boundary.clone()]);
+    source["accessProfiles"][1]["grants"][0]["reviewStages"][0]["targets"][0]["rowBoundaries"] =
+        serde_json::json!([boundary.clone()]);
+    source["accessProfiles"][2]["grants"][0]["applyTargets"][0]["rowBoundaries"] =
+        serde_json::json!([boundary]);
+    source
+}
+
+#[test]
+fn change_request_review_and_apply_cannot_omit_target_access_requirements() {
+    let source = correction_with_target_access_requirements();
+    compile_json(&serde_json::to_vec(&source).unwrap())
+        .expect("explicit requirements are satisfied");
+    for (profile_index, target_path, surface) in [
+        (
+            1,
+            "/grants/0/reviewStages/0/targets/0/rowBoundaries",
+            "reviewStages",
+        ),
+        (2, "/grants/0/applyTargets/0/rowBoundaries", "applyTargets"),
+    ] {
+        for (path, replacement, code) in [
+            (
+                "/requiredScopes",
+                serde_json::json!([]),
+                "access.requirements.scope_missing",
+            ),
+            (
+                "/requiredPurposes",
+                serde_json::json!([]),
+                "access.requirements.purpose_widened",
+            ),
+            (
+                "/requiredPurposes",
+                serde_json::json!(["unrelated"]),
+                "access.requirements.purpose_widened",
+            ),
+            (
+                target_path,
+                serde_json::json!([]),
+                "access.requirements.row_boundary_missing",
+            ),
+            (
+                target_path,
+                serde_json::json!([{"field":"site","claim":"different_sites","operator":"in"}]),
+                "access.requirements.row_boundary_missing",
+            ),
+        ] {
+            let mut changed = source.clone();
+            *changed["accessProfiles"][profile_index]
+                .pointer_mut(path)
+                .unwrap() = replacement;
+            let failure = compile_json(&serde_json::to_vec(&changed).unwrap())
+                .expect_err("request target grants cannot weaken mandatory entity requirements");
+            assert!(
+                failure
+                    .diagnostics()
+                    .iter()
+                    .any(|d| d.code == code && d.path.contains(surface)),
+                "{surface} {path}: {failure:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn change_request_fingerprint_covers_request_and_target_access_requirements() {
+    let fingerprint = |source: &serde_json::Value| {
+        compile_json(&serde_json::to_vec(source).unwrap())
+            .unwrap()
+            .entities()["placement-correction-request"]
+            .change_request
+            .as_ref()
+            .unwrap()
+            .contract_fingerprint
+            .clone()
+    };
+    let mut source = correction_with_target_access_requirements();
+    source["entities"][1]
+        .as_object_mut()
+        .unwrap()
+        .remove("accessRequirements");
+    let base = fingerprint(&source);
+    for entity_index in [1, 2] {
+        let mut changed = source.clone();
+        changed["entities"][entity_index]["accessRequirements"] =
+            serde_json::json!({"requiredScopes":["target:manage"]});
+        assert_ne!(
+            base,
+            fingerprint(&changed),
+            "relevant requirements change the proposal contract"
+        );
+    }
+    source["entities"][0]["accessRequirements"] =
+        serde_json::json!({"requiredScopes":["site:read"]});
+    assert_eq!(
+        base,
+        fingerprint(&source),
+        "unaffected entity requirements do not reinterpret effects"
+    );
+}
+
+#[test]
+fn change_request_presence_cannot_omit_request_access_requirements() {
+    let mut source = correction_with_target_access_requirements();
+    let boundary =
+        serde_json::json!({"field":"placement","claim":"allowed_placements","operator":"in"});
+    source["entities"][1]["accessRequirements"]["allowedPurposes"] =
+        serde_json::json!(["target-management", "non-review"]);
+    source["entities"][2]["accessRequirements"] = serde_json::json!({
+        "requiredScopes":["request:read"],
+        "allowedPurposes":["target-management"],
+        "rowBoundaries":[boundary.clone()]
+    });
+    for (index, profile) in source["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .enumerate()
+    {
+        profile["requiredScopes"] = serde_json::json!(["target:manage", "request:read"]);
+        if index > 0 {
+            profile["grants"][0]["rowBoundaries"] = serde_json::json!([boundary.clone()]);
+        }
+    }
+    source["accessProfiles"][0]["grants"][0]["requestPresence"][0]["rowBoundaries"] =
+        serde_json::json!([boundary]);
+    compile_json(&serde_json::to_vec(&source).unwrap())
+        .expect("presence explicitly satisfies request requirements");
+    for (path, replacement, code) in [
+        (
+            "/requiredScopes",
+            serde_json::json!(["target:manage"]),
+            "access.requirements.scope_missing",
+        ),
+        (
+            "/requiredPurposes",
+            serde_json::json!(["non-review"]),
+            "access.requirements.purpose_widened",
+        ),
+        (
+            "/grants/0/requestPresence/0/rowBoundaries",
+            serde_json::json!([]),
+            "access.requirements.row_boundary_missing",
+        ),
+        (
+            "/grants/0/requestPresence/0/rowBoundaries",
+            serde_json::json!([{"field":"placement","claim":"different_placements","operator":"in"}]),
+            "access.requirements.row_boundary_missing",
+        ),
+    ] {
+        let mut changed = source.clone();
+        *changed["accessProfiles"][0].pointer_mut(path).unwrap() = replacement;
+        let failure = compile_json(&serde_json::to_vec(&changed).unwrap())
+            .expect_err("target admission alone cannot authorize protected request existence");
+        assert!(
+            failure
+                .diagnostics()
+                .iter()
+                .any(|d| d.code == code && d.path.contains("requestPresence")),
+            "{path}: {failure:?}"
+        );
+    }
+}
+
 #[test]
 fn change_request_multi_record_create_and_patch_orders_reserved_references() {
     let compiled = compile_json(
@@ -1776,7 +1964,10 @@ fn public_asset_fixture_compiles_to_coherent_deterministic_inventories() {
     assert!(inspection_routes
         .iter()
         .all(|route| !matches!(route.operation, Operation::Patch | Operation::Tombstone)));
-    assert!(first.findings().is_empty());
+    assert!(first.findings().iter().all(|d| matches!(
+        d.code.as_str(),
+        "access.profile.no_required_scope" | "access.profile.unrestricted_collection"
+    )));
 }
 
 #[test]
@@ -1832,7 +2023,14 @@ fn production_allows_missing_manifest_projection_and_emits_no_manifest_artifacts
         .entries()
         .keys()
         .all(|path| !path.starts_with("generated/manifest/")));
-    assert!(compiled.findings().is_empty());
+    assert_eq!(
+        compiled
+            .findings()
+            .iter()
+            .map(|d| d.code.as_str())
+            .collect::<Vec<_>>(),
+        vec!["access.profile.no_required_scope"]
+    );
 }
 
 #[test]
@@ -2199,9 +2397,9 @@ fn manifest_projection_compiles_to_deterministic_valid_manifest_core() {
 fn all_acceptance_fixtures_compile_manifest_projection_under_production() {
     for domain in [
         "asset-site-placement",
-        "publicschema-household",
-        "farmer",
-        "disability",
+        "business-establishments",
+        "facility",
+        "inspection",
         "business",
     ] {
         let mut project = acceptance_project(domain);
@@ -2285,31 +2483,31 @@ fn all_acceptance_fixtures_compile_manifest_projection_under_production() {
         let dcat = parse_json_strict(&dcat.bytes)
             .unwrap_or_else(|error| panic!("{domain} DCAT projection parses: {error}"));
 
-        if domain == "publicschema-household" {
+        if domain == "business-establishments" {
             let dataset = manifest
-                .dataset("household-registry")
+                .dataset("business-registry")
                 .expect("configured dataset id is preserved");
             assert_eq!(
-                dataset.entities["person"].concept_uri.as_deref(),
-                Some("https://publicschema.org/Person")
+                dataset.entities["establishment"].concept_uri.as_deref(),
+                Some("https://business-establishments.example.gov/model/establishment")
             );
             assert_eq!(
-                dataset.entities["group-membership"]
+                dataset.entities["operator-assignment"]
                     .relationships
                     .iter()
-                    .find(|relationship| relationship.name == "household")
-                    .expect("household relationship is projected")
+                    .find(|relationship| relationship.name == "business")
+                    .expect("operator relationship is projected")
                     .concept_uri
                     .as_deref(),
-                Some("https://publicschema.org/group")
+                Some("https://business-establishments.example.gov/model/business")
             );
             assert_eq!(manifest.data_services().count(), 1);
             assert!(manifest
                 .codelists()
-                .any(|codelist| codelist.id == "household-relationship"));
+                .any(|codelist| codelist.id == "establishment-role"));
             assert_eq!(
                 dcat["dcat:service"][0]["dcat:endpointURL"],
-                "https://publicschema-household.example.gov/v1"
+                "https://business-establishments.example.gov/v1"
             );
         }
     }

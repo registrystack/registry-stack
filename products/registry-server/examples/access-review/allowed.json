@@ -1,0 +1,12 @@
+{
+  "entity": "record",
+  "accessProfile": "district-reader",
+  "operation": "list",
+  "claims": {
+    "principalClaim": "registry_principal",
+    "principal": "synthetic-reader",
+    "scopes": ["record:read"],
+    "purpose": "record-administration",
+    "directClaims": {"assigned_districts": ["synthetic-district"]}
+  }
+}

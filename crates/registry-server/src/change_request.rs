@@ -7,8 +7,8 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use crate::contract::{
-    ChangeRequestEffectSource, ChangeRequestValueSource, Classification, EntitySource,
-    FieldTypeSource, MutationMode, Operation, RowBoundarySource,
+    AccessProfileSource, ChangeRequestEffectSource, ChangeRequestValueSource, Classification,
+    EntitySource, FieldTypeSource, MutationMode, Operation, RowBoundarySource,
 };
 use crate::diagnostics::Diagnostic;
 use crate::model::{
@@ -838,6 +838,13 @@ fn compile_review_grants(
                     "entities[].accessProfiles[].reviewStages[].targets[].rowBoundaries",
                     errors,
                 );
+                validate_grant_access_requirements(
+                    target_entity,
+                    profile,
+                    &target.row_boundaries,
+                    "entities[].accessProfiles[].reviewStages[].targets",
+                    errors,
+                );
                 if let Some(required) = changed_fields.get(&target.entity) {
                     if !required.is_subset(&target.readable_fields) {
                         errors.push(Diagnostic::error(
@@ -930,6 +937,13 @@ fn compile_apply_grants(
                 "entities[].accessProfiles[].applyTargets[].rowBoundaries",
                 errors,
             );
+            validate_grant_access_requirements(
+                target_entity,
+                profile,
+                &target.row_boundaries,
+                "entities[].accessProfiles[].applyTargets",
+                errors,
+            );
             grants.push(CompiledChangeRequestApplyGrant {
                 profile_id: profile.id.clone(),
                 target_entity_id: target.entity.clone(),
@@ -989,6 +1003,13 @@ fn compile_presence_grants(
                     "entities[].accessProfiles[].requestPresence[].rowBoundaries",
                     errors,
                 );
+                validate_grant_access_requirements(
+                    request_entity,
+                    profile,
+                    &grant.row_boundaries,
+                    "entities[].accessProfiles[].requestPresence",
+                    errors,
+                );
                 if !targets.contains(&target_entity.id) {
                     errors.push(Diagnostic::error(
                         "change_request.presence.target_unaffected",
@@ -1044,6 +1065,23 @@ fn compile_presence_grants(
             (&left.target_entity_id, &left.profile_id)
                 .cmp(&(&right.target_entity_id, &right.profile_id))
         });
+    }
+}
+
+fn validate_grant_access_requirements(
+    entity: &CompiledEntity,
+    profile: &AccessProfileSource,
+    row_boundaries: &[RowBoundarySource],
+    path: &str,
+    errors: &mut Vec<Diagnostic>,
+) {
+    if let Some(requirements) = &entity.access_requirements {
+        // A profile's own row bindings cannot substitute for this cross-entity
+        // grant's bindings. Reuse the ordinary requirements check with the
+        // grant's rows and the caller profile's scopes and purposes.
+        let mut grant_profile = profile.clone();
+        grant_profile.row_boundaries = row_boundaries.to_vec();
+        crate::access::check_profile(requirements, &grant_profile, path, errors);
     }
 }
 
@@ -1247,6 +1285,7 @@ fn entity_contract_payload(entity: &CompiledEntity) -> serde_json::Value {
         "mutationMode": entity.mutation_mode,
         "tombstone": entity.tombstone,
         "classification": entity.classification,
+        "accessRequirements": entity.access_requirements,
         "fields": fields,
         "constraints": entity.constraints,
         "changeControl": entity.change_control,

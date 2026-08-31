@@ -100,6 +100,39 @@
       ],
       "type": "object"
     },
+    "AccessRequirementsSource": {
+      "additionalProperties": false,
+      "description": "Compile-time requirements, not grants. Profiles must explicitly satisfy them.",
+      "properties": {
+        "allowedPurposes": {
+          "default": [],
+          "description": "When nonempty, every profile must restrict purpose to a nonempty subset of these values. Empty imposes no purpose requirement.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "requiredScopes": {
+          "default": [],
+          "description": "Every profile must require all these scopes. Requirements never grant access.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "rowBoundaries": {
+          "default": [],
+          "description": "Every profile must include these exact field, verified-claim, and operator bindings.",
+          "items": {
+            "$ref": "#/$defs/RowBoundarySource"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "ApplyTargetGrantSource": {
       "additionalProperties": false,
       "properties": {
@@ -1071,6 +1104,17 @@
     "EntitySource": {
       "additionalProperties": false,
       "properties": {
+        "accessRequirements": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AccessRequirementsSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Mandatory request-access requirements checked against every profile, including module contributions."
+        },
         "batch": {
           "anyOf": [
             {
@@ -1195,6 +1239,7 @@
                 "$ref": "#/$defs/EventScalarValue"
               },
               "default": {},
+              "description": "Required values after the change. Valid with created and patched triggers.",
               "type": "object"
             },
             "beforeEquals": {
@@ -1202,10 +1247,12 @@
                 "$ref": "#/$defs/EventScalarValue"
               },
               "default": {},
+              "description": "Required values before the change. Valid with patched and tombstoned triggers.",
               "type": "object"
             },
             "changed": {
               "default": [],
+              "description": "Fields whose values must change. Only valid with the patched trigger.",
               "items": {
                 "type": "string"
               },
@@ -1282,9 +1329,11 @@
       "additionalProperties": false,
       "properties": {
         "id": {
+          "description": "Stable event contract identifier, sent as `ce-type`. Use a new identifier for a breaking payload change.",
           "type": "string"
         },
         "projection": {
+          "description": "Declared field identifiers to include in `values`. System event metadata is included separately.",
           "items": {
             "type": "string"
           },
@@ -1292,7 +1341,8 @@
           "uniqueItems": true
         },
         "trigger": {
-          "$ref": "#/$defs/EventTrigger"
+          "$ref": "#/$defs/EventTrigger",
+          "description": "Committed record change that can produce this event."
         },
         "webhook": {
           "anyOf": [
@@ -1302,7 +1352,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "Logical delivery destination. Production compilation requires a webhook."
         },
         "when": {
           "anyOf": [
@@ -1312,7 +1363,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "Optional field tests, combined with AND. Omit to emit on every matching trigger."
         }
       },
       "required": [
@@ -2049,6 +2101,7 @@
         },
         "requiredPurposes": {
           "default": [],
+          "description": "The verified token's purpose must match one listed value. Empty means no purpose restriction.",
           "items": {
             "type": "string"
           },
@@ -2057,6 +2110,7 @@
         },
         "requiredScopes": {
           "default": [],
+          "description": "All listed scopes must be present in the verified token.",
           "items": {
             "type": "string"
           },
@@ -2768,6 +2822,7 @@
       "description": "Governed, destination-neutral webhook subscription.\n\nDeployment configuration may bind `destination_id` to transport details\nand tighten these bounds, but cannot supply or widen this authority.",
       "properties": {
         "destinationId": {
+          "description": "Key in runtime `eventDestinations`; the project carries no URL or secret.",
           "type": "string"
         }
       },

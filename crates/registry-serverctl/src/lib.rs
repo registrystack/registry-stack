@@ -14,6 +14,7 @@ use std::process::ExitCode;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use clap::{ArgGroup, Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use registry_platform_canonical_json::parse_json_strict;
 use registry_server::compiler::module_digest_with_assets;
 use registry_server::contract::{FieldTypeSource, ModuleAssetSource, ModuleLockSource};
 use registry_server::migration_plan::ReviewedMigrationRecovery;
@@ -39,6 +40,7 @@ mod doctor;
 mod package_inspection;
 mod package_lifecycle;
 mod request_retention;
+mod reviewed_migrations;
 mod test_lifecycle;
 mod webhook_lifecycle;
 
@@ -134,6 +136,9 @@ struct CheckArgs {
     /// Enforce production-only package closure requirements.
     #[arg(long)]
     production: bool,
+    /// Exit unsuccessfully when any authoring finding needs review, including access warnings.
+    #[arg(long)]
+    deny_findings: bool,
 }
 
 #[derive(Debug, Args)]
@@ -191,6 +196,9 @@ struct ExplainArgs {
     /// Enforce production-only package closure requirements.
     #[arg(long)]
     production: bool,
+    /// For access only: bounded JSON with synthetic claims. Performs no token verification or record access.
+    #[arg(long, value_name = "JSON_FILE")]
+    scenario: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -213,6 +221,10 @@ struct PackageCandidateArgs {
     /// Runtime configuration selecting the verified active baseline for a successor.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     baseline_runtime_config: Option<PathBuf>,
+
+    /// Directory containing reviewed migration descriptors and evidence in package layout. Used identically by test and package; requires a verified baseline.
+    #[arg(long, value_name = "DIRECTORY", requires = "baseline_runtime_config")]
+    reviewed_migrations: Option<PathBuf>,
 
     /// Production signature threshold. Local packages require zero.
     #[arg(long, default_value_t = 0, value_name = "COUNT")]
@@ -1000,6 +1012,7 @@ struct CapturedPackageCandidate {
     modules: Vec<PackageModuleSource>,
     fixture_journeys: PackageSourceFile,
     migration_plan: PackageMigrationPlanInput,
+    prevalidation_schema_fingerprint: Option<String>,
 }
 
 impl CapturedPackageCandidate {
@@ -1029,7 +1042,12 @@ impl CapturedPackageCandidate {
         const PLACEHOLDER_SCHEMA_FINGERPRINT: &str =
             "sha256:0000000000000000000000000000000000000000000000000000000000000000";
         self.clone()
-            .prepare(PLACEHOLDER_SCHEMA_FINGERPRINT.to_owned())
+            .prepare(
+                self.prevalidation_schema_fingerprint
+                    .as_deref()
+                    .unwrap_or(PLACEHOLDER_SCHEMA_FINGERPRINT)
+                    .to_owned(),
+            )
             .map(|_| ())
     }
 
@@ -1112,7 +1130,17 @@ where
     let format = cli.format;
     let result = match cli.command {
         Command::Init(args) => init(&args.destination),
-        Command::Check(args) => check(&args.project, profile(args.production)),
+        Command::Check(args) => check(&args.project, profile(args.production)).and_then(|report| {
+            if args.deny_findings && !report.findings.is_empty() {
+                Err(FailureReport {
+                    ok: false,
+                    command: "check",
+                    diagnostics: report.findings,
+                })
+            } else {
+                Ok(report)
+            }
+        }),
         Command::Project(args) => match args.command {
             ProjectCommand::Lock(args) => project_lock(&args.project, args.check),
         },
@@ -1122,7 +1150,12 @@ where
             profile(args.production),
             &args.output,
         ),
-        Command::Explain(args) => explain(args.subject, &args.project, profile(args.production)),
+        Command::Explain(args) => explain(
+            args.subject,
+            &args.project,
+            profile(args.production),
+            args.scenario.as_deref(),
+        ),
         Command::Diff(args) => {
             return match diff(&args) {
                 Ok(report) => write_diff_success(&report, format, stdout, stderr),
@@ -1803,16 +1836,55 @@ fn capture_candidate(
             SuggestedAction::CorrectAuthoringSource,
         )],
     })?;
+    let mut prevalidation_schema_fingerprint = None;
     let (prior_revision, migration_plan) = match args.baseline_runtime_config.as_deref() {
         Some(runtime_config) => {
             let baseline = inspect_runtime_package(runtime_config)
                 .map_err(|error| inspection_failure(command, "package.baseline", error))?;
-            (
-                Some(baseline.package_revision().to_owned()),
+            let plan = if let Some(directory) = &args.reviewed_migrations {
+                let review = reviewed_migrations::capture(directory).map_err(|diagnostic| {
+                    source_failure(
+                        command,
+                        diagnostic,
+                        DiagnosticArtifact::DatabaseMigration,
+                        SuggestedAction::CorrectPackageBuild,
+                    )
+                })?;
+                prevalidation_schema_fingerprint = Some(review.declared_schema_fingerprint);
+                PackageMigrationPlanInput::ReviewedSuccessor {
+                    prior_registry: Box::new(baseline.registry().clone()),
+                    prior_schema_fingerprint: baseline.schema_fingerprint().to_owned(),
+                    migrations: review.sources,
+                }
+            } else {
+                let changes = registry_server::package::compiled_registry_change_set(
+                    baseline.registry(),
+                    &compiled,
+                    baseline.package_revision(),
+                );
+                if changes
+                    .changes
+                    .iter()
+                    .any(|change| change.class == CompiledRegistryChangeClass::Unsupported)
+                {
+                    return Err(candidate_failure(command, "migration.change.unsupported", "candidate",
+                        "the successor contains a change the migration planner does not support; inspect diff and revise the candidate. Reviewed artifacts cannot authorize unsupported changes",
+                        DiagnosticArtifact::DatabaseMigration, SuggestedAction::CorrectPackageBuild));
+                }
+                if changes
+                    .changes
+                    .iter()
+                    .any(|change| change.class != CompiledRegistryChangeClass::CompatibleAdditive)
+                {
+                    return Err(candidate_failure(command, "migration.review.required", "reviewedMigrations",
+                        "the successor contains changes that cannot be applied automatically; run diff, review the migration and its rehearsal evidence, then provide --reviewed-migrations to both test and package",
+                        DiagnosticArtifact::DatabaseMigration, SuggestedAction::CorrectPackageBuild));
+                }
                 PackageMigrationPlanInput::Successor {
                     prior_registry: Box::new(baseline.registry().clone()),
-                },
-            )
+                }
+            };
+            (Some(baseline.package_revision().to_owned()), plan)
         }
         None => (None, PackageMigrationPlanInput::InitialCompiledDdl),
     };
@@ -1828,7 +1900,7 @@ fn capture_candidate(
             SuggestedAction::CorrectPackageBuild,
         ));
     }
-    Ok(CapturedPackageCandidate {
+    let candidate = CapturedPackageCandidate {
         compiled,
         environment,
         instance_id,
@@ -1850,7 +1922,14 @@ fn capture_candidate(
             bytes: fixture_journey_bytes,
         },
         migration_plan,
-    })
+        prevalidation_schema_fingerprint,
+    };
+    if args.reviewed_migrations.is_some() {
+        candidate.prevalidate().map_err(|_| candidate_failure(command, "migration.review.refused", "reviewedMigrations",
+            "the reviewed plan was refused; check exact change coverage, canonical JSON, artifact hashes, prior package/schema bindings, and target fingerprint. Use the same reviewed directory for test and package",
+            DiagnosticArtifact::DatabaseMigration, SuggestedAction::CorrectPackageBuild))?;
+    }
+    Ok(candidate)
 }
 
 fn apply(args: &ApplyArgs) -> Result<ApplySuccessReport, FailureReport> {
@@ -1986,6 +2065,13 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
             "the packaged schema-test journey suite was refused",
             DiagnosticArtifact::FixtureJourneys,
             SuggestedAction::CorrectFixtureJourneys,
+        ),
+        TestLifecycleError::ReviewFingerprint => (
+            "migration.review.fingerprint_mismatch",
+            "reviewedMigrations",
+            "the reviewed target fingerprint does not match the schema measured on the disposable database; rehearse the exact candidate and correct the review evidence before retrying",
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::CorrectPackageBuild,
         ),
         TestLifecycleError::Credentials => (
             "test.credentials.refused",
@@ -2653,11 +2739,49 @@ fn explain(
     subject: ExplainSubject,
     project_path: &Path,
     profile: ProfileArg,
+    scenario_path: Option<&Path>,
 ) -> Result<SuccessReport, FailureReport> {
     let compiled = compile(project_path, profile, "explain")?;
+    let scenario_error = |diagnostic| FailureReport {
+        ok: false,
+        command: "explain",
+        diagnostics: vec![tool_diagnostic(
+            diagnostic,
+            DiagnosticArtifact::CommandArguments,
+            SuggestedAction::CorrectCommandUsage,
+        )],
+    };
+    let scenario = if let Some(path) = scenario_path {
+        if !matches!(subject, ExplainSubject::Access) {
+            return Err(scenario_error(diagnostic(
+                "access.scenario.subject",
+                "scenario",
+                "--scenario is available only for explain access",
+            )));
+        }
+        let bytes = read_bounded_regular_file(path, "access.scenario.unavailable", 65_536)
+            .map_err(scenario_error)?;
+        let source = parse_json_strict(&bytes).map_err(|_| scenario_error(diagnostic("access.scenario.invalid", "scenario", "provide a strict JSON access scenario with synthetic claims; duplicate keys and malformed JSON are refused")))?;
+        let scenario = serde_json::from_value(source).map_err(|_| scenario_error(diagnostic("access.scenario.invalid", "scenario", "use entity, accessProfile, operation, optional readPath, and claims; claims accepts principalClaim, principal, scopes, purpose, and directClaims")))?;
+        Some(
+            registry_server::access_preview::preview_access(&compiled, scenario).map_err(
+                |message| {
+                    scenario_error(diagnostic("access.scenario.invalid", "scenario", message))
+                },
+            )?,
+        )
+    } else {
+        None
+    };
     let explanation = match subject {
         ExplainSubject::Model => explain_model(&compiled),
-        ExplainSubject::Access => serde_json::to_value(compiled.access()),
+        ExplainSubject::Access => {
+            if let Some(scenario) = scenario {
+                serde_json::to_value(scenario)
+            } else {
+                serde_json::to_value(registry_server::access::explain_access(&compiled))
+            }
+        }
         ExplainSubject::Routes => serde_json::to_value(compiled.routes()),
         ExplainSubject::Queries => explain_queries(&compiled),
         ExplainSubject::ChangeRequests => explain_change_requests(&compiled),
@@ -4471,6 +4595,11 @@ fn write_success(
                 writeln!(stdout, "artifacts: {}", report.artifacts.len())?;
             }
             if let Some(explanation) = &report.explanation {
+                if explanation.get("scopeMatching").is_some()
+                    || explanation.get("mode").and_then(Value::as_str) == Some("offline_synthetic")
+                {
+                    return write_access_explanation(explanation, stdout);
+                }
                 let rendered =
                     serde_json::to_string_pretty(explanation).map_err(io::Error::other)?;
                 writeln!(stdout, "{rendered}")?;
@@ -4485,6 +4614,101 @@ fn write_success(
             ExitCode::from(OPERATIONAL_FAILURE_EXIT)
         }
     }
+}
+
+fn write_access_explanation(explanation: &Value, stdout: &mut dyn Write) -> io::Result<()> {
+    if explanation.get("mode").and_then(Value::as_str) == Some("offline_synthetic") {
+        let admitted = explanation["admitted"].as_bool() == Some(true);
+        writeln!(
+            stdout,
+            "synthetic profile admission: {} ({})",
+            if admitted { "allowed" } else { "refused" },
+            explanation["reason"].as_str().unwrap_or("unknown")
+        )?;
+        writeln!(stdout, "No credentials verified, records checked, or authority issued. Claim values are not printed.")?;
+        if explanation["effectiveProfile"].is_object() {
+            write_access_profile(&explanation["effectiveProfile"], stdout)?;
+        }
+        return Ok(());
+    }
+    for key in [
+        "scopeMatching",
+        "purposeMatching",
+        "rowMatching",
+        "profileSelection",
+    ] {
+        writeln!(stdout, "{}", explanation[key].as_str().unwrap_or(""))?;
+    }
+    if let Some(entities) = explanation["entities"].as_array() {
+        for entity in entities {
+            writeln!(
+                stdout,
+                "\nentity: {} ({})",
+                entity["entity"].as_str().unwrap_or(""),
+                entity["classification"].as_str().unwrap_or("")
+            )?;
+            if !entity["requirements"].is_null() {
+                writeln!(
+                    stdout,
+                    "  mandatory requirements: {}",
+                    entity["requirements"]
+                )?;
+            }
+            if let Some(profiles) = entity["profiles"].as_array() {
+                for profile in profiles {
+                    write_access_profile(profile, stdout)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn write_access_profile(profile: &Value, stdout: &mut dyn Write) -> io::Result<()> {
+    writeln!(
+        stdout,
+        "  profile: {}",
+        profile["id"].as_str().unwrap_or("")
+    )?;
+    writeln!(
+        stdout,
+        "    principal claim: {}",
+        profile["principalClaim"]
+            .as_str()
+            .unwrap_or("none (anonymous)")
+    )?;
+    for (field, label, empty) in [
+        ("operations", "operations", "none"),
+        ("requiredScopes", "required scopes (all)", "none required"),
+        ("requiredPurposes", "allowed purposes (any)", "unrestricted"),
+        ("readableFields", "readable fields", "none"),
+        ("writableFields", "writable fields", "none"),
+        ("filterableFields", "filterable fields", "none"),
+        ("sortableFields", "sortable fields", "none"),
+        ("rowBoundaries", "row restrictions (all)", "unrestricted"),
+        ("lookups", "lookups", "none"),
+        ("readPaths", "related records", "none"),
+    ] {
+        let value = &profile[field];
+        if value.is_null() || value.as_array().is_some_and(Vec::is_empty) {
+            writeln!(stdout, "    {label}: {empty}")?;
+        } else {
+            writeln!(stdout, "    {label}: {value}")?;
+        }
+    }
+    for field in [
+        "anonymous",
+        "allowCount",
+        "revisionAccess",
+        "allowDataExport",
+    ] {
+        writeln!(
+            stdout,
+            "    {field}: {}",
+            profile[field].as_bool().unwrap_or(false)
+        )?;
+    }
+    Ok(())
 }
 
 fn write_doctor_success(

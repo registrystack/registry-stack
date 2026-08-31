@@ -538,8 +538,10 @@ printf '%s' 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789' >
 adopter_suffix="rsadopter$(date +%s)$$"
 adopter_schema_test_v1_database="rs_test_v1_${adopter_suffix}"
 adopter_schema_test_v2_database="rs_test_v2_${adopter_suffix}"
+adopter_measure_v3_database="rs_measure_v3_${adopter_suffix}"
+adopter_schema_test_v3_database="rs_test_v3_${adopter_suffix}"
 adopter_production_database="rs_prod_${adopter_suffix}"
-adopter_databases=("$adopter_schema_test_v1_database" "$adopter_schema_test_v2_database" "$adopter_production_database")
+adopter_databases=("$adopter_schema_test_v1_database" "$adopter_schema_test_v2_database" "$adopter_measure_v3_database" "$adopter_schema_test_v3_database" "$adopter_production_database")
 adopter_migration_role="rs_migration_${adopter_suffix}"
 adopter_runtime_role="rs_runtime_${adopter_suffix}"
 adopter_author_role="rs_author_${adopter_suffix}"
@@ -567,6 +569,8 @@ printf '%s' "$adopter_runtime_url" >"$temporary_root/secrets/production-runtime-
 printf '%s' "$adopter_migration_url" >"$temporary_root/secrets/production-migration-url"
 write_database_url_secrets "$adopter_schema_test_v1_database" schema-test-v1-runtime-url schema-test-v1-migration-url
 write_database_url_secrets "$adopter_schema_test_v2_database" schema-test-v2-runtime-url schema-test-v2-migration-url
+write_database_url_secrets "$adopter_measure_v3_database" measure-v3-runtime-url measure-v3-migration-url
+write_database_url_secrets "$adopter_schema_test_v3_database" schema-test-v3-runtime-url schema-test-v3-migration-url
 
 openssl genpkey -algorithm ED25519 -out "$temporary_root/package-signer.pem" >/dev/null 2>&1
 openssl genpkey -algorithm ED25519 -out "$temporary_root/oidc-signer.pem" >/dev/null 2>&1
@@ -617,7 +621,7 @@ if production.get("profile") != "production":
     raise SystemExit("production profile did not accept the complete fixture closure")
 
 access = json.load(open(sys.argv[2], encoding="utf-8"))
-entries = access.get("explanation", {}).get("entries", [])
+entries = access["explanation"]["routes"]["entries"]
 by_entity_operation = {}
 for entry in entries:
     key = (entry.get("entityId"), entry.get("operation"))
@@ -748,8 +752,18 @@ from pathlib import Path
 path = Path(sys.argv[1])
 source = path.read_text(encoding="utf-8")
 source = source.replace("  sequence: 1\n", "  sequence: 2\n", 1)
-needle = "      - {id: asset-class, type: vocabulary-code, vocabulary: asset-classification, required: true, classification: internal}\n"
-replacement = needle + "      - {id: placement-review-note, type: string, required: false, maxLength: 120, classification: restricted}\n"
+needle = """      - id: asset-class
+        type: vocabulary-code
+        vocabulary: asset-classification
+        required: true
+        classification: internal
+"""
+replacement = needle + """      - id: placement-review-note
+        type: string
+        required: false
+        maxLength: 120
+        classification: restricted
+"""
 if needle not in source:
     raise SystemExit("asset item field insertion point was not found")
 path.write_text(source.replace(needle, replacement, 1), encoding="utf-8")
@@ -850,6 +864,19 @@ while time.time() < deadline:
     time.sleep(0.25)
 raise SystemExit("table lock was not acquired")
 PY
+# Measure a lock-timeout refusal for the metadata-only review fixture below.
+# The contender cannot mutate the table: the held AccessShareLock excludes it.
+lock_probe_started=$SECONDS
+if psql "$adopter_migration_url" -v ON_ERROR_STOP=1 -v VERBOSITY=sqlstate -q \
+  -c "BEGIN; SET LOCAL lock_timeout = '1000ms'; SET LOCAL statement_timeout = '60s'; LOCK TABLE registry_data.\"$asset_table\" IN ACCESS EXCLUSIVE MODE; ROLLBACK;" \
+  >"$temporary_root/lock-probe.stdout" 2>"$temporary_root/lock-probe.stderr"; then
+  printf '%s\n' 'lock-timeout probe unexpectedly acquired the blocked table.' >&2
+  exit 1
+fi
+if [[ "$(<"$temporary_root/lock-probe.stderr")" != *55P03* ]] || (( SECONDS - lock_probe_started > 10 )); then
+  printf '%s\n' 'lock-timeout probe did not produce the expected bounded PostgreSQL refusal.' >&2
+  exit 1
+fi
 if run_json "$temporary_root/apply-v2-locked.json" apply --runtime-config "$temporary_root/runtime-operator-v2-fast-timeout.yaml" --package "$temporary_root/build-v2/package"; then
   printf '%s\n' 'successor apply unexpectedly succeeded while the managed table was locked.' >&2
   exit 1
@@ -917,6 +944,196 @@ if not matching:
     raise SystemExit("created record did not survive successor activation")
 if any("placementReviewNote" in item.get("data", {}) for item in matching):
     raise SystemExit("restricted successor field was disclosed")
+PY
+
+# Add an optional field AND disclose it to one profile on the existing database.
+# This is a reviewed successor, not an automatic additive upgrade.
+cp -R "$temporary_root/project-v2" "$temporary_root/project-v3"
+python3 - "$temporary_root/project-v3/registry.yaml" <<'PY'
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+source = path.read_text(encoding="utf-8").replace("  sequence: 2\n", "  sequence: 3\n", 1)
+needle = """      - id: placement-review-note
+        type: string
+        required: false
+        maxLength: 120
+        classification: restricted
+"""
+grant = """        readableFields:
+          - asset-code
+          - label
+          - asset-class
+        writableFields:
+          - asset-code
+          - label
+          - asset-class
+"""
+if needle not in source or grant not in source:
+    raise SystemExit("reviewed successor insertion points were not found")
+source = source.replace(needle, needle + """      - id: maintenance-note
+        type: string
+        required: false
+        maxLength: 120
+        classification: internal
+""", 1)
+source = source.replace(grant, grant.replace("          - asset-class\n", "          - asset-class\n          - maintenance-note\n"), 1)
+path.write_text(source, encoding="utf-8")
+PY
+render_runtime_config "$temporary_root/runtime-test-v3.yaml" "$temporary_root/build-v2/package" \
+  "$package_revision_v2" 2 60000 "secret:file/schema-test-v3-runtime-url" \
+  "secret:file/schema-test-v3-migration-url" "127.0.0.1:0" \
+  "asset-site-placement-acceptance-0.1.0"
+reviewed_candidate_args=("$temporary_root/project-v3" --database-id asset-site-placement-adopter-db
+  --baseline-runtime-config "$temporary_root/runtime-server-v2.yaml"
+  --signature-threshold 1 --signature-key-id adopter-package-key)
+if run_json "$temporary_root/missing-review-v3.json" test "${reviewed_candidate_args[@]}" \
+  --runtime-config "$temporary_root/runtime-test-v3.yaml" --credentials "$temporary_root/schema-test-credentials.yaml" \
+  --output "$temporary_root/schema-test-receipt-v3.json"; then
+  printf '%s\n' 'readable-field successor unexpectedly bypassed review.' >&2
+  exit 1
+fi
+assert_json_failure "$temporary_root/missing-review-v3.json" migration.review.required
+[[ ! -e "$temporary_root/schema-test-receipt-v3.json" ]]
+run_json "$temporary_root/diff-v3.json" diff "$temporary_root/project-v3" --runtime-config "$temporary_root/runtime-server-v2.yaml"
+assert_json_ok "$temporary_root/diff-v3.json" diff
+
+# Measure the exact target catalog through the public schema-test command on a
+# separate disposable database. Only the package sequence differs. This is not
+# upgrade evidence; the in-place apply and record/disclosure checks follow below.
+cp -R "$temporary_root/project-v3" "$temporary_root/project-measure-v3"
+sed -i.bak 's/  sequence: 3/  sequence: 1/' "$temporary_root/project-measure-v3/registry.yaml"
+render_runtime_config "$temporary_root/runtime-measure-v3.yaml" "$temporary_root/empty-package-root" \
+  "sha256:1111111111111111111111111111111111111111111111111111111111111111" 1 60000 \
+  "secret:file/measure-v3-runtime-url" "secret:file/measure-v3-migration-url" \
+  "127.0.0.1:0" "asset-site-placement-acceptance-0.1.0"
+run_json "$temporary_root/measure-v3.json" test "$temporary_root/project-measure-v3" \
+  --runtime-config "$temporary_root/runtime-measure-v3.yaml" --credentials "$temporary_root/schema-test-credentials.yaml" \
+  --database-id asset-site-placement-adopter-db --signature-threshold 1 --signature-key-id adopter-package-key \
+  --output "$temporary_root/measure-receipt-v3.json"
+assert_json_ok "$temporary_root/measure-v3.json" test
+schema_fingerprint_v3=$(json_field "$temporary_root/measure-v3.json" schemaFingerprint)
+postgres_major=$(psql "$adopter_production_admin_url" -Atqc 'SELECT current_setting('\''server_version_num'\'')::integer / 10000')
+
+# Test-fixture evidence only, for a metadata-only review with no authored SQL.
+# The target fingerprint and lock-timeout refusal above were measured, not guessed.
+python3 - "$temporary_root" "$package_revision_v2" "$schema_fingerprint_v2" "$schema_fingerprint_v3" "$postgres_major" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+root = Path(sys.argv[1])
+changes = json.loads((root / "diff-v3.json").read_text())["changes"]
+if any(change["classification"] == "unsupported" for change in changes):
+    raise SystemExit("reviewed successor was incorrectly classified as unsupported")
+covers = [{"code": item["change"]["code"], "target": item["change"]["target"]}
+          for item in changes if item["change"]["class"] != "compatible_additive"]
+if {cover["code"] for cover in covers} != {"access_profile_changed", "query_inventory_changed"}:
+    raise SystemExit("reviewed successor did not have the expected permission changes")
+base = "modules/asset-site-placement-core/migrations/read-maintenance-note"
+descriptor = {
+    "id": "read-maintenance-note", "changeClass": "access_or_disclosure_change",
+    "covers": covers, "recovery": "exact_target_resume", "lockTimeoutMs": 1000,
+    "statementTimeoutMs": 60000, "steps": [], "preAssertions": [], "postAssertions": [],
+    "rehearsalReceiptPath": f"{base}/rehearsal.json",
+}
+def canonical(document):
+    return json.dumps(document, sort_keys=True, separators=(",", ":")).encode("ascii")
+descriptor_bytes = canonical(descriptor)
+receipt = {
+    "priorRevision": sys.argv[2], "priorSchemaFingerprint": sys.argv[3],
+    "planSha256": "sha256:" + hashlib.sha256(descriptor_bytes).hexdigest(),
+    "sqlSha256": [], "assertionSha256": [], "fixtureInventory": [], "postgresMajor": int(sys.argv[5]),
+    "rowAssertions": [], "finalSchemaFingerprint": sys.argv[4],
+    "proofs": {"lockTimeout": True, "chunkResume": False, "destructiveResume": False},
+}
+directory = root / "review-v3" / base
+directory.mkdir(parents=True)
+(directory / "descriptor.json").write_bytes(descriptor_bytes)
+(directory / "rehearsal.json").write_bytes(canonical(receipt))
+PY
+reviewed_candidate_args+=(--reviewed-migrations "$temporary_root/review-v3")
+review_receipt="$temporary_root/review-v3/modules/asset-site-placement-core/migrations/read-maintenance-note/rehearsal.json"
+cp "$review_receipt" "$temporary_root/review-receipt-v3.original.json"
+python3 - "$review_receipt" <<'PY'
+import json
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+receipt = json.loads(path.read_text())
+receipt["finalSchemaFingerprint"] = "sha256:" + "0" * 64
+path.write_text(json.dumps(receipt, sort_keys=True, separators=(",", ":")), encoding="ascii")
+PY
+if run_json "$temporary_root/mismatched-review-v3.json" test "${reviewed_candidate_args[@]}" \
+  --runtime-config "$temporary_root/runtime-test-v3.yaml" --credentials "$temporary_root/schema-test-credentials.yaml" \
+  --output "$temporary_root/schema-test-receipt-v3.json"; then
+  printf '%s\n' 'reviewed schema fingerprint unexpectedly overrode the database measurement.' >&2
+  exit 1
+fi
+assert_json_failure "$temporary_root/mismatched-review-v3.json" migration.review.fingerprint_mismatch
+[[ ! -e "$temporary_root/schema-test-receipt-v3.json" ]]
+cp "$temporary_root/review-receipt-v3.original.json" "$review_receipt"
+run_json "$temporary_root/schema-test-v3.json" test "${reviewed_candidate_args[@]}" \
+  --runtime-config "$temporary_root/runtime-test-v3.yaml" --credentials "$temporary_root/schema-test-credentials.yaml" \
+  --output "$temporary_root/schema-test-receipt-v3.json"
+assert_json_ok "$temporary_root/schema-test-v3.json" test
+[[ "$(json_field "$temporary_root/schema-test-v3.json" schemaFingerprint)" == "$schema_fingerprint_v3" ]]
+reviewed_package_args=("${reviewed_candidate_args[@]}" --schema-fingerprint "$schema_fingerprint_v3"
+  --test-receipt "$temporary_root/schema-test-receipt-v3.json" --output "$temporary_root/build-v3")
+run_json "$temporary_root/package-v3-awaiting.json" package "${reviewed_package_args[@]}"
+assert_json_ok "$temporary_root/package-v3-awaiting.json" package
+sign_file_hex "$temporary_root/package-signer.pem" "$temporary_root/build-v3/signing-input.json" "$temporary_root/package-v3.sighex"
+write_signature_document "adopter-package-key" "$temporary_root/package-v3.sighex" "$temporary_root/package-v3-signatures.json"
+run_json "$temporary_root/package-v3-published.json" package "${reviewed_package_args[@]}" --signatures "$temporary_root/package-v3-signatures.json"
+assert_json_ok "$temporary_root/package-v3-published.json" package
+package_revision_v3=$(json_field "$temporary_root/package-v3-published.json" packageRevision)
+if ! run_json "$temporary_root/apply-v3.json" apply --runtime-config "$temporary_root/runtime-server-v2.yaml" --package "$temporary_root/build-v3/package"; then
+  # Compare catalog metadata only. Never print runtime URLs or stored records.
+  measure_admin_url=$(derive_admin_database_url "$adopter_measure_v3_database")
+  column_order_sql="SELECT string_agg(a.attname, ',' ORDER BY a.attnum) FROM pg_attribute a WHERE a.attrelid = 'registry_data.\"$asset_table\"'::regclass AND a.attnum > 0 AND NOT a.attisdropped"
+  if [[ "$(psql "$adopter_production_admin_url" -Atqc "$column_order_sql")" != "$(psql "$measure_admin_url" -Atqc "$column_order_sql")" ]]; then
+    printf '%s\n' 'reviewed activation failed: installed column order differs from the fresh target rehearsal.' >&2
+  fi
+  exit 1
+fi
+assert_json_ok "$temporary_root/apply-v3.json" apply
+kill "$server_pid" >/dev/null 2>&1 || true
+wait "$server_pid" >/dev/null 2>&1 || true
+server_pid=""
+render_runtime_config "$temporary_root/runtime-server-v3.yaml" "$temporary_root/build-v3/package" \
+  "$package_revision_v3" 3 60000 "secret:file/production-runtime-url" \
+  "secret:file/production-migration-url" "$listener" "asset-site-placement-acceptance-0.1.0"
+REGISTRY_SERVER_LOG=error "$registry_server" --config "$temporary_root/runtime-server-v3.yaml" >"$temporary_root/server-v3.log" 2>&1 &
+server_pid=$!
+wait_ready_status "${server_url}ready" 200
+printf '%s\n' '{"operation":"create","data":{"assetCode":"ASSET-PUBLIC-002","label":"Reviewed field asset","assetClass":"equipment","maintenanceNote":"Synthetic maintenance note"}}' >"$temporary_root/assets-create-v3.jsonl"
+run_json "$temporary_root/data-import-v3.json" data import --package "$temporary_root/build-v3/package" \
+  --server-url "$server_url" --access-token-file "$temporary_root/secrets/operator-token" \
+  --entity asset-item --profile asset-operator --operation create --input "$temporary_root/assets-create-v3.jsonl" \
+  --checkpoint "$temporary_root/assets-import-v3.checkpoint.json"
+assert_json_ok "$temporary_root/data-import-v3.json" "data import"
+asset_list_path_v3=$(entity_list_path "$temporary_root/build-v3/package" asset-item asset-operator)
+for profile in operator planner; do
+  access_profile=asset-operator
+  [[ "$profile" != planner ]] || access_profile=site-planner
+  http_get_json "$server_url" "$temporary_root/secrets/$profile-token" \
+    "$asset_list_path_v3?accessProfile=$access_profile" "$temporary_root/assets-$profile-v3.json"
+done
+python3 - "$temporary_root/assets-operator-v3.json" "$temporary_root/assets-planner-v3.json" <<'PY'
+import json
+import sys
+operator, planner = [json.load(open(path, encoding="utf-8"))["items"] for path in sys.argv[1:]]
+records = {item["data"]["assetCode"]: item["data"] for item in operator}
+if "ASSET-PUBLIC-001" not in records:
+    raise SystemExit("existing record did not survive the reviewed upgrade")
+if records.get("ASSET-PUBLIC-002", {}).get("maintenanceNote") != "Synthetic maintenance note":
+    raise SystemExit("authorized profile could not round-trip the reviewed field")
+if not any(item["data"]["assetCode"] == "ASSET-PUBLIC-002" for item in planner):
+    raise SystemExit("planner disclosure test did not observe the new record")
+if any("maintenanceNote" in item["data"] for item in planner):
+    raise SystemExit("reviewed field leaked to the profile without its grant")
+if any("placementReviewNote" in item["data"] for item in operator + planner):
+    raise SystemExit("restricted field was disclosed after the reviewed upgrade")
 PY
 
 server_hash_after=$(sha256_file "$registry_server")

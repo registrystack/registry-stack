@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
-use crate::contract::RegistryProject;
+use crate::contract::{RegistryModule, RegistryProject};
 #[cfg(feature = "runtime")]
 use crate::runtime_config::runtime_config_schema;
 
@@ -14,6 +14,9 @@ const SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
 pub const REGISTRY_PROJECT_SCHEMA_FILE: &str = "registry-project.schema.json";
 pub const REGISTRY_PROJECT_SCHEMA_ID: &str =
     "https://id.registrystack.org/schemas/registry-server/authoring/registry-project.v1alpha1.schema.json";
+pub const REGISTRY_MODULE_SCHEMA_FILE: &str = "registry-module.schema.json";
+pub const REGISTRY_MODULE_SCHEMA_ID: &str =
+    "https://id.registrystack.org/schemas/registry-server/authoring/registry-module.v1alpha1.schema.json";
 #[cfg(feature = "runtime")]
 pub const RUNTIME_CONFIG_SCHEMA_FILE: &str = "runtime.schema.json";
 #[cfg(feature = "runtime")]
@@ -22,12 +25,20 @@ pub const RUNTIME_CONFIG_SCHEMA_ID: &str =
 
 /// Every authoring schema under its committed artifact filename.
 pub fn documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> {
-    let entries = [(
-        REGISTRY_PROJECT_SCHEMA_FILE,
-        "Registry Server authored project",
-        REGISTRY_PROJECT_SCHEMA_ID,
-        serde_json::to_value(schemars::schema_for!(RegistryProject))?,
-    )];
+    let entries = [
+        (
+            REGISTRY_PROJECT_SCHEMA_FILE,
+            "Registry Server authored project",
+            REGISTRY_PROJECT_SCHEMA_ID,
+            serde_json::to_value(schemars::schema_for!(RegistryProject))?,
+        ),
+        (
+            REGISTRY_MODULE_SCHEMA_FILE,
+            "Registry Server authored module",
+            REGISTRY_MODULE_SCHEMA_ID,
+            serde_json::to_value(schemars::schema_for!(RegistryModule))?,
+        ),
+    ];
     entries
         .into_iter()
         .map(|(file, title, identifier, derived)| {
@@ -84,7 +95,10 @@ mod tests {
     use jsonschema::{Draft, JSONSchema};
     use serde_json::Value;
 
-    use super::{documents, REGISTRY_PROJECT_SCHEMA_FILE, REGISTRY_PROJECT_SCHEMA_ID};
+    use super::{
+        documents, REGISTRY_MODULE_SCHEMA_FILE, REGISTRY_MODULE_SCHEMA_ID,
+        REGISTRY_PROJECT_SCHEMA_FILE, REGISTRY_PROJECT_SCHEMA_ID,
+    };
     #[cfg(feature = "runtime")]
     use super::{runtime_documents, RUNTIME_CONFIG_SCHEMA_FILE, RUNTIME_CONFIG_SCHEMA_ID};
     #[cfg(feature = "runtime")]
@@ -95,9 +109,9 @@ mod tests {
     const ACCEPTANCE_PROJECTS: &[&str] = &[
         "asset-site-placement",
         "business",
-        "disability",
-        "farmer",
-        "publicschema-household",
+        "inspection",
+        "facility",
+        "business-establishments",
     ];
 
     fn schema_document() -> String {
@@ -233,12 +247,53 @@ mod tests {
     }
 
     #[test]
-    fn registry_project_schema_is_the_only_generated_authoring_document() {
+    fn authoring_documents_cover_projects_and_modules() {
         let documents = documents().expect("the Registry Server authoring schema generates");
         assert_eq!(
             documents.keys().copied().collect::<Vec<_>>(),
-            vec![REGISTRY_PROJECT_SCHEMA_FILE],
+            vec![REGISTRY_MODULE_SCHEMA_FILE, REGISTRY_PROJECT_SCHEMA_FILE],
         );
+    }
+
+    #[test]
+    fn module_schema_accepts_shipped_modules_and_rejects_unknown_fields() {
+        let document = documents()
+            .expect("authoring schemas generate")
+            .remove(REGISTRY_MODULE_SCHEMA_FILE)
+            .expect("the module schema is generated");
+        let value: Value = serde_json::from_str(&document).expect("the schema is JSON");
+        assert_eq!(value["$id"], REGISTRY_MODULE_SCHEMA_ID);
+        let schema = compile(&document);
+        for project in ACCEPTANCE_PROJECTS {
+            for entry in fs::read_dir(acceptance_root().join(project).join("modules"))
+                .expect("the acceptance project has modules")
+            {
+                let entry = entry.expect("the module entry exists");
+                if !entry.file_type().expect("the entry has a type").is_dir() {
+                    continue;
+                }
+                let path = entry.path().join("module.yaml");
+                let raw = fs::read(&path).expect("the module can be read");
+                crate::contract::parse_module_yaml(&raw).expect("the parser accepts the module");
+                let mut instance: Value =
+                    serde_norway::from_slice(&raw).expect("the module is YAML");
+                assert!(schema.is_valid(&instance), "module {}", path.display());
+                instance["unexpected"] = Value::Bool(true);
+                assert!(!schema.is_valid(&instance));
+            }
+        }
+        let mut extension = serde_json::json!({
+            "id": "notifications", "version": "1.0.0",
+            "extendEntities": [{"entity": "record", "events": [{
+                "id": "record-labelled-v1", "trigger": "patched", "projection": ["label"],
+                "when": {"kind": "fields", "changed": ["label"]},
+                "webhook": {"destinationId": "receiver"}
+            }]}]
+        });
+        assert!(schema.is_valid(&extension));
+        extension["extendEntities"][0]["events"][0]["webhook"]["url"] =
+            Value::String("https://example.com/events".into());
+        assert!(!schema.is_valid(&extension));
     }
 
     #[test]

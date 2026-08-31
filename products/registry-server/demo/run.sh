@@ -5,7 +5,7 @@ demo_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 product_dir=$(cd -- "$demo_dir/.." && pwd)
 repository_root=$(cd -- "$product_dir/../.." && pwd)
 support="$demo_dir/support/demo.py"
-fixture="$product_dir/acceptance/publicschema-household"
+fixture="$product_dir/acceptance/business-establishments"
 run_dir="$demo_dir/.run"
 mint_key_material="$repository_root/crates/registry-mint/demo/support/key_material.py"
 postgres_image='postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675'
@@ -159,7 +159,7 @@ if [[ "$webhook" == true ]]; then
     --root "$run_dir" \
     --report "$run_dir/webhook-model-report.json"
   "$registry_serverctl" --format json webhook sample "$run_dir/project" \
-    --event usual-resident-created-v1 \
+    --event operating-created-v1 \
     >"$run_dir/webhook-sample.json"
 fi
 
@@ -240,27 +240,27 @@ python3 "$support" wait-http --url "http://127.0.0.1:${mint_port}/ready" --timeo
 
 "$mint" token \
   --url "http://127.0.0.1:${mint_port}/token" \
-  --client-id household-demo \
+  --client-id business-demo \
   --key "$run_dir/keys/operator/signing-p256-private-jwk" |
   python3 "$support" store-token --out "$run_dir/secrets/operator-token"
 "$mint" token \
   --url "http://127.0.0.1:${mint_port}/token" \
-  --client-id household-demo-no-purpose \
+  --client-id business-demo-no-purpose \
   --key "$run_dir/keys/no-purpose/signing-p256-private-jwk" |
   python3 "$support" store-token --out "$run_dir/secrets/no-purpose-token"
 
-printf '%s\n' '== Testing, packaging, and activating the household Registry'
+printf '%s\n' '== Testing, packaging, and activating the business Registry'
 export SSL_CERT_FILE="$run_dir/tls/ca.pem"
 "$registry_serverctl" --format json test "$run_dir/project" \
   --runtime-config "$run_dir/runtime-test.yaml" \
   --credentials "$run_dir/schema-test-credentials.yaml" \
-  --database-id publicschema-household-demo \
+  --database-id business-establishments-demo \
   --output "$run_dir/schema-test-receipt.json" \
   >"$run_dir/test-report.json"
 schema_fingerprint=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["schemaFingerprint"])' "$run_dir/test-report.json")
 
 "$registry_serverctl" --format json package "$run_dir/project" \
-  --database-id publicschema-household-demo \
+  --database-id business-establishments-demo \
   --schema-fingerprint "$schema_fingerprint" \
   --test-receipt "$run_dir/schema-test-receipt.json" \
   --output "$run_dir/build" \
@@ -294,7 +294,7 @@ if [[ "$webhook" == true ]]; then
 fi
 python3 "$support" seed --root "$run_dir"
 
-printf '%s\n' '== Binding a viewer credential to the first seeded household'
+printf '%s\n' '== Binding a viewer credential to the first seeded business'
 uv run --quiet "$mint_key_material" p256 \
   --private-out "$run_dir/keys/viewer/signing-p256-private-jwk" \
   --public-out "$run_dir/keys/viewer-public.jwk.json"
@@ -308,7 +308,7 @@ mint_pid=$!
 python3 "$support" wait-http --url "http://127.0.0.1:${mint_port}/ready" --timeout 30
 "$mint" token \
   --url "http://127.0.0.1:${mint_port}/token" \
-  --client-id household-demo-viewer \
+  --client-id business-demo-viewer \
   --key "$run_dir/keys/viewer/signing-p256-private-jwk" |
   python3 "$support" store-token --out "$run_dir/secrets/viewer-token"
 
@@ -359,7 +359,7 @@ if [[ "$webhook" == true ]]; then
   printf '%s\n' 'Webhook delivery, retry, dead-letter inspection, and replay passed.'
 fi
 
-printf '\n%s\n' 'Registry Server household demo is ready.'
+printf '\n%s\n' 'Registry Server business demo is ready.'
 printf '  Registry Server: http://127.0.0.1:%s\n' "$server_port"
 printf '  Registry Mint:   http://127.0.0.1:%s\n' "$mint_port"
 printf '  Operator token:  %s\n' "$run_dir/secrets/operator-token"
@@ -372,7 +372,7 @@ fi
 printf '  Logs:            %s\n' "$run_dir/logs"
 
 if [[ "$mode" == smoke ]]; then
-  printf '%s\n' 'Registry Server household demo smoke passed.'
+  printf '%s\n' 'Registry Server business demo smoke passed.'
   exit 0
 fi
 

@@ -226,6 +226,7 @@
       "additionalProperties": false,
       "properties": {
         "allowedPrivateCidrs": {
+          "description": "Explicitly allowed private network ranges in canonical CIDR notation.",
           "items": {
             "type": "string"
           },
@@ -234,29 +235,36 @@
           "uniqueItems": true
         },
         "classificationCeiling": {
-          "$ref": "#/$defs/Classification"
+          "$ref": "#/$defs/Classification",
+          "description": "Highest permitted classification, including fields used only in event conditions."
         },
         "deliveryCeilings": {
-          "$ref": "#/$defs/RawEventDestinationDeliveryCeilings"
+          "$ref": "#/$defs/RawEventDestinationDeliveryCeilings",
+          "description": "Per-destination limits that may tighten, but never increase, the compiled delivery limits."
         },
         "dnsFamily": {
-          "$ref": "#/$defs/EventDestinationDnsFamily"
+          "$ref": "#/$defs/EventDestinationDnsFamily",
+          "description": "Address families to validate when resolving the destination."
         },
         "hmacSha256KeyRef": {
+          "description": "Runtime secret reference for the receiver's shared HMAC-SHA-256 key.",
           "maxLength": 140,
           "minLength": 1,
           "pattern": "^(secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
           "type": "string"
         },
         "networkProfile": {
-          "$ref": "#/$defs/EventDestinationNetworkProfile"
+          "$ref": "#/$defs/EventDestinationNetworkProfile",
+          "description": "HTTPS for production, or explicit loopback-only HTTP for local development."
         },
         "origin": {
+          "description": "Receiver origin without a path or query, such as `https://receiver.example.com`.",
           "maxLength": 2048,
           "minLength": 1,
           "type": "string"
         },
         "path": {
+          "description": "Absolute request path on the configured origin, such as `/events`.",
           "maxLength": 4096,
           "minLength": 1,
           "pattern": "^/[\\x20-\\x22\\x24\\x26-\\x3E\\x40-\\x5B\\x5D-\\x7E]*$",
@@ -270,7 +278,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "Optional private CA and client identity secret references for HTTPS."
         }
       },
       "required": [
@@ -289,12 +298,14 @@
       "additionalProperties": false,
       "properties": {
         "attemptTimeoutMilliseconds": {
+          "description": "Maximum time allowed for one attempt, in milliseconds.",
           "format": "uint32",
           "maximum": 5000,
           "minimum": 100,
           "type": "integer"
         },
         "maximumAttempts": {
+          "description": "Maximum total attempts in one delivery generation, including the first attempt.",
           "format": "uint8",
           "maximum": 5,
           "minimum": 1,
@@ -339,6 +350,7 @@
       ],
       "properties": {
         "caBundleRef": {
+          "description": "PEM CA bundle secret reference, when the receiver uses a private certificate authority.",
           "maxLength": 140,
           "minLength": 1,
           "pattern": "^(secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
@@ -348,6 +360,7 @@
           ]
         },
         "clientIdentityRef": {
+          "description": "PEM client identity secret reference for mutual TLS.",
           "maxLength": 140,
           "minLength": 1,
           "pattern": "^(secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",

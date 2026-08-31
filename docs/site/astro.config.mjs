@@ -211,7 +211,7 @@ export default defineConfig({
     }),
     starlight({
       title: 'Registry stack docs',
-      description: 'Documentation for Registry Stack: Registry Relay and Evidence Gateway, the runtime services that publish protected registry data and answer bounded questions with signed, minimum-disclosure assertions.',
+      description: 'Documentation for Registry Stack: publish existing records with Registry Relay, answer bounded questions with Evidence Gateway, or build a writable registry with the Registry Server source preview.',
       // Historical archives keep their sealed search posture. A new released
       // archive is built once on the release runner and carries its exact
       // Pagefind output into production.
@@ -226,7 +226,7 @@ export default defineConfig({
         // Released archives carry their machine-readable corpus into the
         // canonical root. Historical archives retain their sealed output.
         ...(isHistoricalArchiveBuild ? [] : [starlightLlmsTxt({
-          description: 'Documentation for Registry Stack: tutorials, product docs, explanation, and API reference for Registry Relay and Evidence Gateway.',
+          description: 'Documentation for Registry Stack: tutorials, product docs, explanation, and API reference for Registry Relay, Evidence Gateway, and the Registry Server source preview.',
           details: discoveryHeaderForBase(base),
           exclude: ['reference/apis/**'],
           promote: ['index*', 'explanation/**'],
@@ -425,7 +425,14 @@ export default defineConfig({
         {
           label: 'Build a registry',
           items: [
+            { label: 'Registry Server overview', slug: 'explanation/configuration-defined-registry' },
+            { label: 'Modeling patterns', slug: 'explanation/registry-modeling-patterns' },
+            { label: 'Create and query your first registry', slug: 'tutorials/first-registry-server' },
             { label: 'Review changes before updating a registry', slug: 'tutorials/review-registry-changes' },
+            { label: 'Configure your registry', slug: 'configure/registry-server' },
+            { label: 'Configure webhooks', slug: 'configure/registry-server-webhooks' },
+            { label: 'Configuration reference', slug: 'reference/registry-server-configuration' },
+            { label: 'Events and webhooks reference', slug: 'reference/registry-server-events' },
           ],
         },
         {

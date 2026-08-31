@@ -9,9 +9,9 @@ change, send a small authenticated event to a configured service. This should
 cover the common integration need without turning Registry Server into a
 workflow engine or plugin host.
 
-The mechanism is domain-neutral. A project may declare events for a person,
-household membership, farm, disability assessment, company, asset, or any
-other configured entity. Registry Server has no built-in knowledge of those
+The mechanism is domain-neutral. A project may declare events for a business registration,
+an establishment, a facility inspection, a permit, an asset, or any other
+configured entity. Registry Server has no built-in knowledge of those
 models.
 
 The existing transactional outbox and delivery worker are the starting point,
@@ -46,15 +46,19 @@ events:
 
 - `id` is the stable external event contract. A breaking payload change uses a
   new versioned id.
-- `trigger` is one of `created`, `patched`, or `tombstoned`.
+- `trigger` is one of `created`, `patched`, `tombstoned`, or `request_lifecycle`.
+  Only a change-request entity can declare `request_lifecycle`.
 - `projection` is the complete set of record values that may leave the
   registry. System event metadata does not need to be listed.
-- `when` is optional. Version 1 supports only `kind: fields`. `changed`,
+- `when` is optional. For record mutations, use `kind: fields`. `changed`,
   `beforeEquals`, and `afterEquals` are optional, combine with AND, and accept
   declared fields with scalar or null comparison values. At least one test is
   required when `when` is present. `created` may use `afterEquals`, `patched`
   may use all three tests, and `tombstoned` may use `beforeEquals`; invalid
   combinations fail compilation.
+- Lifecycle events use `kind: request_lifecycle` with at least one nonempty
+  `transitions`, `toStates`, or `stages` list. Each nonempty list must match;
+  field predicates are not available for this trigger.
 - One event has at most one webhook destination. A project that needs fanout
   uses an external event gateway until native fanout is justified.
 - Production compilation rejects an event without a delivery because Version
@@ -75,6 +79,7 @@ restate it. A condition can disclose information through whether an event
 fires even when that field is not in the payload. Activation therefore
 requires the runtime destination to permit the full derived classification,
 but the destination can never add to the compiled projection.
+Lifecycle events are at least as classified as their request entity.
 
 ### Event evaluation and capture
 
@@ -83,6 +88,11 @@ Evaluation and outbox insertion happen inside the record mutation transaction,
 after authorization and validation. A failure creates neither the record
 change nor the event. No user script, network call, or webhook runs inside that
 transaction.
+
+Lifecycle conditions are evaluated against the request transition. Their
+projection contains request fields, not canonical target values, and capture
+commits with the transition. A webhook notification grants no approval or
+application authority.
 
 The captured event is immutable and binds its event id, entity, record id,
 revision, trigger, projected values, package revision, schema fingerprint,
@@ -113,6 +123,11 @@ The body contains `entity`, `recordId`, `revision`, `trigger`,
 `packageRevision`, and `values`. `values` contains exactly the declared
 projection. Record identifiers are deliberately kept out of CloudEvents
 headers because infrastructure commonly logs headers.
+
+Lifecycle bodies also require a `request` object containing `proposalVersion`,
+`workflowRevision`, `transition`, `fromState`, `toState`, `stage`, `effectDigest`,
+and `deduplicationKey`. `stage` and `effectDigest` may be null. The deduplication
+key stays stable across automatic retries and operator replay.
 
 Registry delivery headers add `Idempotency-Key`,
 `X-Registry-Event-Generation`, `X-Registry-Delivery-Attempt`, and

@@ -610,15 +610,24 @@ pub(crate) type RawEventDestinationConfigs = BTreeMap<String, RawEventDestinatio
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct RawEventDestinationConfig {
+    /// Receiver origin without a path or query, such as `https://receiver.example.com`.
     origin: String,
+    /// Absolute request path on the configured origin, such as `/events`.
     path: String,
+    /// HTTPS for production, or explicit loopback-only HTTP for local development.
     network_profile: EventDestinationNetworkProfile,
+    /// Address families to validate when resolving the destination.
     dns_family: EventDestinationDnsFamily,
+    /// Explicitly allowed private network ranges in canonical CIDR notation.
     allowed_private_cidrs: Vec<String>,
+    /// Runtime secret reference for the receiver's shared HMAC-SHA-256 key.
     hmac_sha256_key_ref: String,
+    /// Highest permitted classification, including fields used only in event conditions.
     classification_ceiling: Classification,
+    /// Optional private CA and client identity secret references for HTTPS.
     #[serde(default)]
     tls: Option<RawEventDestinationTlsConfig>,
+    /// Per-destination limits that may tighten, but never increase, the compiled delivery limits.
     delivery_ceilings: RawEventDestinationDeliveryCeilings,
 }
 
@@ -626,8 +635,10 @@ pub(crate) struct RawEventDestinationConfig {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawEventDestinationTlsConfig {
+    /// PEM CA bundle secret reference, when the receiver uses a private certificate authority.
     #[serde(default)]
     ca_bundle_ref: Option<String>,
+    /// PEM client identity secret reference for mutual TLS.
     #[serde(default)]
     client_identity_ref: Option<String>,
 }
@@ -636,7 +647,9 @@ struct RawEventDestinationTlsConfig {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawEventDestinationDeliveryCeilings {
+    /// Maximum time allowed for one attempt, in milliseconds.
     attempt_timeout_milliseconds: u32,
+    /// Maximum total attempts in one delivery generation, including the first attempt.
     maximum_attempts: u8,
 }
 

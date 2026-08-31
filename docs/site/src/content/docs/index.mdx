@@ -1,6 +1,6 @@
 ---
 title: Registry Stack documentation
-description: Answer a bounded question with Evidence Gateway, or publish selected records through Registry Relay from a reviewed read-only SQLite view.
+description: Answer bounded questions with Evidence Gateway, publish existing records with Registry Relay, or build a writable registry with Registry Server.
 status: current
 owner: registry-docs
 source_repos:
@@ -11,19 +11,21 @@ locale: en
 standards_referenced: []
 ---
 
-Registry Stack helps an institution answer questions about data it already
-holds without giving callers direct access to the source. Two doors: Evidence Gateway
-signs the answer to one bounded question, and Registry Relay publishes selected
-records through a protected read-only API.
+Registry Stack helps institutions manage controlled access to authoritative data.
+Evidence Gateway signs the answer to a bounded question, Registry Relay publishes selected
+records from an existing source, and the Registry Server source preview provides a
+configuration-defined writable registry backed by PostgreSQL.
+
+{/* Evidence: crates/registry-server/src/contract.rs, RegistryProject;
+    crates/registry-server/src/api/mod.rs; crates/registry-server/src/postgres/mutation.rs. */}
 
 ## Answer a bounded question with Evidence Gateway
 
 Use Evidence Gateway when the caller needs to learn only a fact, not to read a record.
 It answers one bounded question about one subject and signs the answer,
-releasing the answer rather than the row behind it. Adult status, residence
-region, professional licence status, and legal-parent relationship are coequal
-acceptance definitions; you author whichever one your institution needs, the
-same way.
+releasing the answer rather than the row behind it. For example, a licensing authority can
+answer whether a professional licence is active. Requirements and their permitted outputs
+come from reviewed configuration.
 
 [Evidence Gateway overview](start/evidence-quickstart/) explains the source, assertion,
 verification, and audit boundaries. Continue with
@@ -48,6 +50,32 @@ Continue with [author a Registry Relay project](configure/relay/) to bind an
 institution-owned view, then [operate Registry Relay](operate/relay/) for
 sources, token issuers, audit retention, and revision replacement.
 
+## Build a writable registry with Registry Server
+
+Use Server when you need a system of record, including create and update operations.
+Your project defines entities, relationships, constraints, and caller permissions; the compiler
+generates the storage and REST contract. Holdings, plots, businesses, and assets are configured
+models, not built-in server types. Server is currently documented as an unreleased source preview.
+
+Start with the [Registry Server overview](explanation/configuration-defined-registry/), then
+[create and query your first registry](tutorials/first-registry-server/). Continue with
+[configure your registry](configure/registry-server/) to extend the model and prepare a tested
+deployment handoff.
+
+Follow [review changes before updating records](tutorials/review-registry-changes/) to configure
+change requests, approval stages, and controlled writes.
+
+Use [modeling patterns](explanation/registry-modeling-patterns/) to choose identifier, relationship,
+declaration, provenance, and document-reference structures for your registry.
+
+Follow [configure webhooks](configure/registry-server-webhooks/) to notify another service.
+Use the [configuration reference](reference/registry-server-configuration/) to look up keys,
+defaults, and constraints, and the [events and webhooks reference](reference/registry-server-events/)
+for the receiver contract, signatures, and delivery behavior.
+
+{/* Evidence: crates/registry-server/src/contract.rs, RegistryProject and RegistryModule;
+    crates/registry-server/tests/postgres_pilot_acceptance.rs. */}
+
 ## Keep the product boundaries clear
 
 Registry Relay owns source access and protected record surfaces.
@@ -55,11 +83,17 @@ Evidence Gateway owns bounded question answering, signing, and minimum disclosur
 runs independently of Relay against its own configured authoritative sources.
 The caller receives only the output authorized for that service.
 
-The two products share no tooling and no deployment shape. A Relay deployment is
+The products have separate adopter tooling and deployment contracts, while reusing shared
+Registry Platform primitives. A Relay deployment is
 one sealed package per process, authored with `relayctl` and served by `relay`.
 Evidence Gateway has its own toolset and deployment project shape, covered by the
 [Evidence Gateway overview](start/evidence-quickstart/). Relay responses are not
 signed: portable signed minimum disclosure is what Evidence Gateway is for.
+Server owns its PostgreSQL records; it does not automatically publish them through Relay or
+configure Evidence Gateway on your behalf.
+
+{/* Evidence: crates/registry-server/Cargo.toml; crates/registry-serverctl/src/lib.rs;
+    crates/registry-relayctl/src/lib.rs; crates/registry-evidencectl/src/lib.rs. */}
 
 ## Move beyond the first run
 

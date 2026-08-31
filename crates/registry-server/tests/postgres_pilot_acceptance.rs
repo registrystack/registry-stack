@@ -20,17 +20,17 @@ async fn real_postgres_five_domain_pilot_is_configured_production_closed_and_sou
     asset_site_placement_journey(&asset).await;
     asset.finish().await;
 
-    let household = PilotHarness::start("publicschema-household").await;
-    household_journey(&household).await;
-    household.finish().await;
+    let business = PilotHarness::start("business-establishments").await;
+    establishments_journey(&business).await;
+    business.finish().await;
 
-    let disability = PilotHarness::start("disability").await;
-    disability_journey(&disability).await;
-    disability.finish().await;
+    let inspection = PilotHarness::start("inspection").await;
+    inspection_journey(&inspection).await;
+    inspection.finish().await;
 
-    let farmer = PilotHarness::start("farmer").await;
-    farmer_journey(&farmer).await;
-    farmer.finish().await;
+    let facility = PilotHarness::start("facility").await;
+    facility_journey(&facility).await;
+    facility.finish().await;
 
     let business = PilotHarness::start("business").await;
     business_journey(&business).await;
@@ -199,159 +199,166 @@ async fn asset_site_placement_journey(harness: &PilotHarness) {
     .await;
 }
 
-async fn household_journey(harness: &PilotHarness) {
+async fn establishments_journey(harness: &PilotHarness) {
     let token = harness.token_with_scopes(
-        "household-administration",
+        "business-administration",
         &[],
-        &["registry:household:operate"],
+        &["registry:business:operate"],
     );
-    let openapi = assert_fixture_surface(harness, "household-operator", &token, "household").await;
+    let openapi =
+        assert_fixture_surface(harness, "business-operator", &token, "establishments").await;
     assert_eq!(
-        openapi["components"]["schemas"]["person"]["properties"]["residencyStatus"]
+        openapi["components"]["schemas"]["establishment"]["properties"]["operatingStatus"]
             ["x-registry-vocabulary"],
-        "residency-status"
+        "operating-status"
     );
     assert_eq!(
-        openapi["components"]["schemas"]["person"]["properties"]["preferredLanguage"]
+        openapi["components"]["schemas"]["establishment"]["properties"]["preferredLanguage"]
             ["x-registry-vocabulary"],
         "preferred-language"
     );
 
-    let person = create_record(
+    let establishment = create_record(
         harness,
-        "/v1/records/persons",
+        "/v1/records/establishments",
         &token,
-        "person-create",
+        "establishment-create",
         json!({
-            "personCode":"P-100",
-            "legalName":"Ada North",
-            "familyName":"North",
-            "dateOfBirth":"1990-04-03",
-            "personSex":"female",
-            "residencyStatus":"usual-resident",
+            "establishmentCode":"P-100",
+            "siteName":"North Industrial Works",
+            "locality":"North",
+            "openedOn":"1990-04-03",
+            "establishmentKind":"production",
+            "operatingStatus":"operating",
             "preferredLanguage":"en"
         }),
     )
     .await;
-    assert_eq!(person.body["data"]["residencyStatus"], "usual-resident");
-    assert_eq!(person.body["data"]["preferredLanguage"], "en");
-    let old_household = create_record(
+    assert_eq!(establishment.body["data"]["operatingStatus"], "operating");
+    assert_eq!(establishment.body["data"]["preferredLanguage"], "en");
+    let old_business = create_record(
         harness,
-        "/v1/records/households",
+        "/v1/records/businesses",
         &token,
-        "household-old-create",
+        "business-old-create",
         json!({
-            "householdCode":"H-OLD",
-            "localHouseholdNumber":100,
-            "householdName":"Old household",
+            "businessCode":"H-OLD",
+            "localRegistrationNumber":100,
+            "registeredName":"Old business",
             "administrativeArea":"north",
-            "householdType":"private"
+            "businessType":"private"
         }),
     )
     .await;
-    let current_household = create_record(
+    let current_business = create_record(
         harness,
-        "/v1/records/households",
+        "/v1/records/businesses",
         &token,
-        "household-current-create",
+        "business-current-create",
         json!({
-            "householdCode":"H-CURRENT",
-            "localHouseholdNumber":101,
-            "householdName":"Current household",
+            "businessCode":"H-CURRENT",
+            "localRegistrationNumber":101,
+            "registeredName":"Current business",
             "administrativeArea":"north",
-            "householdType":"private"
+            "businessType":"private"
         }),
     )
     .await;
-    let old_membership = create_record(
+    let old_assignment = create_record(
         harness,
-        "/v1/records/group-memberships",
+        "/v1/records/operator-assignments",
         &token,
-        "membership-old-create",
+        "assignment-old-create",
         json!({
-            "person":person.id,
-            "household":old_household.id,
-            "relationship":"head",
+            "establishment":establishment.id,
+            "business":old_business.id,
+            "relationship":"head-office",
             "validFrom":"2019-01-01",
             "validTo":"2022-01-01"
         }),
     )
     .await;
-    let current_membership = create_record(
+    let current_assignment = create_record(
         harness,
-        "/v1/records/group-memberships",
+        "/v1/records/operator-assignments",
         &token,
-        "membership-current-create",
+        "assignment-current-create",
         json!({
-            "person":person.id,
-            "household":current_household.id,
-            "relationship":"head",
+            "establishment":establishment.id,
+            "business":current_business.id,
+            "relationship":"head-office",
             "validFrom":"2022-01-01"
         }),
     )
     .await;
     assert_list_ids(
         harness,
-        "/v1/records/group-memberships:as-of?accessProfile=household-operator&asOf=2021-12-31T23:59:59Z",
+        "/v1/records/operator-assignments:as-of?accessProfile=business-operator&asOf=2021-12-31T23:59:59Z",
         Some(&token),
-        &[&old_membership.id],
+        &[&old_assignment.id],
     )
     .await;
     assert_list_ids(
         harness,
-        "/v1/records/group-memberships:current?accessProfile=household-operator",
+        "/v1/records/operator-assignments:current?accessProfile=business-operator",
         Some(&token),
-        &[&current_membership.id],
+        &[&current_assignment.id],
     )
     .await;
 
-    let household = harness
+    let business = harness
         .send(
             Method::GET,
             &format!(
-                "/v1/records/households/{}?accessProfile=household-operator&$select=householdCode,headCount,singleHeaded,womanHeaded",
-                current_household.id
+                "/v1/records/businesses/{}?accessProfile=business-operator&$select=businessCode,headOfficeCount,hasHeadOffice,hasProductionSite",
+                current_business.id
             ),
             Some(&token),
             &[],
             Vec::new(),
         )
         .await;
-    assert_eq!(household.status(), StatusCode::OK);
-    let household = response_json(household).await;
-    assert_eq!(household["data"]["householdCode"], "H-CURRENT");
-    assert_eq!(household["data"]["headCount"], 1);
-    assert_eq!(household["data"]["singleHeaded"], true);
-    assert_eq!(household["data"]["womanHeaded"], true);
+    assert_eq!(business.status(), StatusCode::OK);
+    let business = response_json(business).await;
+    assert_eq!(business["data"]["businessCode"], "H-CURRENT");
+    assert_eq!(business["data"]["headOfficeCount"], 1);
+    assert_eq!(business["data"]["hasHeadOffice"], true);
+    assert_eq!(business["data"]["hasProductionSite"], true);
 
-    let people = harness
+    let establishments = harness
         .send(
             Method::GET,
             &format!(
-                "/v1/records/households/{}/people?accessProfile=household-operator&$select=personCode,personSex&$filter=personSex%20eq%20%27female%27&$count=true",
-                current_household.id
+                "/v1/records/businesses/{}/establishments?accessProfile=business-operator&$select=establishmentCode,establishmentKind&$filter=establishmentKind%20eq%20%27production%27&$count=true",
+                current_business.id
             ),
             Some(&token),
             &[],
             Vec::new(),
         )
         .await;
-    assert_eq!(people.status(), StatusCode::OK);
-    let people = response_json(people).await;
-    assert_eq!(people["count"], 1);
-    assert_eq!(people["items"][0]["data"]["personCode"], "P-100");
-    assert_eq!(people["items"][0]["data"]["personSex"], "female");
+    assert_eq!(establishments.status(), StatusCode::OK);
+    let establishments = response_json(establishments).await;
+    assert_eq!(establishments["count"], 1);
+    assert_eq!(
+        establishments["items"][0]["data"]["establishmentCode"],
+        "P-100"
+    );
+    assert_eq!(
+        establishments["items"][0]["data"]["establishmentKind"],
+        "production"
+    );
 
     let overlap = harness
         .send_json(
             Method::POST,
-            "/v1/records/group-memberships",
+            "/v1/records/operator-assignments",
             Some(&token),
-            Some("membership-overlap"),
+            Some("assignment-overlap"),
             json!({"data":{
-                "person":person.id,
-                "household":old_household.id,
-                "relationship":"dependent",
+                "establishment":establishment.id,
+                "business":old_business.id,
+                "relationship":"depot",
                 "validFrom":"2021-06-01",
                 "validTo":"2023-01-01"
             }}),
@@ -360,19 +367,19 @@ async fn household_journey(harness: &PilotHarness) {
     assert_eq!(overlap.status(), StatusCode::CONFLICT);
 }
 
-async fn disability_journey(harness: &PilotHarness) {
-    let token = harness.token("disability-assessment", &[]);
+async fn inspection_journey(harness: &PilotHarness) {
+    let token = harness.token("facility-inspection", &[]);
     let openapi =
-        assert_fixture_surface(harness, "disability-caseworker", &token, "disability").await;
+        assert_fixture_surface(harness, "inspection-inspector", &token, "inspection").await;
     assert_eq!(
-        openapi["components"]["schemas"]["functioning-observation"]["properties"]
+        openapi["components"]["schemas"]["inspection-observation"]["properties"]
             ["observationSchemaMetadata"]["additionalProperties"],
         false
     );
     let concealed_schema = harness
         .send(
             Method::GET,
-            "/openapi.json?accessProfile=disability-caseworker",
+            "/openapi.json?accessProfile=inspection-inspector",
             None,
             &[],
             Vec::new(),
@@ -380,30 +387,38 @@ async fn disability_journey(harness: &PilotHarness) {
         .await;
     assert_eq!(concealed_schema.status(), StatusCode::NOT_FOUND);
 
+    let authority = create_record(
+        harness,
+        "/v1/records/authorities",
+        &token,
+        "authority-create",
+        json!({"authorityCode":"ENV-NORTH","name":"Northern Environmental Authority","jurisdiction":"north-district"}),
+    ).await;
+
     let assessment = create_record(
         harness,
-        "/v1/records/assessment-episodes",
+        "/v1/records/inspections",
         &token,
         "assessment-create",
         json!({
-            "episodeCode":"EP-100",
-            "subjectCode":"SUBJECT-100",
+            "inspectionCode":"EP-100",
+            "facilityCode":"FACILITY-100",
             "openedOn":"2026-01-10",
-            "assessmentSource":"case-management"
+            "inspectionAuthority":"case-management"
         }),
     )
     .await;
     let invalid_range = harness
         .send_json(
             Method::POST,
-            "/v1/records/functioning-observations",
+            "/v1/records/inspection-observations",
             Some(&token),
             Some("observation-invalid-range"),
             json!({"data":{
-                "assessmentEpisode":assessment.id,
+                "inspection":assessment.id,
                 "observedAt":"2026-01-11T09:00:00Z",
-                "functioningDomain":"mobility",
-                "severityScore":5,
+                "inspectionDomain":"air",
+                "findingGrade":5,
                 "observationSchemaMetadata":{
                     "schemaVersion":"1","vocabularyRelease":"2026-01","scoringScale":"zero-to-four"
                 }
@@ -414,14 +429,14 @@ async fn disability_journey(harness: &PilotHarness) {
     let invalid_structure = harness
         .send_json(
             Method::POST,
-            "/v1/records/functioning-observations",
+            "/v1/records/inspection-observations",
             Some(&token),
             Some("observation-invalid-structure"),
             json!({"data":{
-                "assessmentEpisode":assessment.id,
+                "inspection":assessment.id,
                 "observedAt":"2026-01-11T09:00:00Z",
-                "functioningDomain":"mobility",
-                "severityScore":3,
+                "inspectionDomain":"air",
+                "findingGrade":3,
                 "observationSchemaMetadata":{
                     "schemaVersion":"1","vocabularyRelease":"2026-01",
                     "scoringScale":"zero-to-four","undeclared":"refused"
@@ -432,63 +447,83 @@ async fn disability_journey(harness: &PilotHarness) {
     assert_eq!(invalid_structure.status(), StatusCode::BAD_REQUEST);
     let observation = create_record(
         harness,
-        "/v1/records/functioning-observations",
+        "/v1/records/inspection-observations",
         &token,
         "observation-create",
         json!({
-            "assessmentEpisode":assessment.id,
+            "inspection":assessment.id,
             "observedAt":"2026-01-11T09:00:00Z",
-            "functioningDomain":"mobility",
-            "severityScore":3,
+            "inspectionDomain":"air",
+            "findingGrade":3,
             "observationSchemaMetadata":{
                 "schemaVersion":"1","vocabularyRelease":"2026-01","scoringScale":"zero-to-four"
             }
         }),
     )
     .await;
-    assert_eq!(observation.body["data"]["severityScore"], 3);
+    assert_eq!(observation.body["data"]["findingGrade"], 3);
 
     let original = create_record(
         harness,
-        "/v1/records/certifications",
+        "/v1/records/permits",
         &token,
-        "certification-original",
+        "permit-original",
         json!({
-            "certificationCode":"CERT-100",
-            "assessmentEpisode":assessment.id,
-            "certificationStatus":"corrected",
+            "permitCode":"PERMIT-100",
+            "inspection":assessment.id,
+            "permitStatus":"active",
             "validFrom":"2026-01-01",
             "validTo":"2026-07-01",
+            "issuingAuthority":authority.id,
             "validitySource":"review-board"
         }),
     )
     .await;
     let correction = create_record(
         harness,
-        "/v1/records/certifications",
+        "/v1/records/permits",
         &token,
-        "certification-correction",
+        "permit-correction",
         json!({
-            "certificationCode":"CERT-101",
-            "assessmentEpisode":assessment.id,
-            "certificationStatus":"active",
-            "validFrom":"2026-07-01",
-            "correctedCertification":original.id,
+            "permitCode":"PERMIT-101",
+            "inspection":assessment.id,
+            "permitStatus":"active",
+            "validFrom":"2026-01-01",
+            "validTo":"2026-07-01",
+            "correctedPermit":original.id,
             "correctionReason":"reviewed correction",
+            "issuingAuthority":authority.id,
             "validitySource":"review-board",
             "provenanceNote":"signed review packet"
         }),
     )
     .await;
+    assert_eq!(correction.body["data"]["correctedPermit"], original.id);
+    assert_eq!(correction.body["data"]["issuingAuthority"], authority.id);
     assert_eq!(
-        correction.body["data"]["correctedCertification"],
-        original.id
+        correction.body["data"]["validFrom"],
+        original.body["data"]["validFrom"]
     );
+    assert_eq!(
+        correction.body["data"]["validTo"],
+        original.body["data"]["validTo"]
+    );
+    let retained = harness
+        .send(
+            Method::GET,
+            &format!("/v1/records/permits/{}", original.id),
+            Some(&token),
+            &[],
+            Vec::new(),
+        )
+        .await;
+    assert_eq!(retained.status(), StatusCode::OK);
+    assert_eq!(response_json(retained).await["data"], original.body["data"]);
     assert!(correction.body["data"]["correctionReason"].is_string());
     assert!(correction.body["data"]["provenanceNote"].is_string());
     assert_create_only_refuses_patch_and_tombstone(
         harness,
-        "/v1/records/certifications",
+        "/v1/records/permits",
         &correction,
         &token,
     )
@@ -497,7 +532,7 @@ async fn disability_journey(harness: &PilotHarness) {
     let anonymous = harness
         .send(
             Method::GET,
-            &format!("/v1/records/certifications/{}", correction.id),
+            &format!("/v1/records/permits/{}", correction.id),
             None,
             &[],
             Vec::new(),
@@ -507,18 +542,19 @@ async fn disability_journey(harness: &PilotHarness) {
     assert_eq!(response_json(anonymous).await["code"], "resource.not_found");
 }
 
-async fn farmer_journey(harness: &PilotHarness) {
+async fn facility_journey(harness: &PilotHarness) {
     let north_token = harness.token(
-        "farmer-registry",
+        "facility-registry",
         &[("administrative_boundaries", json!(["north-district"]))],
     );
     let south_token = harness.token(
-        "farmer-registry",
+        "facility-registry",
         &[("administrative_boundaries", json!(["south-district"]))],
     );
-    let openapi = assert_fixture_surface(harness, "farmer-operator", &north_token, "farmer").await;
+    let openapi =
+        assert_fixture_surface(harness, "facility-operator", &north_token, "facility").await;
     assert_eq!(
-        openapi["paths"]["/v1/records/plots:batch"]["post"]["x-registry-maximumItems"],
+        openapi["paths"]["/v1/records/installations:batch"]["post"]["x-registry-maximumItems"],
         4
     );
     let ddl = harness.registry.ddl().script().to_ascii_lowercase();
@@ -537,24 +573,24 @@ async fn farmer_journey(harness: &PilotHarness) {
         .get(0);
     assert_eq!(postgis_count, 0);
 
-    let north_farmer = create_record(
+    let north_facility = create_record(
         harness,
-        "/v1/records/farmers",
+        "/v1/records/facilities",
         &north_token,
-        "north-farmer",
+        "north-facility",
         json!({
-            "farmerCode":"F-NORTH","displayName":"North operator",
+            "facilityCode":"F-NORTH","displayName":"North operator",
             "administrativeBoundary":"north-district"
         }),
     )
     .await;
-    let south_farmer = create_record(
+    let south_facility = create_record(
         harness,
-        "/v1/records/farmers",
+        "/v1/records/facilities",
         &south_token,
-        "south-farmer",
+        "south-facility",
         json!({
-            "farmerCode":"F-SOUTH","displayName":"South operator",
+            "facilityCode":"F-SOUTH","displayName":"South operator",
             "administrativeBoundary":"south-district"
         }),
     )
@@ -563,8 +599,8 @@ async fn farmer_journey(harness: &PilotHarness) {
         .send(
             Method::GET,
             &format!(
-                "/v1/records/farmers/{}?accessProfile=farmer-operator",
-                south_farmer.id
+                "/v1/records/facilities/{}?accessProfile=facility-operator",
+                south_facility.id
             ),
             Some(&north_token),
             &[],
@@ -576,7 +612,7 @@ async fn farmer_journey(harness: &PilotHarness) {
         harness
             .send(
                 Method::GET,
-                "/v1/records/farmers?accessProfile=farmer-operator",
+                "/v1/records/facilities?accessProfile=facility-operator",
                 Some(&north_token),
                 &[],
                 Vec::new(),
@@ -585,61 +621,61 @@ async fn farmer_journey(harness: &PilotHarness) {
     )
     .await;
     let north_ids = item_ids(&north_list);
-    assert!(north_ids.contains(&north_farmer.id.as_str()));
-    assert!(!north_ids.contains(&south_farmer.id.as_str()));
+    assert!(north_ids.contains(&north_facility.id.as_str()));
+    assert!(!north_ids.contains(&south_facility.id.as_str()));
 
-    let old_holding = create_record(
+    let old_permit = create_record(
         harness,
-        "/v1/records/holdings",
+        "/v1/records/permits",
         &north_token,
-        "holding-old",
+        "permit-old",
         json!({
-            "holdingCode":"H-NORTH","farmer":north_farmer.id,"tenureType":"leased",
-            "tenureStart":"2020-01-01","tenureEnd":"2024-01-01",
+            "permitNumber":"H-NORTH","facility":north_facility.id,"permitType":"air-emissions",
+            "validFrom":"2020-01-01","validTo":"2024-01-01",
             "administrativeBoundary":"north-district","importSource":"survey-a",
-            "sourceRecordId":"holding-old"
+            "sourceRecordId":"permit-old"
         }),
     )
     .await;
-    let current_holding = create_record(
+    let current_permit = create_record(
         harness,
-        "/v1/records/holdings",
+        "/v1/records/permits",
         &north_token,
-        "holding-current",
+        "permit-current",
         json!({
-            "holdingCode":"H-NORTH","farmer":north_farmer.id,"tenureType":"owned",
-            "tenureStart":"2024-01-01","administrativeBoundary":"north-district",
-            "importSource":"survey-a","sourceRecordId":"holding-current"
+            "permitNumber":"H-NORTH","facility":north_facility.id,"permitType":"water-discharge",
+            "validFrom":"2024-01-01","administrativeBoundary":"north-district",
+            "importSource":"survey-a","sourceRecordId":"permit-current"
         }),
     )
     .await;
     assert_list_ids(
         harness,
-        "/v1/records/holdings:as-of?accessProfile=farmer-operator&asOf=2023-12-31T23:59:59Z",
+        "/v1/records/permits:as-of?accessProfile=facility-operator&asOf=2023-12-31T23:59:59Z",
         Some(&north_token),
-        &[&old_holding.id],
+        &[&old_permit.id],
     )
     .await;
     assert_list_ids(
         harness,
-        "/v1/records/holdings:current?accessProfile=farmer-operator",
+        "/v1/records/permits:current?accessProfile=facility-operator",
         Some(&north_token),
-        &[&current_holding.id],
+        &[&current_permit.id],
     )
     .await;
 
     let invalid_point = harness
         .send_json(
             Method::POST,
-            "/v1/records/plots",
+            "/v1/records/installations",
             Some(&north_token),
-            Some("plot-invalid-point"),
+            Some("installation-invalid-point"),
             json!({"data":{
-                "plotCode":"P-BAD-POINT","holding":current_holding.id,
+                "installationCode":"P-BAD-POINT","permit":current_permit.id,
                 "administrativeBoundary":"north-district",
                 "centroid":{"type":"Point","coordinates":[32.0,-9.5]},
                 "areaValue":"1.2500","areaUnit":"hectare",
-                "importSource":"survey-a","sourceRecordId":"plot-bad-point"
+                "importSource":"survey-a","sourceRecordId":"installation-bad-point"
             }}),
         )
         .await;
@@ -647,56 +683,56 @@ async fn farmer_journey(harness: &PilotHarness) {
     let invalid_decimal = harness
         .send_json(
             Method::POST,
-            "/v1/records/plots",
+            "/v1/records/installations",
             Some(&north_token),
-            Some("plot-invalid-decimal"),
+            Some("installation-invalid-decimal"),
             json!({"data":{
-                "plotCode":"P-BAD-DECIMAL","holding":current_holding.id,
+                "installationCode":"P-BAD-DECIMAL","permit":current_permit.id,
                 "administrativeBoundary":"north-district",
                 "centroid":{"type":"Point","coordinates":[30.5,-9.5]},
                 "areaValue":"01.2500","areaUnit":"hectare",
-                "importSource":"survey-a","sourceRecordId":"plot-bad-decimal"
+                "importSource":"survey-a","sourceRecordId":"installation-bad-decimal"
             }}),
         )
         .await;
     assert_eq!(invalid_decimal.status(), StatusCode::BAD_REQUEST);
-    let plot = create_record(
+    let installation = create_record(
         harness,
-        "/v1/records/plots",
+        "/v1/records/installations",
         &north_token,
-        "plot-create",
+        "installation-create",
         json!({
-            "plotCode":"P-NORTH","holding":current_holding.id,
+            "installationCode":"P-NORTH","permit":current_permit.id,
             "administrativeBoundary":"north-district",
             "centroid":{"type":"Point","coordinates":[30.5,-9.5]},
             "areaValue":"1.2500","areaUnit":"hectare",
-            "importSource":"survey-a","sourceRecordId":"plot-primary"
+            "importSource":"survey-a","sourceRecordId":"installation-primary"
         }),
     )
     .await;
-    assert_eq!(plot.body["data"]["areaValue"], "1.2500");
-    assert_eq!(plot.body["data"]["areaUnit"], "hectare");
+    assert_eq!(installation.body["data"]["areaValue"], "1.2500");
+    assert_eq!(installation.body["data"]["areaUnit"], "hectare");
 
     let old_activity = create_record(
         harness,
-        "/v1/records/seasonal-activities",
+        "/v1/records/discharge-reports",
         &north_token,
         "activity-old",
         json!({
-            "plot":plot.id,"administrativeBoundary":"north-district",
-            "activityType":"planting","seasonStart":"2024-01-01","seasonEnd":"2024-07-01",
+            "installation":installation.id,"administrativeBoundary":"north-district",
+            "substanceCode":"nitrogen","periodStart":"2024-01-01","periodEnd":"2024-07-01",
             "quantityValue":"12.500","quantityUnit":"kilogram"
         }),
     )
     .await;
     let current_activity = create_record(
         harness,
-        "/v1/records/seasonal-activities",
+        "/v1/records/discharge-reports",
         &north_token,
         "activity-current",
         json!({
-            "plot":plot.id,"administrativeBoundary":"north-district",
-            "activityType":"planting","seasonStart":"2024-07-01",
+            "installation":installation.id,"administrativeBoundary":"north-district",
+            "substanceCode":"nitrogen","periodStart":"2024-07-01",
             "quantityValue":"8.250","quantityUnit":"kilogram"
         }),
     )
@@ -704,32 +740,32 @@ async fn farmer_journey(harness: &PilotHarness) {
     assert_eq!(current_activity.body["data"]["quantityValue"], "8.250");
     assert_list_ids(
         harness,
-        "/v1/records/seasonal-activities:as-of?accessProfile=farmer-operator&asOf=2024-06-30T23:59:59Z",
+        "/v1/records/discharge-reports:as-of?accessProfile=facility-operator&asOf=2024-06-30T23:59:59Z",
         Some(&north_token),
         &[&old_activity.id],
     )
     .await;
     assert_list_ids(
         harness,
-        "/v1/records/seasonal-activities:current?accessProfile=farmer-operator",
+        "/v1/records/discharge-reports:current?accessProfile=facility-operator",
         Some(&north_token),
         &[&current_activity.id],
     )
     .await;
 
     let batch_body = json!({"items":[{"operation":"create","data":{
-        "plotCode":"P-BATCH","holding":current_holding.id,
+        "installationCode":"P-BATCH","permit":current_permit.id,
         "administrativeBoundary":"north-district",
         "centroid":{"type":"Point","coordinates":[30.75,-9.25]},
         "areaValue":"2.0000","areaUnit":"hectare",
-        "importSource":"survey-b","sourceRecordId":"plot-batch"
+        "importSource":"survey-b","sourceRecordId":"installation-batch"
     }}]});
     let first_batch = harness
         .send_json(
             Method::POST,
-            "/v1/records/plots:batch",
+            "/v1/records/installations:batch",
             Some(&north_token),
-            Some("plot-batch"),
+            Some("installation-batch"),
             batch_body.clone(),
         )
         .await;
@@ -738,9 +774,9 @@ async fn farmer_journey(harness: &PilotHarness) {
     let replay = harness
         .send_json(
             Method::POST,
-            "/v1/records/plots:batch",
+            "/v1/records/installations:batch",
             Some(&north_token),
-            Some("plot-batch"),
+            Some("installation-batch"),
             batch_body,
         )
         .await;
@@ -750,15 +786,15 @@ async fn farmer_journey(harness: &PilotHarness) {
     let duplicate_import = harness
         .send_json(
             Method::POST,
-            "/v1/records/plots",
+            "/v1/records/installations",
             Some(&north_token),
-            Some("plot-duplicate-import"),
+            Some("installation-duplicate-import"),
             json!({"data":{
-                "plotCode":"P-DUPLICATE","holding":current_holding.id,
+                "installationCode":"P-DUPLICATE","permit":current_permit.id,
                 "administrativeBoundary":"north-district",
                 "centroid":{"type":"Point","coordinates":[30.8,-9.2]},
                 "areaValue":"3.0000","areaUnit":"hectare",
-                "importSource":"survey-b","sourceRecordId":"plot-batch"
+                "importSource":"survey-b","sourceRecordId":"installation-batch"
             }}),
         )
         .await;
@@ -948,14 +984,18 @@ async fn assert_fixture_surface(
     let openapi = response_json(response).await;
     let families = [
         ("asset", "/v1/records/assets", "asset-item"),
-        ("household", "/v1/records/persons", "person"),
-        ("household", "/v1/records/households", "household"),
         (
-            "disability",
-            "/v1/records/assessment-episodes",
-            "assessment-episode",
+            "establishments",
+            "/v1/records/establishments",
+            "establishment",
         ),
-        ("farmer", "/v1/records/farmers", "farmer"),
+        ("establishments", "/v1/records/businesses", "business"),
+        (
+            "inspection",
+            "/v1/records/inspection-observations",
+            "inspection-observation",
+        ),
+        ("facility", "/v1/records/facilities", "facility"),
         ("business", "/v1/records/legal-entities", "legal-entity"),
     ];
     for (family, route, schema) in families {

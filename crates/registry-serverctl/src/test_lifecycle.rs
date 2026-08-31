@@ -56,6 +56,7 @@ pub(crate) enum TestLifecycleError {
     RuntimeConfigPath,
     RuntimeConfig(RuntimeConfigError),
     Candidate,
+    ReviewFingerprint,
     Journeys,
     JourneySyntax { path: String, message: &'static str },
     JourneyStep { path: String, message: String },
@@ -184,6 +185,14 @@ pub(crate) fn run(
             .await
             .map_err(|_| TestLifecycleError::Database)
     })?;
+    if request
+        .candidate
+        .prevalidation_schema_fingerprint
+        .as_ref()
+        .is_some_and(|declared| declared != &schema_fingerprint)
+    {
+        return Err(TestLifecycleError::ReviewFingerprint);
+    }
     let prepared = request
         .candidate
         .prepare(schema_fingerprint.clone())

@@ -5,11 +5,10 @@ REST surface are compiled from governed configuration. It is intended for
 institutional registries that need reliable writes, history, access control,
 and a safe way to evolve their schema without building a bespoke service.
 
-The runtime has no built-in person, household, farmer, disability, business,
-programme, or asset model. An entity, relationship, route, field, access
-profile, and event exists only when an active Registry package declares it.
-For example, a household membership is an ordinary configured relationship
-entity, not a server feature.
+The runtime has no built-in business, facility, authority, permit, or asset model.
+An entity, relationship, route, field, access profile, and event exists only
+when an active Registry package declares it. For example, an establishment's
+assignment to its operating business is an ordinary configured relationship.
 
 The product starts with two executables:
 
@@ -23,6 +22,12 @@ may propose configuration and run deterministic checks, but it cannot bypass
 package review, signature policy, or the separate migration database role.
 
 ## First-hour local quickstart
+
+The documentation site has three adopter pages:
+
+- [Registry Server overview](../../docs/site/src/content/docs/explanation/configuration-defined-registry.mdx)
+- [Create and query your first registry](../../docs/site/src/content/docs/tutorials/first-registry-server.mdx)
+- [Configure your registry](../../docs/site/src/content/docs/configure/registry-server.mdx)
 
 For a generic, domain-neutral local path, run:
 
@@ -66,6 +71,12 @@ It is the first-hour learning path, not a shortcut around production package
 signing, operated database roles, TLS, migration review, or secret custody.
 
 ## Pilot operator lifecycle
+
+For an offline permissions exercise, use [Review access configuration](examples/access-review/README.md).
+It includes a complete project, allowed and refused synthetic caller scenarios,
+and an omitted-row-restriction exercise. `explain access` shows effective field
+permissions; `check --deny-findings` makes review findings blocking for automation.
+Entity `accessRequirements` are mandatory compiler checks, not additional grants.
 
 The pilot lifecycle uses the published `registry-serverctl` and
 `registry-server` executables. It does not require a Rust change for a new
@@ -154,14 +165,16 @@ does not pretend that a test exists. The implementation change that enforces
 it must add one resolving negative executable test in the same patch.
 
 The projects under `acceptance/` are authored configuration inputs for the same
-compiler and binary. The baseline fixtures cover asset/site placement,
-PublicSchema-shaped household membership, disability, farmer, and business
-registries. Change-request fixture copies exercise reviewed request
-configuration without changing those baseline direct-write journeys. They are
-not generated output or implicit runtime models. The real-PostgreSQL pilot test
-executes the baseline fixtures, while the public-binary adopter workflow proves
-signed activation, authenticated data access, an additive upgrade, failure
-recovery, and unchanged server bytes for the non-person project.
+compiler and binary. The five baseline fixtures cover asset/site placement,
+business establishments, facility inspections, environmental facilities, and
+legal-entity registrations. Separate change-request fixtures exercise reviewed
+asset corrections and household contact registration without changing those
+baseline direct-write journeys. These are not generated output or implicit
+runtime models. The real-PostgreSQL pilot test executes the baseline fixtures,
+while the public-binary adopter workflow proves signed activation, authenticated
+data access, an additive upgrade, failure recovery, and unchanged server bytes
+for the asset project. See [change-request examples](CHANGE_REQUEST_EXAMPLES.md)
+for the approval workflows.
 
 Run the current deterministic contract checks with:
 
@@ -169,7 +182,7 @@ Run the current deterministic contract checks with:
 products/registry-server/scripts/check-contracts.sh
 ```
 
-For an interactive local household example backed by disposable PostgreSQL,
+For an interactive local business example backed by disposable PostgreSQL,
 Registry Mint, a real local package, and deterministic relational data, run:
 
 ```bash
@@ -188,12 +201,13 @@ roles, and codelist schemes. The compiler refuses overlay entries outside the
 selected access profile and classification ceiling. It does not infer or
 hardcode a domain model.
 
-The PublicSchema-shaped household fixture demonstrates Person, Household, and
-GroupMembership alignment entirely in configuration. It also declares
-module-owned selector profiles, a household-to-people read path through group
-membership, and a reviewed live SQL asset that contributes derived household
-facts such as head count, child count, under-five child count, elderly count,
-single-headed, and woman-headed:
+The business-establishments fixture defines businesses, establishments, and dated
+operator assignments. Its local example concept URIs demonstrate semantic metadata
+without claiming conformance to an external domain model. It also declares exact
+selectors, a business-to-establishments read path, and a reviewed SQL module that
+counts head offices, branches, production sites, and suspended establishments.
+Two boolean fields indicate whether a business has a head office or production site.
+The summary includes only assignments effective on the evaluation date.
 
 Every emitted derived row must have a non-null canonical `id`, and one derived
 relation may emit at most one row for that `id`. Registry Server refuses the
@@ -201,8 +215,8 @@ query atomically when reviewed SQL violates either rule.
 
 ```bash
 registry-serverctl generate manifest \
-  products/registry-server/acceptance/publicschema-household \
-  --output ./household-metadata
+  products/registry-server/acceptance/business-establishments \
+  --output ./business-metadata
 ```
 
 This produces the canonical Registry Manifest source and a DCAT JSON-LD
@@ -212,7 +226,7 @@ does not carry a second DCAT implementation.
 The REST query profile uses the native `$select`, `$filter`, `$orderby`,
 `$top`, `$count`, and `$skiptoken` keys. Selector values are exact lookup
 inputs only; they do not create authority. Relationship read paths are
-configured routes such as `/v1/records/households/{record_id}/people`, and the
+configured routes such as `/v1/records/businesses/{record_id}/establishments`, and the
 path grant explicitly limits the target fields, filters, ordering, and count
 support available through that traversal.
 

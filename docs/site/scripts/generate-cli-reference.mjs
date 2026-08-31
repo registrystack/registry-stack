@@ -28,6 +28,8 @@ export const expectedBinaries = [
   'evidence-oid4vci',
   'evidencectl',
   'mint',
+  'registry-server',
+  'registry-serverctl',
   'relay',
   'relayctl',
 ];
@@ -43,6 +45,7 @@ const hiddenCommands = new Set([
   'local-audit-last-operation',
 ]);
 const groups = [
+  { title: 'Registry Server', binaries: ['registry-server', 'registry-serverctl'] },
   { title: 'Registry Relay', binaries: ['relay', 'relayctl'] },
   { title: 'Evidence Gateway', binaries: ['evidence', 'evidencectl'] },
   {

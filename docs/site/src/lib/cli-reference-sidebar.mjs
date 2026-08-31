@@ -21,6 +21,10 @@ export function cliReferenceSidebar(indexPath = generatedIndex) {
       collapsed: true,
       items: [
         { label: 'Overview', slug: 'reference/cli' },
+        // Older pinned catalogs predate Server and contain no Server pages.
+        ...['registry-server', 'registry-serverctl']
+          .filter((name) => index.includes(`](./${name}/)`))
+          .map((name) => ({ label: name, slug: `reference/cli/${name}` })),
         { label: 'relay', slug: 'reference/cli/relay' },
         { label: 'relayctl', slug: 'reference/cli/relayctl' },
         { label: 'evidence', slug: 'reference/cli/evidence' },
