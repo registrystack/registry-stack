@@ -111,6 +111,8 @@ pub fn compile_project_with_assets(
     expand_project_access(project, &mut sources, &mut diagnostics);
     resolve_vocabularies(project, &mut sources, &mut diagnostics);
     validate_entities(&sources, profile, &mut diagnostics);
+    crate::access::validate_access_requirements(&sources, &mut diagnostics);
+    findings.extend(crate::access::access_findings(&sources));
     validate_derived_assets(&sources, &derived_origins, assets, &mut diagnostics);
     if !diagnostics.is_empty() {
         return Err(CompileFailure::from_errors(diagnostics));
@@ -905,6 +907,17 @@ fn merge_extension(
     derived_origins: &mut BTreeMap<(String, String), Option<String>>,
     errors: &mut Vec<Diagnostic>,
 ) {
+    if let Some(requirements) = &extension.access_requirements {
+        if entity.access_requirements.is_some() {
+            errors.push(Diagnostic::error(
+                "extension.access_requirements.replace_forbidden",
+                format!("entities[id={}].accessRequirements", entity.id),
+                "an extension cannot replace existing access requirements; edit and review the owning entity declaration",
+            ));
+        } else {
+            entity.access_requirements = Some(requirements.clone());
+        }
+    }
     merge_by_id(
         &mut entity.fields,
         &extension.fields,
@@ -3192,6 +3205,7 @@ fn compile_entities(
                 tombstone: source.tombstone,
                 batch: source.batch.clone(),
                 classification: source.classification,
+                access_requirements: source.access_requirements.clone(),
                 physical_table: table,
                 temporal: source.temporal.clone().map(CompiledTemporal::from),
                 canonical_id,

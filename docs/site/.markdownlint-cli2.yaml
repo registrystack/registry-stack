@@ -32,7 +32,8 @@ config:
       - ProjectStarterSequence
       - ProjectWorkspaceJourneys
       - AuthoringConfigurationReference
-      - EvidenceConfigurationReference
+      - ConfigurationReference
+      - EventReferenceTable
       - DiagnosticReference
       - Steps
 globs:

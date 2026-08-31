@@ -572,7 +572,10 @@ fn public_asset_fixture_compiles_to_coherent_deterministic_inventories() {
     assert!(inspection_routes
         .iter()
         .all(|route| !matches!(route.operation, Operation::Patch | Operation::Tombstone)));
-    assert!(first.findings().is_empty());
+    assert!(first.findings().iter().all(|d| matches!(
+        d.code.as_str(),
+        "access.profile.no_required_scope" | "access.profile.unrestricted_collection"
+    )));
 }
 
 #[test]
@@ -628,7 +631,14 @@ fn production_allows_missing_manifest_projection_and_emits_no_manifest_artifacts
         .entries()
         .keys()
         .all(|path| !path.starts_with("generated/manifest/")));
-    assert!(compiled.findings().is_empty());
+    assert_eq!(
+        compiled
+            .findings()
+            .iter()
+            .map(|d| d.code.as_str())
+            .collect::<Vec<_>>(),
+        vec!["access.profile.no_required_scope"]
+    );
 }
 
 #[test]

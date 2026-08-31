@@ -2,6 +2,10 @@
 
 #![doc = include_str!("../README.md")]
 
+pub mod access;
+#[cfg(all(feature = "runtime", feature = "tooling"))]
+pub mod access_preview;
+
 #[cfg(feature = "runtime")]
 pub mod api;
 pub mod artifacts;
@@ -9,6 +13,8 @@ pub mod artifacts;
 pub mod audit;
 #[cfg(feature = "runtime")]
 pub mod auth;
+#[cfg(feature = "runtime")]
+pub mod cli;
 pub mod compiler;
 pub mod contract;
 #[cfg(feature = "runtime")]
@@ -56,6 +62,8 @@ pub mod tooling;
 pub mod webhook;
 
 pub use artifacts::{GeneratedArtifact, GeneratedArtifacts};
+#[cfg(feature = "runtime")]
+pub use cli::command;
 pub use compiler::{compile_project, compile_project_with_assets, CompileProfile};
 pub use contract::{
     parse_module_json, parse_module_yaml, parse_project_json, parse_project_yaml, RegistryModule,

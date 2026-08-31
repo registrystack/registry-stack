@@ -256,12 +256,17 @@ pub struct ModuleLockSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RegistryModule {
+    /// Stable module identifier, referenced by the project's module lock.
     pub id: String,
+    /// Module version recorded alongside its content digest in the project.
     pub version: String,
+    /// Identifiers of modules that must be applied before this module.
     #[serde(default)]
     pub dependencies: Vec<String>,
+    /// Entities introduced by this module.
     #[serde(default)]
     pub entities: Vec<EntitySource>,
+    /// Additive contributions to entities already declared by the project or another module.
     #[serde(default)]
     pub extend_entities: Vec<EntityExtensionSource>,
 }
@@ -288,6 +293,9 @@ pub struct EntitySource {
     pub classification: Classification,
     #[serde(default)]
     pub fields: Vec<FieldSource>,
+    /// Mandatory request-access requirements checked against every profile, including module contributions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_requirements: Option<AccessRequirementsSource>,
     #[serde(default)]
     pub constraints: Vec<ConstraintSource>,
     #[serde(default)]
@@ -322,6 +330,9 @@ pub struct BatchSource {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct EntityExtensionSource {
     pub entity: String,
+    /// Add mandatory requirements only when the entity has none; replacing them is refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_requirements: Option<AccessRequirementsSource>,
     #[serde(default)]
     pub fields: Vec<FieldSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1508,8 +1519,10 @@ pub struct AccessProfileSource {
     #[serde(default)]
     pub principal_claim: Option<String>,
     #[serde(default)]
+    /// All listed scopes must be present in the verified token.
     pub required_scopes: BTreeSet<String>,
     #[serde(default)]
+    /// The verified token's purpose must match one listed value. Empty means no purpose restriction.
     pub required_purposes: BTreeSet<String>,
     pub operations: BTreeSet<Operation>,
     #[serde(default)]
@@ -1557,6 +1570,22 @@ pub struct RowBoundarySource {
     pub operator: BoundaryOperator,
 }
 
+/// Compile-time requirements, not grants. Profiles must explicitly satisfy them.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct AccessRequirementsSource {
+    /// Every profile must require all these scopes. Requirements never grant access.
+    #[serde(default)]
+    pub required_scopes: BTreeSet<String>,
+    /// When nonempty, every profile must restrict purpose to a nonempty subset of these values. Empty imposes no purpose requirement.
+    #[serde(default)]
+    pub allowed_purposes: BTreeSet<String>,
+    /// Every profile must include these exact field, verified-claim, and operator bindings.
+    #[serde(default)]
+    pub row_boundaries: Vec<RowBoundarySource>,
+}
+
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1569,11 +1598,16 @@ pub enum BoundaryOperator {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct EventSource {
+    /// Stable event contract identifier, sent as `ce-type`. Use a new identifier for a breaking payload change.
     pub id: String,
+    /// Committed record change that can produce this event.
     pub trigger: EventTrigger,
+    /// Declared field identifiers to include in `values`. System event metadata is included separately.
     pub projection: BTreeSet<String>,
+    /// Optional field tests, combined with AND. Omit to emit on every matching trigger.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub when: Option<EventConditionSource>,
+    /// Logical delivery destination. Production compilation requires a webhook.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub webhook: Option<WebhookSource>,
 }
@@ -1592,10 +1626,13 @@ pub struct EventSource {
 )]
 pub enum EventConditionSource {
     Fields {
+        /// Fields whose values must change. Only valid with the patched trigger.
         #[serde(default)]
         changed: BTreeSet<String>,
+        /// Required values before the change. Valid with patched and tombstoned triggers.
         #[serde(default)]
         before_equals: BTreeMap<String, EventScalarValue>,
+        /// Required values after the change. Valid with created and patched triggers.
         #[serde(default)]
         after_equals: BTreeMap<String, EventScalarValue>,
     },
@@ -1623,6 +1660,7 @@ pub enum EventScalarValue {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct WebhookSource {
+    /// Key in runtime `eventDestinations`; the project carries no URL or secret.
     pub destination_id: String,
 }
 
@@ -1652,8 +1690,10 @@ pub struct ProjectAccessProfileSource {
     #[serde(default)]
     pub principal_claim: Option<String>,
     #[serde(default)]
+    /// All listed scopes must be present in the verified token.
     pub required_scopes: BTreeSet<String>,
     #[serde(default)]
+    /// The verified token's purpose must match one listed value. Empty means no purpose restriction.
     pub required_purposes: BTreeSet<String>,
     #[serde(default)]
     pub grants: Vec<AccessGrantSource>,

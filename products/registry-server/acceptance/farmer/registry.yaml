@@ -32,6 +32,10 @@ entities:
   - id: farmer
     route: farmers
     mutationMode: mutable
+    accessRequirements:
+      allowedPurposes: [farmer-registry]
+      rowBoundaries:
+        - {field: administrative-boundary, claim: administrative_boundaries, operator: in}
     fields:
       - {id: farmer-code, type: string, required: true, maxLength: 64, classification: restricted}
       - {id: display-name, type: string, required: true, maxLength: 160, classification: restricted}

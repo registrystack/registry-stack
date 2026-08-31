@@ -244,6 +244,7 @@ pub enum CompiledRegistryChangeCode {
     EntityRouteChanged,
     EntityMutationModeChanged,
     EntityClassificationChanged,
+    EntityAccessRequirementsChanged,
     EntityTemporalChanged,
     FieldAddedOptional,
     FieldAddedRequired,
@@ -971,6 +972,18 @@ fn compare_entities(
                 changes,
                 CompiledRegistryChangeClass::AccessOrDisclosureChange,
                 CompiledRegistryChangeCode::EntityClassificationChanged,
+                target(
+                    CompiledRegistryChangeTargetKind::Entity,
+                    Some(entity_id.as_str()),
+                    None,
+                ),
+            );
+        }
+        if previous_entity.access_requirements != candidate_entity.access_requirements {
+            push_change(
+                changes,
+                CompiledRegistryChangeClass::AccessOrDisclosureChange,
+                CompiledRegistryChangeCode::EntityAccessRequirementsChanged,
                 target(
                     CompiledRegistryChangeTargetKind::Entity,
                     Some(entity_id.as_str()),

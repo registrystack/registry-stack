@@ -1071,6 +1071,17 @@ on:
                 self.assertTrue(outputs["docs"])
                 self.assertTrue(outputs["evidence_contracts"])
 
+    def test_server_config_schema_change_runs_docs_and_server_contracts(self) -> None:
+        for path in (
+            "products/registry-server/generated/authoring/registry-project.schema.json",
+            "products/registry-server/generated/authoring/registry-module.schema.json",
+            "products/registry-server/generated/runtime/runtime.schema.json",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["docs"])
+                self.assertTrue(outputs["registry_server_contracts"])
+
     def test_evidence_authoring_schema_change_runs_docs(self) -> None:
         """The same page publishes the authoring form beside the frozen ones."""
         for path in (

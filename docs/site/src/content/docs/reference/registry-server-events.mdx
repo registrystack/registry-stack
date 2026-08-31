@@ -1,0 +1,231 @@
+---
+title: Registry Server events and webhooks reference
+description: Event fields, trigger compatibility, webhook headers and payloads, signature encoding, and delivery-state contracts.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: reference
+locale: en
+standards_referenced:
+  - cloudevents
+  - json-schema
+wide: true
+---
+
+import ConfigurationReference from '../../../components/ConfigurationReference.astro';
+import EventReferenceTable from '../../../components/EventReferenceTable.astro';
+import configuration from '../../../data/generated/server-configuration.json';
+import { eventConfiguration } from '../../../lib/server-event-reference.mjs';
+
+Lookup reference for Registry Server's Version 1 event contract, currently a source preview.
+For setup, receiver implementation, and recovery steps, use
+[configure Registry Server webhooks](../../configure/registry-server-webhooks/).
+
+## Event configuration
+
+Location: `entities[].events[]` or `extendEntities[].events[]` in a module.
+Field paths in this table are relative to one event.
+Types, requiredness, defaults, and descriptions come from the generated module schema.
+Requiredness describes the YAML grammar; compiler rules follow the table.
+
+<ConfigurationReference contracts={eventConfiguration(configuration)} prefix="server-events" compact />
+
+Compiler rules:
+
+- Event IDs must be unique across the registry.
+- Projection must name at least one declared field.
+- Production compilation requires a webhook destination.
+- Conditions and projections use authored field IDs, not the record API's camel-case property names.
+- Event classification is the highest classification of every projected or condition field.
+
+Destination URLs, keys, network policy, and operational ceilings belong in runtime
+`eventDestinations`, keyed by `webhook.destinationId`.
+The runtime must bind the exact compiled destination set.
+Its `classificationCeiling` must cover the event classification; runtime configuration cannot
+add projected fields. See the [configuration reference](../registry-server-configuration/) for
+destination fields and `eventDelivery.payloadRetentionDays`.
+
+{/* Evidence: crates/registry-server/src/contract.rs, EventSource and WebhookSource;
+    crates/registry-server/src/compiler.rs, validate_events() and compile_event_delivery_inventory();
+    crates/registry-server/src/event_destination.rs, EventDestinationConfig.
+    Configuration fields selected by docs/site/src/lib/server-event-reference.mjs, eventConfiguration(),
+    from src/data/generated/server-configuration.json. Run npm run generate from docs/site. */}
+
+## Triggers and conditions
+
+<EventReferenceTable id="triggers" />
+
+A create-only entity permits only `created`; `tombstoned` also requires tombstone support.
+Omitting `when` selects every matching trigger.
+When present, `kind: fields` requires at least one nonempty test.
+All tests combine with AND, including every field within each test.
+`changed` compares before and after values, not whether a field appeared in the patch.
+Comparison literals must be scalar or null and valid for the declared field type.
+
+Capture and mutation commit in one transaction.
+Delivery uses the captured projection; subsequent record or package changes do not recompute it.
+
+{/* Evidence: crates/registry-server/src/compiler.rs, validate_event_condition();
+    crates/registry-server/src/outbox.rs, condition_matches() and insert_configured_events();
+    crates/registry-server/src/mutation.rs. */}
+
+## HTTP request
+
+Method: `POST`. Target: the configured fixed path, without query parameters.
+Encoding: [CloudEvents 1.0 HTTP binary mode](https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/bindings/http-protocol-binding.md),
+with canonical JSON data in the body. All listed headers are present.
+
+<EventReferenceTable id="headers" />
+
+The package carries each event schema at
+`generated/event-schemas/<entity-id>.<event-id>.schema.json`.
+Record identifiers appear in the body, not in CloudEvents headers.
+
+{/* Evidence: crates/registry-server/src/webhook.rs, reload_and_send();
+    crates/registry-server/src/artifacts.rs, event_data_schema_binding();
+    crates/registry-platform-httputil/src/destination.rs, EventDestinationRequestTemplate;
+    crates/registry-server/tests/postgres_webhook_delivery.rs, assert_exact_request(). */}
+
+### Payload fields
+
+All six members are required. Additional top-level members and unprojected values are excluded.
+
+<EventReferenceTable id="payload" />
+
+Example shape, formatted for reading:
+
+```json
+{
+  "entity": "record",
+  "recordId": "<record-uuid>",
+  "revision": 2,
+  "trigger": "patched",
+  "packageRevision": "sha256:<package-digest>",
+  "values": {"code": "EX-003", "label": "Updated label"}
+}
+```
+
+{/* Evidence: crates/registry-server/src/outbox.rs, insert_configured_events();
+    crates/registry-server/src/artifacts.rs, event_data_schema_binding(). */}
+
+## Signature format
+
+Algorithm: HMAC-SHA-256, a keyed hash shared by Server and the receiver.
+Key: the exact secret bytes resolved by `hmacSha256KeyRef`, at least 32 bytes.
+File secret bytes are neither trimmed nor hex-decoded.
+This is a Registry Server format, not a CloudEvents signing standard.
+
+Signing input starts with the ASCII bytes `registry-server-webhook-signature-v1`, without a
+prefix or separator. Each subsequent value is prefixed with its byte length encoded as an
+unsigned 64-bit big-endian integer, in this exact order:
+
+1. `ce-specversion`
+2. `ce-id`
+3. `ce-source`
+4. `ce-type`
+5. `ce-time`
+6. `ce-dataschema`
+7. `X-Registry-Event-Generation`
+8. `X-Registry-Delivery-Attempt`
+9. `X-Registry-Delivery-Time`
+10. Method bytes: `POST`
+11. Configured request path bytes, without the origin
+12. Content-type bytes: `application/json`
+13. `Idempotency-Key`
+14. Exact body bytes
+
+Header values retain their original bytes; header names are not included.
+The header value is:
+
+```text
+v1=BASE64URL_WITHOUT_PADDING(HMAC_SHA256(key, signing_input))
+```
+
+Verification requires a constant-time signature comparison, expected source/type/schema and
+payload validation, bounded delivery-time skew, and deduplication before effects.
+Freshness uses `X-Registry-Delivery-Time`, not `ce-time`.
+The accepted skew is receiver policy, not a fixed Server limit.
+
+{/* Evidence: crates/registry-server/src/webhook.rs, webhook_signature(), append_length_prefixed(),
+    and hmac_sha256_v1_binds_every_header_and_exact_canonical_body();
+    crates/registry-server/src/event_destination.rs, MIN_HMAC_SHA256_KEY_BYTES;
+    crates/registry-platform-config/src/secrets.rs, resolve_reference() and read_secret_file();
+    products/registry-server/demo/support/demo.py, _verify_webhook_request(). */}
+
+## Delivery contract
+
+<EventReferenceTable id="delivery" />
+
+Runtime ceilings may tighten, never widen, compiled limits.
+A durable attempt audit precedes the send.
+Terminal audit, state transition, and successful payload erasure commit together.
+Activation refuses destination changes that would strand retained nonterminal work.
+
+{/* Evidence: crates/registry-server/src/webhook.rs, claim(), finalize(), and verify_retained_bindings();
+    crates/registry-server/src/compiler.rs, compile_event_delivery_inventory() and MAX_WEBHOOK_PAYLOAD_BYTES;
+    crates/registry-server/src/runtime_config.rs, default_webhook_payload_retention_days();
+    crates/registry-server/src/event_destination.rs, EventDestinationDeliveryCeilings. */}
+
+### Retry and replay identity
+
+<EventReferenceTable id="retry-replay" />
+
+An idempotency key identifies one delivery generation, not an event across all generations.
+
+:::caution[Replay can repeat an external action]
+A new generation has a new idempotency key.
+For effects that must happen only once across generations, receiver deduplication must also use
+event identity (`ce-source` and `ce-id`) or a business key.
+:::
+
+{/* Evidence: crates/registry-server/src/webhook.rs, replay() and webhook_idempotency_key(). */}
+
+### Delivery states
+
+<EventReferenceTable id="states" />
+
+An empty `webhook list` result is neither a delivery history nor proof of receiver acceptance.
+Expired payloads cannot be replayed.
+
+{/* Evidence: crates/registry-server/src/webhook.rs, WebhookDeliveryService and WebhookDeliveryStatusKind;
+    crates/registry-serverctl/src/webhook_lifecycle.rs, list_item(). */}
+
+## Operator commands
+
+Command prefix: `registry-serverctl`. Add `--format json` for machine-readable reports.
+
+<EventReferenceTable id="commands" />
+
+`list` and `replay` connect directly to PostgreSQL using the runtime configuration.
+The public record API has no outbox, payload, delivery, or replay endpoint.
+Replay requires a retained, unexpired dead letter and the matching generation and activated
+destination binding.
+
+### List response fields
+
+The JSON result contains a `deliveries` array. Each entry has these fields and no record values.
+
+<EventReferenceTable id="operator-fields" />
+
+{/* Evidence: crates/registry-serverctl/src/lib.rs, WebhookCommand, WebhookListArgs, and WebhookReplayArgs;
+    crates/registry-serverctl/src/webhook_lifecycle.rs, WebhookListOutcome and WebhookListItem;
+    crates/registry-server/src/webhook.rs, WebhookOperatorService and MAX_WEBHOOK_STATUS_RESULTS;
+    crates/registry-server/src/api/mod.rs, router(). */}
+
+## Sources
+
+This source-preview contract is not a released or frozen compatibility promise.
+The [event contract and implementation at f806b222](https://github.com/registrystack/registry-stack/blob/f806b222f628717c0e6c5d2c14fc0d2bbf7a96f1/products/registry-server/EVENTS-AND-WEBHOOKS.md)
+are the source of truth. Configuration fields are schema-generated; protocol tables are
+manually maintained data, checked against that implementation.
+
+{/* Protocol tables generated from docs/site/src/data/server-events.yaml by
+    docs/site/scripts/generate-data.mjs. Run npm run generate from docs/site. */}
+
+## Next
+
+- [Configure Registry Server webhooks](../../configure/registry-server-webhooks/) for setup and recovery.
+- [Configuration reference](../registry-server-configuration/) for destination and runtime fields.
+- [Create and query your first registry](../../tutorials/first-registry-server/) for the local webhook exercise.

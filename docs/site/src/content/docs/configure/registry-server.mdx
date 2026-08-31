@@ -1,0 +1,378 @@
+---
+title: Configure your registry
+description: Define a Registry Server model, check permissions, and prepare a package for deployment.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: how-to
+locale: en
+standards_referenced:
+  - openapi
+  - json-schema
+  - cloudevents
+---
+
+Use this guide to adapt Registry Server to your institution's records and permissions.
+Define the model in an authoring project, check the generated API, then prepare a tested package
+for your operator to deploy.
+
+## Before you start
+
+Use the source checkout and binaries from [your first registry](../../tutorials/first-registry-server/).
+Run commands from the checkout root. You need an editor and synthetic test records.
+Model checks and API generation work without a database; testing writes needs a separate PostgreSQL database.
+
+## Create a project
+
+Initialize a project:
+
+```sh
+target/debug/registry-serverctl init ./my-registry
+```
+
+The command creates `my-registry/registry.yaml` and `my-registry/tests/journeys.yaml`.
+The starter has a `record` entity with a unique `code`, a `label`, and an operator access profile.
+Adapt its test cases along with the model.
+
+The findings `package.identity.missing` and `manifest_projection.missing` do not block authoring.
+Add package identity before deployment; Manifest catalogue metadata is optional.
+
+In `registry.yaml`, set `registry.id`, `registry.version`, and `registry.defaultLanguage` for your
+project. Add entities to `entities`, controlled code lists to `vocabularies`, and caller rules to
+top-level `accessProfiles`. Keep database URLs, token issuers, and secrets out of this file.
+
+{/* Evidence: crates/registry-serverctl/src/lib.rs, init_files();
+    crates/registry-server/src/contract.rs, RegistryProject;
+    crates/registry-server/src/compiler.rs. */}
+
+## Extend the model
+
+Add fields directly to an entity's `fields` list, or put a reusable extension in
+`modules/<module-id>/module.yaml` under `extendEntities`.
+The [first-registry tutorial](../../tutorials/first-registry-server/) includes a complete module example.
+If the entity belongs to another module, name that module in `dependencies`.
+
+Add the field to each caller grant's `readableFields` or `writableFields` as needed.
+Grant filtering, sorting, and counts separately.
+Declaring a field or assigning its classification does not grant access to it.
+
+{/* Evidence: crates/registry-server/src/contract.rs, EntityExtensionSource and ProjectAccessProfileSource;
+    crates/registry-server/src/compiler.rs; crates/registry-server/src/auth.rs. */}
+
+After adding or changing a module, update its lock and check the project:
+
+```sh
+target/debug/registry-serverctl project lock ./my-registry
+target/debug/registry-serverctl check ./my-registry
+```
+
+The lock records module IDs, versions, and content digests in `registry.yaml`.
+Review and commit it with the module source, including any module-owned SQL files.
+On a failed check, follow the diagnostic's field path and suggested action.
+Use `project lock ./my-registry --check` in automation to detect stale locks without rewriting them.
+
+Authored IDs use kebab-case (`internal-note`); JSON properties use lower camel case (`internalNote`).
+Use the generated schema for API property names.
+
+{/* Evidence: crates/registry-serverctl/src/lib.rs, project_lock() and check();
+    crates/registry-server/src/logical_names.rs; crates/registry-server/src/physical_names.rs;
+    crates/registry-server/tests/postgres_mutation_logical_names.rs. */}
+
+## Connect related records
+
+Use `type: reference` and `target: <entity-id>` for a field that points to another record.
+When the link needs its own role or dates, use a separate relationship entity.
+The household example defines `person`, `household`, and `group-membership`; membership records have
+`valid-from` and `valid-to` fields with a non-overlap constraint.
+
+Define exact lookups in `selectorProfiles` and related-record queries in `readPaths`.
+Grant access to each lookup or read path and its returned fields.
+Lookup values select records; they do not establish the caller's right to read them.
+
+Open the example project at
+`products/registry-server/acceptance/publicschema-household/`. The `farmer`, `disability`, `business`,
+and `asset-site-placement` sibling projects demonstrate other models using the same compiler.
+Review their fields and constraints before adapting them for your institution.
+
+{/* Evidence: products/registry-server/acceptance/publicschema-household/registry.yaml;
+    products/registry-server/acceptance/publicschema-household/modules/publicschema-household-core/module.yaml;
+    crates/registry-server/src/auth.rs; crates/registry-server/src/contract.rs, ReadPathSource. */}
+
+## Check permissions and generate the API
+
+Explain the effective permissions:
+
+```sh
+target/debug/registry-serverctl explain access ./my-registry
+```
+
+The report shows each profile's operations, readable and writable fields, filters, sorting,
+row restrictions, related-record grants, history, and export permissions.
+Required scopes combine with AND. The verified purpose must match one listed `requiredPurposes`
+value; an empty list leaves purpose unrestricted. Row predicates combine with AND.
+Selecting a profile by name never grants authority, and profiles are not merged.
+Use `explain queries` for the complete permitted query shapes.
+Add `--format json` when another tool consumes a report.
+
+`check` reports review findings for profiles without required scopes, unrestricted collection
+reads, writable row-boundary fields, historical disclosure, exports, related-record grants,
+and fields classified above their entity. Each finding names the entity, profile, and setting
+and explains what to review. Findings do not change permissions or block ordinary compilation.
+Use `check ./my-registry --deny-findings` when your automation requires a configuration with no
+findings. Intentional broad access still produces findings. This flag covers all authoring
+findings, including incomplete package identity and metadata.
+
+{/* Evidence: crates/registry-server/src/access.rs, access_findings() and explain_access();
+    crates/registry-server/src/api/mod.rs, authorize_profile_claims();
+    crates/registry-serverctl/src/lib.rs, CheckArgs and write_access_explanation();
+    crates/registry-serverctl/tests/cli.rs, access_review_example_explains_simulates_and_refuses_footguns_without_live_data. */}
+
+### Require restrictions on every profile
+
+Add `accessRequirements` to an entity when a scope, purpose, or row restriction must apply to
+every profile. For the starter's `record` entity:
+
+```yaml
+accessRequirements:
+  requiredScopes: [registry:generic:operate]
+  allowedPurposes: [registry-operations]
+```
+
+Every profile on that entity must explicitly require those scopes. When `allowedPurposes` is
+nonempty, profiles must restrict their purposes to a nonempty subset of it; an empty or omitted
+list imposes no purpose requirement. Requirements grant nothing and refuse anonymous access.
+You can also declare `rowBoundaries`; profiles must include the exact field, claim, and operator
+bindings. A caller's filter does not satisfy a row requirement.
+
+Remove a required scope from the profile and run `check` again. Compilation refuses the omission
+with `access.requirements.scope_missing`. Restore the scope to make the check pass.
+These checks also cover profiles added by modules. An extension may introduce requirements on an
+entity with none, but cannot replace existing requirements.
+
+For relationship routes, the root profile must satisfy the target and join entities' scope and
+purpose requirements. The current relationship plan enforces root row restrictions only.
+If the target or join entity has row requirements, compilation refuses that read-path grant;
+use a direct route on the protected entity instead.
+Requirements govern request access. Review independently configured webhook disclosure separately.
+
+{/* Evidence: crates/registry-server/src/contract.rs, AccessRequirementsSource;
+    crates/registry-server/src/access.rs, validate_access_requirements();
+    crates/registry-server/src/compiler.rs, merge_extension();
+    crates/registry-server/tests/access_configuration.rs. */}
+
+### Try synthetic caller claims
+
+Save this JSON as `access-scenario.json` beside your project. It matches the unmodified starter:
+
+```json
+{
+  "entity": "record",
+  "accessProfile": "operator",
+  "operation": "list",
+  "claims": {
+    "principalClaim": "registry_principal",
+    "principal": "synthetic-operator",
+    "scopes": ["registry:generic:operate"],
+    "purpose": "registry-operations"
+  }
+}
+```
+
+```sh
+target/debug/registry-serverctl explain access ./my-registry --scenario ./access-scenario.json
+```
+
+The preview reports whether these claims satisfy profile admission, using the same admission
+function as HTTP. Remove the scope and repeat to see `required_scope_missing`.
+For a claim-bound row restriction, add synthetic values under `claims.directClaims`, using the
+declared field's scalar type for `equals` or an array for `in`. Claim values are not printed.
+
+Both allowed and refused previews exit successfully because explanation completed.
+For machine checks, use JSON output and inspect `explanation.admitted`.
+Malformed or oversized scenarios fail; the JSON file is limited to 64 KiB and rejects unknown
+fields and duplicate keys.
+
+:::caution[An allowed preview is not a successful request]
+Use invented claims only, never a real token or personal data. The preview verifies no credentials,
+issues no authority, and checks no records, query, request body, database, or audit availability.
+Run the real fixture journeys before deployment to verify those boundaries.
+:::
+
+{/* Evidence: crates/registry-server/src/access_preview.rs, AccessScenario and preview_access();
+    crates/registry-serverctl/src/lib.rs, ExplainArgs and explain();
+    crates/registry-server/tests/access_configuration.rs, synthetic_preview_uses_http_admission_and_never_renders_claim_values. */}
+
+### Generate the API
+
+Generate request schemas and OpenAPI, each into a new directory:
+
+```sh
+target/debug/registry-serverctl generate schemas ./my-registry --output ./my-registry-schemas
+target/debug/registry-serverctl generate openapi ./my-registry --output ./my-registry-api
+```
+
+Open the schemas in `my-registry-schemas/generated/schemas/` and the API description in
+`my-registry-api/generated/openapi.json`. Check your field names, types, and permitted operations.
+These describe the whole compiled project; the running `/openapi.json` endpoint filters its
+description for the authenticated caller. Edit the project and regenerate into fresh directories
+to change these files.
+
+For configuration keys, types, defaults, and constraints, use the
+[configuration reference](../../reference/registry-server-configuration/).
+The source checkout includes `registry-project.schema.json` and `registry-module.schema.json`
+under `products/registry-server/generated/authoring/`, plus
+`products/registry-server/generated/runtime/runtime.schema.json` for editor validation.
+Generated record schemas describe API data, not configuration files.
+
+{/* Evidence: crates/registry-serverctl/src/lib.rs, ExplainSubject, ArtifactSelector, and generate();
+    crates/registry-server/src/artifacts.rs; crates/registry-server/src/api/mod.rs, openapi();
+    products/registry-server/generated/authoring/registry-project.schema.json;
+    products/registry-server/generated/authoring/registry-module.schema.json;
+    products/registry-server/generated/runtime/runtime.schema.json. */}
+
+### Write requests
+
+Create requests wrap the public properties in `data`. For the unmodified starter:
+
+```json
+{"data":{"code":"EX-003","label":"Example record"}}
+```
+
+Send it to the generated create route with a token, an `accessProfile`, and an `Idempotency-Key`.
+PATCH uses `application/json-patch+json` and requires the current `ETag`, including its quotes, in
+`If-Match`. Reuse an idempotency key only for a retry of the same write.
+The tutorial demonstrates both requests and a version conflict.
+
+### Queries and bulk data
+
+List queries use `$select`, `$filter`, `$orderby`, `$top`, `$count`, and `$skiptoken` where the
+selected grant permits them. A field that can be read is not automatically filterable or sortable.
+Keep pagination bound to the original query and profile.
+
+For bulk data, `registry-serverctl data validate` checks an import against a package plan.
+`data import` and `data export` use the authenticated batch and list APIs with the configured
+permissions. Supply tokens through `--access-token-file`.
+Keep an import checkpoint and its `.state` sidecar together for resumable imports. Each export
+starts with new output and checkpoint files.
+
+{/* Evidence: crates/registry-server/src/artifacts.rs; crates/registry-server/src/mutation.rs;
+    crates/registry-server/src/idempotency.rs; crates/registry-server/src/query.rs;
+    crates/registry-server/src/cursor.rs; crates/registry-serverctl/src/data_lifecycle.rs;
+    crates/registry-serverctl/src/lib.rs, DataCommand. */}
+
+## Configure webhooks
+
+Use [configure Registry Server webhooks](../registry-server-webhooks/) to declare an event, bind
+its receiver, verify delivery, and replay a failed attempt.
+The [events and webhooks reference](../../reference/registry-server-events/) lists the exact
+configuration fields, request format, and delivery behavior.
+
+## Prepare a deployment
+
+The author prepares the package, an external signer approves its exact contents, and the operator
+applies it using migration credentials. Production requires signed packages; the quickstart's
+unsigned package is a local-development exception.
+
+The runtime document uses `apiVersion: registry.registrystack.org/server-runtime/v1alpha1` and
+`kind: RegistryServerRuntimeConfig`. Its main bindings are:
+
+| Runtime section | Operator supplies |
+| --- | --- |
+| `identity` and `package` | Environment, instance and database identity, exact package revision and sequence, compiler identity, and trust anchors |
+| `database` | Separate runtime and migration roles, secret references for their connection URLs, and pool bounds |
+| `authentication` | OpenID Connect (OIDC) issuer, audience, token validation settings, and principal/purpose claim names |
+| `secretProviders`, `audit`, and `cursor` | Protected secret storage and the keys used for audit hashing and pagination |
+| `listener` and `eventDestinations` | Listener/proxy configuration and the exact logical destinations required by the package |
+
+Use typed references such as `secret:file/runtime-database-url`, resolved under the configured
+file-provider root, instead of putting credentials in YAML. OIDC keys can come from issuer
+discovery or a static `jwksSource` document. Static keys are loaded at startup; rotate them through
+a configuration change and restart. Configure [Registry Mint](../mint/) only if your deployment
+needs a token issuer.
+
+{/* Evidence: crates/registry-server/src/runtime_config.rs, RuntimeConfig;
+    crates/registry-server/tests/runtime_config.rs;
+    crates/registry-platform-config/src/secrets.rs, SecretReference. */}
+
+To prepare a pilot deployment:
+
+1. Provision PostgreSQL with the administrator-installed `btree_gist` extension, isolated roles,
+   TLS, and a separate schema-test database. Keep migration credentials off the serving process
+   when they are not needed.
+2. Add the project's package identity and run `check --production`. Run `test` against the separate
+   database with real test credential bindings. Retain the receipt and schema fingerprint for the
+   exact candidate. Fixture claims alone are not deployment credentials.
+3. Run `package` with that receipt, fingerprint, database identity, and signature policy. A
+   production candidate waits for detached signatures over `signing-input.json`. Have your signer
+   produce them, then rerun `package` with `--signatures` and the same unchanged signing input,
+   receipt, and output directory. The CLI does not accept a private signing key.
+4. With the migration credential, activate the signed package using `apply --initial` for the first
+   activation. Set the serving runtime file to the activated package, then use `verify` for package
+   verification and `doctor` for dependency checks. Start `registry-server --config <absolute-file>`
+   and check `/ready` before admitting traffic.
+
+This is a deployment checklist, not a provisioning procedure.
+Use each subcommand's `--help` for required arguments.
+`products/registry-server/scripts/test-adopter-workflow.sh` runs a synthetic signed deployment,
+upgrade, and recovery exercise.
+
+{/* Evidence: crates/registry-serverctl/src/lib.rs, PackageArgs, TestArgs, ApplyArgs, and DoctorArgs;
+    crates/registry-serverctl/src/test_lifecycle.rs; crates/registry-serverctl/src/package_lifecycle.rs;
+    crates/registry-serverctl/src/doctor.rs; products/registry-server/scripts/test-adopter-workflow.sh. */}
+
+### Change an active registry
+
+For a successor, compare against the active package with
+`diff <project> --runtime-config <absolute-file>`.
+Then repeat test, package, signing, and apply using `--baseline-runtime-config` for test and package.
+The diff includes before/after access settings and the direction of individual scope, purpose,
+row-boundary, field, count, history, and export changes. Related-record and other mixed changes
+remain marked for review rather than receiving an inferred overall direction.
+Entity requirement changes are included even when the existing profiles still satisfy them.
+Requirements-only changes use the reviewed metadata-only migration path, without dummy SQL.
+Review the migration plan even when a change appears additive. A required field on existing records
+needs a data migration; adding an optional field is not the same operation.
+
+:::caution[Rehearse migration and recovery]
+Activation can change persistent data and enter maintenance. Test the exact successor and retain
+the reviewed backup/recovery artifacts before applying it. Do not run generated SQL manually or
+clear migration state to force the service ready.
+:::
+
+If apply fails after maintenance begins, readiness stays unavailable. Review the failed apply
+report and use `migration explain --runtime-config <absolute-file>` to inspect the configured
+package's migration plan. This command explains the package, not live database status. Resolve the
+reported cause, then retry the exact successor or follow the reviewed restore path.
+A restart alone does not repair a failed migration.
+After a successful activation, restart Server with the successor package selected.
+
+{/* Evidence: crates/registry-serverctl/src/lib.rs, DiffArgs and MigrationCommand;
+    crates/registry-server/src/tooling.rs, access_change_details();
+    crates/registry-serverctl/src/apply_lifecycle.rs; crates/registry-server/src/migration.rs;
+    crates/registry-server/tests/postgres_migration.rs; products/registry-server/scripts/test-adopter-workflow.sh. */}
+
+## Check before deployment
+
+Include successful writes and refused requests in `tests/journeys.yaml`.
+Test missing permissions, forbidden fields, record restrictions, and relationship constraints.
+Rerun database tests after source changes. Retain the source, locks, generated files, test receipt,
+signatures, and runtime configuration for each deployment; store secrets separately.
+
+## Troubleshooting
+
+| Symptom | Next move |
+| --- | --- |
+| A module lock is stale | Run `project lock`, review its diff, and repeat the check. |
+| A property is refused or missing | Check its public JSON name and the selected grant's readable/writable field lists. |
+| A filter, sort, or count is refused | Check that the selected grant explicitly permits it. |
+| Runtime parsing rejects a governed member | Move model or permission changes into the authoring project and build a successor package. |
+| Production packaging refuses the candidate | Check production diagnostics, receipt identity, fingerprint, and detached signature policy. |
+| Readiness remains unavailable after migration failure | Review the failed apply report and resolve or restore through the reviewed recovery path. |
+
+## Next
+
+- [Return to the local tutorial](../../tutorials/first-registry-server/) to compare a known working setup.
+- [Review the product boundary](../../explanation/configuration-defined-registry/) before adding domain workflows.
+- [Configure Registry Mint](../mint/) for a deployment-owned token issuer.

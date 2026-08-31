@@ -24,6 +24,111 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 static TEMPORARY_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+#[test]
+fn access_review_example_explains_simulates_and_refuses_footguns_without_live_data() {
+    let project = TestProject::from_registry_source(include_bytes!(
+        "../../../products/registry-server/examples/access-review/registry.yaml"
+    ));
+    let path = project.path().to_str().unwrap();
+    let check = registry_serverctl(&["--format", "json", "check", path, "--deny-findings"]);
+    assert!(check.status.success(), "{check:?}");
+    let human = registry_serverctl(&["explain", "access", path]);
+    assert!(human.status.success());
+    let text = String::from_utf8(human.stdout).unwrap();
+    for expected in [
+        "required scopes (all)",
+        "allowed purposes (any)",
+        "row restrictions (all)",
+        "district-reader",
+        "principal claim: registry_principal",
+    ] {
+        assert!(text.contains(expected), "{text}");
+    }
+    let scenario_path = project.path().join("scenario.json");
+    for (source, expected, reason) in [
+        (
+            &include_bytes!(
+                "../../../products/registry-server/examples/access-review/allowed.json"
+            )[..],
+            true,
+            "profile_requirements_satisfied",
+        ),
+        (
+            &include_bytes!(
+                "../../../products/registry-server/examples/access-review/missing-scope.json"
+            )[..],
+            false,
+            "required_scope_missing",
+        ),
+    ] {
+        fs::write(&scenario_path, source).unwrap();
+        let output = registry_serverctl(&[
+            "--format",
+            "json",
+            "explain",
+            "access",
+            path,
+            "--scenario",
+            scenario_path.to_str().unwrap(),
+        ]);
+        assert!(output.status.success(), "{output:?}");
+        let report = json_stdout(&output);
+        assert_eq!(report["explanation"]["admitted"], expected);
+        assert_eq!(report["explanation"]["reason"], reason);
+        assert_eq!(report["explanation"]["recordAccess"], "not_evaluated");
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("synthetic-reader"));
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("synthetic-district"));
+    }
+    for malformed in [
+        r#"{"entity":"record","entity":"other","secret":"private-scenario-canary"}"#,
+        r#"{"unexpected":"private-scenario-canary"}"#,
+    ] {
+        fs::write(&scenario_path, malformed).unwrap();
+        let output = registry_serverctl(&[
+            "--format",
+            "json",
+            "explain",
+            "access",
+            path,
+            "--scenario",
+            scenario_path.to_str().unwrap(),
+        ]);
+        assert!(!output.status.success());
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("private-scenario-canary"));
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("private-scenario-canary"));
+    }
+    let mut source: Value = serde_norway::from_slice(include_bytes!(
+        "../../../products/registry-server/examples/access-review/registry.yaml"
+    ))
+    .unwrap();
+    source["accessProfiles"][0]["grants"][0]["rowBoundaries"] = serde_json::json!([]);
+    fs::write(
+        project.path().join("registry.yaml"),
+        serde_json::to_vec(&source).unwrap(),
+    )
+    .unwrap();
+    let refused = registry_serverctl(&["--format", "json", "check", path]);
+    assert!(!refused.status.success());
+    assert!(json_stdout(&refused)["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|d| d["code"] == "access.requirements.row_boundary_missing"));
+    source["entities"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("accessRequirements");
+    fs::write(
+        project.path().join("registry.yaml"),
+        serde_json::to_vec(&source).unwrap(),
+    )
+    .unwrap();
+    assert!(registry_serverctl(&["check", path]).status.success());
+    assert!(!registry_serverctl(&["check", path, "--deny-findings"])
+        .status
+        .success());
+}
 const PACKAGE_INSTANCE: &str = "verify-instance";
 const PACKAGE_DATABASE: &str = "verify-database";
 const PACKAGE_SOURCE_REVISION: &str = "verify-compiler-source";
@@ -1010,7 +1115,7 @@ fn explain_reports_are_derived_from_compiled_inventories() {
         "asset-item"
     );
     assert_eq!(
-        json_stdout(&access)["explanation"]["entries"][0]["entityId"],
+        json_stdout(&access)["explanation"]["routes"]["entries"][0]["entityId"],
         "asset-item"
     );
     assert_eq!(

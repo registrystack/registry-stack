@@ -61,13 +61,15 @@ pub struct ConstraintReference {
     pub arguments: Vec<String>,
 }
 
-/// Build reference data for every Registry Stack Relay and Evidence command line.
+/// Build reference data for the supported Registry Stack command lines.
 pub fn catalog() -> Catalog {
     let mut binaries = vec![
         command_reference(registry_evidence::command(), None),
         command_reference(registry_evidence_oid4vci::command(), None),
         command_reference(registry_evidencectl::command(), None),
         command_reference(registry_mint::command(), None),
+        command_reference(registry_server::command(), None),
+        command_reference(registry_serverctl::command(), None),
         command_reference(registry_relay_v2::command(), None),
         command_reference(registry_relayctl::command(), None),
     ];
@@ -541,7 +543,7 @@ mod tests {
     }
 
     #[test]
-    fn catalog_contains_every_public_evidence_and_relay_binary() {
+    fn catalog_contains_every_supported_public_binary() {
         let catalog = catalog();
         assert_eq!(catalog.source_version, env!("CARGO_PKG_VERSION"));
         assert_eq!(
@@ -555,10 +557,33 @@ mod tests {
                 "evidence-oid4vci",
                 "evidencectl",
                 "mint",
+                "registry-server",
+                "registry-serverctl",
                 "relay",
                 "relayctl",
             ]
         );
+    }
+
+    #[test]
+    fn server_configuration_and_webhook_commands_are_published() {
+        let catalog = catalog();
+        let server = find_command(&catalog.binaries, "registry-server");
+        assert!(server.options.iter().any(|option| {
+            option.display == "--config <ABSOLUTE_FILE>" && option.always_required
+        }));
+        let generate = find_command(&catalog.binaries, "registry-serverctl generate");
+        assert!(generate.arguments.iter().any(|argument| {
+            argument.possible_values == ["openapi", "schemas", "manifest", "metadata", "sql"]
+        }));
+        for invocation in [
+            "registry-serverctl explain",
+            "registry-serverctl webhook sample",
+            "registry-serverctl webhook list",
+            "registry-serverctl webhook replay",
+        ] {
+            assert!(!find_command(&catalog.binaries, invocation).usage.is_empty());
+        }
     }
 
     #[test]

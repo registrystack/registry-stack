@@ -22,11 +22,30 @@ pub enum DiffClassification {
     Unsupported,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ClassifiedRegistryChange {
     pub classification: DiffClassification,
     pub change: CompiledRegistryChange,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub access_details: Vec<AccessChangeDetail>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct AccessChangeDetail {
+    pub field: String,
+    pub direction: AccessChangeDirection,
+    pub before: serde_json::Value,
+    pub after: serde_json::Value,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccessChangeDirection {
+    Widening,
+    Narrowing,
+    ReviewRequired,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -54,6 +73,7 @@ pub fn classify_registry_diff(
         .into_iter()
         .map(|change| ClassifiedRegistryChange {
             classification: classify_change(baseline, candidate, &change),
+            access_details: access_change_details(baseline, candidate, &change),
             change,
         })
         .collect();
@@ -90,6 +110,7 @@ fn classify_change(
         | Code::EntityMutationModeChanged
         | Code::AccessProfileAdded
         | Code::AccessProfileRemoved
+        | Code::EntityAccessRequirementsChanged
         | Code::RouteAdded
         | Code::RouteRemoved
         | Code::RouteChanged => DiffClassification::AccessChange,
@@ -107,6 +128,117 @@ fn classify_change(
             BaseClass::AccessOrDisclosureChange => DiffClassification::Unsupported,
         },
     }
+}
+
+fn access_change_details(
+    baseline: &CompiledRegistry,
+    candidate: &CompiledRegistry,
+    change: &CompiledRegistryChange,
+) -> Vec<AccessChangeDetail> {
+    use serde_json::{json, Value};
+    use CompiledRegistryChangeCode as Code;
+    let Some(entity) = change.target.entity_id.as_deref() else {
+        return vec![];
+    };
+    let before_entity = baseline.entities().get(entity);
+    let after_entity = candidate.entities().get(entity);
+    let member = change.target.member_id.as_deref().unwrap_or("");
+    let serialize_profile = |entity: Option<&crate::model::CompiledEntity>| {
+        entity
+            .and_then(|e| e.access_profiles.get(member))
+            .map(|p| json!(p))
+            .unwrap_or(Value::Null)
+    };
+    let (before, after) = match change.code {
+        Code::AccessProfileAdded | Code::AccessProfileRemoved | Code::AccessProfileChanged => (
+            serialize_profile(before_entity),
+            serialize_profile(after_entity),
+        ),
+        Code::EntityAccessRequirementsChanged => (
+            json!(before_entity.and_then(|e| e.access_requirements.as_ref())),
+            json!(after_entity.and_then(|e| e.access_requirements.as_ref())),
+        ),
+        Code::EventChanged => {
+            let summarize = |entity: Option<&crate::model::CompiledEntity>| {
+                entity.and_then(|e| e.events.get(member)).map(|e| json!({"projection": e.projection, "destinationId": e.webhook.as_ref().map(|w| &w.destination_id)})).unwrap_or(Value::Null)
+            };
+            (summarize(before_entity), summarize(after_entity))
+        }
+        _ => return vec![],
+    };
+    if before.is_null() || after.is_null() {
+        return vec![AccessChangeDetail {
+            field: "profileOrRequirements".into(),
+            direction: AccessChangeDirection::ReviewRequired,
+            before,
+            after,
+        }];
+    }
+    let keys = before
+        .as_object()
+        .into_iter()
+        .flat_map(|v| v.keys())
+        .chain(after.as_object().into_iter().flat_map(|v| v.keys()))
+        .collect::<std::collections::BTreeSet<_>>();
+    keys.into_iter()
+        .filter_map(|field| {
+            let left = &before[field];
+            let right = &after[field];
+            if left == right {
+                return None;
+            }
+            Some(AccessChangeDetail {
+                field: field.clone(),
+                direction: access_direction(field, left, right),
+                before: left.clone(),
+                after: right.clone(),
+            })
+        })
+        .collect()
+}
+
+fn access_direction(
+    field: &str,
+    before: &serde_json::Value,
+    after: &serde_json::Value,
+) -> AccessChangeDirection {
+    use AccessChangeDirection::{Narrowing, ReviewRequired, Widening};
+    let reverse = matches!(field, "requiredScopes" | "rowBoundaries");
+    if let (Some(before), Some(after)) = (before.as_array(), after.as_array()) {
+        if matches!(field, "requiredPurposes" | "allowedPurposes") {
+            if after.is_empty() {
+                return Widening;
+            }
+            if before.is_empty() {
+                return Narrowing;
+            }
+        }
+        if matches!(field, "lookups" | "readPaths") {
+            return ReviewRequired;
+        }
+        let added_only = before.iter().all(|item| after.contains(item));
+        let removed_only = after.iter().all(|item| before.contains(item));
+        if added_only && removed_only {
+            return ReviewRequired;
+        }
+        if added_only {
+            return if reverse { Narrowing } else { Widening };
+        }
+        if removed_only {
+            return if reverse { Widening } else { Narrowing };
+        }
+    }
+    if matches!(
+        field,
+        "anonymous" | "allowCount" | "revisionAccess" | "allowDataExport"
+    ) {
+        return if after == &serde_json::Value::Bool(true) {
+            Widening
+        } else {
+            Narrowing
+        };
+    }
+    ReviewRequired
 }
 
 fn access_profile_direction(

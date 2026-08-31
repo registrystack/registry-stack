@@ -1,3 +1,22 @@
+- id: cloudevents
+  name: CloudEvents
+  standards_body: CNCF
+  official_url: https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/bindings/http-protocol-binding.md
+  version_or_profile: CloudEvents 1.0 HTTP binary mode
+  status: used
+  claim_level: emits
+  adoption_mode: profiled
+  used_by:
+    - registry-server
+  surfaces:
+    - after-commit webhook delivery
+  evidence_docs:
+    - label: Registry Server webhook request tests
+      url: https://github.com/registrystack/registry-stack/blob/f806b222f628717c0e6c5d2c14fc0d2bbf7a96f1/crates/registry-server/tests/postgres_webhook_delivery.rs
+    - label: Registry Server event request template
+      url: https://github.com/registrystack/registry-stack/blob/f806b222f628717c0e6c5d2c14fc0d2bbf7a96f1/crates/registry-platform-httputil/src/destination.rs
+  last_checked: 2026-08-31
+  notes: Registry Server's source preview emits CloudEvents 1.0 attributes in HTTP headers with JSON event data in the body. This row covers binary-mode emission only. The HMAC signature and delivery headers are Registry Server contracts, not CloudEvents signing or delivery guarantees.
 - id: dcat
   name: DCAT and DCAT-AP
   standards_body: W3C and SEMIC

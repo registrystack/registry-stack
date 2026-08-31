@@ -127,6 +127,7 @@ EXCLUDED_EVIDENCE_TUTORIALS=(
 	connect-an-institution-source                    # how-to against the reader's own OpenAPI source; no fixed scenario this gate can replay
 	connect-a-sqlite-extract                         # starter is covered by evidencectl scaffold and fixture tests; production half needs an operator-mounted extract
 	first-run-with-solmara-lab                       # historical; the Solmara Lab stack is replayed by check-tutorial.sh, not here
+	first-registry-server                            # Server source preview; product CI runs quickstart/run.sh --smoke, reader execution checks the documented steps
 	integrate-evidence-candidate-with-docker-compose # drift-checked by evidence-production-build-docs.test.mjs; needs Docker Compose
 	issue-a-birth-certificate-vc-from-opencrvs       # needs the public OpenCRVS Farajaland demo; live and opt-in, not replayed in CI
 	issue-evidence-access-tokens-with-registry-mint  # drift-checked by evidence-production-build-docs.test.mjs; needs a Registry Mint deployment

@@ -516,7 +516,7 @@ def validate_security(waves: set[str], errors: list[str]) -> None:
     invariants = as_list(matrix.get("invariants"), "security matrix.invariants", errors)
     rows = {row.get("id"): row for row in invariants if isinstance(row, dict) and isinstance(row.get("id"), str)}
     unique_ids(invariants, "security matrix.invariants", errors)
-    if set(rows) != {f"RS-SEC-{index:02d}" for index in range(1, 22)}:
+    if set(rows) != {f"RS-SEC-{index:02d}" for index in range(1, 23)}:
         errors.append("security matrix: must contain the complete closed product invariant identifiers")
     negatives: set[str] = set()
     for index, raw in enumerate(invariants):

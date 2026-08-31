@@ -14,6 +14,7 @@ use std::process::ExitCode;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use clap::{ArgGroup, Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use registry_platform_canonical_json::parse_json_strict;
 use registry_server::compiler::module_digest_with_assets;
 use registry_server::contract::{FieldTypeSource, ModuleAssetSource, ModuleLockSource};
 use registry_server::migration_plan::ReviewedMigrationRecovery;
@@ -127,6 +128,9 @@ struct CheckArgs {
     /// Enforce production-only package closure requirements.
     #[arg(long)]
     production: bool,
+    /// Exit unsuccessfully when any authoring finding needs review, including access warnings.
+    #[arg(long)]
+    deny_findings: bool,
 }
 
 #[derive(Debug, Args)]
@@ -184,6 +188,9 @@ struct ExplainArgs {
     /// Enforce production-only package closure requirements.
     #[arg(long)]
     production: bool,
+    /// For access only: bounded JSON with synthetic claims. Performs no token verification or record access.
+    #[arg(long, value_name = "JSON_FILE")]
+    scenario: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -1020,7 +1027,17 @@ where
     let format = cli.format;
     let result = match cli.command {
         Command::Init(args) => init(&args.destination),
-        Command::Check(args) => check(&args.project, profile(args.production)),
+        Command::Check(args) => check(&args.project, profile(args.production)).and_then(|report| {
+            if args.deny_findings && !report.findings.is_empty() {
+                Err(FailureReport {
+                    ok: false,
+                    command: "check",
+                    diagnostics: report.findings,
+                })
+            } else {
+                Ok(report)
+            }
+        }),
         Command::Project(args) => match args.command {
             ProjectCommand::Lock(args) => project_lock(&args.project, args.check),
         },
@@ -1030,7 +1047,12 @@ where
             profile(args.production),
             &args.output,
         ),
-        Command::Explain(args) => explain(args.subject, &args.project, profile(args.production)),
+        Command::Explain(args) => explain(
+            args.subject,
+            &args.project,
+            profile(args.production),
+            args.scenario.as_deref(),
+        ),
         Command::Diff(args) => {
             return match diff(&args) {
                 Ok(report) => write_diff_success(&report, format, stdout, stderr),
@@ -2428,11 +2450,49 @@ fn explain(
     subject: ExplainSubject,
     project_path: &Path,
     profile: ProfileArg,
+    scenario_path: Option<&Path>,
 ) -> Result<SuccessReport, FailureReport> {
     let compiled = compile(project_path, profile, "explain")?;
+    let scenario_error = |diagnostic| FailureReport {
+        ok: false,
+        command: "explain",
+        diagnostics: vec![tool_diagnostic(
+            diagnostic,
+            DiagnosticArtifact::CommandArguments,
+            SuggestedAction::CorrectCommandUsage,
+        )],
+    };
+    let scenario = if let Some(path) = scenario_path {
+        if !matches!(subject, ExplainSubject::Access) {
+            return Err(scenario_error(diagnostic(
+                "access.scenario.subject",
+                "scenario",
+                "--scenario is available only for explain access",
+            )));
+        }
+        let bytes = read_bounded_regular_file(path, "access.scenario.unavailable", 65_536)
+            .map_err(scenario_error)?;
+        let source = parse_json_strict(&bytes).map_err(|_| scenario_error(diagnostic("access.scenario.invalid", "scenario", "provide a strict JSON access scenario with synthetic claims; duplicate keys and malformed JSON are refused")))?;
+        let scenario = serde_json::from_value(source).map_err(|_| scenario_error(diagnostic("access.scenario.invalid", "scenario", "use entity, accessProfile, operation, optional readPath, and claims; claims accepts principalClaim, principal, scopes, purpose, and directClaims")))?;
+        Some(
+            registry_server::access_preview::preview_access(&compiled, scenario).map_err(
+                |message| {
+                    scenario_error(diagnostic("access.scenario.invalid", "scenario", message))
+                },
+            )?,
+        )
+    } else {
+        None
+    };
     let explanation = match subject {
         ExplainSubject::Model => explain_model(&compiled),
-        ExplainSubject::Access => serde_json::to_value(compiled.access()),
+        ExplainSubject::Access => {
+            if let Some(scenario) = scenario {
+                serde_json::to_value(scenario)
+            } else {
+                serde_json::to_value(registry_server::access::explain_access(&compiled))
+            }
+        }
         ExplainSubject::Routes => serde_json::to_value(compiled.routes()),
         ExplainSubject::Queries => explain_queries(&compiled),
         ExplainSubject::Events => serde_json::to_value(compiled.event_deliveries()),
@@ -4050,6 +4110,11 @@ fn write_success(
                 writeln!(stdout, "artifacts: {}", report.artifacts.len())?;
             }
             if let Some(explanation) = &report.explanation {
+                if explanation.get("scopeMatching").is_some()
+                    || explanation.get("mode").and_then(Value::as_str) == Some("offline_synthetic")
+                {
+                    return write_access_explanation(explanation, stdout);
+                }
                 let rendered =
                     serde_json::to_string_pretty(explanation).map_err(io::Error::other)?;
                 writeln!(stdout, "{rendered}")?;
@@ -4064,6 +4129,101 @@ fn write_success(
             ExitCode::from(OPERATIONAL_FAILURE_EXIT)
         }
     }
+}
+
+fn write_access_explanation(explanation: &Value, stdout: &mut dyn Write) -> io::Result<()> {
+    if explanation.get("mode").and_then(Value::as_str) == Some("offline_synthetic") {
+        let admitted = explanation["admitted"].as_bool() == Some(true);
+        writeln!(
+            stdout,
+            "synthetic profile admission: {} ({})",
+            if admitted { "allowed" } else { "refused" },
+            explanation["reason"].as_str().unwrap_or("unknown")
+        )?;
+        writeln!(stdout, "No credentials verified, records checked, or authority issued. Claim values are not printed.")?;
+        if explanation["effectiveProfile"].is_object() {
+            write_access_profile(&explanation["effectiveProfile"], stdout)?;
+        }
+        return Ok(());
+    }
+    for key in [
+        "scopeMatching",
+        "purposeMatching",
+        "rowMatching",
+        "profileSelection",
+    ] {
+        writeln!(stdout, "{}", explanation[key].as_str().unwrap_or(""))?;
+    }
+    if let Some(entities) = explanation["entities"].as_array() {
+        for entity in entities {
+            writeln!(
+                stdout,
+                "\nentity: {} ({})",
+                entity["entity"].as_str().unwrap_or(""),
+                entity["classification"].as_str().unwrap_or("")
+            )?;
+            if !entity["requirements"].is_null() {
+                writeln!(
+                    stdout,
+                    "  mandatory requirements: {}",
+                    entity["requirements"]
+                )?;
+            }
+            if let Some(profiles) = entity["profiles"].as_array() {
+                for profile in profiles {
+                    write_access_profile(profile, stdout)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn write_access_profile(profile: &Value, stdout: &mut dyn Write) -> io::Result<()> {
+    writeln!(
+        stdout,
+        "  profile: {}",
+        profile["id"].as_str().unwrap_or("")
+    )?;
+    writeln!(
+        stdout,
+        "    principal claim: {}",
+        profile["principalClaim"]
+            .as_str()
+            .unwrap_or("none (anonymous)")
+    )?;
+    for (field, label, empty) in [
+        ("operations", "operations", "none"),
+        ("requiredScopes", "required scopes (all)", "none required"),
+        ("requiredPurposes", "allowed purposes (any)", "unrestricted"),
+        ("readableFields", "readable fields", "none"),
+        ("writableFields", "writable fields", "none"),
+        ("filterableFields", "filterable fields", "none"),
+        ("sortableFields", "sortable fields", "none"),
+        ("rowBoundaries", "row restrictions (all)", "unrestricted"),
+        ("lookups", "lookups", "none"),
+        ("readPaths", "related records", "none"),
+    ] {
+        let value = &profile[field];
+        if value.is_null() || value.as_array().is_some_and(Vec::is_empty) {
+            writeln!(stdout, "    {label}: {empty}")?;
+        } else {
+            writeln!(stdout, "    {label}: {value}")?;
+        }
+    }
+    for field in [
+        "anonymous",
+        "allowCount",
+        "revisionAccess",
+        "allowDataExport",
+    ] {
+        writeln!(
+            stdout,
+            "    {field}: {}",
+            profile[field].as_bool().unwrap_or(false)
+        )?;
+    }
+    Ok(())
 }
 
 fn write_doctor_success(

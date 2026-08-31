@@ -375,7 +375,7 @@ fn validate_claim_mapping(
     Ok(expected_direct_claims)
 }
 
-fn compiled_authority_field_type(
+pub(crate) fn compiled_authority_field_type(
     entity: &crate::model::CompiledEntity,
     field_id: &str,
 ) -> Option<crate::contract::FieldTypeSource> {
@@ -460,16 +460,25 @@ fn mapped_claim(
     value: &Value,
     expectation: &DirectClaimExpectation,
 ) -> Result<VerifiedClaimValue, AuthenticationError> {
-    if expectation.multi_value {
+    map_authority_claim(value, &expectation.field_type, expectation.multi_value)
+}
+
+/// Map a typed authority value identically for verified tokens and synthetic previews.
+pub(crate) fn map_authority_claim(
+    value: &Value,
+    field_type: &FieldTypeSource,
+    multi_value: bool,
+) -> Result<VerifiedClaimValue, AuthenticationError> {
+    if multi_value {
         let values = value.as_array().ok_or(AuthenticationError::InvalidClaims)?;
         let values = values
             .iter()
-            .map(|value| mapped_scalar_claim(value, &expectation.field_type))
+            .map(|value| mapped_scalar_claim(value, field_type))
             .collect::<Result<Vec<_>, _>>()?;
         VerifiedClaimValue::direct_string_set(values)
             .map_err(|_| AuthenticationError::InvalidClaims)
     } else {
-        VerifiedClaimValue::direct_string(mapped_scalar_claim(value, &expectation.field_type)?)
+        VerifiedClaimValue::direct_string(mapped_scalar_claim(value, field_type)?)
             .map_err(|_| AuthenticationError::InvalidClaims)
     }
 }

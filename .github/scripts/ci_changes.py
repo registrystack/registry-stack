@@ -182,8 +182,8 @@ EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_PATTERNS = tuple(
     pattern for pattern, _ in EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_INPUTS
 )
 
-# Generated CLI pages consume the public Clap trees for every released Relay
-# and Evidence binary. Keep this list at module ownership so changing an Args
+# Generated CLI pages consume the supported public Clap trees.
+# Keep this list at module ownership so changing an Args
 # type beside a top-level parser cannot leave its published page stale.
 CLI_REFERENCE_INPUTS = (
     ("Cargo.lock", "Cargo.lock"),
@@ -198,6 +198,8 @@ CLI_REFERENCE_INPUTS = (
     ("crates/registry-mint/src/cli.rs", "crates/registry-mint/src/cli.rs"),
     ("crates/registry-relay-v2/src/cli.rs", "crates/registry-relay-v2/src/cli.rs"),
     ("crates/registry-relayctl/src/**", "crates/registry-relayctl/src/lib.rs"),
+    ("crates/registry-server/src/cli.rs", "crates/registry-server/src/cli.rs"),
+    ("crates/registry-serverctl/src/**", "crates/registry-serverctl/src/lib.rs"),
 )
 CLI_REFERENCE_PATTERNS = tuple(pattern for pattern, _ in CLI_REFERENCE_INPUTS)
 
@@ -612,6 +614,8 @@ def classify(
             # them, so either going stale needs a docs rebuild.
             "products/evidence/contracts/*",
             "crates/registry-evidencectl/schemas/authoring/*",
+            "products/registry-server/generated/authoring/*",
+            "products/registry-server/generated/runtime/*",
             # The same page names the product reference that explains each
             # schema, and the docs tests read those references to prove the
             # published key paths and the documented ones agree.

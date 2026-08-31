@@ -1,5 +1,5 @@
 {
-  "format_version": "1.1",
+  "format_version": "1.2",
   "generator": "docs/site/scripts/generate-evidence-configuration.mjs",
   "contracts": [
     {
@@ -30,6 +30,7 @@
             ]
           ],
           "description": "Gated acquisition kinds and source-call optimizations this bundle opts in to. The original Version 1 forms are absent from the vocabulary on purpose, because every bundle already had them; omission and an explicit empty list both enable nothing.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -45,6 +46,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "One gated acquisition kind or source-call optimization this bundle declares, which is the bundle half of a two-sided gate. A requirement using an absent kind is rejected at startup; an absent optimization is never selected.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -61,6 +63,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Declares the governed assurance boundary of the whole bundle, and the value is visible in every assertion, so an authentic `local` assertion never satisfies a relying procedure expecting a deployable profile. `local` is an authoring profile that lets a requirement omit `fixtures` and disables no other runtime boundary; the deployable profiles require every requirement to reference a fixture suite with complete coverage before the bundle loads.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -73,6 +76,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Governs audit pseudonymization and the fail-closed policy for the whole deployment; `runtime.yaml` contributes only the storage location.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -87,6 +91,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Holds every audit gate closed, so an authorization refusal, access attempt, or disclosure release whose record cannot be durably written stops the response instead of being served unaudited.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -101,6 +106,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Fixes the audit record form to the keyed JSONL chain, whose sealed segments an operator replays out of band to prove retained history.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -118,6 +124,7 @@
           ],
           "conditional_constraints": [],
           "description": "Stamped into every audit pseudonym as its version prefix, so pseudonyms produced under different audit key material stay distinguishable within one chain.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -134,6 +141,7 @@
           ],
           "conditional_constraints": [],
           "description": "Points at the file secret Rust separates into the audit chain and identifier subkeys; the same reference cannot also serve `subjectBinding.secretRef`.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -146,6 +154,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Verification policy for inbound bearer tokens: the runtime validates each token against these values itself and ignores upstream identity headers.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -162,6 +171,7 @@
           ],
           "conditional_constraints": [],
           "description": "Names the verified claim read as the actor alongside the principal, and omitting the key enables no fallback actor source.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -180,6 +190,7 @@
           ],
           "conditional_constraints": [],
           "description": "Closes the set of signature algorithms accepted on an inbound access token, and no algorithm fallback outside the set is permitted.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -196,6 +207,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "One signature algorithm the token verifier accepts on an inbound access token.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -214,6 +226,7 @@
           ],
           "conditional_constraints": [],
           "description": "Exact allowlist of audience values an inbound access token must carry to be accepted.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -231,6 +244,7 @@
           ],
           "conditional_constraints": [],
           "description": "One exact audience value an inbound access token may carry.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -247,6 +261,7 @@
           ],
           "conditional_constraints": [],
           "description": "Names the verified claim that fixes the audience an assertion is issued to, and the public request cannot choose another audience.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -263,6 +278,7 @@
           ],
           "conditional_constraints": [],
           "description": "Names the verified claim carrying the granting authority, read only when a subject's `valueOrigin` is `authenticated-grant`; the claim value must equal the matched authority-profile id.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -279,6 +295,7 @@
           ],
           "conditional_constraints": [],
           "description": "Names the verified claim carrying the grant identifier, read only when a subject's `valueOrigin` is `authenticated-grant`.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -303,6 +320,7 @@
             ]
           ],
           "description": "Exact token issuer an inbound access token must declare, with path-based issuers supported; deployable bundles require HTTPS.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -327,6 +345,7 @@
             ]
           ],
           "description": "Fixed endpoint the verifier fetches issuer signing keys from; the endpoint may resolve to a public or private address, so DNS is pinned for each fetch, ambient proxies are disabled, and cloud-metadata destinations remain prohibited.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -341,6 +360,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Selects the inbound credential model, and Version 1 defines exactly one such profile.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -358,6 +378,7 @@
           ],
           "conditional_constraints": [],
           "description": "Caps the accepted `exp - iat` interval, and its presence requires `iat` and an `exp` greater than `iat`.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -374,6 +395,7 @@
           ],
           "conditional_constraints": [],
           "description": "The only claim read as the principal, whose absence denies the request; `client_id`, `azp`, request data, and proxy headers are not fallbacks.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -390,6 +412,7 @@
           ],
           "conditional_constraints": [],
           "description": "Names the verified claim whose tag list selects which authority profile can match the request.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -407,6 +430,7 @@
           ],
           "conditional_constraints": [],
           "description": "Emergency denylist of issuer key identifiers, checked before cached JWKS key selection so a compromised key is refused even while the cache still holds the key.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -425,6 +449,7 @@
           ],
           "conditional_constraints": [],
           "description": "One issuer key identifier the verifier refuses, whatever the cached JWKS still holds.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -443,6 +468,7 @@
           ],
           "conditional_constraints": [],
           "description": "Allowlist of the exact `typ` value an inbound token's protected JWT header must declare.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -458,6 +484,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "One exact protected-header `typ` value accepted on an inbound access token.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -475,6 +502,7 @@
           ],
           "conditional_constraints": [],
           "description": "Named authority profiles deciding which requester class may obtain which assertion. Exactly one authority path may match a request, and two paths covering the same requirement, purpose, and subject tuple deny that request rather than failing startup.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -491,6 +519,9 @@
           ],
           "conditional_constraints": [],
           "description": "Everything one requester class may ask for. Access is per requester class rather than per client identity, so two clients carrying the same tags have identical access.",
+          "defaults": [
+            null
+          ],
           "runtime_validation": null
         },
         {
@@ -508,6 +539,7 @@
           ],
           "conditional_constraints": [],
           "description": "Complete set of authorized paths this requester class has. Permissions are never unioned across grants, so one grant must cover an entire request on its own.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -520,6 +552,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "One authorized path, binding a single requirement, a single purpose, the audience origin, and the referenced requirement's complete subject-role set.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -534,6 +567,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Binds the assertion audience to the requester's verified evidence audience claim, so the public request cannot name another audience.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -550,6 +584,7 @@
           ],
           "conditional_constraints": [],
           "description": "The one purpose this path authorizes, matched exactly against the request purpose; a purpose the referenced requirement does not declare fails startup.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -567,6 +602,7 @@
           ],
           "conditional_constraints": [],
           "description": "The one requirement this path authorizes, named by its exact requirement URI; a requirement no bundle entry declares fails startup.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -586,6 +622,7 @@
           ],
           "conditional_constraints": [],
           "description": "Serializations this path permits, defaulting to signed JWS alone when omitted. Unsigned and SD-JWT VC output each require both the bundle-level `responseFormats` and the one matched grant to permit them.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -603,6 +640,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "One permitted serialization of the same assertion, which introduces no separate issuance protocol and no credential state; a format reaches a response only when the bundle and the one matched grant both permit that format.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -620,6 +658,7 @@
           ],
           "conditional_constraints": [],
           "description": "Subject-binding modes this path permits, defaulting to audience-scoped alone when omitted or empty. Permitting a serialization is not permitting a binding mode: a path widened to `sd-jwt-vc` gains no right to issue holder-bound assertions until that mode is named here. A path may name `holder-bound` alone, which permits nothing else.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -635,6 +674,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "One binding mode this path permits, which is the operator half of a two-sided gate; a requirement declaring a mode no grant for it permits is unreachable and is rejected at startup.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -652,6 +692,7 @@
           ],
           "conditional_constraints": [],
           "description": "Authorization for the referenced requirement's complete subject-role set; a grant that omits a declared role, or repeats one, fails startup.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -664,6 +705,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Authorization for one subject role, fixing which selector profile identifies the subject and where that subject's selector values may originate.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -680,6 +722,7 @@
           ],
           "conditional_constraints": [],
           "description": "Names the requirement subject role this authorization covers; a role the requirement's `subjectRoles` does not declare fails startup, and no role may appear twice in one grant.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -696,6 +739,7 @@
           ],
           "conditional_constraints": [],
           "description": "The selector profile whose field set identifies this role's subject; a profile the requirement's `subjectRoles` entry does not permit for the role fails startup.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -713,6 +757,7 @@
           ],
           "conditional_constraints": [],
           "description": "Maps every field of the named selector profile to the claim path in the verified access token that supplies that field's value. Missing, extra, duplicate-target, or invalid claim paths fail startup.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -730,6 +775,9 @@
           ],
           "conditional_constraints": [],
           "description": "Claim path resolved only from the strictly verified access token, so a caller-supplied selector, grant reference, or approval value cannot supply the field.",
+          "defaults": [
+            null
+          ],
           "runtime_validation": null
         },
         {
@@ -746,6 +794,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Fixes where this role's selector values originate. A `request` origin takes values from the closed public request and prohibits `valueClaims`; `authenticated-context` rejects caller values and reads the exact `valueClaims` map; `authenticated-grant` reads that same map and additionally requires a verified grant id and a grant authority equal to the matched authority-profile id.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -764,6 +813,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Declared basis of authority for this profile's grants; a request whose verified token carries an actor claim matches only a `delegated` profile.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -782,6 +832,7 @@
           ],
           "conditional_constraints": [],
           "description": "Complete tag set the claim named by `authentication.requesterTagsClaim` must contain for this profile to match, so adding a tag narrows the profile rather than widening it.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -798,6 +849,7 @@
           ],
           "conditional_constraints": [],
           "description": "One tag that must be present in the verified claim; differentiated requirements, purposes, or `valueClaims` are expressed by issuing different tags rather than by naming individual clients.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -815,6 +867,7 @@
           ],
           "conditional_constraints": [],
           "description": "Ceiling on how many assertions one holder-bound release may carry. Omission means one, so a bundle written before batch release cannot serve a batch; declaring a ceiling this deployment never reaches enables nothing on its own, because each requirement still needs its own holder-bound declaration and a grant that permits the mode.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -827,6 +880,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Carries the legal issuer identity placed in every assertion, kept separate from the technical provider that operates the process and signs.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -844,6 +898,7 @@
           ],
           "conditional_constraints": [],
           "description": "Legal issuer URI placed in every assertion as `issuedBy`, and governance must authorize the provider named in `service.providerId` to act for that issuer.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -856,6 +911,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Optional provider-authored public facts that cannot be derived from the governed service, issuer, response-format, binding-mode, and Evidence Type inventory. When present, the runtime publishes one deterministic closed Registry Discovery description.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -874,6 +930,7 @@
           ],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -891,6 +948,7 @@
           ],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -909,6 +967,7 @@
           ],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -926,6 +985,7 @@
           ],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -943,6 +1003,7 @@
           ],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -960,6 +1021,7 @@
           ],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -977,6 +1039,7 @@
           ],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -995,6 +1058,7 @@
           ],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1007,6 +1071,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Governs the anti-enumeration budget for authenticated callers, counted against scoped pseudonyms of the principal and the authority rather than against any raw selector value.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1024,6 +1089,7 @@
           ],
           "conditional_constraints": [],
           "description": "Capacity of one principal's request bucket, bounding how many requests may arrive back to back before `requestsPerPrincipalPerMinute` governs the pace.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1041,6 +1107,7 @@
           ],
           "conditional_constraints": [],
           "description": "Budget for selector-resolution failures, checked before source access and consumed only when selector validation itself fails, so repeated probing is refused before it reaches a source.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1058,6 +1125,7 @@
           ],
           "conditional_constraints": [],
           "description": "Rate at which one principal's request budget refills, spread continuously across the minute rather than granted in full at its start.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1075,6 +1143,7 @@
           ],
           "conditional_constraints": [],
           "description": "Requirement identifiers and Evidence Type URIs must each be unique across every entry; a repeat of either rejects the whole bundle at startup.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1087,6 +1156,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "One independently versioned evidence definition; its configuration revision spans only this requirement's own configuration and artifact closure, letting a relying party pin this requirement without depending on the rest of the deployment.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1099,6 +1169,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Fixes this requirement's complete source-request shape to one call over a single source, or to a fixed sequence of calls named here; no response content chooses a different source or an additional call.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1119,6 +1190,7 @@
           ],
           "conditional_constraints": [],
           "description": "Read when `acquisition.kind` is `search-then-fetch` or `search-then-fetch-set`; the fixed second-stage source, or the ordered array of member sources, invoked after the search resolves and never chosen from response content.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1131,6 +1203,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "One declared fetch member of a `search-then-fetch-set` acquisition, called in the order the array declares and reached only after the search resolves to a unique schema-valid match. Members must be distinct from each other and from the search source.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1149,6 +1222,7 @@
           ],
           "conditional_constraints": [],
           "description": "Allowlist of validated search facts this member receives, and the only search-derived data reaching it through any channel, including the body its preparation builds.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1165,6 +1239,7 @@
           ],
           "conditional_constraints": [],
           "description": "One search fact name this member is permitted to read, which the search source's fact schema must require or the bundle is rejected at startup.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1181,6 +1256,7 @@
           ],
           "conditional_constraints": [],
           "description": "The one configured source this member calls, fixed by the bundle like every other acquisition source.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1197,6 +1273,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Selects this requirement's closed acquisition shape, and therefore how many fixed source calls the runtime issues; a gated kind serves only where the bundle and the deployment both name it under `acquisitionCapabilities`.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1214,6 +1291,7 @@
           ],
           "conditional_constraints": [],
           "description": "Ceiling on the whole acquisition, covering the search, every declared member, and the transitions between stages; exceeding it fails the requirement as a dependency failure and never cancels a durable audit append.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1230,6 +1308,7 @@
           ],
           "conditional_constraints": [],
           "description": "Read when `acquisition.kind` is `search-then-fetch` or `search-then-fetch-set`; names the first-stage source, and the runtime aborts before the fetch stage unless this call resolves to exactly one match.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1246,6 +1325,7 @@
           ],
           "conditional_constraints": [],
           "description": "Read only when `acquisition.kind` is `single`; the one configured source this requirement queries in its single fixed call.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1263,6 +1343,7 @@
           ],
           "conditional_constraints": [],
           "description": "Declares the complete, closed set of values this requirement's assertion may disclose; a value the derivation produces under an identifier absent from this list fails evaluation instead of being disclosed.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1275,6 +1356,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "One value the requirement may disclose, corresponding to exactly one `cccev:InformationConcept`, and becoming one entry of the assertion's supported values when the derivation produces that value.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1292,6 +1374,7 @@
           ],
           "conditional_constraints": [],
           "description": "Closed, form-specific bounds a derived value must satisfy before it is accepted into evidence; which keys apply is fixed entirely by the concept's `form`.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1309,6 +1392,7 @@
           ],
           "conditional_constraints": [],
           "description": "URI naming the reviewed bucket scheme for a `date-bucket` or `time-bucket` concept; paired with `schemeVersion`, `bucketScheme` resolves to exactly one codelist artifact, so only the matched bucket code is disclosed and the underlying date, instant, or duration never appears in the assertion.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1326,6 +1410,7 @@
           ],
           "conditional_constraints": [],
           "description": "URI naming the reviewed category vocabulary a `controlled-category` concept's value must belong to; matched against `schemeVersion` and `codelist` at startup, it enforces exact category membership and rejects any unreviewed category.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1342,6 +1427,7 @@
           ],
           "conditional_constraints": [],
           "description": "Bundle-relative path to the closed codelist artifact whose entries fix exact membership for `controlled-code`, `controlled-category`, and `controlled-code-list` concepts, validated at startup.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1359,6 +1445,7 @@
           ],
           "conditional_constraints": [],
           "description": "Version tag paired with `codelist` for `controlled-code` and `controlled-code-list` concepts that must exactly equal the referenced codelist artifact's own declared version, or the bundle fails to load.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1379,6 +1466,7 @@
           ],
           "conditional_constraints": [],
           "description": "Inclusive upper bound paired with `minimum` for `bounded-integer` and `bounded-decimal` concepts; a derived value over it fails evaluation instead of being disclosed.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1396,6 +1484,7 @@
           ],
           "conditional_constraints": [],
           "description": "Caps the disclosed byte length of a `controlled-code`, `controlled-category`, or `audience-scoped-entity-reference` concept's value; a value or projected reference longer than the cap fails validation instead of being truncated.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1413,6 +1502,7 @@
           ],
           "conditional_constraints": [],
           "description": "Inclusive upper bound paired with `minimumItems` on how many items a `controlled-code-list` or `entity-reference-list` concept discloses; a longer derived list fails validation.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1430,6 +1520,7 @@
           ],
           "conditional_constraints": [],
           "description": "Upper bound on the number of fractional digits accepted for a `bounded-decimal` concept's derived value; a finer scale fails validation instead of being rounded.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1447,6 +1538,7 @@
           ],
           "conditional_constraints": [],
           "description": "Caps the serialized JSON byte length of a `reviewed-structured-value` concept's entire disclosed object; an oversized derived value fails validation before signing.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1467,6 +1559,7 @@
           ],
           "conditional_constraints": [],
           "description": "Inclusive lower bound paired with `maximum` for `bounded-integer` and `bounded-decimal` concepts; a derived value under it fails evaluation instead of being disclosed.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1484,6 +1577,7 @@
           ],
           "conditional_constraints": [],
           "description": "Inclusive lower bound paired with `maximumItems` on how many items a `controlled-code-list` or `entity-reference-list` concept discloses; a shorter derived list fails validation.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1501,6 +1595,7 @@
           ],
           "conditional_constraints": [],
           "description": "URI resolving to exactly one closed JSON Schema artifact in the immutable bundle that a `reviewed-structured-value` concept's fields are validated against; the schema closes every property, so unexpected or additional JSON in the derived value fails validation.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1518,6 +1613,7 @@
           ],
           "conditional_constraints": [],
           "description": "Version tag that must exactly equal a referenced codelist artifact's own declared version at startup; pairs with `categoryScheme` for `controlled-category` concepts and with `bucketScheme` for `date-bucket` and `time-bucket` concepts.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1532,6 +1628,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Requires every item in a `controlled-code-list` or `entity-reference-list` concept's disclosed list to be pairwise distinct; a duplicate item fails validation instead of being deduplicated or disclosed twice.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1556,6 +1653,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Selects the concept's closed value shape, which fixes the exact set of keys `constraints` must declare and no others.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1572,6 +1670,7 @@
           ],
           "conditional_constraints": [],
           "description": "Stable application-facing key for this output in typed client result maps. It is governed explicitly and is never inferred from the concept URI.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1589,6 +1688,7 @@
           ],
           "conditional_constraints": [],
           "description": "Stable identifier that names this concept as `providesValueFor` in the assertion and, unless an `sdJwtVc.claim` override is declared, is also the concept's claim name in the SD-JWT VC serialization.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1601,6 +1701,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Whether the derivation must produce a value for this concept; a missing required concept fails the whole evaluation, and a missing optional concept is left out of the disclosed supported values.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1613,6 +1714,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Optional per-concept projection that the concept declaration may set only for `reviewed-structured-value` concepts, selecting how that structured value's fields are exposed as SD-JWT VC disclosures.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1629,6 +1731,7 @@
           ],
           "conditional_constraints": [],
           "description": "Public claim name substituted for the concept identifier in the SD-JWT VC response; it must be unique within the requirement and cannot collide with a profile-owned claim.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1643,6 +1746,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Fixes where the structured value's field-level disclosures are exposed in the SD-JWT VC claim set: as an always-visible top-level object under `sdJwtVc.claim`.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1655,6 +1759,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Determines which Rhai script computes the requirement's concept values as `derive/3`, and what minimized selector inputs and closed typed parameters that script is allowed to see.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1671,6 +1776,7 @@
           ],
           "conditional_constraints": [],
           "description": "Closed set of adopter-named parameter values available to the requirement's derivation; the map cannot carry secrets or runtime authority.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1696,6 +1802,7 @@
           ],
           "conditional_constraints": [],
           "description": "One named parameter's value, closed to a bounded string, a safe integer, a boolean, one typed canonical decimal, or a bounded array of decimal bucket boundaries whose own bounds reuse that same typed-decimal shape.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1710,6 +1817,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Literal `decimal` discriminator marking the typed-decimal form, required wherever that form appears and present only alongside `value`.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1726,6 +1834,7 @@
           ],
           "conditional_constraints": [],
           "description": "Canonical decimal text of the typed-decimal form, restricted to exact finite decimal text with no exponent, no leading zero, and no trailing fractional zero.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1738,6 +1847,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "One decimal bucket boundary in an ordered array parameter, evaluated by the `bucket_number` primitive to classify a derived decimal into the matching boundary's code; each lower bound must equal the previous boundary's upper bound, and a gap fails validation at startup.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1754,6 +1864,7 @@
           ],
           "conditional_constraints": [],
           "description": "Output code returned when a derived decimal falls inside this boundary's interval; duplicate codes across the array fail validation at startup.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1766,6 +1877,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Exclusive upper bound of this boundary's half-open interval, expressed with the same typed-decimal shape as a scalar parameter value.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1780,6 +1892,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Literal `decimal` discriminator marking the typed-decimal form, required wherever that form appears and present only alongside `value`.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1796,6 +1909,7 @@
           ],
           "conditional_constraints": [],
           "description": "Canonical decimal text of the typed-decimal form, restricted to exact finite decimal text with no exponent, no leading zero, and no trailing fractional zero.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1808,6 +1922,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Inclusive lower bound of this boundary's half-open interval, expressed with the same typed-decimal shape as a scalar parameter value.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1822,6 +1937,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Literal `decimal` discriminator marking the typed-decimal form, required wherever that form appears and present only alongside `value`.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1838,6 +1954,7 @@
           ],
           "conditional_constraints": [],
           "description": "Canonical decimal text of the typed-decimal form, restricted to exact finite decimal text with no exponent, no leading zero, and no trailing fractional zero.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1854,6 +1971,7 @@
           ],
           "conditional_constraints": [],
           "description": "Bundle-relative Rhai script compiled at startup to expose the requirement's `derive/3` entry point before the runtime reaches readiness.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1870,6 +1988,7 @@
           ],
           "conditional_constraints": [],
           "description": "Optional closed set of authorized selector roles the derivation may read; omission means `derive/3` receives an empty selector map.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1882,6 +2001,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Declares one subject role the derivation may read, together with the closed profile alternatives permitted for that role; only the alternative matching the authorized request subject reaches `derive/3`.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1899,6 +2019,7 @@
           ],
           "conditional_constraints": [],
           "description": "Closed set of profile and field combinations permitted for the role; the runtime materializes only the combination the matched authority grant carries, never the union of every alternative declared.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1911,6 +2032,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "One permitted selector profile paired with the exact field subset that alternative exposes.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1929,6 +2051,7 @@
           ],
           "conditional_constraints": [],
           "description": "Exact subset of the named profile's declared fields this alternative exposes, which is how a consumer is handed less than the authorized selector carries.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1945,6 +2068,7 @@
           ],
           "conditional_constraints": [],
           "description": "One selector field name, which the named profile must declare or the bundle is rejected at startup.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1961,6 +2085,7 @@
           ],
           "conditional_constraints": [],
           "description": "Selector profile this alternative admits for the role; a profile absent from `selectorProfiles` is rejected at startup.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1977,6 +2102,7 @@
           ],
           "conditional_constraints": [],
           "description": "Subject role this selector input covers, unique across the declaration; the runtime resolves request subjects by role rather than by array position.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1989,6 +2115,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Binds this requirement's release to the reviewed disclosure families a human combined-disclosure review has already assessed.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2007,6 +2134,7 @@
           ],
           "conditional_constraints": [],
           "description": "Non-empty set of those reviewed family URIs; sharing even one family with another enabled requirement rejects the whole bundle at startup.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2024,6 +2152,7 @@
           ],
           "conditional_constraints": [],
           "description": "One reviewed disclosure-family URI; this exact value, not what it represents, is what the startup check compares for reuse across requirements.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2041,6 +2170,7 @@
           ],
           "conditional_constraints": [],
           "description": "Exact Evidence Type URI placed in every assertion issued for this requirement; it must be unique across the bundle, and a duplicate rejects the bundle at startup.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2055,6 +2185,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Governs the outward shape of an unresolved outcome: the runtime returns one identical public problem whether the subject was absent, ambiguous, or found with inconsistent derivation inputs, so a caller cannot distinguish the cause from the response.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2071,6 +2202,7 @@
           ],
           "conditional_constraints": [],
           "description": "Bundle-relative path to this requirement's sanitized fixture suite; omitting it is accepted only under `assuranceProfile: local`, and `production` or `evidence-grade` refuse to load without it and its complete case coverage.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2087,6 +2219,7 @@
           ],
           "conditional_constraints": [],
           "description": "Stable application-facing identifier for selecting this requirement's complete published definition. It is governed explicitly and is never inferred from the requirement URI.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2104,6 +2237,7 @@
           ],
           "conditional_constraints": [],
           "description": "Stable requirement URI a public request names to select this requirement; the runtime looks up requirements by this exact value and no other.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2120,6 +2254,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Requirement classification carried unchanged into every assertion issued for this requirement.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2137,6 +2272,7 @@
           ],
           "conditional_constraints": [],
           "description": "IANA timezone resolving `legal_local_date` and `legal_local_time` from the runtime-supplied `observed_at` instant; an unrecognized name fails validation, and omitting the field resolves both values in UTC instead.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2155,6 +2291,7 @@
           ],
           "conditional_constraints": [],
           "description": "Closed set of purpose codes this requirement can be requested under; an authority-profile grant must bind one of them together with a role and selector profile, or that combination has no authority path and the bundle fails to load.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2171,6 +2308,7 @@
           ],
           "conditional_constraints": [],
           "description": "One purpose code eligible for this requirement; an authority-profile grant must name this exact code before a request under it is authorized.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2189,6 +2327,7 @@
           ],
           "conditional_constraints": [],
           "description": "Governed legal or procedural framework URIs carried as a whole into every assertion issued for this requirement.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2206,6 +2345,7 @@
           ],
           "conditional_constraints": [],
           "description": "One governed framework URI in that set, copied unchanged into the assertion alongside its siblings; the runtime does not select or rank among them.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2221,6 +2361,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "What this requirement's subject bindings are derived under; omission means `audience-scoped`, which is what every requirement written before this key existed did. A `holder-bound` requirement is rejected at startup unless the bundle and at least one grant for it both permit a serialization the mode allows, which is `sd-jwt-vc` or `sd-jwt-vc-batch`, and unless none of its concepts uses an entity-reference value form, whose pointer only the audience it was scoped to could resolve.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2238,6 +2379,7 @@
           ],
           "conditional_constraints": [],
           "description": "Complete set of subject positions this requirement resolves; incoming request array order carries no meaning, and resolved subjects are always canonicalized to this array's declaration order before signing.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2250,6 +2392,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "One subject position this requirement resolves; a request supplying a different number of subjects, a duplicate role, or a role this requirement does not declare is unauthorized.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2264,6 +2407,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Fixes this subject position to a single resolved value; Evidence Version 1 defines no plural or list-valued role.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2280,6 +2424,7 @@
           ],
           "conditional_constraints": [],
           "description": "Deployment-chosen identifier distinguishing this subject position from the requirement's others; requests, grants, and derivation inputs all address the position by this exact value, never by array position.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2298,6 +2443,7 @@
           ],
           "conditional_constraints": [],
           "description": "Selector profiles permitted for this subject position; every one of them must be reachable by some authority-profile grant for every code in `purposes`, or the bundle fails to load.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2314,6 +2460,7 @@
           ],
           "conditional_constraints": [],
           "description": "One selector profile id permitted for this position; it must name an entry in the bundle's `selectorProfiles` map, or the bundle fails to load.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2331,6 +2478,7 @@
           ],
           "conditional_constraints": [],
           "description": "Sets the assertion's validity window measured from `issuedAt`; the bundle fails to load if this exceeds `signing.maximumAssertionValiditySeconds`.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2350,6 +2498,7 @@
           ],
           "conditional_constraints": [],
           "description": "Sets the deployment-wide ceiling of response serializations, and omission means `[signed-jws]`. A bundle that drops signed JWS is rejected at startup, and every other listed format additionally requires the one matched grant's `authorityProfiles.*.grants[].responseFormats` to permit that format.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2367,6 +2516,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "One permitted serialization of the same assertion, which introduces no separate issuance protocol and no credential state; a format reaches a response only when the bundle and the one matched grant both permit that format.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2384,6 +2534,7 @@
           ],
           "conditional_constraints": [],
           "description": "Named registry of selector profiles that requirement subject roles and authority-grant subjects reference by id; an id absent from the map fails validation before startup.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2400,6 +2551,9 @@
           ],
           "conditional_constraints": [],
           "description": "One named, closed profile of deployment-defined fields and their combined byte bound; a profile is not an identity type, and possession of its field values does not by itself grant authority.",
+          "defaults": [
+            null
+          ],
           "runtime_validation": null
         },
         {
@@ -2417,6 +2571,7 @@
           ],
           "conditional_constraints": [],
           "description": "Closed map of the profile's field declarations, keyed by adopter-chosen names that are opaque to Rust and carry no meaning of their own.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2433,6 +2588,9 @@
           ],
           "conditional_constraints": [],
           "description": "One field's exact declaration: Rust matches a supplied value against it verbatim, performing no case folding, normalization, transliteration, tokenization, partial-date matching, or fuzzy scoring.",
+          "defaults": [
+            null
+          ],
           "runtime_validation": null
         },
         {
@@ -2449,6 +2607,7 @@
           ],
           "conditional_constraints": [],
           "description": "Path to the bundled codelist artifact a `controlled-code` value must belong to; a missing referenced artifact fails bundle loading.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2466,6 +2625,7 @@
           ],
           "conditional_constraints": [],
           "description": "Version this field's `controlled-code` values are pinned to; it must equal the referenced codelist artifact's own version or bundle loading fails.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2483,6 +2643,7 @@
           ],
           "conditional_constraints": [],
           "description": "Inclusive upper bound on this field's accepted integer selector value; a submitted value greater than this bound is rejected rather than clamped.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2500,6 +2661,7 @@
           ],
           "conditional_constraints": [],
           "description": "Inclusive upper bound, in UTF-8 bytes, on this field's accepted string or `controlled-code` value; it cannot exceed the profile's `maximumAggregateBytes`.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2517,6 +2679,7 @@
           ],
           "conditional_constraints": [],
           "description": "Inclusive lower bound on this field's accepted integer selector value; a submitted value less than this bound is rejected rather than clamped.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2534,6 +2697,7 @@
           ],
           "conditional_constraints": [],
           "description": "Inclusive lower bound, in UTF-8 bytes, on this field's accepted string value; it cannot exceed the field's own `maximumBytes`.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2552,6 +2716,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Selects the field's scalar kind, fixing which other declaration keys are required; a supplied value of a different kind is rejected.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2569,6 +2734,7 @@
           ],
           "conditional_constraints": [],
           "description": "Caps the summed canonical byte size of every field value resolved for one authorized use of the profile; exceeding it denies the request.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2581,6 +2747,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Carries the identity this deployment asserts under: the technical Evidence provider identity placed in evidence and the operator-controlled trust domain of the process.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2602,6 +2769,7 @@
             ]
           ],
           "description": "Technical provider URI placed in every assertion as `providedBy`. Enabling `sd-jwt-vc` outside local assurance requires this value to be the stable HTTPS origin of the deployment, because issuer metadata and the published JWKS URI are derived from that origin.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2619,6 +2787,7 @@
           ],
           "conditional_constraints": [],
           "description": "Exact public origin of this Evidence protected resource. Production and evidence-grade deployments require a canonical HTTPS origin. The local assurance profile also permits canonical HTTP on numeric 127.0.0.1 with an explicit non-zero port for supervised tutorials.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2636,6 +2805,7 @@
           ],
           "conditional_constraints": [],
           "description": "Scopes the process to one operator-controlled trust domain, whose URI is bound into subject bindings and into requester pseudonym scope, so the same subject yields different pseudonyms under a different trust domain.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2648,6 +2818,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Governs signature format, active and published key selection, key retirement, and assertion validity; missing signing material fails readiness and no unsigned fallback exists.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2664,6 +2835,7 @@
           ],
           "conditional_constraints": [],
           "description": "Names the bundle-held public JWK the runtime signer's key must equal exactly, proven by one sign-and-verify test before readiness.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2678,6 +2850,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Binds assertion signatures to ES256 over P-256, and a verifier rejects any protected header `alg` that differs from the algorithm bound to the trusted key.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2692,6 +2865,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Fixes the wire serialization of a signed assertion to flattened JWS JSON, returned as `application/jose+json`.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2706,6 +2880,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Route where the deployment serves its public key set; that route is not a trust anchor, because a verifier pins the provider identity and key location through its own governed configuration.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2723,6 +2898,7 @@
           ],
           "conditional_constraints": [],
           "description": "Ceiling every `requirements[].validitySeconds` must stay within, and the base of the window a retired public key stays published.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2740,6 +2916,7 @@
           ],
           "conditional_constraints": [],
           "description": "Retains predecessor public keys in the served key set so assertions signed before a rollover still verify, for at least the maximum assertion validity plus the verifier clock skew.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2756,6 +2933,7 @@
           ],
           "conditional_constraints": [],
           "description": "One retained public key served beside the active key; an entry that repeats the active key or names a revoked identifier is rejected at startup.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2773,6 +2951,7 @@
           ],
           "conditional_constraints": [],
           "description": "Emergency denylist: a listed identifier is excluded from the active set, the published set, and the served key set, and a verifier rejects that identifier before selecting a pinned public key.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2789,6 +2968,7 @@
           ],
           "conditional_constraints": [],
           "description": "One denied service key, named by its RFC 7638 thumbprint rather than by a provider-assigned key name.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2806,6 +2986,7 @@
           ],
           "conditional_constraints": [],
           "description": "Skew a relying party applies when checking current validity, and the margin added to the maximum assertion validity before a retired public key may be removed.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2823,6 +3004,7 @@
           ],
           "conditional_constraints": [],
           "description": "Complete map of fixed sources a requirement can reference by id in its `acquisition` field, fixed at startup and immune to override by `runtime.yaml`.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2839,6 +3021,9 @@
           ],
           "conditional_constraints": [],
           "description": "One fixed source referenced by this map key from a requirement's `acquisition` field, combining a transport, the fixed request that transport carries, and a minimization posture with the extraction script and schemas that turn the source's response into facts.",
+          "defaults": [
+            null
+          ],
           "runtime_validation": null
         },
         {
@@ -2851,6 +3036,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "One closed credential profile the runtime presents on this source's outbound calls, distinct from the inbound caller policy at the bundle's top-level `authentication`. Reference members name secrets that resolve only after authorization, durable access audit, and request-parts validation, and no secret reaches a script.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2868,6 +3054,7 @@
           ],
           "conditional_constraints": [],
           "description": "Lifetime credited to an acquired token whose response omits `expires_in`, rather than inferring one from the token. Without this key such a response is a credential failure, and the cached lifetime is still clamped to `maximumCacheSeconds`.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2886,6 +3073,7 @@
           ],
           "conditional_constraints": [],
           "description": "Fixed `audience` form parameter sent with the token request, for an authorization server that keys the issued token to an audience the scope cannot express and returns an unusable token without it. Sent as it stands with no fallback, so a blank value is refused here rather than by the authorization server at readiness.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2904,6 +3092,7 @@
           ],
           "conditional_constraints": [],
           "description": "Fixed `aud` claim of the signed client assertion, for an authorization server that expects an identifier it is not reached at, such as its issuer or a host in front of a proxy. Declared only beside `clientAssertionKeyRef`, and defaulting to `tokenEndpoint`. RFC 7523 section 3 has the server compare this by Simple String Comparison, so it is an opaque identifier rather than a URL and is signed byte for byte. It names who may accept the assertion, never where it is sent. A blank value is refused here rather than at the first token request, where signing rejects a whitespace-only audience as empty.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2921,6 +3110,7 @@
           ],
           "conditional_constraints": [],
           "description": "Logical file-secret reference for the private JWK the runtime signs an RFC 7523 section 2.2 client assertion with, which is the client authentication SMART on FHIR Backend Services requires. The assertion is audienced to `clientAssertionAudience`, or to `tokenEndpoint` when the bundle names none, and lives 60 seconds; no private key leaves the process.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2937,6 +3127,7 @@
           ],
           "conditional_constraints": [],
           "description": "Logical file-secret reference for the client identifier the runtime presents in the client-credentials exchange at `tokenEndpoint`.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2954,6 +3145,7 @@
           ],
           "conditional_constraints": [],
           "description": "Logical file-secret reference for the client secret the runtime presents at `tokenEndpoint`; the token URL, body, response, and debug output stay redacted, so the resolved value reaches no log. Declared with `credentialPlacement` and never beside `clientAssertionKeyRef`.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2969,6 +3161,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Selects whether the client identifier and secret travel in the Authorization header or the form body of the token request; Version 1 offers no query-string placement, so neither value can reach an authorization-server, proxy, or ingress URL log. Declared with `clientSecretRef` and never beside `clientAssertionKeyRef`, whose assertion always travels in the form body.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2987,6 +3180,7 @@
           ],
           "conditional_constraints": [],
           "description": "Names the header carrying this source's API-key value. The name is validated as an HTTP field name and rejected when it collides with authentication, routing, framing, cookie, forwarding, proxy, tracing, or hop-by-hop headers.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3005,6 +3199,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Selects which credential the runtime presents to this source and closes the member set to that profile. `none` sends no credential and is admitted only by a `local` assurance bundle at a canonical numeric-loopback origin; production and evidence-grade bundles reject that kind.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3022,6 +3217,7 @@
           ],
           "conditional_constraints": [],
           "description": "Bounds how long one acquired token is reused across evidence requests for this source; the cache lifetime is the smaller of this bound and the provider's reported expiry.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3038,6 +3234,7 @@
           ],
           "conditional_constraints": [],
           "description": "Logical file-secret reference for the password half of the HTTP Basic credential the runtime encodes into the Authorization header of every request to this source.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3056,6 +3253,7 @@
           ],
           "conditional_constraints": [],
           "description": "Authentication scheme the token is presented under; absent, the runtime sends `Bearer`. RFC 9110 section 11.1 makes the scheme an HTTP token chosen by the origin, and `static-api-key` cannot serve a source that wants another one because it refuses the Authorization header by name.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3073,6 +3271,7 @@
           ],
           "conditional_constraints": [],
           "description": "Fixed scope requested in the client-credentials exchange; a token response reporting a scope other than this one is a credential failure.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3093,6 +3292,7 @@
           ],
           "conditional_constraints": [],
           "description": "Fixed endpoint the runtime exchanges client credentials at before calling this source; the exchange is credential bootstrap, never an evidence-data request or a fact source.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3109,6 +3309,7 @@
           ],
           "conditional_constraints": [],
           "description": "Logical file-secret reference for the static token the runtime places in the Authorization header of every request to this source.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3125,6 +3326,7 @@
           ],
           "conditional_constraints": [],
           "description": "Logical file-secret reference for the user name half of the HTTP Basic credential the runtime presents to this source.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3141,6 +3343,7 @@
           ],
           "conditional_constraints": [],
           "description": "Logical file-secret reference for the API-key value the runtime places in `headerName`; the resolved value is bounded and rejects control characters, CR, and LF.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3165,6 +3368,7 @@
             ]
           ],
           "description": "Fixed HTTPS origin the source's evidence-data requests target, with no path, query, fragment, user information, or runtime substitution. An HTTP numeric-loopback origin is accepted only when `sources.*.authentication.kind` is `none`.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3177,6 +3381,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Optional reviewed one-call optimization for the public multi-subject request batch. It is eligible only for a `single` acquisition using this HTTP source's fixed `path`, when the complete item set fits `maximumItems`, and when both bundle and runtime name `source-batch` under `acquisitionCapabilities`. Omission selects ordinary sequential execution. The block cannot change source, method, origin, path, authentication, headers, TLS, redirect, timeout, response-byte, concurrency, or preparation-limit authority.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3193,6 +3398,7 @@
           ],
           "conditional_constraints": [],
           "description": "Bundle-relative Rhai script implementing `extract_batch/2` over the projected, schema-validated response. Rust requires one closed lookup result for every opaque slot and rejects missing, duplicated, extra, negative, or out-of-range slots.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3210,6 +3416,7 @@
           ],
           "conditional_constraints": [],
           "description": "Largest complete logical request batch this source accepts in one physical call. A larger outer batch uses sequential execution from the start and is never split into optimized sub-batches.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3226,6 +3433,7 @@
           ],
           "conditional_constraints": [],
           "description": "Bundle-relative Rhai script implementing `prepare_batch/2` over ordered opaque slots and minimized selectors. Its RequestParts output is checked under the ordinary source request's preparationLimits before credentials are resolved.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3244,6 +3452,7 @@
           ],
           "conditional_constraints": [],
           "description": "Allowlist of response leaves Rust retains for optimized batch extraction under the same extended JSON Pointer and projected-input bounds as ordinary extraction.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3262,6 +3471,7 @@
           ],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3278,6 +3488,7 @@
           ],
           "conditional_constraints": [],
           "description": "Bundle-relative closed JSON Schema the batch projection must satisfy before `extract_batch/2` runs. It governs only the optional optimized response and does not replace the ordinary source responseSchema used by sequential execution.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3294,6 +3505,7 @@
           ],
           "conditional_constraints": [],
           "description": "Logical name resolved to an exact extract file bound in `runtime.yaml` under `sourceExtracts`. The bundle never names a filesystem location, and startup refuses a profile no runtime binds as well as a bound profile no source reads.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3310,6 +3522,7 @@
           ],
           "conditional_constraints": [],
           "description": "For `http-json`: Bundle-relative Rhai script whose two-parameter `extract` function maps the schema-validated projected response and adapter context to a match, no-match, or ambiguous outcome. The script never selects a candidate among multiple records and never turns protocol inconsistency into a closed lookup outcome. For `sqlite-extract`: Bundle-relative Rhai script whose two-parameter `extract` function maps the schema-validated projected result and adapter context to a match, no-match, or ambiguous outcome. The script never selects a candidate among multiple rows and never turns protocol inconsistency into a closed lookup outcome.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3326,6 +3539,7 @@
           ],
           "conditional_constraints": [],
           "description": "For `http-json`: Bundle-relative closed JSON Schema the extraction script's output `facts` must exactly satisfy on a match outcome. Unlike `sources.*.responseSchema`, this schema validates what the script returns, not what the source sent. For `sqlite-extract`: Bundle-relative closed JSON Schema the extraction script's output `facts` must exactly satisfy on a match outcome. Unlike `sources.*.responseSchema`, this schema validates what the script returns, not what the statement returned.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3343,6 +3557,7 @@
           ],
           "conditional_constraints": [],
           "description": "Bounds how far the extract's published instant may lag the evaluation instant before the request fails as stale. Staleness tolerance belongs to the bundle because it is a property of the concept being asserted rather than of the deployment, and the runtime reads the published instant from the extract's reserved metadata table, never from the file's modification time.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3359,6 +3574,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "For `http-json`: Describes how much of the underlying record crosses the source wire, weakest at `record-transformed` and strongest at `source-derived`. A chained search-then-fetch requirement can claim no stronger minimization than the weaker of its two sources' postures. For `sqlite-extract`: Describes how much of the underlying record crosses the source boundary, weakest at `record-transformed` and strongest at `source-derived`. A statement that aggregates in SQL claims `source-derived` honestly, because only the aggregate leaves the statement.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3371,6 +3587,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "For `http-json`: The one fixed evidence-data request plan for this source; a preparation script, a caller, and a source response hold no authority over method, path, headers, redirects, bounds, or request count. For `sqlite-extract`: The one fixed statement plan for this source; a preparation script, a caller, and the extract itself hold no authority over the statement text, the declared columns, the parameters, or the bounds.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3387,6 +3604,7 @@
           ],
           "conditional_constraints": [],
           "description": "For `http-json`: Closed non-secret constants supplied to both the preparation and the extraction script, rejected at bundle load when they fall outside `adapterParametersSchema`. For `sqlite-extract`: Closed non-secret constants supplied to the extraction script, and to the preparation script when one is declared, rejected at bundle load when they fall outside `adapterParametersSchema`.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3417,6 +3635,9 @@
           ],
           "conditional_constraints": [],
           "description": "For `http-json`: One constant read by both the preparation and the extraction script, which may itself nest further parameter values. For `sqlite-extract`: One constant read by the scripts, which may itself nest further parameter values.",
+          "defaults": [
+            null
+          ],
           "runtime_validation": null
         },
         {
@@ -3433,6 +3654,9 @@
           ],
           "conditional_constraints": [],
           "description": "One member of a parameter object, which is a parameter value in turn, so the parameter shape nests rather than flattening.",
+          "defaults": [
+            null
+          ],
           "runtime_validation": null
         },
         {
@@ -3445,6 +3669,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "One element of a parameter array, which is a parameter value in turn, so the parameter shape nests rather than flattening.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3461,6 +3686,7 @@
           ],
           "conditional_constraints": [],
           "description": "For `http-json`: Bundle-relative closed JSON Schema for the parameter set, whose required-equals-properties rule turns an undeclared or missing parameter into a startup failure. For `sqlite-extract`: Bundle-relative closed JSON Schema for the parameter set, whose required-equals-properties rule turns an undeclared or missing parameter into a startup failure. A non-empty `adapterParameters` without it fails startup.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3478,6 +3704,7 @@
           ],
           "conditional_constraints": [],
           "description": "Closes the result shape by naming every column the statement returns and the type each carries, in order. A result whose column count, names, or value types differ fails as a source-protocol error, so a statement edited without its declaration cannot silently change what the extraction script sees.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3490,6 +3717,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "One declared result column, whose name is unique across the declaration and opaque to Rust.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3506,6 +3734,7 @@
           ],
           "conditional_constraints": [],
           "description": "Name this column carries into the result object, unique across the declaration and opaque to Rust; it need not equal the column's name in the extract.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3523,6 +3752,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Exact value type Rust admits for this column. A null is admitted for any declared type, and any other mismatch fails as a source-protocol error rather than being coerced.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3540,6 +3770,7 @@
           ],
           "conditional_constraints": [],
           "description": "For `http-json`: Bounds how many evaluations may hold an outbound request to this source at once, and waiting for that admission is bounded by `timeoutMilliseconds`. For `sqlite-extract`: Bounds how many evaluations may hold a statement against this extract at once, and waiting for that admission is bounded by `timeoutMilliseconds`.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3556,6 +3787,7 @@
           ],
           "conditional_constraints": [],
           "description": "Ordered non-secret header constants sent on every request to this source; a script cannot add, remove, or change a header.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3568,6 +3800,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "One constant name and value pair added to every request to this source, in the order declared.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3586,6 +3819,7 @@
           ],
           "conditional_constraints": [],
           "description": "Header field name, rejected at startup when it falls in the authentication, host and routing, cookie, body framing, content length or type, connection, forwarding, proxy, or tracing families Rust owns.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3603,6 +3837,7 @@
           ],
           "conditional_constraints": [],
           "description": "Constant value sent verbatim, with any control character rejected at startup, which closes header injection through configuration.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3620,6 +3855,7 @@
           ],
           "conditional_constraints": [],
           "description": "Caps one returned value, so a single oversized cell fails the request rather than entering the response. A cell far past this bound is refused by the engine, on the length recorded beside it, before its content is read at all.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3637,6 +3873,7 @@
           ],
           "conditional_constraints": [],
           "description": "For `http-json`: Caps the response body read from this source before parsing and projection, so an oversized response fails as a transport failure rather than being parsed. For `sqlite-extract`: Caps the assembled result before projection, so an oversized result fails rather than being projected.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3654,6 +3891,7 @@
           ],
           "conditional_constraints": [],
           "description": "Caps the rows the statement may return before the request fails, so a statement that matches more broadly than intended fails rather than moving a bulk result into the runtime.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3671,6 +3909,7 @@
           ],
           "conditional_constraints": [],
           "description": "Caps the virtual-machine steps the statement may take, which bounds work the wall clock does not: a scan that is slow because it is large is stopped by this bound rather than by the timeout.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3686,6 +3925,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Fixes the HTTP method for every request to this source; a `GET` source must also set `preparationLimits.jsonBody` to `forbidden`.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3702,6 +3942,7 @@
           ],
           "conditional_constraints": [],
           "description": "States where each named statement parameter's value comes from, so no value reaches the statement by string substitution. A parameter has one origin and exactly one: a `selector` parameter is filled from the authorized selector field it names and from nothing else, and a `prepared` parameter is filled by the preparation script and by nothing else. A parameter the statement uses and no binding supplies fails the request, as does a binding the statement never names. The reserved name `evidence_now` may not be bound, because Rust binds it.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3719,6 +3960,9 @@
           ],
           "conditional_constraints": [],
           "description": "One parameter's tagged binding, filling exactly one named statement parameter from a value Rust has already validated.",
+          "defaults": [
+            null
+          ],
           "runtime_validation": null
         },
         {
@@ -3735,6 +3979,7 @@
           ],
           "conditional_constraints": [],
           "description": "Exact field of that profile whose resolved value Rust binds to the parameter.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3750,6 +3995,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "For `selector`: Selects the binding origin. This parameter is filled from the authorized selector field named below and from nothing else, so the preparation script cannot stand in for it. For `prepared`: Selects the binding origin. This parameter is filled by the preparation script and by nothing else, which is how a value no selector holds, such as a normalized reference or a derived bound, reaches the statement. It names no selector, because naming one would give the parameter a second origin, and the request fails if the script returns no value for it.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3766,6 +4012,7 @@
           ],
           "conditional_constraints": [],
           "description": "Selector profile the value is taken from, which must be an alternative that role declares.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3782,6 +4029,7 @@
           ],
           "conditional_constraints": [],
           "description": "Subject role the value is taken from, which must be one the request's `selectorInputs` declares.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3799,6 +4047,7 @@
           ],
           "conditional_constraints": [],
           "description": "Fixed normalized absolute path used for every request to this source; a source declares this or `pathTemplate` and never both.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3817,6 +4066,7 @@
           ],
           "conditional_constraints": [],
           "description": "Supplies each `pathTemplate` placeholder with a Rust-resolved value, and a script chooses neither a binding origin nor a path value.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3834,6 +4084,9 @@
           ],
           "conditional_constraints": [],
           "description": "One placeholder's tagged binding, filling exactly one complete path segment from a value Rust has already validated.",
+          "defaults": [
+            null
+          ],
           "runtime_validation": null
         },
         {
@@ -3850,6 +4103,7 @@
           ],
           "conditional_constraints": [],
           "description": "Names the selector field or prior-fact property whose value fills the placeholder; a value carrying `/`, `\\`, `%`, a control, `.`, or `..` is rejected, which closes path traversal and segment injection.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3865,6 +4119,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Chooses whether Rust reads the placeholder value from an already authorized selector or from a scalar prior fact, and a prior-fact binding is accepted only on a fetch source.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3881,6 +4136,7 @@
           ],
           "conditional_constraints": [],
           "description": "Selector profile the bound field belongs to; the same role, profile, and field must also be declared in `selectorInputs`, or the source is rejected at startup.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3897,6 +4153,7 @@
           ],
           "conditional_constraints": [],
           "description": "Subject role whose authorized selector supplies the value; every selector set the request can activate must carry this role and profile, or plan compilation refuses the source.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3916,6 +4173,7 @@
           ],
           "conditional_constraints": [],
           "description": "Fixed absolute path whose placeholders each occupy one complete segment and are expanded by Rust; a template carrying a scheme, authority, query, fragment, empty segment, or dot segment fails startup.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3928,6 +4186,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "For `http-json`: Channel policy and output bounds Rust applies to the request parts a preparation script returns, all checked before credentials are resolved or the source is contacted. For `sqlite-extract`: Output bounds Rust applies to what a preparation script returns, declared with `prepareScript` and never alone.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3944,6 +4203,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Decides whether a preparation script may, must, or must not return a JSON body, where JSON `null` counts as absent and an empty object or array counts as present.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3961,6 +4221,7 @@
           ],
           "conditional_constraints": [],
           "description": "Caps the entries in each array and object of the prepared JSON body; a body over the cap fails preparation and no request is made.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3978,6 +4239,7 @@
           ],
           "conditional_constraints": [],
           "description": "Caps the nesting depth of the prepared JSON body; a deeper body fails preparation and no request is made.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -3995,6 +4257,7 @@
           ],
           "conditional_constraints": [],
           "description": "Caps the serialized size of the complete request parts, query pairs and body together, so the outbound request stays bounded whichever channel a script fills.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4012,6 +4275,7 @@
           ],
           "conditional_constraints": [],
           "description": "Caps one returned parameter value.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4029,6 +4293,7 @@
           ],
           "conditional_constraints": [],
           "description": "Caps how many parameters a preparation script may return.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4046,6 +4311,7 @@
           ],
           "conditional_constraints": [],
           "description": "Caps the length of each query-pair name a preparation script returns, applied before the pair is percent-encoded.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4063,6 +4329,7 @@
           ],
           "conditional_constraints": [],
           "description": "Caps how many query pairs a preparation script may return, bounding the query string the source receives.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4080,6 +4347,7 @@
           ],
           "conditional_constraints": [],
           "description": "Caps the length of each query-pair value a preparation script returns, applied before the pair is percent-encoded.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4097,6 +4365,7 @@
           ],
           "conditional_constraints": [],
           "description": "Caps every string a preparation script returns, covering query names and values as well as JSON body strings and member names.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4113,6 +4382,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Decides whether a preparation script may, must, or must not return query pairs, where `required` means at least one pair. Setting this key and `jsonBody` both to `forbidden` fails startup, because one output channel must stay usable.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4130,6 +4400,7 @@
           ],
           "conditional_constraints": [],
           "description": "For `http-json`: Bundle-relative Rhai script implementing `prepare/2`, the only step that turns the minimized authorized selectors, closed parameters, and any prior facts into ordered query pairs and at most one JSON body. For `sqlite-extract`: Bundle-relative Rhai script implementing `prepare/2`. A statement source usually declares neither this nor `preparationLimits`, because most parameters name the selector field they come from; a source declares both together or neither, and only where it also declares a `prepared` parameter for the script to fill.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4148,6 +4419,7 @@
           ],
           "conditional_constraints": [],
           "description": "For `http-json`: Allowlist of response leaves Rust retains, alongside the containers needed to reach them, so an extraction script never observes a field the source returned but the bundle did not select. For `sqlite-extract`: Restates the statement result shape for the shared projection boundary. It must preserve every declared row column, either through `/rows`, `/rows/*`, or each `/rows/*/<column>` path, and may additionally retain reviewed extract metadata.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4166,6 +4438,7 @@
           ],
           "conditional_constraints": [],
           "description": "One extended JSON Pointer whose `*` segment visits every element of the current array, with no numeric index, recursive descent, filter, predicate, union, or script-computed path admitted.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4180,6 +4453,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Refuses to follow a redirect, so a source response cannot move the request to a different origin; a redirect is classed as a transport failure.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4197,6 +4471,7 @@
           ],
           "conditional_constraints": [],
           "description": "For `http-json`: Closes the minimized authorized selector alternatives a preparation script can see; an empty array is accepted only on a fetch source. For `sqlite-extract`: Closes the minimized authorized selector alternatives this source's parameter bindings may draw on; an empty array is accepted only on a source that binds no selector.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4209,6 +4484,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "For `http-json`: One subject role together with the alternative profiles and exact field sets a preparation script may receive for that role. For `sqlite-extract`: One subject role together with the alternative profiles and exact field sets a binding may name for that role.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4226,6 +4502,7 @@
           ],
           "conditional_constraints": [],
           "description": "Closed set of profile and field combinations permitted for the role; the runtime materializes only the combination the matched authority grant carries, never the union of every alternative declared.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4238,6 +4515,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "One permitted selector profile paired with the exact field subset that alternative exposes.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4256,6 +4534,7 @@
           ],
           "conditional_constraints": [],
           "description": "Exact subset of the named profile's declared fields this alternative exposes, which is how a consumer is handed less than the authorized selector carries.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4272,6 +4551,7 @@
           ],
           "conditional_constraints": [],
           "description": "One selector field name, which the named profile must declare or the bundle is rejected at startup.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4288,6 +4568,7 @@
           ],
           "conditional_constraints": [],
           "description": "Selector profile this alternative admits for the role; a profile absent from `selectorProfiles` is rejected at startup.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4304,6 +4585,7 @@
           ],
           "conditional_constraints": [],
           "description": "Subject role this selector input covers, unique across the declaration; the runtime resolves request subjects by role rather than by array position.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4320,6 +4602,7 @@
           ],
           "conditional_constraints": [],
           "description": "Bundle-relative SQL file holding exactly one statement, hash-identified like every other bundle artifact and reviewed with the bundle. A second statement in the file fails the request, and the statement text is fixed: no caller, script, or extract contributes to it.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4337,6 +4620,7 @@
           ],
           "conditional_constraints": [],
           "description": "For `http-json`: Bounds each phase of one attempt at this source separately, carrying its whole value into every one: concurrency admission, any wait on the token single-flight boundary, and the HTTP exchange. It is not one deadline across the attempt, so an attempt that waits at one phase and then runs the next spends the bound again, and its worst-case wall clock is a multiple of this value rather than this value. For `sqlite-extract`: One absolute deadline for an attempt at this source, covering concurrency admission, blocking-worker queueing, and statement execution. Time spent in an earlier phase reduces what remains for every later phase.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4353,6 +4637,7 @@
           ],
           "conditional_constraints": [],
           "description": "For `http-json`: Bundle-relative closed JSON Schema the projected source response must satisfy before `sources.*.extractScript` runs; a response outside this shape fails as a source-protocol error and no script runs. Unlike `sources.*.factSchema`, this schema may require fewer members than it declares and may mark a leaf nullable, because projection can legitimately drop or null a value the record did not carry. For `sqlite-extract`: Bundle-relative closed JSON Schema the projected statement result must satisfy before `sources.*.extractScript` runs; a result outside this shape fails as a source-protocol error and no script runs. Unlike `sources.*.factSchema`, this schema may require fewer members than it declares and may mark a leaf nullable, because a declared column may legitimately be null in the extract.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4369,6 +4654,7 @@
           ],
           "conditional_constraints": [],
           "description": "Logical name resolved to an exact private certificate authority file bound in `runtime.yaml`. Omission trusts only configured system roots, and the profile is rejected outright when `sources.*.authentication.kind` is `none`.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4384,6 +4670,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "For `http-json`: Selects the HTTP-plus-JSON transport, which reaches a fixed HTTPS origin over the network under one request and response contract for method, media type, and body shape. The tag chooses the shape of the whole source, so a key belonging to another transport is an unknown key here rather than an ignored one. For `sqlite-extract`: Selects the statement transport, which runs one reviewed SQL statement against a read-only SQLite extract file mounted beside the process. There is no origin, no credential, and no network hop, so the keys the HTTP transport needs for those are unknown keys here rather than ignored ones.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4396,6 +4683,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Optional exact source-neutral Problem Details tuple which declares one HTTP 404 response as an explicit unresolved lookup outcome. The runtime accepts it only with exactly one application/problem+json Content-Type and an exact duplicate-free six-member Problem Details object whose status, type, and code equal this tuple. Omission preserves the ordinary rule that every HTTP 404 is a dependency failure. This outcome is unavailable for an optimized physical source batch because one response cannot identify the unresolved logical item.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4414,6 +4702,7 @@
           ],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4428,6 +4717,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4446,6 +4736,7 @@
           ],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4458,6 +4749,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Keys the audience- and purpose-scoped subject bindings an assertion carries in place of selector values, derived over the complete canonical role, profile, and value set rather than as per-field hashes.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4475,6 +4767,7 @@
           ],
           "conditional_constraints": [],
           "description": "Scopes each derived binding and appears in the binding value, so a new version changes every binding a relying party already retains as an expectation.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4491,6 +4784,7 @@
           ],
           "conditional_constraints": [],
           "description": "Points at the file secret keying every subject binding; that reference and its resolved bytes must both differ from the audit master, and a match fails startup.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4505,6 +4799,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Selects the bundle grammar the rest of this document is read against, and a version the runtime does not implement is rejected at startup.",
+          "defaults": [],
           "runtime_validation": null
         }
       ]
@@ -4533,6 +4828,7 @@
           ],
           "conditional_constraints": [],
           "description": "Gated acquisition kinds and source-call optimizations this deployment enables, the operator half of the same two-sided gate the bundle declares. Omission and an explicit empty list both enable nothing.",
+          "defaults": [],
           "runtime_validation": "A bundle whose requirement needs a gated acquisition kind, or whose HTTP source carries a batch block, is refused at startup when the corresponding capability is absent from this list, before the deployment serves anything."
         },
         {
@@ -4548,6 +4844,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "One gated acquisition kind or source-call optimization this deployment permits. A bundle needing an acquisition kind absent here is refused before the listener binds; an absent optimization is never selected.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4560,6 +4857,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Groups the physical destination and size bound for the audit log this process writes; the log format, pseudonymization key, and fail-closed policy are governed by the bundle's `audit` section, not by this one.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4577,6 +4875,7 @@
           ],
           "conditional_constraints": [],
           "description": "Caps how large the active audit segment file may grow before the runtime seals it and starts a new one; a single audit record whose own size exceeds this bound can never be written, and the request that would have produced it fails rather than being audited incompletely.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4595,6 +4894,7 @@
           ],
           "conditional_constraints": [],
           "description": "Absolute path to the append-only keyed-JSONL audit file on durable, operator-owned storage; this physical destination is process-local and is not chosen by the bundle's governed audit policy.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4613,6 +4913,7 @@
           ],
           "conditional_constraints": [],
           "description": "Selects the one governed bundle directory this process loads at startup; no alternate, overlay, or fallback bundle path exists for a running deployment.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4625,6 +4926,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Groups the network binding and per-request admission limits for the process's evidence endpoint; `metricsListener`, when present, is an entirely separate binding with its own limits.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4642,6 +4944,7 @@
           ],
           "conditional_constraints": [],
           "description": "Numeric listener address. The default `private-address` exposure accepts loopback, RFC 1918 private IPv4, or RFC 4193 unique-local IPv6. The explicit `container-private` exposure additionally accepts the unspecified IPv4 or IPv6 wildcard for a container network confined by the operator. Multicast, public, and hostname values are prohibited in both modes.",
+          "defaults": [],
           "runtime_validation": "Parsed as an IP address and checked together with listener.networkExposure. Wildcards require the explicit container-private value; public addresses remain prohibited."
         },
         {
@@ -4659,6 +4962,7 @@
           ],
           "conditional_constraints": [],
           "description": "Sizes the fixed admission semaphore for concurrent evidence requests; a request that cannot acquire a slot within `listener.requestTimeoutMilliseconds` receives a service-unavailable response instead of queuing without bound.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4676,6 +4980,7 @@
           ],
           "conditional_constraints": [],
           "description": "Caps accepted request body size; a request whose declared or actual length exceeds this bound is rejected as malformed before evidence evaluation begins.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4691,6 +4996,9 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Declares the operator-owned network boundary around the listener. Absent preserves the private-address contract used by existing runtime files. container-private permits a wildcard bind only for a container network whose ingress and TLS termination are controlled by the operator; it does not enable public or direct-TLS serving.",
+          "defaults": [
+            "\"private-address\""
+          ],
           "runtime_validation": null
         },
         {
@@ -4708,6 +5016,7 @@
           ],
           "conditional_constraints": [],
           "description": "TCP port the process binds for the evidence API alongside `listener.bindHost`; port `0`, which would ask the kernel for an arbitrary ephemeral port instead of naming one, is refused.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4725,6 +5034,7 @@
           ],
           "conditional_constraints": [],
           "description": "Bounds admission-slot acquisition and request-body collection; once protected evaluation starts, this timer no longer cancels it, and source and OIDC boundaries carry their own separate limits.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4742,6 +5052,7 @@
           ],
           "conditional_constraints": [],
           "description": "Operational target for graceful shutdown to finish within; it does not cancel a request already inside protected evaluation, so audit and signing invariants complete even if shutdown outlives this grace period.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4756,6 +5067,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Declares that TLS terminates at an operator-controlled upstream in front of this listener; the runtime accepts no other value and exposes no direct-TLS or `insecure` mode of its own.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4770,6 +5082,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Fixes the listener to ignore proxy-supplied identity headers; authenticated identity and authority always come from the verified access token, never from a header a network intermediary can set.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4782,6 +5095,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Optional operator-only telemetry listener serving GET /metrics. Absent means the deployment serves no metrics endpoint, which is the default. This listener is a separate binding from the evidence listener and is not described by the public evidence contract.",
+          "defaults": [],
           "runtime_validation": "Rejected at startup when bindHost and port together repeat the evidence listener binding."
         },
         {
@@ -4799,6 +5113,7 @@
           ],
           "conditional_constraints": [],
           "description": "Numeric loopback, RFC 1918 private IPv4, or RFC 4193 unique-local IPv6 address. Unspecified, multicast, public, and hostname values are prohibited.",
+          "defaults": [],
           "runtime_validation": "Parsed as an IP address and accepted only when Rust classifies it as loopback, private IPv4, or unique-local IPv6."
         },
         {
@@ -4816,6 +5131,7 @@
           ],
           "conditional_constraints": [],
           "description": "TCP port for the optional metrics listener; paired with `metricsListener.bindHost`, it must not repeat the evidence listener's exact host-and-port binding.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4828,6 +5144,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Groups outbound TLS trust for calls to configured sources; it can add private certificate authorities through named trust profiles but carries no setting to weaken hostname verification or skip TLS.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4842,6 +5159,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Fixes the system certificate authority store as always trusted for outbound calls; because Version 1 has no way to disable it, a source's public certificate must still chain to a trusted root even when a private trust profile also applies.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4858,6 +5176,7 @@
           ],
           "conditional_constraints": [],
           "description": "Closed map of private certificate-authority bundles a source may reference by logical id; the set of ids present here must exactly match the `tlsTrustProfile` names the bundle's sources declare, with no extra or missing profile.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4874,6 +5193,9 @@
           ],
           "conditional_constraints": [],
           "description": "One named private trust profile, binding a logical id a source's `tlsTrustProfile` reference names to the certificate-authority bundle used only for that source's outbound connections.",
+          "defaults": [
+            null
+          ],
           "runtime_validation": null
         },
         {
@@ -4892,6 +5214,7 @@
           ],
           "conditional_constraints": [],
           "description": "Absolute path to one bounded PEM file of trust anchors, loaded and validated at startup; changing its bytes requires a restart and changes the computed runtime digest.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4904,6 +5227,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Configures how a `secret:file/...` reference resolves to bytes at startup; it supplies the storage location only, and which secret each governed field names is fixed by the bundle, not by this section.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4916,6 +5240,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Declares the file-based secret provider and its root directory; Version 1 defines no other provider kind, so every `secret:file/name` reference resolves through this one path.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4934,6 +5259,7 @@
           ],
           "conditional_constraints": [],
           "description": "Absolute base directory every `secret:file/name` reference resolves beneath; each name is one bounded path component opened relative to this root, and the opened file is checked for type, ownership, mode, and link count before its bytes are read.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4946,6 +5272,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Binds the process to the private-key transport that produces every signature over the bundle's governed active public key; it can select and configure that transport but cannot change the governed key set or signing algorithm.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4962,6 +5289,7 @@
           ],
           "conditional_constraints": [],
           "description": "Names the specific key within `signer.mount` this signer calls; combined with `signer.mount` and `signer.keyVersion`, it reaches exactly one pinned Transit key.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4979,6 +5307,7 @@
           ],
           "conditional_constraints": [],
           "description": "Pins signing to one exact Transit key version rather than a `latest` alias, so a provider-side rotation cannot silently replace the key bytes behind an unchanged `kid`.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -4994,6 +5323,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Selects the signer transport for this deployment: `local-jwk` resolves a file-provider secret directly, `transit` calls a workload-local signing proxy over a Unix socket; only the kind matching the bundle's assurance profile is accepted at startup.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5010,6 +5340,7 @@
           ],
           "conditional_constraints": [],
           "description": "Names the Transit secrets-engine mount this signer calls; it is a path segment in the local Transit-proxy request URL, not a filesystem location.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5026,6 +5357,7 @@
           ],
           "conditional_constraints": [],
           "description": "Names the file-provider secret holding the local signing private key material, read only when `signer.kind` is `local-jwk`; the value is a reference, and configuration never carries the key bytes themselves.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5043,6 +5375,7 @@
           ],
           "conditional_constraints": [],
           "description": "Bounds how long the runtime waits on each call to the Transit signing proxy; because a `transit` signer keeps no local fallback key, a call that exceeds this bound fails the request rather than blocking it indefinitely.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5061,6 +5394,7 @@
           ],
           "conditional_constraints": [],
           "description": "Absolute Unix socket path used to reach the workload-local Transit signing proxy; the runtime supplies no provider token over this connection, because token custody and renewal stay with the proxy.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5077,6 +5411,7 @@
           ],
           "conditional_constraints": [],
           "description": "Closed map of process-local extract files a source may read by logical name; the set of names present here must exactly match the `extractProfile` names the bundle's extract sources declare, with no extra or missing name. Omission binds none, which is what a runtime file for a bundle with no extract source says.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5093,6 +5428,9 @@
           ],
           "conditional_constraints": [],
           "description": "One named extract binding, joining a logical name a source's `extractProfile` reference declares to the process-local file that holds it, so the reviewed bundle names what it reads and the operator decides where that file sits.",
+          "defaults": [
+            null
+          ],
           "runtime_validation": null
         },
         {
@@ -5111,6 +5449,7 @@
           ],
           "conditional_constraints": [],
           "description": "Absolute path to one read-only regular file, validated at startup and digested without being read into memory; it must be neither a symbolic link nor writable, because the statement executor opens it as immutable, and its digest changes the computed runtime digest.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5125,6 +5464,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Pins the runtime document to Version 1 of this grammar; the loader rejects any other value, so a future incompatible runtime shape is never read as if it were this one.",
+          "defaults": [],
           "runtime_validation": null
         }
       ]
@@ -5148,6 +5488,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5160,6 +5501,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "One governed concept a question answers, and the shape of that answer.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5172,6 +5514,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5184,6 +5527,9 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [
+            "null"
+          ],
           "runtime_validation": null
         },
         {
@@ -5200,6 +5546,7 @@
           ],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5217,6 +5564,7 @@
           ],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5233,6 +5581,7 @@
           ],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5245,6 +5594,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5257,6 +5607,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "How an answer appears in the SD-JWT VC serialization of a response.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5269,6 +5620,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5283,6 +5635,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Where a projected claim sits in the disclosure structure.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5300,6 +5653,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "The shape of one answer.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5312,6 +5666,9 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [
+            "[]"
+          ],
           "runtime_validation": null
         },
         {
@@ -5324,6 +5681,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5336,6 +5694,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5348,6 +5707,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Which of a question's concepts a response may carry.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5360,6 +5720,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5372,6 +5733,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5384,6 +5746,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "The published description of what a question decides and under what rules.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5396,6 +5759,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5408,6 +5772,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5420,6 +5785,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5432,6 +5798,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5448,6 +5815,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "What kind of rule a question's requirement is.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5460,6 +5828,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5472,6 +5841,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5484,6 +5854,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5496,6 +5867,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5513,6 +5885,7 @@
           ],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5525,6 +5898,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5537,6 +5911,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5549,6 +5924,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5561,6 +5937,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5576,6 +5953,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "A serialization an answer may be returned in.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5588,6 +5966,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Where a question reads from: a named source, or an operation of the\nproject's own OpenAPI description together with the facts it projects.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5600,6 +5979,9 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [
+            "{}"
+          ],
           "runtime_validation": null
         },
         {
@@ -5617,6 +5999,7 @@
           ],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5629,6 +6012,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5641,6 +6025,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "One value projected out of a source response and handed to the derivation.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5656,6 +6041,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "How many values a fact's path is expected to reach.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5668,6 +6054,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5680,6 +6067,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5692,6 +6080,9 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [
+            "null"
+          ],
           "runtime_validation": null
         },
         {
@@ -5704,6 +6095,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5716,6 +6108,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "One party a question is asked about.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5728,6 +6121,9 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [
+            "false"
+          ],
           "runtime_validation": null
         },
         {
@@ -5740,6 +6136,9 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [
+            "null"
+          ],
           "runtime_validation": null
         },
         {
@@ -5752,6 +6151,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5764,6 +6164,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5776,6 +6177,9 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Whether this role supplies an inline operation path selector.\n\nOmission keeps the unambiguous single-role shorthand. An explicit\nvalue is useful when multiple roles use the same selector field name.",
+          "defaults": [
+            "null"
+          ],
           "runtime_validation": null
         },
         {
@@ -5788,6 +6192,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5800,6 +6205,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "One party a question is asked about.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5812,6 +6218,9 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [
+            "false"
+          ],
           "runtime_validation": null
         },
         {
@@ -5824,6 +6233,9 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [
+            "null"
+          ],
           "runtime_validation": null
         },
         {
@@ -5836,6 +6248,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5848,6 +6261,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5860,6 +6274,9 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Whether this role supplies an inline operation path selector.\n\nOmission keeps the unambiguous single-role shorthand. An explicit\nvalue is useful when multiple roles use the same selector field name.",
+          "defaults": [
+            "null"
+          ],
           "runtime_validation": null
         }
       ]
@@ -5885,6 +6302,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "The one kind of project this crate's marker names today.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -5903,6 +6321,7 @@
           ],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
           "runtime_validation": null
         }
       ]

@@ -12,7 +12,8 @@ standards_referenced: []
 wide: true
 ---
 
-import EvidenceConfigurationReference from '../../../components/EvidenceConfigurationReference.astro';
+import ConfigurationReference from '../../../components/ConfigurationReference.astro';
+import reference from '../../../data/generated/evidence-configuration.json';
 
 This generated reference lists the schema-visible key paths in the two frozen Version 1
 configuration grammars and in the authoring form an adopter writes before a deployment project
@@ -34,7 +35,7 @@ page states which it is.
 | `questions/<name>.yaml`, `evidence-project.yaml` | Adopter tooling, not frozen | `crates/registry-evidencectl/schemas/authoring/*.schema.json` |
 
 - Status: current, pre-1.0
-- Reference format: `1.1`
+- Reference format: `1.2`
 - Generator: `npm run generate` in `docs/site`
 - Coverage gate: `products/evidence/scripts/check-config-key-paths.sh`
 
@@ -104,7 +105,7 @@ loopback pattern listed under *where a rule elsewhere applies*.
     crates/registry-evidencectl/schemas/authoring/*.schema.json.
     Run npm run generate from docs/site. */}
 
-<EvidenceConfigurationReference />
+<ConfigurationReference contracts={reference.contracts} prefix="evidence" />
 
 ## What this page does not carry
 

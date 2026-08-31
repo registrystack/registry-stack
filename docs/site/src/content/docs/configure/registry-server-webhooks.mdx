@@ -1,0 +1,249 @@
+---
+title: Configure Registry Server webhooks
+description: Declare an event, bind a receiver, verify delivery, and recover a failed Registry Server webhook.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: how-to
+locale: en
+standards_referenced:
+  - cloudevents
+---
+
+Use this guide to notify another service when registry records change.
+You will configure a field-change event, connect a receiver, and inspect or replay failed deliveries.
+Use the [events and webhooks reference](../../reference/registry-server-events/) to look up fields,
+headers, signatures, and delivery rules.
+
+## When to use a webhook
+
+Webhooks run after a record change commits. A receiver can start follow-up work, but cannot reject
+or modify the original write. Authorization, validation, condition evaluation, and event capture
+share the mutation transaction; a failed transaction commits neither the change nor the event.
+Delivery uses the captured values, even if the record changes again before the receiver is reached.
+
+The module controls which fields leave the registry and names a logical destination.
+The operator supplies that destination's URL and key separately.
+Synchronous callbacks and script hooks are not supported by this event contract.
+
+{/* Evidence: crates/registry-server/src/mutation.rs;
+    crates/registry-server/src/outbox.rs, insert_configured_events();
+    crates/registry-server/src/contract.rs, EventSource and WebhookSource. */}
+
+## Before you start
+
+Use the source checkout and binaries from [your first registry](../../tutorials/first-registry-server/).
+Run commands from the checkout root.
+You need an authoring project and a deployment runtime configuration with a protected secret root.
+
+The examples use `./my-registry` and the starter's `record` entity with `code` and `label` fields,
+created in [configure your registry](../registry-server/).
+Replace those paths, entity IDs, and field IDs for your own project.
+Authoring checks and request samples need no database.
+Testing delivery needs a separate test deployment, an authorized API caller, and a receiver you control.
+
+## Declare an event
+
+For the starter's `record` entity, create `my-registry/modules/record-notifications/module.yaml`:
+
+```yaml
+id: record-notifications
+version: 0.1.0
+extendEntities:
+  - entity: record
+    events:
+      - id: record-labelled-v1
+        trigger: patched
+        projection: [code, label]
+        when:
+          kind: fields
+          changed: [label]
+        webhook:
+          destinationId: record-receiver
+```
+
+This event fires when a patch changes `label`. Its `values` object contains only `code` and
+`label`; event metadata includes the record ID, revision, and package revision separately.
+Use a new event ID when changing the payload in a way that breaks existing receivers.
+
+For a status transition, combine `changed: [status]` with `beforeEquals` and `afterEquals`.
+All tests must match. Use authored field IDs, such as `residency-status`, in conditions and
+projections; webhook `values` keeps those IDs rather than the record API's camel-case names.
+The [events reference](../../reference/registry-server-events/) lists the allowed trigger and
+condition combinations.
+
+Lock and inspect the event before deploying it:
+
+```sh
+target/debug/registry-serverctl project lock ./my-registry
+target/debug/registry-serverctl check ./my-registry
+target/debug/registry-serverctl explain events ./my-registry
+```
+
+The event report shows its condition, projection, destination, classification, and delivery
+limits. A condition field contributes to the event classification even if you omit that field
+from the payload: whether an event fires also reveals information.
+
+Generate a request for a receiver developer without reading any records:
+
+```sh
+target/debug/registry-serverctl --format json webhook sample ./my-registry \
+  --event record-labelled-v1
+```
+
+The report contains synthetic values and a placeholder signature. It sends no request and
+cannot be used to test signature verification. Each event has at most one destination;
+production compilation requires one.
+
+{/* Evidence: crates/registry-server/src/contract.rs, EventSource and EventConditionSource;
+    crates/registry-server/src/compiler.rs; crates/registry-server/src/mutation.rs;
+    crates/registry-server/src/outbox.rs; crates/registry-serverctl/src/lib.rs, WebhookCommand. */}
+
+## Bind the receiver
+
+Add a binding for `record-receiver` to your deployment's `runtime.yaml`:
+
+```yaml
+eventDestinations:
+  record-receiver:
+    origin: https://receiver.example.com
+    path: /events
+    networkProfile: productionHttps
+    dnsFamily: dualStackStrict
+    allowedPrivateCidrs: []
+    hmacSha256KeyRef: secret:file/record-webhook-key
+    classificationCeiling: restricted
+    deliveryCeilings:
+      attemptTimeoutMilliseconds: 1000
+      maximumAttempts: 3
+eventDelivery:
+  payloadRetentionDays: 7
+```
+
+Replace the origin and path with your receiver's address. Put destination URLs and secret
+references here, not in the module. Bind every destination named by the compiled project,
+without extra entries. The destination's classification ceiling must cover the event's derived
+classification; it cannot add fields to the payload.
+
+Generate the shared HMAC-SHA-256 key inside your existing runtime secret root:
+
+```sh
+uv run --quiet crates/registry-mint/demo/support/key_material.py secret-hex \
+  --out "<absolute-secret-root>/record-webhook-key"
+```
+
+:::caution[Keep the shared key private]
+Provision the same key to the receiver through its secret store. Do not paste the key into YAML,
+commands, logs, or a support message. The generated key file is owner-only.
+:::
+
+For a private HTTPS receiver, set `allowedPrivateCidrs` to the intended canonical network ranges.
+Use `dnsFamily: ipv4Only` only for an IPv4-only deployment. Optional `tls.caBundleRef` and
+`tls.clientIdentityRef` name PEM secrets for a private CA and mutual TLS.
+The local demo uses `networkProfile: loopbackDevelopmentHttp`, which is only for local development.
+
+The compiled defaults are five attempts and a five-second timeout per attempt.
+The runtime example tightens those limits to three attempts and one second.
+Automatic retries keep the same event ID and idempotency key.
+Any `2xx` acknowledges delivery; redirects, timeouts, and other responses use the bounded retry policy.
+
+Follow [prepare a deployment](../registry-server/) to test, package, and apply this project with
+its runtime bindings, then restart Server. Editing the module or runtime file does not change
+the active process. A later package does not recompute events already queued for delivery.
+Activation refuses a destination change that would strand retained work.
+
+{/* Evidence: crates/registry-server/src/event_destination.rs, RawEventDestinationConfig;
+    crates/registry-server/src/runtime_config.rs;
+    crates/registry-server/src/startup.rs; crates/registry-server/src/webhook.rs;
+    crates/registry-server/src/compiler.rs;
+    crates/registry-mint/demo/support/key_material.py. */}
+
+## Verify your receiver
+
+The request uses CloudEvents HTTP binary mode: event attributes are in `ce-*` headers and the
+JSON body contains `entity`, `recordId`, `revision`, `trigger`, `packageRevision`, and `values`.
+Verify `X-Registry-Signature` against the exact request bytes and check `X-Registry-Delivery-Time`
+before applying effects. Signing only the JSON body is insufficient: the signature also binds
+the event headers, delivery metadata, method, and request target.
+The [events and webhooks reference](../../reference/registry-server-events/) defines the signing
+input byte order. The [demo receiver](https://github.com/registrystack/registry-stack/blob/f806b222f628717c0e6c5d2c14fc0d2bbf7a96f1/products/registry-server/demo/support/demo.py)
+provides a working verifier; replace its expected source, event type, schema, and path with yours.
+Verify the received body bytes before any JSON reserialization. Read the shared key file as bytes,
+without hex-decoding its contents or removing a newline.
+
+Validate the expected event and source as well as the signature. Use delivery time for your
+freshness check: the event's capture time may be older because of retries. Choose a bounded clock
+skew suitable for your deployment; the demo uses 30 seconds.
+
+Deduplicate automatic retries by `Idempotency-Key` and use the record revision to handle
+out-of-order events. Acknowledge only after durably recording acceptance. A timeout can occur
+after your receiver has already applied an effect.
+
+On a test deployment, patch the starter record's `label` through the authorized API.
+Confirm that the receiver accepts one `record-labelled-v1` event with the updated label and
+only the declared projected fields. Patch another field and confirm that this event does not fire.
+The [local tutorial](../../tutorials/first-registry-server/) supplies a running receiver and exercises
+retry and replay with synthetic records.
+
+{/* Evidence: crates/registry-server/src/outbox.rs, condition_matches();
+    crates/registry-server/src/webhook.rs, webhook_signature();
+    products/registry-server/demo/support/demo.py, _verify_webhook_request(). */}
+
+## Inspect and replay a failed delivery
+
+Inspect pending, dead-lettered, and expired deliveries with:
+
+```sh
+target/debug/registry-serverctl --format json webhook list \
+  --runtime-config "<absolute-runtime-file>" --limit 50
+```
+
+These operator commands connect directly to PostgreSQL. If the database uses a private CA,
+set `SSL_CERT_FILE` to its PEM CA file for each command, as the local tutorial demonstrates.
+Use the same database trust configuration as the Server process.
+
+The report carries delivery metadata, not record values. A delivery that exhausts its attempts
+becomes a dead letter. After fixing the receiver, use that entry's event ID, delivery ID, and
+generation to replay it:
+
+:::caution[Replay can repeat an external action]
+A replay retains the event ID but uses a new generation and idempotency key. Check the receiver's
+state before replaying an event whose earlier effects are uncertain. If the action must happen
+only once across replay generations, deduplicate by the source and event ID or by a business key.
+:::
+
+```sh
+target/debug/registry-serverctl webhook replay \
+  --runtime-config "<absolute-runtime-file>" \
+  --event-id "<event-uuid>" --delivery-id "<delivery-id>" \
+  --expected-generation "<generation>"
+```
+
+Replay only accepts an eligible dead letter with retained payload and the expected generation.
+Successful delivery erases the payload. Pending and dead-letter payloads expire after
+`payloadRetentionDays`, which defaults to 7 and is capped at 30; expired payloads cannot be replayed.
+Check the receiver's acknowledgement and run `webhook list` again to confirm the remaining work.
+An empty list is not proof of receiver success: in-flight attempts and successful deliveries are
+excluded. Use the receiver's durable acceptance record to confirm the effect.
+
+{/* Evidence: crates/registry-server/src/webhook.rs; crates/registry-server/src/outbox.rs;
+    crates/registry-serverctl/src/lib.rs, WebhookListArgs and WebhookReplayArgs;
+    products/registry-server/demo/support/demo.py, _verify_webhook_request(). */}
+
+## Troubleshooting
+
+| Symptom | Next move |
+| --- | --- |
+| The compiler rejects a condition | Check the trigger's permitted tests and the authored field IDs in the reference. |
+| A sample request fails signature verification | `webhook sample` uses a placeholder signature. Verify a request from the running worker. |
+| The receiver rejects a signed request | Compare the exact key bytes, path, header values, and original body; check the delivery-time skew. |
+| The operator command cannot connect to PostgreSQL | Check the runtime configuration, database credentials, and private CA settings. |
+| Replay is refused | Refresh the list and check generation, `replayEligible`, payload expiry, and destination binding. |
+
+## Next
+
+- [Events and webhooks reference](../../reference/registry-server-events/) for exact contracts.
+- [Configuration reference](../../reference/registry-server-configuration/) for all runtime keys.
+- [Create and query your first registry](../../tutorials/first-registry-server/) for the local webhook exercise.

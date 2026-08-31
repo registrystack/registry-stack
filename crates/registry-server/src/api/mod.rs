@@ -1705,31 +1705,10 @@ fn authorize_direct_route<'a>(
     {
         return None;
     }
-    if profile.anonymous {
-        if entity.classification != Classification::Public {
-            return None;
-        }
-    } else {
-        let expected_claim = profile.principal_claim.as_deref()?;
-        if claims.principal_claim() != Some(expected_claim) || claims.principal().is_none() {
-            return None;
-        }
-    }
-    if !profile
-        .required_scopes
-        .iter()
-        .all(|scope| claims.has_scope(scope))
-    {
+    if profile.anonymous && entity.classification != Classification::Public {
         return None;
     }
-    if !profile.required_purposes.is_empty()
-        && !claims
-            .purpose()
-            .is_some_and(|purpose| profile.required_purposes.contains(purpose))
-    {
-        return None;
-    }
-    let row_boundaries = verified_row_boundaries(profile, claims)?;
+    let row_boundaries = authorize_profile_claims(profile, claims).ok()?;
     let readable_fields = profile
         .readable_fields
         .iter()
@@ -1787,33 +1766,13 @@ fn authorize_read_path_route<'a>(
     if route.operation != Operation::List || route.query_kind != Some(CompiledQueryKind::List) {
         return None;
     }
-    if profile.anonymous {
-        if entity.classification != Classification::Public
-            || response_entity.classification != Classification::Public
-        {
-            return None;
-        }
-    } else {
-        let expected_claim = profile.principal_claim.as_deref()?;
-        if claims.principal_claim() != Some(expected_claim) || claims.principal().is_none() {
-            return None;
-        }
-    }
-    if !profile
-        .required_scopes
-        .iter()
-        .all(|scope| claims.has_scope(scope))
+    if profile.anonymous
+        && (entity.classification != Classification::Public
+            || response_entity.classification != Classification::Public)
     {
         return None;
     }
-    if !profile.required_purposes.is_empty()
-        && !claims
-            .purpose()
-            .is_some_and(|purpose| profile.required_purposes.contains(purpose))
-    {
-        return None;
-    }
-    let row_boundaries = verified_row_boundaries(profile, claims)?;
+    let row_boundaries = authorize_profile_claims(profile, claims).ok()?;
     let readable_fields = grant
         .readable_fields
         .iter()
@@ -1910,6 +1869,35 @@ fn served_operation(service: &HttpService, route: &CompiledRoute) -> bool {
         }
         Operation::Revisions => service.revisions.is_some(),
     }
+}
+
+/// Shared by real HTTP admission and offline synthetic access previews.
+/// Detailed reasons never cross the public HTTP concealment boundary.
+pub(crate) fn authorize_profile_claims(
+    profile: &AccessProfileSource,
+    claims: &VerifiedRequestClaims,
+) -> Result<Vec<VerifiedRowBoundary>, &'static str> {
+    if !profile.anonymous
+        && (profile.principal_claim.as_deref() != claims.principal_claim()
+            || claims.principal().is_none())
+    {
+        return Err("principal_missing_or_mismatched");
+    }
+    if !profile
+        .required_scopes
+        .iter()
+        .all(|scope| claims.has_scope(scope))
+    {
+        return Err("required_scope_missing");
+    }
+    if !profile.required_purposes.is_empty()
+        && !claims
+            .purpose()
+            .is_some_and(|purpose| profile.required_purposes.contains(purpose))
+    {
+        return Err("purpose_missing_or_not_allowed");
+    }
+    verified_row_boundaries(profile, claims).ok_or("row_claim_missing_or_wrong_cardinality")
 }
 
 fn verified_row_boundaries(

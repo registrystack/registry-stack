@@ -24,6 +24,12 @@ package review, signature policy, or the separate migration database role.
 
 ## First-hour local quickstart
 
+The documentation site has three adopter pages:
+
+- [Registry Server overview](../../docs/site/src/content/docs/explanation/configuration-defined-registry.mdx)
+- [Create and query your first registry](../../docs/site/src/content/docs/tutorials/first-registry-server.mdx)
+- [Configure your registry](../../docs/site/src/content/docs/configure/registry-server.mdx)
+
 For a generic, domain-neutral local path, run:
 
 ```bash
@@ -66,6 +72,12 @@ It is the first-hour learning path, not a shortcut around production package
 signing, operated database roles, TLS, migration review, or secret custody.
 
 ## Pilot operator lifecycle
+
+For an offline permissions exercise, use [Review access configuration](examples/access-review/README.md).
+It includes a complete project, allowed and refused synthetic caller scenarios,
+and an omitted-row-restriction exercise. `explain access` shows effective field
+permissions; `check --deny-findings` makes review findings blocking for automation.
+Entity `accessRequirements` are mandatory compiler checks, not additional grants.
 
 The pilot lifecycle uses the published `registry-serverctl` and
 `registry-server` executables. It does not require a Rust change for a new

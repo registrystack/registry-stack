@@ -1,0 +1,119 @@
+---
+title: Build a registry with Registry Server
+description: How Registry Server stores records, applies configured permissions, and handles changes to a registry.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: explanation
+locale: en
+standards_referenced:
+  - openapi
+  - json-schema
+---
+
+Registry Server stores and updates registry records in PostgreSQL through a REST API.
+You define the entities, relationships, constraints, and permissions in YAML.
+Use it to build a registry your institution maintains; use Registry Relay to publish data from an
+existing source. Server is currently available as an unreleased source preview.
+
+{/* Evidence: crates/registry-server/src/contract.rs, RegistryProject and EntitySource;
+    crates/registry-server/src/api/mod.rs, router(); crates/registry-server/src/postgres/mutation.rs. */}
+
+## Data model
+
+A project declares its record types and their fields. For example, a social registry can define
+people and households; a farmer registry can define farms and parcels.
+The supplied household, farmer, disability, business, and asset/site examples use the same server.
+
+Reference fields connect records. When a relationship has attributes of its own, model it as a
+record: a household membership links a person to a household and carries a role and validity dates.
+The household example declares a constraint that prevents overlapping memberships for the same person.
+
+{/* Evidence: products/registry-server/acceptance/ contains the five configured projects;
+    products/registry-server/acceptance/publicschema-household/modules/publicschema-household-core/module.yaml;
+    crates/registry-server/tests/postgres_pilot_acceptance.rs. */}
+
+Modules can extend an entity with fields, constraints, lookups, related-record queries, derived SQL
+fields, and events. The project locks each module's version and content digest.
+Conflicting definitions fail compilation.
+
+The PublicSchema-shaped examples provide models you can adapt.
+You choose which fields to store and expose; Server does not import public schemas at startup.
+
+{/* Evidence: crates/registry-server/src/contract.rs, RegistryModule and EntityExtensionSource;
+    crates/registry-server/src/compiler.rs; crates/registry-server/tests/compiler_contract.rs;
+    products/registry-server/acceptance/publicschema-household/modules/publicschema-household-demographics/module.yaml. */}
+
+## Project and deployment files
+
+| File or directory | Contents | Used by |
+| --- | --- | --- |
+| Authoring project | YAML model, modules, permissions, and test cases | The author and compiler |
+| Compiled package | Captured source, generated schemas, migration information, and signatures | The operator applying a version |
+| Runtime configuration | Database connections, token issuer, secret references, package trust, listener, and webhook URLs | The running process |
+
+The compiler generates PostgreSQL definitions, JSON Schema, and OpenAPI from the project.
+To change a running registry, test and activate a replacement package through `registry-serverctl`.
+Editing YAML alone does not update the database or API. Generated SQL is for inspection; the
+activation command applies migrations.
+
+{/* Evidence: crates/registry-server/src/artifacts.rs, GeneratedArtifacts;
+    crates/registry-server/src/package.rs; crates/registry-server/src/runtime_config.rs, RuntimeConfig;
+    crates/registry-serverctl/src/apply_lifecycle.rs; crates/registry-server/src/startup.rs. */}
+
+## Access control
+
+An access profile declares which operations and fields a caller may use.
+It can require token scopes and a purpose, and restrict records using verified token claims.
+Reading, writing, filtering, sorting, and counting each require permission.
+
+Callers can select fields, filter, sort, and paginate within those permissions and configured limits.
+Related-record queries must be declared in the project. The authenticated OpenAPI endpoint shows
+the operations available to the caller.
+
+{/* Evidence: crates/registry-server/src/auth.rs; crates/registry-server/src/query.rs;
+    crates/registry-server/src/api/mod.rs, openapi(); crates/registry-server/src/derived_sql.rs;
+    crates/registry-server/tests/http_auth.rs; crates/registry-server/tests/http_read_only.rs. */}
+
+## Updates and webhooks
+
+A write validates data and permissions, then stores the change, revision, audit record, and any
+configured events in one transaction. Updates require the ETag from a previous read to prevent
+overwriting a concurrent change.
+
+Webhooks send the configured event fields after commit.
+Delivery is at least once, so a receiver must handle duplicates. A failed delivery does not undo
+the record change.
+
+{/* Evidence: crates/registry-server/src/postgres/mutation.rs;
+    crates/registry-server/src/webhook.rs; crates/registry-server/src/outbox.rs;
+    crates/registry-server/tests/postgres_webhook_outbox.rs;
+    crates/registry-server/tests/postgres_webhook_delivery.rs. */}
+
+## Related products
+
+Registry Mint can issue Server's access tokens when you do not have a suitable issuer.
+Registry Manifest can render catalogue metadata from an optional project mapping.
+Evidence Gateway can use a configured HTTP source adapter to read Server records and answer a
+question about them. Each integration needs its own configuration.
+
+{/* Evidence: crates/registry-server/src/manifest_adapter.rs;
+    products/registry-server/quickstart/run.sh;
+    crates/registry-evidence/src/source.rs; products/relay-v2/CONCEPT.md. */}
+
+## Deployment scope
+
+Server runs one registry package per process and requires PostgreSQL.
+Your application supplies the user interface and domain logic, such as eligibility rules or
+case-management workflows. The current API is REST; GraphQL and SQLite storage are not supported.
+
+{/* Evidence: crates/registry-server/src/main.rs; crates/registry-server/src/api/mod.rs;
+    crates/registry-serverctl/src/lib.rs, Command; products/registry-server/README.md. */}
+
+## Next
+
+- [Create and query your first registry](../../tutorials/first-registry-server/) with synthetic data.
+- [Configure your registry](../../configure/registry-server/) to extend the model and prepare an operator handoff.
+- [Connect an existing registry](../../configure/) if your institution already has a system of record.

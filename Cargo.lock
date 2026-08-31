@@ -3361,6 +3361,8 @@ dependencies = [
  "registry-mint",
  "registry-relay-v2",
  "registry-relayctl",
+ "registry-server",
+ "registry-serverctl",
  "serde",
  "serde_json",
 ]
