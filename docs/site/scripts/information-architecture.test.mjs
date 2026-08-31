@@ -244,6 +244,7 @@ test('keeps the Server guide and references in one adoption path', () => {
   const slugs = [...server.matchAll(/slug: '([^']+)'/g)].map((match) => match[1]);
   assert.deepEqual(slugs, [
     'explanation/configuration-defined-registry',
+    'explanation/registry-modeling-patterns',
     'tutorials/first-registry-server',
     'configure/registry-server',
     'configure/registry-server-webhooks',

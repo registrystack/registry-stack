@@ -55,13 +55,16 @@ sources, token issuers, audit retention, and revision replacement.
 
 Use Server when you need a system of record, including create and update operations.
 Your project defines entities, relationships, constraints, and caller permissions; the compiler
-generates the storage and REST contract. People, households, farms, and businesses are configured
+generates the storage and REST contract. Holdings, plots, businesses, and assets are configured
 models, not built-in server types. Server is currently documented as an unreleased source preview.
 
 Start with the [Registry Server overview](explanation/configuration-defined-registry/), then
 [create and query your first registry](tutorials/first-registry-server/). Continue with
 [configure your registry](configure/registry-server/) to extend the model and prepare a tested
 deployment handoff.
+
+Use [modeling patterns](explanation/registry-modeling-patterns/) to choose identifier, relationship,
+declaration, provenance, and document-reference structures for your registry.
 
 Follow [configure webhooks](configure/registry-server-webhooks/) to notify another service.
 Use the [configuration reference](reference/registry-server-configuration/) to look up keys,

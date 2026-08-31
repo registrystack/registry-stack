@@ -23,28 +23,30 @@ existing source. Server is currently available as an unreleased source preview.
 
 ## Data model
 
-A project declares its record types and their fields. For example, a social registry can define
-people and households; a farmer registry can define farms and parcels.
-The supplied household, farmer, disability, business, and asset/site examples use the same server.
+A project declares its record types and their fields. A farmer registry can define holdings and
+plots; a business registry can define legal entities and filings.
+The supplied farmer, business, and asset/site examples use the same server.
 
 Reference fields connect records. When a relationship has attributes of its own, model it as a
-record: a household membership links a person to a household and carries a role and validity dates.
-The household example declares a constraint that prevents overlapping memberships for the same person.
+record: an asset placement links an asset to a site and carries validity dates.
+The placement example declares a constraint that prevents overlapping placements for the same asset.
 
-{/* Evidence: products/registry-server/acceptance/ contains the five configured projects;
-    products/registry-server/acceptance/publicschema-household/modules/publicschema-household-core/module.yaml;
+{/* Evidence: products/registry-server/acceptance/farmer/registry.yaml;
+    products/registry-server/acceptance/business/registry.yaml;
+    products/registry-server/acceptance/asset-site-placement/modules/asset-site-placement-core/module.yaml;
     crates/registry-server/tests/postgres_pilot_acceptance.rs. */}
 
 Modules can extend an entity with fields, constraints, lookups, related-record queries, derived SQL
 fields, and events. The project locks each module's version and content digest.
 Conflicting definitions fail compilation.
 
-The PublicSchema-shaped examples provide models you can adapt.
+The [modeling patterns](../registry-modeling-patterns/) explain identifiers, relationships,
+declarations, provenance, and document references you can define in configuration.
 You choose which fields to store and expose; Server does not import public schemas at startup.
 
 {/* Evidence: crates/registry-server/src/contract.rs, RegistryModule and EntityExtensionSource;
     crates/registry-server/src/compiler.rs; crates/registry-server/tests/compiler_contract.rs;
-    products/registry-server/acceptance/publicschema-household/modules/publicschema-household-demographics/module.yaml. */}
+    crates/registry-server/src/startup.rs. */}
 
 ## Project and deployment files
 
