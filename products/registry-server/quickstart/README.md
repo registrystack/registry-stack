@@ -42,6 +42,26 @@ For a non-interactive check of the full local path, run:
 products/registry-server/quickstart/run.sh --smoke
 ```
 
+
+## Change-request examples
+
+The configurable change-request examples use the same local quickstart model:
+protected token files, generated runtime configuration, `registry-serverctl`
+checks, and HTTP calls against the compiled REST surface. Start with the
+structural CLI journey in [`../CHANGE_REQUEST_EXAMPLES.md`](../CHANGE_REQUEST_EXAMPLES.md):
+check both fixture directories, inspect `explain change-requests`, then run
+`products/registry-server/scripts/test-change-request-examples.sh --env /path/to/test.env`.
+The env file contains `REGISTRY_SERVER_TEST_DATABASE_URL` and
+`REGISTRY_SERVER_TEST_TLS_CA_PEM_PATH`; the full guide shows the exact file
+shape and disposable fixture override flags for local authoring edits. The
+script uses the same owner-only runtime config and role token file pattern as
+the quickstart and demo paths.
+
+The request action flow is GET-driven. For submit, review, revise, cancel, and
+apply, fetch the request record first and use the matching
+`request.actions[].ifMatch` value as the action `If-Match` header. Do not reuse
+the normal record `ETag` for request actions.
+
 For the offline structural self-test, which does not start Docker or use the
 network, run:
 

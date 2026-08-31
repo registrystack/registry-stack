@@ -1,0 +1,359 @@
+---
+title: Review changes before updating a registry
+description: Test an approval workflow, change a review stage, and check that direct writes cannot bypass review.
+status: draft
+owner: registry-docs
+source_repos: [registry-stack]
+last_reviewed: unreviewed
+doc_type: tutorial
+persona: [data publisher]
+locale: en
+standards_referenced: []
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+If you are evaluating Registry Server for data that needs approval, this tutorial takes you through
+an asset-location correction: propose a different site, collect two approvals, and apply the change.
+You will run the supplied workflow against PostgreSQL, adapt its configuration, and check a refusal.
+
+<QuickstartMeta
+  outcome="A tested approval workflow with a review stage you configured"
+  time="About 25 minutes, plus the first Rust build and container download"
+  level="Source preview, local development"
+  prerequisites={[
+    'Linux or macOS, Bash, and two terminals',
+    'A registry-stack source checkout containing the change-request examples',
+    'Rust and Cargo',
+    'Running Docker',
+    'OpenSSL, PostgreSQL client tools (psql), and Python 3.11+',
+    'uv and a text editor',
+  ]}
+/>
+
+Run commands from the root of that checkout unless a step says otherwise.
+This page targets the change-request source preview, not an installed release.
+The workflow runs through `registry-serverctl test`, which sends requests through the real HTTP
+router with separate caller credentials and a disposable database.
+It does not leave the change-request example running as an HTTP service.
+
+{/* Evidence: products/registry-server/scripts/test-change-request-examples.sh;
+    crates/registry-serverctl/src/test_lifecycle.rs;
+    crates/registry-server/src/fixtures.rs. */}
+
+## 1. Check your first request type
+
+Create a private working directory and copy the supplied example so your edits leave the original
+unchanged:
+
+```sh
+umask 077
+cr_work=$(mktemp -d "$PWD/.registry-server-cr-tutorial.XXXXXX")
+cr_project="$cr_work/asset-corrections"
+cp -R products/registry-server/acceptance/asset-site-placement-change-requests "$cr_project"
+export CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
+cargo build --locked -p registry-serverctl
+target/debug/registry-serverctl check "$cr_project"
+```
+
+The final command prints this shape, with your compiled configuration's digest:
+
+```text
+check succeeded
+revision: sha256:<configuration-digest>
+```
+
+You have a valid request type without writing server code.
+No database has changed yet.
+Ask the CLI to describe what it compiled:
+
+```sh
+target/debug/registry-serverctl explain change-requests "$cr_project" \
+  --format json > "$cr_work/change-requests.json"
+python3 - "$cr_work/change-requests.json" <<'PY'
+import json
+import sys
+explanation = json.load(open(sys.argv[1]))["explanation"]
+request = explanation["requests"][0]
+print(request["requestEntity"])
+for stage in request["stages"]:
+    print(stage["id"], stage["approvals"])
+PY
+```
+
+```text
+placement-correction-request
+review 1
+final-approval 1
+```
+
+The example requires one approval at each of two stages.
+The JSON file also lists the compiled effects, action preconditions, and grants.
+
+{/* Evidence: crates/registry-serverctl/src/lib.rs, explain_change_requests;
+    products/registry-server/acceptance/asset-site-placement-change-requests/registry.yaml. */}
+
+## 2. Read the rule you are testing
+
+Open `registry.yaml` in your copied project.
+The `placement-correction-request` entity has its own fields: a placement reference, a proposed site,
+and a reason.
+The relevant configuration, expanded for readability, is:
+
+```yaml
+changeRequest:
+  retention:
+    mode: operator_erase
+  effects:
+    - target:
+        fromField: placement
+      operation: patch
+      set:
+        site:
+          fromField: proposed-site
+  review:
+    stages:
+      - id: review
+        approvals: 1
+        excludeSubmitter: true
+      - id: final-approval
+        approvals: 1
+        excludeSubmitter: true
+```
+
+The request stores a proposal separately from the placement record.
+Its configured effect says which placement field will change when the request is applied.
+Submitting and approving the request do not apply that effect.
+`operator_erase` selects explicit operator erasure for retained detail; it does not schedule deletion.
+
+The access profiles separate the work:
+
+| Profile | Responsibility |
+| --- | --- |
+| `correction-submitter` | Create, edit, and submit the request |
+| `correction-reviewer` | Review the proposed site and approve the `review` stage |
+| `correction-supervisor` | Approve the `final-approval` stage |
+| `correction-applier` | Apply the approved proposal to the placement |
+
+Each stage excludes the submitting principal from approving.
+That rule does not require a different person for every stage: access profiles and stage grants
+determine which other principals can approve.
+The example supplies different identities for the two reviewers.
+
+On `asset-placement`, `changeControl.requiredFor: [patch]` makes patching a controlled operation.
+The ordinary placement grants therefore omit `patch`.
+
+{/* Evidence: products/registry-server/acceptance/asset-site-placement-change-requests/registry.yaml;
+    products/registry-server/scripts/test-change-request-examples.sh;
+    crates/registry-server/src/request_workflow.rs;
+    crates/registry-server/src/request_retention.rs;
+    crates/registry-server/tests/postgres_change_requests.rs. */}
+
+## 3. Run the approval workflow
+
+In a second terminal, at the same checkout root, start the existing local quickstart.
+You are borrowing its disposable PostgreSQL cluster for the workflow tests.
+
+:::caution[Disposable local services]
+Starting the quickstart replaces its previous `products/registry-server/quickstart/.run` directory.
+Do not run two quickstarts in the same checkout.
+Stopping the launcher removes its database container and the records inside it.
+Keep real data and production credentials out of this tutorial.
+:::
+
+```sh
+products/registry-server/quickstart/run.sh
+```
+
+Wait for this line, then leave the terminal running:
+
+```text
+Registry Server generic quickstart is ready.
+```
+
+Return to your first terminal.
+Create a Python environment for the example runner's YAML support:
+
+```sh
+uv venv "$cr_work/venv"
+uv pip install --python "$cr_work/venv/bin/python" 'PyYAML==6.0.2'
+export PATH="$cr_work/venv/bin:$PATH"
+```
+
+Success installs PyYAML into your tutorial directory rather than changing your system Python.
+
+Create a private connection file from the quickstart's generated credentials.
+This avoids copying a database password into your shell history:
+
+:::caution[Local database credentials]
+The file grants administrative access to the disposable cluster.
+Do not share or commit it, and do not substitute a production database.
+The example runner sources the file as shell code, so use only the file you create yourself.
+:::
+
+```sh
+python3 - "$PWD/products/registry-server/quickstart/.run" "$cr_work/test.env" <<'PY'
+from pathlib import Path
+from urllib.parse import urlsplit
+import shlex
+import sys
+run = Path(sys.argv[1])
+connection = urlsplit((run / "secrets/runtime-database-url").read_text().strip())
+password = (run / "secrets/database-password").read_text().strip()
+url = f"postgresql://postgres:{password}@localhost:{connection.port}/postgres"
+values = {
+    "REGISTRY_SERVER_TEST_DATABASE_URL": url,
+    "REGISTRY_SERVER_TEST_TLS_CA_PEM_PATH": str(run / "tls/ca.pem"),
+}
+Path(sys.argv[2]).write_text("".join(
+    f"export {name}={shlex.quote(value)}\n" for name, value in values.items()
+))
+PY
+products/registry-server/scripts/test-change-request-examples.sh \
+  --env "$cr_work/test.env" --asset-project "$cr_project"
+```
+
+Look for these lines among the build output:
+
+```text
+running change-request fixture: asset-site-placement-change-requests
+change-request fixture passed: asset-site-placement-change-requests
+running change-request fixture: publicschema-household-change-requests
+change-request fixture passed: publicschema-household-change-requests
+```
+
+The runner tests your asset project and the unchanged household example.
+Each run creates its own test databases and roles and removes them on exit.
+The quickstart's generic registry stays separate from those test databases.
+
+Open `tests/journeys.yaml` in your copied project.
+A journey is a sequence of API calls with the status and fields expected from each response.
+This journey creates the asset and sites, drafts the correction, submits it, gets both approvals,
+and applies it as the applier.
+
+Before each action, the journey gets the request as the next caller.
+The runner reads that caller's action-specific `ifMatch`, proposal version, and effect digest
+from the response.
+These bind approval and application to the proposal the caller saw.
+A client making HTTP calls itself must use `request.actions[]` for those values;
+the record's ordinary `ETag` is for editing the draft, not for approving it.
+
+{/* Evidence: products/registry-server/quickstart/run.sh;
+    products/registry-server/quickstart/support/quickstart.py, prepare;
+    products/registry-server/scripts/test-change-request-examples.sh;
+    products/registry-server/acceptance/asset-site-placement-change-requests/tests/journeys.yaml;
+    crates/registry-server/src/fixtures.rs;
+    crates/registry-server/src/request_workflow.rs. */}
+
+## 4. Make the second stage your own
+
+Rename `final-approval` to `operations-approval` in your copied `registry.yaml`.
+Change both occurrences: the stage's `id` and the supervisor grant's `reviewStages` entry.
+Then change the action's `stage` in `tests/journeys.yaml` to the same name.
+The journey's step and capture identifiers can keep their original names.
+
+Your stage and grant now agree on who can approve:
+
+```yaml
+# Under changeRequest.review.stages:
+- id: operations-approval
+  approvals: 1
+  excludeSubmitter: true
+```
+
+```yaml
+# In the correction-supervisor grant:
+reviewStages:
+  - stage: operations-approval
+    targets:
+      - entity: asset-placement
+        readableFields: [site]
+        rowBoundaries: []
+```
+
+Run the structural check and the database journey again:
+
+```sh
+target/debug/registry-serverctl check "$cr_project"
+products/registry-server/scripts/test-change-request-examples.sh \
+  --env "$cr_work/test.env" --asset-project "$cr_project"
+```
+
+The check reports a different configuration digest, and both fixtures pass again.
+You changed the stage name, its authority grant, and the caller's action without changing server code.
+For a new stage rather than a rename, you would also add its GET and approval steps to the journey.
+
+{/* Evidence: products/registry-server/acceptance/asset-site-placement-change-requests/registry.yaml;
+    products/registry-server/acceptance/asset-site-placement-change-requests/tests/journeys.yaml;
+    products/registry-server/scripts/test-change-request-examples.sh. */}
+
+## 5. Check that a direct-write bypass is refused
+
+In your copied `registry.yaml`, find the `asset-operator` grant for `asset-placement`.
+Temporarily add `patch` to its operations:
+
+```yaml
+operations: [create, get, list, patch]
+```
+
+```sh
+target/debug/registry-serverctl check "$cr_project"
+```
+
+The check fails with `change_control.direct_write_grant` and the message
+`a controlled mutation operation cannot remain directly granted`.
+This is an expected refusal: a grant cannot bypass the placement's `changeControl` rule.
+Remove `patch` from that grant and rerun the check; it succeeds again.
+
+{/* Evidence: crates/registry-server/src/change_request.rs;
+    products/registry-server/acceptance/asset-site-placement-change-requests/registry.yaml. */}
+
+## Cleanup
+
+The example runner already removed its temporary databases, roles, and credentials.
+In the second terminal, press `Ctrl+C` to stop the quickstart services and remove its container.
+
+Your copied project remains in `$cr_project`.
+To keep that project but remove the tutorial connection file:
+
+```sh
+rm -f "$cr_work/test.env"
+```
+
+:::caution[Generated local secrets]
+The quickstart leaves keys, credentials, and logs under its `.run` directory.
+After stopping the services, remove that directory if you no longer need those files.
+This also deletes the quickstart's generated project, but not your separate `$cr_project` copy.
+:::
+
+```sh
+rm -rf products/registry-server/quickstart/.run
+```
+
+## What you built
+
+You tested a proposal with its own schema, two approval stages, and a controlled effect on an
+existing record.
+You changed one stage and verified that an ordinary write grant cannot override change control.
+These are local authoring and database tests; packaging and activating the configuration for your
+deployment are separate steps.
+
+## Next
+
+- Open `products/registry-server/CHANGE_REQUEST_EXAMPLES.md` in your checkout for the household
+  example, HTTP action sequence, stale-proposal recovery, and retention commands.
+- Read the local quickstart's `products/registry-server/quickstart/README.md` for its package and
+  activation sequence.
+- Use [Registry Mint](../../configure/mint/) when connecting callers to your own deployment.
+
+## Troubleshooting
+
+| Symptom | Next move |
+| --- | --- |
+| `change-requests` is not a recognized explain subject | Use the source preview containing this feature and rebuild `registry-serverctl`. Released binaries are not the tutorial target. |
+| The quickstart cannot start Docker or a service | Start Docker and check the named prerequisite. Inspect `.run/logs/` without sharing secrets. |
+| The database connection is refused or the certificate fails | Keep the quickstart running and recreate `test.env` after restarting it. Each run has new ports and certificates. |
+| Python cannot import `yaml` | Repeat the virtual environment installation and `PATH` assignment in your first terminal. |
+| Renaming the stage makes `check` fail | Match the stage ID to the supervisor's `reviewStages` entry. |
+| The runner reports `test.step.failed` | Read the reported journey and step indices in `tests/journeys.yaml`. Check the action's stage and expected status; indices start at zero. |
+| You opened a fresh first terminal | Restore `cr_work` to your existing tutorial directory, set `cr_project="$cr_work/asset-corrections"`, and repeat the `PATH` assignment. |

@@ -412,6 +412,10 @@ fn revision_sql(
     let mut predicates = vec![
         "entity_id = $1::text".to_owned(),
         "record_id = $2::uuid".to_owned(),
+        // Erased payloads remain represented by protected request provenance,
+        // never by a fabricated canonical snapshot in the revision API.
+        "snapshot IS NOT NULL".to_owned(),
+        "erased_at IS NULL".to_owned(),
     ];
     if let Some(revision) = request.revision {
         parameters.push(Box::new(revision));
@@ -453,8 +457,18 @@ fn revision_sql(
         format!(
             "SELECT record_id, record_revision, predecessor_revision, record_lifecycle,
                     package_revision, operation_id, mutation_kind, principal_reference,
-                    request_reference, snapshot, created_at
-             FROM registry_internal.registry_revisions
+                    request_reference, snapshot, created_at,
+                    EXISTS (
+                        SELECT 1
+                          FROM registry_internal.registry_request_revision_links l
+                         WHERE l.entity_id = r.entity_id
+                           AND l.record_id = r.record_id
+                           AND l.record_revision = r.record_revision
+                           AND l.request_entity_id = r.entity_id
+                           AND l.request_id = r.record_id
+                           AND l.link_kind = 'request_lifecycle'
+                    ) AS request_lifecycle_revision
+             FROM registry_internal.registry_revisions r
              WHERE {}
              ORDER BY record_revision DESC
              LIMIT ${limit_parameter}::bigint",
@@ -533,11 +547,18 @@ fn revision_from_row(
     let created_at = row
         .try_get::<_, SystemTime>(10)
         .map_err(|_| ReadServiceError::Unavailable)?;
+    let request_lifecycle_revision = row
+        .try_get::<_, bool>(11)
+        .map_err(|_| ReadServiceError::Unavailable)?;
     if revision <= 0
         || predecessor.is_some_and(|value| value <= 0 || value >= revision)
         || !matches!(lifecycle.as_str(), "active" | "tombstoned")
         || !matches!(mutation_kind.as_str(), "create" | "patch" | "tombstone")
-        || operation_id != format!("records.{}.{}", entity.id, mutation_kind)
+        || (operation_id != format!("records.{}.{}", entity.id, mutation_kind)
+            && !(request_lifecycle_revision
+                && entity.change_request.is_some()
+                && mutation_kind == "patch"
+                && valid_request_journal_operation(&entity.id, &operation_id)))
         || !valid_hmac_reference(&actor_reference)
         || !valid_hmac_reference(&request_reference)
         || snapshot.is_empty()
@@ -594,6 +615,18 @@ fn revision_from_row(
         request_reference,
         data,
     })
+}
+
+fn valid_request_journal_operation(entity_id: &str, operation_id: &str) -> bool {
+    let prefix = format!("records.{entity_id}.request.");
+    let Some(action) = operation_id.strip_prefix(&prefix) else {
+        return false;
+    };
+    if matches!(action, "submit" | "revise" | "cancel" | "apply") {
+        return true;
+    }
+    let parts = action.split('.').collect::<Vec<_>>();
+    matches!(parts.as_slice(), ["stages", stage, "approve" | "reject" | "request_revision"] if !stage.is_empty())
 }
 
 fn bounded_text(row: &tokio_postgres::Row, index: usize) -> Result<String, ReadServiceError> {

@@ -29,9 +29,18 @@ PUBLICSCHEMA_HOUSEHOLD_PATHS = (
     "generated/schemas/household.schema.json",
     "generated/schemas/person.schema.json",
 )
+ASSET_SITE_PLACEMENT_CHANGE_REQUEST_PATHS = ASSET_SITE_PLACEMENT_PATHS + (
+    "generated/schemas/placement-correction-request.schema.json",
+)
+PUBLICSCHEMA_HOUSEHOLD_CHANGE_REQUEST_PATHS = PUBLICSCHEMA_HOUSEHOLD_PATHS + (
+    "generated/schemas/register-household-contact-request.schema.json",
+)
+
 EXPECTED_PATHS_BY_BASELINE = {
     "asset-site-placement": ASSET_SITE_PLACEMENT_PATHS,
     "publicschema-household": PUBLICSCHEMA_HOUSEHOLD_PATHS,
+    "asset-site-placement-change-requests": ASSET_SITE_PLACEMENT_CHANGE_REQUEST_PATHS,
+    "publicschema-household-change-requests": PUBLICSCHEMA_HOUSEHOLD_CHANGE_REQUEST_PATHS,
 }
 EXPECTED_PATHS = ASSET_SITE_PLACEMENT_PATHS
 

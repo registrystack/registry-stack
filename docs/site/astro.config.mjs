@@ -423,6 +423,12 @@ export default defineConfig({
           ],
         },
         {
+          label: 'Build a registry',
+          items: [
+            { label: 'Review changes before updating a registry', slug: 'tutorials/review-registry-changes' },
+          ],
+        },
+        {
           // Two audiences used to share one Evidence Gateway group: a relying
           // party calling the HTTP contract, and a deployment delivering the
           // same assertion to a wallet. A relying party runs neither runtime,

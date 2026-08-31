@@ -123,6 +123,7 @@ test('uses the adopter-first top-level flow in its published order', () => {
     'Start',
     'Answer a bounded question',
     'Connect an existing registry',
+    'Build a registry',
     'Consume and verify assertions',
     'Authenticate callers',
     'Publish a Discovery index',

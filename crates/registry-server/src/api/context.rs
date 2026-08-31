@@ -3,6 +3,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use crate::contract::Operation;
+use crate::model::HttpMethod;
+
 const MAX_DIRECT_VALUE_BYTES: usize = 512;
 const MAX_STRING_SET_VALUES: usize = 64;
 
@@ -203,6 +206,8 @@ pub struct AuthorizedRequestContext {
     purpose: Option<String>,
     selected_profile: String,
     row_boundaries: Vec<VerifiedRowBoundary>,
+    request_actions: Vec<VerifiedRequestAction>,
+    request_presence: Vec<VerifiedRequestPresence>,
 }
 
 impl AuthorizedRequestContext {
@@ -217,7 +222,19 @@ impl AuthorizedRequestContext {
             purpose,
             selected_profile,
             row_boundaries,
+            request_actions: Vec::new(),
+            request_presence: Vec::new(),
         }
+    }
+
+    pub(crate) fn with_request_visibility(
+        mut self,
+        request_actions: Vec<VerifiedRequestAction>,
+        request_presence: Vec<VerifiedRequestPresence>,
+    ) -> Self {
+        self.request_actions = request_actions;
+        self.request_presence = request_presence;
+        self
     }
 
     #[must_use]
@@ -239,6 +256,16 @@ impl AuthorizedRequestContext {
     pub fn row_boundaries(&self) -> &[VerifiedRowBoundary] {
         &self.row_boundaries
     }
+
+    #[must_use]
+    pub fn request_actions(&self) -> &[VerifiedRequestAction] {
+        &self.request_actions
+    }
+
+    #[must_use]
+    pub fn request_presence(&self) -> &[VerifiedRequestPresence] {
+        &self.request_presence
+    }
 }
 
 impl fmt::Debug for AuthorizedRequestContext {
@@ -249,6 +276,175 @@ impl fmt::Debug for AuthorizedRequestContext {
             .field("purpose", &self.purpose.as_ref().map(|_| "<redacted>"))
             .field("selected_profile", &self.selected_profile)
             .field("row_boundaries", &self.row_boundaries)
+            .field("request_action_count", &self.request_actions.len())
+            .field("request_presence_count", &self.request_presence.len())
+            .finish()
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct VerifiedRequestAction {
+    route_id: String,
+    method: HttpMethod,
+    path: String,
+    operation: Operation,
+    review_stage: Option<String>,
+    response_fields: BTreeSet<String>,
+    target_authority: Vec<VerifiedRequestTargetAuthority>,
+}
+
+impl VerifiedRequestAction {
+    pub(crate) fn new(
+        route_id: String,
+        method: HttpMethod,
+        path: String,
+        operation: Operation,
+        review_stage: Option<String>,
+        response_fields: BTreeSet<String>,
+        target_authority: Vec<VerifiedRequestTargetAuthority>,
+    ) -> Self {
+        Self {
+            route_id,
+            method,
+            path,
+            operation,
+            review_stage,
+            response_fields,
+            target_authority,
+        }
+    }
+
+    #[must_use]
+    pub fn route_id(&self) -> &str {
+        &self.route_id
+    }
+
+    #[must_use]
+    pub fn method(&self) -> HttpMethod {
+        self.method
+    }
+
+    #[must_use]
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    #[must_use]
+    pub fn operation(&self) -> Operation {
+        self.operation
+    }
+
+    #[must_use]
+    pub fn review_stage(&self) -> Option<&str> {
+        self.review_stage.as_deref()
+    }
+
+    #[must_use]
+    pub fn response_fields(&self) -> &BTreeSet<String> {
+        &self.response_fields
+    }
+
+    #[must_use]
+    pub fn target_authority(&self) -> &[VerifiedRequestTargetAuthority] {
+        &self.target_authority
+    }
+}
+
+impl fmt::Debug for VerifiedRequestAction {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("VerifiedRequestAction")
+            .field("route_id", &self.route_id)
+            .field("method", &self.method)
+            .field("operation", &self.operation)
+            .field("review_stage", &self.review_stage)
+            .field("response_fields", &self.response_fields)
+            .field("target_authority_count", &self.target_authority.len())
+            .finish()
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct VerifiedRequestTargetAuthority {
+    target_entity_id: String,
+    readable_fields: BTreeSet<String>,
+    row_boundaries: Vec<VerifiedRowBoundary>,
+}
+
+impl VerifiedRequestTargetAuthority {
+    pub(crate) fn new(
+        target_entity_id: String,
+        readable_fields: BTreeSet<String>,
+        row_boundaries: Vec<VerifiedRowBoundary>,
+    ) -> Self {
+        Self {
+            target_entity_id,
+            readable_fields,
+            row_boundaries,
+        }
+    }
+
+    #[must_use]
+    pub fn target_entity_id(&self) -> &str {
+        &self.target_entity_id
+    }
+
+    #[must_use]
+    pub fn readable_fields(&self) -> &BTreeSet<String> {
+        &self.readable_fields
+    }
+
+    #[must_use]
+    pub fn row_boundaries(&self) -> &[VerifiedRowBoundary] {
+        &self.row_boundaries
+    }
+}
+
+impl fmt::Debug for VerifiedRequestTargetAuthority {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("VerifiedRequestTargetAuthority")
+            .field("target_entity_id", &self.target_entity_id)
+            .field("readable_fields", &self.readable_fields)
+            .field("row_boundary_count", &self.row_boundaries.len())
+            .finish()
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct VerifiedRequestPresence {
+    request_entity_id: String,
+    request_row_boundaries: Vec<VerifiedRowBoundary>,
+}
+
+impl VerifiedRequestPresence {
+    pub(crate) fn new(
+        request_entity_id: String,
+        request_row_boundaries: Vec<VerifiedRowBoundary>,
+    ) -> Self {
+        Self {
+            request_entity_id,
+            request_row_boundaries,
+        }
+    }
+
+    #[must_use]
+    pub fn request_entity_id(&self) -> &str {
+        &self.request_entity_id
+    }
+
+    #[must_use]
+    pub fn request_row_boundaries(&self) -> &[VerifiedRowBoundary] {
+        &self.request_row_boundaries
+    }
+}
+
+impl fmt::Debug for VerifiedRequestPresence {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("VerifiedRequestPresence")
+            .field("request_entity_id", &self.request_entity_id)
+            .field("row_boundary_count", &self.request_row_boundaries.len())
             .finish()
     }
 }

@@ -37,6 +37,8 @@ pub enum MigrationError {
     EmptyPlan,
     #[error("the Registry package apply failed")]
     ApplyFailed,
+    #[error("active request proposals require rebase or cancellation before this package can be activated")]
+    ActiveRequestProposals,
     #[error("destructive backup evidence is invalid")]
     BackupEvidence,
 }
@@ -311,6 +313,22 @@ pub async fn apply_verified_package(
     )
     .await
     .map_err(|_| MigrationError::ApplyFailed)?;
+    if current.is_some() {
+        if let Err(error) = crate::request_retention::guard_successor_activation(
+            connection.client_for_request_retention_guard(),
+            request.package.registry(),
+        )
+        .await
+        {
+            let _ = connection.release().await;
+            return Err(match error {
+                crate::request_retention::RequestRetentionError::ActiveProposalRequiresRebase => {
+                    MigrationError::ActiveRequestProposals
+                }
+                _ => MigrationError::ApplyFailed,
+            });
+        }
+    }
     let began = if let Some(current) = current {
         connection
             .begin_successor_package(

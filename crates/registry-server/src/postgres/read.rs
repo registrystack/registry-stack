@@ -2,6 +2,9 @@
 
 //! Concrete PostgreSQL record read service with durable audit release gates.
 
+#[path = "request_read.rs"]
+mod request_read;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
@@ -29,8 +32,10 @@ use crate::cursor::{
     CursorLogicalOp, CursorOrderClause, CursorProjectionField, CursorQueryScope,
 };
 use crate::model::{
-    CompiledEntity, CompiledQueryKind, CompiledQueryOperation, CompiledQuerySortDirection,
-    CompiledReadPath, CompiledRegistry,
+    request_query_field_api_name, request_query_field_type, CompiledEntity, CompiledQueryKind,
+    CompiledQueryOperation, CompiledQuerySortDirection, CompiledReadPath, CompiledRegistry,
+    REQUEST_EFFECT_DIGEST_QUERY_FIELD, REQUEST_PROPOSAL_VERSION_QUERY_FIELD,
+    REQUEST_SERVER_STATE_QUERY_FIELD,
 };
 use crate::mutation::strong_record_etag;
 
@@ -410,6 +415,58 @@ impl PostgresRecordReadService {
             .iter()
             .map(|row| row_to_record(row, &plan.entity, &selected_fields))
             .collect::<Result<Vec<_>, _>>()?;
+        let mut rows = rows;
+        request_read::annotate_records(
+            transaction.transaction(),
+            &self.registry,
+            &self.audit_profile,
+            &self.expected,
+            request,
+            claims,
+            &plan.entity,
+            &mut rows,
+        )
+        .await?;
+        if rows.is_empty()
+            && plan.operation == Operation::Get
+            && plan.entity.change_request.is_some()
+        {
+            // Source views intentionally exclude tombstones. Before consulting
+            // retained request provenance, reauthorize this exact erased row
+            // through the generated typed-table GET policy and its row bounds.
+            let record_id = target_record(&request.kind).ok_or(ReadServiceError::Unavailable)?;
+            let sql = format!(
+                "SELECT record_revision FROM registry_data.{}
+                 WHERE record_id = $1::text::uuid
+                   AND record_lifecycle = 'tombstoned'",
+                quote_identifier(&plan.entity.physical_table),
+            );
+            if let Some(row) = transaction
+                .transaction()
+                .query_opt(&sql, &[&record_id])
+                .await
+                .map_err(|_| ReadServiceError::Unavailable)?
+            {
+                let revision: i64 = row.try_get(0).map_err(|_| ReadServiceError::Unavailable)?;
+                if revision <= 0 {
+                    return Err(ReadServiceError::Unavailable);
+                }
+                if let Some(record) = request_read::erased_terminal_request_record(
+                    transaction.transaction(),
+                    &self.registry,
+                    &self.expected,
+                    request,
+                    claims,
+                    &plan.entity,
+                    record_id,
+                    revision,
+                )
+                .await?
+                {
+                    rows.push(record);
+                }
+            }
+        }
         transaction
             .commit()
             .await
@@ -652,10 +709,14 @@ struct MaterializedRead {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct RecordEnvelope {
-    id: String,
-    revision: u64,
-    data: Map<String, Value>,
+pub(super) struct RecordEnvelope {
+    pub(super) id: String,
+    pub(super) revision: u64,
+    pub(super) data: Map<String, Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) request: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) request_presence: Option<Value>,
 }
 
 fn request_operation(kind: &RecordReadKind) -> Operation {
@@ -725,6 +786,17 @@ impl ReadPlan {
             .find(|route| route.id == request.operation_id)
             .ok_or(())?;
         let source_entity = registry.entities().get(&request.entity_id).ok_or(())?;
+        if request
+            .request_history_after_proposal_version
+            .is_some_and(|version| {
+                version <= 0
+                    || version > i64::from(u32::MAX)
+                    || operation != Operation::Get
+                    || source_entity.change_request.is_none()
+            })
+        {
+            return Err(());
+        }
         let profile = source_entity
             .access_profiles
             .get(request.context.selected_profile())
@@ -989,7 +1061,8 @@ fn validate_compiled_query_request(
         if !compiled_sort
             .directions
             .contains(&CompiledQuerySortDirection::Asc)
-            || compiled_field_type(entity, &order.field_id) != Some(&order.field_type)
+            || query_field_type(entity, operation, &order.field_id)
+                != Some(order.field_type.clone())
             || order.direction != CompiledQuerySortDirection::Asc
         {
             return Err(());
@@ -1343,6 +1416,21 @@ impl ReadRelations {
             quote_identifier(&entity.source_relation.sql_name),
             quote_identifier(&entity.physical_table),
         );
+        if entity.change_request.is_some() {
+            from_sql.push_str(
+                " LEFT JOIN registry_internal.registry_request_state AS request_state
+                    ON request_state.request_entity_id = ",
+            );
+            from_sql.push_str(&sql_quote_literal(&entity.id));
+            from_sql.push_str(
+                "
+                   AND request_state.request_id = source_record.id
+                  LEFT JOIN registry_internal.registry_request_proposals AS request_proposal
+                    ON request_proposal.request_entity_id = request_state.request_entity_id
+                   AND request_proposal.request_id = request_state.request_id
+                   AND request_proposal.proposal_version = request_state.proposal_version",
+            );
+        }
         for (index, relation) in entity.derived_relations.values().enumerate() {
             let alias = format!("derived_{index}");
             let view_name = crate::generated_ddl::derived_view_name(
@@ -1458,6 +1546,20 @@ impl ReadRelations {
         entity: &CompiledEntity,
         field_id: &str,
     ) -> Result<FieldExpression, ReadServiceError> {
+        if entity.change_request.is_some() {
+            if let Some(field_type) = request_query_field_type(field_id) {
+                let sql = match field_id {
+                    REQUEST_SERVER_STATE_QUERY_FIELD => "request_state.state",
+                    REQUEST_PROPOSAL_VERSION_QUERY_FIELD => "request_state.proposal_version",
+                    REQUEST_EFFECT_DIGEST_QUERY_FIELD => "request_proposal.effect_digest",
+                    _ => return Err(ReadServiceError::Unavailable),
+                };
+                return Ok(FieldExpression {
+                    sql: sql.to_owned(),
+                    field_type,
+                });
+            }
+        }
         if field_id == "id" {
             return Ok(FieldExpression {
                 sql: self.id_expression.clone(),
@@ -1536,7 +1638,41 @@ fn compiled_field_type<'a>(
         })
 }
 
-fn compiled_api_name<'a>(entity: &'a CompiledEntity, field_id: &str) -> Option<&'a str> {
+fn query_field_type(
+    entity: &CompiledEntity,
+    operation: &CompiledQueryOperation,
+    field_id: &str,
+) -> Option<FieldTypeSource> {
+    if operation
+        .projection_fields
+        .iter()
+        .any(|field| field == field_id)
+        || operation
+            .filter_fields
+            .iter()
+            .any(|field| field.field == field_id)
+        || operation
+            .sort_fields
+            .iter()
+            .any(|field| field.field == field_id)
+    {
+        compiled_field_type(entity, field_id).cloned().or_else(|| {
+            entity
+                .change_request
+                .as_ref()
+                .and_then(|_| request_query_field_type(field_id))
+        })
+    } else {
+        None
+    }
+}
+
+pub(super) fn compiled_api_name<'a>(entity: &'a CompiledEntity, field_id: &str) -> Option<&'a str> {
+    if entity.change_request.is_some() {
+        if let Some(api_name) = request_query_field_api_name(field_id) {
+            return Some(api_name);
+        }
+    }
     entity
         .stored_fields
         .iter()
@@ -1604,7 +1740,7 @@ fn validate_filter_predicate(
     stats: &mut FilterStats,
 ) -> Result<(), ()> {
     stats.predicates = stats.predicates.checked_add(1).ok_or(())?;
-    let Some(field_type) = compiled_field_type(entity, &predicate.field_id) else {
+    let Some(field_type) = query_field_type(entity, operation, &predicate.field_id) else {
         return Err(());
     };
     let Some(compiled_filter) = operation
@@ -1617,7 +1753,7 @@ fn validate_filter_predicate(
     if !compiled_filter
         .operators
         .contains(&predicate.operator.compiled_capability())
-        || field_type != &predicate.field_type
+        || field_type != predicate.field_type
     {
         return Err(());
     }
@@ -1631,7 +1767,7 @@ fn validate_filter_predicate(
         | ReadFilterOperator::StartsWith
         | ReadFilterOperator::Contains => {
             if predicate.values.len() != 1
-                || validate_field_value(&predicate.values[0], field_type).is_err()
+                || validate_field_value(&predicate.values[0], &field_type).is_err()
             {
                 return Err(());
             }
@@ -1651,7 +1787,7 @@ fn validate_filter_predicate(
                 || predicate
                     .values
                     .iter()
-                    .any(|value| validate_field_value(value, field_type).is_err())
+                    .any(|value| validate_field_value(value, &field_type).is_err())
             {
                 return Err(());
             }
@@ -2081,7 +2217,13 @@ fn row_to_record(
             return Err(ReadServiceError::Unavailable);
         }
     }
-    Ok(RecordEnvelope { id, revision, data })
+    Ok(RecordEnvelope {
+        id,
+        revision,
+        data,
+        request: None,
+        request_presence: None,
+    })
 }
 
 fn field_set_reference(
@@ -2305,6 +2447,7 @@ mod tests {
                 },
             },
             maximum_records: 11,
+            request_history_after_proposal_version: None,
             correlation: crate::correlation::RequestCorrelation::server_created(),
         };
         assert!(ReadPlan::from_request(&registry, &expected, &cursors, &request).is_err());

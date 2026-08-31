@@ -153,13 +153,15 @@ catalog. They deliberately distinguish a `planned` invariant from an
 does not pretend that a test exists. The implementation change that enforces
 it must add one resolving negative executable test in the same patch.
 
-The five projects under `acceptance/` are authored configuration inputs for the
-same compiler and binary. They cover asset/site placement, PublicSchema-shaped
-household membership, disability, farmer, and business registries. They are not
-generated output or implicit runtime models. The real-PostgreSQL pilot test
-executes all five, while the public-binary adopter workflow proves signed
-activation, authenticated data access, an additive upgrade, failure recovery,
-and unchanged server bytes for the non-person project.
+The projects under `acceptance/` are authored configuration inputs for the same
+compiler and binary. The baseline fixtures cover asset/site placement,
+PublicSchema-shaped household membership, disability, farmer, and business
+registries. Change-request fixture copies exercise reviewed request
+configuration without changing those baseline direct-write journeys. They are
+not generated output or implicit runtime models. The real-PostgreSQL pilot test
+executes the baseline fixtures, while the public-binary adopter workflow proves
+signed activation, authenticated data access, an additive upgrade, failure
+recovery, and unchanged server bytes for the non-person project.
 
 Run the current deterministic contract checks with:
 

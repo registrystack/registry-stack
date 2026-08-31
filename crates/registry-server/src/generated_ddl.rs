@@ -10,7 +10,7 @@ use crate::contract::{
     BoundaryOperator, ComparisonOperator, ConstraintSource, FieldTypeSource, Operation,
     UniqueWhenPredicate, ValidTimeRole,
 };
-use crate::model::CompiledEntity;
+use crate::model::{CompiledChangeRequestEffect, CompiledChangeRequestMutation, CompiledEntity};
 use crate::physical_names::{hex_prefix, PhysicalNameInventory};
 
 const RECORD_ID_COLUMN: &str = "record_id";
@@ -179,7 +179,7 @@ pub(crate) fn generate_ddl(
             "PRIMARY KEY (record_id)".to_owned(),
         ];
         for field in entity.fields.values() {
-            columns.push(column_definition(field));
+            columns.push(column_definition_for_entity(entity, field));
         }
         statements.push(DdlStatement {
             id: format!("entity.{}.table", entity.id),
@@ -430,16 +430,57 @@ pub(crate) fn add_column_statement(
         sql: format!(
             "ALTER TABLE registry_data.{} ADD COLUMN {}",
             quote_identifier(&entity.physical_table),
-            column_definition(field)
+            column_definition_for_entity(entity, field)
         ),
     }
 }
 
-fn column_definition(field: &crate::model::CompiledField) -> String {
+fn column_definition_for_entity(
+    entity: &CompiledEntity,
+    field: &crate::model::CompiledField,
+) -> String {
+    let nullable_when_tombstoned =
+        entity.change_request.is_some() && !request_row_boundary_fields(entity).contains(&field.id);
+    column_definition(field, nullable_when_tombstoned)
+}
+
+fn request_row_boundary_fields(entity: &CompiledEntity) -> BTreeSet<String> {
+    let mut fields = entity
+        .access_profiles
+        .values()
+        .flat_map(|profile| {
+            profile
+                .row_boundaries
+                .iter()
+                .map(|boundary| boundary.field.clone())
+        })
+        .collect::<BTreeSet<_>>();
+    if let Some(request) = &entity.change_request {
+        for grant in &request.presence_grants {
+            fields.extend(
+                grant
+                    .request_row_boundaries
+                    .iter()
+                    .map(|boundary| boundary.field.clone()),
+            );
+        }
+    }
+    fields
+}
+
+fn column_definition(
+    field: &crate::model::CompiledField,
+    nullable_when_tombstoned: bool,
+) -> String {
     let identifier = quote_identifier(&field.physical_name);
     let mut column = format!("{} {}", identifier, sql_type(&field.field_type));
-    if field.required {
+    if field.required && !nullable_when_tombstoned {
         column.push_str(" NOT NULL");
+    }
+    if field.required && nullable_when_tombstoned {
+        column.push_str(" CHECK (record_lifecycle = 'tombstoned' OR ");
+        column.push_str(&identifier);
+        column.push_str(" IS NOT NULL)");
     }
     if let Some(check) = field_check(&identifier, &field.field_type) {
         column.push_str(" CHECK (");
@@ -474,12 +515,57 @@ fn runtime_privileges(
     }
     if operations.contains(&Operation::Create) {
         privileges.insert(TablePrivilege::Insert);
+        privileges.insert(TablePrivilege::Select);
     }
     if operations
         .iter()
         .any(|operation| matches!(operation, Operation::Patch | Operation::Tombstone))
     {
         privileges.insert(TablePrivilege::Update);
+    }
+    if entity
+        .change_request
+        .as_ref()
+        .is_some_and(|request| !request.presence_grants.is_empty())
+    {
+        privileges.insert(TablePrivilege::Select);
+    }
+    if entity.change_request.is_some()
+        && operations.iter().any(|operation| {
+            matches!(
+                operation,
+                Operation::SubmitRequest
+                    | Operation::ApproveRequest
+                    | Operation::RejectRequest
+                    | Operation::RequestRevision
+                    | Operation::ReviseRequest
+                    | Operation::CancelRequest
+                    | Operation::ApplyRequest
+            )
+        })
+    {
+        privileges.insert(TablePrivilege::Select);
+        privileges.insert(TablePrivilege::Update);
+    }
+    for request in entities
+        .values()
+        .filter_map(|entity| entity.change_request.as_ref())
+    {
+        for effect in &request.effects {
+            if effect.target.entity_id != entity.id {
+                continue;
+            }
+            privileges.insert(TablePrivilege::Select);
+            match effect.operation {
+                Operation::Create => {
+                    privileges.insert(TablePrivilege::Insert);
+                }
+                Operation::Patch => {
+                    privileges.insert(TablePrivilege::Update);
+                }
+                _ => {}
+            }
+        }
     }
     privileges
 }
@@ -500,10 +586,23 @@ fn policies(
             }
             let authority = policy_authority_expression(entity, profile);
             let (using_expression, check_expression) = match command {
-                PolicyCommand::Select => (
-                    Some(format!("({authority}) AND record_lifecycle = 'active'")),
-                    None,
-                ),
+                PolicyCommand::Select => {
+                    let action_context_guard = if entity.change_request.is_some() {
+                        format!(
+                            " AND {} IS NULL",
+                            change_request_action_context_expression()
+                        )
+                    } else {
+                        String::new()
+                    };
+                    let lifecycle_expression = request_get_lifecycle_expression(entity, profile);
+                    (
+                        Some(format!(
+                            "({authority}) AND ({lifecycle_expression}){action_context_guard}"
+                        )),
+                        None,
+                    )
+                }
                 PolicyCommand::Insert => (
                     None,
                     Some(format!("({authority}) AND record_lifecycle = 'active'")),
@@ -528,9 +627,51 @@ fn policies(
                 check_expression,
             });
         }
+        if profile.operations.contains(&Operation::Create)
+            && !profile_supports_command(&profile.operations, PolicyCommand::Select)
+        {
+            let authority = policy_authority_expression(entity, profile);
+            policies.push(DdlPolicy {
+                name: create_returning_policy_name(&entity.id, &profile.id),
+                command: PolicyCommand::Select,
+                access_profile: profile.id.clone(),
+                using_expression: Some(format!(
+                    "({authority}) AND record_lifecycle = 'active' AND {} = NULLIF(current_setting('registry.created_entity_id', true), '') AND record_id = NULLIF(current_setting('registry.created_record_id', true), '')::uuid",
+                    quote_literal(&entity.id)
+                )),
+                check_expression: None,
+            });
+        }
     }
+    policies.extend(change_request_action_policies_for_table(entity));
+    policies.extend(change_request_presence_policies_for_table(entity, entities));
     policies.extend(read_path_policies_for_table(entity, entities));
+    policies.extend(change_request_target_policies_for_table(entity, entities));
     policies
+}
+
+fn request_get_lifecycle_expression(
+    entity: &CompiledEntity,
+    profile: &crate::contract::AccessProfileSource,
+) -> String {
+    if entity.change_request.is_some() && profile.operations.contains(&Operation::Get) {
+        format!(
+            "record_lifecycle = 'active' OR (
+                record_lifecycle = 'tombstoned'
+                AND EXISTS (
+                    SELECT 1
+                      FROM registry_internal.registry_request_state AS cr_state
+                     WHERE cr_state.request_entity_id = {}
+                       AND cr_state.request_id = record_id
+                       AND cr_state.state IN ('rejected', 'canceled', 'applied')
+                       AND cr_state.detail_erased_at IS NOT NULL
+                )
+            )",
+            quote_literal(&entity.id)
+        )
+    } else {
+        "record_lifecycle = 'active'".to_owned()
+    }
 }
 
 fn profile_supports_command(operations: &BTreeSet<Operation>, command: PolicyCommand) -> bool {
@@ -705,6 +846,936 @@ fn read_path_setting_expression(path: &crate::model::CompiledReadPath) -> String
     )
 }
 
+fn change_request_action_policies_for_table(entity: &CompiledEntity) -> Vec<DdlPolicy> {
+    let Some(request) = &entity.change_request else {
+        return Vec::new();
+    };
+    let mut policies = Vec::new();
+    for profile in entity.access_profiles.values() {
+        for operation in [
+            Operation::SubmitRequest,
+            Operation::ApproveRequest,
+            Operation::RejectRequest,
+            Operation::RequestRevision,
+            Operation::ReviseRequest,
+            Operation::CancelRequest,
+            Operation::ApplyRequest,
+        ] {
+            if !profile.operations.contains(&operation) {
+                continue;
+            }
+            let stages = if matches!(
+                operation,
+                Operation::ApproveRequest | Operation::RejectRequest | Operation::RequestRevision
+            ) {
+                request
+                    .stages
+                    .iter()
+                    .map(|stage| Some(stage.id.as_str()))
+                    .collect::<Vec<_>>()
+            } else {
+                vec![None]
+            };
+            for stage in stages {
+                let select_expression = change_request_action_expression(
+                    entity,
+                    profile,
+                    request,
+                    operation,
+                    stage,
+                    PolicyCommand::Select,
+                );
+                let update_expression = change_request_action_expression(
+                    entity,
+                    profile,
+                    request,
+                    operation,
+                    stage,
+                    PolicyCommand::Update,
+                );
+                let stage_name = stage.unwrap_or("none");
+                policies.push(DdlPolicy {
+                    name: change_request_action_policy_name(
+                        &entity.id,
+                        &profile.id,
+                        operation,
+                        stage_name,
+                        PolicyCommand::Select,
+                    ),
+                    command: PolicyCommand::Select,
+                    access_profile: profile.id.clone(),
+                    using_expression: Some(format!(
+                        "{select_expression} AND record_lifecycle = 'active'"
+                    )),
+                    check_expression: None,
+                });
+                policies.push(DdlPolicy {
+                    name: change_request_action_policy_name(
+                        &entity.id,
+                        &profile.id,
+                        operation,
+                        stage_name,
+                        PolicyCommand::Update,
+                    ),
+                    command: PolicyCommand::Update,
+                    access_profile: profile.id.clone(),
+                    using_expression: Some(format!(
+                        "{update_expression} AND record_lifecycle = 'active'"
+                    )),
+                    check_expression: Some(format!(
+                        "{update_expression} AND record_lifecycle = 'active'"
+                    )),
+                });
+            }
+        }
+    }
+    policies
+}
+
+fn change_request_action_expression(
+    entity: &CompiledEntity,
+    profile: &crate::contract::AccessProfileSource,
+    request: &crate::model::CompiledChangeRequest,
+    operation: Operation,
+    stage: Option<&str>,
+    command: PolicyCommand,
+) -> String {
+    let context = change_request_action_context_expression();
+    let stage_predicate = match stage {
+        Some(stage) => format!("{context} ->> 'stage' = {}", quote_literal(stage)),
+        None => format!("({context} ->> 'stage') IS NULL"),
+    };
+    let route_id = change_request_action_route_id(&entity.id, operation, stage);
+    [
+        format!("jsonb_typeof({context}) = 'object'"),
+        format!("{context} ->> 'version' = '1'"),
+        format!(
+            "{context} ->> 'requestEntityId' = {}",
+            quote_literal(&entity.id)
+        ),
+        format!(
+            "{context} ->> 'requestId' = {}::text",
+            field_name(entity, "id")
+        ),
+        format!(
+            "{context} ->> 'contractFingerprint' = {}",
+            quote_literal(&request.contract_fingerprint)
+        ),
+        format!("({context} ->> 'actorReference') IS NOT NULL"),
+        format!(
+            "{context} ->> 'selectedAccessProfile' = {}",
+            quote_literal(&profile.id)
+        ),
+        format!(
+            "({context} ->> 'selectedAccessProfile') = NULLIF(current_setting('registry.access_profile', true), '')"
+        ),
+        format!(
+            "(({context} ->> 'principal') IS NULL OR ({context} ->> 'principal') = NULLIF(current_setting('registry.principal', true), ''))"
+        ),
+        format!(
+            "(({context} ->> 'purpose') IS NULL OR ({context} ->> 'purpose') = NULLIF(current_setting('registry.purpose', true), ''))"
+        ),
+        format!(
+            "{context} ->> 'operation' = {}",
+            quote_literal(change_request_operation_name(operation))
+        ),
+        stage_predicate,
+        format!("{context} ->> 'routeId' = {}", quote_literal(&route_id)),
+        format!(
+            "{context} ->> 'activePackageRevision' = NULLIF(current_setting('registry.active_package_revision', true), '')"
+        ),
+        policy_authority_expression(entity, profile),
+        change_request_action_state_exists_expression(operation, command),
+    ]
+    .join(" AND ")
+}
+
+fn change_request_action_state_exists_expression(
+    operation: Operation,
+    command: PolicyCommand,
+) -> String {
+    let context = change_request_action_context_expression();
+    if command == PolicyCommand::Select {
+        let mut visible_states = vec![
+            "draft",
+            "submitted",
+            "approved",
+            "needs_changes",
+            "rejected",
+            "canceled",
+        ];
+        if operation == Operation::ApplyRequest {
+            visible_states.push("applied");
+        }
+        let visible_states = visible_states
+            .into_iter()
+            .map(quote_literal)
+            .collect::<Vec<_>>()
+            .join(", ");
+        return format!(
+            "EXISTS (
+                SELECT 1
+                  FROM registry_internal.registry_request_state AS cr_state
+                 WHERE cr_state.request_entity_id = ({context} ->> 'requestEntityId')
+                   AND cr_state.request_id = ({context} ->> 'requestId')::uuid
+                   AND cr_state.proposal_version = ({context} ->> 'proposalVersion')::bigint
+                   AND cr_state.state IN ({visible_states})
+            )"
+        );
+    }
+    let states = match command {
+        PolicyCommand::Update => match operation {
+            Operation::SubmitRequest => vec!["draft"],
+            Operation::ApproveRequest | Operation::RejectRequest | Operation::RequestRevision => {
+                vec!["submitted"]
+            }
+            Operation::ReviseRequest => vec!["submitted", "approved", "needs_changes", "rejected"],
+            Operation::CancelRequest => vec![
+                "draft",
+                "submitted",
+                "approved",
+                "needs_changes",
+                "rejected",
+            ],
+            Operation::ApplyRequest => vec!["approved"],
+            _ => Vec::new(),
+        },
+        PolicyCommand::Insert | PolicyCommand::Select => Vec::new(),
+    }
+    .into_iter()
+    .map(quote_literal)
+    .collect::<Vec<_>>()
+    .join(", ");
+    format!(
+        "EXISTS (
+            SELECT 1
+              FROM registry_internal.registry_request_state AS cr_state
+             WHERE cr_state.request_entity_id = ({context} ->> 'requestEntityId')
+               AND cr_state.request_id = ({context} ->> 'requestId')::uuid
+               AND cr_state.proposal_version = ({context} ->> 'proposalVersion')::bigint
+               AND cr_state.state IN ({states})
+        )"
+    )
+}
+
+fn change_request_action_context_expression() -> &'static str {
+    "NULLIF(current_setting('registry.change_request_action_context', true), '')::jsonb"
+}
+
+fn change_request_action_route_id(
+    entity_id: &str,
+    operation: Operation,
+    stage: Option<&str>,
+) -> String {
+    let action_id = match operation {
+        Operation::SubmitRequest => "submit",
+        Operation::ApproveRequest => "approve",
+        Operation::RejectRequest => "reject",
+        Operation::RequestRevision => "request_revision",
+        Operation::ReviseRequest => "revise",
+        Operation::CancelRequest => "cancel",
+        Operation::ApplyRequest => "apply",
+        _ => "unsupported",
+    };
+    match stage {
+        Some(stage) => format!("records.{entity_id}.request.stages.{stage}.{action_id}"),
+        None => format!("records.{entity_id}.request.{action_id}"),
+    }
+}
+
+fn change_request_presence_policies_for_table(
+    request_entity: &CompiledEntity,
+    entities: &BTreeMap<String, CompiledEntity>,
+) -> Vec<DdlPolicy> {
+    let Some(request) = &request_entity.change_request else {
+        return Vec::new();
+    };
+    let mut policies = Vec::new();
+    for grant in &request.presence_grants {
+        let Some(target_entity) = entities.get(&grant.target_entity_id) else {
+            continue;
+        };
+        let Some(target_profile) = target_entity.access_profiles.get(&grant.profile_id) else {
+            continue;
+        };
+        policies.push(DdlPolicy {
+            name: change_request_presence_policy_name(
+                &request_entity.id,
+                &grant.target_entity_id,
+                &grant.profile_id,
+                PolicyCommand::Select,
+            ),
+            command: PolicyCommand::Select,
+            access_profile: grant.profile_id.clone(),
+            using_expression: Some(format!(
+                "{} AND record_lifecycle = 'active'",
+                change_request_presence_expression(request_entity, target_profile, request, grant)
+            )),
+            check_expression: None,
+        });
+    }
+    policies
+}
+
+fn change_request_presence_expression(
+    request_entity: &CompiledEntity,
+    target_profile: &crate::contract::AccessProfileSource,
+    request: &crate::model::CompiledChangeRequest,
+    grant: &crate::model::CompiledChangeRequestPresenceGrant,
+) -> String {
+    let context = change_request_presence_context_expression();
+    [
+        format!("jsonb_typeof({context}) = 'object'"),
+        format!("{context} ->> 'version' = '1'"),
+        format!(
+            "{context} ->> 'requestEntityId' = {}",
+            quote_literal(&request_entity.id)
+        ),
+        format!(
+            "{context} ->> 'targetEntityId' = {}",
+            quote_literal(&grant.target_entity_id)
+        ),
+        format!("({context} ->> 'targetRecordId') IS NOT NULL"),
+        format!(
+            "{context} ->> 'contractFingerprint' = {}",
+            quote_literal(&request.contract_fingerprint)
+        ),
+        format!(
+            "{context} ->> 'selectedAccessProfile' = {}",
+            quote_literal(&grant.profile_id)
+        ),
+        format!(
+            "({context} ->> 'selectedAccessProfile') = NULLIF(current_setting('registry.access_profile', true), '')"
+        ),
+        format!(
+            "(({context} ->> 'principal') IS NULL OR ({context} ->> 'principal') = NULLIF(current_setting('registry.principal', true), ''))"
+        ),
+        format!(
+            "(({context} ->> 'purpose') IS NULL OR ({context} ->> 'purpose') = NULLIF(current_setting('registry.purpose', true), ''))"
+        ),
+        format!(
+            "{context} ->> 'activePackageRevision' = NULLIF(current_setting('registry.active_package_revision', true), '')"
+        ),
+        session_authority_expression(target_profile),
+        change_request_presence_boundary_expression(request_entity, &grant.request_row_boundaries),
+        change_request_presence_target_exists_expression(request_entity),
+    ]
+    .join(" AND ")
+}
+
+fn change_request_presence_target_exists_expression(request_entity: &CompiledEntity) -> String {
+    let context = change_request_presence_context_expression();
+    format!(
+        "EXISTS (
+            SELECT 1
+              FROM registry_internal.registry_request_state AS cr_state
+              JOIN registry_internal.registry_request_proposals AS cr_proposal
+                ON cr_proposal.request_entity_id = cr_state.request_entity_id
+               AND cr_proposal.request_id = cr_state.request_id
+               AND cr_proposal.proposal_version = cr_state.proposal_version
+              JOIN registry_internal.registry_request_targets AS cr_target
+                ON cr_target.request_entity_id = cr_proposal.request_entity_id
+               AND cr_target.request_id = cr_proposal.request_id
+               AND cr_target.proposal_version = cr_proposal.proposal_version
+             WHERE cr_state.request_entity_id = ({context} ->> 'requestEntityId')
+               AND cr_state.request_id = {request_id}
+               AND cr_state.state IN ('submitted', 'approved')
+               AND cr_proposal.contract_fingerprint = ({context} ->> 'contractFingerprint')
+               AND cr_target.target_entity_id = ({context} ->> 'targetEntityId')
+               AND cr_target.target_record_id = ({context} ->> 'targetRecordId')::uuid
+        )",
+        request_id = field_name(request_entity, "id"),
+    )
+}
+
+fn change_request_presence_boundary_expression(
+    entity: &CompiledEntity,
+    boundaries: &[crate::contract::RowBoundarySource],
+) -> String {
+    let context = format!(
+        "({} -> 'requestRowBoundaries')",
+        change_request_presence_context_expression()
+    );
+    let mut predicates = vec![
+        format!("jsonb_typeof({context}) = 'array'"),
+        format!("jsonb_array_length({context}) = {}", boundaries.len()),
+    ];
+    for (index, boundary) in boundaries.iter().enumerate() {
+        let entry = format!("({context} -> {index})");
+        let values = format!("({entry} -> 'values')");
+        predicates.push(format!("jsonb_typeof({entry}) = 'object'"));
+        predicates.push(format!(
+            "({entry} - 'field' - 'operator' - 'values') = '{{}}'::jsonb"
+        ));
+        predicates.push(format!(
+            "{entry} ->> 'field' = {}",
+            quote_literal(&boundary.field)
+        ));
+        predicates.push(format!(
+            "{entry} ->> 'operator' = {}",
+            quote_literal(match boundary.operator {
+                BoundaryOperator::Equals => "equals",
+                BoundaryOperator::In => "in",
+            })
+        ));
+        predicates.push(format!("jsonb_typeof({values}) = 'array'"));
+        let column = field_name(entity, &boundary.field);
+        let value_type = policy_value_type(&logical_field_type(entity, &boundary.field));
+        match boundary.operator {
+            BoundaryOperator::Equals => {
+                predicates.push(format!("jsonb_array_length({values}) = 1"));
+                predicates.push(format!("{column} = ({values} ->> 0)::{value_type}"));
+            }
+            BoundaryOperator::In => {
+                predicates.push(format!("jsonb_array_length({values}) BETWEEN 1 AND 64"));
+                predicates.push(format!(
+                    "{column} = ANY (ARRAY(SELECT boundary_value::{value_type} FROM jsonb_array_elements_text({values}) AS boundary_values(boundary_value)))"
+                ));
+            }
+        }
+    }
+    predicates.join(" AND ")
+}
+
+fn change_request_presence_context_expression() -> &'static str {
+    "NULLIF(current_setting('registry.change_request_presence_context', true), '')::jsonb"
+}
+
+fn change_request_target_policies_for_table(
+    target_entity: &CompiledEntity,
+    entities: &BTreeMap<String, CompiledEntity>,
+) -> Vec<DdlPolicy> {
+    let mut policies = Vec::new();
+    for request_entity in entities.values() {
+        let Some(request) = &request_entity.change_request else {
+            continue;
+        };
+        for effect in request
+            .effects
+            .iter()
+            .filter(|effect| effect.target.entity_id == target_entity.id)
+        {
+            for profile in request_entity.access_profiles.values() {
+                if profile.operations.iter().any(|operation| {
+                    matches!(
+                        operation,
+                        Operation::SubmitRequest | Operation::ReviseRequest
+                    )
+                }) {
+                    policies.push(DdlPolicy {
+                        name: change_request_policy_name(
+                            &request_entity.id,
+                            &target_entity.id,
+                            &profile.id,
+                            &effect.id,
+                            "prepare",
+                            PolicyCommand::Select,
+                        ),
+                        command: PolicyCommand::Select,
+                        access_profile: profile.id.clone(),
+                        using_expression: Some(format!(
+                            "{} AND record_lifecycle = 'active'",
+                            change_request_preparation_expression(
+                                target_entity,
+                                profile,
+                                request,
+                                effect,
+                            )
+                        )),
+                        check_expression: None,
+                    });
+                }
+            }
+            for grant in request
+                .review_grants
+                .iter()
+                .filter(|grant| grant.target_entity_id == target_entity.id)
+            {
+                if !effect_fields(effect).is_subset(&grant.readable_fields) {
+                    continue;
+                }
+                policies.push(DdlPolicy {
+                    name: change_request_policy_name(
+                        &request_entity.id,
+                        &target_entity.id,
+                        &grant.profile_id,
+                        &effect.id,
+                        &format!("review-{}", grant.stage),
+                        PolicyCommand::Select,
+                    ),
+                    command: PolicyCommand::Select,
+                    access_profile: grant.profile_id.clone(),
+                    using_expression: Some(format!(
+                        "{} AND record_lifecycle = 'active'",
+                        change_request_review_expression(
+                            target_entity,
+                            request_entity,
+                            request,
+                            effect,
+                            grant,
+                        )
+                    )),
+                    check_expression: None,
+                });
+            }
+            for grant in request
+                .apply_grants
+                .iter()
+                .filter(|grant| grant.target_entity_id == target_entity.id)
+            {
+                let expression = change_request_application_expression(
+                    target_entity,
+                    request_entity,
+                    request,
+                    effect,
+                    grant,
+                );
+                match effect.operation {
+                    Operation::Create => {
+                        let bounded_return_row =
+                            format!("{expression} AND record_lifecycle = 'active'");
+                        policies.push(DdlPolicy {
+                            name: change_request_policy_name(
+                                &request_entity.id,
+                                &target_entity.id,
+                                &grant.profile_id,
+                                &effect.id,
+                                "apply",
+                                PolicyCommand::Select,
+                            ),
+                            command: PolicyCommand::Select,
+                            access_profile: grant.profile_id.clone(),
+                            using_expression: Some(bounded_return_row.clone()),
+                            check_expression: None,
+                        });
+                        policies.push(DdlPolicy {
+                            name: change_request_policy_name(
+                                &request_entity.id,
+                                &target_entity.id,
+                                &grant.profile_id,
+                                &effect.id,
+                                "apply",
+                                PolicyCommand::Insert,
+                            ),
+                            command: PolicyCommand::Insert,
+                            access_profile: grant.profile_id.clone(),
+                            using_expression: None,
+                            check_expression: Some(bounded_return_row),
+                        });
+                    }
+                    Operation::Patch => {
+                        let bounded_return_row =
+                            format!("{expression} AND record_lifecycle = 'active'");
+                        let bounded_current_row = format!(
+                            "{bounded_return_row} AND record_revision = ({} ->> 'expectedRevision')::bigint",
+                            change_request_context_expression()
+                        );
+                        policies.push(DdlPolicy {
+                            name: change_request_policy_name(
+                                &request_entity.id,
+                                &target_entity.id,
+                                &grant.profile_id,
+                                &effect.id,
+                                "apply",
+                                PolicyCommand::Select,
+                            ),
+                            command: PolicyCommand::Select,
+                            access_profile: grant.profile_id.clone(),
+                            using_expression: Some(bounded_return_row.clone()),
+                            check_expression: None,
+                        });
+                        policies.push(DdlPolicy {
+                            name: change_request_policy_name(
+                                &request_entity.id,
+                                &target_entity.id,
+                                &grant.profile_id,
+                                &effect.id,
+                                "apply",
+                                PolicyCommand::Update,
+                            ),
+                            command: PolicyCommand::Update,
+                            access_profile: grant.profile_id.clone(),
+                            using_expression: Some(bounded_current_row),
+                            check_expression: Some(bounded_return_row),
+                        });
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    policies
+}
+
+fn change_request_preparation_expression(
+    target_entity: &CompiledEntity,
+    profile: &crate::contract::AccessProfileSource,
+    request: &crate::model::CompiledChangeRequest,
+    effect: &CompiledChangeRequestEffect,
+) -> String {
+    let context = change_request_context_expression();
+    let request_state_exists = format!(
+        "EXISTS (
+            SELECT 1
+              FROM registry_internal.registry_request_state AS cr_state
+             WHERE cr_state.request_entity_id = ({context} ->> 'requestEntityId')
+               AND cr_state.request_id = ({context} ->> 'requestId')::uuid
+               AND cr_state.proposal_version = ({context} ->> 'proposalVersion')::bigint
+               AND cr_state.state = 'draft'
+               AND cr_state.owner_reference = ({context} ->> 'actorReference')
+        )"
+    );
+    [
+        change_request_common_expression(
+            target_entity,
+            &profile.id,
+            request,
+            effect,
+            "preparation",
+            None,
+        ),
+        session_authority_expression(profile),
+        format!("{context} -> 'targetRowBoundaries' = '[]'::jsonb"),
+        request_state_exists,
+    ]
+    .join(" AND ")
+}
+
+fn change_request_review_expression(
+    target_entity: &CompiledEntity,
+    request_entity: &CompiledEntity,
+    request: &crate::model::CompiledChangeRequest,
+    effect: &CompiledChangeRequestEffect,
+    grant: &crate::model::CompiledChangeRequestReviewGrant,
+) -> String {
+    [
+        change_request_common_expression(
+            target_entity,
+            &grant.profile_id,
+            request,
+            effect,
+            "review",
+            Some(&grant.stage),
+        ),
+        session_authority_expression(&request_entity.access_profiles[&grant.profile_id]),
+        change_request_proposal_target_exists_expression("submitted", effect),
+        change_request_target_boundary_expression(target_entity, &grant.row_boundaries),
+    ]
+    .join(" AND ")
+}
+
+fn change_request_application_expression(
+    target_entity: &CompiledEntity,
+    request_entity: &CompiledEntity,
+    request: &crate::model::CompiledChangeRequest,
+    effect: &CompiledChangeRequestEffect,
+    grant: &crate::model::CompiledChangeRequestApplyGrant,
+) -> String {
+    [
+        change_request_common_expression(
+            target_entity,
+            &grant.profile_id,
+            request,
+            effect,
+            "application",
+            None,
+        ),
+        session_authority_expression(&request_entity.access_profiles[&grant.profile_id]),
+        change_request_proposal_target_exists_expression("approved", effect),
+        change_request_target_boundary_expression(target_entity, &grant.row_boundaries),
+    ]
+    .join(" AND ")
+}
+
+fn change_request_common_expression(
+    target_entity: &CompiledEntity,
+    profile_id: &str,
+    request: &crate::model::CompiledChangeRequest,
+    effect: &CompiledChangeRequestEffect,
+    phase: &str,
+    stage: Option<&str>,
+) -> String {
+    let context = change_request_context_expression();
+    let field_plan = serde_json::to_string(&effect_fields(effect).into_iter().collect::<Vec<_>>())
+        .expect("compiled field plan serializes");
+    let phase_value = match stage {
+        Some(stage) => serde_json::json!({"kind": phase, "stage": stage}),
+        None => serde_json::json!({"kind": phase}),
+    };
+    let phase_plan = serde_json::to_string(&phase_value).expect("compiled phase serializes");
+    let mut predicates = vec![
+        format!("jsonb_typeof({context}) = 'object'"),
+        format!("{context} ->> 'version' = '1'"),
+        format!(
+            "{context} ->> 'requestEntityId' = {}",
+            quote_literal(&request.request_entity_id)
+        ),
+        format!(
+            "{context} ->> 'contractFingerprint' = {}",
+            quote_literal(&request.contract_fingerprint)
+        ),
+        format!("({context} ->> 'effectDigest') ~ '^sha256:[0-9a-f]{{64}}$'"),
+        format!("({context} ->> 'actorReference') IS NOT NULL"),
+        format!(
+            "{context} ->> 'selectedAccessProfile' = {}",
+            quote_literal(profile_id)
+        ),
+        format!(
+            "({context} ->> 'selectedAccessProfile') = NULLIF(current_setting('registry.access_profile', true), '')"
+        ),
+        format!(
+            "(({context} ->> 'principal') IS NULL OR ({context} ->> 'principal') = NULLIF(current_setting('registry.principal', true), ''))"
+        ),
+        format!(
+            "(({context} ->> 'purpose') IS NULL OR ({context} ->> 'purpose') = NULLIF(current_setting('registry.purpose', true), ''))"
+        ),
+        format!(
+            "{context} ->> 'effectId' = {}",
+            quote_literal(&effect.id)
+        ),
+        format!(
+            "{context} ->> 'targetEntityId' = {}",
+            quote_literal(&effect.target.entity_id)
+        ),
+        format!(
+            "{context} ->> 'operation' = {}",
+            quote_literal(operation_name(effect.operation))
+        ),
+        format!("{context} -> 'fields' = {}::jsonb", quote_literal(&field_plan)),
+        format!(
+            "{context} ->> 'activePackageRevision' = NULLIF(current_setting('registry.active_package_revision', true), '')"
+        ),
+        format!(
+            "{context} ->> 'targetRecordId' = {}::text",
+            field_name(target_entity, "id")
+        ),
+    ];
+    predicates.push(format!(
+        "{context} -> 'phase' = {}::jsonb",
+        quote_literal(&phase_plan)
+    ));
+    predicates.join(" AND ")
+}
+
+fn change_request_proposal_target_exists_expression(
+    required_state: &str,
+    effect: &CompiledChangeRequestEffect,
+) -> String {
+    let context = change_request_context_expression();
+    let expected_revision = match effect.operation {
+        Operation::Create => format!("({context} ->> 'expectedRevision') IS NULL"),
+        Operation::Patch => format!("({context} ->> 'expectedRevision') IS NOT NULL"),
+        _ => "false".to_owned(),
+    };
+    format!(
+        "{expected_revision}
+         AND EXISTS (
+             SELECT 1
+               FROM registry_internal.registry_request_state AS cr_state
+               JOIN registry_internal.registry_request_proposals AS cr_proposal
+                 ON cr_proposal.request_entity_id = cr_state.request_entity_id
+                AND cr_proposal.request_id = cr_state.request_id
+                AND cr_proposal.proposal_version = cr_state.proposal_version
+               JOIN registry_internal.registry_request_targets AS cr_target
+                 ON cr_target.request_entity_id = cr_proposal.request_entity_id
+                AND cr_target.request_id = cr_proposal.request_id
+                AND cr_target.proposal_version = cr_proposal.proposal_version
+              WHERE cr_state.request_entity_id = ({context} ->> 'requestEntityId')
+                AND cr_state.request_id = ({context} ->> 'requestId')::uuid
+                AND cr_state.proposal_version = ({context} ->> 'proposalVersion')::bigint
+                AND cr_state.state = {state}
+                AND cr_proposal.contract_fingerprint = ({context} ->> 'contractFingerprint')
+                AND cr_proposal.effect_digest = ({context} ->> 'effectDigest')
+                AND cr_target.target_entity_id = ({context} ->> 'targetEntityId')
+                AND cr_target.target_record_id = ({context} ->> 'targetRecordId')::uuid
+                AND cr_target.operation = ({context} ->> 'operation')
+                AND (
+                    (cr_target.expected_revision IS NULL AND ({context} ->> 'expectedRevision') IS NULL)
+                    OR cr_target.expected_revision = ({context} ->> 'expectedRevision')::bigint
+                )
+         )",
+        state = quote_literal(required_state),
+    )
+}
+
+fn change_request_target_boundary_expression(
+    entity: &CompiledEntity,
+    boundaries: &[crate::contract::RowBoundarySource],
+) -> String {
+    let context = format!(
+        "({} -> 'targetRowBoundaries')",
+        change_request_context_expression()
+    );
+    let mut predicates = vec![
+        format!("jsonb_typeof({context}) = 'array'"),
+        format!("jsonb_array_length({context}) = {}", boundaries.len()),
+    ];
+    for (index, boundary) in boundaries.iter().enumerate() {
+        let entry = format!("({context} -> {index})");
+        let values = format!("({entry} -> 'values')");
+        predicates.push(format!("jsonb_typeof({entry}) = 'object'"));
+        predicates.push(format!(
+            "({entry} - 'field' - 'operator' - 'values') = '{{}}'::jsonb"
+        ));
+        predicates.push(format!(
+            "{entry} ->> 'field' = {}",
+            quote_literal(&boundary.field)
+        ));
+        predicates.push(format!(
+            "{entry} ->> 'operator' = {}",
+            quote_literal(match boundary.operator {
+                BoundaryOperator::Equals => "equals",
+                BoundaryOperator::In => "in",
+            })
+        ));
+        predicates.push(format!("jsonb_typeof({values}) = 'array'"));
+        let column = field_name(entity, &boundary.field);
+        let value_type = policy_value_type(&logical_field_type(entity, &boundary.field));
+        match boundary.operator {
+            BoundaryOperator::Equals => {
+                predicates.push(format!("jsonb_array_length({values}) = 1"));
+                predicates.push(format!("{column} = ({values} ->> 0)::{value_type}"));
+            }
+            BoundaryOperator::In => {
+                predicates.push(format!("jsonb_array_length({values}) BETWEEN 1 AND 64"));
+                predicates.push(format!(
+                    "{column} = ANY (ARRAY(SELECT boundary_value::{value_type} FROM jsonb_array_elements_text({values}) AS boundary_values(boundary_value)))"
+                ));
+            }
+        }
+    }
+    predicates.join(" AND ")
+}
+
+fn change_request_context_expression() -> &'static str {
+    "NULLIF(current_setting('registry.change_request_target_context', true), '')::jsonb"
+}
+
+fn effect_fields(effect: &CompiledChangeRequestEffect) -> BTreeSet<String> {
+    effect
+        .mutations
+        .iter()
+        .map(|mutation| match mutation {
+            CompiledChangeRequestMutation::Set { field, .. }
+            | CompiledChangeRequestMutation::Clear { field } => field.clone(),
+        })
+        .collect()
+}
+
+fn operation_name(operation: Operation) -> &'static str {
+    match operation {
+        Operation::Create => "create",
+        Operation::Patch => "patch",
+        _ => "unsupported",
+    }
+}
+
+fn change_request_operation_name(operation: Operation) -> &'static str {
+    match operation {
+        Operation::SubmitRequest => "submit_request",
+        Operation::ApproveRequest => "approve_request",
+        Operation::RejectRequest => "reject_request",
+        Operation::RequestRevision => "request_revision",
+        Operation::ReviseRequest => "revise_request",
+        Operation::CancelRequest => "cancel_request",
+        Operation::ApplyRequest => "apply_request",
+        _ => "unsupported",
+    }
+}
+
+fn change_request_policy_name(
+    request_entity_id: &str,
+    target_entity_id: &str,
+    profile_id: &str,
+    effect_id: &str,
+    phase: &str,
+    command: PolicyCommand,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"registry-server/change-request-target-rls-policy/v1");
+    for value in [
+        request_entity_id,
+        target_entity_id,
+        profile_id,
+        effect_id,
+        phase,
+        command.as_sql(),
+    ] {
+        hasher.update((value.len() as u64).to_be_bytes());
+        hasher.update(value.as_bytes());
+    }
+    let digest = hasher.finalize();
+    let suffix = digest[..12]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!(
+        "registry_cr_rls_{}_{}",
+        command.as_sql().to_ascii_lowercase(),
+        suffix
+    )
+}
+
+fn change_request_presence_policy_name(
+    request_entity_id: &str,
+    target_entity_id: &str,
+    profile_id: &str,
+    command: PolicyCommand,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"registry-server/change-request-presence-rls-policy/v1");
+    for value in [
+        request_entity_id,
+        target_entity_id,
+        profile_id,
+        command.as_sql(),
+    ] {
+        hasher.update((value.len() as u64).to_be_bytes());
+        hasher.update(value.as_bytes());
+    }
+    let digest = hasher.finalize();
+    let suffix = digest[..12]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!(
+        "registry_cr_presence_rls_{}_{}",
+        command.as_sql().to_ascii_lowercase(),
+        suffix
+    )
+}
+
+fn change_request_action_policy_name(
+    request_entity_id: &str,
+    profile_id: &str,
+    operation: Operation,
+    stage: &str,
+    command: PolicyCommand,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"registry-server/change-request-action-rls-policy/v1");
+    for value in [
+        request_entity_id,
+        profile_id,
+        change_request_operation_name(operation),
+        stage,
+        command.as_sql(),
+    ] {
+        hasher.update((value.len() as u64).to_be_bytes());
+        hasher.update(value.as_bytes());
+    }
+    let digest = hasher.finalize();
+    let suffix = digest[..12]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!(
+        "registry_cr_action_rls_{}_{}",
+        command.as_sql().to_ascii_lowercase(),
+        suffix
+    )
+}
+
 fn policy_authority_expression(
     entity: &CompiledEntity,
     profile: &crate::contract::AccessProfileSource,
@@ -836,6 +1907,21 @@ fn policy_name(entity_id: &str, profile_id: &str, command: PolicyCommand) -> Str
         command.as_sql().to_ascii_lowercase(),
         suffix
     )
+}
+
+fn create_returning_policy_name(entity_id: &str, profile_id: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"registry-server/create-returning-rls-policy/v1");
+    for value in [entity_id, profile_id] {
+        hasher.update((value.len() as u64).to_be_bytes());
+        hasher.update(value.as_bytes());
+    }
+    let digest = hasher.finalize();
+    let suffix = digest[..12]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("registry_create_returning_rls_{suffix}")
 }
 
 fn read_path_policy_name(

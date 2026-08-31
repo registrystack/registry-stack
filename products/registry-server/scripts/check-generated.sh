@@ -3,7 +3,7 @@ set -euo pipefail
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repository_root=$(cd -- "$script_dir/../../.." && pwd)
-fixtures=(asset-site-placement publicschema-household)
+fixtures=(asset-site-placement publicschema-household asset-site-placement-change-requests publicschema-household-change-requests)
 authoring_baseline="$repository_root/products/registry-server/generated/authoring"
 runtime_baseline="$repository_root/products/registry-server/generated/runtime"
 temporary_root=""
@@ -48,8 +48,9 @@ mkdir "$runtime_candidate"
     fixture="$repository_root/products/registry-server/acceptance/$fixture_name"
     for selector in openapi schemas manifest metadata sql; do
       selector_candidate="$temporary_root/selector-$fixture_name-$selector"
+      selector_output="./selector-$fixture_name-$selector"
       cargo run --manifest-path "$repository_root/Cargo.toml" --locked -p registry-serverctl -- \
-        generate "$selector" "$fixture" --output "$selector_candidate"
+        generate "$selector" "$fixture" --output "$selector_output"
       cp -R "$selector_candidate/." "$candidate"
     done
   done

@@ -8,8 +8,8 @@ use crate::artifacts::GeneratedArtifacts;
 use crate::contract::{
     AccessProfileSource, BatchSource, Classification, ConstraintSource, EventConditionSource,
     EventSource, FieldTypeSource, ManifestProjectionSource, MutationMode, Operation,
-    PackageIdentitySource, TemporalSource, ValidTimeRole, WebhookAuthenticationProfile,
-    WebhookDeadLetterMode,
+    PackageIdentitySource, RowBoundarySource, TemporalSource, ValidTimeRole,
+    WebhookAuthenticationProfile, WebhookDeadLetterMode,
 };
 use crate::diagnostics::Diagnostic;
 use crate::generated_ddl::DdlInventory;
@@ -96,6 +96,154 @@ pub struct CompiledReadPath {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledChangeControl {
+    pub required_for: BTreeSet<Operation>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledChangeRequest {
+    pub request_entity_id: String,
+    pub contract_fingerprint: String,
+    pub retention_mode: CompiledChangeRequestRetentionMode,
+    pub effects: Vec<CompiledChangeRequestEffect>,
+    pub stages: Vec<CompiledChangeRequestStage>,
+    pub actions: Vec<CompiledChangeRequestActionRoute>,
+    pub review_grants: Vec<CompiledChangeRequestReviewGrant>,
+    pub apply_grants: Vec<CompiledChangeRequestApplyGrant>,
+    pub presence_grants: Vec<CompiledChangeRequestPresenceGrant>,
+    pub target_entities: BTreeSet<String>,
+    pub maximum_targets: u16,
+    pub maximum_field_mutations: u16,
+    pub maximum_snapshot_bytes: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompiledChangeRequestRetentionMode {
+    #[default]
+    Retain,
+    OperatorErase,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledChangeRequestEffect {
+    pub id: String,
+    pub target: CompiledChangeRequestTarget,
+    pub operation: Operation,
+    pub mutations: Vec<CompiledChangeRequestMutation>,
+    pub depends_on: BTreeSet<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledChangeRequestTarget {
+    pub entity_id: String,
+    pub binding: CompiledChangeRequestTargetBinding,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase", tag = "kind")]
+pub enum CompiledChangeRequestTargetBinding {
+    Existing { from_field: String },
+    ReservedCreate { effect: String },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase", tag = "kind")]
+pub enum CompiledChangeRequestMutation {
+    Set {
+        field: String,
+        value: CompiledChangeRequestValue,
+    },
+    Clear {
+        field: String,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase", tag = "kind")]
+pub enum CompiledChangeRequestValue {
+    FromField {
+        field: String,
+    },
+    FromEffect {
+        effect: String,
+        target_entity_id: String,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledChangeRequestStage {
+    pub id: String,
+    pub approvals: u16,
+    pub exclude_submitter: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChangeRequestOperation {
+    SubmitRequest,
+    ApproveRequest,
+    RejectRequest,
+    RequestRevision,
+    ReviseRequest,
+    CancelRequest,
+    ApplyRequest,
+}
+
+impl ChangeRequestOperation {
+    pub fn access_operation(self) -> Operation {
+        match self {
+            Self::SubmitRequest => Operation::SubmitRequest,
+            Self::ApproveRequest => Operation::ApproveRequest,
+            Self::RejectRequest => Operation::RejectRequest,
+            Self::RequestRevision => Operation::RequestRevision,
+            Self::ReviseRequest => Operation::ReviseRequest,
+            Self::CancelRequest => Operation::CancelRequest,
+            Self::ApplyRequest => Operation::ApplyRequest,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledChangeRequestActionRoute {
+    pub operation: ChangeRequestOperation,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_stage: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledChangeRequestReviewGrant {
+    pub profile_id: String,
+    pub stage: String,
+    pub target_entity_id: String,
+    pub readable_fields: BTreeSet<String>,
+    pub row_boundaries: Vec<RowBoundarySource>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledChangeRequestApplyGrant {
+    pub profile_id: String,
+    pub target_entity_id: String,
+    pub row_boundaries: Vec<RowBoundarySource>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledChangeRequestPresenceGrant {
+    pub profile_id: String,
+    pub target_entity_id: String,
+    pub request_row_boundaries: Vec<RowBoundarySource>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledEntity {
     pub id: String,
     pub route: String,
@@ -114,6 +262,10 @@ pub struct CompiledEntity {
     pub source_relation: CompiledSourceRelation,
     pub selector_profiles: BTreeMap<String, CompiledSelectorProfile>,
     pub read_paths: BTreeMap<String, CompiledReadPath>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub change_control: Option<CompiledChangeControl>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub change_request: Option<CompiledChangeRequest>,
     pub fields: BTreeMap<String, CompiledField>,
     pub constraints: BTreeMap<String, ConstraintSource>,
     pub indexes: BTreeMap<String, Vec<String>>,
@@ -160,6 +312,8 @@ pub struct CompiledRoute {
     pub query_kind: Option<CompiledQueryKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub revision_kind: Option<CompiledRevisionKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_stage: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub maximum_records: Option<u16>,
     pub access_profiles: Vec<String>,
@@ -360,6 +514,89 @@ pub struct CompiledQueryOperation {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledQueryInventory {
     pub operations: Vec<CompiledQueryOperation>,
+}
+
+pub const REQUEST_SERVER_STATE_QUERY_FIELD: &str = "__request_server_state";
+pub const REQUEST_PROPOSAL_VERSION_QUERY_FIELD: &str = "__request_proposal_version";
+pub const REQUEST_EFFECT_DIGEST_QUERY_FIELD: &str = "__request_effect_digest";
+
+pub fn request_query_field_id_for_api(api_name: &str) -> Option<&'static str> {
+    match api_name {
+        "serverState" => Some(REQUEST_SERVER_STATE_QUERY_FIELD),
+        "proposalVersion" => Some(REQUEST_PROPOSAL_VERSION_QUERY_FIELD),
+        "effectDigest" => Some(REQUEST_EFFECT_DIGEST_QUERY_FIELD),
+        _ => None,
+    }
+}
+
+pub fn request_query_field_api_name(field_id: &str) -> Option<&'static str> {
+    match field_id {
+        REQUEST_SERVER_STATE_QUERY_FIELD => Some("serverState"),
+        REQUEST_PROPOSAL_VERSION_QUERY_FIELD => Some("proposalVersion"),
+        REQUEST_EFFECT_DIGEST_QUERY_FIELD => Some("effectDigest"),
+        _ => None,
+    }
+}
+
+pub fn request_query_field_type(field_id: &str) -> Option<FieldTypeSource> {
+    match field_id {
+        REQUEST_SERVER_STATE_QUERY_FIELD => Some(FieldTypeSource::String {
+            min_length: 4,
+            max_length: 16,
+        }),
+        REQUEST_PROPOSAL_VERSION_QUERY_FIELD => Some(FieldTypeSource::Int64),
+        REQUEST_EFFECT_DIGEST_QUERY_FIELD => Some(FieldTypeSource::String {
+            min_length: 71,
+            max_length: 71,
+        }),
+        _ => None,
+    }
+}
+
+pub fn request_state_query_filter_fields() -> Vec<CompiledQueryFilterField> {
+    vec![
+        CompiledQueryFilterField {
+            field: REQUEST_SERVER_STATE_QUERY_FIELD.to_owned(),
+            operators: vec![
+                CompiledQueryFilterOperator::Equals,
+                CompiledQueryFilterOperator::In,
+            ],
+        },
+        CompiledQueryFilterField {
+            field: REQUEST_PROPOSAL_VERSION_QUERY_FIELD.to_owned(),
+            operators: vec![
+                CompiledQueryFilterOperator::Equals,
+                CompiledQueryFilterOperator::In,
+                CompiledQueryFilterOperator::Range,
+            ],
+        },
+        CompiledQueryFilterField {
+            field: REQUEST_EFFECT_DIGEST_QUERY_FIELD.to_owned(),
+            operators: vec![
+                CompiledQueryFilterOperator::Equals,
+                CompiledQueryFilterOperator::In,
+                CompiledQueryFilterOperator::IsNull,
+                CompiledQueryFilterOperator::IsNotNull,
+            ],
+        },
+    ]
+}
+
+pub fn request_state_query_sort_fields() -> Vec<CompiledQuerySortField> {
+    vec![
+        CompiledQuerySortField {
+            field: REQUEST_SERVER_STATE_QUERY_FIELD.to_owned(),
+            directions: vec![CompiledQuerySortDirection::Asc],
+        },
+        CompiledQuerySortField {
+            field: REQUEST_PROPOSAL_VERSION_QUERY_FIELD.to_owned(),
+            directions: vec![CompiledQuerySortDirection::Asc],
+        },
+        CompiledQuerySortField {
+            field: REQUEST_EFFECT_DIGEST_QUERY_FIELD.to_owned(),
+            directions: vec![CompiledQuerySortDirection::Asc],
+        },
+    ]
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

@@ -127,6 +127,12 @@ pub(crate) enum StoredResultMetadata {
     Batch {
         result_count: u16,
     },
+    Application {
+        record_reference: String,
+        record_revision: i64,
+        proposal_version: i64,
+        result_count: u16,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -273,7 +279,8 @@ pub(crate) async fn lock_and_load(
     let Some(row) = transaction
         .query_opt(
             "SELECT binding_reference, result_kind, record_revision, response_status,
-                    response_body, response_headers, record_reference, result_count
+                    response_body, response_headers, record_reference, result_count,
+                    proposal_version, erased_at
              FROM registry_internal.registry_idempotency
              WHERE key_reference = $1",
             &[&binding.key_reference],
@@ -286,6 +293,11 @@ pub(crate) async fn lock_and_load(
     if row.get::<_, String>(0) != binding.binding_reference {
         return Err(IdempotencyError::Conflict);
     }
+    if row.get::<_, Option<std::time::SystemTime>>(9).is_some() {
+        // Erasure is permanent. Keep the consumed key reserved and refuse
+        // replay without presenting a transient outage to retrying clients.
+        return Err(IdempotencyError::Conflict);
+    }
     let metadata = match row.get::<_, String>(1).as_str() {
         "record" => {
             let record_revision = row
@@ -296,7 +308,7 @@ pub(crate) async fn lock_and_load(
                 .get::<_, Option<String>>(6)
                 .filter(|reference| !reference.is_empty())
                 .ok_or(IdempotencyError::Unavailable)?;
-            if row.get::<_, Option<i16>>(7).is_some() {
+            if row.get::<_, Option<i16>>(7).is_some() || row.get::<_, Option<i64>>(8).is_some() {
                 return Err(IdempotencyError::Unavailable);
             }
             StoredResultMetadata::Record {
@@ -305,7 +317,10 @@ pub(crate) async fn lock_and_load(
             }
         }
         "batch" => {
-            if row.get::<_, Option<i64>>(2).is_some() || row.get::<_, Option<String>>(6).is_some() {
+            if row.get::<_, Option<i64>>(2).is_some()
+                || row.get::<_, Option<String>>(6).is_some()
+                || row.get::<_, Option<i64>>(8).is_some()
+            {
                 return Err(IdempotencyError::Unavailable);
             }
             let result_count = row
@@ -315,10 +330,37 @@ pub(crate) async fn lock_and_load(
                 .ok_or(IdempotencyError::Unavailable)?;
             StoredResultMetadata::Batch { result_count }
         }
+        "application" => {
+            let record_revision = row
+                .get::<_, Option<i64>>(2)
+                .filter(|revision| *revision > 0)
+                .ok_or(IdempotencyError::Unavailable)?;
+            let record_reference = row
+                .get::<_, Option<String>>(6)
+                .filter(|reference| !reference.is_empty())
+                .ok_or(IdempotencyError::Unavailable)?;
+            let result_count = row
+                .get::<_, Option<i16>>(7)
+                .and_then(|count| u16::try_from(count).ok())
+                .filter(|count| (1..=16).contains(count))
+                .ok_or(IdempotencyError::Unavailable)?;
+            let proposal_version = row
+                .get::<_, Option<i64>>(8)
+                .filter(|version| *version > 0)
+                .ok_or(IdempotencyError::Unavailable)?;
+            StoredResultMetadata::Application {
+                record_reference,
+                record_revision,
+                proposal_version,
+                result_count,
+            }
+        }
         _ => return Err(IdempotencyError::Unavailable),
     };
     let status = u16::try_from(row.get::<_, i16>(3)).map_err(|_| IdempotencyError::Unavailable)?;
-    let body = row.get::<_, Vec<u8>>(4);
+    let body = row
+        .get::<_, Option<Vec<u8>>>(4)
+        .ok_or(IdempotencyError::Unavailable)?;
     if body.is_empty() || body.len() > MAX_HELD_BODY_BYTES {
         return Err(IdempotencyError::Unavailable);
     }
@@ -345,30 +387,52 @@ pub(crate) async fn insert_result(
 ) -> Result<(), IdempotencyError> {
     let status = i16::try_from(response.status).map_err(|_| IdempotencyError::InvalidInput)?;
     let headers = encode_headers(&response.headers)?;
-    let (result_kind, record_revision, record_reference, result_count) = match metadata {
-        StoredResultMetadata::Record {
-            record_reference,
-            record_revision,
-        } if !record_reference.is_empty() && *record_revision > 0 => (
-            "record",
-            Some(*record_revision),
-            Some(record_reference.as_str()),
-            None,
-        ),
-        StoredResultMetadata::Batch { result_count } if *result_count > 0 => (
-            "batch",
-            None,
-            None,
-            Some(i16::try_from(*result_count).map_err(|_| IdempotencyError::InvalidInput)?),
-        ),
-        _ => return Err(IdempotencyError::InvalidInput),
-    };
+    let (result_kind, record_revision, record_reference, result_count, proposal_version) =
+        match metadata {
+            StoredResultMetadata::Record {
+                record_reference,
+                record_revision,
+            } if !record_reference.is_empty() && *record_revision > 0 => (
+                "record",
+                Some(*record_revision),
+                Some(record_reference.as_str()),
+                None,
+                None,
+            ),
+            StoredResultMetadata::Batch { result_count } if *result_count > 0 => (
+                "batch",
+                None,
+                None,
+                Some(i16::try_from(*result_count).map_err(|_| IdempotencyError::InvalidInput)?),
+                None,
+            ),
+            StoredResultMetadata::Application {
+                record_reference,
+                record_revision,
+                proposal_version,
+                result_count,
+            } if !record_reference.is_empty()
+                && *record_revision > 0
+                && *proposal_version > 0
+                && (1..=16).contains(result_count) =>
+            {
+                (
+                    "application",
+                    Some(*record_revision),
+                    Some(record_reference.as_str()),
+                    Some(i16::try_from(*result_count).map_err(|_| IdempotencyError::InvalidInput)?),
+                    Some(*proposal_version),
+                )
+            }
+            _ => return Err(IdempotencyError::InvalidInput),
+        };
     let changed = transaction
         .execute(
             "INSERT INTO registry_internal.registry_idempotency
                  (key_reference, binding_reference, result_kind, record_revision,
-                  response_status, response_body, response_headers, record_reference, result_count)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+                  response_status, response_body, response_headers, record_reference, result_count,
+                  proposal_version)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
             &[
                 &binding.key_reference,
                 &binding.binding_reference,
@@ -379,6 +443,7 @@ pub(crate) async fn insert_result(
                 &headers,
                 &record_reference,
                 &result_count,
+                &proposal_version,
             ],
         )
         .await

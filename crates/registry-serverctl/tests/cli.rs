@@ -1078,6 +1078,70 @@ fn explain_reports_are_derived_from_compiled_inventories() {
 }
 
 #[test]
+fn explain_change_requests_reports_compiled_effects_actions_and_controlled_writes() {
+    let project = fs::canonicalize(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/registry-server/acceptance/asset-site-placement-change-requests"),
+    )
+    .expect("committed change request fixture path resolves");
+    let output = registry_serverctl(&[
+        "--format",
+        "json",
+        "explain",
+        "change-requests",
+        project.to_str().expect("path is UTF-8"),
+    ]);
+
+    assert!(output.status.success(), "{output:?}");
+    let report = json_stdout(&output);
+    let explanation = &report["explanation"];
+    let requests = explanation["requests"]
+        .as_array()
+        .expect("change requests are listed");
+    assert_eq!(requests.len(), 1);
+    let request = &requests[0];
+    assert_eq!(request["requestEntity"], "placement-correction-request");
+    assert_eq!(request["effects"][0]["operation"], "patch");
+    assert_eq!(request["effects"][0]["target"]["entity"], "asset-placement");
+    assert_eq!(
+        request["effects"][0]["fields"][0]["target"]["field"],
+        "site"
+    );
+    assert_eq!(
+        request["effects"][0]["fields"][0]["target"]["apiName"],
+        "site"
+    );
+    assert_eq!(
+        request["effects"][0]["fields"][0]["value"]["field"]["field"],
+        "proposed-site"
+    );
+    assert_eq!(request["stages"][1]["id"], "final-approval");
+    let approve = request["actions"]
+        .as_array()
+        .expect("actions are listed")
+        .iter()
+        .find(|action| action["operation"] == "approve_request" && action["stage"] == "review")
+        .expect("review approve action is explained");
+    assert_eq!(
+        approve["preconditions"],
+        json!([
+            "Idempotency-Key",
+            "If-Match",
+            "proposalVersion",
+            "effectDigest"
+        ])
+    );
+    assert_eq!(
+        explanation["controlledWrites"][0]["directWriteRestriction"],
+        "controlled operations are absent from ordinary grants and require compiled apply_request context"
+    );
+    assert_eq!(
+        explanation["controlledWrites"][0]["eligibleRequestTypes"],
+        json!(["placement-correction-request"])
+    );
+}
+
+#[test]
 fn explain_query_filter_examples_match_field_types() {
     let project = TestProject::from_registry_source(
         br#"apiVersion: registry.registrystack.org/v1alpha1

@@ -3,7 +3,7 @@
 #![cfg(all(feature = "runtime", feature = "tooling"))]
 
 use registry_server::compiler::{compile_project, module_digest, CompileProfile};
-use registry_server::contract::{parse_module_yaml, parse_project_yaml};
+use registry_server::contract::{parse_module_yaml, parse_project_json, parse_project_yaml};
 use registry_server::fixtures::{validate_fixture_journeys, FixtureError};
 
 const PROJECT_TEMPLATE: &[u8] = include_bytes!("fixtures/fixture-tooling/project.yaml");
@@ -32,6 +32,19 @@ fn fixture_tooling_strict_parser_refuses_unclosed_authority_and_source_shapes() 
         FixtureError::DuplicateIdentifier
     );
 
+    let source = String::from_utf8(JOURNEY_SOURCE.to_vec()).expect("fixture is UTF-8");
+    let (_, first_journey) = source
+        .split_once("  - id: widget-lifecycle")
+        .expect("fixture contains a journey");
+    let duplicated_step_ids_in_another_journey =
+        format!("{source}  - id: widget-lifecycle-copy{}", first_journey);
+    assert_eq!(
+        validate_fixture_journeys(duplicated_step_ids_in_another_journey.as_bytes(), &registry)
+            .expect("step identifiers are scoped to one journey")
+            .journey_ids(),
+        ["widget-lifecycle", "widget-lifecycle-copy"]
+    );
+
     for (from, to) in [
         ("accessProfile: operator", "accessProfile: administrator"),
         ("operation: create", "operation: tombstone"),
@@ -55,6 +68,117 @@ fn fixture_tooling_strict_parser_refuses_unclosed_authority_and_source_shapes() 
         validate_fixture_journeys(&oversized, &registry).unwrap_err(),
         FixtureError::JourneyTooLarge
     );
+}
+
+#[test]
+fn fixture_tooling_request_actions_are_closed_and_get_precondition_bound() {
+    let registry = compiled_request_fixture();
+    let valid = br#"apiVersion: registry.registrystack.org/server-journeys/v1
+journeys:
+  - id: request-action-flow
+    steps:
+      - id: create-request
+        entity: correction-request
+        accessProfile: submitter
+        claims: &submitter_claims {principal: submitter}
+        request:
+          operation: create
+          data: {target: 11111111-1111-1111-1111-111111111111, value: corrected}
+        expect:
+          outcome: success
+          status: 201
+          fields: {target: 11111111-1111-1111-1111-111111111111, value: corrected}
+        capture: created-request
+      - id: get-before-submit
+        entity: correction-request
+        accessProfile: reviewer
+        claims: &reviewer_claims {principal: reviewer}
+        request: {operation: get, recordRef: created-request}
+        expect:
+          outcome: success
+          status: 200
+          fields: {target: 11111111-1111-1111-1111-111111111111, value: corrected}
+        capture: before-submit
+      - id: submit-request
+        entity: correction-request
+        accessProfile: submitter
+        claims: *submitter_claims
+        request: {operation: submit_request, recordRef: before-submit, etagRef: before-submit}
+        expect: {outcome: success, status: 200}
+      - id: get-before-approve
+        entity: correction-request
+        accessProfile: reviewer
+        claims: *reviewer_claims
+        request: {operation: get, recordRef: created-request}
+        expect:
+          outcome: success
+          status: 200
+          fields: {target: 11111111-1111-1111-1111-111111111111, value: corrected}
+        capture: before-approve
+      - id: approve-request
+        entity: correction-request
+        accessProfile: reviewer
+        claims: *reviewer_claims
+        request:
+          operation: approve_request
+          stage: review
+          recordRef: before-approve
+          etagRef: before-approve
+          proposalVersionRef: before-approve
+          effectDigestRef: before-approve
+        expect: {outcome: success, status: 200}
+      - id: revise-request
+        entity: correction-request
+        accessProfile: submitter
+        claims: *submitter_claims
+        request: {operation: revise_request, recordRef: before-approve, etagRef: before-approve, rebase: true}
+        expect: {outcome: success, status: 200}
+"#;
+    validate_fixture_journeys(valid, &registry).expect("closed request action fixture validates");
+
+    for (label, from, to) in [
+        (
+            "raw body",
+            "request: {operation: submit_request, recordRef: before-submit, etagRef: before-submit}",
+            "request: {operation: submit_request, recordRef: before-submit, etagRef: before-submit, body: {}}",
+        ),
+        (
+            "missing revise rebase",
+            "request: {operation: revise_request, recordRef: before-approve, etagRef: before-approve, rebase: true}",
+            "request: {operation: revise_request, recordRef: before-approve, etagRef: before-approve}",
+        ),
+        (
+            "action capture",
+            "expect: {outcome: success, status: 200}\n      - id: get-before-approve",
+            "expect: {outcome: success, status: 200}\n        capture: submitted-request\n      - id: get-before-approve",
+        ),
+        (
+            "create precondition",
+            "request: {operation: submit_request, recordRef: before-submit, etagRef: before-submit}",
+            "request: {operation: submit_request, recordRef: created-request, etagRef: created-request}",
+        ),
+        (
+            "uppercase digest",
+            "proposalVersionRef: before-approve\n          effectDigestRef: before-approve",
+            "proposalVersion: 1\n          effectDigest: sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ),
+    ] {
+        let changed = String::from_utf8(valid.to_vec())
+            .expect("fixture is UTF-8")
+            .replacen(from, to, 1);
+        let error = match validate_fixture_journeys(changed.as_bytes(), &registry) {
+            Ok(_) => panic!("{label} shape was not refused"),
+            Err(error) => error,
+        };
+        assert!(
+            matches!(
+                error,
+                FixtureError::JourneyShapeRefused | FixtureError::LogicalReferenceRefused
+            ),
+            "{label} returned {error:?}"
+        );
+        assert!(!format!("{error:?}").contains(to));
+    }
 }
 
 #[test]
@@ -158,4 +282,45 @@ fn compiled_fixture() -> registry_server::CompiledRegistry {
     let project = parse_project_yaml(&project_source).expect("project fixture parses");
     compile_project(&project, &[module], CompileProfile::Production)
         .expect("fixture project compiles in Production")
+}
+
+fn compiled_request_fixture() -> registry_server::CompiledRegistry {
+    let project = parse_project_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"fixture-request-actions","version":"1","defaultLanguage":"en"},
+          "entities":[{
+            "id":"target","route":"targets","mutationMode":"mutable","changeControl":{"requiredFor":["patch"]},
+            "fields":[{"id":"label","type":"string","required":true,"maxLength":64,"classification":"public"}]
+          },{
+            "id":"correction-request","route":"correction-requests","mutationMode":"mutable","classification":"public",
+            "fields":[
+              {"id":"target","type":"reference","target":"target","required":true,"classification":"public"},
+              {"id":"value","type":"string","required":true,"maxLength":64,"classification":"public"}
+            ],
+            "changeRequest":{
+              "effects":[{"target":{"fromField":"target"},"operation":"patch","set":{"label":{"fromField":"value"}}}],
+              "review":{"stages":[{"id":"review","approvals":1,"excludeSubmitter":true}]}
+            }
+          }],
+          "accessProfiles":[{
+            "id":"submitter","default":true,"principalClaim":"registry_principal","grants":[{
+              "entity":"correction-request","operations":["create","submit_request","revise_request","cancel_request"],"readableFields":["target","value"],"writableFields":["target","value"]
+            }]
+          },{
+            "id":"reviewer","default":true,"principalClaim":"registry_principal","grants":[{
+              "entity":"correction-request","operations":["get","list","approve_request","reject_request","request_revision"],"readableFields":["target","value"],
+              "reviewStages":[{"stage":"review","targets":[{"entity":"target","readableFields":["label"],"rowBoundaries":[]}]}]
+            }]
+          },{
+            "id":"applier","default":true,"principalClaim":"registry_principal","grants":[{
+              "entity":"correction-request","operations":["apply_request"],"readableFields":["target"],
+              "applyTargets":[{"entity":"target","rowBoundaries":[]}]
+            }]
+          }]
+        }"#,
+    )
+    .expect("request fixture source parses");
+    compile_project(&project, &[], CompileProfile::Authoring).expect("request fixture compiles")
 }

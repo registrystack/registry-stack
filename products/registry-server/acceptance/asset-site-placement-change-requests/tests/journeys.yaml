@@ -1,0 +1,174 @@
+apiVersion: registry.registrystack.org/server-journeys/v1
+journeys:
+  - id: placement-correction-request-flow
+    steps:
+      - id: create-asset
+        entity: asset-item
+        accessProfile: asset-operator
+        claims: &operator_claims
+          principal: asset-operator
+          purpose: asset-management
+        request:
+          operation: create
+          data: {asset-code: pump-001, label: Pump 001, asset-class: equipment}
+        expect:
+          outcome: success
+          status: 201
+          fields: {asset-code: pump-001, label: Pump 001, asset-class: equipment}
+        capture: asset
+      - id: create-original-site
+        entity: asset-site
+        accessProfile: asset-operator
+        claims: *operator_claims
+        request:
+          operation: create
+          data: {site-code: north-yard, label: North Yard}
+        expect:
+          outcome: success
+          status: 201
+          fields: {site-code: north-yard, label: North Yard}
+        capture: original-site
+      - id: create-corrected-site
+        entity: asset-site
+        accessProfile: asset-operator
+        claims: *operator_claims
+        request:
+          operation: create
+          data: {site-code: south-yard, label: South Yard}
+        expect:
+          outcome: success
+          status: 201
+          fields: {site-code: south-yard, label: South Yard}
+        capture: corrected-site
+      - id: create-placement
+        entity: asset-placement
+        accessProfile: asset-operator
+        claims: *operator_claims
+        request:
+          operation: create
+          data: {asset: {recordRef: asset}, site: {recordRef: original-site}, valid-from: "2026-01-01"}
+        expect:
+          outcome: success
+          status: 201
+          fields: {valid-from: "2026-01-01"}
+        capture: placement
+      - id: create-correction-request
+        entity: placement-correction-request
+        accessProfile: correction-submitter
+        claims: &submitter_claims
+          principal: correction-submitter
+          scopes: [registry:corrections:submit]
+          purpose: asset-correction
+        request:
+          operation: create
+          data: {placement: {recordRef: placement}, proposed-site: {recordRef: corrected-site}, reason: site correction after field audit}
+        expect:
+          outcome: success
+          status: 201
+          fields: {reason: site correction after field audit}
+        capture: correction-request
+      - id: edit-correction-request
+        entity: placement-correction-request
+        accessProfile: correction-submitter
+        claims: *submitter_claims
+        request:
+          operation: patch
+          recordRef: correction-request
+          etagRef: correction-request
+          changes:
+            - {field: reason, value: site correction after supervisor field audit}
+        expect:
+          outcome: success
+          status: 200
+          fields: {reason: site correction after supervisor field audit}
+        capture: edited-correction-request
+      - id: get-before-submit
+        entity: placement-correction-request
+        accessProfile: correction-submitter
+        claims: *submitter_claims
+        request: {operation: get, recordRef: edited-correction-request}
+        expect:
+          outcome: success
+          status: 200
+          fields: {reason: site correction after supervisor field audit}
+        capture: correction-before-submit
+      - id: submit-correction-request
+        entity: placement-correction-request
+        accessProfile: correction-submitter
+        claims: *submitter_claims
+        request: {operation: submit_request, recordRef: correction-before-submit, etagRef: correction-before-submit}
+        expect: {outcome: success, status: 200}
+      - id: get-before-review
+        entity: placement-correction-request
+        accessProfile: correction-reviewer
+        claims: &reviewer_claims
+          principal: correction-reviewer
+          scopes: [registry:corrections:review]
+          purpose: asset-correction-review
+        request: {operation: get, recordRef: correction-request}
+        expect:
+          outcome: success
+          status: 200
+          fields: {reason: site correction after supervisor field audit}
+        capture: correction-before-review
+      - id: approve-review-stage
+        entity: placement-correction-request
+        accessProfile: correction-reviewer
+        claims: *reviewer_claims
+        request:
+          operation: approve_request
+          stage: review
+          recordRef: correction-before-review
+          etagRef: correction-before-review
+          proposalVersionRef: correction-before-review
+          effectDigestRef: correction-before-review
+        expect: {outcome: success, status: 200}
+      - id: get-before-final-approval
+        entity: placement-correction-request
+        accessProfile: correction-supervisor
+        claims: &supervisor_claims
+          principal: correction-supervisor
+          scopes: [registry:corrections:supervise]
+          purpose: asset-correction-review
+        request: {operation: get, recordRef: correction-request}
+        expect:
+          outcome: success
+          status: 200
+          fields: {reason: site correction after supervisor field audit}
+        capture: correction-before-final-approval
+      - id: approve-final-stage
+        entity: placement-correction-request
+        accessProfile: correction-supervisor
+        claims: *supervisor_claims
+        request:
+          operation: approve_request
+          stage: final-approval
+          recordRef: correction-before-final-approval
+          etagRef: correction-before-final-approval
+          proposalVersionRef: correction-before-final-approval
+          effectDigestRef: correction-before-final-approval
+        expect: {outcome: success, status: 200}
+      - id: get-before-apply
+        entity: placement-correction-request
+        accessProfile: correction-applier
+        claims: &applier_claims
+          principal: correction-applier
+          scopes: [registry:corrections:apply]
+          purpose: asset-correction-apply
+        request: {operation: get, recordRef: correction-request}
+        expect:
+          outcome: success
+          status: 200
+          fields: {reason: site correction after supervisor field audit}
+        capture: correction-before-apply
+      - id: apply-correction-request
+        entity: placement-correction-request
+        accessProfile: correction-applier
+        claims: *applier_claims
+        request:
+          operation: apply_request
+          recordRef: correction-before-apply
+          etagRef: correction-before-apply
+          proposalVersionRef: correction-before-apply
+          effectDigestRef: correction-before-apply
+        expect: {outcome: success, status: 200}

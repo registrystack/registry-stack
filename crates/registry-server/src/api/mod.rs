@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //! HTTP surface compiled from one immutable Registry inventory.
 
+#[cfg(test)]
+#[path = "tests/change_request_action_tests.rs"]
+mod change_request_action_tests;
+#[cfg(test)]
+#[path = "tests/change_request_read_tests.rs"]
+mod change_request_read_tests;
 mod context;
 mod service;
 
@@ -21,21 +27,23 @@ use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 pub use context::{
     AuthorizedRequestContext, RowBoundaryOperator, VerifiedClaimValue, VerifiedContextError,
-    VerifiedRequestClaims, VerifiedRowBoundary,
+    VerifiedRequestAction, VerifiedRequestClaims, VerifiedRequestPresence,
+    VerifiedRequestTargetAuthority, VerifiedRowBoundary,
 };
 pub use service::{
     BatchMutationInput, CompiledLookupSelector, CompiledReadQuery, ConditionalMutationInput,
     CreateMutationInput, HeldReadResponse, HttpService, LookupSelectorValue, ReadFilterExpr,
     ReadFilterOperator, ReadFilterPredicate, ReadLogicalOp, ReadOrderClause, ReadProjectionField,
     ReadRuntimeIdentity, ReadServiceError, ReadinessProbe, RecordReadKind, RecordReadRefusal,
-    RecordReadRequest, RecordReadService, RevisionReadRefusal, RevisionReadRequest,
-    RevisionReadService, ServiceFuture,
+    RecordReadRequest, RecordReadService, RequestActionBody, RequestActionInput,
+    RequestActionTargetAuthority, RevisionReadRefusal, RevisionReadRequest, RevisionReadService,
+    ServiceFuture,
 };
 
 use crate::auth::{authenticate_request, RegistryAuthenticator};
 use crate::contract::{
     AccessProfileSource, BoundaryOperator, Classification, FieldTypeSource, LookupValueOrigin,
-    Operation,
+    Operation, RowBoundarySource,
 };
 use crate::correlation::RequestCorrelation;
 use crate::cursor::{
@@ -45,9 +53,10 @@ use crate::cursor::{
 };
 use crate::idempotency::{HeldResponse, PermittedResponseHeader};
 use crate::model::{
-    CompiledEntity, CompiledMetadataEntity, CompiledMetadataEntry, CompiledQueryKind,
-    CompiledQueryOperation, CompiledQuerySortDirection, CompiledReadPath, CompiledRevisionKind,
-    CompiledRoute, MAX_REVISION_HISTORY_RECORDS,
+    request_query_field_id_for_api, request_query_field_type, CompiledEntity,
+    CompiledMetadataEntity, CompiledMetadataEntry, CompiledQueryKind, CompiledQueryOperation,
+    CompiledQuerySortDirection, CompiledReadPath, CompiledRevisionKind, CompiledRoute,
+    MAX_REVISION_HISTORY_RECORDS,
 };
 use crate::mutation::{parse_json_patch_document, BatchMutationItem, MutationError};
 use crate::query as strict_query;
@@ -55,7 +64,7 @@ use uuid::Uuid;
 
 use crate::artifacts::{
     openapi_components, openapi_entity_input_schema, openapi_input_schema_id, openapi_operation,
-    OpenApiAccessProfiles, OpenApiOperationSpec,
+    openapi_request_action_input_schema, OpenApiAccessProfiles, OpenApiOperationSpec,
 };
 
 const MAX_MUTATION_BODY_BYTES: usize = 2 * 1024 * 1024;
@@ -138,6 +147,25 @@ fn route_set(service: Arc<HttpService>) -> Router {
                     delete(tombstone_dispatch).layer(Extension(route.clone())),
                 )
             }
+            Operation::SubmitRequest
+            | Operation::ApproveRequest
+            | Operation::RejectRequest
+            | Operation::RequestRevision
+            | Operation::ReviseRequest
+            | Operation::CancelRequest
+            | Operation::ApplyRequest
+                if service.mutations.is_some()
+                    && service
+                        .registry
+                        .entities()
+                        .get(&route.entity_id)
+                        .is_some_and(|entity| entity.change_request.is_some()) =>
+            {
+                app.route(
+                    &route.path,
+                    post(request_action_dispatch).layer(Extension(route.clone())),
+                )
+            }
             _ => app,
         };
     }
@@ -200,6 +228,7 @@ async fn openapi(
     let mut readable_by_entity: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut writable_by_input_schema: BTreeMap<String, (String, BTreeSet<String>)> =
         BTreeMap::new();
+    let mut action_input_schemas = Map::new();
     for surface in &visible {
         let path = paths
             .entry(surface.route.path.clone())
@@ -239,13 +268,24 @@ async fn openapi(
                 .entry(request_schema_ref)
                 .or_insert_with(|| (surface.entity.id.clone(), BTreeSet::new()));
             entry.1.extend(profile.writable_fields.iter().cloned());
+        } else if is_request_operation(surface.route.operation) {
+            action_input_schemas.insert(
+                request_schema_ref,
+                openapi_request_action_input_schema(surface.route.operation),
+            );
         }
     }
 
     let mut schemas = readable_by_entity
         .iter()
         .filter_map(|(entity_id, readable)| {
-            filtered_schema(&service, entity_id, readable).map(|schema| (entity_id.clone(), schema))
+            filtered_schema(
+                &service,
+                entity_id,
+                readable,
+                &permitted_request_types(&visible),
+            )
+            .map(|schema| (entity_id.clone(), schema))
         })
         .collect::<Map<String, Value>>();
     schemas.extend(writable_by_input_schema.iter().filter_map(
@@ -258,11 +298,13 @@ async fn openapi(
             })
         },
     ));
+    let has_request_actions = !action_input_schemas.is_empty();
+    schemas.extend(action_input_schemas);
     Json(json!({
         "openapi": "3.1.0",
         "info": {"title": service.registry.registry_id(), "version": service.registry.version()},
         "paths": paths,
-        "components": openapi_components(schemas)
+        "components": openapi_components(schemas, has_request_actions)
     }))
     .into_response()
 }
@@ -284,6 +326,8 @@ async fn registry_metadata(
     }
 
     let mut entities: BTreeMap<String, MetadataEntity> = BTreeMap::new();
+    let permitted_requests =
+        permitted_request_types(&visible_surfaces(&service, &claims, &options));
     for (_, entry) in visible {
         let Some(response_entity) = service.registry.entities().get(&entry.response_entity_id)
         else {
@@ -305,12 +349,15 @@ async fn registry_metadata(
                 operations: BTreeMap::from([(entry.operation, entry.access_profile.clone())]),
                 readable_fields: entry.readable_fields.clone(),
                 schema_path: format!("/v1/schemas/{}", response_entity.id),
+                change_control: response_entity.change_control.as_ref().map(|_| {
+                    metadata_change_control(&service, response_entity, &permitted_requests)
+                }),
             });
     }
     let entities = entities
         .into_values()
         .map(|entity| {
-            json!({
+            let mut metadata = json!({
                 "id": entity.id,
                 "route": entity.route,
                 "operations": entity.operations.into_iter().map(|(operation, access_profile)| json!({
@@ -319,7 +366,11 @@ async fn registry_metadata(
                 })).collect::<Vec<_>>(),
                 "readableFields": entity.readable_fields,
                 "schema": entity.schema_path,
-            })
+            });
+            if let Some(change_control) = entity.change_control {
+                metadata["changeControl"] = change_control;
+            }
+            metadata
         })
         .collect::<Vec<_>>();
     Json(json!({
@@ -358,7 +409,9 @@ async fn entity_schema(
                 fields.extend(surface.readable_fields.iter().cloned());
                 fields
             });
-    match filtered_schema(&service, &entity_id, &readable) {
+    let permitted_requests =
+        permitted_request_types(&visible_surfaces(&service, &claims, &options));
+    match filtered_schema(&service, &entity_id, &readable, &permitted_requests) {
         Some(schema) => Json(schema).into_response(),
         None => concealed(),
     }
@@ -402,9 +455,22 @@ async fn read_dispatch(
         return response;
     };
 
+    if options.request_history_after_proposal_version.is_some()
+        && (route.operation != Operation::Get || surface.entity.change_request.is_none())
+    {
+        return audited_read_refusal(
+            &service,
+            &route,
+            &surface,
+            path.get("record_id"),
+            invalid_query(),
+            &correlation,
+        )
+        .await;
+    }
     match route.operation {
         Operation::Get => {
-            if surface.read_path.is_some() || options.has_non_projection_query_members() {
+            if surface.read_path.is_some() || options.has_non_history_query_members() {
                 return audited_read_refusal(
                     &service,
                     &route,
@@ -466,6 +532,8 @@ async fn read_dispatch(
                     id: record_id.clone(),
                 },
                 maximum_records: 1,
+                request_history_after_proposal_version: options
+                    .request_history_after_proposal_version,
                 correlation: correlation.clone(),
             };
             match service.records.get(request).await {
@@ -563,6 +631,7 @@ async fn read_dispatch(
                 selected_fields: readable_fields,
                 kind,
                 maximum_records,
+                request_history_after_proposal_version: None,
                 correlation: correlation.clone(),
             };
             match service.records.list(request).await {
@@ -728,6 +797,7 @@ async fn lookup_dispatch(
         selected_fields: readable_fields,
         kind: RecordReadKind::Lookup { selector },
         maximum_records: 2,
+        request_history_after_proposal_version: None,
         correlation: correlation.clone(),
     };
     match service.records.lookup(request).await {
@@ -1539,6 +1609,298 @@ async fn tombstone_dispatch(
     }
 }
 
+#[allow(clippy::too_many_arguments)] // Axum extractors are the HTTP contract.
+async fn request_action_dispatch(
+    State(service): State<Arc<HttpService>>,
+    Extension(route): Extension<CompiledRoute>,
+    Extension(correlation): Extension<RequestCorrelation>,
+    claims: Option<Extension<VerifiedRequestClaims>>,
+    RawQuery(raw_query): RawQuery,
+    Path(path): Path<HashMap<String, String>>,
+    headers: HeaderMap,
+    body: Body,
+) -> Response {
+    let Some(mutations) = &service.mutations else {
+        return concealed();
+    };
+    let claims = claims
+        .map(|Extension(value)| value)
+        .unwrap_or_else(VerifiedRequestClaims::anonymous);
+    let Some(record_id) = path.get("record_id") else {
+        return invalid_request();
+    };
+    let Ok(options) = QueryOptions::parse(raw_query.as_deref(), false) else {
+        return audited_mutation_concealment(
+            mutations,
+            &route,
+            &QueryOptions::default(),
+            &claims,
+            Some(record_id.as_str()),
+            &correlation,
+        )
+        .await;
+    };
+    let Some(surface) = authorize_route(&service, &route, &claims, &options) else {
+        return audited_mutation_concealment(
+            mutations,
+            &route,
+            &options,
+            &claims,
+            Some(record_id.as_str()),
+            &correlation,
+        )
+        .await;
+    };
+    let Some(idempotency_key) = single_header(&headers, "idempotency-key") else {
+        return audited_mutation_refusal(
+            mutations,
+            &route,
+            &surface.context,
+            Some(record_id.as_str()),
+            invalid_request(),
+            &correlation,
+        )
+        .await;
+    };
+    if !valid_idempotency_key(idempotency_key) {
+        return audited_mutation_refusal(
+            mutations,
+            &route,
+            &surface.context,
+            Some(record_id.as_str()),
+            invalid_request(),
+            &correlation,
+        )
+        .await;
+    }
+    let Some(if_match) = single_header(&headers, IF_MATCH.as_str()) else {
+        return audited_mutation_refusal(
+            mutations,
+            &route,
+            &surface.context,
+            Some(record_id.as_str()),
+            precondition_required(),
+            &correlation,
+        )
+        .await;
+    };
+    if !valid_if_match(if_match) {
+        return audited_mutation_refusal(
+            mutations,
+            &route,
+            &surface.context,
+            Some(record_id.as_str()),
+            precondition_failed(),
+            &correlation,
+        )
+        .await;
+    }
+    if !single_content_type(&headers, "application/json") {
+        return audited_mutation_refusal(
+            mutations,
+            &route,
+            &surface.context,
+            Some(record_id.as_str()),
+            unsupported_media_type(),
+            &correlation,
+        )
+        .await;
+    }
+    let Ok(body) = bounded_body(body).await else {
+        return audited_mutation_refusal(
+            mutations,
+            &route,
+            &surface.context,
+            Some(record_id.as_str()),
+            invalid_request(),
+            &correlation,
+        )
+        .await;
+    };
+    let Ok(action) =
+        parse_request_action_body(route.operation, route.request_stage.as_deref(), &body)
+    else {
+        return audited_mutation_refusal(
+            mutations,
+            &route,
+            &surface.context,
+            Some(record_id.as_str()),
+            invalid_request(),
+            &correlation,
+        )
+        .await;
+    };
+    let Some(target_authority) =
+        request_action_target_authority(surface.entity, &route, &surface.context, &claims)
+    else {
+        return audited_mutation_concealment(
+            mutations,
+            &route,
+            &options,
+            &claims,
+            Some(record_id.as_str()),
+            &correlation,
+        )
+        .await;
+    };
+    match mutations
+        .request_action(RequestActionInput {
+            route_id: &route.id,
+            idempotency_key,
+            if_match,
+            context: &surface.context,
+            entity_id: &route.entity_id,
+            record_id,
+            action,
+            response_fields: surface.readable_fields,
+            target_authority,
+            correlation: &correlation,
+        })
+        .await
+    {
+        Ok(outcome) => exact_mutation(outcome.response()),
+        Err(error) => mutation_problem(error),
+    }
+}
+
+fn request_action_target_authority(
+    entity: &CompiledEntity,
+    route: &CompiledRoute,
+    context: &AuthorizedRequestContext,
+    claims: &VerifiedRequestClaims,
+) -> Option<Vec<RequestActionTargetAuthority>> {
+    if !is_request_operation(route.operation) {
+        return Some(Vec::new());
+    }
+    let plan = entity.change_request.as_ref()?;
+    if !plan.actions.iter().any(|action| {
+        action.operation.access_operation() == route.operation
+            && action.review_stage.as_deref() == route.request_stage.as_deref()
+    }) {
+        return None;
+    }
+    match route.operation {
+        Operation::ApproveRequest | Operation::RejectRequest | Operation::RequestRevision => {
+            let stage = route.request_stage.as_deref()?;
+            plan.target_entities
+                .iter()
+                .map(|target_entity_id| {
+                    let grant = plan.review_grants.iter().find(|grant| {
+                        grant.profile_id == context.selected_profile()
+                            && grant.stage == stage
+                            && grant.target_entity_id == *target_entity_id
+                    })?;
+                    Some(RequestActionTargetAuthority {
+                        target_entity_id: target_entity_id.clone(),
+                        readable_fields: grant.readable_fields.clone(),
+                        row_boundaries: verified_row_boundaries_from_sources(
+                            &grant.row_boundaries,
+                            claims,
+                        )?,
+                    })
+                })
+                .collect()
+        }
+        Operation::ApplyRequest => plan
+            .target_entities
+            .iter()
+            .map(|target_entity_id| {
+                let grant = plan.apply_grants.iter().find(|grant| {
+                    grant.profile_id == context.selected_profile()
+                        && grant.target_entity_id == *target_entity_id
+                })?;
+                Some(RequestActionTargetAuthority {
+                    target_entity_id: target_entity_id.clone(),
+                    readable_fields: BTreeSet::new(),
+                    row_boundaries: verified_row_boundaries_from_sources(
+                        &grant.row_boundaries,
+                        claims,
+                    )?,
+                })
+            })
+            .collect(),
+        Operation::SubmitRequest | Operation::ReviseRequest | Operation::CancelRequest => {
+            Some(Vec::new())
+        }
+        _ => None,
+    }
+}
+
+fn request_visibility_authority(
+    service: &HttpService,
+    entity: &CompiledEntity,
+    selected_profile: &str,
+    claims: &VerifiedRequestClaims,
+    options: &QueryOptions,
+) -> (Vec<VerifiedRequestAction>, Vec<VerifiedRequestPresence>) {
+    let actions = if entity.change_request.is_some() {
+        service
+            .registry
+            .routes()
+            .routes
+            .iter()
+            .filter(|route| route.entity_id == entity.id && is_request_operation(route.operation))
+            .filter_map(|route| {
+                let surface = authorize_direct_route_base(service, route, claims, options, false)?;
+                if surface.context.selected_profile() != selected_profile {
+                    return None;
+                }
+                let target_authority =
+                    request_action_target_authority(entity, route, &surface.context, claims)?;
+                let target_authority = target_authority
+                    .into_iter()
+                    .map(|authority| {
+                        VerifiedRequestTargetAuthority::new(
+                            authority.target_entity_id,
+                            authority.readable_fields,
+                            authority.row_boundaries,
+                        )
+                    })
+                    .collect();
+                Some(VerifiedRequestAction::new(
+                    route.id.clone(),
+                    route.method,
+                    route.path.clone(),
+                    route.operation,
+                    route.request_stage.clone(),
+                    surface.readable_fields,
+                    target_authority,
+                ))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let presence = entity
+        .access_profiles
+        .get(selected_profile)
+        .into_iter()
+        .flat_map(|profile| &profile.request_presence)
+        .filter_map(|grant| {
+            let plan = service
+                .registry
+                .entities()
+                .get(&grant.request_type)?
+                .change_request
+                .as_ref()?;
+            if !plan.presence_grants.iter().any(|compiled| {
+                compiled.profile_id == selected_profile
+                    && compiled.target_entity_id == entity.id
+                    && compiled.request_row_boundaries == grant.row_boundaries
+            }) {
+                return None;
+            }
+            let row_boundaries =
+                verified_row_boundaries_from_sources(&grant.row_boundaries, claims)?;
+            Some(VerifiedRequestPresence::new(
+                grant.request_type.clone(),
+                row_boundaries,
+            ))
+        })
+        .collect();
+    (actions, presence)
+}
+
 async fn audited_mutation_refusal(
     mutations: &crate::postgres::PostgresRecordMutationService,
     route: &CompiledRoute,
@@ -1652,6 +2014,61 @@ fn metadata_entry_for_surface<'a>(
     Some((entity, entry))
 }
 
+fn permitted_request_types(surfaces: &[AuthorizedSurface<'_>]) -> BTreeSet<String> {
+    surfaces
+        .iter()
+        .flat_map(|surface| {
+            std::iter::once(surface.response_entity.id.clone()).chain(
+                surface
+                    .context
+                    .request_presence()
+                    .iter()
+                    .map(|grant| grant.request_entity_id().to_owned()),
+            )
+        })
+        .collect()
+}
+
+fn metadata_change_control(
+    service: &HttpService,
+    entity: &CompiledEntity,
+    permitted_requests: &BTreeSet<String>,
+) -> Value {
+    let controlled_operations = entity
+        .change_control
+        .as_ref()
+        .map(|control| {
+            control
+                .required_for
+                .iter()
+                .map(|operation| operation_name(*operation))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let eligible_request_types = service
+        .registry
+        .entities()
+        .values()
+        .filter(|request_entity| permitted_requests.contains(&request_entity.id))
+        .filter_map(|request_entity| {
+            request_entity
+                .change_request
+                .as_ref()
+                .filter(|plan| plan.target_entities.contains(&entity.id))
+                .map(|_| {
+                    json!({
+                        "id": request_entity.id,
+                        "route": request_entity.route,
+                    })
+                })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "controlledOperations": controlled_operations,
+        "eligibleRequestTypes": eligible_request_types,
+    })
+}
+
 fn authorize_route<'a>(
     service: &'a HttpService,
     route: &'a CompiledRoute,
@@ -1676,6 +2093,16 @@ fn authorize_direct_route<'a>(
     route: &'a CompiledRoute,
     claims: &VerifiedRequestClaims,
     options: &QueryOptions,
+) -> Option<AuthorizedSurface<'a>> {
+    authorize_direct_route_base(service, route, claims, options, true)
+}
+
+fn authorize_direct_route_base<'a>(
+    service: &'a HttpService,
+    route: &'a CompiledRoute,
+    claims: &VerifiedRequestClaims,
+    options: &QueryOptions,
+    include_request_visibility: bool,
 ) -> Option<AuthorizedSurface<'a>> {
     let access = access_entry_for_route(service, route)?;
     let selected_profile = options
@@ -1742,16 +2169,22 @@ fn authorize_direct_route<'a>(
         })
         .cloned()
         .collect();
+    let mut context = AuthorizedRequestContext::new(
+        claims.principal().map(str::to_owned),
+        claims.purpose().map(str::to_owned),
+        selected_profile.to_owned(),
+        row_boundaries,
+    );
+    if include_request_visibility {
+        let (actions, presence) =
+            request_visibility_authority(service, entity, selected_profile, claims, options);
+        context = context.with_request_visibility(actions, presence);
+    }
     Some(AuthorizedSurface {
         route,
         entity,
         response_entity: entity,
-        context: AuthorizedRequestContext::new(
-            claims.principal().map(str::to_owned),
-            claims.purpose().map(str::to_owned),
-            selected_profile.to_owned(),
-            row_boundaries,
-        ),
+        context,
         readable_fields,
         read_path: None,
     })
@@ -1852,7 +2285,7 @@ fn access_entry_for_route<'a>(
         .iter()
         .find(|entry| entry.route_id == route.id && entry.operation == route.operation)
         .or_else(|| {
-            if route.id.contains(".path.") {
+            if route.id.contains(".path.") || is_request_operation(route.operation) {
                 return None;
             }
             service.registry.access().entries.iter().find(|entry| {
@@ -1872,6 +2305,19 @@ fn read_path_for_route<'a>(
     })?;
     let response_entity = service.registry.entities().get(&path.to)?;
     Some((path, response_entity))
+}
+
+fn is_request_operation(operation: Operation) -> bool {
+    matches!(
+        operation,
+        Operation::SubmitRequest
+            | Operation::ApproveRequest
+            | Operation::RejectRequest
+            | Operation::RequestRevision
+            | Operation::ReviseRequest
+            | Operation::CancelRequest
+            | Operation::ApplyRequest
+    )
 }
 
 fn served_operation(service: &HttpService, route: &CompiledRoute) -> bool {
@@ -1909,6 +2355,26 @@ fn served_operation(service: &HttpService, route: &CompiledRoute) -> bool {
                     })
         }
         Operation::Revisions => service.revisions.is_some(),
+        Operation::SubmitRequest
+        | Operation::ApproveRequest
+        | Operation::RejectRequest
+        | Operation::RequestRevision
+        | Operation::ReviseRequest
+        | Operation::CancelRequest
+        | Operation::ApplyRequest => {
+            service.mutations.is_some()
+                && service
+                    .registry
+                    .entities()
+                    .get(&route.entity_id)
+                    .and_then(|entity| entity.change_request.as_ref())
+                    .is_some_and(|plan| {
+                        plan.actions.iter().any(|action| {
+                            action.operation.access_operation() == route.operation
+                                && action.review_stage.as_deref() == route.request_stage.as_deref()
+                        })
+                    })
+        }
     }
 }
 
@@ -1916,8 +2382,14 @@ fn verified_row_boundaries(
     profile: &AccessProfileSource,
     claims: &VerifiedRequestClaims,
 ) -> Option<Vec<VerifiedRowBoundary>> {
-    profile
-        .row_boundaries
+    verified_row_boundaries_from_sources(&profile.row_boundaries, claims)
+}
+
+fn verified_row_boundaries_from_sources(
+    row_boundaries: &[RowBoundarySource],
+    claims: &VerifiedRequestClaims,
+) -> Option<Vec<VerifiedRowBoundary>> {
+    row_boundaries
         .iter()
         .map(|boundary| {
             let values = claims.direct_claim(&boundary.claim)?.values();
@@ -1981,7 +2453,9 @@ async fn read_query(
                     .query
                     .filter
                     .as_ref()
-                    .map(|filter| read_filter_expr_from_cursor(surface.response_entity, filter))
+                    .map(|filter| {
+                        read_filter_expr_from_cursor(surface.response_entity, operation, filter)
+                    })
                     .transpose()
                     .map_err(|_| CursorError::Mismatch)?;
                 let order = payload
@@ -2038,7 +2512,7 @@ async fn read_query(
             .query
             .filter
             .as_ref()
-            .map(|filter| read_filter_expr_from_cursor(surface.response_entity, filter))
+            .map(|filter| read_filter_expr_from_cursor(surface.response_entity, operation, filter))
             .transpose()?;
         let order = payload
             .query
@@ -2286,6 +2760,70 @@ fn data_field_type<'a>(entity: &'a CompiledEntity, field_id: &str) -> Option<&'a
         })
 }
 
+fn resolve_query_field_id(
+    entity: &CompiledEntity,
+    operation: &CompiledQueryOperation,
+    api_name: &str,
+) -> Option<String> {
+    if let Some(field_id) = resolve_data_field_id(entity, api_name) {
+        if operation
+            .filter_fields
+            .iter()
+            .any(|field| field.field == field_id)
+            || operation
+                .sort_fields
+                .iter()
+                .any(|field| field.field == field_id)
+        {
+            return Some(field_id.to_owned());
+        }
+    }
+    let request_field = request_query_field_id_for_api(api_name)?;
+    if entity.change_request.is_some()
+        && (operation
+            .filter_fields
+            .iter()
+            .any(|field| field.field == request_field)
+            || operation
+                .sort_fields
+                .iter()
+                .any(|field| field.field == request_field))
+    {
+        Some(request_field.to_owned())
+    } else {
+        None
+    }
+}
+
+fn query_field_type(
+    entity: &CompiledEntity,
+    operation: &CompiledQueryOperation,
+    field_id: &str,
+) -> Option<FieldTypeSource> {
+    if operation
+        .projection_fields
+        .iter()
+        .any(|field| field == field_id)
+        || operation
+            .filter_fields
+            .iter()
+            .any(|field| field.field == field_id)
+        || operation
+            .sort_fields
+            .iter()
+            .any(|field| field.field == field_id)
+    {
+        data_field_type(entity, field_id).cloned().or_else(|| {
+            entity
+                .change_request
+                .as_ref()
+                .and_then(|_| request_query_field_type(field_id))
+        })
+    } else {
+        None
+    }
+}
+
 fn first_page_filter_expr(
     entity: &CompiledEntity,
     operation: &CompiledQueryOperation,
@@ -2371,8 +2909,10 @@ fn read_filter_predicate(
             (field.as_str(), operator, vec![literal])
         }
     };
-    let field_id = resolve_data_field_id(entity, api_field).ok_or(ReadQueryError::Invalid)?;
-    let field_type = data_field_type(entity, field_id).ok_or(ReadQueryError::Invalid)?;
+    let field_id =
+        resolve_query_field_id(entity, operation, api_field).ok_or(ReadQueryError::Invalid)?;
+    let field_type =
+        query_field_type(entity, operation, &field_id).ok_or(ReadQueryError::Invalid)?;
     let capability = operation
         .filter_fields
         .iter()
@@ -2392,7 +2932,7 @@ fn read_filter_predicate(
     } else {
         literals
             .into_iter()
-            .map(|literal| literal_to_field_value(literal, field_type))
+            .map(|literal| literal_to_field_value(literal, &field_type))
             .collect::<Result<Vec<_>, _>>()?
     };
     if operator == ReadFilterOperator::In {
@@ -2403,8 +2943,8 @@ fn read_filter_predicate(
         values.sort();
     }
     Ok(ReadFilterPredicate {
-        field_id: field_id.to_owned(),
-        field_type: field_type.clone(),
+        field_id,
+        field_type,
         operator,
         values,
     })
@@ -2443,8 +2983,10 @@ fn read_order_clause(
     let Some(api_or_field) = api_or_field else {
         return Ok(None);
     };
-    let field_id = resolve_data_field_id(entity, api_or_field).ok_or(ReadQueryError::Invalid)?;
-    let field_type = data_field_type(entity, field_id).ok_or(ReadQueryError::Invalid)?;
+    let field_id =
+        resolve_query_field_id(entity, operation, api_or_field).ok_or(ReadQueryError::Invalid)?;
+    let field_type =
+        query_field_type(entity, operation, &field_id).ok_or(ReadQueryError::Invalid)?;
     let sortable = operation.sort_fields.iter().any(|candidate| {
         candidate.field == field_id
             && candidate
@@ -2455,8 +2997,8 @@ fn read_order_clause(
         return Err(ReadQueryError::Invalid);
     }
     Ok(Some(ReadOrderClause {
-        field_id: field_id.to_owned(),
-        field_type: field_type.clone(),
+        field_id,
+        field_type,
         direction: CompiledQuerySortDirection::Asc,
     }))
 }
@@ -2486,7 +3028,8 @@ fn validate_query_shape(
         if !sortable
             || operation.stable_tie_breaker != "record_id"
             || order.direction != CompiledQuerySortDirection::Asc
-            || data_field_type(entity, &order.field_id) != Some(&order.field_type)
+            || query_field_type(entity, operation, &order.field_id)
+                != Some(order.field_type.clone())
         {
             return Err(ReadQueryError::Invalid);
         }
@@ -2519,14 +3062,14 @@ fn validate_filter_shape(
                 .predicates
                 .checked_add(1)
                 .ok_or(ReadQueryError::Invalid)?;
-            let field_type =
-                data_field_type(entity, &predicate.field_id).ok_or(ReadQueryError::Invalid)?;
+            let field_type = query_field_type(entity, operation, &predicate.field_id)
+                .ok_or(ReadQueryError::Invalid)?;
             let capability = operation
                 .filter_fields
                 .iter()
                 .find(|field| field.field == predicate.field_id)
                 .ok_or(ReadQueryError::Invalid)?;
-            if field_type != &predicate.field_type
+            if field_type != predicate.field_type
                 || !capability
                     .operators
                     .contains(&predicate.operator.compiled_capability())
@@ -2545,7 +3088,7 @@ fn validate_filter_shape(
                     if predicate.values.len() != 1 {
                         return Err(ReadQueryError::Invalid);
                     }
-                    crate::postgres::validate_field_value(&predicate.values[0], field_type)
+                    crate::postgres::validate_field_value(&predicate.values[0], &field_type)
                         .map_err(|_| ReadQueryError::Invalid)?;
                 }
                 ReadFilterOperator::In => {
@@ -2562,7 +3105,7 @@ fn validate_filter_shape(
                         .checked_add(predicate.values.len())
                         .ok_or(ReadQueryError::Invalid)?;
                     for value in &predicate.values {
-                        crate::postgres::validate_field_value(value, field_type)
+                        crate::postgres::validate_field_value(value, &field_type)
                             .map_err(|_| ReadQueryError::Invalid)?;
                     }
                 }
@@ -2891,8 +3434,8 @@ fn read_order_clause_from_cursor(
     operation: &CompiledQueryOperation,
     order: &CursorOrderClause,
 ) -> Result<ReadOrderClause, ReadQueryError> {
-    let field_type =
-        data_field_type(entity, &order.field_id).ok_or(ReadQueryError::CursorInvalid)?;
+    let field_type = query_field_type(entity, operation, &order.field_id)
+        .ok_or(ReadQueryError::CursorInvalid)?;
     let sortable = operation.sort_fields.iter().any(|candidate| {
         candidate.field == order.field_id
             && candidate
@@ -2900,7 +3443,7 @@ fn read_order_clause_from_cursor(
                 .contains(&CompiledQuerySortDirection::Asc)
     });
     if !sortable
-        || field_type != &order.field_type
+        || field_type != order.field_type
         || order.direction != CompiledQuerySortDirection::Asc
     {
         return Err(ReadQueryError::CursorInvalid);
@@ -2914,6 +3457,7 @@ fn read_order_clause_from_cursor(
 
 fn read_filter_expr_from_cursor(
     entity: &CompiledEntity,
+    operation: &CompiledQueryOperation,
     filter: &CursorFilterExpr,
 ) -> Result<ReadFilterExpr, ReadQueryError> {
     match filter {
@@ -2922,19 +3466,19 @@ fn read_filter_expr_from_cursor(
                 CursorLogicalOp::And => ReadLogicalOp::And,
                 CursorLogicalOp::Or => ReadLogicalOp::Or,
             },
-            left: Box::new(read_filter_expr_from_cursor(entity, left)?),
-            right: Box::new(read_filter_expr_from_cursor(entity, right)?),
+            left: Box::new(read_filter_expr_from_cursor(entity, operation, left)?),
+            right: Box::new(read_filter_expr_from_cursor(entity, operation, right)?),
         }),
         CursorFilterExpr::Not { expr } => Ok(ReadFilterExpr::Not(Box::new(
-            read_filter_expr_from_cursor(entity, expr)?,
+            read_filter_expr_from_cursor(entity, operation, expr)?,
         ))),
         CursorFilterExpr::Group { expr } => Ok(ReadFilterExpr::Group(Box::new(
-            read_filter_expr_from_cursor(entity, expr)?,
+            read_filter_expr_from_cursor(entity, operation, expr)?,
         ))),
         CursorFilterExpr::Predicate { predicate } => {
-            let field_type = data_field_type(entity, &predicate.field_id)
+            let field_type = query_field_type(entity, operation, &predicate.field_id)
                 .ok_or(ReadQueryError::CursorInvalid)?;
-            if field_type != &predicate.field_type {
+            if field_type != predicate.field_type {
                 return Err(ReadQueryError::CursorInvalid);
             }
             Ok(ReadFilterExpr::Predicate(ReadFilterPredicate {
@@ -3192,6 +3736,7 @@ fn filtered_schema(
     service: &HttpService,
     entity_id: &str,
     readable_fields: &BTreeSet<String>,
+    permitted_requests: &BTreeSet<String>,
 ) -> Option<Value> {
     let entity = service.registry.entities().get(entity_id)?;
     let readable_api_names = entity
@@ -3215,6 +3760,28 @@ fn filtered_schema(
                 .is_some_and(|field| readable_api_names.contains(field))
         });
     }
+    // Generated authoring artifacts contain complete effects and grants. The
+    // served schema is a caller projection, so it must not copy that authority
+    // inventory or identify request types hidden from the selected context.
+    if let Some(control) = object.get_mut("x-registry-changeControl") {
+        if let Some(types) = control
+            .get_mut("eligibleRequestTypes")
+            .and_then(Value::as_array_mut)
+        {
+            types.retain(|request_type| {
+                request_type
+                    .get("requestEntity")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| permitted_requests.contains(id))
+            });
+        }
+    }
+    if let Some(request) = object
+        .get_mut("x-registry-changeRequest")
+        .and_then(Value::as_object_mut)
+    {
+        request.retain(|key, _| matches!(key.as_str(), "requestEntity" | "stateEnvelope"));
+    }
     Some(schema)
 }
 
@@ -3224,10 +3791,12 @@ struct MetadataEntity {
     operations: BTreeMap<Operation, String>,
     readable_fields: BTreeSet<String>,
     schema_path: String,
+    change_control: Option<Value>,
 }
 
 struct QueryOptions {
     parsed: strict_query::ParsedReadQuery,
+    request_history_after_proposal_version: Option<i64>,
 }
 
 impl QueryOptions {
@@ -3239,14 +3808,33 @@ impl QueryOptions {
             return Err(QueryParseError::Invalid);
         }
         let mut pairs = Vec::new();
+        let mut request_history_after_proposal_version = None;
         for pair in raw.split('&') {
             let (name, value) = pair.split_once('=').ok_or(QueryParseError::Invalid)?;
             let name = percent_decode(name)?;
             let value = percent_decode(value)?;
+            if name == "requestHistoryAfterProposalVersion" {
+                let version = value.parse::<u32>().map_err(|_| QueryParseError::Invalid)?;
+                if version == 0
+                    || version.to_string() != value
+                    || request_history_after_proposal_version
+                        .replace(i64::from(version))
+                        .is_some()
+                {
+                    return Err(QueryParseError::Invalid);
+                }
+                continue;
+            }
             pairs.push((name, value));
         }
         let parsed = strict_query::parse_read_query(pairs).map_err(|_| QueryParseError::Invalid)?;
-        let result = Self { parsed };
+        let result = Self {
+            parsed,
+            request_history_after_proposal_version,
+        };
+        if result.request_history_after_proposal_version.is_some() && result.skiptoken().is_some() {
+            return Err(QueryParseError::Invalid);
+        }
         if !allow_read_query && result.has_any_query_member() {
             return Err(QueryParseError::Invalid);
         }
@@ -3279,6 +3867,11 @@ impl QueryOptions {
     }
 
     fn has_non_projection_query_members(&self) -> bool {
+        self.request_history_after_proposal_version.is_some()
+            || self.has_non_history_query_members()
+    }
+
+    fn has_non_history_query_members(&self) -> bool {
         self.parsed.as_of.is_some()
             || self.skiptoken().is_some()
             || self.query_options().is_some_and(|options| {
@@ -3290,7 +3883,8 @@ impl QueryOptions {
     }
 
     fn has_any_query_member(&self) -> bool {
-        self.parsed.as_of.is_some()
+        self.request_history_after_proposal_version.is_some()
+            || self.parsed.as_of.is_some()
             || self.skiptoken().is_some()
             || self.query_options().is_some_and(|options| {
                 options.select.is_some()
@@ -3305,6 +3899,7 @@ impl QueryOptions {
 impl Default for QueryOptions {
     fn default() -> Self {
         Self {
+            request_history_after_proposal_version: None,
             parsed: strict_query::ParsedReadQuery {
                 access_profile: None,
                 as_of: None,
@@ -3372,6 +3967,13 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::Tombstone => "tombstone",
         Operation::Batch => "batch",
         Operation::Revisions => "revisions",
+        Operation::SubmitRequest => "submit_request",
+        Operation::ApproveRequest => "approve_request",
+        Operation::RejectRequest => "reject_request",
+        Operation::RequestRevision => "request_revision",
+        Operation::ReviseRequest => "revise_request",
+        Operation::CancelRequest => "cancel_request",
+        Operation::ApplyRequest => "apply_request",
     }
 }
 
@@ -3557,6 +4159,96 @@ fn parse_create_body(body: &[u8]) -> Result<Map<String, Value>, ()> {
         .ok_or(())
 }
 
+fn parse_request_action_body(
+    operation: Operation,
+    request_stage: Option<&str>,
+    body: &[u8],
+) -> Result<RequestActionBody, ()> {
+    let value = parse_json_strict(body).map_err(|_| ())?;
+    let object = value.as_object().ok_or(())?;
+    match operation {
+        Operation::SubmitRequest if request_stage.is_none() => {
+            parse_empty_action_object(object)?;
+            Ok(RequestActionBody::Submit)
+        }
+        Operation::ApproveRequest if request_stage.is_some() => {
+            let (proposal_version, effect_digest) = parse_bound_proposal_action(object)?;
+            Ok(RequestActionBody::Approve {
+                proposal_version,
+                effect_digest,
+            })
+        }
+        Operation::RejectRequest if request_stage.is_some() => {
+            let (proposal_version, effect_digest) = parse_bound_proposal_action(object)?;
+            Ok(RequestActionBody::Reject {
+                proposal_version,
+                effect_digest,
+            })
+        }
+        Operation::RequestRevision if request_stage.is_some() => {
+            let (proposal_version, effect_digest) = parse_bound_proposal_action(object)?;
+            Ok(RequestActionBody::RequestRevision {
+                proposal_version,
+                effect_digest,
+            })
+        }
+        Operation::ReviseRequest if request_stage.is_none() => {
+            if object.len() != 1 {
+                return Err(());
+            }
+            let rebase = object.get("rebase").and_then(Value::as_bool).ok_or(())?;
+            Ok(RequestActionBody::Revise { rebase })
+        }
+        Operation::CancelRequest if request_stage.is_none() => {
+            parse_empty_action_object(object)?;
+            Ok(RequestActionBody::Cancel)
+        }
+        Operation::ApplyRequest if request_stage.is_none() => {
+            let (proposal_version, effect_digest) = parse_bound_proposal_action(object)?;
+            Ok(RequestActionBody::Apply {
+                proposal_version,
+                effect_digest,
+            })
+        }
+        _ => Err(()),
+    }
+}
+
+fn parse_empty_action_object(object: &Map<String, Value>) -> Result<(), ()> {
+    if object.is_empty() {
+        Ok(())
+    } else {
+        Err(())
+    }
+}
+
+fn parse_bound_proposal_action(object: &Map<String, Value>) -> Result<(u32, String), ()> {
+    if object.len() != 2 {
+        return Err(());
+    }
+    let version = object
+        .get("proposalVersion")
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .filter(|value| *value > 0)
+        .ok_or(())?;
+    let digest = object
+        .get("effectDigest")
+        .and_then(Value::as_str)
+        .filter(|value| valid_sha256_digest(value))
+        .ok_or(())?;
+    Ok((version, digest.to_owned()))
+}
+
+fn valid_sha256_digest(value: &str) -> bool {
+    value.strip_prefix("sha256:").is_some_and(|digest| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    })
+}
+
 fn single_header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     let mut values = headers.get_all(name).iter();
     let value = values.next()?;
@@ -3634,7 +4326,7 @@ fn mutation_problem(error: MutationError) -> Response {
             "idempotency.conflict",
             "The idempotency key is bound to another request.",
         ),
-        MutationError::Unavailable => fixed_problem(
+        MutationError::Unavailable | MutationError::RetryableConflict => fixed_problem(
             StatusCode::SERVICE_UNAVAILABLE,
             "service.unavailable",
             "The Registry mutation service is unavailable.",

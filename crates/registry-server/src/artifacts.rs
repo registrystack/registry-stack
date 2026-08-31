@@ -15,10 +15,11 @@ use crate::diagnostics::Diagnostic;
 use crate::generated_ddl::DdlInventory;
 use crate::manifest_adapter::project_manifest_artifacts;
 use crate::model::{
-    CompiledAccessInventory, CompiledEntity, CompiledEventDeliveryInventory,
-    CompiledMetadataInventory, CompiledModuleIdentity, CompiledQueryInventory, CompiledQueryKind,
-    CompiledQueryOperation, CompiledRevisionKind, CompiledRoute, CompiledRouteInventory,
-    HttpMethod,
+    CompiledAccessInventory, CompiledChangeRequestMutation, CompiledChangeRequestRetentionMode,
+    CompiledChangeRequestTargetBinding, CompiledChangeRequestValue, CompiledEntity,
+    CompiledEventDeliveryInventory, CompiledMetadataInventory, CompiledModuleIdentity,
+    CompiledQueryInventory, CompiledQueryKind, CompiledQueryOperation, CompiledRevisionKind,
+    CompiledRoute, CompiledRouteInventory, HttpMethod,
 };
 use crate::physical_names::{hex_prefix, PhysicalNameInventory};
 
@@ -137,7 +138,7 @@ pub(crate) fn generate_artifacts(
 
     let mut schemas = BTreeMap::new();
     for entity in entities.values() {
-        let schema = entity_schema(entity);
+        let schema = entity_schema(entity, entities);
         let path = format!("generated/schemas/{}.schema.json", entity.id);
         insert_json_value(&mut artifacts, &path, &schema)?;
         schemas.insert(entity.id.clone(), schema);
@@ -199,25 +200,84 @@ pub(crate) fn event_data_schema_binding(
         EventTrigger::Created => "created",
         EventTrigger::Patched => "patched",
         EventTrigger::Tombstoned => "tombstoned",
+        EventTrigger::RequestLifecycle => "request_lifecycle",
+    };
+    let mut properties = Map::new();
+    properties.insert("entity".to_owned(), json!({"const": entity.id}));
+    properties.insert(
+        "recordId".to_owned(),
+        json!({"type": "string", "format": "uuid"}),
+    );
+    properties.insert(
+        "revision".to_owned(),
+        json!({"type": "integer", "format": "int64", "minimum": 1}),
+    );
+    properties.insert("trigger".to_owned(), json!({"const": trigger}));
+    properties.insert("packageRevision".to_owned(), json!({"type": "string"}));
+    if event.trigger == EventTrigger::RequestLifecycle {
+        properties.insert(
+            "request".to_owned(),
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "proposalVersion": {"type": "integer", "minimum": 1},
+                    "workflowRevision": {"type": "integer", "minimum": 1},
+                    "transition": {"type": "string"},
+                    "fromState": {"type": "string"},
+                    "toState": {"type": "string"},
+                    "stage": {"type": ["string", "null"]},
+                    "effectDigest": {"type": ["string", "null"]},
+                    "deduplicationKey": {"type": "string"}
+                },
+                "required": [
+                    "proposalVersion",
+                    "workflowRevision",
+                    "transition",
+                    "fromState",
+                    "toState",
+                    "stage",
+                    "effectDigest",
+                    "deduplicationKey"
+                ]
+            }),
+        );
+    }
+    properties.insert(
+        "values".to_owned(),
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": value_properties,
+            "required": event.projection,
+        }),
+    );
+    let required = if event.trigger == EventTrigger::RequestLifecycle {
+        vec![
+            "entity",
+            "recordId",
+            "revision",
+            "trigger",
+            "packageRevision",
+            "request",
+            "values",
+        ]
+    } else {
+        vec![
+            "entity",
+            "recordId",
+            "revision",
+            "trigger",
+            "packageRevision",
+            "values",
+        ]
     };
     let schema = json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "additionalProperties": false,
-        "properties": {
-            "entity": {"const": entity.id},
-            "recordId": {"type": "string", "format": "uuid"},
-            "revision": {"type": "integer", "format": "int64", "minimum": 1},
-            "trigger": {"const": trigger},
-            "packageRevision": {"type": "string"},
-            "values": {
-                "type": "object",
-                "additionalProperties": false,
-                "properties": value_properties,
-                "required": event.projection,
-            }
-        },
-        "required": ["entity", "recordId", "revision", "trigger", "packageRevision", "values"]
+        "properties": properties,
+        "required": required
     });
     let bytes = canonicalize_json(&schema).map_err(|_| canonicalization_error())?;
     let digest = Sha256::digest(&bytes);
@@ -238,7 +298,7 @@ pub(crate) fn event_data_schema_binding(
     })
 }
 
-fn entity_schema(entity: &CompiledEntity) -> Value {
+fn entity_schema(entity: &CompiledEntity, entities: &BTreeMap<String, CompiledEntity>) -> Value {
     let mut properties = Map::new();
     let mut required = Vec::new();
     for field in &entity.stored_fields {
@@ -258,7 +318,7 @@ fn entity_schema(entity: &CompiledEntity) -> Value {
             .insert("readOnly".to_owned(), Value::Bool(true));
         properties.insert(field.logical.api_name.clone(), schema);
     }
-    json!({
+    let mut schema = json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": format!("urn:registry-server:entity:{}", entity.id),
         "type": "object",
@@ -269,7 +329,21 @@ fn entity_schema(entity: &CompiledEntity) -> Value {
             MutationMode::Mutable => "mutable",
             MutationMode::CreateOnly => "create_only",
         }
-    })
+    });
+    let object = schema.as_object_mut().expect("entity schema is an object");
+    if entity.change_control.is_some() {
+        object.insert(
+            "x-registry-changeControl".to_owned(),
+            render_change_control(entity, entities),
+        );
+    }
+    if entity.change_request.is_some() {
+        object.insert(
+            "x-registry-changeRequest".to_owned(),
+            render_change_request(entity, entities),
+        );
+    }
+    schema
 }
 
 pub(crate) fn openapi_input_schema_id(entity_id: &str, operation: Operation) -> String {
@@ -306,6 +380,205 @@ pub(crate) fn openapi_entity_input_schema(
             MutationMode::CreateOnly => "create_only",
         }
     })
+}
+
+pub(crate) fn openapi_request_action_input_schema(operation: Operation) -> Value {
+    let proposal_binding = json!({
+        "proposalVersion": {"type": "integer", "format": "int64", "minimum": 1, "maximum": u32::MAX},
+        "effectDigest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "description": "Digest of the immutable proposal effects displayed to the actor."
+        }
+    });
+    match operation {
+        Operation::ApproveRequest
+        | Operation::RejectRequest
+        | Operation::RequestRevision
+        | Operation::ApplyRequest => json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["proposalVersion", "effectDigest"],
+            "properties": proposal_binding,
+        }),
+        Operation::ReviseRequest => json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["rebase"],
+            "properties": {
+                "rebase": {"type": "boolean"}
+            }
+        }),
+        _ => json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {}
+        }),
+    }
+}
+
+fn render_change_control(
+    entity: &CompiledEntity,
+    entities: &BTreeMap<String, CompiledEntity>,
+) -> Value {
+    let controlled_operations = entity
+        .change_control
+        .as_ref()
+        .map(|control| {
+            control
+                .required_for
+                .iter()
+                .map(|operation| operation_name(*operation))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let eligible_request_types = entities
+        .values()
+        .filter_map(|request_entity| {
+            let request = request_entity.change_request.as_ref()?;
+            let operations = request
+                .effects
+                .iter()
+                .filter(|effect| effect.target.entity_id == entity.id)
+                .map(|effect| operation_name(effect.operation))
+                .collect::<BTreeSet<_>>();
+            (!operations.is_empty()).then(|| {
+                json!({
+                    "requestEntity": request_entity.id,
+                    "requestRoute": request_entity.route,
+                    "operations": operations.into_iter().collect::<Vec<_>>(),
+                    "contractFingerprint": request.contract_fingerprint,
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "requiredFor": controlled_operations,
+        "directWriteRestriction": "controlled_operations_require_compiled_change_request_application",
+        "eligibleRequestTypes": eligible_request_types,
+    })
+}
+
+fn render_change_request(
+    entity: &CompiledEntity,
+    entities: &BTreeMap<String, CompiledEntity>,
+) -> Value {
+    let request = entity
+        .change_request
+        .as_ref()
+        .expect("caller checked change request presence");
+    json!({
+        "requestEntity": request.request_entity_id,
+        "contractFingerprint": request.contract_fingerprint,
+        "retention": render_request_retention(request.retention_mode),
+        "bounds": {
+            "maximumTargets": request.maximum_targets,
+            "maximumFieldMutations": request.maximum_field_mutations,
+            "maximumSnapshotBytes": request.maximum_snapshot_bytes,
+        },
+        "stateEnvelope": {
+            "states": ["draft", "submitted", "approved", "needs_changes", "rejected", "canceled", "applied"],
+            "proposalBinding": ["proposalVersion", "effectDigest", "contractFingerprint"],
+            "actionAvailability": "advisory_rechecked_on_use",
+        },
+        "effects": request.effects.iter().map(|effect| {
+            let target = entities.get(&effect.target.entity_id);
+            json!({
+                "id": effect.id,
+                "operation": operation_name(effect.operation),
+                "target": {
+                    "entity": effect.target.entity_id,
+                    "binding": render_target_binding(&effect.target.binding),
+                },
+                "mutations": effect.mutations.iter().map(|mutation| {
+                    render_request_mutation(mutation, target)
+                }).collect::<Vec<_>>(),
+                "dependsOn": effect.depends_on.iter().collect::<Vec<_>>(),
+            })
+        }).collect::<Vec<_>>(),
+        "stages": request.stages,
+        "actions": request.actions.iter().map(|action| json!({
+            "operation": operation_name(action.operation.access_operation()),
+            "stage": action.review_stage,
+            "method": "POST",
+            "requiresIdempotencyKey": true,
+            "requiresRecordPrecondition": true,
+            "inputSchema": openapi_input_schema_id(&entity.id, action.operation.access_operation()),
+            "responseSchema": "ChangeRequestActionResponse",
+        })).collect::<Vec<_>>(),
+        "reviewGrants": request.review_grants,
+        "applyGrants": request.apply_grants,
+        "presenceGrants": request.presence_grants,
+        "targetEntities": request.target_entities,
+    })
+}
+
+fn render_request_retention(mode: CompiledChangeRequestRetentionMode) -> Value {
+    let mode = match mode {
+        CompiledChangeRequestRetentionMode::Retain => "retain",
+        CompiledChangeRequestRetentionMode::OperatorErase => "operator_erase",
+    };
+    json!({
+        "mode": mode,
+        "effectivePolicy": {
+            "payloadSnapshots": match mode {
+                "retain" => "retained_until_package_or_operator_policy_changes",
+                "operator_erase" => "operator_erasable_after_terminal_state",
+                _ => unreachable!("closed retention mode"),
+            },
+            "provenanceStub": "retained_while_target_revisions_reference_request",
+            "erasedDetailMarker": "request.detailErased",
+        }
+    })
+}
+
+fn render_target_binding(binding: &CompiledChangeRequestTargetBinding) -> Value {
+    match binding {
+        CompiledChangeRequestTargetBinding::Existing { from_field } => {
+            json!({"kind": "existing", "fromField": from_field})
+        }
+        CompiledChangeRequestTargetBinding::ReservedCreate { effect } => {
+            json!({"kind": "reserved_create", "effect": effect})
+        }
+    }
+}
+
+fn render_request_mutation(
+    mutation: &CompiledChangeRequestMutation,
+    target: Option<&CompiledEntity>,
+) -> Value {
+    match mutation {
+        CompiledChangeRequestMutation::Set { field, value } => json!({
+            "kind": "set",
+            "field": field,
+            "apiName": target.and_then(|entity| api_field_name(entity, field)),
+            "value": render_request_value(value),
+        }),
+        CompiledChangeRequestMutation::Clear { field } => json!({
+            "kind": "clear",
+            "field": field,
+            "apiName": target.and_then(|entity| api_field_name(entity, field)),
+        }),
+    }
+}
+
+fn render_request_value(value: &CompiledChangeRequestValue) -> Value {
+    match value {
+        CompiledChangeRequestValue::FromField { field } => {
+            json!({"kind": "from_field", "field": field})
+        }
+        CompiledChangeRequestValue::FromEffect {
+            effect,
+            target_entity_id,
+        } => json!({
+            "kind": "from_effect",
+            "effect": effect,
+            "targetEntity": target_entity_id,
+        }),
+    }
 }
 
 fn field_schema(field_type: &FieldTypeSource) -> Value {
@@ -447,6 +720,11 @@ fn openapi_document(
                 request_schema_ref.clone(),
                 openapi_entity_input_schema(entity, Some(&writable_fields)),
             );
+        } else if is_request_action(route.operation) {
+            input_schemas.insert(
+                request_schema_ref.clone(),
+                openapi_request_action_input_schema(route.operation),
+            );
         }
         operations.insert(
             method_name(route.method).to_owned(),
@@ -467,11 +745,15 @@ fn openapi_document(
         .map(|(id, schema)| (id.clone(), schema.clone()))
         .collect();
     component_schemas.extend(input_schemas);
+    let has_request_actions = routes
+        .routes
+        .iter()
+        .any(|route| is_request_action(route.operation));
     json!({
         "openapi": "3.1.0",
         "info": {"title": registry_id, "version": version},
         "paths": paths,
-        "components": openapi_components(component_schemas)
+        "components": openapi_components(component_schemas, has_request_actions)
     })
 }
 
@@ -497,8 +779,17 @@ pub(crate) struct OpenApiOperationSpec<'a> {
 const OPENAPI_EXAMPLE_TRACE_ID: &str = "11111111111111111111111111111111";
 const OPENAPI_EXAMPLE_TRACEPARENT: &str = "00-11111111111111111111111111111111-2222222222222222-01";
 
-pub(crate) fn openapi_components(mut schemas: Map<String, Value>) -> Value {
+pub(crate) fn openapi_components(
+    mut schemas: Map<String, Value>,
+    has_request_actions: bool,
+) -> Value {
     schemas.insert("Problem".to_owned(), problem_schema());
+    if has_request_actions {
+        schemas.insert(
+            "ChangeRequestActionResponse".to_owned(),
+            request_action_response_schema(),
+        );
+    }
     json!({
         "securitySchemes": {
             "bearerAuth": {
@@ -567,10 +858,21 @@ pub(crate) fn openapi_operation(spec: OpenApiOperationSpec<'_>) -> Value {
             json!(batch.maximum_bytes),
         );
     }
+    if is_request_action(spec.route.operation) {
+        operation.insert(
+            "x-registry-requestAction".to_owned(),
+            render_request_action(spec),
+        );
+    }
     if let Some(query_profile) = query_profile_extension(spec) {
         operation.insert(query_profile.0, query_profile.1);
     }
-    let parameters = operation_parameters(spec.route, spec.query, spec.access_profiles);
+    let parameters = operation_parameters(
+        spec.route,
+        spec.response_entity,
+        spec.query,
+        spec.access_profiles,
+    );
     if !parameters.is_empty() {
         operation.insert("parameters".to_owned(), Value::Array(parameters));
     }
@@ -579,6 +881,89 @@ pub(crate) fn openapi_operation(spec: OpenApiOperationSpec<'_>) -> Value {
     }
     operation.insert("responses".to_owned(), operation_responses(spec));
     Value::Object(operation)
+}
+
+fn render_request_action(spec: OpenApiOperationSpec<'_>) -> Value {
+    json!({
+        "operation": operation_name(spec.route.operation),
+        "stage": spec.route.request_stage,
+        "method": method_name(spec.route.method),
+        "path": spec.route.path,
+        "requestEntity": spec.route.entity_id,
+        "requiredPreconditions": request_action_preconditions(spec.route.operation),
+        "inputSchema": openapi_input_schema_id(&spec.entity.id, spec.route.operation),
+        "responseSchema": "ChangeRequestActionResponse",
+        "proposalBinding": {
+            "versionField": "proposalVersion",
+            "digestField": "effectDigest",
+            "recordPrecondition": "If-Match",
+            "idempotencyHeader": "Idempotency-Key",
+        },
+        "targetEntities": request_action_target_entities(spec),
+    })
+}
+
+fn request_action_target_entities(spec: OpenApiOperationSpec<'_>) -> Vec<String> {
+    let Some(request) = spec.entity.change_request.as_ref() else {
+        return Vec::new();
+    };
+    match spec.access_profiles {
+        OpenApiAccessProfiles::All => request.target_entities.iter().cloned().collect(),
+        OpenApiAccessProfiles::Selected(profile) => {
+            let mut targets = BTreeSet::new();
+            match spec.route.operation {
+                Operation::ApproveRequest
+                | Operation::RejectRequest
+                | Operation::RequestRevision => {
+                    if let Some(stage) = spec.route.request_stage.as_deref() {
+                        targets.extend(
+                            request
+                                .review_grants
+                                .iter()
+                                .filter(|grant| grant.profile_id == profile && grant.stage == stage)
+                                .map(|grant| grant.target_entity_id.clone()),
+                        );
+                    }
+                }
+                Operation::ApplyRequest => {
+                    targets.extend(
+                        request
+                            .apply_grants
+                            .iter()
+                            .filter(|grant| grant.profile_id == profile)
+                            .map(|grant| grant.target_entity_id.clone()),
+                    );
+                }
+                Operation::SubmitRequest
+                | Operation::ReviseRequest
+                | Operation::CancelRequest
+                | Operation::Create
+                | Operation::Get
+                | Operation::List
+                | Operation::Patch
+                | Operation::Tombstone
+                | Operation::Batch
+                | Operation::Lookup
+                | Operation::Revisions => {}
+            }
+            targets.into_iter().collect()
+        }
+    }
+}
+
+fn request_action_preconditions(operation: Operation) -> Vec<&'static str> {
+    let mut preconditions = vec!["Idempotency-Key", "If-Match"];
+    if matches!(
+        operation,
+        Operation::ApproveRequest
+            | Operation::RejectRequest
+            | Operation::RequestRevision
+            | Operation::ApplyRequest
+    ) {
+        preconditions.push("proposalVersion");
+        preconditions.push("effectDigest");
+    }
+    preconditions
 }
 
 fn operation_security(spec: OpenApiOperationSpec<'_>) -> Value {
@@ -613,6 +998,7 @@ fn operation_security(spec: OpenApiOperationSpec<'_>) -> Value {
 
 fn operation_parameters(
     route: &CompiledRoute,
+    entity: &CompiledEntity,
     query: &CompiledQueryInventory,
     access_profiles: OpenApiAccessProfiles<'_>,
 ) -> Vec<Value> {
@@ -639,13 +1025,24 @@ fn operation_parameters(
     ));
     parameters.push(access_profile_parameter());
     match route.operation {
-        Operation::Get => parameters.push(query_parameter(
-            "$select",
-            false,
-            false,
-            json!({"type": "string", "maxLength": crate::query::MAX_QUERY_PAYLOAD_BYTES}),
-            "Comma-separated subset of readable API property names.",
-        )),
+        Operation::Get => {
+            parameters.push(query_parameter(
+                "$select",
+                false,
+                false,
+                json!({"type": "string", "maxLength": crate::query::MAX_QUERY_PAYLOAD_BYTES}),
+                "Comma-separated subset of readable API property names.",
+            ));
+            if entity.change_request.is_some() && route.query_kind.is_none() {
+                parameters.push(query_parameter(
+                    "requestHistoryAfterProposalVersion",
+                    false,
+                    false,
+                    json!({"type": "integer", "format": "int64", "minimum": 1, "maximum": u32::MAX}),
+                    "Positive proposal-version cursor for the request history page returned with this request record.",
+                ));
+            }
+        }
         Operation::List => {
             parameters.extend(read_query_parameters(route, query, access_profiles));
         }
@@ -673,6 +1070,26 @@ fn operation_parameters(
             }
         }
         Operation::Revisions => {}
+        Operation::SubmitRequest
+        | Operation::ApproveRequest
+        | Operation::RejectRequest
+        | Operation::RequestRevision
+        | Operation::ReviseRequest
+        | Operation::CancelRequest
+        | Operation::ApplyRequest => {
+            parameters.push(header_parameter(
+                "Idempotency-Key",
+                true,
+                json!({"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[\\x21-\\x2B\\x2D-\\x3A\\x3C-\\x7E]+$"}),
+                "Idempotency key bound to method, route, caller, request record, package revision, action body, and response field set.",
+            ));
+            parameters.push(header_parameter(
+                "If-Match",
+                true,
+                json!({"type": "string", "minLength": 6, "maxLength": 256, "pattern": "^\\\"rs-[\\x21\\x23-\\x7E]+\\\"$"}),
+                "Strong Registry ETag for the currently visible request record representation.",
+            ));
+        }
     }
     parameters
 }
@@ -830,6 +1247,15 @@ fn operation_request_body(spec: OpenApiOperationSpec<'_>) -> Option<Value> {
             ))
         }
         Operation::Get | Operation::List | Operation::Tombstone | Operation::Revisions => None,
+        Operation::SubmitRequest
+        | Operation::ApproveRequest
+        | Operation::RejectRequest
+        | Operation::RequestRevision
+        | Operation::ReviseRequest
+        | Operation::CancelRequest
+        | Operation::ApplyRequest => Some(json_request_body(json!({
+            "$ref": format!("#/components/schemas/{}", spec.request_schema_ref)
+        }))),
     }
 }
 
@@ -943,32 +1369,32 @@ fn operation_responses(spec: OpenApiOperationSpec<'_>) -> Value {
         Operation::Create => success_response(
             "Record created",
             StatusResponseHeaders::MutationCreate,
-            record_response_schema(spec.schema_ref),
+            record_response_schema(spec.response_entity, spec.schema_ref),
         ),
         Operation::Get => success_response(
             "Record returned",
             StatusResponseHeaders::ReadDetail,
-            record_response_schema(spec.schema_ref),
+            record_response_schema(spec.response_entity, spec.schema_ref),
         ),
         Operation::Lookup => success_response(
             "Lookup resolved to one record",
             StatusResponseHeaders::NoStore,
-            record_response_schema(spec.schema_ref),
+            record_response_schema(spec.response_entity, spec.schema_ref),
         ),
         Operation::List => success_response(
             "Records returned",
             StatusResponseHeaders::NoStore,
-            list_response_schema(spec.schema_ref),
+            list_response_schema(spec.response_entity, spec.schema_ref),
         ),
         Operation::Patch => success_response(
             "Record patched",
             StatusResponseHeaders::Mutation,
-            record_response_schema(spec.schema_ref),
+            record_response_schema(spec.response_entity, spec.schema_ref),
         ),
         Operation::Tombstone => success_response(
             "Record tombstoned",
             StatusResponseHeaders::Mutation,
-            record_response_schema(spec.schema_ref),
+            record_response_schema(spec.response_entity, spec.schema_ref),
         ),
         Operation::Batch => {
             let batch = spec
@@ -992,6 +1418,17 @@ fn operation_responses(spec: OpenApiOperationSpec<'_>) -> Value {
             "Record revisions returned",
             StatusResponseHeaders::NoStore,
             revision_response_schema(spec.schema_ref, spec.route.revision_kind),
+        ),
+        Operation::SubmitRequest
+        | Operation::ApproveRequest
+        | Operation::RejectRequest
+        | Operation::RequestRevision
+        | Operation::ReviseRequest
+        | Operation::CancelRequest
+        | Operation::ApplyRequest => success_response(
+            "Request action accepted",
+            StatusResponseHeaders::Mutation,
+            json!({"$ref": "#/components/schemas/ChangeRequestActionResponse"}),
         ),
     };
     let success_status = if spec.route.operation == Operation::Create {
@@ -1095,20 +1532,74 @@ fn traceparent_schema() -> Value {
     })
 }
 
-fn record_response_schema(schema_ref: &str) -> Value {
-    json!({
+fn record_response_schema(entity: &CompiledEntity, schema_ref: &str) -> Value {
+    let mut properties = Map::from_iter([
+        ("id".to_owned(), json!({"type": "string", "format": "uuid"})),
+        (
+            "revision".to_owned(),
+            json!({"type": "integer", "format": "int64", "minimum": 1}),
+        ),
+        ("data".to_owned(), json!({"type": "object"})),
+    ]);
+    if entity.change_request.is_some() {
+        properties.insert("request".to_owned(), request_record_metadata_schema());
+    }
+    if entity
+        .access_profiles
+        .values()
+        .any(|profile| !profile.request_presence.is_empty())
+    {
+        properties.insert(
+            "requestPresence".to_owned(),
+            request_presence_metadata_schema(),
+        );
+    }
+    let mut schema = json!({
         "type": "object",
         "additionalProperties": false,
         "required": ["id", "revision", "data"],
-        "properties": {
-            "id": {"type": "string", "format": "uuid"},
-            "revision": {"type": "integer", "format": "int64", "minimum": 1},
-            "data": {"$ref": format!("#/components/schemas/{schema_ref}")},
-        }
-    })
+        "properties": properties,
+        "allOf": [{
+            "if": {
+                "required": ["request"],
+                "properties": {
+                    "request": {
+                        "type": "object",
+                        "required": ["detailErased"],
+                        "properties": {
+                            "detailErased": {"const": true}
+                        }
+                    }
+                }
+            },
+            "then": {
+                "properties": {
+                    "data": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "maxProperties": 0
+                    }
+                }
+            },
+            "else": {
+                "properties": {
+                    "data": {"$ref": format!("#/components/schemas/{schema_ref}")}
+                }
+            }
+        }]
+    });
+    if entity.change_request.is_none() {
+        schema
+            .as_object_mut()
+            .expect("record schema is object")
+            .remove("allOf");
+        schema["properties"]["data"] =
+            json!({"$ref": format!("#/components/schemas/{schema_ref}")});
+    }
+    schema
 }
 
-fn list_response_schema(schema_ref: &str) -> Value {
+fn list_response_schema(entity: &CompiledEntity, schema_ref: &str) -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
@@ -1116,7 +1607,7 @@ fn list_response_schema(schema_ref: &str) -> Value {
         "properties": {
             "items": {
                 "type": "array",
-                "items": record_response_schema(schema_ref),
+                "items": record_response_schema(entity, schema_ref),
             },
             "pageInfo": {
                 "type": "object",
@@ -1129,6 +1620,201 @@ fn list_response_schema(schema_ref: &str) -> Value {
             "count": {"type": "integer", "format": "int64", "minimum": 0}
         }
     })
+}
+
+fn request_record_metadata_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["serverState", "proposalVersion", "editable"],
+        "properties": {
+            "serverState": request_state_schema(),
+            "proposalVersion": {"type": "integer", "format": "int64", "minimum": 1, "maximum": u32::MAX},
+            "effectDigest": nullable_effect_digest_schema(),
+            "editable": {"type": "boolean"},
+            "detailErased": {"const": true},
+            "actions": {
+                "type": "array",
+                "maxItems": 64,
+                "items": request_action_link_schema(),
+            },
+            "application": request_application_metadata_schema(false),
+            "history": retained_request_history_schema(),
+        }
+    })
+}
+
+fn request_action_link_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["operation", "method", "href", "ifMatch"],
+        "properties": {
+            "operation": {
+                "type": "string",
+                "enum": ["submit_request", "approve_request", "reject_request", "request_revision", "revise_request", "cancel_request", "apply_request"]
+            },
+            "method": {"const": "POST"},
+            "href": {"type": "string", "maxLength": 2048},
+            "ifMatch": {"type": "string", "pattern": "^\\\"rs-[\\x21\\x23-\\x7E]+\\\"$"},
+            "stage": {"type": "string", "minLength": 1},
+            "rebase": {"type": "boolean"},
+            "proposalVersion": {"type": "integer", "format": "int64", "minimum": 1, "maximum": u32::MAX},
+            "effectDigest": effect_digest_schema(),
+            "review": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["targets"],
+                "properties": {
+                    "targets": {
+                        "type": "array",
+                        "maxItems": 16,
+                        "items": request_review_target_schema(),
+                    }
+                }
+            }
+        }
+    })
+}
+
+fn request_review_target_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["entityId", "recordId", "operation", "baseRevision", "before", "after"],
+        "properties": {
+            "entityId": {"type": "string"},
+            "recordId": {"type": "string", "format": "uuid"},
+            "operation": {"type": "string", "enum": ["create", "patch"]},
+            "baseRevision": {"type": ["integer", "null"], "format": "int64", "minimum": 1},
+            "before": {
+                "type": ["object", "null"],
+                "maxProperties": 128,
+                "additionalProperties": true,
+            },
+            "after": {
+                "type": "object",
+                "maxProperties": 128,
+                "additionalProperties": true,
+            }
+        }
+    })
+}
+
+fn request_application_metadata_schema(require_receipt_fields: bool) -> Value {
+    let required = if require_receipt_fields {
+        json!([
+            "applicationId",
+            "proposalVersion",
+            "effectDigest",
+            "appliedAt"
+        ])
+    } else {
+        json!(["applicationId", "proposalVersion"])
+    };
+    json!({
+        "type": ["object", "null"],
+        "additionalProperties": false,
+        "required": required,
+        "properties": {
+            "applicationId": {"type": "string", "format": "uuid"},
+            "proposalVersion": {"type": "integer", "format": "int64", "minimum": 1, "maximum": u32::MAX},
+            "effectDigest": effect_digest_schema(),
+            "appliedAt": {"type": "string", "format": "date-time"}
+        }
+    })
+}
+
+fn retained_request_history_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["proposals", "nextAfterProposalVersion"],
+        "properties": {
+            "proposals": {
+                "type": "array",
+                "maxItems": 50,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                        "requestEntityId",
+                        "requestId",
+                        "proposalVersion",
+                        "serverState",
+                        "current",
+                        "contractFingerprint",
+                        "detailErased",
+                        "applicationId",
+                        "resultLinkCount",
+                        "resultLinks"
+                    ],
+                    "properties": {
+                        "requestEntityId": {"type": "string"},
+                        "requestId": {"type": "string", "format": "uuid"},
+                        "proposalVersion": {"type": "integer", "format": "int64", "minimum": 1, "maximum": u32::MAX},
+                        "serverState": request_state_schema(),
+                        "current": {"type": "boolean"},
+                        "contractFingerprint": {"type": "string"},
+                        "detailErased": {"type": "boolean"},
+                        "applicationId": {"type": ["string", "null"], "format": "uuid"},
+                        "resultLinkCount": {"type": "integer", "minimum": 0, "maximum": 16},
+                        "resultLinks": {
+                            "type": "array",
+                            "maxItems": 16,
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["targetEntityId", "targetRecordId", "targetRevision"],
+                                "properties": {
+                                    "targetEntityId": {"type": "string"},
+                                    "targetRecordId": {"type": "string", "format": "uuid"},
+                                    "targetRevision": {"type": "integer", "format": "int64", "minimum": 1}
+                                }
+                            }
+                        },
+                        "effectDigest": effect_digest_schema()
+                    }
+                }
+            },
+            "nextAfterProposalVersion": {"type": ["integer", "null"], "format": "int64", "minimum": 1, "maximum": u32::MAX}
+        }
+    })
+}
+
+fn request_presence_metadata_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["requests"],
+        "properties": {
+            "requests": {
+                "type": "array",
+                "maxItems": 64,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["requestType", "pending"],
+                    "properties": {
+                        "requestType": {"type": "string"},
+                        "pending": {"type": "boolean"}
+                    }
+                }
+            }
+        }
+    })
+}
+
+fn request_state_schema() -> Value {
+    json!({"type": "string", "enum": ["draft", "submitted", "approved", "needs_changes", "rejected", "canceled", "applied"]})
+}
+
+fn effect_digest_schema() -> Value {
+    json!({"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"})
+}
+
+fn nullable_effect_digest_schema() -> Value {
+    json!({"type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$"})
 }
 
 fn batch_response_schema(
@@ -1212,6 +1898,33 @@ fn revision_response_schema(schema_ref: &str, kind: Option<CompiledRevisionKind>
         })
     }
 }
+
+fn request_action_response_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "revision", "request"],
+        "properties": {
+            "id": {"type": "string", "format": "uuid"},
+            "revision": {"type": "integer", "format": "int64", "minimum": 1},
+            "request": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["serverState", "proposalVersion", "effectDigest", "application"],
+                "properties": {
+                    "serverState": request_state_schema(),
+                    "proposalVersion": {"type": ["integer", "null"], "format": "int64", "minimum": 1, "maximum": u32::MAX},
+                    "effectDigest": nullable_effect_digest_schema(),
+                    "application": request_application_metadata_schema(true)
+                }
+            }
+        }
+    })
+}
+
+#[cfg(test)]
+#[path = "tests/artifacts_response_schema_tests.rs"]
+mod artifacts_response_schema_tests;
 
 #[derive(Clone, Copy)]
 struct ProblemExample {
@@ -1323,6 +2036,42 @@ fn problem_responses(operation: Operation) -> BTreeMap<&'static str, Vec<Problem
             }],
         );
     }
+    if is_request_action(operation) {
+        responses.insert(
+            "409",
+            vec![
+                ProblemExample {
+                    code: "request.conflict",
+                    detail: "The request action conflicts with current request state.",
+                },
+                ProblemExample {
+                    code: "idempotency.conflict",
+                    detail: "The idempotency key is bound to another request.",
+                },
+            ],
+        );
+        responses.insert(
+            "412",
+            vec![ProblemExample {
+                code: "precondition.failed",
+                detail: "The request action precondition failed.",
+            }],
+        );
+        responses.insert(
+            "415",
+            vec![ProblemExample {
+                code: "unsupported.media_type",
+                detail: "The request media type is not supported.",
+            }],
+        );
+        responses.insert(
+            "428",
+            vec![ProblemExample {
+                code: "precondition.required",
+                detail: "The request action precondition is required.",
+            }],
+        );
+    }
     responses
 }
 
@@ -1348,6 +2097,7 @@ fn problem_schema() -> Value {
                     "precondition.required",
                     "query.cursor_invalid",
                     "query.invalid",
+                    "request.conflict",
                     "request.invalid",
                     "request.timeout",
                     "resource.not_found",
@@ -1649,7 +2399,27 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::Tombstone => "tombstone",
         Operation::Batch => "batch",
         Operation::Revisions => "revisions",
+        Operation::SubmitRequest => "submit_request",
+        Operation::ApproveRequest => "approve_request",
+        Operation::RejectRequest => "reject_request",
+        Operation::RequestRevision => "request_revision",
+        Operation::ReviseRequest => "revise_request",
+        Operation::CancelRequest => "cancel_request",
+        Operation::ApplyRequest => "apply_request",
     }
+}
+
+fn is_request_action(operation: Operation) -> bool {
+    matches!(
+        operation,
+        Operation::SubmitRequest
+            | Operation::ApproveRequest
+            | Operation::RejectRequest
+            | Operation::RequestRevision
+            | Operation::ReviseRequest
+            | Operation::CancelRequest
+            | Operation::ApplyRequest
+    )
 }
 
 fn insert_json<T: Serialize>(

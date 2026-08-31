@@ -3,8 +3,8 @@
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use registry_server::compiler::{compile_project, module_digest, CompileProfile};
 use registry_server::contract::{
-    parse_module_json, parse_project_json, Classification, ModuleLockSource, RegistryModule,
-    RegistryProject, WebhookAuthenticationProfile, WebhookDeadLetterMode,
+    parse_module_json, parse_project_json, Classification, EventTrigger, ModuleLockSource,
+    RegistryModule, RegistryProject, WebhookAuthenticationProfile, WebhookDeadLetterMode,
 };
 use registry_server::diagnostics::CompileFailure;
 use registry_server::model::{CompiledWebhookDeliveryMode, CompiledWebhookRetryProfile};
@@ -65,6 +65,88 @@ fn assert_compile_code(value: &Value, code: &str) {
         "missing diagnostic {code:?}: {:?}",
         failure.diagnostics()
     );
+}
+
+fn change_request_event_project() -> Value {
+    json!({
+        "apiVersion":"registry.registrystack.org/v1alpha1",
+        "kind":"RegistryProject",
+        "registry":{"id":"request-events","version":"1","defaultLanguage":"en"},
+        "entities":[{
+            "id":"asset-site",
+            "route":"asset-sites",
+            "mutationMode":"create_only",
+            "classification":"internal",
+            "fields":[
+                {"id":"name","type":"string","maxLength":80,"required":true,"classification":"internal"}
+            ]
+        },{
+            "id":"asset-placement",
+            "route":"asset-placements",
+            "mutationMode":"mutable",
+            "classification":"internal",
+            "changeControl":{"requiredFor":["patch"]},
+            "fields":[
+                {"id":"site","type":"reference","target":"asset-site","required":true,"classification":"internal"}
+            ]
+        },{
+            "id":"placement-correction-request",
+            "route":"placement-correction-requests",
+            "mutationMode":"mutable",
+            "classification":"internal",
+            "fields":[
+                {"id":"placement","type":"reference","target":"asset-placement","required":true,"classification":"internal"},
+                {"id":"proposed-site","type":"reference","target":"asset-site","required":true,"classification":"internal"},
+                {"id":"reason","type":"text","maxLength":1000,"required":true,"classification":"restricted"}
+            ],
+            "events":[{
+                "id":"request-lifecycle",
+                "trigger":"request_lifecycle",
+                "projection":["proposed-site","reason"],
+                "webhook":{"destinationId":"review-operations"}
+            }],
+            "changeRequest":{
+                "effects":[{
+                    "target":{"fromField":"placement"},
+                    "operation":"patch",
+                    "set":{"site":{"fromField":"proposed-site"}}
+                }],
+                "review":{"stages":[{"id":"review","approvals":1,"excludeSubmitter":true}]}
+            }
+        }],
+        "accessProfiles":[{
+            "id":"submitter",
+            "default":true,
+            "principalClaim":"registry_principal",
+            "grants":[{
+                "entity":"placement-correction-request",
+                "operations":["create","get","list","patch","submit_request","revise_request","cancel_request"],
+                "readableFields":["placement","proposed-site","reason"],
+                "writableFields":["placement","proposed-site","reason"]
+            }]
+        },{
+            "id":"reviewer",
+            "principalClaim":"registry_principal",
+            "grants":[{
+                "entity":"placement-correction-request",
+                "operations":["get","list","approve_request","reject_request","request_revision"],
+                "readableFields":["placement","proposed-site","reason"],
+                "reviewStages":[{
+                    "stage":"review",
+                    "targets":[{"entity":"asset-placement","readableFields":["site"],"rowBoundaries":[]}]
+                }]
+            }]
+        },{
+            "id":"applier",
+            "principalClaim":"registry_principal",
+            "grants":[{
+                "entity":"placement-correction-request",
+                "operations":["get","list","apply_request"],
+                "readableFields":["placement","proposed-site","reason"],
+                "applyTargets":[{"entity":"asset-placement","rowBoundaries":[]}]
+            }]
+        }]
+    })
 }
 
 fn webhook_mut(value: &mut Value) -> &mut serde_json::Map<String, Value> {
@@ -151,6 +233,95 @@ fn governed_webhook_compiles_to_deterministic_destination_neutral_inventory() {
     let entity = &first.entities()["case"];
     assert!(entity.events["case-created"].webhook.is_some());
     assert!(entity.events["case-patched-outbox"].webhook.is_none());
+}
+
+#[test]
+fn request_lifecycle_webhook_uses_classified_request_projection() {
+    let compiled =
+        compile(&change_request_event_project()).expect("request lifecycle event compiles");
+    let delivery = compiled
+        .event_deliveries()
+        .deliveries
+        .iter()
+        .find(|delivery| delivery.event_id == "request-lifecycle")
+        .expect("request lifecycle webhook delivery is compiled");
+    assert_eq!(
+        delivery.id,
+        "events.placement-correction-request.request-lifecycle.webhook"
+    );
+    assert_eq!(delivery.entity_id, "placement-correction-request");
+    assert_eq!(delivery.trigger, EventTrigger::RequestLifecycle);
+    assert_eq!(delivery.projection_fields, ["proposed-site", "reason"]);
+    assert_eq!(delivery.classification_ceiling, Classification::Restricted);
+    assert!(delivery.data_schema.starts_with(
+        "urn:registry-server:event-schema:request-events:placement-correction-request:request-lifecycle:sha256:"
+    ));
+
+    let schema = compiled
+        .artifacts()
+        .get(&delivery.data_schema_artifact_path)
+        .expect("lifecycle event schema is generated");
+    let schema_value = parse_json_strict(&schema.bytes).expect("event schema is strict JSON");
+    assert_eq!(
+        schema_value["properties"]["trigger"],
+        json!({"const":"request_lifecycle"})
+    );
+    assert_eq!(
+        schema_value["required"],
+        json!([
+            "entity",
+            "recordId",
+            "revision",
+            "trigger",
+            "packageRevision",
+            "request",
+            "values"
+        ])
+    );
+    assert_eq!(
+        schema_value["properties"]["request"]["required"],
+        json!([
+            "proposalVersion",
+            "workflowRevision",
+            "transition",
+            "fromState",
+            "toState",
+            "stage",
+            "effectDigest",
+            "deduplicationKey"
+        ])
+    );
+}
+
+#[test]
+fn lifecycle_events_are_request_only_and_use_closed_lifecycle_conditions() {
+    let mut non_request = project_value();
+    non_request["entities"][0]["events"][0]["trigger"] = json!("request_lifecycle");
+    assert_compile_code(
+        &non_request,
+        "event.trigger.request_lifecycle_requires_change_request",
+    );
+
+    let mut field_condition = change_request_event_project();
+    field_condition["entities"][2]["events"][0]["when"] =
+        json!({"kind":"fields","afterEquals":{"reason":"notify"}});
+    assert_compile_code(&field_condition, "event.when.trigger_incompatible");
+
+    let mut lifecycle_condition = change_request_event_project();
+    lifecycle_condition["entities"][2]["events"][0]["when"] = json!({
+        "kind":"request_lifecycle",
+        "transitions":["approve"],
+        "toStates":["approved"],
+        "stages":["review"]
+    });
+    compile(&lifecycle_condition).expect("closed lifecycle condition compiles");
+
+    let mut bad_transition = lifecycle_condition.clone();
+    bad_transition["entities"][2]["events"][0]["when"]["transitions"] = json!(["callback_granted"]);
+    assert_compile_code(
+        &bad_transition,
+        "event.when.request_lifecycle_transition_unknown",
+    );
 }
 
 #[test]

@@ -75,6 +75,7 @@ pub(crate) async fn insert_configured_events(
         let snapshot = match mutation.trigger {
             EventTrigger::Created | EventTrigger::Patched => mutation.after,
             EventTrigger::Tombstoned => mutation.before,
+            EventTrigger::RequestLifecycle => return Err(OutboxError::InvalidProjection),
         }
         .ok_or(OutboxError::InvalidProjection)?;
         let mut values = Map::new();
@@ -168,13 +169,16 @@ fn condition_matches(
     before: Option<&Map<String, Value>>,
     after: Option<&Map<String, Value>>,
 ) -> Result<bool, OutboxError> {
-    let Some(EventConditionSource::Fields {
+    let Some(condition) = condition else {
+        return Ok(true);
+    };
+    let EventConditionSource::Fields {
         changed,
         before_equals,
         after_equals,
-    }) = condition
+    } = condition
     else {
-        return Ok(true);
+        return Err(OutboxError::InvalidProjection);
     };
     for field in changed {
         let before_value = before
@@ -215,17 +219,17 @@ fn scalar_value(value: &EventScalarValue) -> Value {
     }
 }
 
-struct WebhookCapture<'a> {
-    delivery: &'a CompiledEventDelivery,
-    payload: &'a [u8],
-    destination_binding_digest: &'a str,
-    deployed_attempt_timeout: std::time::Duration,
-    deployed_maximum_attempts: u8,
-    package_revision: &'a str,
-    schema_fingerprint: &'a str,
+pub(crate) struct WebhookCapture<'a> {
+    pub delivery: &'a CompiledEventDelivery,
+    pub payload: &'a [u8],
+    pub destination_binding_digest: &'a str,
+    pub deployed_attempt_timeout: std::time::Duration,
+    pub deployed_maximum_attempts: u8,
+    pub package_revision: &'a str,
+    pub schema_fingerprint: &'a str,
 }
 
-async fn insert_webhook_delivery(
+pub(crate) async fn insert_webhook_delivery(
     transaction: &Transaction<'_>,
     event_id: Uuid,
     capture: WebhookCapture<'_>,
@@ -338,5 +342,6 @@ fn trigger_name(trigger: EventTrigger) -> &'static str {
         EventTrigger::Created => "created",
         EventTrigger::Patched => "patched",
         EventTrigger::Tombstoned => "tombstoned",
+        EventTrigger::RequestLifecycle => "request_lifecycle",
     }
 }

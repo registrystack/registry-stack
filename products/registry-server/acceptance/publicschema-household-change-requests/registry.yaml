@@ -1,0 +1,268 @@
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: publicschema-household-change-requests
+  version: 0.1.0
+  defaultLanguage: en
+package:
+  environment: acceptance
+  instanceId: publicschema-household-change-requests-acceptance
+  sequence: 1
+  sourceRevision: publicschema-household-change-requests-acceptance-0.1.0
+manifestProjection:
+  accessProfile: household-operator
+  classificationCeiling: restricted
+  catalog:
+    baseUrl: https://publicschema-household.example.gov
+    title:
+      en: PublicSchema Household Registry Catalog
+      fr: Catalogue du registre des ménages PublicSchema
+    description:
+      en: Portable metadata for household, person, and group membership records.
+      fr: Métadonnées portables pour les personnes, les ménages et leur appartenance.
+    publisher:
+      name: PublicSchema Household Authority
+      iri: https://publicschema-household.example.gov/authority
+    conformsTo: [https://www.w3.org/TR/vocab-dcat-3/]
+    standards:
+      dcat: "3.0"
+      jsonSchema: "2020-12"
+  dataset:
+    id: household-registry
+    title:
+      en: PublicSchema Household Registry
+      fr: Registre des ménages PublicSchema
+    description:
+      en: Household, person, and time-bounded group membership metadata.
+      fr: Métadonnées sur les ménages, les personnes et les appartenances limitées dans le temps.
+    owner: PublicSchema Household Authority
+    status: active
+  dataService:
+    id: household-registry-api
+    iri: https://publicschema-household.example.gov/services/registry-api
+    title:
+      en: Household Registry REST API
+      fr: API REST du registre des ménages
+    endpointUrl: https://publicschema-household.example.gov/v1
+    endpointDescription: https://publicschema-household.example.gov/openapi.json
+    conformsTo: https://spec.openapis.org/oas/v3.1.0
+  entities:
+    - id: person
+      title: {en: Person, fr: Personne}
+      description:
+        en: A person recorded by the household registry.
+        fr: Une personne enregistrée dans le registre des ménages.
+      conceptUri: https://publicschema.org/Person
+      identifiers:
+        - {field: person-code, kind: local}
+      fields:
+        - {id: person-code, concepts: [https://publicschema.org/identifier]}
+        - {id: legal-name, concepts: [https://publicschema.org/name]}
+        - {id: family-name, concepts: [https://publicschema.org/family_name]}
+        - {id: date-of-birth, concepts: [https://publicschema.org/date_of_birth]}
+        - {id: person-sex, concepts: [https://publicschema.org/sex]}
+    - id: household
+      title: {en: Household, fr: Ménage}
+      description:
+        en: A social and economic unit represented as a configured registry entity.
+        fr: Une unité sociale et économique représentée comme une entité configurée du registre.
+      conceptUri: https://publicschema.org/Household
+      identifiers:
+        - {field: household-code, kind: local}
+      fields:
+        - {id: household-code, concepts: [https://publicschema.org/identifier]}
+        - {id: local-household-number, concepts: [https://publicschema.org/local_identifier]}
+        - {id: household-name, concepts: [https://publicschema.org/name]}
+        - id: contact-person
+          relationshipRole: contact
+          relationshipConceptUri: https://publicschema.org/contact
+    - id: group-membership
+      title: {en: Group membership, fr: Appartenance à un groupe}
+      description:
+        en: A time-bounded link between a person and a household.
+        fr: Un lien limité dans le temps entre une personne et un ménage.
+      conceptUri: https://publicschema.org/GroupMembership
+      fields:
+        - id: person
+          relationshipRole: member
+          relationshipConceptUri: https://publicschema.org/person
+        - id: household
+          relationshipRole: group
+          relationshipConceptUri: https://publicschema.org/group
+        - {id: relationship, concepts: [https://publicschema.org/role]}
+        - {id: valid-from, concepts: [https://publicschema.org/start_date]}
+        - {id: valid-to, concepts: [https://publicschema.org/end_date]}
+  vocabularies:
+    - id: household-relationship
+      schemeIri: https://publicschema.org/GroupRole
+      version: "0.3.0"
+      externalRef: https://publicschema.org/GroupRole
+      concepts:
+        - {code: head, iri: https://publicschema.org/GroupRole/head, label: {en: Head, fr: Chef}}
+        - {code: spouse, iri: https://publicschema.org/GroupRole/spouse, label: {en: Spouse, fr: Conjoint}}
+        - {code: child, iri: https://publicschema.org/GroupRole/child, label: {en: Child, fr: Enfant}}
+        - {code: dependent, iri: https://publicschema.org/GroupRole/dependent, label: {en: Dependent, fr: Personne à charge}}
+        - {code: other, iri: https://publicschema.org/GroupRole/other, label: {en: Other, fr: Autre}}
+    - id: household-type
+      schemeIri: https://publicschema-household.example.gov/vocab/household-type
+    - id: residency-status
+      schemeIri: https://publicschema-household.example.gov/vocab/residency-status
+    - id: preferred-language
+      schemeIri: https://id.loc.gov/vocabulary/iso639-1
+      externalRef: https://id.loc.gov/vocabulary/iso639-1.html
+    - id: person-sex
+      schemeIri: https://publicschema.org/Sex
+      version: "0.3.0"
+      externalRef: https://publicschema.org/Sex
+      concepts:
+        - {code: female, iri: https://publicschema.org/Sex/female, label: {en: Female, fr: Féminin}}
+        - {code: male, iri: https://publicschema.org/Sex/male, label: {en: Male, fr: Masculin}}
+        - {code: unknown, iri: https://publicschema.org/Sex/unknown, label: {en: Unknown, fr: Inconnu}}
+entities:
+  - id: register-household-contact-request
+    route: household-contact-requests
+    mutationMode: mutable
+    classification: restricted
+    fields:
+      - {id: household, type: reference, target: household, required: true, classification: restricted}
+      - {id: person-code, type: string, required: true, maxLength: 64, classification: restricted}
+      - {id: legal-name, type: string, required: true, maxLength: 160, classification: restricted}
+      - {id: family-name, type: string, required: true, maxLength: 120, classification: restricted}
+      - {id: person-sex, type: vocabulary-code, vocabulary: person-sex, required: true, classification: restricted}
+      - {id: residency-status, type: vocabulary-code, vocabulary: residency-status, required: true, classification: restricted}
+      - {id: relationship, type: vocabulary-code, vocabulary: household-relationship, required: true, classification: restricted}
+      - {id: valid-from, type: date, required: true, classification: restricted}
+      - {id: reason, type: text, maxLength: 1000, required: true, classification: restricted}
+    changeRequest:
+      retention:
+        mode: operator_erase
+      effects:
+        - id: person
+          target: {entity: person}
+          operation: create
+          set:
+            person-code: {fromField: person-code}
+            legal-name: {fromField: legal-name}
+            family-name: {fromField: family-name}
+            person-sex: {fromField: person-sex}
+            residency-status: {fromField: residency-status}
+        - id: membership
+          target: {entity: group-membership}
+          operation: create
+          set:
+            person: {fromEffect: person}
+            household: {fromField: household}
+            relationship: {fromField: relationship}
+            valid-from: {fromField: valid-from}
+        - target: {fromField: household}
+          operation: patch
+          set:
+            contact-person: {fromEffect: person}
+      review:
+        stages:
+          - {id: review, approvals: 1, excludeSubmitter: true}
+          - {id: final-approval, approvals: 1, excludeSubmitter: true}
+modules:
+  - id: publicschema-household-core
+    version: 0.1.0
+    digest: sha256:bddf9b4e7cb5df25b2d3dcf0a4fba28a1d5ca56545e98ed157d3c564783d98cf
+  - id: publicschema-household-demographics
+    version: 0.1.0
+    digest: sha256:cc40de1b9ede8cb727980022f966da5ced9a26e56853ca3a5b3355ce8aff37d5
+accessProfiles:
+  - id: household-operator
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: [registry:household:operate]
+    requiredPurposes: [household-administration]
+    grants:
+      - {entity: person, operations: [get, list, patch], readableFields: [person-code, legal-name, family-name, date-of-birth, person-sex, residency-status, preferred-language], writableFields: [person-code, legal-name, family-name, date-of-birth, person-sex, residency-status, preferred-language], filterableFields: [person-code, person-sex, residency-status], sortableFields: [person-code]}
+      - entity: household
+        operations: [create, get, lookup, list]
+        readableFields: [household-code, local-household-number, household-name, administrative-area, household-type, contact-person, head-count, child-count, child-under-5-count, elderly-count, single-headed, woman-headed]
+        writableFields: [household-code, local-household-number, household-name, administrative-area, household-type]
+        filterableFields: [household-code, local-household-number, administrative-area, household-type, head-count, child-count, child-under-5-count, elderly-count, single-headed, woman-headed]
+        sortableFields: [local-household-number, household-code, child-count]
+        allowCount: true
+        requestPresence:
+          - {requestType: register-household-contact-request}
+        lookups:
+          - {selector: by-local-reference, valueOrigin: request}
+          - {selector: by-household-code, valueOrigin: request}
+        readPaths:
+          - path: people
+            readableFields: [person-code, legal-name, family-name, date-of-birth, person-sex, residency-status]
+            filterableFields: [person-sex, residency-status]
+            sortableFields: [person-code]
+            allowCount: true
+      - {entity: group-membership, operations: [get, list, patch], readableFields: [person, household, relationship, valid-from, valid-to], writableFields: [person, household, relationship, valid-from, valid-to], filterableFields: [person, household, relationship, valid-from]}
+  - id: household-contact-submitter
+    principalClaim: registry_principal
+    requiredScopes: [registry:household-contact:submit]
+    requiredPurposes: [household-contact-registration]
+    grants:
+      - entity: register-household-contact-request
+        operations: [create, get, patch, submit_request, revise_request, cancel_request]
+        readableFields: [household, person-code, legal-name, family-name, person-sex, residency-status, relationship, valid-from, reason]
+        writableFields: [household, person-code, legal-name, family-name, person-sex, residency-status, relationship, valid-from, reason]
+  - id: household-contact-reviewer
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: [registry:household-contact:review]
+    requiredPurposes: [household-contact-review]
+    grants:
+      - entity: register-household-contact-request
+        operations: [get, list, approve_request, reject_request, request_revision]
+        readableFields: [household, person-code, legal-name, family-name, person-sex, residency-status, relationship, valid-from, reason]
+        reviewStages:
+          - stage: review
+            targets:
+              - {entity: person, readableFields: [person-code, legal-name, family-name, person-sex, residency-status], rowBoundaries: []}
+              - {entity: group-membership, readableFields: [person, household, relationship, valid-from], rowBoundaries: []}
+              - {entity: household, readableFields: [contact-person], rowBoundaries: []}
+  - id: household-contact-supervisor
+    principalClaim: registry_principal
+    requiredScopes: [registry:household-contact:supervise]
+    requiredPurposes: [household-contact-review]
+    grants:
+      - entity: register-household-contact-request
+        operations: [get, approve_request, reject_request, request_revision]
+        readableFields: [household, person-code, legal-name, family-name, person-sex, residency-status, relationship, valid-from, reason]
+        reviewStages:
+          - stage: final-approval
+            targets:
+              - {entity: person, readableFields: [person-code, legal-name, family-name, person-sex, residency-status], rowBoundaries: []}
+              - {entity: group-membership, readableFields: [person, household, relationship, valid-from], rowBoundaries: []}
+              - {entity: household, readableFields: [contact-person], rowBoundaries: []}
+  - id: household-contact-applier
+    principalClaim: registry_principal
+    requiredScopes: [registry:household-contact:apply]
+    requiredPurposes: [household-contact-apply]
+    grants:
+      - entity: register-household-contact-request
+        operations: [get, apply_request]
+        readableFields: [household, person-code, legal-name, family-name, person-sex, residency-status, relationship, valid-from, reason]
+        applyTargets:
+          - {entity: person, rowBoundaries: []}
+          - {entity: group-membership, rowBoundaries: []}
+          - {entity: household, rowBoundaries: []}
+  - id: household-viewer
+    principalClaim: registry_principal
+    requiredScopes: [registry:household:view]
+    requiredPurposes: [household-view]
+    grants:
+      - entity: household
+        operations: [get, lookup]
+        readableFields: [household-code, local-household-number, household-name, administrative-area, household-type]
+        rowBoundaries:
+          - {field: id, claim: household_id, operator: equals}
+        lookups:
+          - selector: by-household-code
+            valueOrigin: verified_claim
+            claimMapping: {household-code: household_code}
+vocabularies:
+  - {id: household-relationship, values: [head, spouse, child, dependent, other]}
+  - {id: household-type, values: [private, collective, institutional]}
+  - {id: residency-status, values: [usual-resident, temporary-resident, departed]}
+  - {id: preferred-language, values: [en, es, fr]}
+  - {id: person-sex, values: [female, male, unknown]}

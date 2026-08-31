@@ -129,6 +129,40 @@ fn operations_for(compiled: &CompiledRegistry, entity_id: &str) -> Vec<Operation
 }
 
 #[test]
+fn asset_placement_change_request_fixture_compiles_site_correction_plan() {
+    let compiled = compile_fixture("asset-site-placement-change-requests");
+    assert_eq!(
+        compiled.registry_id(),
+        "asset-site-placement-change-requests"
+    );
+    assert_eq!(compiled.entities().len(), 5);
+
+    let placement = entity(&compiled, "asset-placement");
+    assert_eq!(
+        placement.change_control.as_ref().map(|control| {
+            control
+                .required_for
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>()
+        }),
+        Some(BTreeSet::from([Operation::Patch]))
+    );
+
+    let request = entity(&compiled, "placement-correction-request");
+    let request_plan = request
+        .change_request
+        .as_ref()
+        .expect("asset placement correction request compiles to a request plan");
+    assert_eq!(request_plan.effects.len(), 1);
+    assert_eq!(request_plan.stages.len(), 2);
+    assert_eq!(
+        request_plan.target_entities,
+        ["asset-placement"].into_iter().map(str::to_owned).collect()
+    );
+}
+
+#[test]
 fn household_pilot_fixture_compiles_person_household_and_time_bounded_membership() {
     let compiled = compile_fixture("publicschema-household");
     assert_eq!(compiled.registry_id(), "publicschema-household");
@@ -162,6 +196,43 @@ fn household_pilot_fixture_compiles_person_household_and_time_bounded_membership
 }
 
 #[test]
+fn household_change_request_fixture_compiles_contact_registration_plan() {
+    let compiled = compile_fixture("publicschema-household-change-requests");
+    assert_eq!(
+        compiled.registry_id(),
+        "publicschema-household-change-requests"
+    );
+    assert_eq!(compiled.entities().len(), 4);
+
+    let person = entity(&compiled, "person");
+    assert!(person.change_control.is_some());
+    assert!(person.fields.contains_key("residency-status"));
+    assert!(person.fields.contains_key("preferred-language"));
+
+    let household = entity(&compiled, "household");
+    assert!(household.change_control.is_some());
+    assert!(household.fields.contains_key("contact-person"));
+
+    let membership = entity(&compiled, "group-membership");
+    assert!(membership.change_control.is_some());
+
+    let request = entity(&compiled, "register-household-contact-request");
+    let request_plan = request
+        .change_request
+        .as_ref()
+        .expect("household contact request compiles to a request plan");
+    assert_eq!(request_plan.effects.len(), 3);
+    assert_eq!(request_plan.stages.len(), 2);
+    assert_eq!(
+        request_plan.target_entities,
+        ["group-membership", "household", "person"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    );
+}
+
+#[test]
 fn household_pilot_fixture_journeys_preflight_against_the_exact_compiled_registry() {
     let compiled = compile_fixture("publicschema-household");
     let journeys = fs::read(fixture_root("publicschema-household").join("tests/journeys.yaml"))
@@ -187,6 +258,40 @@ fn household_pilot_fixture_journeys_preflight_against_the_exact_compiled_registr
             }
         }
         panic!("household journey validation failed after every prefix passed: {error:?}");
+    }
+}
+
+#[test]
+fn change_request_pilot_fixture_journeys_preflight_against_their_exact_registries() {
+    for fixture in [
+        "asset-site-placement-change-requests",
+        "publicschema-household-change-requests",
+    ] {
+        let compiled = compile_fixture(fixture);
+        let journeys = fs::read(fixture_root(fixture).join("tests/journeys.yaml"))
+            .expect("committed change request journeys are readable");
+        if let Err(error) = validate_fixture_journeys(&journeys, &compiled) {
+            let document: serde_json::Value = serde_norway::from_slice(&journeys)
+                .expect("journey YAML has a generic value shape");
+            let steps = document["journeys"][0]["steps"]
+                .as_array()
+                .expect("journey steps are an array");
+            for length in 1..=steps.len() {
+                let mut prefix = document.clone();
+                prefix["journeys"][0]["steps"]
+                    .as_array_mut()
+                    .expect("journey steps remain an array")
+                    .truncate(length);
+                let source = serde_norway::to_string(&prefix).expect("journey prefix serializes");
+                if let Err(prefix_error) = validate_fixture_journeys(source.as_bytes(), &compiled) {
+                    let step = steps[length - 1]["id"].as_str().unwrap_or("unknown");
+                    panic!(
+                        "{fixture} journey first fails at step {step}: {prefix_error:?}; full error: {error:?}"
+                    );
+                }
+            }
+            panic!("{fixture} journey validation failed after every prefix passed: {error:?}");
+        }
     }
 }
 

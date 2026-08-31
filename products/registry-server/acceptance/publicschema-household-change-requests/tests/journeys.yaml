@@ -1,0 +1,207 @@
+apiVersion: registry.registrystack.org/server-journeys/v1
+journeys:
+  - id: household-contact-registration-request-flow
+    steps:
+      - id: create-household
+        entity: household
+        accessProfile: household-operator
+        claims: &operator_claims
+          principal: household-operator
+          scopes: [registry:household:operate]
+          purpose: household-administration
+        request:
+          operation: create
+          data:
+            household-code: hh-001
+            local-household-number: 1001
+            household-name: Ortega household
+            administrative-area: district-9
+            household-type: private
+        expect:
+          outcome: success
+          status: 201
+          fields:
+            household-code: hh-001
+            local-household-number: 1001
+            household-name: Ortega household
+            administrative-area: district-9
+            household-type: private
+        capture: household
+      - id: create-contact-request
+        entity: register-household-contact-request
+        accessProfile: household-contact-submitter
+        claims: &submitter_claims
+          principal: household-contact-submitter
+          scopes: [registry:household-contact:submit]
+          purpose: household-contact-registration
+        request:
+          operation: create
+          data:
+            household:
+              recordRef: household
+            person-code: person-001
+            legal-name: Ana Ortega
+            family-name: Ortega
+            person-sex: female
+            residency-status: usual-resident
+            relationship: head
+            valid-from: "2026-01-01"
+            reason: registration packet verified
+        expect:
+          outcome: success
+          status: 201
+          fields:
+            person-code: person-001
+            legal-name: Ana Ortega
+            family-name: Ortega
+            person-sex: female
+            residency-status: usual-resident
+            relationship: head
+            valid-from: "2026-01-01"
+            reason: registration packet verified
+        capture: contact-request
+      - id: edit-contact-request
+        entity: register-household-contact-request
+        accessProfile: household-contact-submitter
+        claims: *submitter_claims
+        request:
+          operation: patch
+          recordRef: contact-request
+          etagRef: contact-request
+          changes:
+            - {field: reason, value: registration packet and field visit verified}
+        expect:
+          outcome: success
+          status: 200
+          fields:
+            person-code: person-001
+            legal-name: Ana Ortega
+            family-name: Ortega
+            person-sex: female
+            residency-status: usual-resident
+            relationship: head
+            valid-from: "2026-01-01"
+            reason: registration packet and field visit verified
+        capture: edited-contact-request
+      - id: get-before-submit
+        entity: register-household-contact-request
+        accessProfile: household-contact-submitter
+        claims: *submitter_claims
+        request: {operation: get, recordRef: edited-contact-request}
+        expect:
+          outcome: success
+          status: 200
+          fields:
+            person-code: person-001
+            legal-name: Ana Ortega
+            family-name: Ortega
+            person-sex: female
+            residency-status: usual-resident
+            relationship: head
+            valid-from: "2026-01-01"
+            reason: registration packet and field visit verified
+        capture: contact-before-submit
+      - id: submit-contact-request
+        entity: register-household-contact-request
+        accessProfile: household-contact-submitter
+        claims: *submitter_claims
+        request: {operation: submit_request, recordRef: contact-before-submit, etagRef: contact-before-submit}
+        expect: {outcome: success, status: 200}
+      - id: get-before-review
+        entity: register-household-contact-request
+        accessProfile: household-contact-reviewer
+        claims: &reviewer_claims
+          principal: household-contact-reviewer
+          scopes: [registry:household-contact:review]
+          purpose: household-contact-review
+        request: {operation: get, recordRef: contact-request}
+        expect:
+          outcome: success
+          status: 200
+          fields:
+            person-code: person-001
+            legal-name: Ana Ortega
+            family-name: Ortega
+            person-sex: female
+            residency-status: usual-resident
+            relationship: head
+            valid-from: "2026-01-01"
+            reason: registration packet and field visit verified
+        capture: contact-before-review
+      - id: approve-review-stage
+        entity: register-household-contact-request
+        accessProfile: household-contact-reviewer
+        claims: *reviewer_claims
+        request:
+          operation: approve_request
+          stage: review
+          recordRef: contact-before-review
+          etagRef: contact-before-review
+          proposalVersionRef: contact-before-review
+          effectDigestRef: contact-before-review
+        expect: {outcome: success, status: 200}
+      - id: get-before-final-approval
+        entity: register-household-contact-request
+        accessProfile: household-contact-supervisor
+        claims: &supervisor_claims
+          principal: household-contact-supervisor
+          scopes: [registry:household-contact:supervise]
+          purpose: household-contact-review
+        request: {operation: get, recordRef: contact-request}
+        expect:
+          outcome: success
+          status: 200
+          fields:
+            person-code: person-001
+            legal-name: Ana Ortega
+            family-name: Ortega
+            person-sex: female
+            residency-status: usual-resident
+            relationship: head
+            valid-from: "2026-01-01"
+            reason: registration packet and field visit verified
+        capture: contact-before-final-approval
+      - id: approve-final-stage
+        entity: register-household-contact-request
+        accessProfile: household-contact-supervisor
+        claims: *supervisor_claims
+        request:
+          operation: approve_request
+          stage: final-approval
+          recordRef: contact-before-final-approval
+          etagRef: contact-before-final-approval
+          proposalVersionRef: contact-before-final-approval
+          effectDigestRef: contact-before-final-approval
+        expect: {outcome: success, status: 200}
+      - id: get-before-apply
+        entity: register-household-contact-request
+        accessProfile: household-contact-applier
+        claims: &applier_claims
+          principal: household-contact-applier
+          scopes: [registry:household-contact:apply]
+          purpose: household-contact-apply
+        request: {operation: get, recordRef: contact-request}
+        expect:
+          outcome: success
+          status: 200
+          fields:
+            person-code: person-001
+            legal-name: Ana Ortega
+            family-name: Ortega
+            person-sex: female
+            residency-status: usual-resident
+            relationship: head
+            valid-from: "2026-01-01"
+            reason: registration packet and field visit verified
+        capture: contact-before-apply
+      - id: apply-contact-request
+        entity: register-household-contact-request
+        accessProfile: household-contact-applier
+        claims: *applier_claims
+        request:
+          operation: apply_request
+          recordRef: contact-before-apply
+          etagRef: contact-before-apply
+          proposalVersionRef: contact-before-apply
+          effectDigestRef: contact-before-apply
+        expect: {outcome: success, status: 200}
