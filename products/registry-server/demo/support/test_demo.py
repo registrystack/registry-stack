@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import base64
 import json
 import os
 import re
@@ -32,6 +33,14 @@ def public_jwk(kid: str) -> dict[str, str]:
         "x": "A" * 43,
         "y": "B" * 43,
     }
+
+
+def compact_jwt(expires: int) -> str:
+    def encode(value: dict[str, object]) -> str:
+        raw = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+    return f"{encode({'alg': 'ES256', 'typ': 'JWT'})}.{encode({'exp': expires})}.signature"
 
 
 class DemoProvisioningTests(unittest.TestCase):
@@ -65,6 +74,7 @@ class DemoProvisioningTests(unittest.TestCase):
         mint = (self.root / "mint/mint.yaml").read_text(encoding="utf-8")
         self.assertIn("validationMode: supervised-local-development", mint)
         self.assertIn("audiences: [urn:registry-server:household-demo]", mint)
+        self.assertIn("lifetimeSeconds: 300", mint)
         self.assertIn("algorithms: [ES256]", mint)
         self.assertNotIn("database-password", mint)
         operator = (self.root / "mint/clients/household-demo.yaml").read_text(encoding="utf-8")
@@ -80,6 +90,7 @@ class DemoProvisioningTests(unittest.TestCase):
         self.assertIn("apiVersion: registry.registrystack.org/server-runtime/v1alpha1", runtime)
         self.assertIn("kind: RegistryServerRuntimeConfig", runtime)
         self.assertIn("accessTokenType: at+jwt", runtime)
+        self.assertIn("maxTokenLifetimeSeconds: 300", runtime)
         self.assertIn("kind: static", runtime)
         self.assertIn("documentRef: secret:file/mint-jwks", runtime)
         self.assertIn("principal: registry_principal", runtime)
@@ -118,6 +129,42 @@ class DemoProvisioningTests(unittest.TestCase):
         self.assertIn(f"activeRevision: {revision}", runtime)
         self.assertIn(f"root: {self.root.resolve() / 'build/package'}", runtime)
         self.assertIn("bind: 127.0.0.1:18080", runtime)
+
+    def test_token_lifetime_override_binds_mint_and_server_consistently(self) -> None:
+        DEMO.prepare(
+            self.root,
+            self.fixture,
+            15432,
+            18081,
+            18080,
+            token_lifetime_seconds=900,
+        )
+        mint = (self.root / "mint/mint.yaml").read_text(encoding="utf-8")
+        runtime_test = (self.root / "runtime-test.yaml").read_text(encoding="utf-8")
+        self.assertIn("lifetimeSeconds: 900", mint)
+        self.assertIn("maxTokenLifetimeSeconds: 900", runtime_test)
+
+        revision = "sha256:" + "2" * 64
+        DEMO.render_runtime(self.root, revision, token_lifetime_seconds=900)
+        runtime = (self.root / "runtime.yaml").read_text(encoding="utf-8")
+        self.assertIn("maxTokenLifetimeSeconds: 900", runtime)
+
+    def test_token_lifetime_override_is_bounded(self) -> None:
+        with self.assertRaisesRegex(DEMO.DemoError, "between 60 and 900"):
+            DEMO.prepare(
+                self.root,
+                self.fixture,
+                15432,
+                18081,
+                18080,
+                token_lifetime_seconds=59,
+            )
+        with self.assertRaisesRegex(DEMO.DemoError, "between 60 and 900"):
+            DEMO.render_runtime(
+                self.root,
+                "sha256:" + "2" * 64,
+                token_lifetime_seconds=901,
+            )
 
     def test_webhook_mode_extends_only_the_disposable_module_and_binds_its_compiled_digest(
         self,
@@ -482,6 +529,140 @@ class DemoProvisioningTests(unittest.TestCase):
         (bad_fixture / "registry.yaml").write_text("apiVersion: wrong\n", encoding="utf-8")
         with self.assertRaisesRegex(DEMO.DemoError, "expected package line"):
             DEMO.prepare(self.root, bad_fixture, 15432, 18081, 18080)
+
+    def test_prepare_asset_site_writes_distinct_clients_credentials_and_local_project(self) -> None:
+        for name in ("planner", "planner-no-purpose"):
+            (self.root / f"keys/{name}-public.jwk.json").write_text(
+                json.dumps(public_jwk(f"{name}-key")), encoding="utf-8"
+            )
+        asset_fixture = MODULE_PATH.parents[2] / "acceptance/asset-site-placement"
+
+        DEMO.prepare(self.root, asset_fixture, 15432, 18081, 18080, fixture_kind="asset-site")
+
+        project = (self.root / "project/registry.yaml").read_text(encoding="utf-8")
+        self.assertIn("environment: local", project)
+        self.assertIn(f"instanceId: {DEMO.ASSET_SITE_INSTANCE_ID}", project)
+        self.assertIn(f"sourceRevision: {DEMO.ASSET_SITE_SOURCE_REVISION}", project)
+        self.assertNotIn("asset-site-placement-acceptance", project)
+        self.assertIn("requiredScopes: [registry:asset:operate]", project)
+        self.assertIn("requiredScopes: [registry:asset:plan]", project)
+        journeys = (self.root / "project/tests/journeys.yaml").read_text(encoding="utf-8")
+        self.assertIn("scopes: [registry:asset:operate]", journeys)
+        self.assertIn("scopes: [registry:asset:plan]", journeys)
+
+        runtime = (self.root / "runtime-test.yaml").read_text(encoding="utf-8")
+        self.assertIn(f"audience: {DEMO.ASSET_SITE_AUDIENCE}", runtime)
+        self.assertIn("allowedClients: [asset-site-demo-operator, asset-site-demo-planner, asset-site-demo-planner-no-purpose]", runtime)
+        self.assertIn(f"instanceId: {DEMO.ASSET_SITE_INSTANCE_ID}", runtime)
+
+        operator = (self.root / "mint/clients/asset-site-demo-operator.yaml").read_text(encoding="utf-8")
+        planner = (self.root / "mint/clients/asset-site-demo-planner.yaml").read_text(encoding="utf-8")
+        no_purpose = (self.root / "mint/clients/asset-site-demo-planner-no-purpose.yaml").read_text(encoding="utf-8")
+        self.assertIn('registry_principal: "synthetic-asset-operator"', operator)
+        self.assertIn('scopes: ["registry:asset:operate"]', operator)
+        self.assertIn('registry_purpose: "asset-management"', operator)
+        self.assertIn('registry_principal: "synthetic-site-planner"', planner)
+        self.assertIn('scopes: ["registry:asset:plan"]', planner)
+        self.assertIn('registry_purpose: "site-planning"', planner)
+        self.assertIn('registry_principal: "synthetic-site-planner"', no_purpose)
+        self.assertIn('scopes: ["registry:asset:plan"]', no_purpose)
+        self.assertNotIn("registry_purpose", no_purpose)
+
+        credentials = (self.root / "schema-test-credentials.yaml").read_text(encoding="utf-8")
+        self.assertIn("stepId: planner-without-purpose-is-concealed", credentials)
+        self.assertIn("tokenRef: secret:file/planner-no-purpose-token", credentials)
+
+    def test_seed_asset_site_uses_normal_api_routes_and_validates_planner_projection(self) -> None:
+        created_ids = {
+            "/v1/records/assets": str(uuid.uuid4()),
+            "/v1/records/sites": str(uuid.uuid4()),
+            "/v1/records/placements": str(uuid.uuid4()),
+            "/v1/records/inspections": str(uuid.uuid4()),
+        }
+        calls: list[tuple[str, str, str, dict[str, object] | None]] = []
+
+        def request(
+            root: Path,
+            method: str,
+            path: str,
+            token_name: str,
+            body: dict[str, object] | None = None,
+            idempotency_key: str | None = None,
+            expected: int = 200,
+        ) -> tuple[dict[str, object], dict[str, str]]:
+            calls.append((method, path, token_name, body))
+            route = path.split("?", 1)[0]
+            if method == "POST":
+                return {"id": created_ids[route], "data": body.get("data", {}) if body else {}}, {}
+            if token_name == "planner-no-purpose-token":
+                return {"code": "resource.not_found"}, {}
+            return {"items": [{"id": "one", "data": {"assetCode": "ASSET-SYNTH-001", "label": "Synthetic water pump"}}]}, {}
+
+        with mock.patch.object(DEMO, "_request", side_effect=request), mock.patch("builtins.print"):
+            DEMO.seed_asset_site(self.root)
+
+        post_paths = [call[1] for call in calls if call[0] == "POST"]
+        self.assertEqual(
+            post_paths,
+            [
+                "/v1/records/assets?accessProfile=asset-operator",
+                "/v1/records/sites?accessProfile=asset-operator",
+                "/v1/records/placements?accessProfile=asset-operator",
+                "/v1/records/inspections?accessProfile=asset-operator",
+            ],
+        )
+        self.assertTrue((self.root / "seed-record-ids.json").is_file())
+        rendered = json.dumps([call[3] for call in calls if call[0] == "POST"], sort_keys=True)
+        self.assertIn("observedAt", rendered)
+        self.assertIn("validFrom", rendered)
+
+    def test_handoff_contains_only_frozen_persona_metadata_and_owner_only_token_paths(self) -> None:
+        (self.root / "server-origin").write_text("http://127.0.0.1:18080\n", encoding="ascii")
+        expires = 1798761600
+        for name in ("operator-token", "viewer-token"):
+            path = self.root / f"secrets/{name}"
+            path.write_text(compact_jwt(expires), encoding="ascii")
+            path.chmod(0o600)
+
+        handoff = self.root / "handoff.json"
+        DEMO.write_handoff(self.root, "household", handoff)
+
+        self.assertEqual(handoff.stat().st_mode & 0o077, 0)
+        value = json.loads(handoff.read_text(encoding="utf-8"))
+        self.assertEqual(value["schemaVersion"], "registry-workspace/demo/v1")
+        self.assertEqual(value["registry"], {"id": "publicschema-household", "baseUrl": "http://127.0.0.1:18080"})
+        self.assertEqual(
+            value["personas"],
+            [
+                {
+                    "id": "household-operator",
+                    "label": "Household operator",
+                    "tokenFile": str((self.root / "secrets/operator-token").resolve()),
+                    "accessProfile": "household-operator",
+                    "expiresAt": "2027-01-01T00:00:00Z",
+                },
+                {
+                    "id": "household-viewer",
+                    "label": "Household viewer",
+                    "tokenFile": str((self.root / "secrets/viewer-token").resolve()),
+                    "accessProfile": "household-viewer",
+                    "expiresAt": "2027-01-01T00:00:00Z",
+                },
+            ],
+        )
+        rendered = json.dumps(value, sort_keys=True)
+        self.assertNotIn(compact_jwt(expires), rendered)
+
+    def test_handoff_refuses_group_readable_token_files(self) -> None:
+        (self.root / "server-origin").write_text("http://127.0.0.1:18080\n", encoding="ascii")
+        for name in ("operator-token", "viewer-token"):
+            path = self.root / f"secrets/{name}"
+            path.write_text(compact_jwt(1798752000), encoding="ascii")
+            path.chmod(0o600)
+        (self.root / "secrets/viewer-token").chmod(0o640)
+
+        with self.assertRaisesRegex(DEMO.DemoError, "owner-only"):
+            DEMO.write_handoff(self.root, "household", self.root / "handoff.json")
 
     def test_demo_root_must_not_be_a_symbolic_link(self) -> None:
         linked_root = Path(self.temporary.name) / "linked-run"

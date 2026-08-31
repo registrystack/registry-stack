@@ -31,6 +31,18 @@ AUDIENCE = "urn:registry-server:household-demo"
 OPERATOR_CLIENT = "household-demo"
 NO_PURPOSE_CLIENT = "household-demo-no-purpose"
 VIEWER_CLIENT = "household-demo-viewer"
+ASSET_SITE_DATABASE_ID = "asset-site-placement-demo"
+ASSET_SITE_INSTANCE_ID = "asset-site-placement-local"
+ASSET_SITE_SOURCE_REVISION = "asset-site-placement-local-0.1.0"
+ASSET_SITE_AUDIENCE = "urn:registry-server:asset-site-demo"
+ASSET_OPERATOR_CLIENT = "asset-site-demo-operator"
+ASSET_PLANNER_CLIENT = "asset-site-demo-planner"
+ASSET_PLANNER_NO_PURPOSE_CLIENT = "asset-site-demo-planner-no-purpose"
+ASSET_OPERATOR_SCOPE = "registry:asset:operate"
+ASSET_PLANNER_SCOPE = "registry:asset:plan"
+DEFAULT_TOKEN_LIFETIME_SECONDS = 300
+MIN_TOKEN_LIFETIME_SECONDS = 60
+MAX_TOKEN_LIFETIME_SECONDS = 900
 MIGRATION_ROLE = "registry_demo_migration"
 RUNTIME_ROLE = "registry_demo_runtime"
 TEST_DATABASE = "registry_demo_test"
@@ -39,6 +51,11 @@ EXPECTED_PROJECT_REPLACEMENTS = {
     "  environment: acceptance": "  environment: local",
     "  instanceId: publicschema-household-acceptance": f"  instanceId: {INSTANCE_ID}",
     "  sourceRevision: publicschema-household-acceptance-0.1.0": f"  sourceRevision: {SOURCE_REVISION}",
+}
+ASSET_SITE_PROJECT_REPLACEMENTS = {
+    "  environment: acceptance": "  environment: local",
+    "  instanceId: asset-site-placement-acceptance": f"  instanceId: {ASSET_SITE_INSTANCE_ID}",
+    "  sourceRevision: asset-site-placement-acceptance-0.1.0": f"  sourceRevision: {ASSET_SITE_SOURCE_REVISION}",
 }
 WEBHOOK_DESTINATION_ID = "household-event-receiver"
 WEBHOOK_EVENT_ID = "usual-resident-created-v1"
@@ -61,6 +78,73 @@ WEBHOOK_RECEIVER_MAX_BODY_BYTES = 1024 * 1024
 
 class DemoError(RuntimeError):
     pass
+
+
+FIXTURE_CONFIGS: dict[str, dict[str, Any]] = {
+    "household": {
+        "registry_id": "publicschema-household",
+        "database_id": DATABASE_ID,
+        "instance_id": INSTANCE_ID,
+        "source_revision": SOURCE_REVISION,
+        "audience": AUDIENCE,
+        "replacements": EXPECTED_PROJECT_REPLACEMENTS,
+        "allowed_clients": [OPERATOR_CLIENT, NO_PURPOSE_CLIENT, VIEWER_CLIENT],
+        "personas": [
+            {
+                "id": "household-operator",
+                "label": "Household operator",
+                "token_name": "operator-token",
+                "access_profile": "household-operator",
+            },
+            {
+                "id": "household-viewer",
+                "label": "Household viewer",
+                "token_name": "viewer-token",
+                "access_profile": "household-viewer",
+            },
+        ],
+    },
+    "asset-site": {
+        "registry_id": "asset-site-placement",
+        "database_id": ASSET_SITE_DATABASE_ID,
+        "instance_id": ASSET_SITE_INSTANCE_ID,
+        "source_revision": ASSET_SITE_SOURCE_REVISION,
+        "audience": ASSET_SITE_AUDIENCE,
+        "replacements": ASSET_SITE_PROJECT_REPLACEMENTS,
+        "allowed_clients": [
+            ASSET_OPERATOR_CLIENT,
+            ASSET_PLANNER_CLIENT,
+            ASSET_PLANNER_NO_PURPOSE_CLIENT,
+        ],
+        "personas": [
+            {
+                "id": "asset-operator",
+                "label": "Asset operator",
+                "token_name": "operator-token",
+                "access_profile": "asset-operator",
+            },
+            {
+                "id": "site-planner",
+                "label": "Site planner",
+                "token_name": "planner-token",
+                "access_profile": "site-planner",
+            },
+        ],
+    },
+}
+
+
+def _fixture_config(fixture_kind: str) -> dict[str, Any]:
+    try:
+        return FIXTURE_CONFIGS[fixture_kind]
+    except KeyError as error:
+        raise DemoError("fixture must be household or asset-site") from error
+
+
+def _validated_token_lifetime_seconds(value: int) -> int:
+    if value < MIN_TOKEN_LIFETIME_SECONDS or value > MAX_TOKEN_LIFETIME_SECONDS:
+        raise DemoError("token lifetime seconds must be between 60 and 900")
+    return value
 
 
 def _write_new(path: Path, content: str, mode: int = 0o644) -> None:
@@ -106,16 +190,19 @@ def reserve_ports(count: int = 3) -> tuple[int, ...]:
             listener.close()
 
 
-def _local_project(root: Path, fixture: Path, webhook: bool) -> None:
+def _local_project(root: Path, fixture: Path, webhook: bool, fixture_kind: str = "household") -> None:
     target = root / "project"
     shutil.copytree(fixture, target, ignore=shutil.ignore_patterns(".DS_Store"))
     project_path = target / "registry.yaml"
     source = project_path.read_text(encoding="utf-8")
-    for expected, replacement in EXPECTED_PROJECT_REPLACEMENTS.items():
+    config = _fixture_config(fixture_kind)
+    for expected, replacement in config["replacements"].items():
         if source.count(expected) != 1:
-            raise DemoError(f"household fixture no longer has the expected package line: {expected.strip()}")
+            raise DemoError(f"{fixture_kind} fixture no longer has the expected package line: {expected.strip()}")
         source = source.replace(expected, replacement, 1)
     if webhook:
+        if fixture_kind != "household":
+            raise DemoError("the webhook demo is available only for the household fixture")
         if source.count(WEBHOOK_MODULE_LOCK) != 1:
             raise DemoError("household fixture no longer has the expected demographics module lock")
         before_lock, after_lock = source.split(WEBHOOK_MODULE_LOCK, 1)
@@ -146,6 +233,52 @@ def _local_project(root: Path, fixture: Path, webhook: bool) -> None:
             ),
             encoding="utf-8",
         )
+    if fixture_kind == "asset-site":
+        source = source.replace(
+            "  - id: asset-operator\n    default: true\n    principalClaim: registry_principal\n    requiredPurposes:",
+            "  - id: asset-operator\n    default: true\n    principalClaim: registry_principal\n"
+            f"    requiredScopes: [{ASSET_OPERATOR_SCOPE}]\n    requiredPurposes:",
+            1,
+        )
+        source = source.replace(
+            "  - id: site-planner\n    principalClaim: registry_principal\n    requiredPurposes:",
+            "  - id: site-planner\n    principalClaim: registry_principal\n"
+            f"    requiredScopes: [{ASSET_PLANNER_SCOPE}]\n    requiredPurposes:",
+            1,
+        )
+        journeys_path = target / "tests/journeys.yaml"
+        journeys = journeys_path.read_text(encoding="utf-8")
+        journeys = journeys.replace(
+            "        claims: &asset_operator_claims\n"
+            "          principal: synthetic-asset-operator\n"
+            "          purpose: asset-management\n",
+            "        claims: &asset_operator_claims\n"
+            "          principal: synthetic-asset-operator\n"
+            f"          scopes: [{ASSET_OPERATOR_SCOPE}]\n"
+            "          purpose: asset-management\n",
+            1,
+        )
+        journeys = journeys.replace(
+            "        claims: &site_planner_claims\n"
+            "          principal: synthetic-site-planner\n"
+            "          purpose: site-planning\n",
+            "        claims: &site_planner_claims\n"
+            "          principal: synthetic-site-planner\n"
+            f"          scopes: [{ASSET_PLANNER_SCOPE}]\n"
+            "          purpose: site-planning\n",
+            1,
+        )
+        journeys = journeys.replace(
+            "        claims:\n"
+            "          principal: synthetic-site-planner\n"
+            "        request: {operation: get, recordRef: renamed-asset}\n",
+            "        claims:\n"
+            "          principal: synthetic-site-planner\n"
+            f"          scopes: [{ASSET_PLANNER_SCOPE}]\n"
+            "        request: {operation: get, recordRef: renamed-asset}\n",
+            1,
+        )
+        journeys_path.write_text(journeys, encoding="utf-8")
     project_path.write_text(source, encoding="utf-8")
 
 
@@ -207,7 +340,11 @@ def _runtime_config(
     revision: str,
     bind: str,
     webhook: bool = False,
+    fixture_kind: str = "household",
+    token_lifetime_seconds: int = DEFAULT_TOKEN_LIFETIME_SECONDS,
 ) -> str:
+    config = _fixture_config(fixture_kind)
+    token_lifetime_seconds = _validated_token_lifetime_seconds(token_lifetime_seconds)
     secrets = root / "secrets"
     if webhook:
         receiver_origin = root.joinpath("receiver-origin").read_text(encoding="ascii").strip()
@@ -235,8 +372,8 @@ listener:
   trustedProxy: direct
 identity:
   environment: local
-  instanceId: {INSTANCE_ID}
-  databaseId: {DATABASE_ID}
+  instanceId: {config["instance_id"]}
+  databaseId: {config["database_id"]}
   databaseInitializationEnvironment: local
 secretProviders:
   file:
@@ -255,20 +392,20 @@ database:
 package:
   root: {package_root}
   trustAnchorPath: {root / 'trust-anchor.json'}
-  compilerSourceRevision: {SOURCE_REVISION}
+  compilerSourceRevision: {config["source_revision"]}
   activeRevision: {revision}
   activeSequence: 1
 authentication:
   oidc:
     issuer: {root.joinpath('mint-origin').read_text(encoding='ascii').strip()}
-    audience: {AUDIENCE}
+    audience: {config["audience"]}
     allowedAlgorithm: ES256
     accessTokenType: at+jwt
     scopeClaim: scope
     scopeSeparator: " "
-    allowedClients: [{OPERATOR_CLIENT}, {NO_PURPOSE_CLIENT}, {VIEWER_CLIENT}]
+    allowedClients: [{", ".join(config["allowed_clients"])}]
     deniedKids: []
-    maxTokenLifetimeSeconds: 300
+    maxTokenLifetimeSeconds: {token_lifetime_seconds}
     leewayMilliseconds: 30000
     jwksCache:
       cacheTtlSeconds: 300
@@ -305,11 +442,15 @@ def prepare(
     server_port: int,
     webhook: bool = False,
     receiver_port: int | None = None,
+    fixture_kind: str = "household",
+    token_lifetime_seconds: int = DEFAULT_TOKEN_LIFETIME_SECONDS,
 ) -> None:
     root = _require_root(root)
+    config = _fixture_config(fixture_kind)
+    token_lifetime_seconds = _validated_token_lifetime_seconds(token_lifetime_seconds)
     fixture = fixture.resolve()
     if not (fixture / "registry.yaml").is_file():
-        raise DemoError("household fixture is missing registry.yaml")
+        raise DemoError(f"{fixture_kind} fixture is missing registry.yaml")
     password_path = root / "secrets/database-password"
     password = password_path.read_text(encoding="ascii").strip()
     if not password or any(character not in "0123456789abcdef" for character in password):
@@ -317,10 +458,14 @@ def prepare(
 
     if webhook and receiver_port is None:
         raise DemoError("the webhook demo requires a receiver port")
-    _local_project(root, fixture, webhook)
+    _local_project(root, fixture, webhook, fixture_kind)
     mint_public = _read_json_object(root / "keys/mint-public.jwk.json")
     operator_public = _read_json_object(root / "keys/operator-public.jwk.json")
-    no_purpose_public = _read_json_object(root / "keys/no-purpose-public.jwk.json")
+    no_purpose_public = (
+        _read_json_object(root / "keys/no-purpose-public.jwk.json")
+        if fixture_kind == "household"
+        else None
+    )
     kid = mint_public.get("kid")
     if not isinstance(kid, str) or not kid:
         raise DemoError("Mint public JWK must carry a key identifier")
@@ -333,27 +478,68 @@ def prepare(
         _write_new(root / "receiver-origin", f"http://127.0.0.1:{receiver_port}\n")
     _write_json(root / "secrets/mint-jwks", {"keys": [mint_public]}, 0o600)
     _write_json(root / f"mint/public-keys/{kid}.jwk.json", mint_public)
-    _write_new(
-        root / f"mint/clients/{OPERATOR_CLIENT}.yaml",
-        _mint_client(
-            OPERATOR_CLIENT,
-            operator_public,
-            ["registry:household:operate"],
-            {
-                "registry_principal": "synthetic-household-operator",
-                "registry_purpose": "household-administration",
-            },
-        ),
-    )
-    _write_new(
-        root / f"mint/clients/{NO_PURPOSE_CLIENT}.yaml",
-        _mint_client(
-            NO_PURPOSE_CLIENT,
-            no_purpose_public,
-            ["registry:household:operate"],
-            {"registry_principal": "synthetic-household-operator"},
-        ),
-    )
+    if fixture_kind == "household":
+        if no_purpose_public is None:
+            raise DemoError("household no-purpose key material is missing")
+        _write_new(
+            root / f"mint/clients/{OPERATOR_CLIENT}.yaml",
+            _mint_client(
+                OPERATOR_CLIENT,
+                operator_public,
+                ["registry:household:operate"],
+                {
+                    "registry_principal": "synthetic-household-operator",
+                    "registry_purpose": "household-administration",
+                },
+            ),
+        )
+        _write_new(
+            root / f"mint/clients/{NO_PURPOSE_CLIENT}.yaml",
+            _mint_client(
+                NO_PURPOSE_CLIENT,
+                no_purpose_public,
+                ["registry:household:operate"],
+                {"registry_principal": "synthetic-household-operator"},
+            ),
+        )
+    else:
+        planner_public = _read_json_object(root / "keys/planner-public.jwk.json")
+        planner_no_purpose_public = _read_json_object(
+            root / "keys/planner-no-purpose-public.jwk.json"
+        )
+        _write_new(
+            root / f"mint/clients/{ASSET_OPERATOR_CLIENT}.yaml",
+            _mint_client(
+                ASSET_OPERATOR_CLIENT,
+                operator_public,
+                [ASSET_OPERATOR_SCOPE],
+                {
+                    "registry_principal": "synthetic-asset-operator",
+                    "registry_purpose": "asset-management",
+                },
+            ),
+        )
+        _write_new(
+            root / f"mint/clients/{ASSET_PLANNER_CLIENT}.yaml",
+            _mint_client(
+                ASSET_PLANNER_CLIENT,
+                planner_public,
+                [ASSET_PLANNER_SCOPE],
+                {
+                    "registry_principal": "synthetic-site-planner",
+                    "registry_purpose": "site-planning",
+                },
+            ),
+        )
+        _write_new(
+            root / f"mint/clients/{ASSET_PLANNER_NO_PURPOSE_CLIENT}.yaml",
+            _mint_client(
+                ASSET_PLANNER_NO_PURPOSE_CLIENT,
+                planner_no_purpose_public,
+                [ASSET_PLANNER_SCOPE],
+                {"registry_principal": "synthetic-site-planner"},
+            ),
+        )
     _write_new(
         root / "mint/mint.yaml",
         f"""version: 1
@@ -376,8 +562,8 @@ audit:
   hashKeyRef: secret:file/audit-hmac-key
   hashKeyVersion: 1
 accessTokens:
-  audiences: [{AUDIENCE}]
-  lifetimeSeconds: 300
+  audiences: [{config["audience"]}]
+  lifetimeSeconds: {token_lifetime_seconds}
 clientAssertion:
   audience: {mint_origin}/token
   maximumLifetimeSeconds: 120
@@ -449,6 +635,8 @@ REVOKE ALL ON SCHEMA registry_internal, registry_data, registry_source, registry
         dummy_revision,
         "127.0.0.1:0",
         webhook,
+        fixture_kind,
+        token_lifetime_seconds,
     )
     test_runtime = test_runtime.replace(
         "secret:file/runtime-database-url", "secret:file/test-runtime-database-url"
@@ -456,9 +644,8 @@ REVOKE ALL ON SCHEMA registry_internal, registry_data, registry_source, registry
         "secret:file/migration-database-url", "secret:file/test-migration-database-url"
     )
     _write_new(root / "runtime-test.yaml", test_runtime)
-    _write_new(
-        root / "schema-test-credentials.yaml",
-        f"""apiVersion: registry.registrystack.org/server-schema-test-credentials/v1
+    if fixture_kind == "household":
+        credentials = f"""apiVersion: registry.registrystack.org/server-schema-test-credentials/v1
 kind: SchemaTestCredentials
 bindings:
   - {{journeyId: household-person-lifecycle, stepId: create-single-headed-head, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
@@ -477,18 +664,46 @@ bindings:
   - {{journeyId: household-person-lifecycle, stepId: query-household-demographics, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
   - {{journeyId: household-person-lifecycle, stepId: refuse-incomplete-membership, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
   - {{journeyId: household-person-lifecycle, stepId: operator-without-purpose-is-concealed, credential: {{type: bearer, tokenRef: secret:file/no-purpose-token}}}}
-""",
-    )
+"""
+    else:
+        credentials = """apiVersion: registry.registrystack.org/server-schema-test-credentials/v1
+kind: SchemaTestCredentials
+bindings:
+  - {journeyId: asset-and-site-caller-surfaces, stepId: create-asset, credential: {type: bearer, tokenRef: secret:file/operator-token}}
+  - {journeyId: asset-and-site-caller-surfaces, stepId: planner-gets-asset, credential: {type: bearer, tokenRef: secret:file/planner-token}}
+  - {journeyId: asset-and-site-caller-surfaces, stepId: planner-lists-assets, credential: {type: bearer, tokenRef: secret:file/planner-token}}
+  - {journeyId: asset-and-site-caller-surfaces, stepId: operator-renames-asset, credential: {type: bearer, tokenRef: secret:file/operator-token}}
+  - {journeyId: asset-and-site-caller-surfaces, stepId: create-site, credential: {type: bearer, tokenRef: secret:file/operator-token}}
+  - {journeyId: asset-and-site-caller-surfaces, stepId: planner-gets-site, credential: {type: bearer, tokenRef: secret:file/planner-token}}
+  - {journeyId: asset-and-site-caller-surfaces, stepId: planner-lists-sites, credential: {type: bearer, tokenRef: secret:file/planner-token}}
+  - {journeyId: asset-and-site-caller-surfaces, stepId: planner-without-purpose-is-concealed, credential: {type: bearer, tokenRef: secret:file/planner-no-purpose-token}}
+"""
+    _write_new(root / "schema-test-credentials.yaml", credentials)
 
 
-def render_runtime(root: Path, revision: str, webhook: bool = False) -> None:
+def render_runtime(
+    root: Path,
+    revision: str,
+    webhook: bool = False,
+    fixture_kind: str = "household",
+    token_lifetime_seconds: int = DEFAULT_TOKEN_LIFETIME_SECONDS,
+) -> None:
     root = _require_root(root)
     if not revision.startswith("sha256:") or len(revision) != 71:
         raise DemoError("package revision must be one SHA-256 identifier")
+    token_lifetime_seconds = _validated_token_lifetime_seconds(token_lifetime_seconds)
     bind = urllib.parse.urlparse((root / "server-origin").read_text(encoding="ascii").strip()).netloc
     _write_new(
         root / "runtime.yaml",
-        _runtime_config(root, root / "build/package", revision, bind, webhook),
+        _runtime_config(
+            root,
+            root / "build/package",
+            revision,
+            bind,
+            webhook,
+            fixture_kind,
+            token_lifetime_seconds,
+        ),
     )
 
 
@@ -846,12 +1061,19 @@ def _request(
     return document, response_headers
 
 
-def _create(root: Path, route: str, logical_key: str, data: dict[str, Any]) -> str:
+def _create(
+    root: Path,
+    route: str,
+    logical_key: str,
+    data: dict[str, Any],
+    access_profile: str = "household-operator",
+    token_name: str = "operator-token",
+) -> str:
     response, _ = _request(
         root,
         "POST",
-        route + "?accessProfile=household-operator",
-        "operator-token",
+        route + f"?accessProfile={urllib.parse.quote(access_profile, safe='')}",
+        token_name,
         {"data": data},
         f"demo-{logical_key}",
         201,
@@ -945,6 +1167,72 @@ def seed(root: Path) -> None:
         expected=404,
     )
     print("Seeded 8 synthetic people, 3 households, and 8 current memberships.")
+
+
+def seed_asset_site(root: Path) -> None:
+    root = _require_root(root)
+    asset_id = _create(
+        root,
+        "/v1/records/assets",
+        "asset-synth-001",
+        {"assetCode": "ASSET-SYNTH-001", "label": "Synthetic water pump", "assetClass": "equipment"},
+        "asset-operator",
+        "operator-token",
+    )
+    site_id = _create(
+        root,
+        "/v1/records/sites",
+        "site-synth-001",
+        {"siteCode": "SITE-SYNTH-001", "label": "Synthetic northern depot"},
+        "asset-operator",
+        "operator-token",
+    )
+    placement_id = _create(
+        root,
+        "/v1/records/placements",
+        "placement-synth-001",
+        {"asset": asset_id, "site": site_id, "validFrom": "2026-01-01"},
+        "asset-operator",
+        "operator-token",
+    )
+    inspection_id = _create(
+        root,
+        "/v1/records/inspections",
+        "inspection-synth-001",
+        {"asset": asset_id, "observedAt": "2026-01-15T10:00:00Z", "result": "passed"},
+        "asset-operator",
+        "operator-token",
+    )
+    _write_json(
+        root / "seed-record-ids.json",
+        {
+            "assets": {"ASSET-SYNTH-001": asset_id},
+            "sites": {"SITE-SYNTH-001": site_id},
+            "placements": {"PLACEMENT-SYNTH-001": placement_id},
+            "inspections": {"INSPECTION-SYNTH-001": inspection_id},
+        },
+    )
+    for route, expected_count in (
+        ("/v1/records/assets?accessProfile=asset-operator&$top=20", 1),
+        ("/v1/records/sites?accessProfile=asset-operator&$top=20", 1),
+        ("/v1/records/placements?accessProfile=asset-operator&$top=20", 1),
+        ("/v1/records/inspections?accessProfile=asset-operator&$top=20", 1),
+        ("/v1/records/assets?accessProfile=site-planner&$top=20", 1),
+        ("/v1/records/sites?accessProfile=site-planner&$top=20", 1),
+    ):
+        response, _ = _request(root, "GET", route, "planner-token" if "site-planner" in route else "operator-token")
+        if len(response.get("items", [])) != expected_count:
+            raise DemoError(f"{route} did not return the expected seeded records")
+    concealed, _ = _request(
+        root,
+        "GET",
+        f"/v1/records/assets/{urllib.parse.quote(asset_id, safe='')}?accessProfile=site-planner",
+        "planner-no-purpose-token",
+        expected=404,
+    )
+    if concealed.get("code") != "resource.not_found":
+        raise DemoError("planner without purpose did not receive the concealed resource response")
+    print("Seeded 1 synthetic asset, site, placement, and create-only inspection.")
 
 
 def _bound_household(root: Path) -> tuple[str, str]:
@@ -1070,6 +1358,94 @@ def query(root: Path, suite: str = "all") -> None:
             _print_query(label, response)
 
 
+def query_asset_site(root: Path, suite: str = "all") -> None:
+    root = _require_root(root)
+    if suite not in ("all", "operator", "planner"):
+        raise DemoError("query suite must be all, operator, or planner")
+    seed_ids = _read_json_object(root / "seed-record-ids.json")
+    asset_id = seed_ids.get("assets", {}).get("ASSET-SYNTH-001")
+    site_id = seed_ids.get("sites", {}).get("SITE-SYNTH-001")
+    if not isinstance(asset_id, str) or not isinstance(site_id, str):
+        raise DemoError("asset-site seed record identifiers are missing")
+    if suite in ("all", "operator"):
+        for label, path in (
+            ("Asset operator assets", "/v1/records/assets?accessProfile=asset-operator&$top=20"),
+            ("Asset operator sites", "/v1/records/sites?accessProfile=asset-operator&$top=20"),
+            ("Asset operator placements", "/v1/records/placements?accessProfile=asset-operator&$top=20"),
+            ("Asset operator inspections", "/v1/records/inspections?accessProfile=asset-operator&$top=20"),
+        ):
+            response, _ = _request(root, "GET", path, "operator-token")
+            _print_query(label, response)
+    if suite in ("all", "planner"):
+        for label, path in (
+            ("Site planner assets", "/v1/records/assets?accessProfile=site-planner&$top=20"),
+            ("Site planner sites", "/v1/records/sites?accessProfile=site-planner&$top=20"),
+            ("Site planner placements", "/v1/records/placements?accessProfile=site-planner&$top=20"),
+        ):
+            response, _ = _request(root, "GET", path, "planner-token")
+            rendered = json.dumps(response, sort_keys=True)
+            if "assetClass" in rendered:
+                raise DemoError("site planner response exposed the operator-only asset classification")
+            _print_query(label, response)
+        concealed, _ = _request(
+            root,
+            "GET",
+            f"/v1/records/assets/{urllib.parse.quote(asset_id, safe='')}?accessProfile=site-planner",
+            "planner-no-purpose-token",
+            expected=404,
+        )
+        if concealed.get("code") != "resource.not_found":
+            raise DemoError("site planner no-purpose denial did not use the concealed resource response")
+        _print_query("Site planner without purpose is concealed", concealed)
+
+
+def _token_expires_at(token: str) -> str:
+    parts = token.split(".")
+    if len(parts) != 3:
+        raise DemoError("token must be one compact JWT")
+    payload = parts[1]
+    payload += "=" * (-len(payload) % 4)
+    try:
+        claims = json.loads(base64.urlsafe_b64decode(payload.encode("ascii")))
+    except (ValueError, UnicodeError) as error:
+        raise DemoError("token payload is not valid JSON") from error
+    expires = claims.get("exp")
+    if not isinstance(expires, int) or expires <= 0:
+        raise DemoError("token payload does not carry an integer exp claim")
+    return datetime.fromtimestamp(expires, timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def write_handoff(root: Path, fixture_kind: str, out: Path) -> None:
+    root = _require_root(root)
+    config = _fixture_config(fixture_kind)
+    if out.exists() or out.is_symlink():
+        raise DemoError("handoff output must name a new regular file")
+    server_origin = (root / "server-origin").read_text(encoding="ascii").strip()
+    personas = []
+    for persona in config["personas"]:
+        token_name = persona["token_name"]
+        token_file = (root / f"secrets/{token_name}").resolve()
+        token = _token(root, token_name)
+        personas.append(
+            {
+                "id": persona["id"],
+                "label": persona["label"],
+                "tokenFile": str(token_file),
+                "accessProfile": persona["access_profile"],
+                "expiresAt": _token_expires_at(token),
+            }
+        )
+    _write_json(
+        out,
+        {
+            "schemaVersion": "registry-workspace/demo/v1",
+            "registry": {"id": config["registry_id"], "baseUrl": server_origin},
+            "personas": personas,
+        },
+        0o600,
+    )
+
+
 def wait_http(url: str, timeout_seconds: float) -> None:
     deadline = time.monotonic() + timeout_seconds
     last_status: int | None = None
@@ -1101,20 +1477,38 @@ def parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument("--server-port", required=True, type=int)
     prepare_parser.add_argument("--receiver-port", type=int)
     prepare_parser.add_argument("--webhook", action="store_true")
+    prepare_parser.add_argument("--fixture-kind", choices=("household", "asset-site"), default="household")
+    prepare_parser.add_argument(
+        "--token-lifetime-seconds",
+        type=int,
+        default=DEFAULT_TOKEN_LIFETIME_SECONDS,
+    )
     runtime_parser = commands.add_parser("render-runtime")
     runtime_parser.add_argument("--root", required=True, type=Path)
     runtime_parser.add_argument("--revision", required=True)
     runtime_parser.add_argument("--webhook", action="store_true")
+    runtime_parser.add_argument("--fixture-kind", choices=("household", "asset-site"), default="household")
+    runtime_parser.add_argument(
+        "--token-lifetime-seconds",
+        type=int,
+        default=DEFAULT_TOKEN_LIFETIME_SECONDS,
+    )
     bind_parser = commands.add_parser("bind-webhook-module")
     bind_parser.add_argument("--root", required=True, type=Path)
     bind_parser.add_argument("--report", required=True, type=Path)
     seed_parser = commands.add_parser("seed")
     seed_parser.add_argument("--root", required=True, type=Path)
+    seed_parser.add_argument("--fixture-kind", choices=("household", "asset-site"), default="household")
     viewer_parser = commands.add_parser("configure-viewer")
     viewer_parser.add_argument("--root", required=True, type=Path)
     query_parser = commands.add_parser("query")
     query_parser.add_argument("--root", required=True, type=Path)
-    query_parser.add_argument("--suite", choices=("all", "operator", "viewer"), default="all")
+    query_parser.add_argument("--fixture-kind", choices=("household", "asset-site"), default="household")
+    query_parser.add_argument("--suite", default="all")
+    handoff_parser = commands.add_parser("handoff")
+    handoff_parser.add_argument("--root", required=True, type=Path)
+    handoff_parser.add_argument("--fixture-kind", choices=("household", "asset-site"), default="household")
+    handoff_parser.add_argument("--out", required=True, type=Path)
     wait_parser = commands.add_parser("wait-http")
     wait_parser.add_argument("--url", required=True)
     wait_parser.add_argument("--timeout", type=float, default=30.0)
@@ -1149,17 +1543,33 @@ def main() -> int:
                 args.server_port,
                 args.webhook,
                 args.receiver_port,
+                args.fixture_kind,
+                args.token_lifetime_seconds,
             )
         elif args.command == "render-runtime":
-            render_runtime(args.root, args.revision, args.webhook)
+            render_runtime(
+                args.root,
+                args.revision,
+                args.webhook,
+                args.fixture_kind,
+                args.token_lifetime_seconds,
+            )
         elif args.command == "bind-webhook-module":
             bind_webhook_module(args.root, args.report)
         elif args.command == "seed":
-            seed(args.root)
+            if args.fixture_kind == "household":
+                seed(args.root)
+            else:
+                seed_asset_site(args.root)
         elif args.command == "configure-viewer":
             configure_viewer(args.root)
         elif args.command == "query":
-            query(args.root, args.suite)
+            if args.fixture_kind == "household":
+                query(args.root, args.suite)
+            else:
+                query_asset_site(args.root, args.suite)
+        elif args.command == "handoff":
+            write_handoff(args.root, args.fixture_kind, args.out)
         elif args.command == "wait-http":
             wait_http(args.url, args.timeout)
         elif args.command == "store-token":

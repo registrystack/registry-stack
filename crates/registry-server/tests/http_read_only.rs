@@ -422,10 +422,29 @@ async fn in_filter_values_are_one_deterministic_finite_set() {
 async fn lookup_body_exactness_origin_types_and_unresolved_equivalence_are_value_free() {
     let harness = Harness::from_project(LOOKUP_PATH_PROJECT, true);
     let operator_claims = Some(caseworker_claims("case-management"));
+    let metadata = body_json(
+        harness
+            .send(
+                Method::GET,
+                "/v1/registry?accessProfile=operator",
+                operator_claims.clone(),
+            )
+            .await,
+    )
+    .await;
+    let lookup = metadata_operation(&metadata, "records.household.lookup");
+    let projection_parameter = lookup["request"]["queryParameters"][0]
+        .as_str()
+        .expect("lookup permits projection");
+    assert_eq!(projection_parameter, "$select");
+    let projected_lookup = format!(
+        "{}?accessProfile=operator&{projection_parameter}=householdCode",
+        lookup["path"].as_str().unwrap()
+    );
     let accepted = harness
         .send_json(
             Method::POST,
-            "/v1/records/households:lookup?accessProfile=operator&$select=householdCode",
+            &projected_lookup,
             operator_claims.clone(),
             json!({
                 "selector": "by-local-reference",
@@ -758,7 +777,7 @@ async fn relationship_discovery_uses_target_entity_and_unions_authorized_operati
         openapi["components"]["schemas"]["person"]["properties"],
         json!({
             "personCode": {"type": "string", "minLength": 0, "maxLength": 64},
-            "sensitiveNote": {"type": "string", "minLength": 0, "maxLength": 64}
+            "sensitiveNote": {"anyOf": [{"type": "string", "minLength": 0, "maxLength": 64}, {"type": "null"}]}
         })
     );
 
@@ -849,7 +868,7 @@ async fn derived_fields_are_discoverable_as_read_only_response_properties() {
     .await;
     assert_eq!(
         schema["properties"]["eligibilityScore"],
-        json!({"type": "integer", "format": "int64", "readOnly": true})
+        json!({"anyOf": [{"type": "integer", "format": "int64"}, {"type": "null"}], "readOnly": true})
     );
     assert_eq!(
         schema["properties"]["label"],
@@ -2323,5 +2342,279 @@ fn assert_no_mutation_methods(document: &Value) {
         assert!(methods.get("post").is_none());
         assert!(methods.get("patch").is_none());
         assert!(methods.get("delete").is_none());
+    }
+}
+
+fn metadata_operation<'a>(document: &'a Value, id: &str) -> &'a Value {
+    document["operations"]
+        .as_array()
+        .expect("operation metadata")
+        .iter()
+        .find(|operation| operation["id"] == id)
+        .expect("authorized operation")
+}
+
+#[tokio::test]
+async fn workspace_metadata_keeps_route_fields_selectors_and_query_capabilities_separate() {
+    let harness = Harness::from_project(LOOKUP_PATH_PROJECT, true);
+    let response = harness
+        .send(
+            Method::GET,
+            "/v1/registry?accessProfile=operator",
+            Some(caseworker_claims("case-management")),
+        )
+        .await;
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    let document = body_json(response).await;
+    assert_eq!(document["metadataVersion"], "1");
+    assert!(document["revision"].is_string());
+    let path = metadata_operation(&document, "records.household.path.people");
+    assert_eq!(path["sourceEntity"], "household");
+    assert_eq!(path["responseEntity"], "person");
+    assert_eq!(path["readPath"], json!({"id":"people", "label":"People"}));
+    assert_eq!(path["readableFields"], json!(["person-code"]));
+    assert_eq!(path["fields"][0]["apiName"], "personCode");
+    assert_eq!(path["titleFields"], json!(["person-code"]));
+    assert_eq!(path["query"]["allowCount"], true);
+    assert_eq!(
+        path["query"]["filterableFields"][0]["apiName"],
+        "personCode"
+    );
+    assert_eq!(
+        path["query"]["sortableFields"][0],
+        json!({"id":"person-code","apiName":"personCode","directions":["asc"]})
+    );
+    assert_eq!(
+        path["request"]["queryParameters"],
+        json!([
+            "$count",
+            "$filter",
+            "$orderby",
+            "$select",
+            "$skiptoken",
+            "$top"
+        ])
+    );
+    assert_eq!(
+        path["query"]["maxPageSize"],
+        path["query"]["defaultPageSize"]
+    );
+    let direct = metadata_operation(&document, "records.person.get");
+    assert_eq!(direct["readableFields"], json!(["sensitive-note"]));
+    assert_eq!(
+        direct["fields"][0]["schema"]["anyOf"][1],
+        json!({"type":"null"})
+    );
+    assert_eq!(direct["request"]["queryParameters"], json!(["$select"]));
+    assert_eq!(direct["createWritableFields"], json!([]));
+    assert_eq!(direct["patchWritableFields"], json!([]));
+    assert_eq!(direct["requiredCapabilities"], json!([]));
+    let lookup = metadata_operation(&document, "records.household.lookup");
+    assert_eq!(lookup["selectors"].as_array().unwrap().len(), 2);
+    assert_eq!(lookup["selectors"][0]["valueOrigin"], "request");
+    assert_eq!(
+        lookup["selectors"][0]["requestFields"],
+        json!(["householdCode"])
+    );
+    assert_eq!(
+        lookup["selectors"][0]["fields"][0]["schema"],
+        json!({"type":"string","minLength":0,"maxLength":64})
+    );
+    assert_eq!(lookup["request"]["queryParameters"], json!(["$select"]));
+    let openapi = body_json(
+        harness
+            .send(
+                Method::GET,
+                "/openapi.json?accessProfile=operator",
+                Some(caseworker_claims("case-management")),
+            )
+            .await,
+    )
+    .await;
+    let query_parameters = openapi["paths"][lookup["path"].as_str().unwrap()]["post"]["parameters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|parameter| parameter["in"] == "query" && parameter["name"] != "accessProfile")
+        .map(|parameter| parameter["name"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        lookup["request"]["queryParameters"],
+        json!(query_parameters)
+    );
+    let rendered = document.to_string();
+    for hidden in [
+        "private-note",
+        "privateNote",
+        "by-private-note",
+        "sourceRef",
+        "targetRef",
+        "claimMapping",
+        "physicalName",
+        "processingFields",
+    ] {
+        assert!(!rendered.contains(hidden), "metadata leaked {hidden}");
+    }
+    assert_eq!(harness.records.calls(), 0);
+}
+
+#[tokio::test]
+async fn workspace_metadata_lookup_claim_origin_exposes_no_private_claim_mapping() {
+    let harness = Harness::from_project(LOOKUP_PATH_PROJECT, true);
+    let claims = caseworker_claims_with_direct(
+        "case-management",
+        [
+            (
+                "household_id",
+                VerifiedClaimValue::direct_string("00000000-0000-4000-8000-000000000001").unwrap(),
+            ),
+            (
+                "household_code",
+                VerifiedClaimValue::direct_string("PRIVATE-SELECTOR-VALUE").unwrap(),
+            ),
+        ],
+    );
+    let document = body_json(
+        harness
+            .send(
+                Method::GET,
+                "/v1/registry?accessProfile=viewer",
+                Some(claims),
+            )
+            .await,
+    )
+    .await;
+    let lookup = metadata_operation(&document, "records.household.lookup");
+    assert_eq!(lookup["selectors"].as_array().unwrap().len(), 1);
+    assert_eq!(lookup["selectors"][0]["valueOrigin"], "verified_claim");
+    assert_eq!(lookup["request"]["queryParameters"], json!(["$select"]));
+    assert_eq!(lookup["selectors"][0]["requestFields"], json!([]));
+    assert_eq!(
+        lookup["selectors"][0]["fields"][0]["apiName"],
+        "householdCode"
+    );
+    let rendered = document.to_string();
+    for hidden in [
+        "household_id",
+        "household_code",
+        "PRIVATE-SELECTOR-VALUE",
+        "administrative-area",
+        "by-local-reference",
+        "claimMapping",
+        "path.people",
+    ] {
+        assert!(!rendered.contains(hidden), "metadata leaked {hidden}");
+    }
+    assert_eq!(document["operations"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn workspace_references_require_independent_same_profile_target_operations() {
+    let source = LOOKUP_PATH_PROJECT.replace("      - entity: person\n        operations: [get, list]", "      - entity: membership\n        operations: [get]\n        readableFields: [person]\n      - entity: person\n        operations: [get, list]");
+    let harness = Harness::from_project(&source, true);
+    let document = body_json(
+        harness
+            .send(
+                Method::GET,
+                "/v1/registry?accessProfile=operator",
+                Some(caseworker_claims("case-management")),
+            )
+            .await,
+    )
+    .await;
+    let membership = metadata_operation(&document, "records.membership.get");
+    assert_eq!(membership["fields"].as_array().unwrap().len(), 1);
+    let reference = &membership["fields"][0]["reference"];
+    assert_eq!(reference["targetEntity"], "person");
+    assert_eq!(reference["manualEntry"], true);
+    assert_eq!(reference["operations"].as_array().unwrap().len(), 2);
+    for operation in reference["operations"].as_array().unwrap() {
+        assert_eq!(operation["accessProfile"], "operator");
+        assert_eq!(operation["labelFields"], json!(["sensitive-note"]));
+        assert_ne!(operation["operationId"], "records.household.path.people");
+    }
+    let path_only = source.replace("      - entity: person\n        operations: [get, list]\n        readableFields: [sensitive-note]\n        filterableFields: [sensitive-note]\n        sortableFields: [sensitive-note]\n", "");
+    let harness = Harness::from_project(&path_only, true);
+    let document = body_json(
+        harness
+            .send(
+                Method::GET,
+                "/v1/registry?accessProfile=operator",
+                Some(caseworker_claims("case-management")),
+            )
+            .await,
+    )
+    .await;
+    let reference =
+        &metadata_operation(&document, "records.membership.get")["fields"][0]["reference"];
+    assert_eq!(reference, &json!({"manualEntry":true,"operations":[]}));
+    assert!(document["operations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|operation| operation["readPath"]["id"] == "people"));
+    // The no-profile request can have different compiled defaults per route.
+    // Even a visible direct operation in another profile cannot label this reference.
+    let other_profile = format!("{path_only}      - entity: person\n        operations: [get, list]\n        readableFields: [sensitive-note]\n");
+    let harness = Harness::from_project(&other_profile, true);
+    let document = body_json(
+        harness
+            .send(
+                Method::GET,
+                "/v1/registry",
+                Some(caseworker_claims("case-management")),
+            )
+            .await,
+    )
+    .await;
+    assert_eq!(
+        metadata_operation(&document, "records.person.get")["accessProfile"],
+        "viewer"
+    );
+    assert_eq!(
+        metadata_operation(&document, "records.membership.get")["fields"][0]["reference"],
+        json!({"manualEntry":true,"operations":[]})
+    );
+}
+
+#[tokio::test]
+async fn workspace_temporal_capabilities_and_no_store_cover_success_and_refusal() {
+    let harness = Harness::from_project(DISCOVERY_MATRIX_PROJECT, true);
+    let document = body_json(
+        harness
+            .send(
+                Method::GET,
+                "/v1/registry?accessProfile=caseworker",
+                Some(caseworker_claims("case-management")),
+            )
+            .await,
+    )
+    .await;
+    let as_of = document["operations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|operation| operation["query"]["kind"] == "as_of")
+        .unwrap();
+    assert_eq!(as_of["query"]["temporal"]["parameter"], "asOf");
+    assert_eq!(as_of["query"]["temporal"]["required"], true);
+    assert!(as_of["request"]["queryParameters"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("asOf")));
+    for uri in [
+        "/v1/registry",
+        "/openapi.json",
+        "/v1/schemas/public-record",
+        "/v1/records/public-records",
+        "/v1/records/public-records/00000000-0000-4000-8000-000000000001",
+        "/v1/registry?accessProfile=unknown",
+        "/v1/schemas/protected-ledger",
+        "/v1/records/public-records?$top=0",
+        "/missing",
+    ] {
+        let response = harness.send(Method::GET, uri, None).await;
+        assert_eq!(response.headers()["cache-control"], "no-store", "{uri}");
+        assert!(response.headers().contains_key("traceparent"));
     }
 }

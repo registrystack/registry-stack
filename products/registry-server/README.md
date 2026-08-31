@@ -191,6 +191,10 @@ and prints a separate query helper rather than printing bearer credentials.
 
 ## Portable metadata and composition
 
+Application clients consume the [caller-filtered metadata contract](metadata.md)
+from `/v1/registry`, including exact route/profile fields, schemas, selectors,
+reference bindings, and query capabilities.
+
 Domain-semantic entries in `manifestProjection` are optional overlays on the
 configured data model. They can declare localized catalogue text, dataset and
 API metadata, entity concept URIs, identifiers, field concepts, relationship

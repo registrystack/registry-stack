@@ -2,6 +2,7 @@
 //! HTTP surface compiled from one immutable Registry inventory.
 
 mod context;
+mod metadata;
 mod service;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -72,6 +73,7 @@ const MAX_IN_VALUES: usize = 100;
 /// allowing request headers or query values to construct authority.
 pub fn router(service: Arc<HttpService>) -> Router {
     route_set(service)
+        .layer(middleware::from_fn(metadata::no_store))
         .layer(middleware::from_fn(crate::correlation::observe))
         .layer(security_headers(CspBuilder::restrictive()))
 }
@@ -160,6 +162,7 @@ pub fn authenticated_router(
             authenticator,
             authenticate_request,
         ))
+        .layer(middleware::from_fn(metadata::no_store))
         .layer(middleware::from_fn(crate::correlation::observe))
         .layer(security_headers(CspBuilder::restrictive()))
 }
@@ -278,6 +281,8 @@ async fn registry_metadata(
     let claims = claims
         .map(|Extension(value)| value)
         .unwrap_or_else(VerifiedRequestClaims::anonymous);
+    let surfaces = visible_surfaces(&service, &claims, &options);
+    let operations = metadata::operations(&service, &surfaces);
     let visible = visible_metadata_entries(&service, &claims, &options);
     if options.access_profile().is_some() && visible.is_empty() {
         return concealed();
@@ -327,6 +332,8 @@ async fn registry_metadata(
         "version": service.registry.version(),
         "revision": service.registry.revision(),
         "entities": entities,
+        "metadataVersion": "1",
+        "operations": operations,
     }))
     .into_response()
 }
