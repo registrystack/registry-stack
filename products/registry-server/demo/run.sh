@@ -19,7 +19,7 @@ handoff_path=""
 token_lifetime_seconds=300
 
 usage() {
-  printf '%s\n' 'usage: products/registry-server/demo/run.sh [--smoke] [--webhook] [--fixture business-establishments|household|asset-site] [--state-dir PATH] [--handoff PATH] [--token-lifetime-seconds 60..900]' >&2
+  printf '%s\n' 'usage: products/registry-server/demo/run.sh [--smoke] [--webhook] [--fixture business-establishments|household|asset-site|facility|inspection] [--state-dir PATH] [--handoff PATH] [--token-lifetime-seconds 60..900]' >&2
 }
 
 while [[ $# -gt 0 ]]; do
@@ -97,6 +97,22 @@ case "$fixture_kind" in
     database_id='asset-site-placement-demo'
     if [[ "$webhook" == true ]]; then
       printf '%s\n' 'the --webhook option is not supported for the asset-site fixture.' >&2
+      exit 2
+    fi
+    ;;
+  facility)
+    fixture="$product_dir/acceptance/facility"
+    database_id='facility-demo'
+    if [[ "$webhook" == true ]]; then
+      printf '%s\n' 'the --webhook option is not supported for the facility fixture.' >&2
+      exit 2
+    fi
+    ;;
+  inspection)
+    fixture="$product_dir/acceptance/inspection"
+    database_id='inspection-demo'
+    if [[ "$webhook" == true ]]; then
+      printf '%s\n' 'the --webhook option is not supported for the inspection fixture.' >&2
       exit 2
     fi
     ;;
@@ -233,6 +249,10 @@ if [[ "$fixture_kind" == asset-site ]]; then
   uv run --quiet "$mint_key_material" p256 \
     --private-out "$run_dir/keys/planner-no-purpose/signing-p256-private-jwk" \
     --public-out "$run_dir/keys/planner-no-purpose-public.jwk.json"
+elif [[ "$fixture_kind" == facility ]]; then
+  uv run --quiet "$mint_key_material" p256 \
+    --private-out "$run_dir/keys/south-operator/signing-p256-private-jwk" \
+    --public-out "$run_dir/keys/south-operator-public.jwk.json"
 else
   uv run --quiet "$mint_key_material" p256 \
     --private-out "$run_dir/keys/no-purpose/signing-p256-private-jwk" \
@@ -390,6 +410,28 @@ elif [[ "$fixture_kind" == asset-site ]]; then
     --client-id asset-site-demo-planner-no-purpose \
     --key "$run_dir/keys/planner-no-purpose/signing-p256-private-jwk" |
     python3 "$support" store-token --out "$run_dir/secrets/planner-no-purpose-token"
+elif [[ "$fixture_kind" == facility ]]; then
+  "$mint" token \
+    --url "http://127.0.0.1:${mint_port}/token" \
+    --client-id facility-demo-operator \
+    --key "$run_dir/keys/operator/signing-p256-private-jwk" |
+    python3 "$support" store-token --out "$run_dir/secrets/operator-token"
+  "$mint" token \
+    --url "http://127.0.0.1:${mint_port}/token" \
+    --client-id facility-demo-south-operator \
+    --key "$run_dir/keys/south-operator/signing-p256-private-jwk" |
+    python3 "$support" store-token --out "$run_dir/secrets/south-operator-token"
+elif [[ "$fixture_kind" == inspection ]]; then
+  "$mint" token \
+    --url "http://127.0.0.1:${mint_port}/token" \
+    --client-id inspection-demo-inspector \
+    --key "$run_dir/keys/operator/signing-p256-private-jwk" |
+    python3 "$support" store-token --out "$run_dir/secrets/operator-token"
+  "$mint" token \
+    --url "http://127.0.0.1:${mint_port}/token" \
+    --client-id inspection-demo-no-purpose \
+    --key "$run_dir/keys/no-purpose/signing-p256-private-jwk" |
+    python3 "$support" store-token --out "$run_dir/secrets/no-purpose-token"
 else
   usage
   exit 2
@@ -525,16 +567,22 @@ if [[ "$fixture_kind" == business-establishments ]]; then
   printf '\n%s\n' 'Registry Server business demo is ready.'
 elif [[ "$fixture_kind" == household ]]; then
   printf '\n%s\n' 'Registry Server household demo is ready.'
-else
+elif [[ "$fixture_kind" == asset-site ]]; then
   printf '\n%s\n' 'Registry Server asset-site demo is ready.'
+elif [[ "$fixture_kind" == facility ]]; then
+  printf '\n%s\n' 'Registry Server facility demo is ready.'
+else
+  printf '\n%s\n' 'Registry Server inspection demo is ready.'
 fi
 printf '  Registry Server: http://127.0.0.1:%s\n' "$server_port"
 printf '  Registry Mint:   http://127.0.0.1:%s\n' "$mint_port"
 printf '  Operator token:  %s\n' "$run_dir/secrets/operator-token"
 if [[ "$fixture_kind" == business-establishments || "$fixture_kind" == household ]]; then
   printf '  Viewer token:    %s\n' "$run_dir/secrets/viewer-token"
-else
+elif [[ "$fixture_kind" == asset-site ]]; then
   printf '  Planner token:   %s\n' "$run_dir/secrets/planner-token"
+else
+  printf '  Persona token:   %s\n' "$run_dir/secrets/operator-token"
 fi
 if [[ -n "$handoff_path" ]]; then
   printf '  Handoff:         %s\n' "$handoff_path"

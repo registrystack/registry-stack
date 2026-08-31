@@ -3,8 +3,9 @@ set -euo pipefail
 
 demo_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 run_dir="$demo_dir/.run"
-fixture_kind=household
+fixture_kind=business-establishments
 suite=all
+usage='usage: products/registry-server/demo/query.sh [--fixture business-establishments|household|asset-site|facility|inspection] [all|operator|viewer|planner|inspector]'
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -16,7 +17,7 @@ while [[ $# -gt 0 ]]; do
       fixture_kind="$2"
       shift 2
       ;;
-    all|operator|viewer|planner)
+    all|operator|viewer|planner|inspector)
       suite="$1"
       shift
       ;;
@@ -33,7 +34,7 @@ if [[ ! -d "$run_dir" || -L "$run_dir" ]]; then
 fi
 
 case "$fixture_kind:$suite" in
-  household:all|household:operator|household:viewer|asset-site:all|asset-site:operator|asset-site:planner) ;;
+  business-establishments:all|business-establishments:operator|business-establishments:viewer|household:all|household:operator|household:viewer|asset-site:all|asset-site:operator|asset-site:planner|facility:all|facility:operator|inspection:all|inspection:inspector) ;;
   *)
     printf '%s\n' 'the selected query suite is not available for that fixture.' >&2
     exit 2

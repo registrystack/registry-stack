@@ -47,6 +47,20 @@ ASSET_PLANNER_CLIENT = "asset-site-demo-planner"
 ASSET_PLANNER_NO_PURPOSE_CLIENT = "asset-site-demo-planner-no-purpose"
 ASSET_OPERATOR_SCOPE = "registry:asset:operate"
 ASSET_PLANNER_SCOPE = "registry:asset:plan"
+FACILITY_DATABASE_ID = "facility-demo"
+FACILITY_INSTANCE_ID = "facility-local"
+FACILITY_SOURCE_REVISION = "facility-local-0.1.0"
+FACILITY_AUDIENCE = "urn:registry-server:facility-demo"
+FACILITY_OPERATOR_CLIENT = "facility-demo-operator"
+FACILITY_SOUTH_OPERATOR_CLIENT = "facility-demo-south-operator"
+FACILITY_OPERATOR_SCOPE = "registry:facility:operate"
+INSPECTION_DATABASE_ID = "inspection-demo"
+INSPECTION_INSTANCE_ID = "inspection-local"
+INSPECTION_SOURCE_REVISION = "inspection-local-0.1.0"
+INSPECTION_AUDIENCE = "urn:registry-server:inspection-demo"
+INSPECTION_INSPECTOR_CLIENT = "inspection-demo-inspector"
+INSPECTION_NO_PURPOSE_CLIENT = "inspection-demo-no-purpose"
+INSPECTION_INSPECTOR_SCOPE = "registry:inspection:inspect"
 DEFAULT_FIXTURE_KIND = "business-establishments"
 DEFAULT_TOKEN_LIFETIME_SECONDS = 300
 MIN_TOKEN_LIFETIME_SECONDS = 60
@@ -64,6 +78,16 @@ ASSET_SITE_PROJECT_REPLACEMENTS = {
     "  environment: acceptance": "  environment: local",
     "  instanceId: asset-site-placement-acceptance": f"  instanceId: {ASSET_SITE_INSTANCE_ID}",
     "  sourceRevision: asset-site-placement-acceptance-0.1.0": f"  sourceRevision: {ASSET_SITE_SOURCE_REVISION}",
+}
+FACILITY_PROJECT_REPLACEMENTS = {
+    "  environment: acceptance": "  environment: local",
+    "  instanceId: facility-acceptance": f"  instanceId: {FACILITY_INSTANCE_ID}",
+    "  sourceRevision: facility-acceptance-0.1.0": f"  sourceRevision: {FACILITY_SOURCE_REVISION}",
+}
+INSPECTION_PROJECT_REPLACEMENTS = {
+    "  environment: acceptance": "  environment: local",
+    "  instanceId: inspection-acceptance": f"  instanceId: {INSPECTION_INSTANCE_ID}",
+    "  sourceRevision: inspection-acceptance-0.1.0": f"  sourceRevision: {INSPECTION_SOURCE_REVISION}",
 }
 BUSINESS_PROJECT_REPLACEMENTS = {
     "  environment: acceptance": "  environment: local",
@@ -201,6 +225,46 @@ FIXTURE_CONFIGS: dict[str, dict[str, Any]] = {
             },
         ],
     },
+    "facility": {
+        "registry_id": "facility",
+        "database_id": FACILITY_DATABASE_ID,
+        "instance_id": FACILITY_INSTANCE_ID,
+        "source_revision": FACILITY_SOURCE_REVISION,
+        "audience": FACILITY_AUDIENCE,
+        "replacements": FACILITY_PROJECT_REPLACEMENTS,
+        "allowed_clients": [
+            FACILITY_OPERATOR_CLIENT,
+            FACILITY_SOUTH_OPERATOR_CLIENT,
+        ],
+        "personas": [
+            {
+                "id": "facility-operator",
+                "label": "Facility operator",
+                "token_name": "operator-token",
+                "access_profile": "facility-operator",
+            },
+        ],
+    },
+    "inspection": {
+        "registry_id": "inspection",
+        "database_id": INSPECTION_DATABASE_ID,
+        "instance_id": INSPECTION_INSTANCE_ID,
+        "source_revision": INSPECTION_SOURCE_REVISION,
+        "audience": INSPECTION_AUDIENCE,
+        "replacements": INSPECTION_PROJECT_REPLACEMENTS,
+        "allowed_clients": [
+            INSPECTION_INSPECTOR_CLIENT,
+            INSPECTION_NO_PURPOSE_CLIENT,
+        ],
+        "personas": [
+            {
+                "id": "inspection-inspector",
+                "label": "Inspection inspector",
+                "token_name": "operator-token",
+                "access_profile": "inspection-inspector",
+            },
+        ],
+    },
 }
 
 
@@ -208,7 +272,9 @@ def _fixture_config(fixture_kind: str) -> dict[str, Any]:
     try:
         return FIXTURE_CONFIGS[fixture_kind]
     except KeyError as error:
-        raise DemoError("fixture must be business-establishments, household, or asset-site") from error
+        raise DemoError(
+            "fixture must be business-establishments, household, asset-site, facility, or inspection"
+        ) from error
 
 
 def _fixture_kind_for_root(root: Path) -> str:
@@ -260,6 +326,12 @@ def _require_root(root: Path) -> Path:
     return root
 
 
+def _replace_once(source: str, expected: str, replacement: str, description: str) -> str:
+    if source.count(expected) != 1:
+        raise DemoError(description)
+    return source.replace(expected, replacement, 1)
+
+
 def reserve_ports(count: int = 3) -> tuple[int, ...]:
     if count not in (3, 4):
         raise DemoError("the demo reserves either three or four ports")
@@ -287,9 +359,12 @@ def _local_project(
     source = project_path.read_text(encoding="utf-8")
     config = _fixture_config(fixture_kind)
     for expected, replacement in config["replacements"].items():
-        if source.count(expected) != 1:
-            raise DemoError(f"{fixture_kind} fixture no longer has the expected package line: {expected.strip()}")
-        source = source.replace(expected, replacement, 1)
+        source = _replace_once(
+            source,
+            expected,
+            replacement,
+            f"{fixture_kind} fixture no longer has the expected package line: {expected.strip()}",
+        )
     if webhook:
         hook = _webhook_config(fixture_kind)
         module_lock = hook["module_lock"]
@@ -322,21 +397,24 @@ def _local_project(
             encoding="utf-8",
         )
     if fixture_kind == "asset-site":
-        source = source.replace(
+        source = _replace_once(
+            source,
             "  - id: asset-operator\n    default: true\n    principalClaim: registry_principal\n    requiredPurposes:",
             "  - id: asset-operator\n    default: true\n    principalClaim: registry_principal\n"
             f"    requiredScopes: [{ASSET_OPERATOR_SCOPE}]\n    requiredPurposes:",
-            1,
+            "asset-site fixture no longer has the expected asset-operator access profile",
         )
-        source = source.replace(
+        source = _replace_once(
+            source,
             "  - id: site-planner\n    principalClaim: registry_principal\n    requiredPurposes:",
             "  - id: site-planner\n    principalClaim: registry_principal\n"
             f"    requiredScopes: [{ASSET_PLANNER_SCOPE}]\n    requiredPurposes:",
-            1,
+            "asset-site fixture no longer has the expected site-planner access profile",
         )
         journeys_path = target / "tests/journeys.yaml"
         journeys = journeys_path.read_text(encoding="utf-8")
-        journeys = journeys.replace(
+        journeys = _replace_once(
+            journeys,
             "        claims: &asset_operator_claims\n"
             "          principal: synthetic-asset-operator\n"
             "          purpose: asset-management\n",
@@ -344,9 +422,10 @@ def _local_project(
             "          principal: synthetic-asset-operator\n"
             f"          scopes: [{ASSET_OPERATOR_SCOPE}]\n"
             "          purpose: asset-management\n",
-            1,
+            "asset-site fixture no longer has the expected operator journey claims",
         )
-        journeys = journeys.replace(
+        journeys = _replace_once(
+            journeys,
             "        claims: &site_planner_claims\n"
             "          principal: synthetic-site-planner\n"
             "          purpose: site-planning\n",
@@ -354,17 +433,103 @@ def _local_project(
             "          principal: synthetic-site-planner\n"
             f"          scopes: [{ASSET_PLANNER_SCOPE}]\n"
             "          purpose: site-planning\n",
-            1,
+            "asset-site fixture no longer has the expected planner journey claims",
         )
-        journeys = journeys.replace(
+        no_purpose_claims = (
             "        claims:\n"
             "          principal: synthetic-site-planner\n"
-            "        request: {operation: get, recordRef: renamed-asset}\n",
+            "        request:\n"
+            "          operation: get\n"
+            "          recordRef: renamed-asset\n"
+        )
+        journeys = _replace_once(
+            journeys,
+            no_purpose_claims,
             "        claims:\n"
             "          principal: synthetic-site-planner\n"
             f"          scopes: [{ASSET_PLANNER_SCOPE}]\n"
-            "        request: {operation: get, recordRef: renamed-asset}\n",
-            1,
+            "        request:\n"
+            "          operation: get\n"
+            "          recordRef: renamed-asset\n",
+            "asset-site fixture no longer has the expected no-purpose planner step",
+        )
+        journeys_path.write_text(journeys, encoding="utf-8")
+    elif fixture_kind == "facility":
+        source = _replace_once(
+            source,
+            "  - id: facility-operator\n    principalClaim: registry_principal\n    requiredPurposes:",
+            "  - id: facility-operator\n    principalClaim: registry_principal\n"
+            f"    requiredScopes: [{FACILITY_OPERATOR_SCOPE}]\n    requiredPurposes:",
+            "facility fixture no longer has the expected operator access profile",
+        )
+        entity_row_boundary = "          claim: administrative_boundaries\n          operator: in"
+        grant_row_boundary = "            claim: administrative_boundaries\n            operator: in"
+        if source.count(entity_row_boundary) != 1 or source.count(grant_row_boundary) != 4:
+            raise DemoError("facility fixture no longer has the expected row-boundary operators")
+        source = source.replace(
+            entity_row_boundary,
+            "          claim: administrative_boundaries\n          operator: equals",
+        )
+        source = source.replace(
+            grant_row_boundary,
+            "            claim: administrative_boundaries\n            operator: equals",
+        )
+        journeys_path = target / "tests/journeys.yaml"
+        journeys = journeys_path.read_text(encoding="utf-8")
+        journeys = _replace_once(
+            journeys,
+            "        claims: &north_operator_claims\n"
+            "          principal: synthetic-facility-operator\n"
+            "          purpose: facility-registry\n",
+            "        claims: &north_operator_claims\n"
+            "          principal: synthetic-facility-operator\n"
+            f"          scopes: [{FACILITY_OPERATOR_SCOPE}]\n"
+            "          purpose: facility-registry\n",
+            "facility fixture no longer has the expected north operator journey claims",
+        )
+        journeys = _replace_once(
+            journeys,
+            "        claims:\n"
+            "          principal: synthetic-facility-operator\n"
+            "          purpose: facility-registry\n",
+            "        claims:\n"
+            "          principal: synthetic-facility-operator\n"
+            f"          scopes: [{FACILITY_OPERATOR_SCOPE}]\n"
+            "          purpose: facility-registry\n",
+            "facility fixture no longer has the expected south operator journey claims",
+        )
+        journeys_path.write_text(journeys, encoding="utf-8")
+    elif fixture_kind == "inspection":
+        source = _replace_once(
+            source,
+            "  - id: inspection-inspector\n    principalClaim: registry_principal\n    requiredPurposes:",
+            "  - id: inspection-inspector\n    principalClaim: registry_principal\n"
+            f"    requiredScopes: [{INSPECTION_INSPECTOR_SCOPE}]\n    requiredPurposes:",
+            "inspection fixture no longer has the expected inspector access profile",
+        )
+        journeys_path = target / "tests/journeys.yaml"
+        journeys = journeys_path.read_text(encoding="utf-8")
+        journeys = _replace_once(
+            journeys,
+            "        claims: &inspection_inspector_claims\n"
+            "          principal: synthetic-inspection-inspector\n"
+            "          purpose: facility-inspection\n",
+            "        claims: &inspection_inspector_claims\n"
+            "          principal: synthetic-inspection-inspector\n"
+            f"          scopes: [{INSPECTION_INSPECTOR_SCOPE}]\n"
+            "          purpose: facility-inspection\n",
+            "inspection fixture no longer has the expected inspector journey claims",
+        )
+        journeys = _replace_once(
+            journeys,
+            "        claims:\n"
+            "          principal: synthetic-inspection-inspector\n"
+            "        request:\n",
+            "        claims:\n"
+            "          principal: synthetic-inspection-inspector\n"
+            f"          scopes: [{INSPECTION_INSPECTOR_SCOPE}]\n"
+            "        request:\n",
+            "inspection fixture no longer has the expected no-purpose inspector journey claims",
         )
         journeys_path.write_text(journeys, encoding="utf-8")
     project_path.write_text(source, encoding="utf-8")
@@ -409,7 +574,7 @@ def _mint_client(
     client_id: str,
     public_key: dict[str, Any],
     scopes: list[str],
-    claims: dict[str, str],
+    claims: dict[str, Any],
 ) -> str:
     rendered_scopes = ", ".join(
         json.dumps(scope, ensure_ascii=True, separators=(",", ":")) for scope in scopes
@@ -559,7 +724,7 @@ def prepare(
     operator_public = _read_json_object(root / "keys/operator-public.jwk.json")
     no_purpose_public = (
         _read_json_object(root / "keys/no-purpose-public.jwk.json")
-        if fixture_kind in ("business-establishments", "household")
+        if fixture_kind in ("business-establishments", "household", "inspection")
         else None
     )
     kid = mint_public.get("kid")
@@ -658,6 +823,58 @@ def prepare(
                 planner_no_purpose_public,
                 [ASSET_PLANNER_SCOPE],
                 {"registry_principal": "synthetic-site-planner"},
+            ),
+        )
+    elif fixture_kind == "facility":
+        south_operator_public = _read_json_object(root / "keys/south-operator-public.jwk.json")
+        _write_new(
+            root / f"mint/clients/{FACILITY_OPERATOR_CLIENT}.yaml",
+            _mint_client(
+                FACILITY_OPERATOR_CLIENT,
+                operator_public,
+                [FACILITY_OPERATOR_SCOPE],
+                {
+                    "administrative_boundaries": "north-district",
+                    "registry_principal": "synthetic-facility-operator",
+                    "registry_purpose": "facility-registry",
+                },
+            ),
+        )
+        _write_new(
+            root / f"mint/clients/{FACILITY_SOUTH_OPERATOR_CLIENT}.yaml",
+            _mint_client(
+                FACILITY_SOUTH_OPERATOR_CLIENT,
+                south_operator_public,
+                [FACILITY_OPERATOR_SCOPE],
+                {
+                    "administrative_boundaries": "south-district",
+                    "registry_principal": "synthetic-facility-operator",
+                    "registry_purpose": "facility-registry",
+                },
+            ),
+        )
+    elif fixture_kind == "inspection":
+        if no_purpose_public is None:
+            raise DemoError("inspection no-purpose key material is missing")
+        _write_new(
+            root / f"mint/clients/{INSPECTION_INSPECTOR_CLIENT}.yaml",
+            _mint_client(
+                INSPECTION_INSPECTOR_CLIENT,
+                operator_public,
+                [INSPECTION_INSPECTOR_SCOPE],
+                {
+                    "registry_principal": "synthetic-inspection-inspector",
+                    "registry_purpose": "facility-inspection",
+                },
+            ),
+        )
+        _write_new(
+            root / f"mint/clients/{INSPECTION_NO_PURPOSE_CLIENT}.yaml",
+            _mint_client(
+                INSPECTION_NO_PURPOSE_CLIENT,
+                no_purpose_public,
+                [INSPECTION_INSPECTOR_SCOPE],
+                {"registry_principal": "synthetic-inspection-inspector"},
             ),
         )
     else:
@@ -820,6 +1037,28 @@ bindings:
   - {journeyId: asset-and-site-caller-surfaces, stepId: planner-gets-site, credential: {type: bearer, tokenRef: secret:file/planner-token}}
   - {journeyId: asset-and-site-caller-surfaces, stepId: planner-lists-sites, credential: {type: bearer, tokenRef: secret:file/planner-token}}
   - {journeyId: asset-and-site-caller-surfaces, stepId: planner-without-purpose-is-concealed, credential: {type: bearer, tokenRef: secret:file/planner-no-purpose-token}}
+"""
+    elif fixture_kind == "facility":
+        credentials = """apiVersion: registry.registrystack.org/server-schema-test-credentials/v1
+kind: SchemaTestCredentials
+bindings:
+  - {journeyId: bounded-facility-and-batch-validation, stepId: create-north-district-facility, credential: {type: bearer, tokenRef: secret:file/operator-token}}
+  - {journeyId: bounded-facility-and-batch-validation, stepId: get-north-district-facility, credential: {type: bearer, tokenRef: secret:file/operator-token}}
+  - {journeyId: bounded-facility-and-batch-validation, stepId: rename-north-district-facility, credential: {type: bearer, tokenRef: secret:file/operator-token}}
+  - {journeyId: bounded-facility-and-batch-validation, stepId: list-north-district-facilities, credential: {type: bearer, tokenRef: secret:file/operator-token}}
+  - {journeyId: bounded-facility-and-batch-validation, stepId: south-district-claim-cannot-see-north-record, credential: {type: bearer, tokenRef: secret:file/south-operator-token}}
+  - {journeyId: bounded-facility-and-batch-validation, stepId: batch-refuses-out-of-bounds-installation, credential: {type: bearer, tokenRef: secret:file/operator-token}}
+"""
+    elif fixture_kind == "inspection":
+        credentials = """apiVersion: registry.registrystack.org/server-schema-test-credentials/v1
+kind: SchemaTestCredentials
+bindings:
+  - {journeyId: inspection-and-schema-validation, stepId: create-inspection, credential: {type: bearer, tokenRef: secret:file/operator-token}}
+  - {journeyId: inspection-and-schema-validation, stepId: close-inspection, credential: {type: bearer, tokenRef: secret:file/operator-token}}
+  - {journeyId: inspection-and-schema-validation, stepId: get-closed-inspection, credential: {type: bearer, tokenRef: secret:file/operator-token}}
+  - {journeyId: inspection-and-schema-validation, stepId: list-inspections, credential: {type: bearer, tokenRef: secret:file/operator-token}}
+  - {journeyId: inspection-and-schema-validation, stepId: refuse-undeclared-observation-metadata, credential: {type: bearer, tokenRef: secret:file/operator-token}}
+  - {journeyId: inspection-and-schema-validation, stepId: inspector-without-purpose-is-concealed, credential: {type: bearer, tokenRef: secret:file/no-purpose-token}}
 """
     else:
         raise AssertionError(fixture_kind)
@@ -1501,6 +1740,269 @@ def seed_asset_site(root: Path) -> None:
     print("Seeded 1 synthetic asset, site, placement, and create-only inspection.")
 
 
+def seed_facility(root: Path) -> None:
+    root = _require_root(root)
+    north_facility_id = _create(
+        root,
+        "/v1/records/facilities",
+        "facility-north",
+        {
+            "facilityCode": "FACILITY-SYNTH-001",
+            "displayName": "North District Water Treatment Facility",
+            "administrativeBoundary": "north-district",
+        },
+        "facility-operator",
+        "operator-token",
+    )
+    south_facility_id = _create(
+        root,
+        "/v1/records/facilities",
+        "facility-south",
+        {
+            "facilityCode": "FACILITY-SYNTH-002",
+            "displayName": "South District Materials Recovery Facility",
+            "administrativeBoundary": "south-district",
+        },
+        "facility-operator",
+        "south-operator-token",
+    )
+    old_permit_id = _create(
+        root,
+        "/v1/records/permits",
+        "facility-permit-old",
+        {
+            "permitNumber": "PERMIT-SYNTH-001",
+            "facility": north_facility_id,
+            "permitType": "air-emissions",
+            "validFrom": "2020-01-01",
+            "validTo": "2024-01-01",
+            "administrativeBoundary": "north-district",
+            "importSource": "demo-facility-register",
+            "sourceRecordId": "permit-synth-001-old",
+        },
+        "facility-operator",
+        "operator-token",
+    )
+    current_permit_id = _create(
+        root,
+        "/v1/records/permits",
+        "facility-permit-current",
+        {
+            "permitNumber": "PERMIT-SYNTH-001",
+            "facility": north_facility_id,
+            "permitType": "water-discharge",
+            "validFrom": "2024-01-01",
+            "administrativeBoundary": "north-district",
+            "importSource": "demo-facility-register",
+            "sourceRecordId": "permit-synth-001-current",
+        },
+        "facility-operator",
+        "operator-token",
+    )
+    installation_id = _create(
+        root,
+        "/v1/records/installations",
+        "facility-installation-primary",
+        {
+            "installationCode": "INSTALLATION-SYNTH-001",
+            "permit": current_permit_id,
+            "administrativeBoundary": "north-district",
+            "centroid": {"type": "Point", "coordinates": [30.5, -9.5]},
+            "areaValue": "1.2500",
+            "areaUnit": "hectare",
+            "importSource": "demo-facility-survey",
+            "sourceRecordId": "installation-synth-001",
+        },
+        "facility-operator",
+        "operator-token",
+    )
+    old_report_id = _create(
+        root,
+        "/v1/records/discharge-reports",
+        "facility-discharge-old",
+        {
+            "installation": installation_id,
+            "administrativeBoundary": "north-district",
+            "substanceCode": "nitrogen",
+            "periodStart": "2024-01-01",
+            "periodEnd": "2024-07-01",
+            "quantityValue": "12.500",
+            "quantityUnit": "kilogram",
+        },
+        "facility-operator",
+        "operator-token",
+    )
+    current_report_id = _create(
+        root,
+        "/v1/records/discharge-reports",
+        "facility-discharge-current",
+        {
+            "installation": installation_id,
+            "administrativeBoundary": "north-district",
+            "substanceCode": "nitrogen",
+            "periodStart": "2024-07-01",
+            "quantityValue": "8.250",
+            "quantityUnit": "kilogram",
+        },
+        "facility-operator",
+        "operator-token",
+    )
+    _write_json(
+        root / "seed-record-ids.json",
+        {
+            "facilities": {
+                "FACILITY-SYNTH-001": north_facility_id,
+                "FACILITY-SYNTH-002": south_facility_id,
+            },
+            "permits": {
+                "PERMIT-SYNTH-001-OLD": old_permit_id,
+                "PERMIT-SYNTH-001-CURRENT": current_permit_id,
+            },
+            "installations": {"INSTALLATION-SYNTH-001": installation_id},
+            "dischargeReports": {
+                "DISCHARGE-SYNTH-001-OLD": old_report_id,
+                "DISCHARGE-SYNTH-001-CURRENT": current_report_id,
+            },
+        },
+    )
+    for route, expected_count in (
+        ("/v1/records/facilities?accessProfile=facility-operator&$top=20", 1),
+        ("/v1/records/permits:current?accessProfile=facility-operator&$top=20", 1),
+        ("/v1/records/installations?accessProfile=facility-operator&$top=20", 1),
+        ("/v1/records/discharge-reports:current?accessProfile=facility-operator&$top=20", 1),
+    ):
+        response, _ = _request(root, "GET", route, "operator-token")
+        if len(response.get("items", [])) != expected_count:
+            raise DemoError(f"{route} did not return the expected north-district records")
+    concealed, _ = _request(
+        root,
+        "GET",
+        f"/v1/records/facilities/{urllib.parse.quote(south_facility_id, safe='')}?accessProfile=facility-operator",
+        "operator-token",
+        expected=404,
+    )
+    if concealed.get("code") != "resource.not_found":
+        raise DemoError("north facility operator did not receive the concealed resource response")
+    print("Seeded 2 synthetic facilities and north-district permit, installation, and discharge history.")
+
+
+def seed_inspection(root: Path) -> None:
+    root = _require_root(root)
+    authority_id = _create(
+        root,
+        "/v1/records/authorities",
+        "inspection-authority",
+        {
+            "authorityCode": "AUTHORITY-SYNTH-001",
+            "name": "Northern Environmental Authority",
+            "jurisdiction": "north-district",
+        },
+        "inspection-inspector",
+        "operator-token",
+    )
+    inspection_id = _create(
+        root,
+        "/v1/records/inspections",
+        "inspection-synth-001",
+        {
+            "inspectionCode": "INSPECTION-SYNTH-001",
+            "facilityCode": "FACILITY-SYNTH-001",
+            "openedOn": "2026-01-10",
+            "closedOn": "2026-01-20",
+            "inspectionAuthority": "synthetic-case-management",
+        },
+        "inspection-inspector",
+        "operator-token",
+    )
+    observation_id = _create(
+        root,
+        "/v1/records/inspection-observations",
+        "inspection-observation-synth-001",
+        {
+            "inspection": inspection_id,
+            "observedAt": "2026-01-11T09:00:00Z",
+            "inspectionDomain": "air",
+            "findingGrade": 3,
+            "observationSchemaMetadata": {
+                "schemaVersion": "1",
+                "vocabularyRelease": "2026-01",
+                "scoringScale": "zero-to-four",
+            },
+            "observationNote": "Stack height records matched the submitted operating log.",
+        },
+        "inspection-inspector",
+        "operator-token",
+    )
+    original_permit_id = _create(
+        root,
+        "/v1/records/permits",
+        "inspection-permit-original",
+        {
+            "permitCode": "INSPECTION-PERMIT-SYNTH-001",
+            "inspection": inspection_id,
+            "permitStatus": "active",
+            "validFrom": "2026-01-01",
+            "validTo": "2026-07-01",
+            "issuingAuthority": authority_id,
+            "validitySource": "review-board",
+        },
+        "inspection-inspector",
+        "operator-token",
+    )
+    correction_permit_id = _create(
+        root,
+        "/v1/records/permits",
+        "inspection-permit-correction",
+        {
+            "permitCode": "INSPECTION-PERMIT-SYNTH-002",
+            "inspection": inspection_id,
+            "permitStatus": "active",
+            "validFrom": "2026-01-01",
+            "validTo": "2026-07-01",
+            "correctedPermit": original_permit_id,
+            "correctionReason": "Reviewed correction after authority reconciliation.",
+            "issuingAuthority": authority_id,
+            "validitySource": "review-board",
+            "provenanceNote": "Signed review packet held by the authority.",
+        },
+        "inspection-inspector",
+        "operator-token",
+    )
+    _write_json(
+        root / "seed-record-ids.json",
+        {
+            "authorities": {"AUTHORITY-SYNTH-001": authority_id},
+            "inspections": {"INSPECTION-SYNTH-001": inspection_id},
+            "inspectionObservations": {
+                "OBSERVATION-SYNTH-001": observation_id,
+            },
+            "permits": {
+                "INSPECTION-PERMIT-SYNTH-001": original_permit_id,
+                "INSPECTION-PERMIT-SYNTH-002": correction_permit_id,
+            },
+        },
+    )
+    for route, expected_count in (
+        ("/v1/records/authorities?accessProfile=inspection-inspector&$top=20", 1),
+        ("/v1/records/inspections?accessProfile=inspection-inspector&$top=20", 1),
+        ("/v1/records/inspection-observations?accessProfile=inspection-inspector&$top=20", 1),
+        ("/v1/records/permits?accessProfile=inspection-inspector&$top=20", 2),
+    ):
+        response, _ = _request(root, "GET", route, "operator-token")
+        if len(response.get("items", [])) != expected_count:
+            raise DemoError(f"{route} did not return the expected seeded records")
+    concealed, _ = _request(
+        root,
+        "GET",
+        f"/v1/records/inspections/{urllib.parse.quote(inspection_id, safe='')}?accessProfile=inspection-inspector",
+        "no-purpose-token",
+        expected=404,
+    )
+    if concealed.get("code") != "resource.not_found":
+        raise DemoError("inspection token without purpose did not receive the concealed resource response")
+    print("Seeded 1 inspection authority, inspection, structured observation, and 2 create-only permits.")
+
+
 def _bound_household(root: Path) -> tuple[str, str]:
     seed_ids = _read_json_object(root / "seed-record-ids.json")
     households = seed_ids.get("households")
@@ -1802,6 +2304,94 @@ def query_asset_site(root: Path, suite: str = "all") -> None:
         _print_query("Site planner without purpose is concealed", concealed)
 
 
+def query_facility(root: Path, suite: str = "all") -> None:
+    root = _require_root(root)
+    if suite not in ("all", "operator"):
+        raise DemoError("query suite must be all or operator")
+    seed_ids = _read_json_object(root / "seed-record-ids.json")
+    facility_id = seed_ids.get("facilities", {}).get("FACILITY-SYNTH-001")
+    if not isinstance(facility_id, str):
+        raise DemoError("facility seed record identifiers are missing")
+    for label, path in (
+        (
+            "North-district facilities",
+            "/v1/records/facilities?accessProfile=facility-operator&$top=20",
+        ),
+        (
+            "Current north-district permits",
+            "/v1/records/permits:current?accessProfile=facility-operator&$top=20",
+        ),
+        (
+            "North-district installations with point and decimal fields",
+            "/v1/records/installations?accessProfile=facility-operator&$top=20",
+        ),
+        (
+            "Current discharge reports",
+            "/v1/records/discharge-reports:current?accessProfile=facility-operator&$top=20",
+        ),
+    ):
+        response, _ = _request(root, "GET", path, "operator-token")
+        if len(response.get("items", [])) != 1:
+            raise DemoError(f"{label} did not return one seeded north-district record")
+        _print_query(label, response)
+    response, _ = _request(
+        root,
+        "GET",
+        f"/v1/records/facilities/{urllib.parse.quote(facility_id, safe='')}?accessProfile=facility-operator",
+        "operator-token",
+    )
+    data = response.get("data")
+    if not isinstance(data, dict) or data.get("displayName") != "North District Water Treatment Facility":
+        raise DemoError("facility get did not return the seeded north-district facility")
+    _print_query("North-district facility by UUID", response)
+
+
+def query_inspection(root: Path, suite: str = "all") -> None:
+    root = _require_root(root)
+    if suite not in ("all", "inspector"):
+        raise DemoError("query suite must be all or inspector")
+    seed_ids = _read_json_object(root / "seed-record-ids.json")
+    inspection_id = seed_ids.get("inspections", {}).get("INSPECTION-SYNTH-001")
+    if not isinstance(inspection_id, str):
+        raise DemoError("inspection seed record identifiers are missing")
+    for label, path, expected_count in (
+        (
+            "Inspection record",
+            "/v1/records/inspections?accessProfile=inspection-inspector&$top=20",
+            1,
+        ),
+        (
+            "Structured inspection observation",
+            "/v1/records/inspection-observations?accessProfile=inspection-inspector&$top=20",
+            1,
+        ),
+        (
+            "Create-only permit correction history",
+            "/v1/records/permits?accessProfile=inspection-inspector&$top=20",
+            2,
+        ),
+        (
+            "Imported public authority",
+            "/v1/records/authorities?accessProfile=inspection-inspector&$top=20",
+            1,
+        ),
+    ):
+        response, _ = _request(root, "GET", path, "operator-token")
+        if len(response.get("items", [])) != expected_count:
+            raise DemoError(f"{label} did not return the expected seeded records")
+        _print_query(label, response)
+    response, _ = _request(
+        root,
+        "GET",
+        f"/v1/records/inspections/{urllib.parse.quote(inspection_id, safe='')}?accessProfile=inspection-inspector",
+        "operator-token",
+    )
+    data = response.get("data")
+    if not isinstance(data, dict) or data.get("inspectionCode") != "INSPECTION-SYNTH-001":
+        raise DemoError("inspection get did not return the seeded inspection")
+    _print_query("Inspection by UUID", response)
+
+
 def _token_expires_at(token: str) -> str:
     parts = token.split(".")
     if len(parts) != 3:
@@ -1870,7 +2460,7 @@ def wait_http(url: str, timeout_seconds: float) -> None:
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser()
     commands = result.add_subparsers(dest="command", required=True)
-    fixture_choices = ("business-establishments", "household", "asset-site")
+    fixture_choices = ("business-establishments", "household", "asset-site", "facility", "inspection")
     ports_parser = commands.add_parser("ports")
     ports_parser.add_argument("--count", type=int, choices=(3, 4), default=3)
     prepare_parser = commands.add_parser("prepare")
@@ -1968,6 +2558,10 @@ def main() -> int:
                 seed(args.root)
             elif args.fixture_kind == "asset-site":
                 seed_asset_site(args.root)
+            elif args.fixture_kind == "facility":
+                seed_facility(args.root)
+            elif args.fixture_kind == "inspection":
+                seed_inspection(args.root)
             else:
                 raise AssertionError(args.fixture_kind)
         elif args.command == "configure-viewer":
@@ -1979,6 +2573,10 @@ def main() -> int:
                 query(args.root, args.suite)
             elif args.fixture_kind == "asset-site":
                 query_asset_site(args.root, args.suite)
+            elif args.fixture_kind == "facility":
+                query_facility(args.root, args.suite)
+            elif args.fixture_kind == "inspection":
+                query_inspection(args.root, args.suite)
             else:
                 raise AssertionError(args.fixture_kind)
         elif args.command == "handoff":

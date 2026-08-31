@@ -5,15 +5,16 @@ This local demo starts four real components:
 - PostgreSQL 17 with TLS, separate migration and runtime roles, and disposable
   databases;
 - Registry Mint as the OIDC token issuer;
-- Registry Server configured from the business-establishments project;
+- Registry Server configured from one acceptance project;
 - `registry-serverctl` for schema testing, packaging, activation, and
   verification.
 
-It then asks Mint for short-lived operator and negative-test tokens and creates
-eight synthetic establishments, three businesses, and eight effective-dated operator assignments
-through Registry Server's ordinary authenticated REST API. Once the first
-business has a server UUID, the demo creates a separate viewer key and Mint
-client whose verified claims bind it to that UUID and business code.
+It defaults to the business-establishments project. The business path asks Mint
+for short-lived operator and negative-test tokens and creates eight synthetic
+establishments, three businesses, and eight effective-dated operator
+assignments through Registry Server's ordinary authenticated REST API. Once the
+first business has a server UUID, the demo creates a separate viewer key and
+Mint client whose verified claims bind it to that UUID and business code.
 
 ## Run it
 
@@ -55,6 +56,22 @@ without waiting:
 
 ```bash
 products/registry-server/demo/run.sh --smoke
+```
+
+Choose another maintained fixture with `--fixture`:
+
+```bash
+products/registry-server/demo/run.sh --fixture household
+products/registry-server/demo/run.sh --fixture asset-site
+products/registry-server/demo/run.sh --fixture facility
+products/registry-server/demo/run.sh --fixture inspection
+```
+
+The corresponding query helper uses the same fixture choice:
+
+```bash
+products/registry-server/demo/query.sh --fixture facility operator
+products/registry-server/demo/query.sh --fixture inspection inspector
 ```
 
 Use `--webhook` to add a local loopback receiver and exercise the configured
@@ -107,6 +124,18 @@ All names and records are synthetic. Summary counts use currently effective
 operator assignments; a suspended site still belongs to its operating business.
 The `operating-created-v1` webhook selects only establishments created with
 `operating-status: operating`, so the suspended depot produces no event.
+
+Facility mode uses the `facility-operator` persona with purpose
+`facility-registry` and an `administrative_boundaries` claim containing
+`north-district`. It seeds "North District Water Treatment Facility" and a
+separate south-district facility to prove row-boundary concealment, then creates
+a current water-discharge permit, one installation with CRS84 point and decimal
+area fields, and dated discharge reports.
+
+Inspection mode uses the `inspection-inspector` persona with purpose
+`facility-inspection`. It seeds inspection `INSPECTION-SYNTH-001`, a structured
+air-domain observation, imported authority `AUTHORITY-SYNTH-001`, and two
+create-only permit records where the second corrects the first.
 
 The data is a small curated relational fixture rather than random names. This
 makes the business assignments and expected query results stable and easy to
