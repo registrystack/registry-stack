@@ -109,9 +109,9 @@ mod tests {
     const ACCEPTANCE_PROJECTS: &[&str] = &[
         "asset-site-placement",
         "business",
-        "disability",
-        "farmer",
-        "publicschema-household",
+        "inspection",
+        "facility",
+        "business-establishments",
     ];
 
     fn schema_document() -> String {

@@ -30,7 +30,7 @@ class RegistryServerProductCatalogTests(unittest.TestCase):
         decisions = (VALIDATOR.PRODUCT_ROOT / "DECISIONS.md").read_text(encoding="utf-8")
         assurance = (
             "Generated RLS policies defend against application mistakes and pooled-context\n"
-            "  leakage. They do not constrain a party holding the runtime database\n"
+            "  leakage. They do not constrain a party permit the runtime database\n"
             "  credential, which can set the same custom transaction context; credential\n"
             "  posture and rotation remain operator controls."
         )
@@ -207,16 +207,16 @@ class RegistryServerProductCatalogTests(unittest.TestCase):
     def test_postgres_data_journeys_follow_batch_in_the_owned_gate(self) -> None:
         commands = list(VALIDATOR.POSTGRES_TEST_COMMANDS)
         batch = "cargo test --locked -p registry-server --features postgres-test --test postgres_batch"
-        farmer = (
+        facility = (
             "cargo test --locked -p registry-server --features postgres-test "
-            "--test postgres_data_farmer"
+            "--test postgres_data_facility"
         )
         export = (
             "cargo test --locked -p registry-server --features postgres-test "
             "--test postgres_data_export"
         )
-        self.assertEqual(commands.index(batch) + 1, commands.index(farmer))
-        self.assertEqual(commands.index(farmer) + 1, commands.index(export))
+        self.assertEqual(commands.index(batch) + 1, commands.index(facility))
+        self.assertEqual(commands.index(facility) + 1, commands.index(export))
 
     def test_postgres_tls_entrypoint_refuses_to_silently_skip_without_container_id(self) -> None:
         script = VALIDATOR.POSTGRES_TLS_ENTRYPOINT
@@ -447,13 +447,13 @@ class RegistryServerProductCatalogTests(unittest.TestCase):
             errors = VALIDATOR.validate_all()
         self.assertTrue(any("exit criterion does not resolve" in error for error in errors), errors)
 
-    def test_asset_fixture_cannot_gain_a_household_entity(self) -> None:
+    def test_asset_fixture_cannot_gain_a_business_entity(self) -> None:
         original = VALIDATOR.load_yaml
 
         def load_with_hardcoding(path: Path):
             value = copy.deepcopy(original(path))
             if path.name == "registry.yaml" and path.parent.name == "asset-site-placement":
-                value["entities"].append({"id": "household", "route": "households"})
+                value["entities"].append({"id": "business", "route": "businesses"})
             return value
 
         errors: list[str] = []

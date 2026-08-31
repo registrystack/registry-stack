@@ -11,7 +11,7 @@ locale: en
 standards_referenced: []
 ---
 
-Use these patterns when designing a farmer, business, or asset registry with Registry Server.
+Use these patterns when designing business, facility, or public-organisation registries with Registry Server.
 They describe common record structures and the choices you need to make before configuring them.
 The YAML examples use Server's current configuration syntax, but are fragments, not installable
 modules or complete projects. Merge their list entries into your own configuration.
@@ -32,8 +32,8 @@ selecting its name does not authenticate a caller. Creation and correction need 
 
 You define entities, fields, references, constraints, and permissions in `registry.yaml` or local
 modules. A pattern does not add a built-in domain entity to the server.
-For example, an asset placement can be a record with references to an asset and a site, plus dates.
-The same configuration mechanism can describe a business officer's appointment.
+For example, an operator assignment links an establishment to the business operating it, with dates.
+The same configuration mechanism can describe an authority's responsibility for a jurisdiction.
 
 {/* Evidence: crates/registry-server/src/contract.rs, RegistryProject and RegistryModule;
     products/registry-server/acceptance/asset-site-placement/registry.yaml;
@@ -146,19 +146,19 @@ does not automatically mark `0017` inactive; an application needs an explicit ru
 ## Relationships with dates
 
 Use a relationship entity when a link has information of its own.
-An `asset-placement` can reference one asset and one site and carry start and end dates.
-A `holding-operator` can reference one holding and one operator and carry a role.
+An `operator-assignment` can reference one establishment and one business and carry start and end dates.
+An authority's responsibility can similarly link a public organisation, jurisdiction, and function.
 Use references with declared target entities rather than an untyped pair of text IDs.
 
 {/* Evidence: crates/registry-server/src/contract.rs, FieldTypeSource;
-    products/registry-server/acceptance/asset-site-placement/registry.yaml. */}
+    products/registry-server/acceptance/business-establishments/modules/business-establishments-core/module.yaml. */}
 
 Dates and exclusivity answer different questions: when did a link apply, and which other links
 were allowed at the same time? These are distinct possible policies:
 
-- An asset has at most one physical placement at a time.
-- A holding has several operators at the same time.
-- A holding has several operators, but at most one designated primary operator at a time.
+- An establishment has one operating business at a time.
+- A facility has several operators at the same time.
+- A facility has several operators, but one designated primary operator at a time.
 
 Choose the policy before configuring temporal constraints. In Server's temporal configuration,
 `scopeFields` names the tuple within which intervals cannot overlap, and the temporal declaration
@@ -170,39 +170,40 @@ exclusivity.
     crates/registry-server/src/compiler.rs, validate_constraints();
     crates/registry-server/src/generated_ddl.rs. */}
 
-Use "where was this asset on the chosen date?" and "who operated this holding during the season?"
+Use "which business operated this establishment on the chosen date?" and
+"which authority had responsibility for this jurisdiction?"
 to review the model. Test adjacent periods, open-ended periods, and concurrency that your policy
 allows. Related-record access needs its own review; permission to read one endpoint is not a
 reason to expose everything linked to it.
 
-A move to another site is a real change. Discovering that a placement was entered against the wrong
-site is a correction. Preserve that distinction in the record history and test the correction for
+A transfer to another operating business is a real change. Discovering that an assignment named
+the wrong business is a correction. Preserve that distinction in the record history and test the correction for
 the original period, not only a successor beginning later. When an upgrade adds an optional role,
 keep earlier records readable without assigning them a role nobody recorded.
 
-Keep effective time separate from recording time. A placement that began on June 1 but was entered
-on June 10 has two relevant dates. Decide whether a query asks where the asset was located or what
+Keep effective time separate from recording time. An assignment that began on June 1 but was entered
+on June 10 has two relevant dates. Decide whether a query asks which business operated the establishment or what
 the registry had recorded at the time; those questions need different historical information.
 
-### Example: one asset placement at a time
+### Example: one operating business at a time
 
-This model assumes `asset-item` and `asset-site` entities. It deliberately disallows overlapping
-placements for the same asset, while allowing different assets at the same site.
+This model assumes `establishment` and `business` entities. It deliberately disallows overlapping
+operator assignments for one establishment, while allowing one business to operate several establishments.
 
 ```yaml
 entities:
-  - id: asset-placement
-    route: placements
+  - id: operator-assignment
+    route: operator-assignments
     mutationMode: mutable
     fields:
-      - id: asset
+      - id: establishment
         type: reference
-        target: asset-item
+        target: establishment
         required: true
         classification: internal
-      - id: site
+      - id: business
         type: reference
-        target: asset-site
+        target: business
         required: true
         classification: internal
       - id: valid-from
@@ -216,19 +217,19 @@ entities:
     temporal:
       startField: valid-from
       endField: valid-to
-      scopeFields: [asset]
+      scopeFields: [establishment]
     constraints:
       - kind: temporal-non-overlap
-        scopeFields: [asset]
+        scopeFields: [establishment]
         startField: valid-from
         endField: valid-to
 ```
 
-Where was this asset on June 15? The `:as-of` route takes a timestamp even though this model
+Who operated this establishment on June 15? The `:as-of` route takes a timestamp even though this model
 stores calendar dates. It selects effective periods from the records, not a past database snapshot.
 
 ```http
-GET /v1/records/placements:as-of?accessProfile=model-reader&asOf=2026-06-15T00:00:00Z&$filter=asset%20eq%20%27bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb%27
+GET /v1/records/operator-assignments:as-of?accessProfile=model-reader&asOf=2026-06-15T00:00:00Z&$filter=establishment%20eq%20%27bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb%27
 ```
 
 Illustrative response:
@@ -239,8 +240,8 @@ Illustrative response:
     "id": "22222222-2222-4222-8222-222222222222",
     "revision": 1,
     "data": {
-      "asset": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-      "site": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      "establishment": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "business": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
       "validFrom": "2026-06-01",
       "validTo": "2026-07-01"
     }
@@ -249,9 +250,9 @@ Illustrative response:
 }
 ```
 
-**Refusal case:** another placement for that asset starting June 20 conflicts with this period.
-A successor starting July 1 is allowed because the end date is exclusive. If the site was entered
-incorrectly, correct the original placement rather than inventing a move on today's date.
+**Refusal case:** another operator assignment for that establishment starting June 20 conflicts with this period.
+A successor starting July 1 is allowed because the end date is exclusive. If the operating business was entered
+incorrectly, correct the original assignment rather than inventing a transfer on today's date.
 A permitted patch needs the current record's `If-Match` value and an `Idempotency-Key`.
 
 {/* Evidence: crates/registry-server/src/query.rs, QueryOptions;
@@ -262,11 +263,11 @@ A permitted patch needs the current record's `If-Match` value and an `Idempotenc
 ## Declarations and observations
 
 A declaration records what someone reported. An observation records what was observed and how.
-For a farmer registry, a declaration might report `1200` kilograms of harvested crop for a season;
-a weighbridge observation might record a separate measured quantity.
+For an environmental facility, a declaration might report `1200` kilograms of nitrogen discharged
+during June; an inspection can record an independently measured quantity and method.
 Neither record needs to overwrite the other.
 
-Consider fields for the holding or plot, reporter or observer, reporting period, observation time,
+Consider fields for the facility or installation, reporter or observer, reporting period, observation time,
 quantity, unit, method or form version, and a correction reference.
 Keep the person who supplied information distinct from the authenticated account that submitted it.
 An importer may submit a declaration on someone else's behalf.
@@ -287,33 +288,33 @@ one is applicable and why.
     crates/registry-server/tests/postgres_pilot_acceptance.rs, assert_create_only_refuses_patch_and_tombstone();
     products/registry-server/README.md. */}
 
-Review queries for both "what was reported for this season?" and "what information was accepted?"
+Review queries for both "what was reported for this reporting period?" and "what information was accepted?"
 Test corrections for the same reporting period, missing units, and a submitter attempting an
 acceptance action without permission. When a form or scoring method changes, retain its version
 on earlier records instead of applying the later interpretation to every historical value.
 
-### Example: a crop declaration and its correction
+### Example: a discharge declaration and its correction
 
-This model assumes a `holding` entity. The unit vocabulary deliberately accepts only kilograms;
+This model assumes a `facility` entity. The unit vocabulary deliberately accepts only kilograms;
 the decimal quantity is a JSON string, so `"1200.00"` retains its decimal representation.
 
 ```yaml
 entities:
-  - id: crop-declaration
-    route: crop-declarations
+  - id: discharge-declaration
+    route: discharge-declarations
     mutationMode: create_only
     fields:
-      - id: holding
+      - id: facility
         type: reference
-        target: holding
+        target: facility
         required: true
         classification: internal
-      - id: season
+      - id: reporting-period
         type: string
         maxLength: 32
         required: true
         classification: internal
-      - id: crop
+      - id: substance
         type: string
         maxLength: 64
         required: true
@@ -331,24 +332,24 @@ entities:
         classification: internal
       - id: unit
         type: vocabulary-code
-        vocabulary: crop-mass-unit
+        vocabulary: discharge-mass-unit
         required: true
         classification: internal
       - id: correction-of
         type: reference
-        target: crop-declaration
+        target: discharge-declaration
         required: false
         classification: internal
 vocabularies:
-  - id: crop-mass-unit
+  - id: discharge-mass-unit
     values: [kg]
 ```
 
-What was reported for the 2026 main season? This query returns declarations, including any
+What was reported for the June 2026 reporting period? This query returns declarations, including any
 corrections; it does not choose an accepted value or calculate a corrected total.
 
 ```http
-GET /v1/records/crop-declarations?accessProfile=model-reader&$filter=season%20eq%20%272026-main%27
+GET /v1/records/discharge-declarations?accessProfile=model-reader&$filter=reportingPeriod%20eq%20%272026-06%27
 ```
 
 Illustrative response before a correction:
@@ -359,10 +360,10 @@ Illustrative response before a correction:
     "id": "33333333-3333-4333-8333-333333333333",
     "revision": 1,
     "data": {
-      "holding": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
-      "season": "2026-main",
-      "crop": "maize",
-      "reporter": "holding-operator-17",
+      "facility": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      "reportingPeriod": "2026-06",
+      "substance": "nitrogen",
+      "reporter": "facility-operator-17",
       "quantity": "1200.00",
       "unit": "kg"
     }
@@ -371,7 +372,7 @@ Illustrative response before a correction:
 }
 ```
 
-**Correction case:** create another complete declaration for the same holding, season, and crop.
+**Correction case:** create another complete declaration for the same facility, reporting period, and substance.
 Its `data` includes these changed fields; this fragment alone is not a complete create request:
 
 ```json
@@ -382,7 +383,7 @@ Its `data` includes these changed fields; this fragment alone is not a complete 
 ```
 
 Both records remain. The application must decide which declaration applies, prevent invalid
-correction chains, and keep a correction from being counted as another harvest.
+correction chains, and keep a correction from being counted as another discharge.
 Omitting `unit`, or sending `"tonnes"` without changing the vocabulary, is invalid.
 
 {/* Evidence: crates/registry-server/src/contract.rs, FieldTypeSource;
@@ -392,8 +393,8 @@ Omitting `unit`, or sending `"tonnes"` without changing the vocabulary, is inval
 ## Source provenance
 
 Provenance records where a contribution came from.
-For an asset directory, source system `inventory-a` and record key `0042` identify a source record.
-They do not establish that it is the same asset as record `0042` in another system.
+For a facility registry, source system `inventory-a` and record key `0042` identify a source record.
+They do not establish that it is the same facility as record `0042` in another system.
 Matching those records is a separate decision.
 
 Keep the source namespace, source record key and version when available, observation time, and the
@@ -401,11 +402,11 @@ mapping version used to produce the local record. Record source observation time
 local acceptance time. If one local record combines several sources, keep separate contributions
 so their origins remain distinguishable.
 
-The farmer and business examples contain source-system and source-record fields with composite
+The facility and business examples contain source-system and source-record fields with composite
 uniqueness. Those constraints prevent duplicate tuples; they do not reconcile identities or
 distinguish source revisions unless your model includes that distinction.
 
-{/* Evidence: products/registry-server/acceptance/farmer/registry.yaml;
+{/* Evidence: products/registry-server/acceptance/facility/registry.yaml;
     products/registry-server/acceptance/business/registry.yaml;
     crates/registry-server/src/contract.rs, ConstraintSource. */}
 
@@ -417,18 +418,18 @@ reprocessed contributions without relabelling the old ones as if they used the l
 
 ### Example: a versioned source contribution
 
-This model assumes an `asset-item` entity and a source that supplies a version for each record.
+This model assumes a `facility` entity and a source that supplies a version for each record.
 The unique key includes the mapping version so reprocessing can preserve an earlier contribution.
 
 ```yaml
 entities:
-  - id: asset-source-contribution
-    route: asset-sources
+  - id: facility-source-contribution
+    route: facility-sources
     mutationMode: create_only
     fields:
-      - id: asset
+      - id: facility
         type: reference
-        target: asset-item
+        target: facility
         required: true
         classification: internal
       - id: source-system
@@ -463,7 +464,7 @@ entities:
 Which source revisions and mappings contributed to source record `inventory-a / 0042`?
 
 ```http
-GET /v1/records/asset-sources?accessProfile=model-reader&$filter=sourceSystem%20eq%20%27inventory-a%27%20and%20sourceRecordId%20eq%20%270042%27
+GET /v1/records/facility-sources?accessProfile=model-reader&$filter=sourceSystem%20eq%20%27inventory-a%27%20and%20sourceRecordId%20eq%20%270042%27
 ```
 
 Illustrative response:
@@ -474,7 +475,7 @@ Illustrative response:
     "id": "44444444-4444-4444-8444-444444444444",
     "revision": 1,
     "data": {
-      "asset": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "facility": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
       "sourceSystem": "inventory-a",
       "sourceRecordId": "0042",
       "sourceVersion": "7",
@@ -487,14 +488,14 @@ Illustrative response:
 
 **Refusal case:** a separate create with the same four key values conflicts with this contribution.
 Source version `8`, or reprocessing version `7` with `inventory-map-3`, produces a different key
-and can be recorded separately. Neither entry automatically replaces the asset's current values.
+and can be recorded separately. Neither entry automatically replaces the facility's current values.
 This fragment tracks record-level origins; tracing individual values also needs retained source
 content or field-level contributions.
 
 ## Document references
 
 A document reference describes supporting material stored elsewhere.
-An asset inspection can reference a PDF using an object key and object version, media type
+A facility inspection can reference a PDF using an object key and object version, media type
 `application/pdf`, digest algorithm and value, and an optional title.
 Keep the relationship to the inspection explicit.
 File storage, retrieval permissions, and document authenticity checks remain separate responsibilities.
@@ -512,7 +513,7 @@ object references or digests.
 
 ### Example: an inspection's supporting PDF
 
-This model assumes an `inspection-event` entity. The storage service, not these string fields,
+This model assumes an `inspection` entity. The storage service, not these string fields,
 must guarantee that an object version resolves to immutable bytes.
 
 ```yaml
@@ -523,7 +524,7 @@ entities:
     fields:
       - id: inspection
         type: reference
-        target: inspection-event
+        target: inspection
         required: true
         classification: internal
       - id: object-key
@@ -585,6 +586,25 @@ its calculated digest, and `replaces: "55555555-5555-4555-8555-555555555555"`.
 Keep the original object version available for historical checks. This read returns metadata,
 not PDF bytes or a download authorization; retrieval needs its own permission check.
 
+## Public authorities and responsibilities
+
+Give a public authority its own record and stable identifier. A business registration or permit can
+reference that authority without copying its name into every record. Keep departments distinct when
+you need to record their parent organisation, jurisdiction, or responsibility for a service.
+
+Record a transfer of responsibility with dates. Renaming an authority does not necessarily create a
+new organisation; a merger may. Decide those identity rules explicitly and retain the source decision
+or document reference. Several authorities may have different functions in the same jurisdiction,
+so a jurisdiction alone is not a suitable non-overlap scope for every responsibility.
+
+These are configuration choices using the same typed references and dates as the operator-assignment
+example. Registry Server does not decide organisational succession or run permit approval workflows.
+
+{/* Evidence: crates/registry-server/src/contract.rs, FieldTypeSource and TemporalSource;
+    products/registry-server/acceptance/inspection/registry.yaml;
+    products/registry-server/acceptance/inspection/modules/inspection-core/module.yaml;
+    products/registry-server/README.md. */}
+
 ## Preserve meaning when values are incomplete
 
 - Missing, unknown, not applicable, and withheld values have different meanings. Use explicit
@@ -592,12 +612,12 @@ not PDF bytes or a download authorization; retrieval needs its own permission ch
 - Preserve identifiers as supplied. Document any scheme-specific normalization, such as removing
   permitted separators. Normalization is not fuzzy matching or proof of identity.
 - Allow business and operator names in multiple languages or scripts where needed. Keep the
-  original text and avoid requiring a family-name structure for every operator.
+  registered name separate from abbreviations and translated display names.
 - Preserve approximate dates as approximate. A known year is not a known January 1. Define a
   separate precision-aware representation when the information is less precise than a full date.
 
 These choices affect queries. "No declaration received" differs from "declared quantity is zero";
-an approximate start year cannot establish placement on a particular day.
+an approximate start year cannot establish an operator assignment on a particular day.
 Server's ordinary `date` field represents a full calendar date.
 
 {/* Evidence: crates/registry-server/src/artifacts.rs;
@@ -625,7 +645,8 @@ A stored classification label is not a substitute for configured field permissio
     crates/registry-server/src/access.rs, explain_access();
     crates/registry-server/tests/access_configuration.rs. */}
 
-PublicSchema can supply optional concept and vocabulary mappings through Manifest metadata.
+Manifest metadata can carry optional concept and vocabulary mappings. The business-establishments
+example uses local example concept URIs; these are not claims of compliance with an external model.
 Keep a record of the semantic source version and mapping revision you adopt.
 Report unsupported or ambiguous imported definitions rather than silently dropping them.
 A semantic mapping does not establish compliance with an exchange protocol.
@@ -648,7 +669,7 @@ the example filters do not restrict authorization. Add it only if one reader sho
 rows and fields. Real deployments may need separate profiles and row restrictions. It requires
 a verified `registry_principal` claim, the scope `registry:examples:read`, and the purpose
 `registry-operations`, configured through your trusted authentication setup.
-It grants no access to the target business, holding, asset, site, or inspection records themselves.
+It grants no access to the target business, establishment, facility, or inspection records themselves.
 
 ```yaml
 accessProfiles:
@@ -665,29 +686,29 @@ accessProfiles:
           - value
           - replaces
         filterableFields: [namespace, value]
-      - entity: asset-placement
+      - entity: operator-assignment
         operations: [list]
         readableFields:
-          - asset
-          - site
+          - establishment
+          - business
           - valid-from
           - valid-to
-        filterableFields: [asset]
-      - entity: crop-declaration
+        filterableFields: [establishment]
+      - entity: discharge-declaration
         operations: [list]
         readableFields:
-          - holding
-          - season
-          - crop
+          - facility
+          - reporting-period
+          - substance
           - reporter
           - quantity
           - unit
           - correction-of
-        filterableFields: [season]
-      - entity: asset-source-contribution
+        filterableFields: [reporting-period]
+      - entity: facility-source-contribution
         operations: [list]
         readableFields:
-          - asset
+          - facility
           - source-system
           - source-record-id
           - source-version

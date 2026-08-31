@@ -1005,9 +1005,9 @@ fn manifest_projection_compiles_to_deterministic_valid_manifest_core() {
 fn all_acceptance_fixtures_compile_manifest_projection_under_production() {
     for domain in [
         "asset-site-placement",
-        "publicschema-household",
-        "farmer",
-        "disability",
+        "business-establishments",
+        "facility",
+        "inspection",
         "business",
     ] {
         let mut project = acceptance_project(domain);
@@ -1091,31 +1091,31 @@ fn all_acceptance_fixtures_compile_manifest_projection_under_production() {
         let dcat = parse_json_strict(&dcat.bytes)
             .unwrap_or_else(|error| panic!("{domain} DCAT projection parses: {error}"));
 
-        if domain == "publicschema-household" {
+        if domain == "business-establishments" {
             let dataset = manifest
-                .dataset("household-registry")
+                .dataset("business-registry")
                 .expect("configured dataset id is preserved");
             assert_eq!(
-                dataset.entities["person"].concept_uri.as_deref(),
-                Some("https://publicschema.org/Person")
+                dataset.entities["establishment"].concept_uri.as_deref(),
+                Some("https://business-establishments.example.gov/model/establishment")
             );
             assert_eq!(
-                dataset.entities["group-membership"]
+                dataset.entities["operator-assignment"]
                     .relationships
                     .iter()
-                    .find(|relationship| relationship.name == "household")
-                    .expect("household relationship is projected")
+                    .find(|relationship| relationship.name == "business")
+                    .expect("operator relationship is projected")
                     .concept_uri
                     .as_deref(),
-                Some("https://publicschema.org/group")
+                Some("https://business-establishments.example.gov/model/business")
             );
             assert_eq!(manifest.data_services().count(), 1);
             assert!(manifest
                 .codelists()
-                .any(|codelist| codelist.id == "household-relationship"));
+                .any(|codelist| codelist.id == "establishment-role"));
             assert_eq!(
                 dcat["dcat:service"][0]["dcat:endpointURL"],
-                "https://publicschema-household.example.gov/v1"
+                "https://business-establishments.example.gov/v1"
             );
         }
     }

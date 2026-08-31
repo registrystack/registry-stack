@@ -27,7 +27,7 @@ cargo test --locked -p registry-server --features postgres-test --test postgres_
 cargo test --locked -p registry-server --features postgres-test --test postgres_webhook_outbox
 cargo test --locked -p registry-server --features postgres-test --test postgres_webhook_delivery
 cargo test --locked -p registry-server --features postgres-test --test postgres_batch
-cargo test --locked -p registry-server --features postgres-test --test postgres_data_farmer
+cargo test --locked -p registry-server --features postgres-test --test postgres_data_facility
 cargo test --locked -p registry-server --features postgres-test --test postgres_data_export
 cargo test --locked -p registry-server --features postgres-test --test postgres_pilot_acceptance
 cargo test --locked -p registry-server --features postgres-test --test postgres_tombstone_revision

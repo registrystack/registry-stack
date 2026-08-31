@@ -31,9 +31,9 @@ ACCEPTANCE_JOURNEY_IDS = tuple(f"RS-J{index:02d}" for index in range(1, 18))
 ACCEPTANCE_FIXTURES = {
     "RS-J01": ("asset-site-placement", "acceptance/asset-site-placement"),
     "RS-J02": ("asset-site-placement", "acceptance/asset-site-placement"),
-    "RS-J03": ("household", "acceptance/publicschema-household"),
-    "RS-J04": ("disability", "acceptance/disability"),
-    "RS-J05": ("farmer", "acceptance/farmer"),
+    "RS-J03": ("business-establishments", "acceptance/business-establishments"),
+    "RS-J04": ("inspection", "acceptance/inspection"),
+    "RS-J05": ("facility", "acceptance/facility"),
     "RS-J06": ("business", "acceptance/business"),
 }
 RUST_TEST = re.compile(
@@ -84,7 +84,7 @@ POSTGRES_TEST_COMMANDS = (
     "cargo test --locked -p registry-server --features postgres-test --test postgres_webhook_outbox",
     "cargo test --locked -p registry-server --features postgres-test --test postgres_webhook_delivery",
     "cargo test --locked -p registry-server --features postgres-test --test postgres_batch",
-    "cargo test --locked -p registry-server --features postgres-test --test postgres_data_farmer",
+    "cargo test --locked -p registry-server --features postgres-test --test postgres_data_facility",
     "cargo test --locked -p registry-server --features postgres-test --test postgres_data_export",
     "cargo test --locked -p registry-server --features postgres-test --test postgres_pilot_acceptance",
     "cargo test --locked -p registry-server --features postgres-test --test postgres_tombstone_revision",

@@ -23,15 +23,15 @@ existing source. Server is currently available as an unreleased source preview.
 
 ## Data model
 
-A project declares its record types and their fields. A farmer registry can define holdings and
-plots; a business registry can define legal entities and filings.
-The supplied farmer, business, and asset/site examples use the same server.
+A project declares its record types and their fields. A facility registry can define permits and
+installations; a business registry can define legal entities and filings.
+The supplied facility, business, and asset/site examples use the same server.
 
 Reference fields connect records. When a relationship has attributes of its own, model it as a
 record: an asset placement links an asset to a site and carries validity dates.
 The placement example declares a constraint that prevents overlapping placements for the same asset.
 
-{/* Evidence: products/registry-server/acceptance/farmer/registry.yaml;
+{/* Evidence: products/registry-server/acceptance/facility/registry.yaml;
     products/registry-server/acceptance/business/registry.yaml;
     products/registry-server/acceptance/asset-site-placement/modules/asset-site-placement-core/module.yaml;
     crates/registry-server/tests/postgres_pilot_acceptance.rs. */}

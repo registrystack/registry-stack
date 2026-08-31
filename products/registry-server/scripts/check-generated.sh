@@ -3,7 +3,7 @@ set -euo pipefail
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repository_root=$(cd -- "$script_dir/../../.." && pwd)
-fixtures=(asset-site-placement publicschema-household)
+fixtures=(asset-site-placement business-establishments)
 authoring_baseline="$repository_root/products/registry-server/generated/authoring"
 runtime_baseline="$repository_root/products/registry-server/generated/runtime"
 temporary_root=""

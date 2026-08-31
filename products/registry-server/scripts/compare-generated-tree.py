@@ -19,19 +19,19 @@ ASSET_SITE_PLACEMENT_PATHS = (
     "generated/schemas/asset-site.schema.json",
     "generated/schemas/inspection-event.schema.json",
 )
-PUBLICSCHEMA_HOUSEHOLD_PATHS = (
+BUSINESS_ESTABLISHMENTS_PATHS = (
     "generated/manifest/registry-manifest.json",
     "generated/manifest/dcat.jsonld",
     "generated/metadata/registry.json",
     "generated/openapi.json",
     "generated/postgres/schema.sql",
-    "generated/schemas/group-membership.schema.json",
-    "generated/schemas/household.schema.json",
-    "generated/schemas/person.schema.json",
+    "generated/schemas/operator-assignment.schema.json",
+    "generated/schemas/business.schema.json",
+    "generated/schemas/establishment.schema.json",
 )
 EXPECTED_PATHS_BY_BASELINE = {
     "asset-site-placement": ASSET_SITE_PLACEMENT_PATHS,
-    "publicschema-household": PUBLICSCHEMA_HOUSEHOLD_PATHS,
+    "business-establishments": BUSINESS_ESTABLISHMENTS_PATHS,
 }
 EXPECTED_PATHS = ASSET_SITE_PLACEMENT_PATHS
 

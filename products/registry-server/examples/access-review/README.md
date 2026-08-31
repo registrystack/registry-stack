@@ -81,5 +81,5 @@ Changing mandatory requirements is included in package migration/change review.
 
 The executable CLI regression is
 `access_review_example_explains_simulates_and_refuses_footguns_without_live_data`.
-The farmer acceptance project also declares a mandatory purpose and row boundary;
+The facility acceptance project also declares a mandatory purpose and row boundary;
 its PostgreSQL journeys exercise real record isolation.

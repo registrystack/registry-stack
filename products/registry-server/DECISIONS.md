@@ -16,7 +16,7 @@
   Modules may contribute profiles while composing an entity, but root project
   entities do not carry a second access-profile vocabulary.
 - Domain semantics are optional configuration overlays. Registry Server does
-  not hardcode Person, Household, GroupMembership, or any other domain model.
+  not hardcode Establishment, Business, OperatorAssignment, or any other domain model.
   An overlay may add localized labels, concept URIs, identifiers, relationship
   roles, and codelist metadata only for entities and fields visible through its
   selected access profile and classification ceiling.

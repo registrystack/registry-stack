@@ -32,7 +32,9 @@ journeys:
       - id: public-register-gets-business
         entity: legal-entity
         accessProfile: public-register
-        request: {operation: get, recordRef: first-business}
+        request:
+          operation: get
+          recordRef: first-business
         expect:
           outcome: success
           status: 200
@@ -45,8 +47,12 @@ journeys:
       - id: public-register-lists-businesses
         entity: legal-entity
         accessProfile: public-register
-        request: {operation: list}
-        expect: {outcome: success, status: 200, count: 1}
+        request:
+          operation: list
+        expect:
+          outcome: success
+          status: 200
+          count: 1
       - id: registrar-suspends-business
         entity: legal-entity
         accessProfile: business-registrar
@@ -56,7 +62,8 @@ journeys:
           recordRef: first-business
           etagRef: first-business
           changes:
-            - {field: entity-status, value: suspended}
+            - field: entity-status
+              value: suspended
         expect:
           outcome: success
           status: 200
@@ -68,7 +75,9 @@ journeys:
       - id: public-register-sees-new-status
         entity: legal-entity
         accessProfile: public-register
-        request: {operation: get, recordRef: suspended-business}
+        request:
+          operation: get
+          recordRef: suspended-business
         expect:
           outcome: success
           status: 200
@@ -81,7 +90,9 @@ journeys:
         accessProfile: business-registrar
         claims:
           principal: synthetic-business-registrar
-        request: {operation: get, recordRef: suspended-business}
+        request:
+          operation: get
+          recordRef: suspended-business
         expect:
           outcome: refusal
           status: 404

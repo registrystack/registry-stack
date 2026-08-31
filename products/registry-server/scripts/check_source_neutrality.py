@@ -10,6 +10,22 @@ from pathlib import Path
 
 
 FORBIDDEN_FIXTURE_IDENTIFIERS = (
+    "business-establishments-core",
+    "business-establishment-summary",
+    "operator-assignment",
+    "public-authority",
+    "facility-core",
+    "inspection-core",
+    "inspection-observation",
+    "discharge-report",
+    "/v1/records/businesses",
+    "/v1/records/authorities",
+    "/v1/records/establishments",
+    "/v1/records/operator-assignments",
+    "/v1/records/facilities",
+    "/v1/records/permits",
+    "/v1/records/installations",
+    "/v1/records/discharge-reports",
     "asset-site-placement",
     "asset-site-placement-core",
     "asset-item",
@@ -46,6 +62,14 @@ FORBIDDEN_FIXTURE_IDENTIFIERS = (
     "/v1/records/officer-appointments",
 )
 FORBIDDEN_RUST_TYPE_IDENTIFIERS = (
+    "Establishment",
+    "Business",
+    "PublicAuthority",
+    "OperatorAssignment",
+    "Facility",
+    "Installation",
+    "InspectionObservation",
+    "DischargeReport",
     "Asset",
     "Site",
     "Placement",

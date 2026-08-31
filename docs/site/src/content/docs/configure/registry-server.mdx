@@ -84,7 +84,7 @@ Use the generated schema for API property names.
 
 Use `type: reference` and `target: <entity-id>` for a field that points to another record.
 When the link needs its own role or dates, use a separate relationship entity.
-The household example defines `person`, `household`, and `group-membership`; membership records have
+The business-establishments example defines `establishment`, `business`, and `operator-assignment`; assignment records have
 `valid-from` and `valid-to` fields with a non-overlap constraint.
 
 Define exact lookups in `selectorProfiles` and related-record queries in `readPaths`.
@@ -92,12 +92,12 @@ Grant access to each lookup or read path and its returned fields.
 Lookup values select records; they do not establish the caller's right to read them.
 
 Open the example project at
-`products/registry-server/acceptance/publicschema-household/`. The `farmer`, `disability`, `business`,
+`products/registry-server/acceptance/business-establishments/`. The `facility`, `inspection`, `business`,
 and `asset-site-placement` sibling projects demonstrate other models using the same compiler.
 Review their fields and constraints before adapting them for your institution.
 
-{/* Evidence: products/registry-server/acceptance/publicschema-household/registry.yaml;
-    products/registry-server/acceptance/publicschema-household/modules/publicschema-household-core/module.yaml;
+{/* Evidence: products/registry-server/acceptance/business-establishments/registry.yaml;
+    products/registry-server/acceptance/business-establishments/modules/business-establishments-core/module.yaml;
     crates/registry-server/src/auth.rs; crates/registry-server/src/contract.rs, ReadPathSource. */}
 
 ## Check permissions and generate the API

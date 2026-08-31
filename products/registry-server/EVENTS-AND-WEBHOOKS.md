@@ -9,9 +9,9 @@ change, send a small authenticated event to a configured service. This should
 cover the common integration need without turning Registry Server into a
 workflow engine or plugin host.
 
-The mechanism is domain-neutral. A project may declare events for a person,
-household membership, farm, disability assessment, company, asset, or any
-other configured entity. Registry Server has no built-in knowledge of those
+The mechanism is domain-neutral. A project may declare events for a business registration,
+an establishment, a facility inspection, a permit, an asset, or any other
+configured entity. Registry Server has no built-in knowledge of those
 models.
 
 The existing transactional outbox and delivery worker are the starting point,
