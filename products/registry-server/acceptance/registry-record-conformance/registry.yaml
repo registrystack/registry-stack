@@ -1,0 +1,98 @@
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: cross-product-conformance
+  canonicalBaseIri: https://cross-product.example.invalid
+  version: 0.1.0
+  defaultLanguage: en
+package:
+  environment: acceptance
+  instanceId: cross-product-conformance-acceptance
+  sequence: 1
+  sourceRevision: cross-product-conformance-0.1.0
+manifestProjection:
+  accessProfile: public-reader
+  classificationCeiling: public
+  catalog:
+    baseUrl: https://cross-product.example.invalid
+    title: Cross-product Registry Record conformance catalog
+    description: Synthetic public and protected datasets used for local conformance proof.
+    publisher:
+      id: cross-product-conformance-authority
+      name: Synthetic Conformance Authority
+      iri: https://cross-product.example.invalid/authority
+    conformsTo:
+      - https://www.w3.org/TR/vocab-dcat-3/
+    standards:
+      dcat: "3.0"
+      jsonSchema: 2020-12
+  datasets:
+    - id: public-units
+      title: Public synthetic units
+      description: Public semantic canary records.
+      owner: Synthetic Conformance Authority
+      status: active
+      version: "1"
+    - id: protected-units
+      title: Protected synthetic units
+      description: Protected semantic canary records.
+      owner: Synthetic Conformance Authority
+      status: active
+      version: "1"
+      accessProfile: protected-reader
+  dataServices:
+    - id: registry-record-api
+      title: Synthetic Registry Record API
+      endpointUrl: https://cross-product.example.invalid/v1
+      endpointDescription: https://cross-product.example.invalid/openapi.json
+      conformsTo: https://spec.openapis.org/oas/v3.1.0
+      servesDatasets: [public-units, protected-units]
+  distributions:
+    - id: public-units-json
+      dataset: public-units
+      accessService: registry-record-api
+      accessUrl: https://cross-product.example.invalid/v1/records/public-units
+      mediaType: application/json
+    - id: protected-units-json
+      dataset: protected-units
+      accessService: registry-record-api
+      accessUrl: https://cross-product.example.invalid/v1/records/protected-units
+      mediaType: application/json
+  publicService:
+    id: cross-product-conformance-service
+    title: Cross-product Registry Record conformance service
+modules:
+  - id: registry-record-conformance-core
+    version: 0.1.0
+    digest: sha256:394ffc4e9edf95cc4e70bba22701393d0667297283f56219512acd4ef4bfc71d
+accessProfiles:
+  - id: public-reader
+    default: true
+    anonymous: true
+    grants:
+      - entity: public-unit
+        operations: [get, list]
+        readableFields: [label]
+  - id: protected-reader
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: [records:protected:read]
+    requiredPurposes: [bounded-read]
+    grants:
+      - entity: protected-unit
+        operations: [get, list]
+        readableFields: [label]
+  - id: fixture-writer
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: [records:fixture:write]
+    requiredPurposes: [fixture-setup]
+    grants:
+      - entity: public-unit
+        operations: [create]
+        readableFields: [label]
+        writableFields: [label]
+      - entity: protected-unit
+        operations: [create]
+        readableFields: [label]
+        writableFields: [label]

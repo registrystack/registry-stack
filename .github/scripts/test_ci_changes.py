@@ -20,6 +20,7 @@ from ci_changes import (
     EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_INPUTS,
     EVIDENCE_TUTORIAL_INPUTS,
     IDENTIFIER_CATALOG_INPUTS,
+    REGISTRY_RECORD_CROSS_PRODUCT_INPUTS,
     REGISTRY_SERVER_PACKAGES,
     SECURITY_WORKFLOW_GATES,
     SHARDS,
@@ -323,11 +324,39 @@ class CiChangesTest(unittest.TestCase):
             with self.subTest(pattern=pattern):
                 self.assertTrue(classify(self.workspace, (sample,))["identifiers"])
 
-    def test_registry_record_profile_inputs_select_the_catalog_gate(self) -> None:
+    def test_registry_record_cross_product_inputs_select_both_product_gates(self) -> None:
         for path in (
             "products/registry-record/profile/registry-record-v1.md",
             "products/registry-record/schema/registry-record-v1.schema.json",
             "products/registry-record/context/registry-record-v1.jsonld",
+            "products/registry-record/fixtures/cross-product/semantic-gold.json",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["identifiers"])
+                self.assertTrue(outputs["registry_server_contracts"])
+                self.assertTrue(outputs["relay_v2_contracts"])
+                self.assertFalse(outputs["rust"])
+                self.assertEqual([], outputs["rust_matrix"]["include"])
+
+    def test_cross_product_registry_record_patterns_are_narrow_and_live(self) -> None:
+        self.assertEqual(
+            REGISTRY_RECORD_CROSS_PRODUCT_INPUTS,
+            (
+                "products/registry-record/schema/**",
+                "products/registry-record/context/**",
+                "products/registry-record/profile/**",
+                "products/registry-record/fixtures/cross-product/**",
+            ),
+        )
+        for pattern in REGISTRY_RECORD_CROSS_PRODUCT_INPUTS:
+            with self.subTest(pattern=pattern):
+                self.assertTrue(list(Path().glob(pattern)))
+
+    def test_registry_record_tooling_and_ordinary_fixtures_stay_profile_only(
+        self,
+    ) -> None:
+        for path in (
             "products/registry-record/fixtures/positive/single.json",
             "products/registry-record/scripts/test_contract.py",
         ):

@@ -13,6 +13,11 @@ CARGO_PROFILE_TEST_DEBUG=0 \
 CARGO_INCREMENTAL=0 \
 CARGO_PROFILE_DEV_DEBUG=0 \
 CARGO_PROFILE_TEST_DEBUG=0 \
+  cargo test --locked -p registry-relay-v2 --test multi_resource_isolation
+
+CARGO_INCREMENTAL=0 \
+CARGO_PROFILE_DEV_DEBUG=0 \
+CARGO_PROFILE_TEST_DEBUG=0 \
   cargo test --locked -p registry-relay-v2 --test sdmx_http
 
 if [[ "${RELAY_V2_SDMX_CONFORMANCE:-0}" == "1" ]]; then

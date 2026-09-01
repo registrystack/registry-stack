@@ -159,6 +159,7 @@ invariants:
       - {path: crates/registry-relay-v2/src/semantics.rs, name: operation_context_does_not_redefine_shared_registry_record_terms}
       - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: shared_registry_record_artifacts_pin_opaque_string_identifiers}
       - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: all_four_registry_http_journeys_use_the_real_router}
+      - {path: crates/registry-relay-v2/tests/multi_resource_isolation.rs, name: real_router_keeps_related_public_and_protected_resources_isolated}
       - {path: crates/registry-relay-client/tests/http_boundary.rs, name: registry_record_identity_is_media_specific_for_single_and_collection_responses}
       - {path: crates/registry-relay-v2/tests/access_profile_http.rs, name: metadata_and_artifacts_authorize_each_access_profile_exactly}
       - {path: crates/registry-relay-v2/tests/access_profile_http.rs, name: quotas_remain_operation_scoped_across_access_profiles}

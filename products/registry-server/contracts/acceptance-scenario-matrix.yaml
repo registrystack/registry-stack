@@ -44,7 +44,7 @@ scenarios:
   - id: RS-J08
     state: enforced
     doneWhen: "Hidden processing, unauthorized writes, wrong purpose, stale ETags, changed idempotency, and malformed tokens refuse without leakage."
-    evidence: [{path: crates/registry-server/tests/compiler_contract.rs, name: anonymous_public_profile_cannot_filter_a_non_public_field}, {path: crates/registry-server/tests/compiler_contract.rs, name: anonymous_public_surface_rejects_every_non_public_constraint_field}, {path: crates/registry-server/tests/postgres_mutation.rs, name: real_postgres_http_mutations_are_guarded_and_exactly_replayable}, {path: crates/registry-server/tests/http_auth.rs, name: issuer_audience_algorithm_token_type_and_signature_are_all_verified}]
+    evidence: [{path: crates/registry-server/tests/compiler_contract.rs, name: anonymous_public_profile_cannot_filter_a_non_public_field}, {path: crates/registry-server/tests/compiler_contract.rs, name: anonymous_public_surface_rejects_every_non_public_constraint_field}, {path: crates/registry-server/tests/postgres_mutation.rs, name: real_postgres_http_mutations_are_guarded_and_exactly_replayable}, {path: crates/registry-server/tests/http_auth.rs, name: issuer_audience_algorithm_token_type_and_signature_are_all_verified}, {path: crates/registry-server/tests/postgres_record_profile_conformance.rs, name: real_postgres_registry_record_profile_matches_the_cross_product_semantic_gold}]
   - id: RS-J09
     state: enforced
     doneWhen: "Package, profile, purpose, row boundary, projection, and query changes invalidate replay after fresh authorization."
