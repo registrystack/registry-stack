@@ -210,10 +210,22 @@ pub struct CursorPageInfo {
     pub next_cursor: Option<String>,
 }
 
+/// The fixed shared context for one homogeneous Registry Record response.
+///
+/// This belongs to a JSON or JSON-LD response's `meta`, never to an individual
+/// [`Record`]. GeoJSON is a separately named media profile and uses
+/// [`GeoJsonRecordProperties`].
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RegistryRecordContext {
+    pub registry_identifier: String,
+    pub dataset_identifier: String,
+    pub entity_type_identifier: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Record {
-    pub registry_identifier: String,
     pub record_identifier: String,
     pub revision_identifier: String,
     pub lifecycle_state: String,
@@ -230,9 +242,22 @@ pub struct Record {
     pub json_ld_type: Option<String>,
 }
 
+impl Record {
+    fn has_json_ld_identity(&self) -> bool {
+        self.json_ld_id.is_some() && self.json_ld_type.is_some()
+    }
+
+    fn has_no_json_ld_identity(&self) -> bool {
+        self.json_ld_id.is_none() && self.json_ld_type.is_none()
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RecordMetadata {
+pub struct RecordResponseMetadata {
+    pub registry_identifier: String,
+    pub dataset_identifier: String,
+    pub entity_type_identifier: String,
     pub operation_identifier: String,
     pub access_profile: String,
     pub family: String,
@@ -242,6 +267,17 @@ pub struct RecordMetadata {
     pub source_revision: SourceRevision,
     pub selected_fields: Vec<String>,
     pub links: RecordLinks,
+}
+
+impl RecordResponseMetadata {
+    #[must_use]
+    pub fn registry_record_context(&self) -> RegistryRecordContext {
+        RegistryRecordContext {
+            registry_identifier: self.registry_identifier.clone(),
+            dataset_identifier: self.dataset_identifier.clone(),
+            entity_type_identifier: self.entity_type_identifier.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -263,14 +299,81 @@ pub struct RecordLinks {
     pub semantic_model: String,
 }
 
+/// The governed JSON-LD context array returned by Relay Record responses.
+///
+/// It always contains the fixed Registry Record context followed by the
+/// Relay operation context. The latter is also exposed by `meta.links.context`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RelayJsonLdContext {
+    relay_context: String,
+}
+
+impl RelayJsonLdContext {
+    pub const REGISTRY_RECORD_CONTEXT_ID: &'static str =
+        "https://id.registrystack.org/contexts/registry-record/v1";
+
+    #[must_use]
+    pub fn relay_context(&self) -> &str {
+        &self.relay_context
+    }
+}
+
+impl Serialize for RelayJsonLdContext {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        [
+            Self::REGISTRY_RECORD_CONTEXT_ID,
+            self.relay_context.as_str(),
+        ]
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for RelayJsonLdContext {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let values = Vec::<String>::deserialize(deserializer)?;
+        let [registry_record_context, relay_context] = values.as_slice() else {
+            return Err(serde::de::Error::custom(
+                "a Relay JSON-LD context must contain exactly two context identifiers",
+            ));
+        };
+        if registry_record_context != Self::REGISTRY_RECORD_CONTEXT_ID || relay_context.is_empty() {
+            return Err(serde::de::Error::custom(
+                "a Relay JSON-LD context must begin with the Registry Record context and include a Relay context",
+            ));
+        }
+        Ok(Self {
+            relay_context: relay_context.clone(),
+        })
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RecordEnvelope {
     pub data: Record,
-    pub meta: RecordMetadata,
+    pub meta: RecordResponseMetadata,
     #[serde(rename = "@context")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub json_ld_context: Option<String>,
+    pub json_ld_context: Option<RelayJsonLdContext>,
+}
+
+impl RecordEnvelope {
+    pub(crate) fn matches_json_ld_representation(&self) -> bool {
+        self.json_ld_context
+            .as_ref()
+            .is_some_and(|context| context.relay_context() == self.meta.links.context)
+            && self.data.has_json_ld_identity()
+    }
+
+    pub(crate) fn matches_json_representation(&self) -> bool {
+        self.json_ld_context.is_none() && self.data.has_no_json_ld_identity()
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -278,10 +381,41 @@ pub struct RecordEnvelope {
 pub struct RecordCollection {
     pub items: Vec<Record>,
     pub page_info: CursorPageInfo,
-    pub meta: RecordMetadata,
+    pub meta: RecordResponseMetadata,
     #[serde(rename = "@context")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub json_ld_context: Option<String>,
+    pub json_ld_context: Option<RelayJsonLdContext>,
+}
+
+impl RecordCollection {
+    pub(crate) fn matches_json_ld_representation(&self) -> bool {
+        self.json_ld_context
+            .as_ref()
+            .is_some_and(|context| context.relay_context() == self.meta.links.context)
+            && self.items.iter().all(Record::has_json_ld_identity)
+    }
+
+    pub(crate) fn matches_json_representation(&self) -> bool {
+        self.json_ld_context.is_none() && self.items.iter().all(Record::has_no_json_ld_identity)
+    }
+}
+
+/// Relay's separate GeoJSON record-properties contract.
+///
+/// Unlike the Registry Record JSON and JSON-LD profiles, this media profile
+/// keeps its Registry identifier in feature properties.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct GeoJsonRecordProperties {
+    pub registry_identifier: String,
+    pub record_identifier: String,
+    pub revision_identifier: String,
+    pub lifecycle_state: String,
+    pub schema_reference: String,
+    pub semantic_model_reference: String,
+    pub authority_identifier: String,
+    pub recorded_at: String,
+    pub domain_data: BTreeMap<String, Value>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -291,15 +425,31 @@ pub struct GeoJsonFeature {
     pub kind: String,
     pub id: String,
     pub geometry: Value,
-    pub properties: Record,
+    pub properties: GeoJsonRecordProperties,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub meta: Option<RecordMetadata>,
+    pub meta: Option<RelayRecordMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conforms_to: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub feature_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub coord_ref_sys: Option<String>,
+}
+
+/// Relay-owned metadata in GeoJSON, which does not use the shared Registry
+/// Record response envelope.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RelayRecordMetadata {
+    pub operation_identifier: String,
+    pub access_profile: String,
+    pub family: String,
+    pub pattern: String,
+    pub disclosure_profile: String,
+    pub contract_revision: String,
+    pub source_revision: SourceRevision,
+    pub selected_fields: Vec<String>,
+    pub links: RecordLinks,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -309,7 +459,7 @@ pub struct GeoJsonFeatureCollection {
     pub kind: String,
     pub features: Vec<GeoJsonFeature>,
     pub page_info: CursorPageInfo,
-    pub meta: RecordMetadata,
+    pub meta: RelayRecordMetadata,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conforms_to: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -344,7 +494,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fixed_envelopes_reject_unknown_members_but_domain_records_remain_dynamic() {
+    fn registry_record_context_is_response_metadata_not_record_data() {
         let probe = serde_json::from_value::<ProbeStatus>(serde_json::json!({
             "status": "ok",
             "canary": "must be refused"
@@ -352,7 +502,6 @@ mod tests {
         assert!(probe.is_err());
 
         let record = serde_json::from_value::<Record>(serde_json::json!({
-            "registryIdentifier": "registry",
             "recordIdentifier": "record-1",
             "revisionIdentifier": "revision-1",
             "lifecycleState": "active",
@@ -364,5 +513,48 @@ mod tests {
         }))
         .expect("dynamic domain data is retained");
         assert_eq!(record.domain_data["adopterOwnedNestedShape"]["answer"], 42);
+
+        assert!(serde_json::from_value::<Record>(serde_json::json!({
+            "registryIdentifier": "legacy-placement",
+            "recordIdentifier": "record-1",
+            "revisionIdentifier": "revision-1",
+            "lifecycleState": "active",
+            "schemaReference": "https://example.invalid/schema",
+            "semanticModelReference": "https://example.invalid/semantics",
+            "authorityIdentifier": "authority",
+            "recordedAt": "2026-08-11T00:00:00Z",
+            "domainData": {}
+        }))
+        .is_err());
+    }
+
+    #[test]
+    fn governed_json_ld_context_requires_the_fixed_shared_context_and_relay_context() {
+        let valid = serde_json::json!([
+            RelayJsonLdContext::REGISTRY_RECORD_CONTEXT_ID,
+            "https://relay.example.invalid/contexts/record.jsonld"
+        ]);
+        let context =
+            serde_json::from_value::<RelayJsonLdContext>(valid).expect("governed context parses");
+        assert_eq!(
+            context.relay_context(),
+            "https://relay.example.invalid/contexts/record.jsonld"
+        );
+
+        for invalid in [
+            serde_json::json!(RelayJsonLdContext::REGISTRY_RECORD_CONTEXT_ID),
+            serde_json::json!([
+                "https://example.invalid/wrong",
+                "https://relay.example.invalid/context"
+            ]),
+            serde_json::json!([RelayJsonLdContext::REGISTRY_RECORD_CONTEXT_ID, ""]),
+            serde_json::json!([
+                RelayJsonLdContext::REGISTRY_RECORD_CONTEXT_ID,
+                "https://relay.example.invalid/context",
+                "extra"
+            ]),
+        ] {
+            assert!(serde_json::from_value::<RelayJsonLdContext>(invalid).is_err());
+        }
     }
 }

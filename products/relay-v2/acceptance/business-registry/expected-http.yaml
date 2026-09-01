@@ -37,6 +37,18 @@ steps:
       itemCount: 1
       nextCursor: non-null
       registryCoreRequired: true
+  - id: first-page-jsonld
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records
+      query: {jurisdiction: EX-A, pageSize: 1}
+      headers: {accept: application/ld+json}
+    expect:
+      status: 200
+      itemCount: 1
+      nextCursor: non-null
+      registryCoreRequired: true
+      recordsEquivalentTo: first-page
   - id: second-page
     request:
       method: GET

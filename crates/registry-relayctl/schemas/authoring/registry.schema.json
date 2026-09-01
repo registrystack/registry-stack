@@ -801,6 +801,9 @@
         "classificationDefaults": {
           "$ref": "#/$defs/ClassificationPartial"
         },
+        "datasetIdentifier": {
+          "type": "string"
+        },
         "description": {
           "type": "string"
         },
@@ -809,6 +812,9 @@
             "$ref": "#/$defs/DisclosureProfile"
           },
           "type": "object"
+        },
+        "entityTypeIdentifier": {
+          "type": "string"
         },
         "id": {
           "type": "string"
@@ -857,6 +863,8 @@
       },
       "required": [
         "id",
+        "datasetIdentifier",
+        "entityTypeIdentifier",
         "title",
         "description",
         "semanticClass",

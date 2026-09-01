@@ -1550,6 +1550,8 @@ sources:
   registry: {kind: sqlite, profile: snapshot, expectedSchemaFingerprint: "sha256:0000000000000000000000000000000000000000000000000000000000000000"}
 resources:
   - id: record
+    datasetIdentifier: records
+    entityTypeIdentifier: record
     title: Record
     description: Unreviewed starter Record resource
     semanticClass: local:Record

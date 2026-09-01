@@ -380,6 +380,8 @@ pub enum SourceProfile {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ResourceDefinition {
     pub id: String,
+    pub dataset_identifier: String,
+    pub entity_type_identifier: String,
     pub title: String,
     pub description: String,
     pub semantic_class: String,
@@ -1588,6 +1590,8 @@ sources:
   db: {kind: sqlite, profile: snapshot, expectedSchemaFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
 resources:
   - id: thing
+    datasetIdentifier: things
+    entityTypeIdentifier: thing
     title: Thing
     description: Thing
     semanticClass: local:Thing
@@ -1873,6 +1877,20 @@ disclosureProfiles: {}
             .replace("defaultAccessProfile", "defaultRepresentation")
             .replace("accessProfiles", "representations");
         assert!(RegistryContract::parse_yaml(&yaml).is_err());
+    }
+
+    #[test]
+    fn resource_dataset_and_entity_type_identifiers_are_required_not_inferred() {
+        let yaml = crate::compiler::tests::valid_contract();
+        for field in [
+            "    datasetIdentifier: records\n",
+            "    entityTypeIdentifier: record\n",
+        ] {
+            assert!(
+                RegistryContract::parse_yaml(&yaml.replace(field, "")).is_err(),
+                "missing {field:?} must fail strict authoring"
+            );
+        }
     }
 
     #[test]

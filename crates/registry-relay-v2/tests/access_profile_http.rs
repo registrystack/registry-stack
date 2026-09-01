@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::body::{to_bytes, Body};
-use http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH};
+use http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH, LINK};
 use http::{Method, Request, StatusCode};
 use registry_platform_audit::{AuditChainHasher, AuditEnvelope, AuditError, AuditSink, ChainState};
 use registry_platform_httputil::FetchUrlPolicy;
@@ -16,7 +16,10 @@ use registry_platform_sqlite::{
 use registry_platform_testing::{
     fixtures, oidc_verifier_config, sign_ed25519_compact_jwt, MockIdp,
 };
-use registry_relay_v2::artifacts::{generate_artifacts, ArtifactSet};
+use registry_relay_v2::artifacts::{
+    generate_artifacts, ArtifactSet, REGISTRY_RECORD_CONTEXT_ID, REGISTRY_RECORD_PROFILE_ID,
+    RELAY_PROFILE_ID,
+};
 use registry_relay_v2::audit::RelayAudit;
 use registry_relay_v2::auth::RelayAuthenticator;
 use registry_relay_v2::contract::{
@@ -876,6 +879,14 @@ async fn cursor_and_etag_are_bound_to_selected_access_profile() {
         .and_then(|value| value.to_str().ok())
         .expect("public profile has ETag")
         .to_owned();
+    let document: Value = serde_json::from_slice(&body).expect("public JSON response");
+    assert_eq!(
+        document["meta"]["registryIdentifier"],
+        "urn:example:registry:access-profiles"
+    );
+    assert_eq!(document["meta"]["datasetIdentifier"], "records");
+    assert_eq!(document["meta"]["entityTypeIdentifier"], "record");
+    assert!(document["data"].get("registryIdentifier").is_none());
     let (status, headers, _) = harness
         .send(
             Method::GET,
@@ -940,6 +951,35 @@ async fn cursor_and_etag_are_bound_to_selected_access_profile() {
     ] {
         assert!(!audit_wire.contains(source_value));
     }
+
+    let (status, json_ld_headers, json_ld_body) = harness
+        .send(
+            Method::GET,
+            "/v2/resources/record/records/record-1",
+            None,
+            None,
+            &[
+                (http::header::ACCEPT.as_str(), "application/ld+json"),
+                (IF_NONE_MATCH.as_str(), &etag),
+            ],
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_ne!(
+        json_ld_headers
+            .get(ETAG)
+            .and_then(|value| value.to_str().ok()),
+        Some(etag.as_str()),
+        "the ETag must bind the selected representation"
+    );
+    let json_ld: Value = serde_json::from_slice(&json_ld_body).expect("JSON-LD response");
+    assert_eq!(
+        json_ld["@context"],
+        json!([
+            REGISTRY_RECORD_CONTEXT_ID,
+            json_ld["meta"]["links"]["context"]
+        ])
+    );
 
     let (status, headers, body) = harness
         .send(
@@ -1136,7 +1176,68 @@ async fn accept_negotiation_uses_quality_and_json_tie_break_without_leaking_valu
         );
         let document: Value = serde_json::from_slice(&body).expect("response JSON");
         assert_eq!(document.get("@context").is_some(), expects_context);
+        assert_eq!(
+            document["meta"]["registryIdentifier"],
+            "urn:example:registry:access-profiles"
+        );
+        assert_eq!(document["meta"]["datasetIdentifier"], "records");
+        assert_eq!(document["meta"]["entityTypeIdentifier"], "record");
+        for field in [
+            "registryIdentifier",
+            "datasetIdentifier",
+            "entityTypeIdentifier",
+        ] {
+            assert!(document["data"].get(field).is_none());
+        }
+        let expected_link = format!(
+            "<{REGISTRY_RECORD_PROFILE_ID}>; rel=\"profile\", <{RELAY_PROFILE_ID}>; rel=\"profile\""
+        );
+        assert_eq!(
+            headers.get(LINK).and_then(|value| value.to_str().ok()),
+            Some(expected_link.as_str())
+        );
+        if expects_context {
+            assert_eq!(
+                document["@context"],
+                json!([
+                    REGISTRY_RECORD_CONTEXT_ID,
+                    document["meta"]["links"]["context"]
+                ])
+            );
+        }
     }
+
+    let (_, _, json_body) = harness
+        .send(
+            Method::GET,
+            "/v2/resources/record/records/record-1",
+            None,
+            None,
+            &[(http::header::ACCEPT.as_str(), "application/json")],
+        )
+        .await;
+    let (_, _, json_ld_body) = harness
+        .send(
+            Method::GET,
+            "/v2/resources/record/records/record-1",
+            None,
+            None,
+            &[(http::header::ACCEPT.as_str(), "application/ld+json")],
+        )
+        .await;
+    let json_document: Value = serde_json::from_slice(&json_body).expect("JSON response");
+    let mut json_ld_document: Value =
+        serde_json::from_slice(&json_ld_body).expect("JSON-LD response");
+    json_ld_document
+        .as_object_mut()
+        .expect("JSON-LD envelope")
+        .remove("@context");
+    let record = json_ld_document["data"]
+        .as_object_mut()
+        .expect("JSON-LD Record");
+    record.remove("@id");
+    record.remove("@type");
+    assert_eq!(json_ld_document, json_document);
 
     let (status, _, read_body) = harness
         .send(
@@ -1802,6 +1903,8 @@ fn compiled_registry(fingerprint: String) -> CompiledRegistry {
         }],
         resources: vec![CompiledResource {
             id: RESOURCE.into(),
+            dataset_identifier: "records".into(),
+            entity_type_identifier: "record".into(),
             title: "Record".into(),
             description: "Synthetic record".into(),
             semantic_class: "https://registry.example.invalid/vocabulary/Record".into(),

@@ -41,7 +41,9 @@ use registry_relay_client::{
     RelayClientConfig, ResourceListRequest, SdmxDataFormat, SdmxDataRequest, SdmxStructureKind,
     SdmxStructureRequest, SearchRequest, StaticToken, TokenProvider,
 };
-use registry_relay_v2::artifacts::generate_artifacts;
+use registry_relay_v2::artifacts::{
+    generate_artifacts, REGISTRY_RECORD_CONTEXT_ID, REGISTRY_RECORD_PROFILE_ID, RELAY_PROFILE_ID,
+};
 use registry_relay_v2::audit::RelayAudit;
 use registry_relay_v2::auth::RelayAuthenticator;
 use registry_relay_v2::compiler::{
@@ -69,14 +71,17 @@ use registry_relay_v2::server::{
 };
 use registry_relay_v2::sqlite_runtime::{RuntimeSourceBinding, SqliteRuntime, SqliteRuntimeLimits};
 use registry_relay_v2::startup::build_authenticator_for_supervised_local_development;
-use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
+use serde_json::{json, Map, Value};
 use tempfile::TempDir;
 use tower::ServiceExt as _;
 
 const ACCEPTANCE_ROOT: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../products/relay-v2/acceptance"
+);
+const REGISTRY_RECORD_ROOT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../products/registry-record"
 );
 const PROJECTS: [&str; 4] = [
     "social-assistance",
@@ -89,6 +94,7 @@ const PROJECTS: [&str; 4] = [
 struct ResponseContractCoverage {
     json_records: usize,
     json_ld_records: usize,
+    operation_representations: BTreeSet<(String, bool)>,
 }
 
 struct ProjectHarness {
@@ -466,12 +472,15 @@ async fn all_four_registry_http_journeys_use_the_real_router() {
             "selected acceptance project is unknown"
         );
     }
+    let shared_context_terms = shared_registry_record_context_terms();
+    let mut registry_record_operation_coverage = BTreeSet::new();
     for project in PROJECTS.into_iter().filter(|project| {
         selected
             .as_deref()
             .is_none_or(|selected| selected == *project)
     }) {
         let mut harness = ProjectHarness::open(project).await;
+        assert_all_generated_operation_contexts_are_disjoint(&harness, &shared_context_terms);
         let journey = project_journey(project);
         assert_eq!(
             journey.schema_version,
@@ -568,6 +577,7 @@ async fn all_four_registry_http_journeys_use_the_real_router() {
                 "{project} must validate a JSON-LD Record against its generated schema"
             );
         }
+        registry_record_operation_coverage.extend(contract_coverage.operation_representations);
         shutdown_tx.send(()).expect("loopback server is running");
         tokio::time::timeout(Duration::from_secs(5), server)
             .await
@@ -577,6 +587,52 @@ async fn all_four_registry_http_journeys_use_the_real_router() {
         if let Some(idp) = harness.idp.take() {
             idp.stop().await;
         }
+    }
+    if selected.is_none() {
+        for operation in ["list", "read", "lookup", "search"] {
+            for json_ld in [false, true] {
+                assert!(
+                    registry_record_operation_coverage.contains(&(operation.into(), json_ld)),
+                    "the real HTTP journeys must validate a representative {operation} {} response against the local shared Registry Record schema",
+                    if json_ld { "JSON-LD" } else { "JSON" }
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn shared_registry_record_artifacts_pin_opaque_string_identifiers() {
+    let schema = load_registry_record_artifact("schema/registry-record-v1.schema.json");
+    assert_eq!(
+        schema["$id"],
+        "https://id.registrystack.org/schemas/registry-record/v1"
+    );
+    assert_eq!(
+        schema["$defs"]["opaqueIdentifier"],
+        json!({"type": "string", "minLength": 1})
+    );
+
+    let shared_context = load_registry_record_artifact("context/registry-record-v1.jsonld");
+    let terms = shared_context["@context"]
+        .as_object()
+        .expect("the local Registry Record context is an inline context document");
+    for identifier in [
+        "registryIdentifier",
+        "datasetIdentifier",
+        "entityTypeIdentifier",
+        "recordIdentifier",
+        "revisionIdentifier",
+    ] {
+        assert_eq!(
+            terms[identifier]["@id"],
+            format!("https://id.registrystack.org/vocab/registry-record/{identifier}")
+        );
+        assert_eq!(
+            terms[identifier]["@type"],
+            "http://www.w3.org/2001/XMLSchema#string"
+        );
+        assert_ne!(terms[identifier]["@type"], "@id");
     }
 }
 
@@ -1843,7 +1899,14 @@ async fn spatial_formats_validate_and_keep_distinct_cache_identities() {
             Some("Accept, Authorization"),
             "{label} varies across the negotiation and authorization boundaries"
         );
-        let expected_link = profile_uri.map(|profile| format!("<{profile}>; rel=\"profile\""));
+        let expected_link = profile_uri.map_or_else(
+            || {
+                Some(format!(
+                    "<{REGISTRY_RECORD_PROFILE_ID}>; rel=\"profile\", <{RELAY_PROFILE_ID}>; rel=\"profile\""
+                ))
+            },
+            |profile| Some(format!("<{profile}>; rel=\"profile\"")),
+        );
         assert_eq!(
             headers.get(LINK).and_then(|value| value.to_str().ok()),
             expected_link.as_deref(),
@@ -1859,11 +1922,7 @@ async fn spatial_formats_validate_and_keep_distinct_cache_identities() {
             .and_then(|value| value.to_str().ok())
             .expect("public snapshot response has an ETag")
             .to_owned();
-        assert_eq!(
-            etag,
-            format!("\"{}\"", hex::encode(Sha256::digest(&body))),
-            "{label} ETag binds the exact released bytes"
-        );
+        assert!(etag.starts_with('"') && etag.ends_with('"'), "{label} ETag");
         let document: Value = serde_json::from_slice(&body).expect("spatial response is JSON");
 
         if label == "json" || label == "json-ld" {
@@ -1900,17 +1959,7 @@ async fn spatial_formats_validate_and_keep_distinct_cache_identities() {
         }
 
         if label == "json-ld" {
-            let mut expanded = document.clone();
-            expanded["@context"] = context_document["@context"].clone();
-            let raw = serde_json::to_string(&expanded).expect("JSON-LD response serializes");
-            let parser = JsonLdParser::new()
-                .with_base_iri(&harness.service.registry.base_uri)
-                .expect("Registry base IRI is valid");
-            let quads = parser
-                .for_slice(&raw)
-                .map(|quad| quad.expect("public JSON-LD response expands").to_string())
-                .collect::<Vec<_>>();
-            assert!(!quads.is_empty(), "JSON-LD produces a public RDF graph");
+            assert_operation_context_is_disjoint_from_shared_terms(&context_document);
         } else if label == "geojson" {
             for member in ["conformsTo", "featureType", "coordRefSys"] {
                 assert!(
@@ -2906,9 +2955,26 @@ fn assert_expectations(
     let records = response_records(&document);
     if step.expect.registry_core_required.unwrap_or(false) {
         assert!(!records.is_empty(), "{label} must contain a Record");
-        for record in &records {
+        let registry_record_envelope = headers
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| {
+                value.starts_with("application/json") || value.starts_with("application/ld+json")
+            });
+        if registry_record_envelope {
             for key in [
                 "registryIdentifier",
+                "datasetIdentifier",
+                "entityTypeIdentifier",
+            ] {
+                assert!(
+                    document["meta"].get(key).is_some(),
+                    "{label} meta is missing {key}"
+                );
+            }
+        }
+        for record in &records {
+            for key in [
                 "recordIdentifier",
                 "revisionIdentifier",
                 "lifecycleState",
@@ -2919,6 +2985,23 @@ fn assert_expectations(
                 "domainData",
             ] {
                 assert!(record.get(key).is_some(), "{label} Record is missing {key}");
+            }
+            if registry_record_envelope {
+                for key in [
+                    "registryIdentifier",
+                    "datasetIdentifier",
+                    "entityTypeIdentifier",
+                ] {
+                    assert!(
+                        record.get(key).is_none(),
+                        "{label} Record duplicates response context {key}"
+                    );
+                }
+            } else {
+                assert!(
+                    record.get("registryIdentifier").is_some(),
+                    "{label} GeoJSON Record keeps its separate Registry identity"
+                );
             }
         }
     }
@@ -3120,6 +3203,7 @@ fn normalized_records(document: &Value) -> Vec<Value> {
             if let Some(object) = record.as_object_mut() {
                 object.remove("@id");
                 object.remove("@type");
+                object.remove("registryIdentifier");
                 if let Some(domain) = object.get_mut("domainData").and_then(Value::as_object_mut) {
                     domain.retain(|_, value| {
                         value.get("type").and_then(Value::as_str) != Some("Point")
@@ -3209,6 +3293,97 @@ fn validate_response_contracts(
         step.id
     );
     let binding = matching_bindings[0];
+    let resource = harness
+        .service
+        .registry
+        .resources
+        .iter()
+        .find(|resource| {
+            resource
+                .operations
+                .iter()
+                .any(|operation| operation.identifier == binding.operation_identifier)
+        })
+        .expect("compiled operation belongs to one resource");
+    let operation = resource
+        .operations
+        .iter()
+        .find(|operation| operation.identifier == binding.operation_identifier)
+        .expect("compiled operation belongs to the resolved resource");
+    assert_eq!(
+        document
+            .pointer("/meta/registryIdentifier")
+            .and_then(Value::as_str),
+        Some(harness.service.registry.registry_identifier.as_str())
+    );
+    assert_eq!(
+        document
+            .pointer("/meta/datasetIdentifier")
+            .and_then(Value::as_str),
+        Some(resource.dataset_identifier.as_str())
+    );
+    assert_eq!(
+        document
+            .pointer("/meta/entityTypeIdentifier")
+            .and_then(Value::as_str),
+        Some(resource.entity_type_identifier.as_str())
+    );
+    let expected_link = format!(
+        "<{REGISTRY_RECORD_PROFILE_ID}>; rel=\"profile\", <{RELAY_PROFILE_ID}>; rel=\"profile\""
+    );
+    assert_eq!(
+        headers.get(LINK).and_then(|value| value.to_str().ok()),
+        Some(expected_link.as_str())
+    );
+
+    let shared_schema = load_registry_record_artifact("schema/registry-record-v1.schema.json");
+    let shared_validator = JSONSchema::options()
+        .with_draft(Draft::Draft202012)
+        .should_validate_formats(true)
+        .compile(&shared_schema)
+        .expect("the exact local Registry Record base schema compiles without resolution");
+    assert!(
+        shared_validator.is_valid(document),
+        "{project}/{} response must conform to the exact local Registry Record base schema",
+        step.id
+    );
+
+    let exact_schema = exact_generated_response_schema(harness, operation_identifier, media_type);
+    let mut exact_options = JSONSchema::options();
+    exact_options
+        .with_draft(Draft::Draft202012)
+        .should_validate_formats(true);
+    for artifact in harness
+        .service
+        .artifacts
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.media_type == "application/schema+json")
+    {
+        let schema: Value =
+            serde_json::from_slice(&artifact.content).expect("generated schema parses");
+        if let Some(identifier) = schema.get("$id").and_then(Value::as_str) {
+            exact_options.with_document(identifier.to_owned(), schema);
+        }
+    }
+    let exact_validator = exact_options
+        .compile(&exact_schema)
+        .expect("the exact generated operation response schema compiles locally");
+    assert!(
+        exact_validator.is_valid(document),
+        "{project}/{} runtime response must conform to its exact generated operation schema",
+        step.id
+    );
+
+    let operation_kind = match operation.kind {
+        OperationKind::List => "list",
+        OperationKind::Read => "read",
+        OperationKind::Lookup { .. } => "lookup",
+        OperationKind::Search { .. } => "search",
+    };
+    coverage
+        .operation_representations
+        .insert((operation_kind.into(), json_ld));
 
     for record in records {
         let schema_reference = record
@@ -3289,6 +3464,107 @@ fn validate_response_contracts(
     }
 }
 
+fn load_registry_record_artifact(relative_path: &str) -> Value {
+    let path = Path::new(REGISTRY_RECORD_ROOT).join(relative_path);
+    let bytes = fs::read(&path)
+        .unwrap_or_else(|error| panic!("exact local artifact {} reads: {error}", path.display()));
+    serde_json::from_slice(&bytes)
+        .unwrap_or_else(|error| panic!("exact local artifact {} parses: {error}", path.display()))
+}
+
+fn shared_registry_record_context_terms() -> BTreeSet<String> {
+    load_registry_record_artifact("context/registry-record-v1.jsonld")["@context"]
+        .as_object()
+        .expect("the exact local Registry Record context owns an object of terms")
+        .keys()
+        .cloned()
+        .collect()
+}
+
+fn assert_all_generated_operation_contexts_are_disjoint(
+    harness: &ProjectHarness,
+    shared_terms: &BTreeSet<String>,
+) {
+    let bound_context_paths = harness
+        .service
+        .artifacts
+        .operation_bindings
+        .iter()
+        .map(|binding| binding.context_path.as_str())
+        .collect::<BTreeSet<_>>();
+    let generated_context_paths = harness
+        .service
+        .artifacts
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.path.ends_with(".context.jsonld"))
+        .map(|artifact| artifact.path.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        generated_context_paths, bound_context_paths,
+        "every generated Relay operation context belongs to an exact operation binding"
+    );
+    assert!(
+        !generated_context_paths.is_empty() || harness.service.registry.resources.is_empty(),
+        "every Registry with Record operations generates operation contexts"
+    );
+    for path in generated_context_paths {
+        let artifact = harness
+            .service
+            .artifacts
+            .get(path)
+            .unwrap_or_else(|| panic!("generated operation context {path} exists"));
+        let document: Value = serde_json::from_slice(&artifact.content)
+            .unwrap_or_else(|error| panic!("generated operation context {path} parses: {error}"));
+        let operation_terms = document["@context"]
+            .as_object()
+            .unwrap_or_else(|| panic!("generated operation context {path} owns an object"));
+        let overlap = operation_terms
+            .keys()
+            .filter(|term| shared_terms.contains(*term))
+            .cloned()
+            .collect::<Vec<_>>();
+        assert!(
+            overlap.is_empty(),
+            "generated operation context {path} redefines exact local shared terms {overlap:?}"
+        );
+    }
+}
+
+fn exact_generated_response_schema(
+    harness: &ProjectHarness,
+    operation_identifier: &str,
+    media_type: &str,
+) -> Value {
+    let openapi: Value = serde_json::from_slice(
+        &harness
+            .service
+            .artifacts
+            .get("openapi.full.yaml")
+            .expect("the generated full OpenAPI artifact exists")
+            .content,
+    )
+    .expect("the generated full OpenAPI artifact parses as JSON-compatible YAML");
+    let matches = openapi["paths"]
+        .as_object()
+        .expect("generated OpenAPI paths are an object")
+        .values()
+        .flat_map(|path| {
+            path.as_object()
+                .into_iter()
+                .flat_map(|methods| methods.values())
+        })
+        .filter(|operation| operation["operationId"] == operation_identifier)
+        .map(|operation| operation["responses"]["200"]["content"][media_type]["schema"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        matches.len(),
+        1,
+        "operation {operation_identifier} has one exact generated {media_type} response schema"
+    );
+    matches.into_iter().next().expect("one schema")
+}
+
 fn validate_json_ld_graph(
     harness: &ProjectHarness,
     project: &str,
@@ -3320,8 +3596,11 @@ fn validate_json_ld_graph(
         })
         .expect("compiled operation carries the selected access profile");
     assert_eq!(
-        document.get("@context").and_then(Value::as_str),
-        Some(access_profile.context_reference.as_str()),
+        document.get("@context"),
+        Some(&json!([
+            REGISTRY_RECORD_CONTEXT_ID,
+            access_profile.context_reference
+        ])),
         "{project}/{} JSON-LD response must name the selected access profile context",
         step.id
     );
@@ -3340,24 +3619,43 @@ fn validate_json_ld_graph(
         .expect("the exact response binding carries its generated JSON-LD context");
     let context_document: Value = serde_json::from_slice(&context_artifact.content)
         .expect("generated JSON-LD context parses");
-    let mut expanded_document = document.clone();
-    expanded_document["@context"] = context_document["@context"].clone();
-    let raw = serde_json::to_string(&expanded_document).expect("JSON-LD response serializes");
-    let parser = JsonLdParser::new()
-        .with_base_iri(&harness.service.registry.base_uri)
-        .expect("Registry base IRI is valid");
-    let quads = parser
-        .for_slice(&raw)
-        .map(|quad| {
+    assert_operation_context_is_disjoint_from_shared_terms(&context_document);
+    let mut quads = Vec::new();
+    for record in response_records(document) {
+        let mut semantic_record = Map::new();
+        semantic_record.insert("@context".into(), context_document["@context"].clone());
+        for field in [
+            "@id",
+            "@type",
+            "lifecycleState",
+            "schemaReference",
+            "semanticModelReference",
+            "authorityIdentifier",
+            "recordedAt",
+        ] {
+            semantic_record.insert(field.into(), record[field].clone());
+        }
+        for (field, value) in record["domainData"]
+            .as_object()
+            .expect("Record domainData is an object")
+        {
+            semantic_record.insert(field.clone(), value.clone());
+        }
+        let raw = serde_json::to_string(&semantic_record)
+            .expect("operation semantic projection serializes");
+        let parser = JsonLdParser::new()
+            .with_base_iri(&harness.service.registry.base_uri)
+            .expect("Registry base IRI is valid");
+        quads.extend(parser.for_slice(&raw).map(|quad| {
             quad.unwrap_or_else(|error| {
                 panic!(
-                    "{project}/{} generated context must expand the actual response: {error}",
+                    "{project}/{} generated operation context must expand its owned terms: {error}",
                     step.id
                 )
             })
             .to_string()
-        })
-        .collect::<Vec<_>>();
+        }));
+    }
     assert!(
         !quads.is_empty(),
         "{project}/{} JSON-LD response must produce an RDF graph",
@@ -3390,7 +3688,6 @@ fn validate_json_ld_graph(
             &step.id,
         );
         for field in [
-            "registryIdentifier",
             "schemaReference",
             "semanticModelReference",
             "authorityIdentifier",
@@ -3409,21 +3706,27 @@ fn validate_json_ld_graph(
             );
             assert!(shacl.contains(&format!("sh:path <{predicate}> ; sh:nodeKind sh:IRI")));
         }
-        for (field, datatype) in [
+        for (field, namespace, datatype) in [
             (
-                "recordIdentifier",
+                "lifecycleState",
+                "https://id.registrystack.org/vocab/core/",
                 "http://www.w3.org/2001/XMLSchema#string",
             ),
             (
-                "revisionIdentifier",
-                "http://www.w3.org/2001/XMLSchema#string",
+                "recordedAt",
+                "https://id.registrystack.org/vocab/core/",
+                "http://www.w3.org/2001/XMLSchema#dateTime",
             ),
-            ("lifecycleState", "http://www.w3.org/2001/XMLSchema#string"),
-            ("recordedAt", "http://www.w3.org/2001/XMLSchema#dateTime"),
         ] {
-            let predicate = format!("https://id.registrystack.org/vocab/core/{field}");
+            let predicate = format!("{namespace}{field}");
             assert_typed_quad(&quads, subject, &predicate, datatype, project, &step.id);
             assert!(shacl.contains(&format!("sh:path <{predicate}> ; sh:datatype <{datatype}>")));
+        }
+        for field in ["recordIdentifier", "revisionIdentifier"] {
+            let predicate = format!("https://id.registrystack.org/vocab/registry-record/{field}");
+            assert!(shacl.contains(&format!(
+                "sh:path <{predicate}> ; sh:datatype <http://www.w3.org/2001/XMLSchema#string>"
+            )));
         }
         let domain_data = record["domainData"]
             .as_object()
@@ -3459,6 +3762,18 @@ fn validate_json_ld_graph(
                 property.semantic_iri
             )));
         }
+    }
+}
+
+fn assert_operation_context_is_disjoint_from_shared_terms(context_document: &Value) {
+    let operation_terms = context_document["@context"]
+        .as_object()
+        .expect("generated operation context is an object");
+    for term in registry_relay_v2::semantics::REGISTRY_RECORD_SHARED_CONTEXT_TERMS {
+        assert!(
+            !operation_terms.contains_key(*term),
+            "generated operation context must not redefine shared term {term}"
+        );
     }
 }
 

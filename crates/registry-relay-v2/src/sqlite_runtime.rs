@@ -2651,6 +2651,8 @@ mod tests {
     fn resource() -> CompiledResource {
         CompiledResource {
             id: "record".into(),
+            dataset_identifier: "records".into(),
+            entity_type_identifier: "record".into(),
             title: "Record".into(),
             description: "Synthetic record".into(),
             semantic_class: "https://example.invalid/Record".into(),

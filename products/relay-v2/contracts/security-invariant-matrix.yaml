@@ -146,13 +146,20 @@ invariants:
       - {path: crates/registry-relay-v2/src/compiler.rs, name: transformed_properties_cannot_be_list_filters_or_order_keys}
       - {path: crates/registry-relay-v2/tests/access_profile_http.rs, name: transforms_are_bounded_value_free_and_terminal_audit_gates_exact_bytes}
   - id: sec-access-profile-state-and-metadata-binding
-    threat: A cursor, ETag, metadata route, artifact, or quota crosses an access-profile boundary or reveals a protected profile.
-    enforcementPoint: Access profile-bound cursor and cache identity, exact access-profile artifact gates, and operation-owned quota state.
+    threat: A cursor, ETag, response context, metadata route, artifact, or quota crosses a dataset, entity-type, Registry Record profile, representation, field-projection, or access-profile boundary, or reveals a protected profile.
+    enforcementPoint: Dataset-, entity-type-, Registry Record profile-, representation-, field-, and access-profile-bound cursor and cache identity; locally pinned shared Registry Record schema and context artifacts plus exact generated response-context constants and access-profile artifact gates; and operation-owned quota state.
     negativeTest: cursor_and_etag_are_bound_to_selected_access_profile
-    expected: Cursor and ETag reuse across profiles fails; metadata and artifacts authorize one access profile exactly; adding profiles does not multiply the operation quota.
-    evidence: real-router-access-profile-state-tests
+    expected: Cursor and ETag reuse across dataset, entity-type, response-profile, representation, field, or access-profile contexts fails; representative JSON and JSON-LD list, read, lookup, and search responses conform to the locally pinned open base schema; JSON-LD pins the shared-then-governed context pair and requires derived @id and @type on every record, while ordinary JSON rejects @context, @id, and @type; exact generated schemas reject missing, extra, reordered, inline, or wrong context values and media-specific record identity violations; every generated Relay operation context is disjoint from the locally pinned shared terms; the five opaque identifiers retain their shared xsd:string mappings; metadata and artifacts authorize one access profile exactly; adding profiles does not multiply the operation quota; no resolver is fetched.
+    evidence: real-router-shared-base-and-exact-generated-schema-conformance-tests
     tests:
       - {path: crates/registry-relay-v2/tests/access_profile_http.rs, name: cursor_and_etag_are_bound_to_selected_access_profile}
+      - {path: crates/registry-relay-v2/src/cursor.rs, name: cursor_refuses_every_mismatched_request_binding_and_expiry}
+      - {path: crates/registry-relay-v2/src/artifacts.rs, name: exact_operation_schema_rejects_wrong_registry_record_context_constants}
+      - {path: crates/registry-relay-v2/src/artifacts.rs, name: exact_operation_schemas_pin_media_specific_record_identity}
+      - {path: crates/registry-relay-v2/src/semantics.rs, name: operation_context_does_not_redefine_shared_registry_record_terms}
+      - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: shared_registry_record_artifacts_pin_opaque_string_identifiers}
+      - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: all_four_registry_http_journeys_use_the_real_router}
+      - {path: crates/registry-relay-client/tests/http_boundary.rs, name: registry_record_identity_is_media_specific_for_single_and_collection_responses}
       - {path: crates/registry-relay-v2/tests/access_profile_http.rs, name: metadata_and_artifacts_authorize_each_access_profile_exactly}
       - {path: crates/registry-relay-v2/tests/access_profile_http.rs, name: quotas_remain_operation_scoped_across_access_profiles}
   - id: sec-operation-quota

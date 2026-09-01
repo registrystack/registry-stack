@@ -15,7 +15,7 @@ use sha2::Sha256;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
-const CURSOR_VERSION: u8 = 2;
+const CURSOR_VERSION: u8 = 3;
 const MAX_CURSOR_BYTES: usize = 8 * 1024;
 pub(crate) const MAXIMUM_CURSOR_ORDER_VALUE_BYTES: usize = 512;
 pub(crate) const MAXIMUM_CURSOR_ORDER_VALUES: usize = 8;
@@ -23,7 +23,7 @@ const KEY_BYTES: usize = 32;
 const NONCE_BYTES: usize = 24;
 const TAG_BYTES: usize = 16;
 const ENVELOPE_OVERHEAD: usize = 1 + NONCE_BYTES + TAG_BYTES;
-const CURSOR_AAD: &[u8] = b"registry-relay-v2-cursor-v2";
+const CURSOR_AAD: &[u8] = b"registry-relay-v2-cursor-v3";
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -36,6 +36,9 @@ pub struct CursorPayload {
     pub contract_revision: String,
     pub source_revision: String,
     pub operation: String,
+    pub dataset_identifier: String,
+    pub entity_type_identifier: String,
+    pub response_profile: String,
     pub access_profile: String,
     pub disclosure_profile: String,
     pub transforms_digest: String,
@@ -73,6 +76,9 @@ pub enum CursorValue {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CursorBindings {
+    pub dataset_identifier: String,
+    pub entity_type_identifier: String,
+    pub response_profile: String,
     pub access_profile: String,
     pub disclosure_profile: String,
     pub transforms_digest: String,
@@ -98,6 +104,9 @@ impl CursorPayload {
             contract_revision,
             source_revision,
             operation,
+            dataset_identifier: bindings.dataset_identifier,
+            entity_type_identifier: bindings.entity_type_identifier,
+            response_profile: bindings.response_profile,
             access_profile: bindings.access_profile,
             disclosure_profile: bindings.disclosure_profile,
             transforms_digest: bindings.transforms_digest,
@@ -160,7 +169,7 @@ impl CursorKey {
         let bytes = Zeroizing::new(bytes);
         let mut derivation =
             HmacSha256::new_from_slice(bytes.as_slice()).map_err(|_| CursorError::Configuration)?;
-        derivation.update(b"registry-relay-v2-cursor-key-v2");
+        derivation.update(b"registry-relay-v2-cursor-key-v3");
         let derived: [u8; KEY_BYTES] = derivation.finalize().into_bytes().into();
         Ok(Self(Zeroizing::new(derived)))
     }
@@ -326,6 +335,9 @@ pub fn require_same_request(
     if cursor.contract_revision != request.contract_revision
         || cursor.source_revision != request.source_revision
         || cursor.operation != request.operation
+        || cursor.dataset_identifier != request.dataset_identifier
+        || cursor.entity_type_identifier != request.entity_type_identifier
+        || cursor.response_profile != request.response_profile
         || cursor.access_profile != request.access_profile
         || cursor.disclosure_profile != request.disclosure_profile
         || cursor.transforms_digest != request.transforms_digest
@@ -358,6 +370,10 @@ mod tests {
             "sha256:source".to_owned(),
             "resource.list".to_owned(),
             CursorBindings {
+                dataset_identifier: "records".to_owned(),
+                entity_type_identifier: "record".to_owned(),
+                response_profile: "https://id.registrystack.org/profiles/registry-record/v1"
+                    .to_owned(),
                 access_profile: "public".to_owned(),
                 disclosure_profile: "public".to_owned(),
                 transforms_digest: "sha256:transforms".to_owned(),
@@ -488,6 +504,15 @@ mod tests {
         mismatches.push(request);
         let mut request = payload();
         request.operation = "other.list".to_owned();
+        mismatches.push(request);
+        let mut request = payload();
+        request.dataset_identifier = "other-dataset".to_owned();
+        mismatches.push(request);
+        let mut request = payload();
+        request.entity_type_identifier = "other-entity-type".to_owned();
+        mismatches.push(request);
+        let mut request = payload();
+        request.response_profile = "https://example.test/other-profile".to_owned();
         mismatches.push(request);
         let mut request = payload();
         request.filters_digest = "sha256:other-filters".to_owned();

@@ -117,6 +117,8 @@ sources:
     expectedSchemaFingerprint: OBSERVED_FINGERPRINT
 resources:
   - id: public-unit
+    datasetIdentifier: public-units
+    entityTypeIdentifier: unit
     title: Public unit
     description: Public projection of a synthetic related unit.
     semanticClass: local:PublicUnit
@@ -159,6 +161,8 @@ resources:
           public: {access: public, disclosureProfile: public-view}
     processingDescriptions: []
   - id: protected-unit
+    datasetIdentifier: protected-units
+    entityTypeIdentifier: unit
     title: Protected unit
     description: Protected projection of a synthetic related unit.
     semanticClass: local:ProtectedUnit
@@ -1093,7 +1097,20 @@ fn assert_record_state(
     field: &str,
     expected_value: &str,
 ) {
-    assert_eq!(document["data"]["registryIdentifier"], REGISTRY_ID);
+    let (dataset_identifier, entity_type_identifier) = if operation.starts_with("public-unit.") {
+        ("public-units", "unit")
+    } else {
+        ("protected-units", "unit")
+    };
+    assert_eq!(document["meta"]["registryIdentifier"], REGISTRY_ID);
+    assert_eq!(document["meta"]["datasetIdentifier"], dataset_identifier);
+    assert_eq!(
+        document["meta"]["entityTypeIdentifier"],
+        entity_type_identifier
+    );
+    assert!(document["data"].get("registryIdentifier").is_none());
+    assert!(document["data"].get("datasetIdentifier").is_none());
+    assert!(document["data"].get("entityTypeIdentifier").is_none());
     assert_eq!(document["data"]["recordIdentifier"], "shared-001");
     assert_eq!(document["meta"]["operationIdentifier"], operation);
     assert_eq!(document["meta"]["disclosureProfile"], disclosure);
