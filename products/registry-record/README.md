@@ -7,7 +7,11 @@ client, authorization behavior, or source access.
 
 The profile is intentionally open to product-owned extensions. Product OpenAPI
 and response schemas remain responsible for closing the exact emitted shape and
-for binding the response context to governed values.
+for binding the response context to governed values. An exact JSON-LD product
+schema must pin the complete ordered context URI array, and local product tests
+must prove that locally pinned product contexts add terms without redefining a
+shared-context-owned term. The open base schema is only a conformance aid: it
+does not fetch context IRIs or turn them into trust or authority.
 
 Run the local artifact and fixture contract check with:
 

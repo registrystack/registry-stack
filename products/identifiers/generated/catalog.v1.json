@@ -12,7 +12,7 @@
       "description": "Governed JSON-LD terms for the Registry Record v1 base response profile.",
       "source": {
         "path": "products/registry-record/profile/registry-record-v1.md",
-        "sha256": "7e0eee88e2c08af556081d4efcf43aaa272bcfd7c58c4a188e13feea5f06e517"
+        "sha256": "f165e62044df2129b5cc533d3199cf81ae23d263617f39437ee37be87d3b37fe"
       },
       "artifact": {
         "path": "products/registry-record/context/registry-record-v1.jsonld",
@@ -803,11 +803,11 @@
       "description": "Open base response profile for one Registry record or a homogeneous Registry record collection.",
       "source": {
         "path": "products/registry-record/profile/registry-record-v1.md",
-        "sha256": "7e0eee88e2c08af556081d4efcf43aaa272bcfd7c58c4a188e13feea5f06e517"
+        "sha256": "f165e62044df2129b5cc533d3199cf81ae23d263617f39437ee37be87d3b37fe"
       },
       "artifact": {
         "path": "products/registry-record/profile/registry-record-v1.md",
-        "sha256": "7e0eee88e2c08af556081d4efcf43aaa272bcfd7c58c4a188e13feea5f06e517",
+        "sha256": "f165e62044df2129b5cc533d3199cf81ae23d263617f39437ee37be87d3b37fe",
         "mediaType": "text/markdown"
       }
     },
@@ -839,11 +839,11 @@
       "description": "Registry Record base response profile JSON Schema.",
       "source": {
         "path": "products/registry-record/schema/registry-record-v1.schema.json",
-        "sha256": "77167603834da2ca3ba7d8dfc68341464e66be130b54796c6624023236cd7501"
+        "sha256": "31cae7de9e84904e300d0d77ffbfdfc7a1de6127719a0ccbb3f6a88d7306510e"
       },
       "artifact": {
         "path": "products/registry-record/schema/registry-record-v1.schema.json",
-        "sha256": "77167603834da2ca3ba7d8dfc68341464e66be130b54796c6624023236cd7501",
+        "sha256": "31cae7de9e84904e300d0d77ffbfdfc7a1de6127719a0ccbb3f6a88d7306510e",
         "mediaType": "application/schema+json"
       }
     },

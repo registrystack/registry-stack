@@ -4,6 +4,7 @@ import json
 import unittest
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -52,6 +53,63 @@ def require_identifier(value: Any, field: str) -> None:
         raise ValueError(f"{field} must be an opaque non-empty string")
 
 
+def require_product_context_iri(value: Any, field: str) -> None:
+    if not isinstance(value, str) or not value or any(
+        character.isspace() or ord(character) < 0x20 for character in value
+    ):
+        raise ValueError(f"{field} must be a non-empty absolute HTTPS IRI")
+    try:
+        parsed = urlsplit(value)
+        hostname = parsed.hostname
+        _ = parsed.port
+    except ValueError as error:
+        raise ValueError(
+            f"{field} must be a non-empty absolute HTTPS IRI"
+        ) from error
+    if parsed.scheme != "https" or not parsed.netloc or not hostname:
+        raise ValueError(f"{field} must be a non-empty absolute HTTPS IRI")
+
+
+def validate_jsonld_context(context: Any) -> None:
+    if context == CONTEXT_URI:
+        return
+    if not isinstance(context, list) or len(context) < 2:
+        raise ValueError(
+            "JSON-LD @context must be the governed context or an ordered composition"
+        )
+    if context[0] != CONTEXT_URI:
+        raise ValueError(
+            "composed JSON-LD @context must start with the governed context"
+        )
+    for index, product_context in enumerate(context[1:], start=1):
+        require_product_context_iri(product_context, f"@context[{index}]")
+    if len(context) != len(set(context)):
+        raise ValueError("composed JSON-LD @context entries must be unique")
+
+
+def context_terms(document: Any, name: str) -> set[str]:
+    if not isinstance(document, dict) or not isinstance(
+        document.get("@context"), dict
+    ):
+        raise ValueError(f"{name} must contain one local inline context definition")
+    return set(document["@context"])
+
+
+def require_disjoint_product_context_terms(
+    shared_context: Any, product_contexts: tuple[Any, ...]
+) -> None:
+    shared_terms = context_terms(shared_context, "shared context")
+    for index, product_context in enumerate(product_contexts):
+        overlap = shared_terms.intersection(
+            context_terms(product_context, f"product context {index}")
+        )
+        if overlap:
+            raise ValueError(
+                "product context redefines shared-context-owned term: "
+                + ", ".join(sorted(overlap))
+            )
+
+
 def reject_nested_context(value: Any, path: str) -> None:
     if isinstance(value, dict):
         for key, member in value.items():
@@ -95,8 +153,7 @@ def validate_response(document: Any, *, jsonld: bool) -> None:
         raise ValueError("response must be an object")
     context = document.get("@context")
     if jsonld:
-        if context != CONTEXT_URI:
-            raise ValueError("JSON-LD response must use the governed @context")
+        validate_jsonld_context(context)
     elif "@context" in document:
         raise ValueError("JSON response must not include @context")
     if "@context" in document:
@@ -137,7 +194,12 @@ class RegistryRecordContractTest(unittest.TestCase):
         self.assertIn(CONTEXT_URI, profile)
         schema = load_json(ROOT / "schema/registry-record-v1.schema.json")
         self.assertEqual(schema["$id"], SCHEMA_URI)
-        self.assertEqual(schema["properties"]["@context"]["const"], CONTEXT_URI)
+        context_schema = schema["properties"]["@context"]["oneOf"]
+        self.assertEqual(context_schema[0]["const"], CONTEXT_URI)
+        self.assertEqual(context_schema[1]["prefixItems"][0]["const"], CONTEXT_URI)
+        self.assertEqual(context_schema[1]["minItems"], 2)
+        self.assertTrue(context_schema[1]["uniqueItems"])
+        self.assertEqual(context_schema[1]["items"]["format"], "iri")
 
     def test_schema_keeps_required_v1_member_placement_open_to_extensions(self) -> None:
         schema = load_json(ROOT / "schema/registry-record-v1.schema.json")
@@ -164,9 +226,41 @@ class RegistryRecordContractTest(unittest.TestCase):
             definitions["domainData"]["propertyNames"]["not"]["const"],
             "@context",
         )
-        self.assertTrue(definitions["singleResponse"]["additionalProperties"])
-        self.assertTrue(definitions["collectionResponse"]["additionalProperties"])
-        self.assertTrue(definitions["record"]["additionalProperties"])
+        extension_value = definitions["extensionValue"]
+        array_value = next(
+            branch for branch in extension_value["oneOf"] if branch["type"] == "array"
+        )
+        object_value = next(
+            branch for branch in extension_value["oneOf"] if branch["type"] == "object"
+        )
+        self.assertEqual(
+            array_value["items"]["$ref"], "#/$defs/extensionValue"
+        )
+        self.assertEqual(object_value["propertyNames"]["not"]["const"], "@context")
+        self.assertEqual(
+            object_value["additionalProperties"]["$ref"],
+            "#/$defs/extensionValue",
+        )
+        for definition in (
+            "domainData",
+            "record",
+            "responseMeta",
+            "pageInfo",
+            "singleResponse",
+            "collectionResponse",
+        ):
+            with self.subTest(definition=definition):
+                self.assertEqual(
+                    definitions[definition]["additionalProperties"]["$ref"],
+                    "#/$defs/extensionValue",
+                )
+
+    def test_nested_context_in_response_extension_is_rejected(self) -> None:
+        fixture = load_json(
+            ROOT / "fixtures/negative/nested-context-in-product-extension.jsonld"
+        )
+        with self.assertRaisesRegex(ValueError, "inline or nested @context"):
+            validate_response(fixture, jsonld=True)
 
     def test_context_preserves_all_opaque_identifiers_as_strings(self) -> None:
         context = load_json(ROOT / "context/registry-record-v1.jsonld")["@context"]
@@ -178,6 +272,29 @@ class RegistryRecordContractTest(unittest.TestCase):
                     mapping["@type"], "http://www.w3.org/2001/XMLSchema#string"
                 )
                 self.assertNotEqual(mapping["@type"], "@id")
+
+    def test_product_context_terms_must_be_disjoint_from_shared_terms(self) -> None:
+        shared_context = load_json(ROOT / "context/registry-record-v1.jsonld")
+        additive_product_context = {
+            "@context": {
+                "legalName": "https://product.example.org/vocab/legalName"
+            }
+        }
+        require_disjoint_product_context_terms(
+            shared_context, (additive_product_context,)
+        )
+
+        redefining_product_context = {
+            "@context": {
+                "recordIdentifier": "https://product.example.org/vocab/recordId"
+            }
+        }
+        with self.assertRaisesRegex(
+            ValueError, "redefines shared-context-owned term: recordIdentifier"
+        ):
+            require_disjoint_product_context_terms(
+                shared_context, (redefining_product_context,)
+            )
 
     def test_positive_fixtures_conform_in_json_and_jsonld(self) -> None:
         for path in sorted((ROOT / "fixtures/positive").iterdir()):

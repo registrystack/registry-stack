@@ -73,12 +73,27 @@ cross-entity operation must use another profile or explicit per-item context.
 
 ## JSON-LD
 
-JSON uses no `@context`. JSON-LD uses `application/ld+json` and exactly the
-governed context identifier below, and releases exactly the same values as
-JSON. Inline, host-selected, and other context identifiers do not conform. The
-shared context maps the five opaque identifiers to string-valued vocabulary
-predicates, never to JSON-LD node identifiers. Canonical resource IRIs belong
-in separate governed terms or links.
+JSON uses no `@context`. JSON-LD uses `application/ld+json` and releases exactly
+the same values as JSON. Its `@context` is either the exact shared context
+identifier below or an ordered array whose first item is that exact identifier
+and whose remaining one or more items are non-empty absolute HTTPS product
+context IRIs. Every array entry is unique. Inline objects, a wrong, missing, or
+reordered shared context, empty entries, duplicate entries, and non-HTTPS
+product context IRIs do not conform.
+
+Product contexts may add terms, but must not redefine any term owned by the
+shared context. This includes the envelope, metadata, pagination, domain-data,
+and identifier terms. Each exact product response schema must pin its complete
+scalar context or URI array, rather than accepting arbitrary extra contexts,
+and its local conformance tests must read locally pinned context documents and
+prove that shared and product term-name sets are disjoint. Neither this profile
+nor its open base schema dereferences a context IRI. An accepted IRI grants no
+trust, authority, code-loading capability, or permission to perform network
+I/O.
+
+The shared context maps the five opaque identifiers to string-valued
+vocabulary predicates, never to JSON-LD node identifiers. Canonical resource
+IRIs belong in separate governed terms or links.
 
 ```json
 {
@@ -103,7 +118,11 @@ in separate governed terms or links.
 This is a base conformance profile. Product schemas may add members while
 preserving the required members and meanings above. Consumers that validate
 only this profile must tolerate those product extensions. A product profile may
-close its actual response shape.
+close its actual response shape. The open base schema is a conformance aid, not
+a media-type discriminator, context resolver, trust source, or substitute for
+that exact product schema. A JSON product schema must prohibit `@context`; a
+JSON-LD product schema must require and pin the exact scalar or full URI array
+that the product emits.
 
 Successful single reads, single-result lookups, creates, patches, and
 tombstones use the single shape. Homogeneous list and revision-history

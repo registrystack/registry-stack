@@ -1,0 +1,18 @@
+{
+  "@context": [
+    "https://id.registrystack.org/contexts/registry-record/v1",
+    {
+      "legalName": "https://product.example.org/vocab/legalName"
+    }
+  ],
+  "data": {
+    "recordIdentifier": "company-123",
+    "revisionIdentifier": "42",
+    "domainData": {}
+  },
+  "meta": {
+    "registryIdentifier": "business-registry",
+    "datasetIdentifier": "legal-entities",
+    "entityTypeIdentifier": "company"
+  }
+}
