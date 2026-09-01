@@ -114,7 +114,13 @@ async fn real_postgres_revision_http_is_bounded_authorized_atomic_and_audit_gate
     assert_eq!(
         items
             .iter()
-            .map(|item| item["revision"].as_u64().expect("revision"))
+            .map(|item| {
+                item["revisionIdentifier"]
+                    .as_str()
+                    .expect("revision")
+                    .parse::<u64>()
+                    .expect("numeric revision")
+            })
             .collect::<Vec<_>>(),
         [3, 2, 1]
     );
@@ -126,7 +132,7 @@ async fn real_postgres_revision_http_is_bounded_authorized_atomic_and_audit_gate
     assert_eq!(items[2]["predecessorRevision"], Value::Null);
     assert_eq!(items[0]["actorReference"], ACTOR_REFERENCE);
     assert_eq!(items[0]["requestReference"], REQUEST_REFERENCE);
-    assert_eq!(items[0]["data"], json!({"label": "tombstoned"}));
+    assert_eq!(items[0]["domainData"], json!({"label": "tombstoned"}));
     assert!(items.iter().all(|item| item.get("changeContext").is_none()));
     assert!(!String::from_utf8(list_bytes)
         .expect("response is UTF-8")
@@ -166,8 +172,15 @@ async fn real_postgres_revision_http_is_bounded_authorized_atomic_and_audit_gate
     .await;
     assert_eq!(tombstoned_detail.status(), StatusCode::OK);
     let detail = body_json(tombstoned_detail).await;
-    assert_eq!(detail["revision"], 3);
-    assert_eq!(detail["lifecycle"], "tombstoned");
+    assert_eq!(detail["data"]["revisionIdentifier"], "3");
+    assert_eq!(detail["data"]["recordIdentifier"], RECORD_ID);
+    assert_eq!(detail["data"]["lifecycle"], "tombstoned");
+    assert_eq!(
+        detail["meta"]["registryIdentifier"],
+        "revision-http-registry"
+    );
+    assert_eq!(detail["meta"]["datasetIdentifier"], "test-dataset");
+    assert_eq!(detail["meta"]["entityTypeIdentifier"], "widget");
 
     let bounded = send(
         &app,
@@ -179,8 +192,14 @@ async fn real_postgres_revision_http_is_bounded_authorized_atomic_and_audit_gate
     let bounded = body_json(bounded).await;
     let bounded = bounded["items"].as_array().expect("bounded items");
     assert_eq!(bounded.len(), 100);
-    assert_eq!(bounded.first().expect("newest")["revision"], 101);
-    assert_eq!(bounded.last().expect("oldest retained")["revision"], 2);
+    assert_eq!(
+        bounded.first().expect("newest")["revisionIdentifier"],
+        "101"
+    );
+    assert_eq!(
+        bounded.last().expect("oldest retained")["revisionIdentifier"],
+        "2"
+    );
 
     for uri in [
         format!("/v1/records/widgets/{HIDDEN_RECORD_ID}/revisions"),
@@ -362,12 +381,12 @@ async fn real_postgres_revision_http_lists_internal_migration_revisions() {
     let body = body_json(response).await;
     let items = body["items"].as_array().expect("list returns items");
     assert_eq!(items.len(), 2);
-    assert_eq!(items[0]["revision"], 2);
+    assert_eq!(items[0]["revisionIdentifier"], "2");
     assert_eq!(items[0]["mutationKind"], "migration");
-    assert_eq!(items[0]["operationId"], MIGRATION_REFERENCE);
+    assert_eq!(items[0]["operationIdentifier"], MIGRATION_REFERENCE);
     assert_eq!(items[0]["actorReference"], MIGRATION_SYSTEM_ORIGIN);
     assert_eq!(items[0]["requestReference"], MIGRATION_REFERENCE);
-    assert_eq!(items[0]["data"], json!({"label": "migrated"}));
+    assert_eq!(items[0]["domainData"], json!({"label": "migrated"}));
     assert_eq!(items[1]["mutationKind"], "create");
     database.cleanup().await;
 }

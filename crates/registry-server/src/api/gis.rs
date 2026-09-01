@@ -19,9 +19,9 @@ use serde_json::{json, Map, Value};
 
 use super::{
     audited_read_concealment, audited_read_refusal, authorize_route, concealed, data_field_type,
-    exact_read_no_store, invalid_query, percent_decode, read_query, unavailable, AuthorizedSurface,
-    HttpService, QueryOptions, QueryParseError, ReadQueryError, RecordReadKind, RecordReadRequest,
-    VerifiedRequestClaims, MAX_RAW_QUERY_BYTES,
+    exact_non_record_no_store, invalid_query, percent_decode, read_query, unavailable,
+    AuthorizedSurface, HttpService, QueryOptions, QueryParseError, ReadQueryError, RecordReadKind,
+    RecordReadRequest, VerifiedRequestClaims, MAX_RAW_QUERY_BYTES,
 };
 use crate::contract::{FieldTypeSource, Operation};
 use crate::correlation::RequestCorrelation;
@@ -395,7 +395,7 @@ async fn items(
         correlation,
     };
     match service.records.list(request).await {
-        Ok(response) => exact_read_no_store(response),
+        Ok(response) => exact_non_record_no_store(response),
         Err(super::ReadServiceError::Unavailable) => unavailable(),
         Err(super::ReadServiceError::CursorInvalid) => super::cursor_invalid(),
     }
@@ -1132,7 +1132,7 @@ mod tests {
         let source = r#"
 apiVersion: registry.registrystack.org/v1alpha1
 kind: RegistryProject
-registry: {id: gis-test, version: "1", defaultLanguage: en}
+registry: {id: gis-test, version: "1", defaultLanguage: en, canonicalBaseIri: https://gis-test.example.test}
 entities:
   - id: service-site
     primaryDataset: test-dataset

@@ -552,6 +552,7 @@ fn create_request<'a>(
             .iter()
             .map(|field| (*field).to_owned())
             .collect::<BTreeSet<_>>(),
+        representation: registry_server::record_profile::RecordRepresentation::Json,
         correlation: registry_server::correlation::RequestCorrelation::server_created(),
     }
 }
@@ -567,7 +568,7 @@ fn temporal_data(start: &str, end: &str) -> Map<String, Value> {
 fn response_id(outcome: &registry_server::mutation::MutationOutcome) -> String {
     let body: Value = serde_json::from_slice(outcome.response().body())
         .expect("mutation response is canonical JSON");
-    body["id"]
+    body["data"]["recordIdentifier"]
         .as_str()
         .expect("create response contains its record id")
         .to_owned()

@@ -25,6 +25,7 @@ use crate::model::{
     HttpMethod,
 };
 use crate::physical_names::{hex_prefix, PhysicalNameInventory};
+use crate::record_profile::{link_header_value, CONTEXT_IDENTIFIER, PROFILE_IDENTIFIER};
 
 pub const REGISTRY_METADATA_ARTIFACT_PATH: &str = "generated/metadata/registry.json";
 
@@ -1450,6 +1451,7 @@ fn openapi_document(
         operations.insert(
             method_name(route.method).to_owned(),
             openapi_operation(OpenApiOperationSpec {
+                registry_identifier: registry_id,
                 route,
                 entity,
                 response_entity,
@@ -1526,6 +1528,7 @@ pub(crate) enum OpenApiAccessProfiles<'a> {
 
 #[derive(Clone, Copy)]
 pub(crate) struct OpenApiOperationSpec<'a> {
+    pub registry_identifier: &'a str,
     pub route: &'a CompiledRoute,
     pub entity: &'a CompiledEntity,
     pub response_entity: &'a CompiledEntity,
@@ -1574,6 +1577,7 @@ pub(crate) fn openapi_components(
 }
 
 pub(crate) fn openapi_operation(spec: OpenApiOperationSpec<'_>) -> Value {
+    let geojson_profiles = geojson_profiles(spec);
     let mut operation = Map::from_iter([
         ("operationId".to_owned(), json!(spec.route.id)),
         ("x-registry-entity".to_owned(), json!(spec.route.entity_id)),
@@ -1587,6 +1591,27 @@ pub(crate) fn openapi_operation(spec: OpenApiOperationSpec<'_>) -> Value {
         ),
         ("security".to_owned(), operation_security(spec)),
     ]);
+    if geojson_profiles.is_empty() {
+        operation.insert(
+            "x-registry-responseShape".to_owned(),
+            json!(operation_response_shape(spec)),
+        );
+    } else {
+        operation.insert(
+            "x-registry-responseShapes".to_owned(),
+            json!({
+                "application/json": operation_response_shape(spec),
+                "application/ld+json": operation_response_shape(spec),
+                "application/geo+json": geojson_operation_response_shape(spec),
+            }),
+        );
+    }
+    if is_registry_record_response(spec) {
+        operation.insert(
+            "x-registry-responseProfile".to_owned(),
+            json!(PROFILE_IDENTIFIER),
+        );
+    }
     match spec.access_profiles {
         OpenApiAccessProfiles::All => {
             operation.insert(
@@ -1644,7 +1669,6 @@ pub(crate) fn openapi_operation(spec: OpenApiOperationSpec<'_>) -> Value {
         spec.query,
         spec.access_profiles,
     );
-    let geojson_profiles = geojson_profiles(spec);
     if !geojson_profiles.is_empty() {
         if let Some(select) = parameters
             .iter_mut()
@@ -1652,16 +1676,26 @@ pub(crate) fn openapi_operation(spec: OpenApiOperationSpec<'_>) -> Value {
         {
             select["examples"] = geojson_selection_examples(spec, &geojson_profiles);
         }
-        parameters.push(header_parameter(
-            "Accept",
-            false,
-            json!({"type": "string", "enum": ["application/json", "application/geo+json"]}),
-            "Choose JSON or GeoJSON. Selecting fields without the primary Point returns null geometry; include that Point in $select to display a map feature.",
-        ));
         operation.insert(
             "x-registry-geojsonProfiles".to_owned(),
             json!(geojson_profiles),
         );
+    }
+    if is_registry_record_response(spec) {
+        let mut media_types = vec!["application/json", "application/ld+json"];
+        if !geojson_profiles.is_empty() {
+            media_types.push("application/geo+json");
+        }
+        parameters.push(header_parameter(
+            "Accept",
+            false,
+            json!({"type": "string", "enum": media_types}),
+            if geojson_profiles.is_empty() {
+                "Choose the ordinary JSON or JSON-LD Registry Record representation."
+            } else {
+                "Choose ordinary JSON, JSON-LD, or GeoJSON. Selecting fields without the primary Point returns null geometry; include that Point in $select to display a map feature."
+            },
+        ));
     }
     if !parameters.is_empty() {
         operation.insert("parameters".to_owned(), Value::Array(parameters));
@@ -1671,6 +1705,53 @@ pub(crate) fn openapi_operation(spec: OpenApiOperationSpec<'_>) -> Value {
     }
     operation.insert("responses".to_owned(), operation_responses(spec));
     Value::Object(operation)
+}
+
+fn is_registry_record_response(spec: OpenApiOperationSpec<'_>) -> bool {
+    matches!(
+        spec.route.operation,
+        Operation::Create
+            | Operation::Get
+            | Operation::Lookup
+            | Operation::List
+            | Operation::Snapshot
+            | Operation::Patch
+            | Operation::Tombstone
+            | Operation::Revisions
+    )
+}
+
+fn operation_response_shape(spec: OpenApiOperationSpec<'_>) -> &'static str {
+    match spec.route.operation {
+        Operation::Create
+        | Operation::Get
+        | Operation::Lookup
+        | Operation::Patch
+        | Operation::Tombstone => "RegistryRecordSingleV1",
+        Operation::List => "RegistryRecordCollectionV1",
+        Operation::Snapshot => "RegistryServerSnapshotCollectionV1",
+        Operation::Revisions if spec.route.revision_kind == Some(CompiledRevisionKind::Detail) => {
+            "RegistryServerRevisionRecordV1"
+        }
+        Operation::Revisions => "RegistryServerRevisionCollectionV1",
+        Operation::Batch => "RegistryServerAtomicBatchMutationResponseV1",
+        Operation::Invoke => "RegistryServerImmediateActionResponseV1",
+        Operation::SubmitRequest
+        | Operation::ApproveRequest
+        | Operation::RejectRequest
+        | Operation::RequestRevision
+        | Operation::ReviseRequest
+        | Operation::CancelRequest
+        | Operation::ApplyRequest => "RegistryServerChangeRequestActionResponseV1",
+    }
+}
+
+fn geojson_operation_response_shape(spec: OpenApiOperationSpec<'_>) -> &'static str {
+    match spec.route.operation {
+        Operation::Get => "RegistryServerGeoJsonFeatureV1",
+        Operation::List => "RegistryServerGeoJsonFeatureCollectionV1",
+        _ => unreachable!("only record get and list routes expose GeoJSON"),
+    }
 }
 
 fn render_request_action(spec: OpenApiOperationSpec<'_>) -> Value {
@@ -2249,40 +2330,54 @@ pub(crate) fn json_patch_array_schema() -> Value {
 
 fn operation_responses(spec: OpenApiOperationSpec<'_>) -> Value {
     let mut success = match spec.route.operation {
-        Operation::Create => success_response(
+        Operation::Create => registry_record_success_response(
+            spec,
             "Record created",
             StatusResponseHeaders::MutationCreate,
-            mutation_response_schema(spec.schema_ref),
+            single_response_schema(spec, mutation_record_member_schema(spec.schema_ref), false),
+            single_response_schema(spec, mutation_record_member_schema(spec.schema_ref), true),
         ),
-        Operation::Get => success_response(
+        Operation::Get => registry_record_success_response(
+            spec,
             "Record returned",
             StatusResponseHeaders::ReadDetail,
-            record_response_schema(spec.response_entity, spec.schema_ref),
+            single_response_schema(spec, record_member_schema(spec), false),
+            single_response_schema(spec, record_member_schema(spec), true),
         ),
-        Operation::Lookup => success_response(
+        Operation::Lookup => registry_record_success_response(
+            spec,
             "Lookup resolved to one record",
             StatusResponseHeaders::NoStore,
-            record_response_schema(spec.response_entity, spec.schema_ref),
+            single_response_schema(spec, record_member_schema(spec), false),
+            single_response_schema(spec, record_member_schema(spec), true),
         ),
-        Operation::List => success_response(
+        Operation::List => registry_record_success_response(
+            spec,
             "Records returned",
             StatusResponseHeaders::NoStore,
-            list_response_schema(spec.response_entity, spec.schema_ref),
+            list_response_schema(spec, false),
+            list_response_schema(spec, true),
         ),
-        Operation::Snapshot => success_response(
+        Operation::Snapshot => registry_record_success_response(
+            spec,
             "Historical records returned",
             StatusResponseHeaders::NoStore,
-            snapshot_response_schema(spec),
+            snapshot_response_schema(spec, false),
+            snapshot_response_schema(spec, true),
         ),
-        Operation::Patch => success_response(
+        Operation::Patch => registry_record_success_response(
+            spec,
             "Record patched",
             StatusResponseHeaders::Mutation,
-            mutation_response_schema(spec.schema_ref),
+            single_response_schema(spec, mutation_record_member_schema(spec.schema_ref), false),
+            single_response_schema(spec, mutation_record_member_schema(spec.schema_ref), true),
         ),
-        Operation::Tombstone => success_response(
+        Operation::Tombstone => registry_record_success_response(
+            spec,
             "Record tombstoned",
             StatusResponseHeaders::Mutation,
-            mutation_response_schema(spec.schema_ref),
+            single_response_schema(spec, mutation_record_member_schema(spec.schema_ref), false),
+            single_response_schema(spec, mutation_record_member_schema(spec.schema_ref), true),
         ),
         Operation::Batch => {
             let batch = spec
@@ -2302,10 +2397,12 @@ fn operation_responses(spec: OpenApiOperationSpec<'_>) -> Value {
                 ),
             )
         }
-        Operation::Revisions => success_response(
+        Operation::Revisions => registry_record_success_response(
+            spec,
             "Record revisions returned",
             StatusResponseHeaders::NoStore,
-            revision_response_schema(spec),
+            revision_response_schema(spec, false),
+            revision_response_schema(spec, true),
         ),
         Operation::Invoke => success_response(
             "Action accepted",
@@ -2332,7 +2429,7 @@ fn operation_responses(spec: OpenApiOperationSpec<'_>) -> Value {
         });
         if spec.route.operation == Operation::Get {
             success["headers"]["ETag"]["description"] = json!(
-                "Strong Registry mutation precondition for JSON only. GeoJSON does not return this validator."
+                "Strong Registry mutation precondition for JSON and JSON-LD only. GeoJSON does not return this validator."
             );
             success["headers"]["Cache-Control"] = json!({
                 "description": "Protected GeoJSON responses are not stored.",
@@ -2424,6 +2521,29 @@ fn success_response(description: &str, headers: StatusResponseHeaders, schema: V
     Value::Object(response)
 }
 
+fn registry_record_success_response(
+    spec: OpenApiOperationSpec<'_>,
+    description: &str,
+    headers: StatusResponseHeaders,
+    json_schema: Value,
+    json_ld_schema: Value,
+) -> Value {
+    let mut response = success_response(description, headers, json_schema);
+    response["content"]["application/ld+json"] = json!({"schema": json_ld_schema});
+    response["headers"]["Link"] = json!({
+        "description": "Emitted only for application/json and application/ld+json Registry Record responses and omitted for application/geo+json. Carries the Registry Record profile and caller-visible entity schema. The describedby target is a relative Server route and is never derived from Host or forwarded headers.",
+        "schema": {
+            "const": link_header_value(spec.response_entity)
+                .expect("compiled entity identifiers are safe response-header components")
+        }
+    });
+    response["headers"]["Vary"] = json!({
+        "description": "Responses vary by authorization and negotiated representation.",
+        "schema": {"type": "string"}
+    });
+    response
+}
+
 fn no_store_header() -> Value {
     json!({"description": "Caller-dependent responses must not be stored.", "schema": {"const": "no-store"}})
 }
@@ -2452,14 +2572,19 @@ fn traceparent_schema() -> Value {
     })
 }
 
-fn record_response_schema(entity: &CompiledEntity, schema_ref: &str) -> Value {
+fn record_member_schema(spec: OpenApiOperationSpec<'_>) -> Value {
+    let entity = spec.response_entity;
+    let schema_ref = spec.schema_ref;
     let mut properties = Map::from_iter([
-        ("id".to_owned(), json!({"type": "string", "format": "uuid"})),
         (
-            "revision".to_owned(),
-            json!({"type": "integer", "format": "int64", "minimum": 1}),
+            "recordIdentifier".to_owned(),
+            json!({"type": "string", "format": "uuid"}),
         ),
-        ("data".to_owned(), json!({"type": "object"})),
+        (
+            "revisionIdentifier".to_owned(),
+            json!({"type": "string", "pattern": "^[1-9][0-9]*$"}),
+        ),
+        ("domainData".to_owned(), json!({"type": "object"})),
     ]);
     if entity.change_request.is_some() {
         properties.insert("request".to_owned(), request_record_metadata_schema());
@@ -2477,7 +2602,7 @@ fn record_response_schema(entity: &CompiledEntity, schema_ref: &str) -> Value {
     let mut schema = json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "revision", "data"],
+        "required": ["recordIdentifier", "revisionIdentifier", "domainData"],
         "properties": properties,
         "allOf": [{
             "if": {
@@ -2494,7 +2619,7 @@ fn record_response_schema(entity: &CompiledEntity, schema_ref: &str) -> Value {
             },
             "then": {
                 "properties": {
-                    "data": {
+                    "domainData": {
                         "type": "object",
                         "additionalProperties": false,
                         "maxProperties": 0
@@ -2503,7 +2628,7 @@ fn record_response_schema(entity: &CompiledEntity, schema_ref: &str) -> Value {
             },
             "else": {
                 "properties": {
-                    "data": {"$ref": format!("#/components/schemas/{schema_ref}")}
+                    "domainData": {"$ref": format!("#/components/schemas/{schema_ref}")}
                 }
             }
         }]
@@ -2513,22 +2638,22 @@ fn record_response_schema(entity: &CompiledEntity, schema_ref: &str) -> Value {
             .as_object_mut()
             .expect("record schema is object")
             .remove("allOf");
-        schema["properties"]["data"] =
+        schema["properties"]["domainData"] =
             json!({"$ref": format!("#/components/schemas/{schema_ref}")});
     }
     schema
 }
 
-fn mutation_response_schema(schema_ref: &str) -> Value {
+fn mutation_record_member_schema(schema_ref: &str) -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "revision", "snapshot", "data"],
+        "required": ["recordIdentifier", "revisionIdentifier", "domainData", "snapshot"],
         "properties": {
-            "id": {"type": "string", "format": "uuid"},
-            "revision": {"type": "integer", "format": "int64", "minimum": 1},
+            "recordIdentifier": {"type": "string", "format": "uuid"},
+            "revisionIdentifier": {"type": "string", "pattern": "^[1-9][0-9]*$"},
             "snapshot": snapshot_reference_schema(),
-            "data": {"$ref": format!("#/components/schemas/{schema_ref}")},
+            "domainData": {"$ref": format!("#/components/schemas/{schema_ref}")},
         }
     })
 }
@@ -2537,27 +2662,95 @@ fn snapshot_reference_schema() -> Value {
     json!({"type": "string", "maxLength": crate::query::MAX_OPAQUE_VALUE_BYTES})
 }
 
-fn list_response_schema(entity: &CompiledEntity, schema_ref: &str) -> Value {
+fn response_meta_schema(spec: OpenApiOperationSpec<'_>) -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["items", "pageInfo"],
+        "required": ["registryIdentifier", "datasetIdentifier", "entityTypeIdentifier"],
         "properties": {
-            "items": {
-                "type": "array",
-                "items": record_response_schema(entity, schema_ref),
+            "registryIdentifier": {"const": spec.registry_identifier},
+            "datasetIdentifier": {
+                "const": spec.response_entity.primary_dataset.as_deref()
+                    .expect("served entities have a compiled primary dataset")
             },
-            "pageInfo": {
+            "entityTypeIdentifier": {"const": spec.response_entity.id}
+        }
+    })
+}
+
+fn single_response_schema(
+    spec: OpenApiOperationSpec<'_>,
+    member_schema: Value,
+    json_ld: bool,
+) -> Value {
+    let mut required = vec!["data", "meta"];
+    let mut properties = Map::from_iter([
+        ("data".to_owned(), member_schema),
+        ("meta".to_owned(), response_meta_schema(spec)),
+    ]);
+    if json_ld {
+        required.push("@context");
+        properties.insert("@context".to_owned(), json!({"const": CONTEXT_IDENTIFIER}));
+    }
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": required,
+        "properties": properties
+    })
+}
+
+fn collection_response_schema(
+    spec: OpenApiOperationSpec<'_>,
+    member_schema: Value,
+    mut extensions: Map<String, Value>,
+    required_extensions: &[&'static str],
+    json_ld: bool,
+) -> Value {
+    let mut required = vec!["items", "pageInfo", "meta"];
+    required.extend_from_slice(required_extensions);
+    let mut properties = Map::from_iter([
+        (
+            "items".to_owned(),
+            json!({"type": "array", "items": member_schema}),
+        ),
+        (
+            "pageInfo".to_owned(),
+            json!({
                 "type": "object",
                 "additionalProperties": false,
                 "required": ["nextCursor"],
                 "properties": {
                     "nextCursor": {"type": ["string", "null"], "maxLength": crate::query::MAX_OPAQUE_VALUE_BYTES}
                 }
-            },
-            "count": {"type": "integer", "format": "int64", "minimum": 0}
-        }
+            }),
+        ),
+        ("meta".to_owned(), response_meta_schema(spec)),
+    ]);
+    properties.append(&mut extensions);
+    if json_ld {
+        required.push("@context");
+        properties.insert("@context".to_owned(), json!({"const": CONTEXT_IDENTIFIER}));
+    }
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": required,
+        "properties": properties
     })
+}
+
+fn list_response_schema(spec: OpenApiOperationSpec<'_>, json_ld: bool) -> Value {
+    collection_response_schema(
+        spec,
+        record_member_schema(spec),
+        Map::from_iter([(
+            "count".to_owned(),
+            json!({"type": "integer", "format": "int64", "minimum": 0}),
+        )]),
+        &[],
+        json_ld,
+    )
 }
 
 fn request_record_metadata_schema() -> Value {
@@ -2755,41 +2948,24 @@ fn nullable_effect_digest_schema() -> Value {
     json!({"type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$"})
 }
 
-fn snapshot_response_schema(spec: OpenApiOperationSpec<'_>) -> Value {
-    let mut properties = Map::from_iter([
+fn snapshot_response_schema(spec: OpenApiOperationSpec<'_>, json_ld: bool) -> Value {
+    let mut extensions = Map::from_iter([
         ("snapshot".to_owned(), snapshot_reference_schema()),
-        (
-            "items".to_owned(),
-            json!({
-                "type": "array",
-                "items": record_response_schema(spec.response_entity, spec.schema_ref),
-            }),
-        ),
-        (
-            "pageInfo".to_owned(),
-            json!({
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["nextCursor"],
-                "properties": {
-                    "nextCursor": {"type": ["string", "null"], "maxLength": crate::query::MAX_OPAQUE_VALUE_BYTES}
-                }
-            }),
-        ),
         (
             "count".to_owned(),
             json!({"type": "integer", "format": "int64", "minimum": 0}),
         ),
     ]);
     if let Some(valid_at) = snapshot_valid_at_schema(spec.route, spec.query, spec.access_profiles) {
-        properties.insert("validAt".to_owned(), valid_at);
+        extensions.insert("validAt".to_owned(), valid_at);
     }
-    json!({
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["snapshot", "items", "pageInfo"],
-        "properties": properties
-    })
+    collection_response_schema(
+        spec,
+        record_member_schema(spec),
+        extensions,
+        &["snapshot"],
+        json_ld,
+    )
 }
 
 fn geojson_profiles<'a>(spec: OpenApiOperationSpec<'a>) -> Vec<&'a str> {
@@ -2880,7 +3056,7 @@ fn geojson_response_schema(spec: OpenApiOperationSpec<'_>) -> Option<Value> {
     if spec.route.operation == Operation::Get {
         return Some(feature);
     }
-    let collection = list_response_schema(spec.response_entity, spec.schema_ref);
+    let collection = list_response_schema(spec, false);
     Some(json!({
         "type": "object",
         "additionalProperties": false,
@@ -2978,11 +3154,15 @@ fn batch_response_schema(
     })
 }
 
-fn revision_response_schema(spec: OpenApiOperationSpec<'_>) -> Value {
+fn revision_response_schema(spec: OpenApiOperationSpec<'_>, json_ld: bool) -> Value {
     let mut properties = Map::from_iter([
         (
-            "revision".to_owned(),
-            json!({"type": "integer", "format": "int64", "minimum": 1}),
+            "recordIdentifier".to_owned(),
+            json!({"type": "string", "format": "uuid"}),
+        ),
+        (
+            "revisionIdentifier".to_owned(),
+            json!({"type": "string", "pattern": "^[1-9][0-9]*$"}),
         ),
         (
             "predecessorRevision".to_owned(),
@@ -2996,6 +3176,8 @@ fn revision_response_schema(spec: OpenApiOperationSpec<'_>) -> Value {
             "mutationKind".to_owned(),
             json!({"type": "string", "enum": ["create", "patch", "tombstone", "migration"]}),
         ),
+        ("packageRevision".to_owned(), json!({"type": "string"})),
+        ("operationIdentifier".to_owned(), json!({"type": "string"})),
         ("actorReference".to_owned(), json!({"type": "string"})),
         ("requestReference".to_owned(), json!({"type": "string"})),
         (
@@ -3003,7 +3185,7 @@ fn revision_response_schema(spec: OpenApiOperationSpec<'_>) -> Value {
             json!({"type": "string", "format": "date-time"}),
         ),
         (
-            "data".to_owned(),
+            "domainData".to_owned(),
             json!({"$ref": format!("#/components/schemas/{}", spec.schema_ref)}),
         ),
     ]);
@@ -3014,32 +3196,27 @@ fn revision_response_schema(spec: OpenApiOperationSpec<'_>) -> Value {
         "type": "object",
         "additionalProperties": false,
         "required": [
-            "revision",
+            "recordIdentifier",
+            "revisionIdentifier",
             "predecessorRevision",
             "lifecycle",
+            "packageRevision",
+            "operationIdentifier",
             "mutationKind",
             "actorReference",
             "requestReference",
             "createdAt",
-            "data"
+            "domainData"
         ],
         "properties": properties
     });
     if spec.route.revision_kind == Some(CompiledRevisionKind::Detail) {
-        item
+        single_response_schema(spec, item, json_ld)
     } else {
-        json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["items"],
-            "properties": {
-                "items": {
-                    "type": "array",
-                    "maxItems": crate::model::MAX_REVISION_HISTORY_RECORDS,
-                    "items": item
-                }
-            }
-        })
+        let mut collection = collection_response_schema(spec, item, Map::new(), &[], json_ld);
+        collection["properties"]["items"]["maxItems"] =
+            json!(crate::model::MAX_REVISION_HISTORY_RECORDS);
+        collection
     }
 }
 
@@ -3737,6 +3914,7 @@ mod spatial_tests {
             .find(|route| route.operation == method)
             .expect("fixture route exists");
         openapi_operation(OpenApiOperationSpec {
+            registry_identifier: registry.registry_id(),
             route,
             entity,
             response_entity: entity,
@@ -3764,6 +3942,19 @@ mod spatial_tests {
         assert_eq!(
             map["x-registry-queryProfile"]["spatialQueries"]["bbox"]["maximumLatitudeSpanDegrees"],
             0.25
+        );
+        assert!(map.get("x-registry-responseShape").is_none());
+        assert_eq!(
+            map["x-registry-responseShapes"],
+            json!({
+                "application/json": "RegistryRecordCollectionV1",
+                "application/ld+json": "RegistryRecordCollectionV1",
+                "application/geo+json": "RegistryServerGeoJsonFeatureCollectionV1",
+            })
+        );
+        assert_eq!(
+            map["x-registry-responseProfile"], PROFILE_IDENTIFIER,
+            "the stable profile marker governs only the JSON and JSON-LD shapes in the media map"
         );
         let feature = &map["responses"]["200"]["content"]["application/geo+json"]["schema"]
             ["properties"]["features"]["items"];
@@ -3800,6 +3991,12 @@ mod spatial_tests {
         assert!(plain["responses"]["200"]["content"]
             .get("application/geo+json")
             .is_none());
+        assert_eq!(
+            plain["x-registry-responseShape"],
+            "RegistryRecordCollectionV1"
+        );
+        assert_eq!(plain["x-registry-responseProfile"], PROFILE_IDENTIFIER);
+        assert!(plain.get("x-registry-responseShapes").is_none());
         assert!(plain.get("x-registry-geojsonProfiles").is_none());
         assert!(plain["x-registry-queryProfile"]
             .get("spatialQueries")
@@ -3812,6 +4009,14 @@ mod spatial_tests {
         let get = operation(&registry, Operation::Get, "geometry-only");
         let content = &get["responses"]["200"]["content"];
         assert!(content["application/json"].is_object());
+        assert_eq!(
+            get["x-registry-responseShapes"]["application/geo+json"],
+            "RegistryServerGeoJsonFeatureV1"
+        );
+        assert_eq!(
+            get["x-registry-responseShapes"]["application/json"],
+            "RegistryRecordSingleV1"
+        );
         let schema = &content["application/geo+json"]["schema"];
         assert_eq!(schema["properties"]["type"]["const"], "Feature");
         assert_eq!(schema["properties"]["properties"]["properties"], json!({}));

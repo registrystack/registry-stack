@@ -300,9 +300,12 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
     )
     .unwrap();
     let widened_body = canonicalize_json(&json!({
-        "items":[{"id":"00000000-0000-4000-8000-000000000001","revision":1,
-                   "data":{"code":"ROW-000","secret":SECRET_CANARY}}],
-        "pageInfo":{"nextCursor":null}
+        "items":[{"recordIdentifier":"00000000-0000-4000-8000-000000000001",
+                   "revisionIdentifier":"1",
+                   "domainData":{"code":"ROW-000","secret":SECRET_CANARY}}],
+        "pageInfo":{"nextCursor":null},
+        "meta":{"registryIdentifier":"data-export-registry",
+                "datasetIdentifier":"test-dataset","entityTypeIdentifier":"entry"}
     }))
     .unwrap();
     let widened = execute_export_page(
@@ -353,7 +356,7 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
         "kind":"RegistryProject",
         "registry":{"id":"data-export-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
         "entities":[{
-            "id":"entry", "route":"entries", "mutationMode":"create_only",
+            "id":"entry", "primaryDataset":"test-dataset", "route":"entries", "mutationMode":"create_only",
             "batch":{"maximumItems":60,"maximumBytes":131072},
             "fields":[
                 {"id":"code","type":"string","required":true,"maxLength":16,

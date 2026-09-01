@@ -694,6 +694,7 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
           "registry":{"id":"history-store-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"membership",
+            "primaryDataset":"test-dataset",
             "route":"memberships",
             "mutationMode":"mutable",
             "tombstone":true,

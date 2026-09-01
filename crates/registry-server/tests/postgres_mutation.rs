@@ -320,6 +320,7 @@ async fn real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable()
             &mut client,
             MutationRequest {
                 response_fields: BTreeSet::from(["label".to_owned()]),
+                representation: registry_server::record_profile::RecordRepresentation::Json,
                 correlation: registry_server::correlation::RequestCorrelation::server_created(),
                 ..create_request(
                     &create_plan,
@@ -336,6 +337,33 @@ async fn real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable()
         changed_projection,
         before_changed_projection,
         before_changed_projection_refusals,
+        &database,
+        table,
+    )
+    .await;
+
+    let before_changed_representation = durable_counts(&database, table).await;
+    let before_changed_representation_refusals = refusal_audit_count(&database).await;
+    let changed_representation = coordinator
+        .execute(
+            &mut client,
+            MutationRequest {
+                representation: registry_server::record_profile::RecordRepresentation::JsonLd,
+                ..create_request(
+                    &create_plan,
+                    "positive-key",
+                    &claims,
+                    RECORD_POSITIVE,
+                    "created-label",
+                    Some(7),
+                )
+            },
+        )
+        .await;
+    assert_idempotency_refusal_only(
+        changed_representation,
+        before_changed_representation,
+        before_changed_representation_refusals,
         &database,
         table,
     )
@@ -508,11 +536,11 @@ async fn real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable()
         .contains_key(&PermittedResponseHeader::Location));
     let patched_body: Value =
         serde_json::from_slice(patched.response().body()).expect("patch response is JSON");
-    assert_eq!(patched_body["data"]["label"], "after-patch");
-    assert_eq!(patched_body["data"]["quantity"], 41);
-    assert_eq!(patched_body["id"], patch_id);
-    assert_eq!(patched_body["revision"], 2);
-    assert_snapshot_reference(&patched_body["snapshot"]);
+    assert_eq!(patched_body["data"]["domainData"]["label"], "after-patch");
+    assert_eq!(patched_body["data"]["domainData"]["quantity"], 41);
+    assert_eq!(patched_body["data"]["recordIdentifier"], patch_id);
+    assert_eq!(patched_body["data"]["revisionIdentifier"], "2");
+    assert_snapshot_reference(&patched_body["data"]["snapshot"]);
     let patched_etag = response_etag(&patched);
     assert_one_complete_effect(before_patch, durable_counts(&database, table).await, 0, 2);
     assert_patch_preserved_omitted_field(&database, table, &patch_id).await;
@@ -544,6 +572,7 @@ async fn real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable()
                     value: json!(42),
                 }]),
                 response_fields: BTreeSet::from(["label".to_owned()]),
+                representation: registry_server::record_profile::RecordRepresentation::Json,
                 correlation: registry_server::correlation::RequestCorrelation::server_created(),
             },
         )
@@ -570,6 +599,7 @@ async fn real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable()
                 expected_etag: Some(&patched_etag),
                 body: MutationBody::Patch(Vec::new()),
                 response_fields: BTreeSet::from(["label".to_owned()]),
+                representation: registry_server::record_profile::RecordRepresentation::Json,
                 correlation: registry_server::correlation::RequestCorrelation::server_created(),
             },
         )
@@ -625,6 +655,7 @@ async fn real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable()
                     },
                 ]),
                 response_fields: BTreeSet::from(["label".to_owned(), "quantity".to_owned()]),
+                representation: registry_server::record_profile::RecordRepresentation::Json,
                 correlation: registry_server::correlation::RequestCorrelation::server_created(),
             },
         )
@@ -847,7 +878,7 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
         query_parameter_names(
             &operator_openapi["paths"]["/v1/records/widgets"]["post"]["parameters"]
         ),
-        ["Idempotency-Key", "accessProfile", "traceparent"]
+        ["Accept", "Idempotency-Key", "accessProfile", "traceparent"]
     );
     assert!(
         operator_openapi["paths"]["/v1/records/widgets"]["post"]["responses"]["201"]["headers"]
@@ -862,6 +893,7 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
             &operator_openapi["paths"]["/v1/records/widgets/{record_id}"]["patch"]["parameters"]
         ),
         [
+            "Accept",
             "Idempotency-Key",
             "If-Match",
             "accessProfile",
@@ -1059,15 +1091,28 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
     )
     .await;
     assert_eq!(created.status, StatusCode::CREATED);
-    let record_id = created.body["id"].as_str().expect("id").to_owned();
+    let record_id = created.body["data"]["recordIdentifier"]
+        .as_str()
+        .expect("id")
+        .to_owned();
     assert!(Uuid::parse_str(&record_id).is_ok_and(|id| id.to_string() == record_id));
-    assert_eq!(created.body["revision"], 1);
-    assert_eq!(created.body["data"]["label"], "http-created");
-    assert_eq!(created.body["data"]["note"], Value::Null);
+    assert_eq!(created.body["data"]["revisionIdentifier"], "1");
+    assert_eq!(
+        created.body["meta"]["registryIdentifier"],
+        "mutation-registry"
+    );
+    assert_eq!(created.body["meta"]["datasetIdentifier"], "test-dataset");
+    assert_eq!(created.body["meta"]["entityTypeIdentifier"], "widget");
+    assert_eq!(created.body["data"]["domainData"]["label"], "http-created");
+    assert_eq!(created.body["data"]["domainData"]["note"], Value::Null);
     assert!(created.etag.starts_with("\"rs-"));
     assert_eq!(
         created.location,
         Some(format!("/v1/records/widgets/{record_id}"))
+    );
+    assert_eq!(
+        created.link,
+        "<https://id.registrystack.org/profiles/registry-record/v1>; rel=\"profile\", </v1/schemas/widget>; rel=\"describedby\""
     );
 
     let replay = response_parts(
@@ -1090,6 +1135,7 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
     assert_eq!(replay.content_type, created.content_type);
     assert_eq!(replay.etag, created.etag);
     assert_eq!(replay.location, created.location);
+    assert_eq!(replay.link, created.link);
 
     let before_rs_sec_13_seed = durable_counts(&database, &table).await;
     let rs_sec_13_seed_body = format!(
@@ -1160,9 +1206,9 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
         .await,
     )
     .await;
-    assert_eq!(fetched.body["id"], record_id);
-    assert_eq!(fetched.body["revision"], 1);
-    assert_eq!(fetched.body["data"]["label"], "http-created");
+    assert_eq!(fetched.body["data"]["recordIdentifier"], record_id);
+    assert_eq!(fetched.body["data"]["revisionIdentifier"], "1");
+    assert_eq!(fetched.body["data"]["domainData"]["label"], "http-created");
     assert_eq!(fetched.etag, created.etag);
 
     let anonymous_fetched = response_parts(
@@ -1178,7 +1224,7 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
     )
     .await;
     assert_eq!(
-        anonymous_fetched.body["data"],
+        anonymous_fetched.body["data"]["domainData"],
         json!({"label": "http-created"})
     );
     assert!(anonymous_fetched.etag.starts_with("\"rs-"));
@@ -1199,7 +1245,7 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
         .as_array()
         .expect("items")
         .iter()
-        .any(|item| item["id"] == record_id));
+        .any(|item| item["recordIdentifier"] == record_id));
 
     let log_created = response_parts(
         send(
@@ -1217,7 +1263,9 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
     )
     .await;
     assert_eq!(log_created.status, StatusCode::CREATED);
-    let log_id = log_created.body["id"].as_str().expect("log id");
+    let log_id = log_created.body["data"]["recordIdentifier"]
+        .as_str()
+        .expect("log id");
     let log_patch = send(
         &app,
         Method::PATCH,
@@ -1328,10 +1376,10 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
     )
     .await;
     assert_eq!(patched.status, StatusCode::OK);
-    assert_eq!(patched.body["revision"], 2);
-    assert_eq!(patched.body["data"]["label"], "http-patched");
-    assert_eq!(patched.body["data"]["quantity"], 3);
-    assert_eq!(patched.body["data"]["note"], Value::Null);
+    assert_eq!(patched.body["data"]["revisionIdentifier"], "2");
+    assert_eq!(patched.body["data"]["domainData"]["label"], "http-patched");
+    assert_eq!(patched.body["data"]["domainData"]["quantity"], 3);
+    assert_eq!(patched.body["data"]["domainData"]["note"], Value::Null);
     assert!(patched.location.is_none());
 
     let stale = send(
@@ -1399,7 +1447,7 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
         .await,
     )
     .await;
-    assert_eq!(current.body["revision"], 2);
+    assert_eq!(current.body["data"]["revisionIdentifier"], "2");
     assert_eq!(current.etag, patched.etag);
 
     for (label, headers, body, expected, code) in [
@@ -1583,9 +1631,12 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
     )
     .await;
     assert_eq!(tombstoned.status, StatusCode::OK);
-    assert_eq!(tombstoned.body["id"], record_id);
-    assert_eq!(tombstoned.body["revision"], 3);
-    assert_eq!(tombstoned.body["data"]["label"], "http-patched");
+    assert_eq!(tombstoned.body["data"]["recordIdentifier"], record_id);
+    assert_eq!(tombstoned.body["data"]["revisionIdentifier"], "3");
+    assert_eq!(
+        tombstoned.body["data"]["domainData"]["label"],
+        "http-patched"
+    );
 
     let tombstone_replay = response_parts(
         send(
@@ -1718,6 +1769,63 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
             before.audit + 1
         );
     }
+
+    let json_ld_created = response_parts(
+        send(
+            &app,
+            Method::POST,
+            "/v1/records/widgets",
+            Some(claims.clone()),
+            &[
+                ("accept", "application/ld+json"),
+                ("content-type", "application/json"),
+                ("idempotency-key", "http-json-ld-create-key"),
+                ("host", "attacker.example.invalid"),
+                ("x-forwarded-host", "attacker.example.invalid"),
+            ],
+            br#"{"data":{"jurisdiction":"zone-a","label":"json-ld-created","quantity":5}}"#
+                .to_vec(),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(json_ld_created.status, StatusCode::CREATED);
+    assert_eq!(json_ld_created.content_type, "application/ld+json");
+    assert_eq!(
+        json_ld_created.body["@context"],
+        "https://id.registrystack.org/contexts/registry-record/v1"
+    );
+    assert_eq!(
+        json_ld_created.body["data"]["domainData"]["label"],
+        "json-ld-created"
+    );
+    assert!(!json_ld_created
+        .body
+        .to_string()
+        .contains("attacker.example.invalid"));
+    assert!(!json_ld_created.link.contains("attacker.example.invalid"));
+
+    let json_ld_replay = response_parts(
+        send(
+            &app,
+            Method::POST,
+            "/v1/records/widgets",
+            Some(claims.clone()),
+            &[
+                ("accept", "application/ld+json"),
+                ("content-type", "application/json"),
+                ("idempotency-key", "http-json-ld-create-key"),
+            ],
+            br#"{"data":{"jurisdiction":"zone-a","label":"json-ld-created","quantity":5}}"#
+                .to_vec(),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(json_ld_replay.body_bytes, json_ld_created.body_bytes);
+    assert_eq!(json_ld_replay.content_type, json_ld_created.content_type);
+    assert_eq!(json_ld_replay.etag, json_ld_created.etag);
+    assert_eq!(json_ld_replay.link, json_ld_created.link);
 
     let faulting = mutation_router(
         pool,
@@ -1927,6 +2035,7 @@ struct ResponseParts {
     body_bytes: Vec<u8>,
     content_type: String,
     etag: String,
+    link: String,
     location: Option<String>,
 }
 
@@ -1944,6 +2053,7 @@ async fn response_parts(response: axum::response::Response) -> ResponseParts {
         body_bytes,
         content_type: header_string(&headers, "content-type"),
         etag: header_string(&headers, "etag"),
+        link: header_string(&headers, "link"),
         location: headers
             .get("location")
             .map(|value| value.to_str().expect("location").to_owned()),
@@ -2130,6 +2240,7 @@ fn create_request<'a>(
         expected_etag: None,
         body: MutationBody::Create(data),
         response_fields: BTreeSet::from(["label".to_owned(), "quantity".to_owned()]),
+        representation: registry_server::record_profile::RecordRepresentation::Json,
         correlation: registry_server::correlation::RequestCorrelation::server_created(),
     }
 }
@@ -2153,6 +2264,7 @@ fn patch_request<'a>(
             value: Value::String(label.to_owned()),
         }]),
         response_fields: BTreeSet::from(["label".to_owned(), "quantity".to_owned()]),
+        representation: registry_server::record_profile::RecordRepresentation::Json,
         correlation: registry_server::correlation::RequestCorrelation::server_created(),
     }
 }
@@ -2165,7 +2277,7 @@ fn response_etag(outcome: &MutationOutcome) -> String {
 fn response_id(outcome: &MutationOutcome) -> String {
     let body: Value =
         serde_json::from_slice(outcome.response().body()).expect("mutation response is JSON");
-    body["id"]
+    body["data"]["recordIdentifier"]
         .as_str()
         .expect("mutation response includes id")
         .to_owned()
@@ -2175,11 +2287,11 @@ fn assert_created_response(outcome: &MutationOutcome, record_id: &str, label: &s
     assert_eq!(outcome.response().status(), 201);
     let body: Value =
         serde_json::from_slice(outcome.response().body()).expect("create response is JSON");
-    assert_eq!(body["data"]["label"], label);
-    assert_eq!(body["data"]["quantity"], quantity);
-    assert_eq!(body["id"], record_id);
-    assert_eq!(body["revision"], 1);
-    assert_snapshot_reference(&body["snapshot"]);
+    assert_eq!(body["data"]["domainData"]["label"], label);
+    assert_eq!(body["data"]["domainData"]["quantity"], quantity);
+    assert_eq!(body["data"]["recordIdentifier"], record_id);
+    assert_eq!(body["data"]["revisionIdentifier"], "1");
+    assert_snapshot_reference(&body["data"]["snapshot"]);
     assert_eq!(
         outcome.response().headers()[&PermittedResponseHeader::ContentType],
         b"application/json"

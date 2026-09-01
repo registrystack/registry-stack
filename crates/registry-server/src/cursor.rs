@@ -329,6 +329,7 @@ impl fmt::Debug for CursorQuery {
 pub enum CursorRepresentation {
     #[default]
     Json,
+    JsonLd,
     GeoJson,
 }
 

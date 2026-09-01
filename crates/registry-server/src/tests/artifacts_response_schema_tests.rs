@@ -28,13 +28,14 @@ fn request_get_schema_accepts_runtime_annotations_and_erased_terminal_data() {
     assert_valid(
         &schema,
         &json!({
-            "id": request_id,
-            "revision": 4,
             "data": {
-                "placement": placement_id,
-                "proposedSite": replacement_site_id
-            },
-            "request": {
+                "recordIdentifier": request_id,
+                "revisionIdentifier": "4",
+                "domainData": {
+                    "placement": placement_id,
+                    "proposedSite": replacement_site_id
+                },
+                "request": {
                 "serverState": "submitted",
                 "proposalVersion": 2,
                 "effectDigest": digest,
@@ -80,6 +81,12 @@ fn request_get_schema_accepts_runtime_annotations_and_erased_terminal_data() {
                     }],
                     "nextAfterProposalVersion": null
                 }
+            },
+            },
+            "meta": {
+                "registryIdentifier": "change-request-openapi",
+                "datasetIdentifier": "test-dataset",
+                "entityTypeIdentifier": "placement-correction-request"
             }
         }),
     );
@@ -87,10 +94,11 @@ fn request_get_schema_accepts_runtime_annotations_and_erased_terminal_data() {
     assert_valid(
         &schema,
         &json!({
-            "id": request_id,
-            "revision": 9,
-            "data": {},
-            "request": {
+            "data": {
+                "recordIdentifier": request_id,
+                "revisionIdentifier": "9",
+                "domainData": {},
+                "request": {
                 "serverState": "applied",
                 "proposalVersion": 2,
                 "detailErased": true,
@@ -120,6 +128,12 @@ fn request_get_schema_accepts_runtime_annotations_and_erased_terminal_data() {
                     }],
                     "nextAfterProposalVersion": null
                 }
+            },
+            },
+            "meta": {
+                "registryIdentifier": "change-request-openapi",
+                "datasetIdentifier": "test-dataset",
+                "entityTypeIdentifier": "placement-correction-request"
             }
         }),
     );
@@ -127,30 +141,44 @@ fn request_get_schema_accepts_runtime_annotations_and_erased_terminal_data() {
     assert_invalid(
         &schema,
         &json!({
-            "id": request_id,
-            "revision": 9,
-            "data": {},
-            "request": {
-                "serverState": "applied",
-                "proposalVersion": 2,
-                "editable": false
+            "data": {
+                "recordIdentifier": request_id,
+                "revisionIdentifier": "9",
+                "domainData": {},
+                "request": {
+                    "serverState": "applied",
+                    "proposalVersion": 2,
+                    "editable": false
+                }
+            },
+            "meta": {
+                "registryIdentifier": "change-request-openapi",
+                "datasetIdentifier": "test-dataset",
+                "entityTypeIdentifier": "placement-correction-request"
             }
         }),
     );
     assert_invalid(
         &schema,
         &json!({
-            "id": request_id,
-            "revision": 4,
             "data": {
-                "placement": placement_id,
-                "proposedSite": replacement_site_id
+                "recordIdentifier": request_id,
+                "revisionIdentifier": "4",
+                "domainData": {
+                    "placement": placement_id,
+                    "proposedSite": replacement_site_id
+                },
+                "request": {
+                    "serverState": "submitted",
+                    "proposalVersion": 2,
+                    "editable": false,
+                    "operatorSecret": "must-not-be-modeled"
+                }
             },
-            "request": {
-                "serverState": "submitted",
-                "proposalVersion": 2,
-                "editable": false,
-                "operatorSecret": "must-not-be-modeled"
+            "meta": {
+                "registryIdentifier": "change-request-openapi",
+                "datasetIdentifier": "test-dataset",
+                "entityTypeIdentifier": "placement-correction-request"
             }
         }),
     );
@@ -187,31 +215,45 @@ fn served_field_projection_keeps_response_data_strict_but_subsettable() {
     assert_valid(
         &schema,
         &json!({
-            "id": "00000000-0000-4000-8000-000000000001",
-            "revision": 4,
             "data": {
-                "placement": "00000000-0000-4000-8000-000000000010"
+                "recordIdentifier": "00000000-0000-4000-8000-000000000001",
+                "revisionIdentifier": "4",
+                "domainData": {
+                    "placement": "00000000-0000-4000-8000-000000000010"
+                },
+                "request": {
+                    "serverState": "submitted",
+                    "proposalVersion": 2,
+                    "editable": false
+                }
             },
-            "request": {
-                "serverState": "submitted",
-                "proposalVersion": 2,
-                "editable": false
+            "meta": {
+                "registryIdentifier": "change-request-openapi",
+                "datasetIdentifier": "test-dataset",
+                "entityTypeIdentifier": "placement-correction-request"
             }
         }),
     );
     assert_invalid(
         &schema,
         &json!({
-            "id": "00000000-0000-4000-8000-000000000001",
-            "revision": 4,
             "data": {
-                "placement": "00000000-0000-4000-8000-000000000010",
-                "proposedSite": "00000000-0000-4000-8000-000000000021"
+                "recordIdentifier": "00000000-0000-4000-8000-000000000001",
+                "revisionIdentifier": "4",
+                "domainData": {
+                    "placement": "00000000-0000-4000-8000-000000000010",
+                    "proposedSite": "00000000-0000-4000-8000-000000000021"
+                },
+                "request": {
+                    "serverState": "submitted",
+                    "proposalVersion": 2,
+                    "editable": false
+                }
             },
-            "request": {
-                "serverState": "submitted",
-                "proposalVersion": 2,
-                "editable": false
+            "meta": {
+                "registryIdentifier": "change-request-openapi",
+                "datasetIdentifier": "test-dataset",
+                "entityTypeIdentifier": "placement-correction-request"
             }
         }),
     );
@@ -228,22 +270,29 @@ fn target_get_schema_accepts_bounded_request_presence_annotations() {
         "200",
     );
     let record = json!({
-        "id": "00000000-0000-4000-8000-000000000010",
-        "revision": 8,
         "data": {
-            "site": "00000000-0000-4000-8000-000000000020"
+            "recordIdentifier": "00000000-0000-4000-8000-000000000010",
+            "revisionIdentifier": "8",
+            "domainData": {
+                "site": "00000000-0000-4000-8000-000000000020"
+            },
+            "requestPresence": {
+                "requests": [{
+                    "requestType": "placement-correction-request",
+                    "pending": true
+                }]
+            }
         },
-        "requestPresence": {
-            "requests": [{
-                "requestType": "placement-correction-request",
-                "pending": true
-            }]
+        "meta": {
+            "registryIdentifier": "change-request-openapi",
+            "datasetIdentifier": "test-dataset",
+            "entityTypeIdentifier": "placement"
         }
     });
     assert_valid(&schema, &record);
 
     let mut widened = record;
-    widened["requestPresence"]["requests"][0]["effectDigest"] = json!(effect_digest());
+    widened["data"]["requestPresence"]["requests"][0]["effectDigest"] = json!(effect_digest());
     assert_invalid(&schema, &widened);
 }
 

@@ -84,9 +84,13 @@ async fn snapshot_http_reconstructs_before_filters_and_keeps_pages_pinned() {
     assert_eq!(old["snapshot"], snapshot_ref(OLD_REFERENCE_UUID));
     assert_eq!(old["validAt"], "2026-06-05");
     assert_eq!(old["count"], 1);
-    assert_eq!(old["items"][0]["id"], MEMBERSHIP);
-    assert_eq!(old["items"][0]["revision"], 1);
-    assert_eq!(old["items"][0]["data"], json!({"householdCode": "B"}));
+    assert_eq!(old["meta"]["registryIdentifier"], "history-demo");
+    assert_eq!(old["meta"]["datasetIdentifier"], "test-dataset");
+    assert_eq!(old["meta"]["entityTypeIdentifier"], "membership");
+    assert!(old.get("@context").is_none());
+    assert_eq!(old["items"][0]["recordIdentifier"], MEMBERSHIP);
+    assert_eq!(old["items"][0]["revisionIdentifier"], "1");
+    assert_eq!(old["items"][0]["domainData"], json!({"householdCode": "B"}));
 
     let corrected = send(
         &app,
@@ -100,9 +104,9 @@ async fn snapshot_http_reconstructs_before_filters_and_keeps_pages_pinned() {
     assert_eq!(corrected.status(), StatusCode::OK);
     let corrected = body_json(corrected).await;
     assert_eq!(corrected["items"].as_array().unwrap().len(), 1);
-    assert_eq!(corrected["items"][0]["id"], MEMBERSHIP);
+    assert_eq!(corrected["items"][0]["recordIdentifier"], MEMBERSHIP);
     assert_eq!(
-        corrected["items"][0]["revision"], 3,
+        corrected["items"][0]["revisionIdentifier"], "3",
         "the highest revision in the same commit wins before filters run"
     );
 
@@ -166,7 +170,7 @@ async fn snapshot_http_reconstructs_before_filters_and_keeps_pages_pinned() {
     let first_page = body_json(first_page).await;
     assert_eq!(first_page["snapshot"], snapshot_ref(LATEST_REFERENCE_UUID));
     assert_eq!(first_page["count"], 2);
-    assert_eq!(first_page["items"][0]["id"], MEMBERSHIP);
+    assert_eq!(first_page["items"][0]["recordIdentifier"], MEMBERSHIP);
     let cursor = first_page["pageInfo"]["nextCursor"]
         .as_str()
         .expect("first page carries continuation")
@@ -375,7 +379,7 @@ async fn snapshot_row_authority_uses_selected_historical_row_values() {
     assert_eq!(old_zone_a.status(), StatusCode::OK);
     let old_zone_a = body_json(old_zone_a).await;
     assert_eq!(item_ids(&old_zone_a), vec![AUTHORITY_CHANGED]);
-    assert_eq!(old_zone_a["items"][0]["revision"], 1);
+    assert_eq!(old_zone_a["items"][0]["revisionIdentifier"], "1");
 
     let old_zone_b = send(
         &app,
@@ -419,7 +423,7 @@ async fn snapshot_row_authority_uses_selected_historical_row_values() {
     assert_eq!(latest_zone_b.status(), StatusCode::OK);
     let latest_zone_b = body_json(latest_zone_b).await;
     assert_eq!(item_ids(&latest_zone_b), vec![AUTHORITY_CHANGED]);
-    assert_eq!(latest_zone_b["items"][0]["revision"], 2);
+    assert_eq!(latest_zone_b["items"][0]["revisionIdentifier"], "2");
 
     database.cleanup().await;
 }
@@ -531,7 +535,7 @@ async fn snapshot_refuses_derived_fields_missing_descriptors_and_terminal_audit_
     let stored_only = body_json(stored_only).await;
     for item in stored_only["items"].as_array().unwrap() {
         assert!(
-            item["data"].get("memberCount").is_none(),
+            item["domainData"].get("memberCount").is_none(),
             "snapshot reads must not evaluate or disclose live derived fields"
         );
     }
@@ -1387,7 +1391,11 @@ fn item_ids(body: &Value) -> Vec<&str> {
         .as_array()
         .expect("items are an array")
         .iter()
-        .map(|item| item["id"].as_str().expect("item id is a string"))
+        .map(|item| {
+            item["recordIdentifier"]
+                .as_str()
+                .expect("item id is a string")
+        })
         .collect()
 }
 

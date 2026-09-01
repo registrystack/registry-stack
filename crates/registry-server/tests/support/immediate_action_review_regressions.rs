@@ -566,10 +566,12 @@ fn compiled_lock_order_action_registry() -> registry_server::CompiledRegistry {
         "registry": {
             "id": PACKAGE_ID,
             "version": "1",
-            "defaultLanguage": "en"
+            "defaultLanguage": "en",
+            "canonicalBaseIri": "https://immediate-action-review.example.test"
         },
         "entities": [{
             "id": "lock-record",
+            "primaryDataset": "test-dataset",
             "route": "lock-records",
             "mutationMode": "mutable",
             "fields": [{
@@ -966,10 +968,12 @@ fn compiled_wide_action_registry() -> registry_server::CompiledRegistry {
         "registry": {
             "id": PACKAGE_ID,
             "version": "1",
-            "defaultLanguage": "en"
+            "defaultLanguage": "en",
+            "canonicalBaseIri": "https://immediate-action-review.example.test"
         },
         "entities": [{
             "id": "wide-record",
+            "primaryDataset": "test-dataset",
             "route": "wide-records",
             "mutationMode": "mutable",
             "fields": entity_fields

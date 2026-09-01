@@ -9,7 +9,7 @@ mod pilot_acceptance_harness;
 mod postgres_harness;
 
 use axum::http::{Method, StatusCode};
-use pilot_acceptance_harness::{response_bytes, response_json, PilotHarness};
+use pilot_acceptance_harness::{response_bytes, response_json as raw_response_json, PilotHarness};
 use serde_json::{json, Value};
 
 const FOREIGN_UUID: &str = "00000000-0000-4000-8000-000000000999";
@@ -214,7 +214,7 @@ async fn establishments_journey(harness: &PilotHarness) {
     );
     assert_eq!(
         openapi["components"]["schemas"]["establishment"]["properties"]["preferredLanguage"]
-            ["x-registry-vocabulary"],
+            ["anyOf"][0]["x-registry-vocabulary"],
         "preferred-language"
     );
 
@@ -1075,6 +1075,78 @@ struct CreatedRecord {
     id: String,
     etag: String,
     body: Value,
+}
+
+async fn response_json(response: axum::response::Response) -> Value {
+    normalize_record_response(raw_response_json(response).await)
+}
+
+fn normalize_record_response(mut value: Value) -> Value {
+    let Some(object) = value.as_object_mut() else {
+        return value;
+    };
+    if object.contains_key("meta")
+        && object
+            .get("data")
+            .is_some_and(|data| data.get("recordIdentifier").is_some())
+    {
+        assert_record_meta(object.remove("meta").expect("record response has meta"));
+        return normalize_record_member(object.remove("data").expect("record response has data"));
+    }
+    if object.contains_key("meta") && object.contains_key("items") {
+        assert_record_meta(object.remove("meta").expect("record collection has meta"));
+        let items = object
+            .get_mut("items")
+            .and_then(Value::as_array_mut)
+            .expect("record collection has items");
+        for item in items {
+            *item = normalize_record_member(item.take());
+        }
+    }
+    value
+}
+
+fn normalize_record_member(value: Value) -> Value {
+    let mut member = value
+        .as_object()
+        .cloned()
+        .expect("record member is an object");
+    let identifier = member
+        .remove("recordIdentifier")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .expect("record member has recordIdentifier");
+    let revision = member
+        .remove("revisionIdentifier")
+        .and_then(|value| value.as_str().and_then(|value| value.parse::<u64>().ok()))
+        .expect("record member has numeric revisionIdentifier");
+    let domain_data = member
+        .remove("domainData")
+        .filter(Value::is_object)
+        .expect("record member has domainData");
+    let mut legacy = serde_json::Map::from_iter([
+        ("id".to_owned(), Value::String(identifier)),
+        ("revision".to_owned(), json!(revision)),
+        ("data".to_owned(), domain_data),
+    ]);
+    legacy.extend(member);
+    Value::Object(legacy)
+}
+
+fn assert_record_meta(meta: Value) {
+    let meta = meta.as_object().expect("record meta is an object");
+    assert_eq!(meta.len(), 3, "record meta is closed");
+    for name in [
+        "registryIdentifier",
+        "datasetIdentifier",
+        "entityTypeIdentifier",
+    ] {
+        assert!(
+            meta.get(name)
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.is_empty()),
+            "record meta contains {name}"
+        );
+    }
 }
 
 async fn create_record(

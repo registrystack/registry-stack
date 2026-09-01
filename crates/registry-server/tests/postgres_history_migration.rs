@@ -208,7 +208,9 @@ async fn bounded_update_establishes_existing_baseline_and_appends_migration_revi
     .await;
     assert_eq!(created.status(), StatusCode::CREATED);
     let created = body_json(created).await;
-    let created_id = created["id"].as_str().expect("create response id");
+    let created_id = created["data"]["recordIdentifier"]
+        .as_str()
+        .expect("create response id");
     let created_revision = send(
         &app,
         Method::GET,
@@ -220,9 +222,12 @@ async fn bounded_update_establishes_existing_baseline_and_appends_migration_revi
     .await;
     assert_eq!(created_revision.status(), StatusCode::OK);
     let created_revision = body_json(created_revision).await;
-    assert_eq!(created_revision["items"][0]["revision"], 1);
+    assert_eq!(created_revision["items"][0]["revisionIdentifier"], "1");
     assert_eq!(created_revision["items"][0]["mutationKind"], "create");
-    assert_eq!(created_revision["items"][0]["data"], json!({"code": "B1"}));
+    assert_eq!(
+        created_revision["items"][0]["domainData"],
+        json!({"code": "B1"})
+    );
     database.cleanup().await;
 }
 

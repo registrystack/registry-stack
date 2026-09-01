@@ -128,7 +128,7 @@ async fn real_postgres_spatial_bbox_reads_preserve_authority_and_geojson_audit()
         &[PAGE_A, PAGE_B, PAGE_C, PAGE_D, PAGE_E],
     );
     assert_eq!(
-        derived_filtered_and_ordered["items"][0]["data"]["mapLabel"],
+        derived_filtered_and_ordered["items"][0]["domainData"]["mapLabel"],
         "page-a"
     );
 
@@ -142,7 +142,7 @@ async fn real_postgres_spatial_bbox_reads_preserve_authority_and_geojson_audit()
     assert_eq!(derived_dependencies.status(), StatusCode::OK);
     let derived_dependencies = body_json(derived_dependencies).await;
     assert_ids(&derived_dependencies, &[EDGE_WEST]);
-    let dependency_data = &derived_dependencies["items"][0]["data"];
+    let dependency_data = &derived_dependencies["items"][0]["domainData"];
     assert_eq!(
         dependency_data["zoneSiteCount"], 13,
         "same-entity derived aggregate includes authorized service-site rows outside the root bbox"
@@ -482,7 +482,7 @@ async fn real_postgres_spatial_response_budget_refuses_oversized_payloads_atomic
     let smaller_page = json_from_bytes(&smaller_page_bytes);
     assert_ids(&smaller_page, &[BUDGET_A]);
     assert_eq!(
-        smaller_page["items"][0]["data"]["notes"]
+        smaller_page["items"][0]["domainData"]["notes"]
             .as_str()
             .expect("notes is returned")
             .len(),
@@ -1052,7 +1052,11 @@ fn assert_ids(body: &Value, expected: &[&str]) {
         .as_array()
         .expect("response carries items")
         .iter()
-        .map(|item| item["id"].as_str().expect("item id"))
+        .map(|item| {
+            item["recordIdentifier"]
+                .as_str()
+                .expect("item record identifier")
+        })
         .collect::<Vec<_>>();
     assert_eq!(ids, expected);
 }
@@ -2061,6 +2065,7 @@ fn spatial_registry_module_source() -> &'static str {
       "version":"1",
       "entities":[{
         "id":"service-site",
+        "primaryDataset":"test-dataset",
         "route":"service-sites",
         "mutationMode":"mutable",
         "tombstone":true,
@@ -2147,6 +2152,7 @@ fn spatial_registry_module_source() -> &'static str {
         }]
       },{
         "id":"service-zone",
+        "primaryDataset":"test-dataset",
         "route":"service-zones",
         "mutationMode":"mutable",
         "classification":"internal",
@@ -2167,6 +2173,7 @@ fn spatial_registry_module_source() -> &'static str {
         }]
       },{
         "id":"service-region",
+        "primaryDataset":"test-dataset",
         "route":"service-regions",
         "mutationMode":"mutable",
         "classification":"internal",
@@ -2235,6 +2242,7 @@ fn plain_geojson_registry_source() -> &'static str {
       "registry":{"id":"plain-geojson-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
       "entities":[{
         "id":"plain-site",
+        "primaryDataset":"test-dataset",
         "route":"plain-sites",
         "mutationMode":"mutable",
         "classification":"internal",

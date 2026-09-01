@@ -24,6 +24,7 @@ use crate::model::{
 };
 use crate::mutation::BatchMutationItem;
 use crate::postgres::{PostgresRecordMutationService, PostgresRevisionReadService};
+use crate::record_profile::RecordRepresentation;
 
 pub type ServiceFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -37,6 +38,20 @@ pub struct HeldReadResponse {
 impl HeldReadResponse {
     pub fn from_json(value: &Value) -> Result<Self, ReadServiceError> {
         Self::from_value(value, ReadResponseContentType::Json)
+    }
+
+    pub fn from_json_ld(value: &Value) -> Result<Self, ReadServiceError> {
+        Self::from_value(value, ReadResponseContentType::JsonLd)
+    }
+
+    pub(crate) fn from_registry_record(
+        value: &Value,
+        representation: RecordRepresentation,
+    ) -> Result<Self, ReadServiceError> {
+        match representation {
+            RecordRepresentation::Json => Self::from_json(value),
+            RecordRepresentation::JsonLd => Self::from_json_ld(value),
+        }
     }
 
     pub fn from_geojson(value: &Value) -> Result<Self, ReadServiceError> {
@@ -80,6 +95,7 @@ impl HeldReadResponse {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ReadResponseContentType {
     Json,
+    JsonLd,
     GeoJson,
 }
 
@@ -87,6 +103,7 @@ impl ReadResponseContentType {
     fn as_str(self) -> &'static str {
         match self {
             Self::Json => "application/json",
+            Self::JsonLd => "application/ld+json",
             Self::GeoJson => "application/geo+json",
         }
     }
@@ -100,6 +117,7 @@ pub struct CreateMutationInput<'a> {
     pub entity_id: &'a str,
     pub data: serde_json::Map<String, Value>,
     pub response_fields: BTreeSet<String>,
+    pub representation: RecordRepresentation,
     pub correlation: &'a RequestCorrelation,
 }
 
@@ -112,6 +130,7 @@ pub struct ConditionalMutationInput<'a> {
     pub entity_id: &'a str,
     pub record_id: &'a str,
     pub response_fields: BTreeSet<String>,
+    pub representation: RecordRepresentation,
     pub correlation: &'a RequestCorrelation,
 }
 
@@ -610,6 +629,7 @@ pub struct RevisionReadRequest {
     pub revision: Option<i64>,
     pub context: AuthorizedRequestContext,
     pub selected_fields: BTreeSet<String>,
+    pub representation: CursorRepresentation,
     pub maximum_records: usize,
     pub correlation: RequestCorrelation,
 }

@@ -350,7 +350,7 @@ async fn create(
         )
         .await;
     assert_eq!(response.status(), StatusCode::CREATED);
-    response_json(response).await["id"]
+    response_json(response).await["data"]["recordIdentifier"]
         .as_str()
         .expect("created record has id")
         .to_owned()

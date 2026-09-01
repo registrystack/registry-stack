@@ -37,6 +37,14 @@
   classification values inherit from explicit project defaults. The compiled
   Server model projects these resources once into Registry Manifest and owns no
   parallel DCAT model.
+- A selected and authorized compiled record operation is the Server's governed
+  decision to publish the record's structural registry, primary-dataset, and
+  entity-type identifiers. They are mandatory Registry Record metadata rather
+  than caller-selectable domain fields, and the Server does not add a second
+  gate based on the optional Registry Manifest catalogue publication profile.
+  Successful JSON and JSON-LD records use the shared Registry Record v1
+  envelope. Batch, action, and GeoJSON products remain explicitly named
+  separate shapes.
 - An operational reference may cross dataset boundaries when the ordinary
   compiled model and access checks permit it. Registry Manifest v1 currently
   requires relationship targets to be entities in the same dataset, so the

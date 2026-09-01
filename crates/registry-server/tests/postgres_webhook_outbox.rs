@@ -250,7 +250,7 @@ async fn real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_determ
     assert!(!first.replayed());
     let first_response: Value = serde_json::from_slice(first.response().body())
         .expect("held create response is strict JSON");
-    let raw_record_id = first_response["id"]
+    let raw_record_id = first_response["data"]["recordIdentifier"]
         .as_str()
         .expect("create response contains a record id");
     let first_capture = capture(&database, 0).await;
@@ -691,6 +691,7 @@ fn create_request<'a>(
             "label".to_owned(),
             "restricted_note".to_owned(),
         ]),
+        representation: registry_server::record_profile::RecordRepresentation::Json,
         correlation: registry_server::correlation::RequestCorrelation::server_created(),
     }
 }
@@ -718,6 +719,7 @@ fn patch_request<'a>(
             "label".to_owned(),
             "restricted_note".to_owned(),
         ]),
+        representation: registry_server::record_profile::RecordRepresentation::Json,
         correlation: registry_server::correlation::RequestCorrelation::server_created(),
     }
 }

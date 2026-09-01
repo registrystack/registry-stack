@@ -991,6 +991,7 @@ async fn create_event(
                     "label".to_owned(),
                     "restricted_note".to_owned(),
                 ]),
+                representation: registry_server::record_profile::RecordRepresentation::Json,
                 correlation: registry_server::correlation::RequestCorrelation::server_created(),
             },
         )

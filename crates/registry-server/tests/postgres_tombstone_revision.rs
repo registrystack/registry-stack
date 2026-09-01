@@ -631,6 +631,7 @@ fn create_request<'a>(
             ("quantity".to_owned(), json!(7)),
         ])),
         response_fields: response_fields(),
+        representation: registry_server::record_profile::RecordRepresentation::Json,
         correlation: registry_server::correlation::RequestCorrelation::server_created(),
     }
 }
@@ -654,6 +655,7 @@ fn patch_request<'a>(
             value: Value::String(label.to_owned()),
         }]),
         response_fields: response_fields(),
+        representation: registry_server::record_profile::RecordRepresentation::Json,
         correlation: registry_server::correlation::RequestCorrelation::server_created(),
     }
 }
@@ -673,6 +675,7 @@ fn tombstone_request<'a>(
         expected_etag: Some(expected_etag),
         body: MutationBody::Tombstone,
         response_fields: response_fields(),
+        representation: registry_server::record_profile::RecordRepresentation::Json,
         correlation: registry_server::correlation::RequestCorrelation::server_created(),
     }
 }
@@ -684,7 +687,7 @@ fn response_fields() -> BTreeSet<String> {
 fn response_id(outcome: &MutationOutcome) -> String {
     let body: Value =
         serde_json::from_slice(outcome.response().body()).expect("mutation response is JSON");
-    body["id"]
+    body["data"]["recordIdentifier"]
         .as_str()
         .expect("response includes id")
         .to_owned()
@@ -693,8 +696,9 @@ fn response_id(outcome: &MutationOutcome) -> String {
 fn response_revision(outcome: &MutationOutcome) -> i64 {
     let body: Value =
         serde_json::from_slice(outcome.response().body()).expect("mutation response is JSON");
-    body["revision"]
-        .as_i64()
+    body["data"]["revisionIdentifier"]
+        .as_str()
+        .and_then(|value| value.parse::<i64>().ok())
         .expect("response includes revision")
 }
 
@@ -717,6 +721,7 @@ fn response_etag(
         "recordId": record_id,
         "recordRevision": record_revision,
         "responseFields": response_fields,
+        "responseRepresentation": "application/json",
     }))
     .expect("etag input is canonical");
     let etag_input = std::str::from_utf8(&etag_input).expect("canonical JSON is UTF-8");

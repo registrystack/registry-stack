@@ -106,19 +106,89 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
     )
     .await;
     assert_eq!(get.status(), StatusCode::OK);
+    assert_eq!(get.headers()["content-type"], "application/json");
+    assert_eq!(
+        get.headers()["link"],
+        "<https://id.registrystack.org/profiles/registry-record/v1>; rel=\"profile\", </v1/schemas/widget>; rel=\"describedby\""
+    );
+    let ordinary_etag = get.headers()["etag"].clone();
     let get_bytes = body_bytes(get).await;
     assert_eq!(
         get_bytes,
         format!(
-            "{{\"data\":{{\"label\":\"label-001\"}},\"id\":\"{VISIBLE_RECORD}\",\"revision\":1}}"
+            "{{\"data\":{{\"domainData\":{{\"label\":\"label-001\"}},\"recordIdentifier\":\"{VISIBLE_RECORD}\",\"revisionIdentifier\":\"1\"}},\"meta\":{{\"datasetIdentifier\":\"test-dataset\",\"entityTypeIdentifier\":\"widget\",\"registryIdentifier\":\"read-registry\"}}}}"
         )
         .as_bytes()
     );
     let body = json_from_bytes(&get_bytes);
-    assert_eq!(body["id"], VISIBLE_RECORD);
-    assert_eq!(body["revision"], 1);
-    assert_eq!(body["data"], json!({"label": "label-001"}));
+    assert_eq!(body["data"]["recordIdentifier"], VISIBLE_RECORD);
+    assert_eq!(body["data"]["revisionIdentifier"], "1");
+    assert_eq!(body["data"]["domainData"], json!({"label": "label-001"}));
+    assert_eq!(body["meta"]["registryIdentifier"], "read-registry");
+    assert_eq!(body["meta"]["datasetIdentifier"], "test-dataset");
+    assert_eq!(body["meta"]["entityTypeIdentifier"], "widget");
+    assert!(body.get("@context").is_none());
+    assert!(body.get("@id").is_none());
+    assert!(body.get("@type").is_none());
     assert!(!body.to_string().contains(SECRET_CANARY));
+
+    let json_ld = send_representation(
+        &app,
+        &format!("/v1/records/widgets/{VISIBLE_RECORD}?$select=label"),
+        Some(read_claims(["zone-a"])),
+        "application/ld+json",
+        "attacker.example.invalid",
+    )
+    .await;
+    assert_eq!(json_ld.status(), StatusCode::OK);
+    assert_eq!(json_ld.headers()["content-type"], "application/ld+json");
+    assert_eq!(
+        json_ld.headers()["link"],
+        "<https://id.registrystack.org/profiles/registry-record/v1>; rel=\"profile\", </v1/schemas/widget>; rel=\"describedby\""
+    );
+    assert_ne!(json_ld.headers()["etag"], ordinary_etag);
+    assert!(!format!("{:?}", json_ld.headers()).contains("attacker.example.invalid"));
+    let json_ld = body_json(json_ld).await;
+    assert_eq!(
+        json_ld["@context"],
+        "https://id.registrystack.org/contexts/registry-record/v1"
+    );
+    assert_eq!(json_ld["data"]["recordIdentifier"], VISIBLE_RECORD);
+    assert_eq!(json_ld["data"]["revisionIdentifier"], "1");
+    assert_eq!(json_ld["data"]["domainData"], json!({"label": "label-001"}));
+    assert_eq!(json_ld["meta"]["registryIdentifier"], "read-registry");
+    assert_eq!(json_ld["meta"]["datasetIdentifier"], "test-dataset");
+    assert_eq!(json_ld["meta"]["entityTypeIdentifier"], "widget");
+    assert!(json_ld.get("@id").is_none());
+    assert!(json_ld.get("@type").is_none());
+
+    let lookup = send_lookup(
+        &app,
+        "/v1/records/widgets:lookup?$select=label",
+        Some(read_claims(["zone-a"])),
+        json!({"selector": "by-amount", "values": {"amount": "1.20"}}),
+    )
+    .await;
+    assert_eq!(lookup.status(), StatusCode::OK);
+    let lookup = body_json(lookup).await;
+    assert_eq!(lookup["data"]["recordIdentifier"], VISIBLE_RECORD);
+    assert_eq!(lookup["data"]["revisionIdentifier"], "1");
+    assert_eq!(lookup["data"]["domainData"], json!({"label": "label-001"}));
+    for amount in ["99.99", "2.00"] {
+        let unresolved = send_lookup(
+            &app,
+            "/v1/records/widgets:lookup?$select=label",
+            Some(read_claims(["zone-a"])),
+            json!({"selector": "by-amount", "values": {"amount": amount}}),
+        )
+        .await;
+        assert_eq!(unresolved.status(), StatusCode::NOT_FOUND);
+        assert!(unresolved.headers().get("link").is_none());
+        let unresolved = body_json(unresolved).await;
+        assert_eq!(unresolved["code"], "lookup.unresolved");
+        assert!(!unresolved.to_string().contains(amount));
+        assert!(!unresolved.to_string().contains("amount"));
+    }
 
     let governed_names = send(
         &app,
@@ -128,10 +198,18 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
     .await;
     assert_eq!(governed_names.status(), StatusCode::OK);
     let governed_names = body_json(governed_names).await;
-    assert_eq!(governed_names["data"]["publicCode"], Value::Null);
-    assert_eq!(governed_names["data"]["label"], "label-001");
-    assert_eq!(governed_names["data"]["jurisdiction"], "zone-a");
-    assert!(governed_names["data"].get("internal-code").is_none());
+    assert_eq!(
+        governed_names["data"]["domainData"]["publicCode"],
+        Value::Null
+    );
+    assert_eq!(governed_names["data"]["domainData"]["label"], "label-001");
+    assert_eq!(
+        governed_names["data"]["domainData"]["jurisdiction"],
+        "zone-a"
+    );
+    assert!(governed_names["data"]["domainData"]
+        .get("internal-code")
+        .is_none());
 
     let decimal = send(
         &app,
@@ -143,11 +221,16 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
     let decimal_bytes = body_bytes(decimal).await;
     assert_eq!(
         decimal_bytes,
-        format!("{{\"data\":{{\"amount\":\"1.20\"}},\"id\":\"{VISIBLE_RECORD}\",\"revision\":1}}")
-            .as_bytes(),
+        format!(
+            "{{\"data\":{{\"domainData\":{{\"amount\":\"1.20\"}},\"recordIdentifier\":\"{VISIBLE_RECORD}\",\"revisionIdentifier\":\"1\"}},\"meta\":{{\"datasetIdentifier\":\"test-dataset\",\"entityTypeIdentifier\":\"widget\",\"registryIdentifier\":\"read-registry\"}}}}"
+        )
+        .as_bytes(),
         "fixed-scale decimals are returned as exact strings, not JSON numbers"
     );
-    assert_eq!(json_from_bytes(&decimal_bytes)["data"]["amount"], "1.20");
+    assert_eq!(
+        json_from_bytes(&decimal_bytes)["data"]["domainData"]["amount"],
+        "1.20"
+    );
 
     let list = send(
         &app,
@@ -166,12 +249,18 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
     );
     for window in items.windows(2) {
         assert!(
-            window[0]["id"].as_str() <= window[1]["id"].as_str(),
+            window[0]["recordIdentifier"].as_str() <= window[1]["recordIdentifier"].as_str(),
             "list ordering is deterministic by record id"
         );
     }
-    assert_eq!(items[0]["id"], "00000000-0000-4000-8000-000000000000");
-    assert_eq!(items[99]["id"], "00000000-0000-4000-8000-000000000099");
+    assert_eq!(
+        items[0]["recordIdentifier"],
+        "00000000-0000-4000-8000-000000000000"
+    );
+    assert_eq!(
+        items[99]["recordIdentifier"],
+        "00000000-0000-4000-8000-000000000099"
+    );
     let next_cursor = body["pageInfo"]["nextCursor"]
         .as_str()
         .expect("overfetch produces a cursor")
@@ -195,10 +284,10 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
         "repeated in values are one finite set, not an impossible conjunction"
     );
     assert_eq!(
-        repeated_items[0]["id"],
+        repeated_items[0]["recordIdentifier"],
         "00000000-0000-4000-8000-000000000000"
     );
-    assert_eq!(repeated_items[1]["id"], VISIBLE_RECORD);
+    assert_eq!(repeated_items[1]["recordIdentifier"], VISIBLE_RECORD);
     assert!(!repeated_in.to_string().contains("zone-b-label"));
 
     let prefix = send(
@@ -211,8 +300,8 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
     let prefix = body_json(prefix).await;
     let prefix_items = prefix["items"].as_array().expect("prefix returns items");
     assert_eq!(prefix_items.len(), 1);
-    assert_eq!(prefix_items[0]["id"], WILDCARD_RECORD);
-    assert_eq!(prefix_items[0]["data"]["label"], "literal%_\\value");
+    assert_eq!(prefix_items[0]["recordIdentifier"], WILDCARD_RECORD);
+    assert_eq!(prefix_items[0]["domainData"]["label"], "literal%_\\value");
 
     let continuation = send(
         &app,
@@ -229,7 +318,7 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
     assert_eq!(
         continuation_items
             .iter()
-            .map(|item| item["id"].as_str().expect("record id"))
+            .map(|item| item["recordIdentifier"].as_str().expect("record id"))
             .collect::<Vec<_>>(),
         vec![
             "00000000-0000-4000-8000-000000000100",
@@ -401,11 +490,13 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
     assert_eq!(current.status(), StatusCode::OK);
     let current = body_json(current).await;
     assert_ids(current.clone(), &[TEMPORAL_OPEN_RECORD]);
-    assert_eq!(current["items"][0]["data"]["label"], "lease-a");
-    assert!(current["items"][0]["data"]["validFrom"].is_string());
-    assert_eq!(current["items"][0]["data"]["validTo"], Value::Null);
-    assert!(current["items"][0]["data"].get("valid-from").is_none());
-    assert!(current["items"][0]["data"].get("valid-to").is_none());
+    assert_eq!(current["items"][0]["domainData"]["label"], "lease-a");
+    assert!(current["items"][0]["domainData"]["validFrom"].is_string());
+    assert_eq!(current["items"][0]["domainData"]["validTo"], Value::Null);
+    assert!(current["items"][0]["domainData"]
+        .get("valid-from")
+        .is_none());
+    assert!(current["items"][0]["domainData"].get("valid-to").is_none());
     assert!(!current.to_string().contains(TEMPORAL_OTHER_BOUNDARY_RECORD));
 
     let sorted_first = send(
@@ -436,7 +527,7 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
         sorted_second.clone(),
         &[SORT_NEXT_RECORD, SORT_NULL_A_RECORD],
     );
-    assert_eq!(sorted_second["items"][1]["data"]["rank"], Value::Null);
+    assert_eq!(sorted_second["items"][1]["domainData"]["rank"], Value::Null);
     let sorted_third_cursor = sorted_second["pageInfo"]["nextCursor"]
         .as_str()
         .expect("null sort page overfetches")
@@ -670,6 +761,49 @@ async fn send(
     app.call(request).await.expect("router returns a response")
 }
 
+async fn send_representation(
+    app: &axum::Router,
+    uri: &str,
+    claims: Option<VerifiedRequestClaims>,
+    accept: &str,
+    host: &str,
+) -> Response<Body> {
+    let mut request = Request::builder()
+        .method(Method::GET)
+        .uri(uri)
+        .header("accept", accept)
+        .header("host", host)
+        .header("x-forwarded-host", host)
+        .body(Body::empty())
+        .expect("request builds");
+    if let Some(claims) = claims {
+        request.extensions_mut().insert(claims);
+    }
+    let mut app = app.clone();
+    app.call(request).await.expect("router returns a response")
+}
+
+async fn send_lookup(
+    app: &axum::Router,
+    uri: &str,
+    claims: Option<VerifiedRequestClaims>,
+    body: Value,
+) -> Response<Body> {
+    let mut request = Request::builder()
+        .method(Method::POST)
+        .uri(uri)
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&body).expect("lookup request serializes"),
+        ))
+        .expect("request builds");
+    if let Some(claims) = claims {
+        request.extensions_mut().insert(claims);
+    }
+    let mut app = app.clone();
+    app.call(request).await.expect("router returns a response")
+}
+
 async fn body_json(response: Response<Body>) -> Value {
     let bytes = body_bytes(response).await;
     json_from_bytes(&bytes)
@@ -729,7 +863,7 @@ fn assert_ids(body: Value, expected: &[&str]) {
         .as_array()
         .expect("response carries items")
         .iter()
-        .map(|item| item["id"].as_str().expect("item id"))
+        .map(|item| item["recordIdentifier"].as_str().expect("item id"))
         .collect::<Vec<_>>();
     assert_eq!(ids, expected);
 }
@@ -1116,6 +1250,14 @@ async fn assert_read_audit_is_ordered_chained_and_minimized(
             ("attempt", None),
             ("terminal", Some("returned")),
             ("attempt", None),
+            ("terminal", Some("unresolved")),
+            ("attempt", None),
+            ("terminal", Some("unresolved")),
+            ("attempt", None),
+            ("terminal", Some("returned")),
+            ("attempt", None),
+            ("terminal", Some("returned")),
+            ("attempt", None),
             ("terminal", Some("returned")),
             ("attempt", None),
             ("terminal", Some("returned")),
@@ -1136,18 +1278,22 @@ async fn assert_read_audit_is_ordered_chained_and_minimized(
     assert_eq!(records[1]["resultCount"], 1);
     assert_eq!(records[3]["resultCount"], 1);
     assert_eq!(records[5]["resultCount"], 1);
-    assert_eq!(records[7]["resultCount"], 100);
-    assert_eq!(records[9]["resultCount"], 2);
+    assert!(records[7].get("resultCount").is_none());
+    assert!(records[9].get("resultCount").is_none());
     assert_eq!(records[11]["resultCount"], 1);
-    assert_eq!(records[13]["resultCount"], 3);
-    assert_eq!(records[16]["resultCount"], 0);
-    assert_eq!(records[18]["resultCount"], 0);
+    assert_eq!(records[13]["resultCount"], 1);
+    assert_eq!(records[15]["resultCount"], 100);
+    assert_eq!(records[17]["resultCount"], 2);
+    assert_eq!(records[19]["resultCount"], 1);
+    assert_eq!(records[21]["resultCount"], 3);
+    assert_eq!(records[24]["resultCount"], 0);
+    assert_eq!(records[26]["resultCount"], 0);
     assert!(records[1].get("fieldSetReference").is_some());
     assert!(records[3].get("fieldSetReference").is_some());
     assert!(records[5].get("fieldSetReference").is_some());
     assert!(records[7].get("fieldSetReference").is_some());
-    assert!(records[7].get("queryReference").is_some());
-    assert!(records[7].get("rowBoundaryReference").is_some());
+    assert!(records[15].get("queryReference").is_some());
+    assert!(records[15].get("rowBoundaryReference").is_some());
 
     let audit_text = records
         .iter()
@@ -1265,10 +1411,12 @@ fn registry_source() -> String {
 	          "registry":{"id":"read-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"widget",
+            "primaryDataset":"test-dataset",
             "route":"widgets",
             "mutationMode":"mutable",
             "tombstone":true,
             "classification":"restricted",
+            "selectorProfiles":[{"id":"by-amount","fields":["amount"]}],
             "fields":[
               {"id":"jurisdiction","type":"string","required":true,"maxLength":32,"classification":"internal"},
               {"id":"label","type":"string","required":true,"maxLength":100,"classification":"internal"},
@@ -1280,6 +1428,7 @@ fn registry_source() -> String {
             ]
           },{
             "id":"assignment",
+            "primaryDataset":"test-dataset",
             "route":"assignments",
             "mutationMode":"mutable",
             "tombstone":true,
@@ -1310,11 +1459,12 @@ fn registry_source() -> String {
             "requiredPurposes":["case-management","audit-review"],
             "grants":[{
               "entity":"widget",
-              "operations":["create","get","list","tombstone"],
+              "operations":["create","get","lookup","list","tombstone"],
               "readableFields":["label","secret","amount","jurisdiction","ordinal","rank","internal-code"],
               "writableFields":["label","secret","amount","jurisdiction","ordinal","rank"],
               "filterableFields":["jurisdiction","label","ordinal","rank"],
               "sortableFields":["ordinal","label","rank"],
+              "lookups":[{"selector":"by-amount","valueOrigin":"request"}],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
             },{
               "entity":"assignment",

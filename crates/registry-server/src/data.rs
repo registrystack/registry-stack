@@ -1078,6 +1078,8 @@ where
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct DataExportPlan {
+    registry_id: String,
+    dataset_id: String,
     entity_id: String,
     profile_id: String,
     requested_fields: Vec<String>,
@@ -1194,6 +1196,11 @@ impl DataExportPlan {
             })
             .collect();
         Ok(Self {
+            registry_id: registry.registry_id().to_owned(),
+            dataset_id: entity
+                .primary_dataset
+                .clone()
+                .ok_or(DataError::InvalidBinding)?,
             entity_id: entity_id.to_owned(),
             profile_id: profile_id.to_owned(),
             requested_fields: requested_api_names.into_iter().collect(),
@@ -1754,10 +1761,29 @@ fn validate_export_response(
     require_success_json(response)?;
     let value = parse_canonical_response(&response.body)?;
     let object = value.as_object().ok_or(DataError::InvalidResponse)?;
-    if !(object.len() == 2 || object.len() == 3)
+    if !(object.len() == 3 || object.len() == 4)
         || !object.contains_key("items")
         || !object.contains_key("pageInfo")
-        || (object.len() == 3 && !object.contains_key("count"))
+        || !object.contains_key("meta")
+        || (object.len() == 4 && !object.contains_key("count"))
+    {
+        return Err(DataError::InvalidResponse);
+    }
+    let meta = object["meta"]
+        .as_object()
+        .ok_or(DataError::InvalidResponse)?;
+    require_exact_keys(
+        meta,
+        &[
+            "registryIdentifier",
+            "datasetIdentifier",
+            "entityTypeIdentifier",
+        ],
+    )
+    .map_err(|_| DataError::InvalidResponse)?;
+    if meta["registryIdentifier"].as_str() != Some(plan.registry_id.as_str())
+        || meta["datasetIdentifier"].as_str() != Some(plan.dataset_id.as_str())
+        || meta["entityTypeIdentifier"].as_str() != Some(plan.entity_id.as_str())
     {
         return Err(DataError::InvalidResponse);
     }
@@ -1786,21 +1812,39 @@ fn validate_export_response(
     if items.is_empty() && next_cursor.is_some() {
         return Err(DataError::InvalidResponse);
     }
+    let mut records = Vec::with_capacity(items.len());
     for item in items {
         let item = item.as_object().ok_or(DataError::InvalidResponse)?;
-        require_exact_keys(item, &["id", "revision", "data"])
-            .map_err(|_| DataError::InvalidResponse)?;
-        if !item["id"].as_str().is_some_and(valid_uuid)
-            || item["revision"].as_u64().is_none_or(|value| value == 0)
-        {
-            return Err(DataError::InvalidResponse);
-        }
-        let data = item["data"].as_object().ok_or(DataError::InvalidResponse)?;
+        require_exact_keys(
+            item,
+            &["recordIdentifier", "revisionIdentifier", "domainData"],
+        )
+        .map_err(|_| DataError::InvalidResponse)?;
+        let record_identifier = item["recordIdentifier"]
+            .as_str()
+            .filter(|value| valid_uuid(value))
+            .ok_or(DataError::InvalidResponse)?;
+        let revision_identifier = item["revisionIdentifier"]
+            .as_str()
+            .ok_or(DataError::InvalidResponse)?;
+        let revision = revision_identifier
+            .parse::<u64>()
+            .ok()
+            .filter(|value| *value > 0 && value.to_string() == revision_identifier)
+            .ok_or(DataError::InvalidResponse)?;
+        let data = item["domainData"]
+            .as_object()
+            .ok_or(DataError::InvalidResponse)?;
         if !valid_response_data(data, &plan.response_fields) {
             return Err(DataError::InvalidResponse);
         }
+        records.push(json!({
+            "id": record_identifier,
+            "revision": revision,
+            "data": data,
+        }));
     }
-    Ok((items.clone(), next_cursor))
+    Ok((records, next_cursor))
 }
 
 fn valid_response_data(

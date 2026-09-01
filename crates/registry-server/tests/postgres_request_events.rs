@@ -440,7 +440,7 @@ async fn authenticated_webhook_service_event_material_does_not_grant_request_act
     .await;
     assert_eq!(service_view.status, StatusCode::OK);
     assert!(
-        service_view.body["request"]["actions"]
+        service_view.body["data"]["request"]["actions"]
             .as_array()
             .is_none_or(|actions| actions.is_empty()),
         "service read profile must not receive request action links"
@@ -493,7 +493,10 @@ async fn authenticated_webhook_service_event_material_does_not_grant_request_act
         api_claims("submitter-principal", None),
     )
     .await;
-    assert_eq!(submitter_view.body["request"]["serverState"], "draft");
+    assert_eq!(
+        submitter_view.body["data"]["request"]["serverState"],
+        "draft"
+    );
     assert_eq!(
         outbox_count(&database.admin).await,
         0,
@@ -795,12 +798,12 @@ async fn create_record(
         "create {uri} failed with body {}",
         response.body
     );
-    let id = response.body["id"]
+    let id = response.body["data"]["recordIdentifier"]
         .as_str()
         .expect("created response includes id")
         .to_owned();
     assert!(Uuid::parse_str(&id).is_ok_and(|uuid| uuid.to_string() == id));
-    assert_eq!(response.body["revision"], 1);
+    assert_eq!(response.body["data"]["revisionIdentifier"], "1");
     assert!(response.etag.starts_with("\"rs-"));
     CreatedRecord {
         id,

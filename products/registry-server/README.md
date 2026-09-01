@@ -149,6 +149,18 @@ database, authority, role, and secret-reference fields explicit.
 
 ## Scope
 
+### Record response contract
+
+Authorized get, list, lookup, create, patch, tombstone, relationship, snapshot,
+and revision routes use the shared Registry Record v1 single-record or
+collection envelope. The envelope keeps opaque record and revision identifiers
+separate from `domainData` and publishes the compiled registry, primary dataset,
+and entity type in `meta`. Use `Accept: application/ld+json` for the scalar
+shared context; ordinary `application/json` has no JSON-LD control members.
+Successful profiled responses include profile and relative schema Link values.
+See [History](HISTORY.md) for the breaking before-and-after shape and the exact
+route mapping.
+
 For atomic interval corrections, saved historical queries and their access and
 retention boundaries, see [Corrections and historical queries](HISTORY.md).
 

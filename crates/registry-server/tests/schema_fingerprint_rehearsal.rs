@@ -389,13 +389,19 @@ fn project_bytes(environment: &str, instance_id: &str, source_revision: &str) ->
     "catalog": {{
       "baseUrl": "https://rehearsal.example.test",
       "title": "Rehearsal Registry",
-      "publisher": {{"name": "Rehearsal Publisher"}}
+      "publisher": {{"id": "rehearsal-authority", "name": "Rehearsal Publisher"}}
     }},
-    "dataset": {{
-      "title": "Rehearsal Dataset",
-      "owner": "Rehearsal Publisher",
-      "status": "active"
-    }}
+    "publicService": {{"id": "rehearsal-service", "title": "Rehearsal Registry"}},
+    "datasets": [{{
+      "id": "test-dataset", "title": "Rehearsal Dataset",
+      "owner": "Rehearsal Publisher", "status": "active"
+    }}],
+    "dataServices": [{{
+      "id": "rehearsal-data-service", "title": "Rehearsal Registry",
+      "endpointUrl": "https://rehearsal.example.test",
+      "servesDatasets": ["test-dataset"]
+    }}],
+    "distributions": []
   }},
   "entities": [{{
     "id": "case",

@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use axum::body::{to_bytes, Body};
 use axum::extract::{Path, RawQuery, State};
-use axum::http::header::{ACCEPT, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_MATCH, VARY};
+use axum::http::header::{ACCEPT, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_MATCH, LINK, VARY};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post};
@@ -66,6 +66,7 @@ use crate::model::{
 use crate::mutation::{parse_json_patch_document, BatchMutationItem, MutationError};
 use crate::query as strict_query;
 use crate::query_binding::CursorBindingQuery;
+use crate::record_profile::{self, RecordRepresentation};
 use uuid::Uuid;
 
 use crate::artifacts::{
@@ -264,6 +265,7 @@ async fn openapi(
         methods.insert(
             method_name(surface.route.method).to_owned(),
             openapi_operation(OpenApiOperationSpec {
+                registry_identifier: service.registry.registry_id(),
                 route: surface.route,
                 entity: surface.entity,
                 response_entity: surface.response_entity,
@@ -557,9 +559,7 @@ async fn read_dispatch(
                     .await;
                 }
             };
-            if representation == CursorRepresentation::GeoJson
-                && !geojson_available(surface.response_entity, &surface.readable_fields)
-            {
+            if representation == CursorRepresentation::GeoJson && !geojson_available(&surface) {
                 return audited_read_refusal(
                     &service,
                     &route,
@@ -589,7 +589,7 @@ async fn read_dispatch(
                 correlation: correlation.clone(),
             };
             match service.records.get(request).await {
-                Ok(Some(record)) => exact_read(record),
+                Ok(Some(record)) => exact_read(record, surface.response_entity),
                 Ok(None) => concealed(),
                 Err(ReadServiceError::Unavailable) => unavailable(),
                 Err(ReadServiceError::CursorInvalid) => cursor_invalid(),
@@ -664,9 +664,7 @@ async fn read_dispatch(
                 )
                 .await;
             }
-            if representation == CursorRepresentation::GeoJson
-                && !geojson_available(surface.response_entity, &surface.readable_fields)
-            {
+            if representation == CursorRepresentation::GeoJson && !geojson_available(&surface) {
                 return audited_read_refusal(
                     &service,
                     &route,
@@ -706,7 +704,7 @@ async fn read_dispatch(
                 correlation: correlation.clone(),
             };
             match service.records.list(request).await {
-                Ok(response) => exact_read_no_store(response),
+                Ok(response) => exact_read_no_store(response, surface.response_entity),
                 Err(ReadServiceError::Unavailable) => unavailable(),
                 Err(ReadServiceError::CursorInvalid) => cursor_invalid(),
             }
@@ -866,7 +864,7 @@ async fn lookup_dispatch(
         method: route.method,
         context: surface.context,
         selected_fields: readable_fields,
-        representation: CursorRepresentation::Json,
+        representation: negotiated_json_representation(&headers),
         adapter: CursorAdapter::Native,
         adapter_origin: None,
         geojson_next_link_prefix: None,
@@ -876,8 +874,9 @@ async fn lookup_dispatch(
         correlation: correlation.clone(),
     };
     match service.records.lookup(request).await {
-        Ok(Some(record)) => exact_json_no_store(record),
-        Ok(None) | Err(ReadServiceError::Unavailable) => lookup_unresolved(),
+        Ok(Some(record)) => exact_read_no_store(record, surface.response_entity),
+        Ok(None) => lookup_unresolved(),
+        Err(ReadServiceError::Unavailable) => unavailable(),
         Err(ReadServiceError::CursorInvalid) => cursor_invalid(),
     }
 }
@@ -888,6 +887,7 @@ async fn revision_dispatch(
     Extension(correlation): Extension<RequestCorrelation>,
     claims: Option<Extension<VerifiedRequestClaims>>,
     RawQuery(raw_query): RawQuery,
+    headers: HeaderMap,
     Path(path): Path<HashMap<String, String>>,
 ) -> Response {
     let Some(revisions) = &service.revisions else {
@@ -992,17 +992,18 @@ async fn revision_dispatch(
         revision,
         context: surface.context,
         selected_fields: surface.readable_fields,
+        representation: negotiated_json_representation(&headers),
         maximum_records,
         correlation: correlation.clone(),
     };
     match route.revision_kind {
         Some(CompiledRevisionKind::List) => match revisions.list(request).await {
-            Ok(Some(response)) => exact_json_no_store(response),
+            Ok(Some(response)) => exact_read_no_store(response, surface.response_entity),
             Ok(None) => concealed(),
             Err(_) => unavailable(),
         },
         Some(CompiledRevisionKind::Detail) => match revisions.detail(request).await {
-            Ok(Some(response)) => exact_json_no_store(response),
+            Ok(Some(response)) => exact_read_no_store(response, surface.response_entity),
             Ok(None) => concealed(),
             Err(_) => unavailable(),
         },
@@ -1016,6 +1017,7 @@ async fn snapshot_dispatch(
     Extension(correlation): Extension<RequestCorrelation>,
     claims: Option<Extension<VerifiedRequestClaims>>,
     RawQuery(raw_query): RawQuery,
+    headers: HeaderMap,
 ) -> Response {
     let Some(snapshots) = &service.snapshots else {
         return concealed();
@@ -1047,7 +1049,7 @@ async fn snapshot_dispatch(
         &surface,
         &options,
         None,
-        CursorRepresentation::Json,
+        negotiated_json_representation(&headers),
         CursorAdapter::Native,
     )
     .await
@@ -1079,7 +1081,7 @@ async fn snapshot_dispatch(
         correlation,
     };
     match snapshots.list(request).await {
-        Ok(response) => exact_json_no_store(response),
+        Ok(response) => exact_read_no_store(response, surface.response_entity),
         Err(ReadServiceError::Unavailable) => unavailable(),
         Err(ReadServiceError::CursorInvalid) => cursor_invalid(),
     }
@@ -1358,6 +1360,7 @@ async fn create_dispatch(
             entity_id: &route.entity_id,
             data,
             response_fields: surface.readable_fields,
+            representation: negotiated_record_representation(&headers),
             correlation: &correlation,
         })
         .await
@@ -1507,6 +1510,7 @@ async fn patch_dispatch(
                 entity_id: &route.entity_id,
                 record_id,
                 response_fields: surface.readable_fields,
+                representation: negotiated_record_representation(&headers),
                 correlation: &correlation,
             },
             patch,
@@ -1757,6 +1761,7 @@ async fn tombstone_dispatch(
             entity_id: &route.entity_id,
             record_id,
             response_fields: surface.readable_fields,
+            representation: negotiated_record_representation(&headers),
             correlation: &correlation,
         })
         .await
@@ -2217,6 +2222,7 @@ fn metadata_change_control(
                 .map(|_| {
                     json!({
                         "id": request_entity.id,
+                        "primaryDataset": request_entity.primary_dataset,
                         "route": request_entity.route,
                     })
                 })
@@ -4364,11 +4370,20 @@ fn lookup_unresolved() -> Response {
     )
 }
 
-fn exact_read(response: HeldReadResponse) -> Response {
+fn exact_read(response: HeldReadResponse, entity: &CompiledEntity) -> Response {
     let mut builder = Response::builder()
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, response.content_type())
         .header(VARY, "authorization, accept");
+    if matches!(
+        response.content_type(),
+        "application/json" | "application/ld+json"
+    ) {
+        let Ok(link) = record_profile::link_header_value(entity) else {
+            return unavailable();
+        };
+        builder = builder.header(LINK, link);
+    }
     if let Some(etag) = response.strong_etag() {
         let Ok(etag) = HeaderValue::from_bytes(etag) else {
             return unavailable();
@@ -4380,34 +4395,39 @@ fn exact_read(response: HeldReadResponse) -> Response {
         .unwrap_or_else(|_| unavailable())
 }
 
-fn exact_read_no_store(response: HeldReadResponse) -> Response {
-    (
-        StatusCode::OK,
-        [
-            (CONTENT_TYPE, response.content_type()),
-            (CACHE_CONTROL, "no-store"),
-            (VARY, "authorization, accept"),
-        ],
-        response.body().to_vec(),
-    )
-        .into_response()
+fn exact_read_no_store(response: HeldReadResponse, entity: &CompiledEntity) -> Response {
+    let mut builder = Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, response.content_type())
+        .header(CACHE_CONTROL, "no-store")
+        .header(VARY, "authorization, accept");
+    if matches!(
+        response.content_type(),
+        "application/json" | "application/ld+json"
+    ) {
+        let Ok(link) = record_profile::link_header_value(entity) else {
+            return unavailable();
+        };
+        builder = builder.header(LINK, link);
+    }
+    builder
+        .body(Body::from(response.body().to_vec()))
+        .unwrap_or_else(|_| unavailable())
 }
 
-fn exact_json_no_store(response: HeldReadResponse) -> Response {
-    (
-        StatusCode::OK,
-        [
-            (CONTENT_TYPE, "application/json"),
-            (CACHE_CONTROL, "no-store"),
-            (VARY, "authorization, accept"),
-        ],
-        response.body().to_vec(),
-    )
-        .into_response()
+fn exact_non_record_no_store(response: HeldReadResponse) -> Response {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, response.content_type())
+        .header(CACHE_CONTROL, "no-store")
+        .header(VARY, "authorization, accept")
+        .body(Body::from(response.body().to_vec()))
+        .unwrap_or_else(|_| unavailable())
 }
 
 fn negotiated_read_representation(headers: &HeaderMap) -> CursorRepresentation {
     let mut json_quality: Option<(u16, u8)> = None;
+    let mut json_ld_quality: Option<(u16, u8)> = None;
     let mut geojson_quality: Option<(u16, u8)> = None;
     for value in headers
         .get_all(ACCEPT)
@@ -4423,6 +4443,8 @@ fn negotiated_read_representation(headers: &HeaderMap) -> CursorRepresentation {
             }
             if media.eq_ignore_ascii_case("application/geo+json") {
                 geojson_quality = Some(geojson_quality.unwrap_or_default().max((quality, 3)));
+            } else if media.eq_ignore_ascii_case("application/ld+json") {
+                json_ld_quality = Some(json_ld_quality.unwrap_or_default().max((quality, 3)));
             } else if media.eq_ignore_ascii_case("application/json") {
                 json_quality = Some(json_quality.unwrap_or_default().max((quality, 3)));
             } else if media == "*/*" || media.eq_ignore_ascii_case("application/*") {
@@ -4430,10 +4452,29 @@ fn negotiated_read_representation(headers: &HeaderMap) -> CursorRepresentation {
             }
         }
     }
-    match (geojson_quality, json_quality) {
-        (Some(geojson), Some(json)) if geojson > json => CursorRepresentation::GeoJson,
-        (Some(_), None) => CursorRepresentation::GeoJson,
-        _ => CursorRepresentation::Json,
+    let json = json_quality.unwrap_or_default();
+    let json_ld = json_ld_quality.unwrap_or_default();
+    let geojson = geojson_quality.unwrap_or_default();
+    if geojson_quality.is_some() && geojson > json && geojson > json_ld {
+        CursorRepresentation::GeoJson
+    } else if json_ld_quality.is_some() && json_ld > json {
+        CursorRepresentation::JsonLd
+    } else {
+        CursorRepresentation::Json
+    }
+}
+
+fn negotiated_json_representation(headers: &HeaderMap) -> CursorRepresentation {
+    match negotiated_read_representation(headers) {
+        CursorRepresentation::JsonLd => CursorRepresentation::JsonLd,
+        CursorRepresentation::Json | CursorRepresentation::GeoJson => CursorRepresentation::Json,
+    }
+}
+
+fn negotiated_record_representation(headers: &HeaderMap) -> RecordRepresentation {
+    match negotiated_json_representation(headers) {
+        CursorRepresentation::JsonLd => RecordRepresentation::JsonLd,
+        CursorRepresentation::Json | CursorRepresentation::GeoJson => RecordRepresentation::Json,
     }
 }
 
@@ -4476,19 +4517,24 @@ fn parse_accept_quality(value: &str) -> Option<u16> {
     Some(scaled)
 }
 
-fn geojson_available(entity: &CompiledEntity, readable_fields: &BTreeSet<String>) -> bool {
-    let Some(geojson) = entity.geojson.as_ref() else {
+fn geojson_available(surface: &AuthorizedSurface<'_>) -> bool {
+    if surface.read_path.is_some() {
+        return false;
+    }
+    let Some(geojson) = surface.response_entity.geojson.as_ref() else {
         return false;
     };
-    readable_fields.contains(&geojson.geometry_field)
+    surface.readable_fields.contains(&geojson.geometry_field)
         && matches!(
-            data_field_type(entity, &geojson.geometry_field),
+            data_field_type(surface.response_entity, &geojson.geometry_field),
             Some(FieldTypeSource::Crs84Point { .. })
         )
 }
 
 fn exact_mutation(response: &HeldResponse) -> Response {
-    let mut builder = Response::builder().status(response.status());
+    let mut builder = Response::builder()
+        .status(response.status())
+        .header(VARY, "authorization, accept");
     for (name, value) in response.headers() {
         let Ok(value) = HeaderValue::from_bytes(value) else {
             return unavailable();
@@ -4496,6 +4542,7 @@ fn exact_mutation(response: &HeldResponse) -> Response {
         builder = match name {
             PermittedResponseHeader::ContentType => builder.header(CONTENT_TYPE, value),
             PermittedResponseHeader::Etag => builder.header("etag", value),
+            PermittedResponseHeader::Link => builder.header(LINK, value),
             PermittedResponseHeader::Location => builder.header("location", value),
         };
     }

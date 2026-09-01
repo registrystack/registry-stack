@@ -153,6 +153,10 @@ fn metadata_advertises_controlled_operations_separately_from_crud() {
         metadata["eligibleRequestTypes"][0]["id"],
         "placement-correction-request"
     );
+    assert_eq!(
+        metadata["eligibleRequestTypes"][0]["primaryDataset"],
+        "test-dataset"
+    );
     let hidden = metadata_change_control(&service, placement, &BTreeSet::new());
     assert_eq!(hidden["eligibleRequestTypes"], serde_json::json!([]));
 }

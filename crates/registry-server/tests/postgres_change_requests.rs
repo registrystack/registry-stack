@@ -2391,12 +2391,85 @@ async fn response_parts(response: axum::response::Response) -> ResponseParts {
         .to_vec();
     ResponseParts {
         status,
-        body: serde_json::from_slice(&bytes).expect("response body is JSON"),
+        body: normalize_record_response(
+            serde_json::from_slice(&bytes).expect("response body is JSON"),
+        ),
         etag: headers
             .get("etag")
             .and_then(|value| value.to_str().ok())
             .unwrap_or_default()
             .to_owned(),
+    }
+}
+
+fn normalize_record_response(mut value: Value) -> Value {
+    let Some(object) = value.as_object_mut() else {
+        return value;
+    };
+    if object.contains_key("meta")
+        && object
+            .get("data")
+            .is_some_and(|data| data.get("recordIdentifier").is_some())
+    {
+        assert_record_meta(object.remove("meta").expect("record response has meta"));
+        return normalize_record_member(object.remove("data").expect("record response has data"));
+    }
+    if object.contains_key("meta") && object.contains_key("items") {
+        assert_record_meta(object.remove("meta").expect("record collection has meta"));
+        let items = object
+            .get_mut("items")
+            .and_then(Value::as_array_mut)
+            .expect("record collection has items");
+        for item in items {
+            *item = normalize_record_member(item.take());
+        }
+    }
+    value
+}
+
+fn normalize_record_member(value: Value) -> Value {
+    let mut member = value
+        .as_object()
+        .cloned()
+        .expect("record member is an object");
+    let identifier = member
+        .remove("recordIdentifier")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .expect("record member has recordIdentifier");
+    let revision = member
+        .remove("revisionIdentifier")
+        .and_then(|value| value.as_str().and_then(|value| value.parse::<u64>().ok()))
+        .expect("record member has numeric revisionIdentifier");
+    let domain_data = member
+        .remove("domainData")
+        .filter(Value::is_object)
+        .expect("record member has domainData");
+    if let Some(operation) = member.remove("operationIdentifier") {
+        member.insert("operationId".to_owned(), operation);
+    }
+    let mut legacy = serde_json::Map::from_iter([
+        ("id".to_owned(), Value::String(identifier)),
+        ("revision".to_owned(), json!(revision)),
+        ("data".to_owned(), domain_data),
+    ]);
+    legacy.extend(member);
+    Value::Object(legacy)
+}
+
+fn assert_record_meta(meta: Value) {
+    let meta = meta.as_object().expect("record meta is an object");
+    assert_eq!(meta.len(), 3, "record meta is closed");
+    for name in [
+        "registryIdentifier",
+        "datasetIdentifier",
+        "entityTypeIdentifier",
+    ] {
+        assert!(
+            meta.get(name)
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.is_empty()),
+            "record meta contains {name}"
+        );
     }
 }
 

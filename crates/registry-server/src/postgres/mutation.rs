@@ -288,6 +288,7 @@ impl PostgresRecordMutationService {
                 expected_etag: None,
                 body: MutationBody::Create(input.data),
                 response_fields: input.response_fields,
+                representation: input.representation,
                 correlation: input.correlation.clone(),
             },
         )
@@ -364,6 +365,7 @@ impl PostgresRecordMutationService {
                 expected_etag: Some(input.if_match),
                 body,
                 response_fields: input.response_fields,
+                representation: input.representation,
                 correlation: input.correlation.clone(),
             },
         )

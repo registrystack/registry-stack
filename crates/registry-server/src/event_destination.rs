@@ -552,6 +552,7 @@ enum EventDestinationNetworkProfile {
     ProductionHttps,
     LoopbackDevelopmentHttp,
     #[cfg(feature = "postgres-test")]
+    #[cfg_attr(feature = "schema", schemars(skip))]
     PinnedLoopbackHttpsTest,
 }
 

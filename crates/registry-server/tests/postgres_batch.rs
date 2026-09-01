@@ -110,7 +110,10 @@ async fn real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable
     assert_eq!(seed.status(), StatusCode::CREATED);
     let seed_etag = header(&seed, "etag");
     let seed_body = body_json(seed).await;
-    let seed_id = seed_body["id"].as_str().expect("seed id").to_owned();
+    let seed_id = seed_body["data"]["recordIdentifier"]
+        .as_str()
+        .expect("seed id")
+        .to_owned();
 
     let batch_body = json!({
         "changeContext": {

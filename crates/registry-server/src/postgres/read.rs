@@ -38,8 +38,9 @@ use crate::model::{
     REQUEST_EFFECT_DIGEST_QUERY_FIELD, REQUEST_PROPOSAL_VERSION_QUERY_FIELD,
     REQUEST_SERVER_STATE_QUERY_FIELD,
 };
-use crate::mutation::strong_record_etag;
+use crate::mutation::strong_record_etag_for_representation;
 use crate::query_binding::{CursorBindingQuery, CursorBindingReferences};
+use crate::record_profile::{self, RecordRepresentation};
 
 use super::{
     begin_record_transaction, install_spatial_bbox_context, validate_field_value, ClaimContext,
@@ -211,43 +212,50 @@ impl PostgresRecordReadService {
                 return Err(error);
             }
         };
-        let mut held = match ReadResult::from_materialized(&request, &plan, materialized)
-            .and_then(|result| result.enforce_spatial_response_budget(&request))
-        {
-            Ok(held) => held,
-            Err(error) => {
-                let _ = self
-                    .record_read_terminal_audit(
-                        &mut client,
-                        &claims,
-                        &request,
-                        self.terminal(
-                            &request,
+        let mut held =
+            match ReadResult::from_materialized(&self.registry, &request, &plan, materialized)
+                .and_then(|result| result.enforce_spatial_response_budget(&request))
+            {
+                Ok(held) => held,
+                Err(error) => {
+                    let _ = self
+                        .record_read_terminal_audit(
+                            &mut client,
                             &claims,
-                            &plan,
-                            TerminalAuditOutcome::Refused,
-                            0,
-                            None,
-                        )?,
-                    )
-                    .await;
-                return Err(error);
-            }
-        };
+                            &request,
+                            self.terminal(
+                                &request,
+                                &claims,
+                                &plan,
+                                TerminalAuditOutcome::Refused,
+                                0,
+                                None,
+                            )?,
+                        )
+                        .await;
+                    return Err(error);
+                }
+            };
         if plan.operation == Operation::Get
-            && request.representation == CursorRepresentation::Json
+            && request.representation != CursorRepresentation::GeoJson
             && held.response.is_some()
         {
             let response = held.response.take().ok_or(ReadServiceError::Unavailable)?;
             let record_id = target_record.ok_or(ReadServiceError::Unavailable)?;
             let record_revision = held.record_revision.ok_or(ReadServiceError::Unavailable)?;
-            let etag = strong_record_etag(
+            let representation = match request.representation {
+                CursorRepresentation::Json => RecordRepresentation::Json,
+                CursorRepresentation::JsonLd => RecordRepresentation::JsonLd,
+                CursorRepresentation::GeoJson => return Err(ReadServiceError::Unavailable),
+            };
+            let etag = strong_record_etag_for_representation(
                 &self.audit_profile,
                 &claims,
                 &self.expected.package_revision,
                 record_id,
                 record_revision,
                 &request.selected_fields,
+                representation,
             )
             .map_err(|_| ReadServiceError::Unavailable)?;
             held.response = Some(response.with_strong_etag(etag));
@@ -742,6 +750,7 @@ impl ReadResult {
     }
 
     fn from_materialized(
+        registry: &CompiledRegistry,
         request: &RecordReadRequest,
         plan: &ReadPlan,
         materialized: MaterializedRead,
@@ -753,7 +762,36 @@ impl ReadResult {
                 };
                 let revision =
                     i64::try_from(record.revision).map_err(|_| ReadServiceError::Unavailable)?;
-                let response = HeldReadResponse::from_json(&json!(record))?;
+                let member = record.into_record_member()?;
+                let body = record_profile::single_response(
+                    registry.registry_id(),
+                    &plan.entity,
+                    member,
+                    RecordRepresentation::Json,
+                )
+                .map_err(|_| ReadServiceError::Unavailable)?;
+                let response = HeldReadResponse::from_json(&body)?;
+                Ok(Self {
+                    response: Some(response),
+                    result_count: 1,
+                    record_revision: Some(revision),
+                })
+            }
+            (Operation::Get, CursorRepresentation::JsonLd) => {
+                let Some(record) = materialized.rows.into_iter().next() else {
+                    return Ok(Self::empty_get());
+                };
+                let revision =
+                    i64::try_from(record.revision).map_err(|_| ReadServiceError::Unavailable)?;
+                let member = record.into_record_member()?;
+                let body = record_profile::single_response(
+                    registry.registry_id(),
+                    &plan.entity,
+                    member,
+                    RecordRepresentation::JsonLd,
+                )
+                .map_err(|_| ReadServiceError::Unavailable)?;
+                let response = HeldReadResponse::from_json_ld(&body)?;
                 Ok(Self {
                     response: Some(response),
                     result_count: 1,
@@ -776,14 +814,52 @@ impl ReadResult {
             }
             (Operation::List, CursorRepresentation::Json) => {
                 let result_count = materialized.rows.len();
-                let mut body = json!({
-                    "items": materialized.rows,
-                    "pageInfo": {"nextCursor": materialized.next_cursor},
-                });
+                let items = materialized
+                    .rows
+                    .into_iter()
+                    .map(RecordEnvelope::into_record_member)
+                    .collect::<Result<Vec<_>, _>>()?;
+                let mut extensions = Map::new();
                 if let Some(count) = materialized.total_count {
-                    body["count"] = json!(count);
+                    extensions.insert("count".to_owned(), json!(count));
                 }
+                let body = record_profile::collection_response(
+                    registry.registry_id(),
+                    &plan.entity,
+                    items,
+                    materialized.next_cursor,
+                    extensions,
+                    RecordRepresentation::Json,
+                )
+                .map_err(|_| ReadServiceError::Unavailable)?;
                 let response = HeldReadResponse::from_json(&body)?;
+                Ok(Self {
+                    response: Some(response),
+                    result_count,
+                    record_revision: None,
+                })
+            }
+            (Operation::List, CursorRepresentation::JsonLd) => {
+                let result_count = materialized.rows.len();
+                let items = materialized
+                    .rows
+                    .into_iter()
+                    .map(RecordEnvelope::into_record_member)
+                    .collect::<Result<Vec<_>, _>>()?;
+                let mut extensions = Map::new();
+                if let Some(count) = materialized.total_count {
+                    extensions.insert("count".to_owned(), json!(count));
+                }
+                let body = record_profile::collection_response(
+                    registry.registry_id(),
+                    &plan.entity,
+                    items,
+                    materialized.next_cursor,
+                    extensions,
+                    RecordRepresentation::JsonLd,
+                )
+                .map_err(|_| ReadServiceError::Unavailable)?;
+                let response = HeldReadResponse::from_json_ld(&body)?;
                 Ok(Self {
                     response: Some(response),
                     result_count,
@@ -831,7 +907,40 @@ impl ReadResult {
                 }
                 let revision =
                     i64::try_from(record.revision).map_err(|_| ReadServiceError::Unavailable)?;
-                let response = HeldReadResponse::from_json(&json!(record))?;
+                let member = record.into_record_member()?;
+                let body = record_profile::single_response(
+                    registry.registry_id(),
+                    &plan.entity,
+                    member,
+                    RecordRepresentation::Json,
+                )
+                .map_err(|_| ReadServiceError::Unavailable)?;
+                let response = HeldReadResponse::from_json(&body)?;
+                Ok(Self {
+                    response: Some(response),
+                    result_count: 1,
+                    record_revision: Some(revision),
+                })
+            }
+            (Operation::Lookup, CursorRepresentation::JsonLd) => {
+                let mut rows = materialized.rows.into_iter();
+                let Some(record) = rows.next() else {
+                    return Ok(Self::empty_get());
+                };
+                if rows.next().is_some() {
+                    return Ok(Self::empty_get());
+                }
+                let revision =
+                    i64::try_from(record.revision).map_err(|_| ReadServiceError::Unavailable)?;
+                let member = record.into_record_member()?;
+                let body = record_profile::single_response(
+                    registry.registry_id(),
+                    &plan.entity,
+                    member,
+                    RecordRepresentation::JsonLd,
+                )
+                .map_err(|_| ReadServiceError::Unavailable)?;
+                let response = HeldReadResponse::from_json_ld(&body)?;
                 Ok(Self {
                     response: Some(response),
                     result_count: 1,
@@ -859,6 +968,20 @@ pub(super) struct RecordEnvelope {
     pub(super) request: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) request_presence: Option<Value>,
+}
+
+impl RecordEnvelope {
+    fn into_record_member(self) -> Result<Value, ReadServiceError> {
+        let mut extensions = Map::new();
+        if let Some(request) = self.request {
+            extensions.insert("request".to_owned(), request);
+        }
+        if let Some(request_presence) = self.request_presence {
+            extensions.insert("requestPresence".to_owned(), request_presence);
+        }
+        record_profile::record_member(self.id, self.revision.to_string(), self.data, extensions)
+            .map_err(|_| ReadServiceError::Unavailable)
+    }
 }
 
 fn feature_value(
@@ -1182,8 +1305,8 @@ fn valid_read_representation_request(request: &RecordReadRequest) -> bool {
         request.geojson_next_link_prefix.as_ref(),
     ) {
         (
-            Operation::Get | Operation::List,
-            CursorRepresentation::Json,
+            Operation::Get | Operation::List | Operation::Lookup,
+            CursorRepresentation::Json | CursorRepresentation::JsonLd,
             CursorAdapter::Native,
             None,
             None,
