@@ -30,7 +30,7 @@
       "description": "JSON-LD namespace for Registry Manifest terms.",
       "source": {
         "path": "crates/registry-manifest-core/src/lib.rs",
-        "sha256": "0db88429a6353a5a097a76434f5a5e7009556bf80e5066e2df6b643315d4cb81"
+        "sha256": "fffbf6f3136634bd665b94397892dfeb73e57d2e8c838e7ea47d37a6c75b2079"
       }
     },
     {
@@ -911,11 +911,11 @@
       "description": "Registry Server project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-server/src/schema.rs",
-        "sha256": "a2ea247e5e90bbbe2cbcfe9f7546a1c19b0f9fb0c6d28b16fa8571bf9ac24f01"
+        "sha256": "0c5a95128b19d886b837fca829974b718283fce480ca674940e8bd03814e5f9f"
       },
       "artifact": {
         "path": "products/registry-server/generated/authoring/registry-module.schema.json",
-        "sha256": "0e91e77caa0f7749ecdb1bf8428ae77b3d8a1fa2859045f92bb34cfc0767e1bf",
+        "sha256": "b7d9548f6d2320179f70c338fabfac31a1075acac4b19474eb8b72c7afaae6a6",
         "mediaType": "application/schema+json"
       }
     },
@@ -929,11 +929,11 @@
       "description": "Registry Server project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-server/src/schema.rs",
-        "sha256": "a2ea247e5e90bbbe2cbcfe9f7546a1c19b0f9fb0c6d28b16fa8571bf9ac24f01"
+        "sha256": "0c5a95128b19d886b837fca829974b718283fce480ca674940e8bd03814e5f9f"
       },
       "artifact": {
         "path": "products/registry-server/generated/authoring/registry-project.schema.json",
-        "sha256": "1dd7f2803605efaa69855cb07b7e24062b9697f1f10a3e8e85d31e510c34ae26",
+        "sha256": "8290bb45abb16f8d9e8cbe786d7cf02358d9973932e095691d56e0b1ef2f60b9",
         "mediaType": "application/schema+json"
       }
     },
@@ -947,7 +947,7 @@
       "description": "Registry Server runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-server/src/schema.rs",
-        "sha256": "a2ea247e5e90bbbe2cbcfe9f7546a1c19b0f9fb0c6d28b16fa8571bf9ac24f01"
+        "sha256": "0c5a95128b19d886b837fca829974b718283fce480ca674940e8bd03814e5f9f"
       },
       "artifact": {
         "path": "products/registry-server/generated/runtime/runtime.schema.json",
