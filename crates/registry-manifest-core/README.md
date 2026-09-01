@@ -10,7 +10,8 @@ share the same metadata model.
 
 ## What It Provides
 
-- Manifest structs for catalogs, datasets, entities, fields, policies,
+- Manifest structs for catalogs, datasets, distributions, data services,
+  entities, fields, policies,
   codelists, requirements, profiles, evidence offerings, and evaluation
   profiles.
 - Strict validation with unknown-field rejection through Serde.

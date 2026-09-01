@@ -23,7 +23,7 @@ cargo build --bin registry-manifest
 The commands in this page use `cargo run --bin registry-manifest --` as a prefix.
 If you have installed the binary directly, replace that prefix with `registry-manifest`.
 
-The four example profile fixtures in the repository serve as ready-made manifest inputs.
+The five example profile fixtures in the repository serve as ready-made manifest inputs.
 The commands in this how-to use
 [`profiles/example-civil-registration/fixtures/metadata.yaml`](../profiles/example-civil-registration/fixtures/metadata.yaml)
 as the example path.
@@ -57,6 +57,8 @@ Validation checks include:
 - Codelist references resolve to defined codelists.
 - Grouped evidence type lists reference known evidence types that prove the owning requirement.
 - Public service, authority, channel, form, and data-service references resolve.
+- Every distribution names one existing dataset, names a serving data service
+  when `access_service` is present, and declares at least one access mechanism.
 - ODRL policy terms use recognized action and operator values.
 - Evidence offering references are internally consistent.
 - Runtime-only keys such as table names, source paths, scopes, and backend bindings are absent.

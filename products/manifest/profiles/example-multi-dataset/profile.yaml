@@ -1,0 +1,22 @@
+schema_version: registry-manifest-profile/v1
+profile:
+  id: example-multi-dataset
+  version: "1"
+  name: Multi-dataset DCAT Example
+  upstream_system: Registry Manifest
+  upstream_url: https://registrystack.org/
+  description: Non-normative example of two datasets, one shared data service, and one distribution.
+supported_input_artifacts:
+  - kind: metadata_manifest
+    media_type: application/yaml
+    description: Registry Manifest portable metadata manifest with explicit dataset and distribution relationships.
+conformance_checks:
+  - id: example-multi-dataset.resource-model
+    severity: error
+    description: Manifest must validate the dataset, data-service, and distribution relationships.
+fixtures:
+  - path: fixtures/metadata.yaml
+    manifest: true
+    expect: valid
+    description: Two datasets served by one data service, with one distribution bound to exactly one dataset.
+generator_command: null

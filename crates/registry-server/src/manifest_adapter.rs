@@ -113,9 +113,12 @@ fn project_manifest(
                 conforms_to: service.conforms_to.clone(),
             })
             .collect(),
+        distributions: Vec::new(),
         forms: Vec::new(),
         datasets: vec![DatasetManifest {
             id: dataset_id,
+            iri: None,
+            version: None,
             title: localized_text(&projection.dataset.title),
             description: projection.dataset.description.as_ref().map(localized_text),
             owner: projection.dataset.owner.clone(),

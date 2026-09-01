@@ -1,0 +1,42 @@
+schema_version: registry-manifest/v1
+catalog:
+  id: example-multi-dataset
+  base_url: https://data.example.test
+  title: Example multi-dataset Registry
+  publisher:
+    name: Example Registry Authority
+profiles:
+  - id: example-multi-dataset
+    version: "1"
+data_services:
+  - id: registry-api
+    iri: https://data.example.test/services/registry-api
+    title: Registry API
+    description: API serving both master datasets.
+    endpoint_url: https://api.example.test/v1
+    endpoint_description: https://api.example.test/openapi.json
+    serves_datasets:
+      - legal-entities
+      - beneficial-ownership
+datasets:
+  - id: legal-entities
+    iri: https://data.example.test/datasets/legal-entities
+    version: "2026.1"
+    title: Legal entities
+    description: Authoritative legal-entity master data.
+    entities: []
+  - id: beneficial-ownership
+    title: Beneficial ownership
+    description: Authoritative beneficial-ownership master data.
+    entities: []
+distributions:
+  - id: legal-entities-snapshot
+    iri: https://data.example.test/distributions/legal-entities-snapshot
+    dataset: legal-entities
+    access_service: registry-api
+    access_url: https://api.example.test/v1/legal-entities
+    download_url: https://downloads.example.test/legal-entities.ndjson
+    media_type: application/x-ndjson
+    format: http://publications.europa.eu/resource/authority/file-type/NDJSON
+    title: Legal entities snapshot
+    description: Deliberate release snapshot of the legal-entities dataset.

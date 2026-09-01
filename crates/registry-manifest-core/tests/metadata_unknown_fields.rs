@@ -87,6 +87,11 @@ fn top_level_section_key_typos_are_rejected() {
             "data_service",
         ),
         (
+            "distributions",
+            "distributons:\n  - id: distribution-a\n    dataset: dataset-a\n    download_url: https://example.test/data.json",
+            "distributons",
+        ),
+        (
             "forms",
             "form:\n  - id: form-a\n    title: Form A\n    service: service-a",
             "form",

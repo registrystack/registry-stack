@@ -89,6 +89,7 @@ Source:
 | `authorities` | list of `AuthorityManifest` | No | Public authority records referenced by public services. |
 | `public_services` | list of `ServiceManifest` | No | CPSV-AP public services and channels. |
 | `data_services` | list of `DataServiceManifest` | No | DCAT data services referenced by services and evidence offerings. |
+| `distributions` | list of `DistributionManifest` | No | Concrete deliveries or representations, each belonging to exactly one dataset. Empty and absent collections are canonically equivalent. |
 | `forms` | list of `FormManifest` | No | Local form-profile records linked from public services and channels. |
 | `codelists` | list of `CodelistManifest` | No | Enumerated value schemes with concept URIs. |
 | `evaluation_profiles` | list of `EvaluationProfileManifest` | No | Public profile-to-ruleset bindings for delegated evaluation. |
@@ -113,12 +114,32 @@ Source:
 | Key | Description |
 | --- | --- |
 | `id` | Dataset identifier string (alphanumeric and dashes). Must be unique. |
+| `iri` | Optional canonical dataset IRI. When absent, the existing fragment identity `#dataset-<id>` is retained. |
+| `version` | Optional deliberate dataset release version. It is independent of records, schemas, and package activation. |
 | `title` | Human-readable dataset title. |
 | `entities` | List of `EntityManifest` entries describing domain resources and their fields. |
 | `policies` | List of `DatasetPolicyManifest` entries describing ODRL access policies. |
 | `evidence_offerings` | List of `EvidenceOfferingManifest` entries. |
 | `public_services` | Dataset-scoped public registry services, when a dataset is itself the produced registry resource. |
 | `codelists` | List of codelist IDs referenced by this dataset's fields. |
+
+### DistributionManifest keys
+
+| Key | Type | Required | Description |
+| --- | --- | --- | --- |
+| `id` | string | Yes | Unique distribution identifier. |
+| `dataset` | string | Yes | Exactly one existing dataset id. |
+| `access_service` | string | No | Existing data-service id. The service must include the distribution dataset in `serves_datasets`. |
+| `access_url` | HTTP(S) URL | No | Access location for the distribution. |
+| `download_url` | HTTP(S) URL | No | Direct download location for the distribution. |
+| `media_type` | string | No | IANA `type/subtype` value without parameters, rendered as its IANA media-type IRI. |
+| `format` | IRI or configured CURIE | No | Distribution format identifier rendered as `dcterms:format`. |
+| `title` | `LocalizedText` | No | Human-readable title. |
+| `description` | `LocalizedText` | No | Human-readable description. |
+| `iri` | IRI or configured CURIE | No | Canonical distribution IRI. A deterministic metadata IRI is derived when absent. |
+
+A distribution must declare at least one of `access_service`, `access_url`, or
+`download_url`.
 
 ### CodelistManifest keys
 
@@ -143,6 +164,10 @@ Source:
 | `forms[].sections[].fields[].concept` | Information concept IRI collected by the form field. |
 | `forms[].sections[].fields[].supports_requirement` | Requirement ID supported by the field. |
 | `forms[].sections[].fields[].fulfillment` | Manual input, file upload, registry lookup, evidence exchange, self-declaration, or already-known mode metadata. |
+
+Every `data_services[]` entry requires a non-empty `serves_datasets` list of
+existing dataset ids. Filtered metadata removes hidden dataset memberships,
+hidden-only data services, and public-service relationships to either.
 
 ### Evidence offering access keys
 

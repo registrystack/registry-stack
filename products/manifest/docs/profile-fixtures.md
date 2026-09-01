@@ -18,7 +18,7 @@ A profile fixture is a pair of files in a `profiles/<profile-id>/` directory:
 The two schema versions govern different files: `registry-manifest/v1` governs the manifest;
 `registry-manifest-profile/v1` governs the descriptor. The CLI enforces both.
 
-The four example profiles in the repository are non-normative examples.
+The five example profiles in the repository are non-normative examples.
 They are not authoritative profiles for OpenCRVS, OpenSPP, OpenIMIS, or SP DCI until reviewed
 against official artifacts.
 
@@ -62,6 +62,7 @@ placeholders):
 ```text
 example-benefits-sync/
 example-civil-registration/
+example-multi-dataset/
 example-person-schema/
 example-social-benefits/
 opencrvs/
@@ -152,13 +153,14 @@ echo "exit code: $?"
 
 Exit code 0 means every profile descriptor and every referenced fixture passed.
 
-To confirm the test suite also covers all four example profiles, run:
+To confirm the profile gate also covers all five example profiles, run:
 
 ```sh
-cargo test --locked -p registry-manifest-core validates_profile_fixtures
+cargo run --locked -p registry-manifest-cli -- validate-profiles profiles
 ```
 
-This test asserts that all four example profile fixtures pass manifest validation.
+This command asserts that all five example profile descriptors and fixtures pass
+manifest validation.
 
 ## Troubleshooting
 
