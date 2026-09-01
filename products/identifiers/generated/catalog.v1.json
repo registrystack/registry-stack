@@ -848,6 +848,24 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/schemas/registry-server/authoring/registry-module.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "registry-server",
+      "title": "Registry Server authored module",
+      "description": "Registry Server project authoring JSON Schema.",
+      "source": {
+        "path": "crates/registry-server/src/schema.rs",
+        "sha256": "a2ea247e5e90bbbe2cbcfe9f7546a1c19b0f9fb0c6d28b16fa8571bf9ac24f01"
+      },
+      "artifact": {
+        "path": "products/registry-server/generated/authoring/registry-module.schema.json",
+        "sha256": "0e91e77caa0f7749ecdb1bf8428ae77b3d8a1fa2859045f92bb34cfc0767e1bf",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/registry-server/authoring/registry-project.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",
@@ -857,11 +875,11 @@
       "description": "Registry Server project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-server/src/schema.rs",
-        "sha256": "b8adb47a1ae445395121e3d51f4d7dac93e5465032cef5c55b47430ed4f3ee80"
+        "sha256": "a2ea247e5e90bbbe2cbcfe9f7546a1c19b0f9fb0c6d28b16fa8571bf9ac24f01"
       },
       "artifact": {
         "path": "products/registry-server/generated/authoring/registry-project.schema.json",
-        "sha256": "d553fe4ce669a36018a520ae7f16cf7c33837a4c7000027b831598d744fc7187",
+        "sha256": "1dd7f2803605efaa69855cb07b7e24062b9697f1f10a3e8e85d31e510c34ae26",
         "mediaType": "application/schema+json"
       }
     },
@@ -875,11 +893,11 @@
       "description": "Registry Server runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-server/src/schema.rs",
-        "sha256": "b8adb47a1ae445395121e3d51f4d7dac93e5465032cef5c55b47430ed4f3ee80"
+        "sha256": "a2ea247e5e90bbbe2cbcfe9f7546a1c19b0f9fb0c6d28b16fa8571bf9ac24f01"
       },
       "artifact": {
         "path": "products/registry-server/generated/runtime/runtime.schema.json",
-        "sha256": "76ab2845bff3f137c6c8640725d74879332d991544543bdb8c86821613653b9b",
+        "sha256": "c273fdb60c7721c28038d0809aaf92a132c54857cc2dd60e29e10444e1387d99",
         "mediaType": "application/schema+json"
       }
     },
