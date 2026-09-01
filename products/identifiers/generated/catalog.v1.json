@@ -857,7 +857,7 @@
       "description": "Relay V2 generated public JSON Schema.",
       "source": {
         "path": "crates/registry-relay-v2/src/artifacts.rs",
-        "sha256": "11101d8c32539b21051940790c36d72a3fb2dddd6a4ad10796623b456a55431d"
+        "sha256": "d5fa67cf1f0ad2e50e70c26115125976ff869cd68727fd212245f0bf363865eb"
       },
       "artifact": {
         "path": "products/identifiers/generated/artifacts/registry-relay/audit-event/v2alpha1.json",
@@ -875,11 +875,11 @@
       "description": "Relay V2 authoring JSON Schema.",
       "source": {
         "path": "crates/registry-relayctl/schemas/authoring/registry.schema.json",
-        "sha256": "d7a3d7b6dc9c1904fc067f0779c941ff247b26feb3a62f8d391b04f463c5a2ca"
+        "sha256": "c030917d19b1f50c8d2b41fc7b2ef4fb07b803b5fa98ffd971f5c964f491f7e5"
       },
       "artifact": {
         "path": "crates/registry-relayctl/schemas/authoring/registry.schema.json",
-        "sha256": "d7a3d7b6dc9c1904fc067f0779c941ff247b26feb3a62f8d391b04f463c5a2ca",
+        "sha256": "c030917d19b1f50c8d2b41fc7b2ef4fb07b803b5fa98ffd971f5c964f491f7e5",
         "mediaType": "application/schema+json"
       }
     },
@@ -965,7 +965,7 @@
       "description": "Relay V2 Registry Core predicate binding a controlled property to its codelist.",
       "source": {
         "path": "crates/registry-relay-v2/src/semantics.rs",
-        "sha256": "bac9c3e6ca299349a4bcde2ad51b77decff32efa268278722f5d17d436a76b00"
+        "sha256": "d585ce17229a864b6270c1442158c876bdbd2e41546395ae92c485b8572914da"
       }
     },
     {
@@ -978,7 +978,7 @@
       "description": "Relay V2 Registry Core predicate identifying a spatial property's coordinate reference system.",
       "source": {
         "path": "crates/registry-relay-v2/src/semantics.rs",
-        "sha256": "bac9c3e6ca299349a4bcde2ad51b77decff32efa268278722f5d17d436a76b00"
+        "sha256": "d585ce17229a864b6270c1442158c876bdbd2e41546395ae92c485b8572914da"
       }
     },
     {
@@ -991,7 +991,7 @@
       "description": "Vocabulary base for Relay V2 Registry Core semantic predicates.",
       "source": {
         "path": "crates/registry-relay-v2/src/semantics.rs",
-        "sha256": "bac9c3e6ca299349a4bcde2ad51b77decff32efa268278722f5d17d436a76b00"
+        "sha256": "d585ce17229a864b6270c1442158c876bdbd2e41546395ae92c485b8572914da"
       }
     },
     {
@@ -1004,7 +1004,7 @@
       "description": "Relay V2 Registry Core predicate identifying a spatial property's geometry type.",
       "source": {
         "path": "crates/registry-relay-v2/src/semantics.rs",
-        "sha256": "bac9c3e6ca299349a4bcde2ad51b77decff32efa268278722f5d17d436a76b00"
+        "sha256": "d585ce17229a864b6270c1442158c876bdbd2e41546395ae92c485b8572914da"
       }
     },
     {
@@ -1017,7 +1017,7 @@
       "description": "Ordered Relay V2 technical handling levels: public, internal, confidential, and restricted.",
       "source": {
         "path": "products/relay-v2/CONCEPT.md",
-        "sha256": "6502c4860b3ff48cb85f5833099be607c8d4b2d0d1126fb4b8e3a7790820a7d7"
+        "sha256": "5a60dadc119db6869534f2087ca817fe68f86625d3a48510eb26f99774fd62ed"
       }
     },
     {
@@ -1043,7 +1043,7 @@
       "description": "Relay V2 Registry Core predicate indicating whether a source value is required.",
       "source": {
         "path": "crates/registry-relay-v2/src/semantics.rs",
-        "sha256": "bac9c3e6ca299349a4bcde2ad51b77decff32efa268278722f5d17d436a76b00"
+        "sha256": "d585ce17229a864b6270c1442158c876bdbd2e41546395ae92c485b8572914da"
       }
     }
   ]
