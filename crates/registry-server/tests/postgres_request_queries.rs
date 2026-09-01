@@ -22,7 +22,7 @@ use registry_server::compiler::{compile_project, CompileProfile};
 use registry_server::contract::parse_project_json;
 use registry_server::cursor::CursorCodec;
 use registry_server::postgres::{
-    initialize_registry_state_for_catalog_test, install_compiled_schema, ExpectedManagedCatalog,
+    initialize_compiled_registry_state_for_test, install_compiled_schema,
     PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey,
     RegistryStateTestIdentity,
 };
@@ -420,10 +420,10 @@ async fn install_registry(
     install_compiled_schema(&migration, registry, &database.runtime_role)
         .await
         .expect("request query schema installs");
-    let identity = initialize_registry_state_for_catalog_test(
+    let identity = initialize_compiled_registry_state_for_test(
         &migration,
         &database.runtime_role,
-        &ExpectedManagedCatalog::compiled(registry),
+        registry,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
             environment: "local",

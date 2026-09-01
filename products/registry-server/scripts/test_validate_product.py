@@ -176,7 +176,7 @@ class RegistryServerProductCatalogTests(unittest.TestCase):
 
     def test_postgres_migration_requires_tooling_and_follows_package_in_the_owned_gate(self) -> None:
         commands = list(VALIDATOR.POSTGRES_TEST_COMMANDS)
-        package = "cargo test --locked -p registry-server --features postgres-test --test postgres_package"
+        package = "cargo test --locked -p registry-server --features postgres-test,tooling --test postgres_package"
         migration = (
             "cargo test --locked -p registry-server --features postgres-test,tooling "
             "--test postgres_migration"

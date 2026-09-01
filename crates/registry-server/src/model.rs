@@ -8,7 +8,7 @@ use crate::artifacts::GeneratedArtifacts;
 use crate::contract::{
     AccessProfileSource, BatchSource, Classification, ConstraintSource, EventConditionSource,
     EventSource, FieldTypeSource, ManifestProjectionSource, MutationMode, Operation,
-    PackageIdentitySource, RowBoundarySource, TemporalSource, ValidTimeRole,
+    PackageIdentitySource, ProvenanceFieldSource, RowBoundarySource, TemporalSource, ValidTimeRole,
     WebhookAuthenticationProfile, WebhookDeadLetterMode,
 };
 use crate::diagnostics::Diagnostic;
@@ -280,6 +280,9 @@ pub struct CompiledEntity {
 pub struct CompiledTemporal {
     pub start_field: String,
     pub end_field: String,
+    /// Deprecated predecessor compatibility. New compiled temporal semantics do
+    /// not derive query scope or exclusion policy from this field.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub scope_fields: Vec<String>,
 }
 
@@ -288,7 +291,7 @@ impl From<TemporalSource> for CompiledTemporal {
         Self {
             start_field: source.start_field,
             end_field: source.end_field,
-            scope_fields: source.scope_fields,
+            scope_fields: Vec::new(),
         }
     }
 }
@@ -413,6 +416,8 @@ pub struct CompiledMetadataEntry {
     pub access_profile: String,
     pub response_entity_id: String,
     pub readable_fields: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provenance_fields: Vec<ProvenanceFieldSource>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -438,6 +443,7 @@ pub enum CompiledQueryKind {
     List,
     Current,
     AsOf,
+    Snapshot,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -477,8 +483,19 @@ pub struct CompiledQuerySortField {
 pub struct CompiledQueryTemporalBinding {
     pub start_field: String,
     pub end_field: String,
+    pub value_kind: CompiledQueryTemporalValueKind,
+    /// Deprecated predecessor compatibility. New query bindings leave this
+    /// empty and generated contracts do not expose it as temporal semantics.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub scope_fields: Vec<String>,
     pub semantics: CompiledQueryTemporalSemantics,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompiledQueryTemporalValueKind {
+    Date,
+    Timestamp,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]

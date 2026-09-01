@@ -12,7 +12,7 @@ use postgres_harness::TestDatabase;
 use registry_server::compiler::{compile_project, CompileProfile};
 use registry_server::contract::parse_project_json;
 use registry_server::postgres::{
-    begin_record_transaction, initialize_registry_state_for_catalog_test, install_compiled_schema,
+    begin_record_transaction, initialize_compiled_registry_state_for_test, install_compiled_schema,
     verify_catalog_identity_for_catalog, ClaimContext, ExpectedManagedCatalog, RegistryLockKey,
     RegistryStateTestIdentity,
 };
@@ -46,10 +46,10 @@ async fn change_request_target_authority_requires_exact_context_and_proposal_tar
         .await
         .expect("compiled change-request schema installs");
     let catalog = ExpectedManagedCatalog::compiled(&registry);
-    let identity = initialize_registry_state_for_catalog_test(
+    let identity = initialize_compiled_registry_state_for_test(
         &migration,
         &database.runtime_role,
-        &catalog,
+        &registry,
         RegistryStateTestIdentity {
             package_id: "request-authority",
             environment: "local",

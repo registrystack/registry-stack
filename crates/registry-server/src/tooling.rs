@@ -111,10 +111,13 @@ fn classify_change(
         | Code::AccessProfileAdded
         | Code::AccessProfileRemoved
         | Code::EntityAccessRequirementsChanged
-        | Code::QueryInventoryChanged
         | Code::RouteAdded
         | Code::RouteRemoved
         | Code::RouteChanged => DiffClassification::AccessChange,
+        Code::QueryInventoryChanged => match change.class {
+            BaseClass::AccessOrDisclosureChange => DiffClassification::AccessChange,
+            _ => DiffClassification::Unsupported,
+        },
         Code::EventAdded | Code::EventRemoved | Code::EventChanged => {
             DiffClassification::Unsupported
         }
@@ -444,6 +447,92 @@ mod tests {
         );
     }
 
+    #[test]
+    fn query_removed_by_snapshot_profile_revocation_is_supported_access_change() {
+        let baseline = compiled_temporal_with_profile(r#""list","snapshot""#, "");
+        let candidate = compiled_temporal_with_profile(r#""list""#, "");
+
+        let diff = classify_registry_diff(&baseline, &candidate, PACKAGE_REVISION);
+        let query_changes = diff
+            .changes
+            .iter()
+            .filter(|change| {
+                change.change.code == CompiledRegistryChangeCode::QueryInventoryChanged
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            !query_changes.is_empty(),
+            "snapshot revocation removes query operations"
+        );
+        assert!(query_changes
+            .iter()
+            .all(|change| change.classification == DiffClassification::AccessChange));
+        assert!(diff
+            .changes
+            .iter()
+            .all(|change| change.classification != DiffClassification::Unsupported));
+    }
+
+    #[test]
+    fn query_added_by_snapshot_profile_grant_is_supported_access_change() {
+        let baseline = compiled_temporal_with_profile(r#""list""#, "");
+        let candidate = compiled_temporal_with_profile(r#""list","snapshot""#, "");
+
+        let diff = classify_registry_diff(&baseline, &candidate, PACKAGE_REVISION);
+        let query_changes = diff
+            .changes
+            .iter()
+            .filter(|change| {
+                change.change.code == CompiledRegistryChangeCode::QueryInventoryChanged
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            !query_changes.is_empty(),
+            "snapshot adoption adds query operations"
+        );
+        assert!(query_changes
+            .iter()
+            .all(|change| change.classification == DiffClassification::AccessChange));
+        assert!(diff
+            .changes
+            .iter()
+            .all(|change| change.classification != DiffClassification::Unsupported));
+    }
+
+    #[test]
+    fn query_rewrite_from_readable_filterable_delta_is_supported_access_change() {
+        let baseline = compiled_temporal_with_profile(r#""list","snapshot""#, "");
+        let candidate = compiled_temporal_with_profile_fields(
+            r#""list","snapshot""#,
+            r#",{"id":"label","type":"string","maxLength":32,"classification":"internal"}"#,
+            r#""readableFields":["subject","valid-from","valid-to","label"],"filterableFields":["subject","valid-from","label"]"#,
+            "",
+        );
+
+        let diff = classify_registry_diff(&baseline, &candidate, PACKAGE_REVISION);
+
+        assert!(diff.changes.iter().any(|change| {
+            change.change.code == CompiledRegistryChangeCode::QueryInventoryChanged
+                && change.classification == DiffClassification::AccessChange
+        }));
+    }
+
+    #[test]
+    fn changed_query_shape_without_operation_removal_requires_reviewed_access_change() {
+        let baseline = compiled_temporal_with_profile(r#""list","snapshot""#, "");
+        let candidate =
+            compiled_temporal_with_profile(r#""list","snapshot""#, r#", "allowCount": true"#);
+
+        let diff = classify_registry_diff(&baseline, &candidate, PACKAGE_REVISION);
+
+        assert!(diff.changes.iter().any(|change| {
+            change.change.code == CompiledRegistryChangeCode::QueryInventoryChanged
+                && change.classification == DiffClassification::AccessChange
+        }));
+    }
+
     fn assert_class(
         baseline: &CompiledRegistry,
         candidate: &CompiledRegistry,
@@ -454,6 +543,33 @@ mod tests {
         assert!(diff.changes.iter().any(|change| {
             change.change.code == code && change.classification == classification
         }));
+    }
+
+    fn compiled_temporal_with_profile(operations: &str, profile_extra: &str) -> CompiledRegistry {
+        compiled_temporal_with_profile_fields(
+            operations,
+            "",
+            r#""readableFields":["subject","valid-from","valid-to"],"filterableFields":["subject","valid-from"]"#,
+            profile_extra,
+        )
+    }
+
+    fn compiled_temporal_with_profile_fields(
+        operations: &str,
+        extra_fields: &str,
+        access_fields: &str,
+        profile_extra: &str,
+    ) -> CompiledRegistry {
+        let module_bytes = format!(
+            r#"{{"id":"core","version":"1","entities":[{{"id":"membership","route":"memberships","mutationMode":"mutable","fields":[{{"id":"subject","type":"string","maxLength":64,"required":true,"classification":"internal"}},{{"id":"valid-from","type":"date","required":true,"classification":"internal"}},{{"id":"valid-to","type":"date","classification":"internal"}}{extra_fields}],"temporal":{{"startField":"valid-from","endField":"valid-to"}},"constraints":[{{"id":"membership-window","kind":"temporal-non-overlap","scopeFields":["subject"],"startField":"valid-from","endField":"valid-to"}}],"accessProfiles":[{{"id":"consumer","principalClaim":"principal","operations":[{operations}],{access_fields}{profile_extra}}}]}}]}}"#
+        );
+        let module = parse_module_json(module_bytes.as_bytes()).expect("module parses");
+        let digest = module_digest(&module);
+        let project_bytes = format!(
+            r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"temporal-registry","version":"1","defaultLanguage":"en"}},"package":{{"environment":"local","instanceId":"instance-under-test","sequence":1,"sourceRevision":"compiler-source-revision"}},"manifestProjection":{{"accessProfile":"consumer","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Temporal Registry Catalog","publisher":{{"name":"Package Test Publisher"}}}},"dataset":{{"title":"Temporal Registry Dataset","owner":"Package Test Publisher","status":"active"}}}},"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
+        );
+        let project = parse_project_json(project_bytes.as_bytes()).expect("project parses");
+        compile_project(&project, &[module], CompileProfile::Production).expect("fixture compiles")
     }
 
     fn compiled(

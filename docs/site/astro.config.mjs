@@ -432,6 +432,7 @@ export default defineConfig({
             { label: 'Configure your registry', slug: 'configure/registry-server' },
             { label: 'Configure webhooks', slug: 'configure/registry-server-webhooks' },
             { label: 'Configuration reference', slug: 'reference/registry-server-configuration' },
+            { label: 'History reference', slug: 'reference/registry-server-history' },
             { label: 'Events and webhooks reference', slug: 'reference/registry-server-events' },
           ],
         },

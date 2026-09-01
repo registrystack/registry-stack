@@ -38,6 +38,7 @@ use crate::model::{
     REQUEST_SERVER_STATE_QUERY_FIELD,
 };
 use crate::mutation::strong_record_etag;
+use crate::query_binding::{CursorBindingQuery, CursorBindingReferences};
 
 use super::{
     begin_record_transaction, validate_field_value, ClaimContext, ExpectedRegistryIdentity,
@@ -1025,6 +1026,7 @@ fn validate_compiled_query_request(
         return Err(());
     }
     match query.kind {
+        CompiledQueryKind::Snapshot => return Err(()),
         CompiledQueryKind::List => {
             if query.temporal_instant.is_some() || operation.temporal.is_some() {
                 return Err(());
@@ -1099,103 +1101,29 @@ fn validate_compiled_query_request(
     Ok(())
 }
 
-struct CursorBindingReferences {
-    principal: Option<String>,
-    purpose: Option<String>,
-    row_boundary: String,
-    projection: String,
-    query: String,
-    sort: String,
-    scope: String,
-}
-
 fn cursor_binding_references(
     cursors: &CursorCodec,
     request: &RecordReadRequest,
     operation: &CompiledQueryOperation,
     query: &crate::api::CompiledReadQuery,
 ) -> Result<CursorBindingReferences, ()> {
-    let principal = request
-        .context
-        .principal()
-        .map(|value| {
-            cursors.binding_digest_bytes(b"registry-server-cursor-principal-v3", value.as_bytes())
-        })
-        .transpose()
-        .map_err(|_| ())?;
-    let purpose = request
-        .context
-        .purpose()
-        .map(|value| {
-            cursors.binding_digest_bytes(b"registry-server-cursor-purpose-v3", value.as_bytes())
-        })
-        .transpose()
-        .map_err(|_| ())?;
-    let row_boundary = cursors
-        .binding_digest(
-            b"registry-server-cursor-row-boundary-v3",
-            &json!(request
-                .context
-                .row_boundaries()
-                .iter()
-                .map(|boundary| {
-                    json!({
-                        "field": boundary.field(),
-                        "operator": match boundary.operator() {
-                            ApiRowBoundaryOperator::Equals => "equals",
-                            ApiRowBoundaryOperator::In => "in",
-                        },
-                        "values": boundary.values(),
-                    })
-                })
-                .collect::<Vec<_>>()),
-        )
-        .map_err(|_| ())?;
-    let projection = cursors
-        .binding_digest(
-            b"registry-server-cursor-projection-v3",
-            &json!({"projection": query.projection.iter().map(projection_field_value).collect::<Vec<_>>()}),
-        )
-        .map_err(|_| ())?;
-    let query_reference = cursors
-        .binding_digest(
-            b"registry-server-cursor-query-v3",
-            &json!({
-                "routeId": query.route_id,
-                "queryOperationId": operation.id,
-                "queryKind": operation.kind,
-                "selectedProfile": request.context.selected_profile(),
-                "projection": query.projection.iter().map(projection_field_value).collect::<Vec<_>>(),
-                "filter": query.filter.as_ref().map(read_filter_expr_value),
-                "order": query.order.as_ref().map(read_order_clause_value),
-                "pageSize": query.page_size,
-                "includeCount": query.include_count,
-                "temporalInstant": query.temporal_instant,
-                "scope": cursor_scope_value(&query.cursor_query.scope),
-            }),
-        )
-        .map_err(|_| ())?;
-    let sort = cursors
-        .binding_digest(
-            b"registry-server-cursor-sort-v3",
-            &json!({"order": query.order.as_ref().map(read_order_clause_value), "tieBreaker": operation.stable_tie_breaker}),
-        )
-        .map_err(|_| ())?;
-    let scope = cursors
-        .binding_digest(
-            b"registry-server-cursor-scope-v3",
-            &cursor_scope_value(&query.cursor_query.scope),
-        )
-        .map_err(|_| ())?;
-    Ok(CursorBindingReferences {
-        principal,
-        purpose,
-        row_boundary,
-        projection,
-        query: query_reference,
-        sort,
-        scope,
-    })
+    crate::query_binding::references(
+        cursors,
+        &query.route_id,
+        operation,
+        &request.context,
+        CursorBindingQuery {
+            selected_fields: &request.selected_fields,
+            projection: &query.projection,
+            filter: query.filter.as_ref(),
+            order: query.order.as_ref(),
+            include_count: query.include_count,
+            page_size: query.page_size,
+            temporal_instant: query.temporal_instant.as_deref(),
+            scope: &query.cursor_query.scope,
+        },
+    )
+    .map_err(|_| ())
 }
 
 fn cursor_query_matches_request(
@@ -1277,17 +1205,6 @@ fn cursor_filter_expr_from_read(filter: &ReadFilterExpr) -> CursorFilterExpr {
                 values: predicate.values.clone(),
             },
         },
-    }
-}
-
-fn cursor_scope_value(scope: &CursorQueryScope) -> Value {
-    match scope {
-        CursorQueryScope::Collection {} => json!({"kind": "collection"}),
-        CursorQueryScope::Relationship { path_id, root_id } => json!({
-            "kind": "relationship",
-            "pathId": path_id,
-            "rootId": root_id,
-        }),
     }
 }
 
@@ -1799,68 +1716,6 @@ fn validate_filter_predicate(
         }
     }
     Ok(())
-}
-
-fn projection_field_value(field: &ReadProjectionField) -> Value {
-    json!({
-        "fieldId": field.field_id,
-        "fieldType": field.field_type,
-    })
-}
-
-fn read_order_clause_value(order: &ReadOrderClause) -> Value {
-    json!({
-        "fieldId": order.field_id,
-        "fieldType": order.field_type,
-        "direction": order.direction,
-    })
-}
-
-fn read_filter_expr_value(filter: &ReadFilterExpr) -> Value {
-    match filter {
-        ReadFilterExpr::Binary { op, left, right } => json!({
-            "kind": "binary",
-            "op": match op {
-                ReadLogicalOp::And => "and",
-                ReadLogicalOp::Or => "or",
-            },
-            "left": read_filter_expr_value(left),
-            "right": read_filter_expr_value(right),
-        }),
-        ReadFilterExpr::Not(expr) => json!({
-            "kind": "not",
-            "op": "not",
-            "expr": read_filter_expr_value(expr),
-        }),
-        ReadFilterExpr::Group(expr) => json!({
-            "kind": "group",
-            "op": "group",
-            "expr": read_filter_expr_value(expr),
-        }),
-        ReadFilterExpr::Predicate(predicate) => json!({
-            "kind": "predicate",
-            "fieldId": predicate.field_id,
-            "fieldType": predicate.field_type,
-            "operator": read_filter_operator_name(predicate.operator),
-            "values": predicate.values,
-        }),
-    }
-}
-
-fn read_filter_operator_name(operator: ReadFilterOperator) -> &'static str {
-    match operator {
-        ReadFilterOperator::Eq => "eq",
-        ReadFilterOperator::Ne => "ne",
-        ReadFilterOperator::Lt => "lt",
-        ReadFilterOperator::Le => "le",
-        ReadFilterOperator::Gt => "gt",
-        ReadFilterOperator::Ge => "ge",
-        ReadFilterOperator::In => "in",
-        ReadFilterOperator::IsNull => "is_null",
-        ReadFilterOperator::IsNotNull => "is_not_null",
-        ReadFilterOperator::StartsWith => "startswith",
-        ReadFilterOperator::Contains => "contains",
-    }
 }
 
 fn projection(

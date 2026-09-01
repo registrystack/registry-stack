@@ -250,6 +250,7 @@ test('keeps the Server guide and references in one adoption path', () => {
     'configure/registry-server',
     'configure/registry-server-webhooks',
     'reference/registry-server-configuration',
+    'reference/registry-server-history',
     'reference/registry-server-events',
   ]);
   for (const slug of slugs) {

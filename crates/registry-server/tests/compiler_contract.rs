@@ -1850,8 +1850,8 @@ fn batch_route_requires_explicit_bounds_and_compiles_bounded_openapi() {
 
     let configured = compile_json(
         source(
-            r#", "batch":{"maximumItems":37,"maximumBytes":65536}"#,
-            r#"["create","patch","batch"]"#,
+            r#", "tombstone":true, "batch":{"maximumItems":37,"maximumBytes":65536}"#,
+            r#"["create","get","patch","tombstone","batch"]"#,
         )
         .as_bytes(),
     )
@@ -1875,16 +1875,90 @@ fn batch_route_requires_explicit_bounds_and_compiles_bounded_openapi() {
     let batch_operation = &openapi["paths"]["/v1/records/records:batch"]["post"];
     assert_eq!(batch_operation["x-registry-maximumItems"], 37);
     assert_eq!(batch_operation["x-registry-maximumBytes"], 65536);
+    let batch_request_schema =
+        &batch_operation["requestBody"]["content"]["application/json"]["schema"];
+    assert_eq!(batch_request_schema["properties"]["items"]["maxItems"], 37);
+    let change_context = &batch_request_schema["properties"]["changeContext"];
+    assert_eq!(change_context["additionalProperties"], false);
+    assert_eq!(change_context["x-registry-maxCanonicalBytes"], 16 * 1024);
     assert_eq!(
-        batch_operation["requestBody"]["content"]["application/json"]["schema"]["properties"]
-            ["items"]["maxItems"],
-        37
+        change_context["properties"]["kind"]["enum"],
+        json!(["change", "correction"])
     );
     assert_eq!(
-        batch_operation["responses"]["200"]["content"]["application/json"]["schema"]["properties"]
-            ["results"]["maxItems"],
+        change_context["properties"]["reasonCode"]["x-registry-maxBytes"],
+        64
+    );
+    assert_eq!(change_context["properties"]["reasonCode"]["minLength"], 1);
+    assert_eq!(
+        change_context["properties"]["reasonText"]["x-registry-maxBytes"],
+        4 * 1024
+    );
+    assert_eq!(
+        change_context["properties"]["sourceReferences"]["maxItems"],
+        16
+    );
+    assert_eq!(
+        change_context["properties"]["sourceReferences"]["items"]["x-registry-maxBytes"],
+        256
+    );
+    assert_eq!(
+        change_context["allOf"][0]["then"]["required"],
+        json!(["reasonCode"])
+    );
+    for item_schema in batch_request_schema["properties"]["items"]["items"]["oneOf"]
+        .as_array()
+        .expect("batch request item alternatives are rendered")
+    {
+        assert!(item_schema["properties"]
+            .as_object()
+            .expect("batch item properties render")
+            .get("changeContext")
+            .is_none());
+    }
+    let batch_response_schema =
+        &batch_operation["responses"]["200"]["content"]["application/json"]["schema"];
+    assert!(batch_response_schema["required"]
+        .as_array()
+        .expect("batch response required properties render")
+        .contains(&json!("snapshot")));
+    assert_eq!(
+        batch_response_schema["properties"]["results"]["maxItems"],
         37
     );
+    assert!(
+        batch_response_schema["properties"]["results"]["items"]["properties"]
+            .as_object()
+            .expect("batch result properties render")
+            .get("snapshot")
+            .is_none()
+    );
+
+    let create_response_schema = &openapi["paths"]["/v1/records/records"]["post"]["responses"]
+        ["201"]["content"]["application/json"]["schema"];
+    let get_response_schema = &openapi["paths"]["/v1/records/records/{record_id}"]["get"]
+        ["responses"]["200"]["content"]["application/json"]["schema"];
+    let patch_response_schema = &openapi["paths"]["/v1/records/records/{record_id}"]["patch"]
+        ["responses"]["200"]["content"]["application/json"]["schema"];
+    let tombstone_response_schema = &openapi["paths"]["/v1/records/records/{record_id}"]["delete"]
+        ["responses"]["200"]["content"]["application/json"]["schema"];
+    for schema in [
+        create_response_schema,
+        patch_response_schema,
+        tombstone_response_schema,
+    ] {
+        assert!(schema["required"]
+            .as_array()
+            .expect("mutation response required properties render")
+            .contains(&json!("snapshot")));
+        assert!(schema["properties"].get("snapshot").is_some());
+    }
+    assert!(get_response_schema["required"]
+        .as_array()
+        .expect("read response required properties render")
+        .iter()
+        .all(|property| property.as_str() != Some("snapshot")));
+    assert!(get_response_schema["properties"].get("snapshot").is_none());
 
     let configured_but_ungranted = compile_json(
         source(
@@ -4348,6 +4422,30 @@ fn compiler_produces_both_revision_routes_when_explicitly_configured() {
         ),
         ["accessProfile", "record_id", "traceparent"]
     );
+    let revision_list_schema = &openapi["paths"]["/v1/records/entries/{record_id}/revisions"]
+        ["get"]["responses"]["200"]["content"]["application/json"]["schema"]["properties"]["items"]
+        ["items"];
+    assert_eq!(
+        revision_list_schema["properties"]["mutationKind"]["enum"],
+        json!(["create", "patch", "tombstone", "migration"])
+    );
+    assert!(revision_list_schema["properties"]
+        .as_object()
+        .expect("revision item properties render")
+        .get("changeContext")
+        .is_none());
+    let revision_detail_schema = &openapi["paths"]
+        ["/v1/records/entries/{record_id}/revisions/{revision}"]["get"]["responses"]["200"]
+        ["content"]["application/json"]["schema"];
+    assert_eq!(
+        revision_detail_schema["properties"]["mutationKind"]["enum"],
+        json!(["create", "patch", "tombstone", "migration"])
+    );
+    assert!(revision_detail_schema["properties"]
+        .as_object()
+        .expect("revision detail properties render")
+        .get("changeContext")
+        .is_none());
 }
 
 #[test]
@@ -4439,6 +4537,7 @@ fn public_profile_cannot_process_an_internal_field() {
             allow_count: false,
             allow_data_export: false,
             revision_access: false,
+            provenance_fields: Vec::new(),
         }],
     });
 
@@ -4722,6 +4821,10 @@ fn compiled_query_inventory_is_profile_scoped_bounded_and_temporal() {
         .expect("temporal declaration is preserved in the compiled model");
     assert_eq!(temporal.start_field, "valid-from");
     assert_eq!(temporal.end_field, "valid-to");
+    assert!(
+        temporal.scope_fields.is_empty(),
+        "new compiled temporal metadata does not own exclusion scope"
+    );
 
     let operations = &compiled.queries().operations;
     let route = compiled
@@ -4815,7 +4918,10 @@ fn compiled_query_inventory_is_profile_scoped_bounded_and_temporal() {
             .expect("temporal query carries a fixed temporal binding");
         assert_eq!(binding.start_field, "valid-from");
         assert_eq!(binding.end_field, "valid-to");
-        assert_eq!(binding.scope_fields, ["asset"]);
+        assert!(
+            binding.scope_fields.is_empty(),
+            "new query temporal metadata does not own exclusion scope"
+        );
         assert_eq!(
             binding.semantics,
             CompiledQueryTemporalSemantics::StartInclusiveEndExclusive
@@ -4854,6 +4960,12 @@ fn compiled_query_inventory_is_profile_scoped_bounded_and_temporal() {
     assert_eq!(
         openapi["paths"]["/v1/records/placements:as-of"]["get"]["x-registry-queryKind"],
         "as_of"
+    );
+    assert!(
+        openapi["paths"]["/v1/records/placements:as-of"]["get"]["x-registry-queryProfiles"]
+            ["asset-operator"]["temporal"]
+            .get("scopeProperties")
+            .is_none()
     );
     let list_parameter_names =
         query_parameter_names(&openapi["paths"]["/v1/records/placements"]["get"]["parameters"]);
@@ -4912,6 +5024,454 @@ fn compiled_query_inventory_is_profile_scoped_bounded_and_temporal() {
             && statement.sql.contains(" IS NULL OR ")
             && statement.sql.contains(" < ")
     }));
+    assert!(compiled.ddl().statements.iter().any(|statement| {
+        statement
+            .id
+            .starts_with("entity.asset-placement.constraint.temporal-non-overlap-")
+            && statement.sql.starts_with("ALTER TABLE registry_data.")
+            && statement.sql.contains("EXCLUDE USING gist")
+            && statement.sql.contains("DEFERRABLE INITIALLY IMMEDIATE")
+    }));
+}
+
+#[test]
+fn temporal_validity_compiles_without_non_overlap_constraint() {
+    let compiled = compile_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"temporal-open","version":"1","defaultLanguage":"en"},
+          "entities":[{
+            "id":"membership","route":"memberships","mutationMode":"mutable","classification":"internal",
+            "fields":[
+              {"id":"person","type":"string","maxLength":32,"required":true,"classification":"internal"},
+              {"id":"role","type":"string","maxLength":32,"required":true,"classification":"internal"},
+              {"id":"valid-from","type":"date","required":true,"classification":"internal"},
+              {"id":"valid-to","type":"date","classification":"internal"}
+            ],
+            "temporal":{"startField":"valid-from","endField":"valid-to"}
+          }],
+          "accessProfiles":[{
+            "id":"operator","default":true,"principalClaim":"principal","grants":[{
+              "entity":"membership","operations":["list"],
+              "readableFields":["person","role","valid-from","valid-to"]
+            }]
+          }]
+        }"#,
+    )
+    .expect("temporal validity does not require non-overlap");
+    let entity = &compiled.entities()["membership"];
+    assert!(entity.constraints.is_empty());
+    assert_eq!(
+        entity
+            .temporal
+            .as_ref()
+            .expect("temporal metadata is compiled")
+            .scope_fields,
+        Vec::<String>::new()
+    );
+    assert!(compiled.ddl().statements.iter().any(|statement| {
+        statement.id == "entity.membership.constraint.temporal-order"
+            && statement.sql.contains(" IS NULL OR ")
+            && statement.sql.contains(" < ")
+            && !statement.sql.contains("DEFERRABLE")
+    }));
+    assert!(compiled.ddl().statements.iter().all(|statement| {
+        !statement.id.contains("temporal-non-overlap")
+            && !statement.sql.contains("EXCLUDE USING gist")
+    }));
+}
+
+#[test]
+fn deprecated_temporal_scope_fields_must_match_explicit_non_overlap() {
+    let failure = compile_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"temporal-bridge","version":"1","defaultLanguage":"en"},
+          "entities":[{
+            "id":"membership","route":"memberships","mutationMode":"mutable","classification":"internal",
+            "fields":[
+              {"id":"person","type":"string","maxLength":32,"required":true,"classification":"internal"},
+              {"id":"household","type":"string","maxLength":32,"required":true,"classification":"internal"},
+              {"id":"valid-from","type":"date","required":true,"classification":"internal"},
+              {"id":"valid-to","type":"date","classification":"internal"}
+            ],
+            "temporal":{"startField":"valid-from","endField":"valid-to","scopeFields":["person"]},
+            "constraints":[
+              {"kind":"temporal-non-overlap","scopeFields":["household"],"startField":"valid-from","endField":"valid-to"}
+            ]
+          }],
+          "accessProfiles":[{
+            "id":"operator","default":true,"principalClaim":"principal","grants":[{
+              "entity":"membership","operations":["list"],
+              "readableFields":["person","household","valid-from","valid-to"]
+            }]
+          }]
+        }"#,
+    )
+    .expect_err("deprecated bridge scope must not silently override the constraint scope");
+    assert!(failure.diagnostics().iter().any(|diagnostic| {
+        diagnostic.code == "temporal.scope_fields.deprecated_mismatch"
+            && diagnostic.path == "entities[].temporal.scopeFields"
+    }));
+}
+
+#[test]
+fn anonymous_temporal_processing_floor_survives_without_exclusion() {
+    let failure = compile_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"temporal-public-floor","version":"1","defaultLanguage":"en"},
+          "entities":[{
+            "id":"membership","route":"memberships","mutationMode":"mutable","classification":"public",
+            "fields":[
+              {"id":"label","type":"string","maxLength":32,"classification":"public"},
+              {"id":"valid-from","type":"date","required":true,"classification":"internal"},
+              {"id":"valid-to","type":"date","classification":"public"}
+            ],
+            "temporal":{"startField":"valid-from","endField":"valid-to"}
+          }],
+          "accessProfiles":[{
+            "id":"public-reader","anonymous":true,"default":true,"grants":[{
+              "entity":"membership","operations":["list"],"readableFields":["label"]
+            }]
+          }]
+        }"#,
+    )
+    .expect_err("anonymous temporal surfaces cannot process private boundaries");
+    assert!(failure.diagnostics().iter().any(|diagnostic| {
+        diagnostic.code == "access_profile.public.processing_non_public"
+            && diagnostic.path == "entities[].temporal"
+    }));
+}
+
+#[test]
+fn snapshot_operation_is_authenticated_stored_field_history_contract() {
+    let project = br#"{
+      "apiVersion":"registry.registrystack.org/v1alpha1",
+      "kind":"RegistryProject",
+      "registry":{"id":"snapshot-demo","version":"1","defaultLanguage":"en"},
+      "entities":[{
+        "id":"household","route":"households","mutationMode":"mutable","classification":"internal",
+        "fields":[
+          {"id":"household-code","type":"string","maxLength":32,"required":true,"classification":"internal"},
+          {"id":"administrative-area","type":"string","maxLength":32,"required":true,"classification":"internal"},
+          {"id":"valid-from","type":"date","required":true,"classification":"internal"},
+          {"id":"valid-to","type":"date","classification":"internal"}
+        ],
+        "temporal":{"startField":"valid-from","endField":"valid-to"},
+        "derived":[{
+          "id":"rollup","sql":"sql/household-rollup.sql","key":"id","execution":"live",
+          "fields":[{"id":"member-count","type":"int64","classification":"restricted"}]
+        }]
+      }],
+      "accessProfiles":[{
+        "id":"historian","default":true,"principalClaim":"principal","grants":[{
+          "entity":"household","operations":["list","snapshot","revisions"],"revisionAccess":true,
+          "readableFields":["household-code","administrative-area","valid-from","valid-to","member-count"],
+          "filterableFields":["administrative-area","member-count"],
+          "sortableFields":["member-count"],
+          "allowCount":true,
+          "provenanceFields":["kind","reasonCode","sourceReferences"]
+        }]
+      }]
+    }"#;
+    let sql = "SELECT h.id AS id, 1::bigint AS member_count FROM registry_source.household h";
+    let compiled = compile_json_with_assets(
+        project,
+        vec![derived_sql_asset("sql/household-rollup.sql", sql)],
+    )
+    .expect("snapshot profile with live derived fields compiles");
+
+    let route = compiled
+        .routes()
+        .routes
+        .iter()
+        .find(|route| route.operation == Operation::Snapshot)
+        .expect("snapshot route is compiled");
+    assert_eq!(route.id, "records.household.snapshot");
+    assert_eq!(route.path, "/v1/records/households:snapshot");
+    assert_eq!(route.query_kind, Some(CompiledQueryKind::Snapshot));
+    assert_eq!(route.access_profiles, ["historian"]);
+    let access = compiled
+        .access()
+        .entries
+        .iter()
+        .find(|entry| entry.route_id == "records.household.snapshot")
+        .expect("snapshot has its own access inventory entry");
+    assert_eq!(access.operation, Operation::Snapshot);
+
+    let query = compiled
+        .queries()
+        .operations
+        .iter()
+        .find(|operation| operation.id == "records.household.historian.snapshot")
+        .expect("snapshot query inventory is compiled");
+    assert_eq!(query.kind, CompiledQueryKind::Snapshot);
+    assert_eq!(query.route_id, "records.household.snapshot");
+    assert_eq!(
+        query.projection_fields,
+        [
+            "administrative-area",
+            "household-code",
+            "valid-from",
+            "valid-to"
+        ]
+    );
+    assert_eq!(query.filter_fields.len(), 1);
+    assert_eq!(query.filter_fields[0].field, "administrative-area");
+    assert!(query.sort_fields.is_empty());
+    assert!(!query.processing_fields.contains(&"member-count".to_owned()));
+    let temporal = query
+        .temporal
+        .as_ref()
+        .expect("temporal entities allow snapshot validAt");
+    assert_eq!(temporal.start_field, "valid-from");
+    assert_eq!(temporal.end_field, "valid-to");
+    assert!(temporal.scope_fields.is_empty());
+
+    let snapshot_metadata = compiled
+        .metadata()
+        .entities
+        .iter()
+        .find(|entity| entity.id == "household")
+        .and_then(|entity| {
+            entity
+                .entries
+                .iter()
+                .find(|entry| entry.route_id == "records.household.snapshot")
+        })
+        .expect("snapshot metadata entry exists");
+    assert_eq!(
+        snapshot_metadata.readable_fields,
+        [
+            "administrative-area",
+            "household-code",
+            "valid-from",
+            "valid-to"
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>(),
+        "snapshot metadata exposes only stored fields, matching the snapshot query inventory"
+    );
+    assert!(
+        snapshot_metadata.provenance_fields.is_empty(),
+        "snapshot metadata never advertises context or provenance release"
+    );
+    let revision_metadata = compiled
+        .metadata()
+        .entities
+        .iter()
+        .find(|entity| entity.id == "household")
+        .expect("household metadata exists")
+        .entries
+        .iter()
+        .filter(|entry| entry.operation == Operation::Revisions)
+        .collect::<Vec<_>>();
+    assert_eq!(revision_metadata.len(), 2);
+    for metadata in revision_metadata {
+        assert_eq!(
+            metadata.provenance_fields,
+            [
+                registry_server::contract::ProvenanceFieldSource::Kind,
+                registry_server::contract::ProvenanceFieldSource::ReasonCode,
+                registry_server::contract::ProvenanceFieldSource::SourceReferences,
+            ]
+        );
+    }
+
+    let openapi = compiled
+        .artifacts()
+        .get("generated/openapi.json")
+        .expect("OpenAPI is generated");
+    let openapi = parse_json_strict(&openapi.bytes).expect("OpenAPI is strict JSON");
+    let operation = &openapi["paths"]["/v1/records/households:snapshot"]["get"];
+    assert_eq!(operation["operationId"], "records.household.snapshot");
+    assert_eq!(operation["x-registry-operation"], "snapshot");
+    assert_eq!(operation["x-registry-queryKind"], "snapshot");
+    assert_eq!(
+        query_parameter_names(&operation["parameters"]),
+        [
+            "$count",
+            "$filter",
+            "$orderby",
+            "$select",
+            "$skiptoken",
+            "$top",
+            "accessProfile",
+            "snapshot",
+            "traceparent",
+            "validAt",
+        ]
+    );
+    assert_eq!(
+        operation["parameters"]
+            .as_array()
+            .expect("parameters are rendered")
+            .iter()
+            .find(|parameter| parameter["name"] == "validAt")
+            .expect("validAt parameter exists")["schema"],
+        json!({"type": "string", "format": "date"})
+    );
+    let response_schema = &operation["responses"]["200"]["content"]["application/json"]["schema"];
+    assert!(response_schema["required"]
+        .as_array()
+        .expect("required properties render")
+        .contains(&json!("snapshot")));
+    assert_eq!(
+        response_schema["properties"]["validAt"],
+        json!({"type": "string", "format": "date"})
+    );
+    assert!(serde_json::to_string(response_schema)
+        .expect("schema serializes")
+        .contains("\"revision\""));
+    assert!(!serde_json::to_string(response_schema)
+        .expect("schema serializes")
+        .contains("reasonCode"));
+
+    let revision_schema = &openapi["paths"]["/v1/records/households/{record_id}/revisions"]["get"]
+        ["responses"]["200"]["content"]["application/json"]["schema"]["properties"]["items"]
+        ["items"];
+    assert!(!revision_schema["required"]
+        .as_array()
+        .expect("revision item required properties render")
+        .contains(&json!("changeContext")));
+    let change_context = &revision_schema["properties"]["changeContext"];
+    assert_eq!(change_context["additionalProperties"], false);
+    let mut context_properties = change_context["properties"]
+        .as_object()
+        .expect("revision context properties render")
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    context_properties.sort();
+    assert_eq!(
+        context_properties,
+        ["kind", "reasonCode", "sourceReferences"]
+    );
+    assert_eq!(
+        change_context["properties"]["reasonCode"]["x-registry-maxBytes"],
+        64
+    );
+    assert_eq!(change_context["properties"]["reasonCode"]["minLength"], 1);
+    assert_eq!(
+        change_context["properties"]["sourceReferences"]["items"]["x-registry-maxBytes"],
+        256
+    );
+    let revision_detail_schema = &openapi["paths"]
+        ["/v1/records/households/{record_id}/revisions/{revision}"]["get"]["responses"]["200"]
+        ["content"]["application/json"]["schema"];
+    assert!(revision_detail_schema["properties"]
+        .as_object()
+        .expect("revision detail properties render")
+        .contains_key("changeContext"));
+}
+
+#[test]
+fn snapshot_operation_rejects_anonymous_and_unauthorized_provenance() {
+    let anonymous = compile_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"snapshot-anonymous","version":"1","defaultLanguage":"en"},
+          "entities":[{
+            "id":"record","route":"records","mutationMode":"mutable","classification":"public",
+            "fields":[{"id":"code","type":"string","maxLength":32,"classification":"public"}]
+          }],
+          "accessProfiles":[{
+            "id":"public-reader","anonymous":true,"default":true,"grants":[{
+              "entity":"record","operations":["snapshot"],"readableFields":["code"]
+            }]
+          }]
+        }"#,
+    )
+    .expect_err("snapshot cannot be anonymous");
+    assert!(anonymous
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| { diagnostic.code == "access_profile.snapshot.anonymous_forbidden" }));
+
+    let provenance = compile_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"snapshot-provenance","version":"1","defaultLanguage":"en"},
+          "entities":[{
+            "id":"record","route":"records","mutationMode":"mutable","classification":"internal",
+            "fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"}]
+          }],
+          "accessProfiles":[{
+            "id":"reader","default":true,"principalClaim":"principal","grants":[{
+              "entity":"record","operations":["snapshot"],"readableFields":["code"],
+              "provenanceFields":["kind"]
+            }]
+          }]
+        }"#,
+    )
+    .expect_err("provenance fields require revision access");
+    assert!(provenance
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| { diagnostic.code == "access_profile.provenance_fields.invalid" }));
+}
+
+#[test]
+fn snapshot_valid_at_openapi_schema_matches_temporal_value_type() {
+    let compiled = compile_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"snapshot-timestamp","version":"1","defaultLanguage":"en"},
+          "entities":[{
+            "id":"record","route":"records","mutationMode":"mutable","classification":"internal",
+            "fields":[
+              {"id":"code","type":"string","maxLength":32,"classification":"internal"},
+              {"id":"valid-from","type":"timestamp","required":true,"classification":"internal"},
+              {"id":"valid-to","type":"timestamp","classification":"internal"}
+            ],
+            "temporal":{"startField":"valid-from","endField":"valid-to"}
+          }],
+          "accessProfiles":[{
+            "id":"historian","default":true,"principalClaim":"principal","grants":[{
+              "entity":"record","operations":["snapshot"],"allowCount":true,
+              "readableFields":["code","valid-from","valid-to"]
+            }]
+          }]
+        }"#,
+    )
+    .expect("timestamp temporal snapshot compiles");
+    assert!(compiled.queries().operations.iter().any(|operation| {
+        operation.kind == CompiledQueryKind::Snapshot && operation.allow_count
+    }));
+    assert!(compiled
+        .routes()
+        .routes
+        .iter()
+        .all(|route| route.operation != Operation::List));
+    let openapi = compiled
+        .artifacts()
+        .get("generated/openapi.json")
+        .expect("OpenAPI is generated");
+    let openapi = parse_json_strict(&openapi.bytes).expect("OpenAPI is strict JSON");
+    let valid_at = openapi["paths"]["/v1/records/records:snapshot"]["get"]["parameters"]
+        .as_array()
+        .expect("parameters are rendered")
+        .iter()
+        .find(|parameter| parameter["name"] == "validAt")
+        .expect("validAt parameter exists");
+    assert_eq!(
+        valid_at["schema"],
+        json!({"type": "string", "format": "date-time"})
+    );
+    let response_schema = &openapi["paths"]["/v1/records/records:snapshot"]["get"]["responses"]
+        ["200"]["content"]["application/json"]["schema"];
+    assert_eq!(
+        response_schema["properties"]["validAt"],
+        json!({"type": "string", "format": "date-time"})
+    );
 }
 
 #[test]

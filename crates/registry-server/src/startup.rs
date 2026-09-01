@@ -30,7 +30,7 @@ use crate::package::{load_package, PackageIntent, PackageLoadContext, VerifiedPa
 use crate::postgres::{
     verify_catalog_identity_for_catalog, ExpectedManagedCatalog, ExpectedRegistryIdentity,
     PostgresRecordMutationService, PostgresRecordReadService, PostgresRevisionReadService,
-    RegistryLockKey, RuntimePool, SqlIdentifier,
+    PostgresSnapshotReadService, RegistryLockKey, RuntimePool, SqlIdentifier,
 };
 use crate::runtime_config::{load_runtime_config, RuntimeConfig, RuntimeConfigError};
 use crate::webhook::{WebhookDeliveryService, WebhookWorker};
@@ -678,6 +678,15 @@ async fn finish_prepared_server(
         config.operational_timeouts().record_lock,
         audit_profile.clone(),
     ));
+    let snapshots = Arc::new(PostgresSnapshotReadService::new(
+        pool.clone(),
+        Arc::clone(&registry),
+        expected.clone(),
+        lock_key,
+        config.operational_timeouts().record_lock,
+        audit_profile.clone(),
+        Arc::clone(&cursor_codec),
+    ));
     let webhook_delivery = WebhookDeliveryService::new(
         pool.clone(),
         Arc::clone(&event_destinations),
@@ -705,6 +714,7 @@ async fn finish_prepared_server(
     let service = Arc::new(
         HttpService::new(registry, read_identity, records, readiness, cursor_codec)
             .with_postgres_revisions(revisions)
+            .with_snapshots(snapshots)
             .with_postgres_mutations(mutations),
     );
     let app = with_request_timeout(

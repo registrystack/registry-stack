@@ -24,8 +24,8 @@ use registry_server::contract::parse_project_json;
 use registry_server::event_destination::ActivatedEventDestinationRegistry;
 use registry_server::mutation::{MutationBody, MutationCoordinator, MutationPlan, MutationRequest};
 use registry_server::postgres::{
-    install_compiled_schema, ClaimContext, ExpectedRegistryIdentity, RegistryLockKey,
-    RowBoundaryContext,
+    initialize_compiled_registry_state_for_test, install_compiled_schema, ClaimContext,
+    ExpectedRegistryIdentity, RegistryLockKey, RegistryStateTestIdentity, RowBoundaryContext,
 };
 use registry_server::runtime_config::parse_runtime_config;
 use registry_server::webhook::{
@@ -44,8 +44,6 @@ use uuid::Uuid;
 
 const PACKAGE_REVISION: &str =
     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-const SCHEMA_FINGERPRINT: &str =
-    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const SUCCESSOR_PACKAGE_REVISION: &str =
     "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
 const SUCCESSOR_SCHEMA_FINGERPRINT: &str =
@@ -74,8 +72,14 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     install_compiled_schema(&migration, &compiled, &database.runtime_role)
         .await
         .expect("migration installs delivery state with the compiled schema");
-    let identity = expected_identity();
-    initialize_registry_state(&migration, &identity).await;
+    let identity = initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &compiled,
+        registry_state_test_identity(),
+    )
+    .await
+    .expect("migration initializes active package identity with empty history");
     migration_task.abort();
 
     let fixture = DestinationFixture::new(&receiver);
@@ -823,8 +827,14 @@ async fn real_postgres_webhook_delivery_finishes_prior_package_work_after_compat
     install_compiled_schema(&migration, &compiled, &database.runtime_role)
         .await
         .expect("migration installs webhook delivery state");
-    let original_identity = expected_identity();
-    initialize_registry_state(&migration, &original_identity).await;
+    let original_identity = initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &compiled,
+        registry_state_test_identity(),
+    )
+    .await
+    .expect("migration initializes active package identity with empty history");
     migration_task.abort();
 
     let fixture = DestinationFixture::new(&receiver);
@@ -1392,42 +1402,15 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
         .expect("webhook delivery fixture compiles")
 }
 
-fn expected_identity() -> ExpectedRegistryIdentity {
-    ExpectedRegistryIdentity {
-        package_id: "webhook-delivery-registry".to_owned(),
-        environment: "local".to_owned(),
-        instance_id: "webhook-delivery-instance".to_owned(),
-        database_id: "webhook-delivery-database".to_owned(),
-        package_revision: PACKAGE_REVISION.to_owned(),
-        schema_fingerprint: SCHEMA_FINGERPRINT.to_owned(),
+fn registry_state_test_identity() -> RegistryStateTestIdentity<'static> {
+    RegistryStateTestIdentity {
+        package_id: "webhook-delivery-registry",
+        environment: "local",
+        instance_id: "webhook-delivery-instance",
+        database_id: "webhook-delivery-database",
+        package_revision: PACKAGE_REVISION,
         package_sequence: 1,
     }
-}
-
-async fn initialize_registry_state(
-    migration: &tokio_postgres::Client,
-    identity: &ExpectedRegistryIdentity,
-) {
-    let changed = migration
-        .execute(
-            "INSERT INTO registry_internal.registry_state
-                 (singleton, package_id, environment, instance_id, database_id,
-                  active_package_revision, schema_fingerprint, package_sequence,
-                  maintenance_status)
-             VALUES (true, $1, $2, $3, $4, $5, $6, $7, 'ready')",
-            &[
-                &identity.package_id,
-                &identity.environment,
-                &identity.instance_id,
-                &identity.database_id,
-                &identity.package_revision,
-                &identity.schema_fingerprint,
-                &identity.package_sequence,
-            ],
-        )
-        .await
-        .expect("migration initializes the exact active package binding");
-    assert_eq!(changed, 1);
 }
 
 fn mutation_claims(registry: &registry_server::CompiledRegistry) -> ClaimContext {

@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 
 use crate::contract::{
     EventSource, EventTrigger, FieldTypeSource, ManifestProjectionSource, MutationMode, Operation,
-    PackageIdentitySource,
+    PackageIdentitySource, ProvenanceFieldSource,
 };
 use crate::diagnostics::Diagnostic;
 use crate::generated_ddl::DdlInventory;
@@ -18,8 +18,9 @@ use crate::model::{
     CompiledAccessInventory, CompiledChangeRequestMutation, CompiledChangeRequestRetentionMode,
     CompiledChangeRequestTargetBinding, CompiledChangeRequestValue, CompiledEntity,
     CompiledEventDeliveryInventory, CompiledMetadataInventory, CompiledModuleIdentity,
-    CompiledQueryInventory, CompiledQueryKind, CompiledQueryOperation, CompiledRevisionKind,
-    CompiledRoute, CompiledRouteInventory, HttpMethod,
+    CompiledQueryInventory, CompiledQueryKind, CompiledQueryOperation,
+    CompiledQueryTemporalValueKind, CompiledRevisionKind, CompiledRoute, CompiledRouteInventory,
+    HttpMethod,
 };
 use crate::physical_names::{hex_prefix, PhysicalNameInventory};
 
@@ -944,7 +945,8 @@ fn request_action_target_entities(spec: OpenApiOperationSpec<'_>) -> Vec<String>
                 | Operation::Tombstone
                 | Operation::Batch
                 | Operation::Lookup
-                | Operation::Revisions => {}
+                | Operation::Revisions
+                | Operation::Snapshot => {}
             }
             targets.into_iter().collect()
         }
@@ -1045,6 +1047,25 @@ fn operation_parameters(
         }
         Operation::List => {
             parameters.extend(read_query_parameters(route, query, access_profiles));
+        }
+        Operation::Snapshot => {
+            parameters.extend(read_query_parameters(route, query, access_profiles));
+            parameters.push(query_parameter(
+                "snapshot",
+                false,
+                false,
+                json!({"type": "string", "maxLength": crate::query::MAX_OPAQUE_VALUE_BYTES}),
+                "Opaque Registry history snapshot reference. Omit to capture the latest committed position.",
+            ));
+            if let Some(schema) = snapshot_valid_at_schema(route, query, access_profiles) {
+                parameters.push(query_parameter(
+                    "validAt",
+                    false,
+                    false,
+                    schema,
+                    "Effective-validity value evaluated within the selected historical snapshot.",
+                ));
+            }
         }
         Operation::Lookup => parameters.push(query_parameter(
             "$select",
@@ -1155,6 +1176,28 @@ fn read_query_parameters(
     parameters
 }
 
+fn snapshot_valid_at_schema(
+    route: &CompiledRoute,
+    query: &CompiledQueryInventory,
+    access_profiles: OpenApiAccessProfiles<'_>,
+) -> Option<Value> {
+    let kind = query_profiles_for_route(route, query, access_profiles)
+        .into_iter()
+        .filter_map(|operation| {
+            operation
+                .temporal
+                .as_ref()
+                .map(|temporal| temporal.value_kind)
+        })
+        .max()?;
+    Some(match kind {
+        CompiledQueryTemporalValueKind::Date => json!({"type": "string", "format": "date"}),
+        CompiledQueryTemporalValueKind::Timestamp => {
+            json!({"type": "string", "format": "date-time"})
+        }
+    })
+}
+
 fn query_parameter(
     name: &str,
     required: bool,
@@ -1246,7 +1289,11 @@ fn operation_request_body(spec: OpenApiOperationSpec<'_>) -> Option<Value> {
                 allow_patch,
             ))
         }
-        Operation::Get | Operation::List | Operation::Tombstone | Operation::Revisions => None,
+        Operation::Get
+        | Operation::List
+        | Operation::Tombstone
+        | Operation::Revisions
+        | Operation::Snapshot => None,
         Operation::SubmitRequest
         | Operation::ApproveRequest
         | Operation::RejectRequest
@@ -1332,6 +1379,7 @@ fn batch_request_body(
                     "additionalProperties": false,
                     "required": ["items"],
                     "properties": {
+                        "changeContext": change_context_request_schema(),
                         "items": {
                             "type": "array",
                             "minItems": 1,
@@ -1342,6 +1390,48 @@ fn batch_request_body(
                 }
             }
         }
+    })
+}
+
+fn change_context_request_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "x-registry-maxCanonicalBytes": 16 * 1024,
+        "properties": {
+            "kind": {"type": "string", "enum": ["change", "correction"]},
+            "reasonCode": bounded_nonempty_text_schema(64),
+            "reasonText": bounded_text_schema(4 * 1024),
+            "sourceReferences": {
+                "type": "array",
+                "maxItems": 16,
+                "items": bounded_text_schema(256)
+            }
+        },
+        "allOf": [{
+            "if": {
+                "required": ["kind"],
+                "properties": {"kind": {"const": "correction"}}
+            },
+            "then": {"required": ["reasonCode"]}
+        }]
+    })
+}
+
+fn bounded_nonempty_text_schema(max_bytes: usize) -> Value {
+    let mut schema = bounded_text_schema(max_bytes);
+    schema
+        .as_object_mut()
+        .expect("bounded text schema is an object")
+        .insert("minLength".to_owned(), json!(1));
+    schema
+}
+
+fn bounded_text_schema(max_bytes: usize) -> Value {
+    json!({
+        "type": "string",
+        "maxLength": max_bytes,
+        "x-registry-maxBytes": max_bytes
     })
 }
 
@@ -1369,7 +1459,7 @@ fn operation_responses(spec: OpenApiOperationSpec<'_>) -> Value {
         Operation::Create => success_response(
             "Record created",
             StatusResponseHeaders::MutationCreate,
-            record_response_schema(spec.response_entity, spec.schema_ref),
+            mutation_response_schema(spec.schema_ref),
         ),
         Operation::Get => success_response(
             "Record returned",
@@ -1386,15 +1476,20 @@ fn operation_responses(spec: OpenApiOperationSpec<'_>) -> Value {
             StatusResponseHeaders::NoStore,
             list_response_schema(spec.response_entity, spec.schema_ref),
         ),
+        Operation::Snapshot => success_response(
+            "Historical records returned",
+            StatusResponseHeaders::NoStore,
+            snapshot_response_schema(spec),
+        ),
         Operation::Patch => success_response(
             "Record patched",
             StatusResponseHeaders::Mutation,
-            record_response_schema(spec.response_entity, spec.schema_ref),
+            mutation_response_schema(spec.schema_ref),
         ),
         Operation::Tombstone => success_response(
             "Record tombstoned",
             StatusResponseHeaders::Mutation,
-            record_response_schema(spec.response_entity, spec.schema_ref),
+            mutation_response_schema(spec.schema_ref),
         ),
         Operation::Batch => {
             let batch = spec
@@ -1417,7 +1512,7 @@ fn operation_responses(spec: OpenApiOperationSpec<'_>) -> Value {
         Operation::Revisions => success_response(
             "Record revisions returned",
             StatusResponseHeaders::NoStore,
-            revision_response_schema(spec.schema_ref, spec.route.revision_kind),
+            revision_response_schema(spec),
         ),
         Operation::SubmitRequest
         | Operation::ApproveRequest
@@ -1597,6 +1692,24 @@ fn record_response_schema(entity: &CompiledEntity, schema_ref: &str) -> Value {
             json!({"$ref": format!("#/components/schemas/{schema_ref}")});
     }
     schema
+}
+
+fn mutation_response_schema(schema_ref: &str) -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "revision", "snapshot", "data"],
+        "properties": {
+            "id": {"type": "string", "format": "uuid"},
+            "revision": {"type": "integer", "format": "int64", "minimum": 1},
+            "snapshot": snapshot_reference_schema(),
+            "data": {"$ref": format!("#/components/schemas/{schema_ref}")},
+        }
+    })
+}
+
+fn snapshot_reference_schema() -> Value {
+    json!({"type": "string", "maxLength": crate::query::MAX_OPAQUE_VALUE_BYTES})
 }
 
 fn list_response_schema(entity: &CompiledEntity, schema_ref: &str) -> Value {
@@ -1817,6 +1930,43 @@ fn nullable_effect_digest_schema() -> Value {
     json!({"type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$"})
 }
 
+fn snapshot_response_schema(spec: OpenApiOperationSpec<'_>) -> Value {
+    let mut properties = Map::from_iter([
+        ("snapshot".to_owned(), snapshot_reference_schema()),
+        (
+            "items".to_owned(),
+            json!({
+                "type": "array",
+                "items": record_response_schema(spec.response_entity, spec.schema_ref),
+            }),
+        ),
+        (
+            "pageInfo".to_owned(),
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["nextCursor"],
+                "properties": {
+                    "nextCursor": {"type": ["string", "null"], "maxLength": crate::query::MAX_OPAQUE_VALUE_BYTES}
+                }
+            }),
+        ),
+        (
+            "count".to_owned(),
+            json!({"type": "integer", "format": "int64", "minimum": 0}),
+        ),
+    ]);
+    if let Some(valid_at) = snapshot_valid_at_schema(spec.route, spec.query, spec.access_profiles) {
+        properties.insert("validAt".to_owned(), valid_at);
+    }
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["snapshot", "items", "pageInfo"],
+        "properties": properties
+    })
+}
+
 fn batch_response_schema(
     schema_ref: &str,
     maximum_items: u16,
@@ -1833,8 +1983,9 @@ fn batch_response_schema(
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["results"],
+        "required": ["snapshot", "results"],
         "properties": {
+            "snapshot": snapshot_reference_schema(),
             "results": {
                 "type": "array",
                 "minItems": 1,
@@ -1856,7 +2007,38 @@ fn batch_response_schema(
     })
 }
 
-fn revision_response_schema(schema_ref: &str, kind: Option<CompiledRevisionKind>) -> Value {
+fn revision_response_schema(spec: OpenApiOperationSpec<'_>) -> Value {
+    let mut properties = Map::from_iter([
+        (
+            "revision".to_owned(),
+            json!({"type": "integer", "format": "int64", "minimum": 1}),
+        ),
+        (
+            "predecessorRevision".to_owned(),
+            json!({"type": ["integer", "null"], "format": "int64", "minimum": 1}),
+        ),
+        (
+            "lifecycle".to_owned(),
+            json!({"type": "string", "enum": ["active", "tombstoned"]}),
+        ),
+        (
+            "mutationKind".to_owned(),
+            json!({"type": "string", "enum": ["create", "patch", "tombstone", "migration"]}),
+        ),
+        ("actorReference".to_owned(), json!({"type": "string"})),
+        ("requestReference".to_owned(), json!({"type": "string"})),
+        (
+            "createdAt".to_owned(),
+            json!({"type": "string", "format": "date-time"}),
+        ),
+        (
+            "data".to_owned(),
+            json!({"$ref": format!("#/components/schemas/{}", spec.schema_ref)}),
+        ),
+    ]);
+    if let Some(change_context) = revision_change_context_schema(spec) {
+        properties.insert("changeContext".to_owned(), change_context);
+    }
     let item = json!({
         "type": "object",
         "additionalProperties": false,
@@ -1870,18 +2052,9 @@ fn revision_response_schema(schema_ref: &str, kind: Option<CompiledRevisionKind>
             "createdAt",
             "data"
         ],
-        "properties": {
-            "revision": {"type": "integer", "format": "int64", "minimum": 1},
-            "predecessorRevision": {"type": ["integer", "null"], "format": "int64", "minimum": 1},
-            "lifecycle": {"type": "string", "enum": ["active", "tombstoned"]},
-            "mutationKind": {"type": "string", "enum": ["create", "patch", "tombstone"]},
-            "actorReference": {"type": "string"},
-            "requestReference": {"type": "string"},
-            "createdAt": {"type": "string", "format": "date-time"},
-            "data": {"$ref": format!("#/components/schemas/{schema_ref}")},
-        }
+        "properties": properties
     });
-    if kind == Some(CompiledRevisionKind::Detail) {
+    if spec.route.revision_kind == Some(CompiledRevisionKind::Detail) {
         item
     } else {
         json!({
@@ -1903,10 +2076,11 @@ fn request_action_response_schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "revision", "request"],
+        "required": ["id", "revision", "snapshot", "request"],
         "properties": {
             "id": {"type": "string", "format": "uuid"},
             "revision": {"type": "integer", "format": "int64", "minimum": 1},
+            "snapshot": snapshot_reference_schema(),
             "request": {
                 "type": "object",
                 "additionalProperties": false,
@@ -1920,6 +2094,67 @@ fn request_action_response_schema() -> Value {
             }
         }
     })
+}
+
+fn revision_change_context_schema(spec: OpenApiOperationSpec<'_>) -> Option<Value> {
+    let mut fields = Vec::new();
+    match spec.access_profiles {
+        OpenApiAccessProfiles::All => {
+            for profile_id in &spec.route.access_profiles {
+                let Some(profile) = spec.entity.access_profiles.get(profile_id) else {
+                    continue;
+                };
+                for field in &profile.provenance_fields {
+                    if !fields.contains(field) {
+                        fields.push(*field);
+                    }
+                }
+            }
+        }
+        OpenApiAccessProfiles::Selected(profile_id) => {
+            let profile = spec.entity.access_profiles.get(profile_id)?;
+            fields.extend(profile.provenance_fields.iter().copied());
+        }
+    }
+    change_context_response_schema(&fields)
+}
+
+fn change_context_response_schema(fields: &[ProvenanceFieldSource]) -> Option<Value> {
+    if fields.is_empty() {
+        return None;
+    }
+    let mut properties = Map::new();
+    for field in fields {
+        match field {
+            ProvenanceFieldSource::Kind => {
+                properties.insert(
+                    "kind".to_owned(),
+                    json!({"type": "string", "enum": ["change", "correction"]}),
+                );
+            }
+            ProvenanceFieldSource::ReasonCode => {
+                properties.insert("reasonCode".to_owned(), bounded_nonempty_text_schema(64));
+            }
+            ProvenanceFieldSource::ReasonText => {
+                properties.insert("reasonText".to_owned(), bounded_text_schema(4 * 1024));
+            }
+            ProvenanceFieldSource::SourceReferences => {
+                properties.insert(
+                    "sourceReferences".to_owned(),
+                    json!({
+                        "type": "array",
+                        "maxItems": 16,
+                        "items": bounded_text_schema(256)
+                    }),
+                );
+            }
+        }
+    }
+    Some(Value::Object(Map::from_iter([
+        ("type".to_owned(), json!("object")),
+        ("additionalProperties".to_owned(), json!(false)),
+        ("properties".to_owned(), Value::Object(properties)),
+    ])))
 }
 
 #[cfg(test)]
@@ -1970,7 +2205,10 @@ fn problem_responses(operation: Operation) -> BTreeMap<&'static str, Vec<Problem
             }],
         ),
     ]);
-    if matches!(operation, Operation::List | Operation::Lookup) {
+    if matches!(
+        operation,
+        Operation::List | Operation::Lookup | Operation::Snapshot
+    ) {
         responses.entry("400").or_default().extend([
             ProblemExample {
                 code: "query.invalid",
@@ -2253,7 +2491,10 @@ fn render_query_profile(
         "temporal": operation.temporal.as_ref().map(|temporal| json!({
             "startProperty": api_field_name(entity, &temporal.start_field).unwrap_or(temporal.start_field.as_str()),
             "endProperty": api_field_name(entity, &temporal.end_field).unwrap_or(temporal.end_field.as_str()),
-            "scopeProperties": api_field_names(entity, &temporal.scope_fields),
+            "valueKind": match temporal.value_kind {
+                CompiledQueryTemporalValueKind::Date => "date",
+                CompiledQueryTemporalValueKind::Timestamp => "timestamp",
+            },
             "semantics": "start_inclusive_end_exclusive",
         }))
     })
@@ -2386,6 +2627,7 @@ fn query_kind_name(kind: CompiledQueryKind) -> &'static str {
         CompiledQueryKind::List => "list",
         CompiledQueryKind::Current => "current",
         CompiledQueryKind::AsOf => "as_of",
+        CompiledQueryKind::Snapshot => "snapshot",
     }
 }
 
@@ -2399,6 +2641,7 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::Tombstone => "tombstone",
         Operation::Batch => "batch",
         Operation::Revisions => "revisions",
+        Operation::Snapshot => "snapshot",
         Operation::SubmitRequest => "submit_request",
         Operation::ApproveRequest => "approve_request",
         Operation::RejectRequest => "reject_request",

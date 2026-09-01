@@ -11,10 +11,14 @@ use std::time::Duration;
 use postgres_harness::TestDatabase;
 use registry_server::compiler::{compile_project, compile_project_with_assets, CompileProfile};
 use registry_server::contract::{parse_project_json, parse_project_yaml, ModuleAssetSource};
+use registry_server::package::{
+    change_set_to_applicable_migration_plan, compiled_registry_change_set,
+    CompiledRegistryChangeClass, CompiledRegistryChangeCode,
+};
 use registry_server::postgres::{
     begin_record_transaction, initialize_registry_state_for_catalog_test, install_compiled_schema,
-    verify_catalog_identity_for_catalog, ClaimContext, ExpectedManagedCatalog, RegistryLockKey,
-    RegistryStateTestIdentity, RowBoundaryContext,
+    managed_schema_fingerprint, verify_catalog_identity_for_catalog, ClaimContext,
+    ExpectedManagedCatalog, RegistryLockKey, RegistryStateTestIdentity, RowBoundaryContext,
 };
 
 const RECORD_ALPHA: &str = "00000000-0000-0000-0000-000000000201";
@@ -22,6 +26,8 @@ const RECORD_BETA: &str = "00000000-0000-0000-0000-000000000202";
 const PACKAGE_ID: &str = "compiled-registry";
 const INSTANCE_ID: &str = "compiled-instance";
 const DATABASE_ID: &str = "compiled-database";
+const PRIOR_REVISION: &str =
+    "sha256:1111111111111111111111111111111111111111111111111111111111111111";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn compiled_postgres_schema_enforces_context_rls_and_exact_catalog() {
@@ -314,6 +320,104 @@ async fn compiled_postgres_schema_enforces_context_rls_and_exact_catalog() {
 
     install_derived_view_fixture().await;
     install_asset_fixture().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn optional_field_additive_upgrade_matches_fresh_catalog_fingerprint_despite_column_ordinals()
+{
+    let previous = additive_catalog_registry(AdditiveCatalogVariant::Base);
+    let candidate = additive_catalog_registry(AdditiveCatalogVariant::OptionalMiddle);
+
+    let change_set = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
+    assert_change(
+        &change_set,
+        CompiledRegistryChangeClass::CompatibleAdditive,
+        CompiledRegistryChangeCode::FieldAddedOptional,
+    );
+    let plan = change_set_to_applicable_migration_plan(&change_set)
+        .expect("optional field addition is compiler-applicable");
+    let statement_ids = plan
+        .statements
+        .iter()
+        .map(|statement| statement.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        statement_ids,
+        vec![
+            "entity.entry.field.middle.column",
+            "entity.entry.source-view"
+        ]
+    );
+
+    let candidate_catalog = ExpectedManagedCatalog::compiled(&candidate);
+    let upgraded = TestDatabase::create(1).await;
+    let (upgraded_migration, upgraded_task) = upgraded.connect_migration().await;
+    install_compiled_schema(&upgraded_migration, &previous, &upgraded.runtime_role)
+        .await
+        .expect("previous schema installs");
+    for statement in &plan.statements {
+        upgraded_migration
+            .batch_execute(&statement.sql)
+            .await
+            .expect("compiler-produced additive statement applies");
+    }
+    let upgraded_fingerprint = managed_schema_fingerprint(
+        &upgraded_migration,
+        &upgraded.runtime_role,
+        &candidate_catalog,
+    )
+    .await
+    .expect("upgraded candidate catalog is fingerprinted");
+    let upgraded_order = physical_field_order(&upgraded_migration, &candidate).await;
+    upgraded_task.abort();
+
+    let fresh = TestDatabase::create(1).await;
+    let (fresh_migration, fresh_task) = fresh.connect_migration().await;
+    install_compiled_schema(&fresh_migration, &candidate, &fresh.runtime_role)
+        .await
+        .expect("candidate schema installs cleanly");
+    let fresh_fingerprint =
+        managed_schema_fingerprint(&fresh_migration, &fresh.runtime_role, &candidate_catalog)
+            .await
+            .expect("fresh candidate catalog is fingerprinted");
+    let fresh_order = physical_field_order(&fresh_migration, &candidate).await;
+    fresh_task.abort();
+
+    assert_ne!(
+        upgraded_order, fresh_order,
+        "the fixture must prove PostgreSQL kept different physical column ordinals"
+    );
+    assert_eq!(
+        upgraded_fingerprint, fresh_fingerprint,
+        "semantic managed catalog identity ignores registry_data base-table column ordinals"
+    );
+
+    for (variant, class, code) in [
+        (
+            AdditiveCatalogVariant::ChangedType,
+            CompiledRegistryChangeClass::DestructiveOrIrreversible,
+            CompiledRegistryChangeCode::FieldTypeChanged,
+        ),
+        (
+            AdditiveCatalogVariant::ChangedNullability,
+            CompiledRegistryChangeClass::DestructiveOrIrreversible,
+            CompiledRegistryChangeCode::FieldRequirednessChanged,
+        ),
+    ] {
+        let refused = compiled_registry_change_set(
+            &previous,
+            &additive_catalog_registry(variant),
+            PRIOR_REVISION,
+        );
+        assert_change(&refused, class, code);
+        assert!(
+            change_set_to_applicable_migration_plan(&refused).is_err(),
+            "changed field type or nullability must not become an automatic additive migration"
+        );
+    }
+
+    upgraded.cleanup().await;
+    fresh.cleanup().await;
 }
 
 async fn install_derived_view_fixture() {
@@ -847,6 +951,38 @@ async fn assert_catalog_drift_is_rejected(
         .await
         .expect("test administrator removes publication drift");
 
+    database
+        .admin
+        .batch_execute(&format!(
+            "GRANT UPDATE (event_id) ON registry_internal.registry_outbox TO \"{}\"",
+            database.runtime_role.as_str(),
+        ))
+        .await
+        .expect("test administrator introduces hidden outbox column grant drift");
+    assert!(verify_catalog_identity_for_catalog(
+        &migration,
+        identity,
+        catalog,
+        &database.migration_role,
+        &database.runtime_role,
+    )
+    .await
+    .is_err());
+    assert!(
+        managed_schema_fingerprint(&migration, &database.runtime_role, catalog)
+            .await
+            .is_err(),
+        "managed schema fingerprint refuses unexpected column-level runtime grants"
+    );
+    database
+        .admin
+        .batch_execute(&format!(
+            "REVOKE UPDATE (event_id) ON registry_internal.registry_outbox FROM \"{}\"",
+            database.runtime_role.as_str(),
+        ))
+        .await
+        .expect("test administrator removes hidden outbox column grant drift");
+
     verify_catalog_identity_for_catalog(
         &migration,
         identity,
@@ -939,6 +1075,132 @@ fn boundaries(tenant: &str, regions: &[&str]) -> Vec<RowBoundaryContext> {
 
 fn quote_identifier(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
+}
+
+fn assert_change(
+    change_set: &registry_server::package::CompiledRegistryChangeSet,
+    class: CompiledRegistryChangeClass,
+    code: CompiledRegistryChangeCode,
+) {
+    assert!(
+        change_set
+            .changes
+            .iter()
+            .any(|change| change.class == class && change.code == code),
+        "expected {class:?}/{code:?} in {:?}",
+        change_set.changes
+    );
+}
+
+async fn physical_field_order(
+    client: &impl tokio_postgres::GenericClient,
+    registry: &registry_server::CompiledRegistry,
+) -> Vec<String> {
+    let entity = &registry.entities()["entry"];
+    let physical_table = &entity.physical_table;
+    let physical_fields = ["alpha", "middle", "omega"]
+        .map(|field| entity.fields[field].physical_name.clone())
+        .to_vec();
+    client
+        .query(
+            "SELECT a.attname
+             FROM pg_catalog.pg_class c
+             JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+             JOIN pg_catalog.pg_attribute a
+               ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+             WHERE n.nspname = 'registry_data'
+               AND c.relname = $1
+               AND a.attname = ANY($2::text[])
+             ORDER BY a.attnum",
+            &[physical_table, &physical_fields],
+        )
+        .await
+        .expect("physical data-table field order is inspectable")
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect()
+}
+
+#[derive(Clone, Copy)]
+enum AdditiveCatalogVariant {
+    Base,
+    OptionalMiddle,
+    ChangedType,
+    ChangedNullability,
+}
+
+fn additive_catalog_registry(variant: AdditiveCatalogVariant) -> registry_server::CompiledRegistry {
+    let mut fields = match variant {
+        AdditiveCatalogVariant::ChangedType => vec![serde_json::json!({
+            "id": "alpha",
+            "type": "int64",
+            "required": true,
+            "classification": "internal"
+        })],
+        AdditiveCatalogVariant::ChangedNullability => vec![serde_json::json!({
+            "id": "alpha",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32,
+            "classification": "internal"
+        })],
+        _ => vec![serde_json::json!({
+            "id": "alpha",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32,
+            "required": true,
+            "classification": "internal"
+        })],
+    };
+    fields.push(serde_json::json!({
+        "id": "omega",
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 32,
+        "required": true,
+        "classification": "internal"
+    }));
+    if matches!(variant, AdditiveCatalogVariant::OptionalMiddle) {
+        fields.push(serde_json::json!({
+            "id": "middle",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32,
+            "classification": "internal"
+        }));
+    }
+    let writable_fields = vec!["alpha", "omega"];
+    let project = serde_json::json!({
+        "apiVersion": "registry.registrystack.org/v1alpha1",
+        "kind": "RegistryProject",
+        "registry": {
+            "id": "additive-catalog",
+            "version": "1",
+            "defaultLanguage": "en"
+        },
+        "entities": [{
+            "id": "entry",
+            "route": "entries",
+            "mutationMode": "mutable",
+            "fields": fields
+        }],
+        "accessProfiles": [{
+            "id": "writer",
+            "default": true,
+            "principalClaim": "registry_principal",
+            "grants": [{
+                "entity": "entry",
+                "operations": ["create", "get", "list", "patch"],
+                "readableFields": writable_fields,
+                "writableFields": writable_fields
+            }]
+        }]
+    });
+    let project_bytes = serde_json::to_vec(&project).expect("fixture serializes");
+    let project = parse_project_json(&project_bytes).expect("additive catalog fixture parses");
+    compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("additive catalog fixture compiles")
 }
 
 fn compiled_registry() -> registry_server::CompiledRegistry {

@@ -32,7 +32,7 @@ use registry_server::package::{
     FIXTURE_JOURNEYS_PATH, TRUST_ANCHOR_API_VERSION,
 };
 use registry_server::postgres::{
-    initialize_registry_state_for_catalog_test, install_compiled_schema,
+    initialize_compiled_registry_state_for_test, install_compiled_schema,
     managed_schema_fingerprint, ExpectedManagedCatalog, RegistryStateTestIdentity,
 };
 use registry_server::runtime_config::load_runtime_config;
@@ -70,10 +70,10 @@ async fn fixture_test_runs_strict_journeys_through_the_real_postgres_router() {
             .await
             .expect("closed managed schema fingerprint computes");
     let package = package_fixture(&project_source, &schema_fingerprint);
-    let identity = initialize_registry_state_for_catalog_test(
+    let identity = initialize_compiled_registry_state_for_test(
         &migration,
         &database.runtime_role,
-        &expected_catalog,
+        &registry,
         RegistryStateTestIdentity {
             package_id: &package.package.manifest().package_id,
             environment: &package.package.manifest().environment,

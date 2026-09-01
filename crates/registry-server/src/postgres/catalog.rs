@@ -8,6 +8,8 @@ use tokio_postgres::GenericClient;
 use crate::generated_ddl::{PolicyCommand, TablePrivilege};
 use crate::model::CompiledRegistry;
 
+#[cfg(feature = "postgres-test")]
+use super::schema::install_empty_history_baseline_for_compiled_registry;
 use super::{
     migration_ledger::install_migration_ledger, verify_btree_gist, PostgresKernelError, Result,
     SqlIdentifier,
@@ -63,6 +65,15 @@ struct ManagedObject {
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct ManagedColumnPrivilege {
+    table: String,
+    column: String,
+    grantee: String,
+    privilege: String,
+    grantable: bool,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct ManagedPolicy {
     table: String,
     name: String,
@@ -79,6 +90,7 @@ struct ManagedPolicy {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExpectedManagedCatalog {
     objects: BTreeSet<ManagedObject>,
+    column_privileges: BTreeSet<ManagedColumnPrivilege>,
     policies: BTreeSet<ManagedPolicy>,
 }
 
@@ -135,9 +147,46 @@ impl ExpectedManagedCatalog {
                 "registry_internal.registry_idempotency",
                 &["INSERT", "SELECT"][..],
             ),
+            (
+                "registry_internal.registry_revision_commits",
+                &["INSERT", "SELECT"][..],
+            ),
+            (
+                "registry_internal.registry_revision_commit_members",
+                &["INSERT", "SELECT"][..],
+            ),
+            (
+                "registry_internal.registry_history_schemas",
+                &["SELECT"][..],
+            ),
         ] {
             catalog.table(name, privileges.iter().copied(), Some((false, false)));
         }
+        catalog.table(
+            "registry_internal.registry_commit_head",
+            ["SELECT"],
+            Some((false, false)),
+        );
+        // Runtime workers scrub retained webhook payload bytes after delivery
+        // or expiry without widening update access to outbox identity columns.
+        catalog.column_privilege(
+            "registry_internal.registry_outbox",
+            "payload",
+            "runtime",
+            "UPDATE",
+        );
+        catalog.column_privilege(
+            "registry_internal.registry_commit_head",
+            "latest_position",
+            "runtime",
+            "UPDATE",
+        );
+        catalog.column_privilege(
+            "registry_internal.registry_commit_head",
+            "updated_at",
+            "runtime",
+            "UPDATE",
+        );
         catalog.sequence(
             "registry_internal.registry_outbox_outbox_id_seq",
             ["SELECT", "USAGE"],
@@ -195,6 +244,7 @@ impl ExpectedManagedCatalog {
     fn base() -> Self {
         let mut catalog = Self {
             objects: BTreeSet::new(),
+            column_privileges: BTreeSet::new(),
             policies: BTreeSet::new(),
         };
         for schema in MANAGED_SCHEMAS {
@@ -265,6 +315,22 @@ impl ExpectedManagedCatalog {
             name: name.to_owned(),
             runtime_privileges: privilege.into_iter().map(str::to_owned).collect(),
             row_security: None,
+        });
+    }
+
+    fn column_privilege(
+        &mut self,
+        table: &str,
+        column: &str,
+        grantee: &'static str,
+        privilege: &'static str,
+    ) {
+        self.column_privileges.insert(ManagedColumnPrivilege {
+            table: table.to_owned(),
+            column: column.to_owned(),
+            grantee: grantee.to_owned(),
+            privilege: privilege.to_owned(),
+            grantable: false,
         });
     }
 }
@@ -552,6 +618,43 @@ pub async fn initialize_registry_state_for_catalog_test(
         package_sequence: identity.package_sequence,
     };
     initialize_registry_state_for_catalog(migration, runtime_role, expected_catalog, &initial).await
+}
+
+/// Test-only helper for integration fixtures that install a compiled Registry
+/// directly and need the same empty history boundary a verified initial package
+/// would create. It refuses if any compiled live table or revision journal is
+/// already nonempty, so fixtures with existing history must use an explicit
+/// predecessor-baseline path instead.
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub async fn initialize_compiled_registry_state_for_test(
+    migration: &impl GenericClient,
+    runtime_role: &SqlIdentifier,
+    registry: &CompiledRegistry,
+    identity: RegistryStateTestIdentity<'_>,
+) -> Result<ExpectedRegistryIdentity> {
+    let initial = InitialRegistryState {
+        package_id: identity.package_id,
+        environment: identity.environment,
+        instance_id: identity.instance_id,
+        database_id: identity.database_id,
+        package_revision: identity.package_revision,
+        package_sequence: identity.package_sequence,
+    };
+    let expected = initialize_registry_state_for_catalog(
+        migration,
+        runtime_role,
+        &ExpectedManagedCatalog::compiled(registry),
+        &initial,
+    )
+    .await?;
+    install_empty_history_baseline_for_compiled_registry(
+        migration,
+        registry,
+        identity.package_revision,
+    )
+    .await?;
+    Ok(expected)
 }
 
 /// Test-only helper for the W2 feasibility kernel catalog.
@@ -974,7 +1077,96 @@ async fn verify_exact_acl(
             "managed object privileges differ from the closed catalog",
         ));
     }
+    verify_exact_column_acl(client, runtime_role, expected_catalog).await?;
     Ok(())
+}
+
+async fn verify_exact_column_acl(
+    client: &impl GenericClient,
+    runtime_role: &SqlIdentifier,
+    expected_catalog: &ExpectedManagedCatalog,
+) -> Result<()> {
+    let checked_tables = expected_column_acl_tables(expected_catalog);
+    let rows = query_categorized_column_acl(client, runtime_role, &checked_tables).await?;
+    let actual: BTreeSet<ManagedColumnPrivilege> = rows
+        .into_iter()
+        .map(|row| ManagedColumnPrivilege {
+            table: row.get(0),
+            column: row.get(1),
+            grantee: row.get(2),
+            privilege: row.get(3),
+            grantable: row.get(4),
+        })
+        .collect();
+    if actual != expected_catalog.column_privileges {
+        return Err(PostgresKernelError::CatalogInvariant(
+            "managed column privileges differ from the closed catalog",
+        ));
+    }
+    Ok(())
+}
+
+fn expected_column_acl_tables(expected_catalog: &ExpectedManagedCatalog) -> Vec<String> {
+    expected_catalog
+        .objects
+        .iter()
+        .filter(|object| {
+            matches!(
+                object.kind,
+                ManagedObjectKind::Table | ManagedObjectKind::View
+            )
+        })
+        .map(|object| object.name.clone())
+        .collect()
+}
+
+async fn query_categorized_column_acl(
+    client: &impl GenericClient,
+    runtime_role: &SqlIdentifier,
+    checked_tables: &[String],
+) -> Result<Vec<tokio_postgres::Row>> {
+    if checked_tables.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(client
+        .query(
+            "WITH managed_column_acl AS (
+                 SELECT n.nspname || '.' || c.relname AS table_name,
+                        n.nspname,
+                        c.relname,
+                        a.attname AS column_name,
+                        c.relowner AS owner_oid,
+                        a.attacl AS acl
+                   FROM pg_catalog.pg_class c
+                   JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                   JOIN pg_catalog.pg_attribute a
+                     ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+                  WHERE n.nspname = ANY($2::text[])
+                    AND n.nspname || '.' || c.relname = ANY($3::text[])
+                    AND c.relkind IN ('r', 'v')
+                    AND a.attacl IS NOT NULL
+             ), runtime AS (
+                 SELECT oid FROM pg_catalog.pg_roles WHERE rolname = $1
+             )
+             SELECT a.table_name,
+                    a.column_name,
+                    CASE
+                        WHEN x.grantee = 0 THEN 'public'
+                        WHEN x.grantee = a.owner_oid THEN 'owner'
+                        WHEN x.grantee = runtime.oid THEN 'runtime'
+                        ELSE 'other'
+                    END,
+                    x.privilege_type,
+                    x.is_grantable,
+                    a.nspname,
+                    a.relname
+               FROM managed_column_acl a
+               CROSS JOIN runtime
+               CROSS JOIN LATERAL pg_catalog.aclexplode(a.acl) x
+              ORDER BY 1, 2, 3, 4, 5",
+            &[&runtime_role.as_str(), &MANAGED_SCHEMAS, &checked_tables],
+        )
+        .await?)
 }
 
 /// Computes a deterministic fingerprint over the exact expected managed

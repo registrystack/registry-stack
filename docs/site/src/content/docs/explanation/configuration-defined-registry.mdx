@@ -70,14 +70,19 @@ activation command applies migrations.
 An access profile declares which operations and fields a caller may use.
 It can require token scopes and a purpose, and restrict records using verified token claims.
 Reading, writing, filtering, sorting, and counting each require permission.
+Saved snapshot queries also require an explicit `snapshot` grant; a live list grant or revision
+history grant is not enough.
 
 Callers can select fields, filter, sort, and paginate within those permissions and configured limits.
 Related-record queries must be declared in the project. The authenticated OpenAPI endpoint shows
 the operations available to the caller.
+Use the [history reference](../../reference/registry-server-history/) for snapshot query inputs,
+effective-time filtering, correction context, erasure maintenance, and coverage limits.
 
 {/* Evidence: crates/registry-server/src/auth.rs; crates/registry-server/src/query.rs;
-    crates/registry-server/src/api/mod.rs, openapi(); crates/registry-server/src/derived_sql.rs;
-    crates/registry-server/tests/http_auth.rs; crates/registry-server/tests/http_read_only.rs. */}
+    crates/registry-server/src/api/mod.rs, openapi(); crates/registry-server/src/postgres/history_read.rs;
+    crates/registry-server/tests/http_auth.rs; crates/registry-server/tests/http_read_only.rs;
+    crates/registry-server/tests/postgres_historical.rs. */}
 
 ## Updates and webhooks
 
@@ -118,4 +123,5 @@ case-management workflows. The current API is REST; GraphQL and SQLite storage a
 
 - [Create and query your first registry](../../tutorials/first-registry-server/) with synthetic data.
 - [Configure your registry](../../configure/registry-server/) to extend the model and prepare an operator handoff.
+- [History reference](../../reference/registry-server-history/) for saved snapshots, corrections, and retained-history erasure.
 - [Connect an existing registry](../../configure/) if your institution already has a system of record.

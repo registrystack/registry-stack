@@ -25,8 +25,9 @@ use registry_server::mutation::{
     MutationPlan, MutationRequest, PatchOperation,
 };
 use registry_server::postgres::{
-    install_compiled_schema, managed_schema_fingerprint, ClaimContext, ExpectedManagedCatalog,
-    ExpectedRegistryIdentity, RegistryLockKey, RowBoundaryContext,
+    initialize_compiled_registry_state_for_test, install_compiled_schema,
+    managed_schema_fingerprint, ClaimContext, ExpectedManagedCatalog, ExpectedRegistryIdentity,
+    RegistryLockKey, RegistryStateTestIdentity, RowBoundaryContext,
 };
 use registry_server::runtime_config::parse_runtime_config;
 use serde_json::{json, Map, Value};
@@ -109,8 +110,21 @@ async fn real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_determ
         apply_search_path,
         "fingerprinting restores the pinned apply search path"
     );
-    let identity = expected_identity();
-    initialize_registry_state(&migration, &identity).await;
+    let identity = initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &compiled,
+        RegistryStateTestIdentity {
+            package_id: "webhook-outbox-registry",
+            environment: "local",
+            instance_id: "webhook-outbox-instance",
+            database_id: "webhook-outbox-database",
+            package_revision: PACKAGE_REVISION,
+            package_sequence: 1,
+        },
+    )
+    .await
+    .expect("migration activates the compiled package and its history baseline");
     migration_task.abort();
 
     let fixture = DestinationFixture::new();
@@ -638,44 +652,6 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
     .expect("webhook capture fixture parses");
     compile_project(&project, &[], CompileProfile::Authoring)
         .expect("webhook capture fixture compiles")
-}
-
-fn expected_identity() -> ExpectedRegistryIdentity {
-    ExpectedRegistryIdentity {
-        package_id: "webhook-outbox-registry".to_owned(),
-        environment: "local".to_owned(),
-        instance_id: "webhook-outbox-instance".to_owned(),
-        database_id: "webhook-outbox-database".to_owned(),
-        package_revision: PACKAGE_REVISION.to_owned(),
-        schema_fingerprint: SCHEMA_FINGERPRINT.to_owned(),
-        package_sequence: 1,
-    }
-}
-
-async fn initialize_registry_state(
-    migration: &tokio_postgres::Client,
-    identity: &ExpectedRegistryIdentity,
-) {
-    let changed = migration
-        .execute(
-            "INSERT INTO registry_internal.registry_state
-                 (singleton, package_id, environment, instance_id, database_id,
-                  active_package_revision, schema_fingerprint, package_sequence,
-                  maintenance_status)
-             VALUES (true, $1, $2, $3, $4, $5, $6, $7, 'ready')",
-            &[
-                &identity.package_id,
-                &identity.environment,
-                &identity.instance_id,
-                &identity.database_id,
-                &identity.package_revision,
-                &identity.schema_fingerprint,
-                &identity.package_sequence,
-            ],
-        )
-        .await
-        .expect("migration initializes the exact active package binding");
-    assert_eq!(changed, 1);
 }
 
 fn mutation_claims(registry: &registry_server::CompiledRegistry) -> ClaimContext {

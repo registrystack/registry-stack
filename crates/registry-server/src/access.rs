@@ -169,6 +169,10 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
                 findings.push(Diagnostic::finding("access.profile.revision_history", format!("{path}.revisionAccess"),
                     "history can disclose previous values of readable fields, including values removed from the current record; review historical disclosure separately"));
             }
+            if profile.operations.contains(&Operation::Snapshot) {
+                findings.push(Diagnostic::finding("access.profile.snapshot_history", format!("{path}.operations"),
+                    "snapshot reads can reproduce retained historical rows under current authorization; review stored-field projection, filters, and row restrictions separately"));
+            }
             if profile.allow_data_export {
                 findings.push(Diagnostic::finding("access.profile.data_export", format!("{path}.allowDataExport"),
                     "bulk export is enabled; disabling it later cannot recall downloaded data. Review the readable fields and row restrictions"));

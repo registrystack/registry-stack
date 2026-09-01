@@ -27,6 +27,17 @@ pub struct ParsedReadQuery {
     pub mode: ParsedReadQueryMode,
 }
 
+/// Snapshot parameters are a separate grammar from live `asOf` reads. The
+/// reference is resolved and the validity value is typed only after access is
+/// authorized against the active compiled operation.
+#[derive(Clone, Eq, PartialEq)]
+pub struct ParsedSnapshotQuery {
+    pub access_profile: Option<String>,
+    pub snapshot: Option<String>,
+    pub valid_at: Option<String>,
+    pub mode: ParsedReadQueryMode,
+}
+
 #[derive(Clone, Eq, PartialEq)]
 pub enum ParsedReadQueryMode {
     Query(ReadQueryOptions),
@@ -178,6 +189,21 @@ impl fmt::Debug for ParsedReadQueryMode {
                 .field("token", &"<redacted>")
                 .finish(),
         }
+    }
+}
+
+impl fmt::Debug for ParsedSnapshotQuery {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ParsedSnapshotQuery")
+            .field(
+                "access_profile",
+                &self.access_profile.as_ref().map(|_| "<redacted>"),
+            )
+            .field("snapshot", &self.snapshot.as_ref().map(|_| "<redacted>"))
+            .field("valid_at", &self.valid_at.as_ref().map(|_| "<redacted>"))
+            .field("mode", &self.mode)
+            .finish()
     }
 }
 
@@ -508,6 +534,56 @@ pub fn parse_filter(value: &str) -> Result<FilterExpr, QueryParseError> {
     parser.expect_end()?;
     validate_filter_depth(&filter, 1)?;
     Ok(filter)
+}
+
+pub fn parse_snapshot_query<I, K, V>(pairs: I) -> Result<ParsedSnapshotQuery, QueryParseError>
+where
+    I: IntoIterator<Item = (K, V)>,
+    K: AsRef<str>,
+    V: AsRef<str>,
+{
+    let mut builder = QueryBuilder::default();
+    let mut snapshot = None;
+    let mut valid_at = None;
+    let mut payload_bytes = 0_usize;
+    for (key, value) in pairs {
+        let key = key.as_ref();
+        let value = value.as_ref();
+        payload_bytes = payload_bytes
+            .checked_add(key.len())
+            .and_then(|bytes| bytes.checked_add(value.len()))
+            .and_then(|bytes| bytes.checked_add(2))
+            .ok_or(QueryParseError::PayloadTooLarge)?;
+        if payload_bytes > MAX_QUERY_PAYLOAD_BYTES {
+            return Err(QueryParseError::PayloadTooLarge);
+        }
+        match key {
+            "snapshot" => {
+                ensure_absent(snapshot.is_none())?;
+                snapshot = Some(parse_opaque_value(value)?);
+            }
+            "validAt" => {
+                ensure_absent(valid_at.is_none())?;
+                valid_at = Some(parse_bounded_scalar(value)?);
+            }
+            "asOf" | "recordedAsOf" => return Err(QueryParseError::DisallowedOption),
+            _ => builder.apply(key, value)?,
+        }
+    }
+    let parsed = builder.finish()?;
+    // Continuations carry the already selected snapshot and validity value.
+    // Accepting a second value would make one request describe two queries.
+    if matches!(parsed.mode, ParsedReadQueryMode::SkipToken { .. })
+        && (snapshot.is_some() || valid_at.is_some())
+    {
+        return Err(QueryParseError::ConflictingOptions);
+    }
+    Ok(ParsedSnapshotQuery {
+        access_profile: parsed.access_profile,
+        snapshot,
+        valid_at,
+        mode: parsed.mode,
+    })
 }
 
 #[derive(Default)]
@@ -1522,6 +1598,99 @@ mod tests {
         assert_eq!(display, "query filter syntax is invalid");
         assert!(!debug.contains("secret"));
         assert!(!display.contains("secret"));
+    }
+
+    #[test]
+    fn snapshot_grammar_preserves_options_without_widening_live_reads() {
+        let parsed = parse_snapshot_query([
+            ("accessProfile", "caseworker"),
+            ("snapshot", "snapshot-canary"),
+            ("validAt", "2026-06-05"),
+            ("$select", "household_id,valid_from"),
+            ("$filter", "status eq 'active'"),
+            ("$orderby", "valid_from"),
+            ("$top", "20"),
+            ("$count", "true"),
+        ])
+        .expect("snapshot query syntax");
+        assert_eq!(parsed.snapshot.as_deref(), Some("snapshot-canary"));
+        assert_eq!(parsed.valid_at.as_deref(), Some("2026-06-05"));
+        let ParsedReadQueryMode::Query(options) = parsed.mode else {
+            panic!("first page expected");
+        };
+        assert_eq!(options.top, Some(20));
+        assert_eq!(options.count, Some(true));
+        for key in ["snapshot", "validAt", "recordedAsOf"] {
+            assert!(parse_read_query([(key, "value")]).is_err());
+        }
+        for key in ["asOf", "recordedAsOf", "$expand", "sql"] {
+            assert_eq!(
+                parse_snapshot_query([(key, "value")]),
+                Err(QueryParseError::DisallowedOption)
+            );
+        }
+        let empty = parse_snapshot_query(std::iter::empty::<(&str, &str)>()).unwrap();
+        assert_eq!(empty.snapshot, None);
+        assert_eq!(empty.valid_at, None);
+    }
+
+    #[test]
+    fn snapshot_continuations_cannot_override_the_bound_query() {
+        assert!(parse_snapshot_query([
+            ("accessProfile", "caseworker"),
+            ("$skiptoken", "cursor-canary"),
+        ])
+        .is_ok());
+        for key in [
+            "snapshot", "validAt", "$select", "$filter", "$orderby", "$top", "$count",
+        ] {
+            let value = match key {
+                "$filter" => "field eq 'value'",
+                "$top" => "10",
+                "$count" => "true",
+                _ => "value",
+            };
+            assert_eq!(
+                parse_snapshot_query([("$skiptoken", "cursor-canary"), (key, value)]),
+                Err(QueryParseError::ConflictingOptions)
+            );
+        }
+    }
+
+    #[test]
+    fn snapshot_parameters_are_unique_bounded_and_redacted() {
+        for key in ["snapshot", "validAt"] {
+            assert_eq!(
+                parse_snapshot_query([(key, "one"), (key, "two")]),
+                Err(QueryParseError::DuplicateOption)
+            );
+            for value in ["", "canary\n"] {
+                assert_eq!(
+                    parse_snapshot_query([(key, value)]),
+                    Err(QueryParseError::InvalidValue)
+                );
+            }
+        }
+        assert_eq!(
+            parse_snapshot_query([("snapshot", "x".repeat(MAX_OPAQUE_VALUE_BYTES + 1))]),
+            Err(QueryParseError::InvalidValue)
+        );
+        assert_eq!(
+            parse_snapshot_query([("validAt", "x".repeat(MAX_LITERAL_BYTES + 1))]),
+            Err(QueryParseError::InvalidValue)
+        );
+        assert_eq!(
+            parse_snapshot_query([("snapshot", "x".repeat(MAX_QUERY_PAYLOAD_BYTES))]),
+            Err(QueryParseError::PayloadTooLarge)
+        );
+        let parsed = parse_snapshot_query([
+            ("snapshot", "snapshot-canary"),
+            ("validAt", "validity-canary"),
+            ("accessProfile", "profile-canary"),
+            ("$filter", "field eq 'filter-canary'"),
+        ])
+        .unwrap();
+        assert!(!format!("{parsed:?}").contains("canary"));
     }
 
     #[test]

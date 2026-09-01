@@ -940,6 +940,7 @@ mod tests {
                             request.body().to_vec(),
                         ));
                         let body = canonicalize_json(&json!({
+                            "snapshot": "rs1_00000000-0000-4000-8000-000000000001",
                             "results": [{
                                 "operation": "create",
                                 "id": "018f06d6-0248-4c7f-8a7e-df9dfbd83d2c",
@@ -1399,7 +1400,11 @@ mod tests {
                             })
                         })
                         .collect::<Vec<_>>();
-                    let body = canonicalize_json(&json!({"results": results})).unwrap();
+                    let body = canonicalize_json(&json!({
+                        "results": results,
+                        "snapshot": "rs1_00000000-0000-4000-8000-000000000001"
+                    }))
+                    .unwrap();
                     DataHttpResponse::new(200, Some("application/json".to_owned()), body)
                 }
             },

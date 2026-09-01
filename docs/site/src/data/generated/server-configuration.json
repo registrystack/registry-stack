@@ -8,7 +8,7 @@
       "file": "products/registry-server/generated/authoring/registry-project.schema.json",
       "status": "beta",
       "reference": "docs/site/src/content/docs/configure/registry-server.mdx",
-      "field_count": 341,
+      "field_count": 343,
       "fields": [
         {
           "key_path": "accessProfiles",
@@ -397,8 +397,40 @@
             "request_revision",
             "revise_request",
             "revisions",
+            "snapshot",
             "submit_request",
             "tombstone"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "accessProfiles[].grants[].provenanceFields",
+          "kind": "property",
+          "type": "array",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "accessProfiles[].grants[].provenanceFields[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": "no",
+          "values": [
+            "kind",
+            "reasonCode",
+            "reasonText",
+            "sourceReferences"
           ],
           "values_conditional": false,
           "constraints": [],
@@ -1412,6 +1444,7 @@
             "request_revision",
             "revise_request",
             "revisions",
+            "snapshot",
             "submit_request",
             "tombstone"
           ],
@@ -1527,6 +1560,7 @@
             "request_revision",
             "revise_request",
             "revisions",
+            "snapshot",
             "submit_request",
             "tombstone"
           ],
@@ -3538,7 +3572,7 @@
           "values_conditional": false,
           "constraints": [],
           "conditional_constraints": [],
-          "description": null,
+          "description": "Deprecated bounded predecessor bridge. New authoring should declare\nexclusivity only through `constraints[].scopeFields`.",
           "defaults": [],
           "runtime_validation": null
         },
@@ -5246,6 +5280,7 @@
             "request_revision",
             "revise_request",
             "revisions",
+            "snapshot",
             "submit_request",
             "tombstone"
           ],
@@ -5361,6 +5396,7 @@
             "request_revision",
             "revise_request",
             "revisions",
+            "snapshot",
             "submit_request",
             "tombstone"
           ],
@@ -7372,7 +7408,7 @@
           "values_conditional": false,
           "constraints": [],
           "conditional_constraints": [],
-          "description": null,
+          "description": "Deprecated bounded predecessor bridge. New authoring should declare\nexclusivity only through `constraints[].scopeFields`.",
           "defaults": [],
           "runtime_validation": null
         },
@@ -7643,6 +7679,7 @@
             "request_revision",
             "revise_request",
             "revisions",
+            "snapshot",
             "submit_request",
             "tombstone"
           ],
@@ -7758,6 +7795,7 @@
             "request_revision",
             "revise_request",
             "revisions",
+            "snapshot",
             "submit_request",
             "tombstone"
           ],

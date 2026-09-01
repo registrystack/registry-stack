@@ -257,6 +257,10 @@ The tutorial demonstrates both requests and a version conflict.
 List queries use `$select`, `$filter`, `$orderby`, `$top`, `$count`, and `$skiptoken` where the
 selected grant permits them. A field that can be read is not automatically filterable or sortable.
 Keep pagination bound to the original query and profile.
+Snapshot queries use the same permitted query controls with explicit `snapshot` access, an optional
+saved snapshot reference, and an optional `validAt` effective-time filter.
+Use the [history reference](../../reference/registry-server-history/) for correction context,
+snapshot access, field compatibility, and retained-history erasure.
 
 For bulk data, `registry-serverctl data validate` checks an import against a package plan.
 `data import` and `data export` use the authenticated batch and list APIs with the configured
@@ -266,7 +270,8 @@ starts with new output and checkpoint files.
 
 {/* Evidence: crates/registry-server/src/artifacts.rs; crates/registry-server/src/mutation.rs;
     crates/registry-server/src/idempotency.rs; crates/registry-server/src/query.rs;
-    crates/registry-server/src/cursor.rs; crates/registry-serverctl/src/data_lifecycle.rs;
+    crates/registry-server/src/cursor.rs; crates/registry-server/src/postgres/history_read.rs;
+    crates/registry-serverctl/src/data_lifecycle.rs;
     crates/registry-serverctl/src/lib.rs, DataCommand. */}
 
 ## Configure webhooks
@@ -451,6 +456,7 @@ signatures, and runtime configuration for each deployment; store secrets separat
 | A module lock is stale | Run `project lock`, review its diff, and repeat the check. |
 | A property is refused or missing | Check its public JSON name and the selected grant's readable/writable field lists. |
 | A filter, sort, or count is refused | Check that the selected grant explicitly permits it. |
+| A saved snapshot query returns `503 source.unavailable` | Check retained history coverage, compatible field metadata, and erasure maintenance history before retrying with a fresh reference. |
 | Runtime parsing rejects a governed member | Move model or permission changes into the authoring project and build a successor package. |
 | Production packaging refuses the candidate | Check production diagnostics, receipt identity, fingerprint, and detached signature policy. |
 | Readiness remains unavailable after migration failure | Review the failed apply report and resolve or restore through the reviewed recovery path. |
@@ -459,4 +465,5 @@ signatures, and runtime configuration for each deployment; store secrets separat
 
 - [Return to the local tutorial](../../tutorials/first-registry-server/) to compare a known working setup.
 - [Review the product boundary](../../explanation/configuration-defined-registry/) before adding domain workflows.
+- [Use the history reference](../../reference/registry-server-history/) for corrections and saved snapshots.
 - [Configure Registry Mint](../mint/) for a deployment-owned token issuer.
