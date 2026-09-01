@@ -10,7 +10,12 @@ use serde_json::{json, Value};
 use tokio_postgres::Transaction;
 
 use crate::model::HttpMethod;
-use crate::postgres::ClaimContext;
+use crate::postgres::{ActionClaimContext, ClaimContext, RowBoundaryContext};
+
+// Every compiled effect mutates at least one field, so this also bounds the
+// number of separately named references in an immediate-action receipt.
+pub(crate) const MAX_IMMEDIATE_ACTION_RESULTS: u16 =
+    crate::change_request::MAX_CHANGE_REQUEST_FIELD_MUTATIONS;
 
 const MAX_IDEMPOTENCY_KEY_BYTES: usize = 256;
 const MAX_HEADER_VALUE_BYTES: usize = 8 * 1024;
@@ -106,6 +111,18 @@ pub(crate) struct IdempotencyBinding<'a> {
     pub canonical_request_digest: [u8; 32],
 }
 
+pub(crate) struct ActionIdempotencyBinding<'a> {
+    pub key: &'a str,
+    pub context: &'a ActionClaimContext,
+    pub method: HttpMethod,
+    pub route: &'a str,
+    pub package_revision: &'a str,
+    pub action_contract_fingerprint: &'a str,
+    pub target_authority: &'a BTreeMap<String, Vec<RowBoundaryContext>>,
+    pub result_effects: &'a BTreeSet<String>,
+    pub canonical_request_digest: [u8; 32],
+}
+
 pub(crate) struct ResolvedIdempotencyBinding {
     pub key_reference: String,
     pub binding_reference: String,
@@ -131,6 +148,9 @@ pub(crate) enum StoredResultMetadata {
         record_reference: String,
         record_revision: i64,
         proposal_version: i64,
+        result_count: u16,
+    },
+    ImmediateAction {
         result_count: u16,
     },
 }
@@ -216,6 +236,79 @@ pub(crate) fn resolve_binding(
     })
 }
 
+pub(crate) fn resolve_action_binding(
+    profile: &AuditProfile,
+    binding: &ActionIdempotencyBinding<'_>,
+) -> Result<ResolvedIdempotencyBinding, IdempotencyError> {
+    if binding.key.is_empty()
+        || binding.key.len() > MAX_IDEMPOTENCY_KEY_BYTES
+        || binding.route.is_empty()
+        || binding.package_revision.is_empty()
+        || binding.action_contract_fingerprint.is_empty()
+        || binding
+            .result_effects
+            .iter()
+            .any(|effect| effect.is_empty())
+    {
+        return Err(IdempotencyError::InvalidInput);
+    }
+    let key_hasher = profile.key_hasher();
+    let key_reference = key_hasher
+        .audit_reference_hash("registry-server-idempotency-key-v1", "", binding.key)
+        .map_err(|_| IdempotencyError::InvalidInput)?;
+    let principal_reference = key_hasher
+        .audit_reference_hash(
+            "registry-server-principal-v1",
+            binding.package_revision,
+            binding.context.principal(),
+        )
+        .map_err(|_| IdempotencyError::InvalidInput)?;
+    let canonical_context =
+        canonical_action_context(profile, binding.context, binding.package_revision)?;
+    let target_authority = binding
+        .target_authority
+        .iter()
+        .map(|(entity_id, boundaries)| {
+            if entity_id.is_empty() {
+                return Err(IdempotencyError::InvalidInput);
+            }
+            Ok(json!({
+                "entityId": entity_id,
+                "rowBoundaries": canonical_boundary_references(
+                    profile,
+                    binding.package_revision,
+                    boundaries,
+                )?,
+            }))
+        })
+        .collect::<Result<Vec<_>, IdempotencyError>>()?;
+    let canonical = canonicalize_json(&json!({
+        "context": canonical_context,
+        "method": method_name(binding.method),
+        "route": binding.route,
+        "packageRevision": binding.package_revision,
+        "actionContractFingerprint": binding.action_contract_fingerprint,
+        "targetAuthority": target_authority,
+        "resultEffects": binding.result_effects,
+        "canonicalRequestDigest": hex(&binding.canonical_request_digest),
+    }))
+    .map_err(|_| IdempotencyError::InvalidInput)?;
+    let canonical = std::str::from_utf8(&canonical).map_err(|_| IdempotencyError::InvalidInput)?;
+    let binding_reference = key_hasher
+        .audit_reference_hash(
+            "registry-server-action-idempotency-binding-v1",
+            binding.package_revision,
+            canonical,
+        )
+        .map_err(|_| IdempotencyError::InvalidInput)?;
+    Ok(ResolvedIdempotencyBinding {
+        key_reference,
+        binding_reference,
+        principal_reference,
+        record_reference: String::new(),
+    })
+}
+
 /// Canonical, value-safe identity of every verified authorization input that
 /// PostgreSQL receives for one protected operation.
 pub(crate) fn canonical_claim_context(
@@ -263,6 +356,62 @@ pub(crate) fn canonical_claim_context(
         "verifiedPurpose": context.purpose(),
         "rowBoundaries": row_boundaries,
     }))
+}
+
+pub(crate) fn canonical_action_context(
+    profile: &AuditProfile,
+    context: &ActionClaimContext,
+    package_revision: &str,
+) -> Result<Value, IdempotencyError> {
+    let key_hasher = profile.key_hasher();
+    let principal_reference = key_hasher
+        .audit_reference_hash(
+            "registry-server-principal-v1",
+            package_revision,
+            context.principal(),
+        )
+        .map_err(|_| IdempotencyError::InvalidInput)?;
+    Ok(json!({
+        "actionId": context.action_id(),
+        "principalReference": principal_reference,
+        "selectedAccessProfile": context.access_profile(),
+        "verifiedPurpose": context.purpose(),
+    }))
+}
+
+fn canonical_boundary_references(
+    profile: &AuditProfile,
+    package_revision: &str,
+    boundaries: &[RowBoundaryContext],
+) -> Result<Vec<Value>, IdempotencyError> {
+    let key_hasher = profile.key_hasher();
+    boundaries
+        .iter()
+        .map(|boundary| {
+            let reference_context = format!(
+                "{package_revision}:{}:{}",
+                boundary.field(),
+                boundary.operator().as_str()
+            );
+            let value_references = boundary
+                .values()
+                .into_iter()
+                .map(|value| {
+                    key_hasher.audit_reference_hash(
+                        "registry-server-row-boundary-value-v1",
+                        &reference_context,
+                        value,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| IdempotencyError::InvalidInput)?;
+            Ok(json!({
+                "field": boundary.field(),
+                "operator": boundary.operator().as_str(),
+                "valueReferences": value_references,
+            }))
+        })
+        .collect()
 }
 
 pub(crate) async fn lock_and_load(
@@ -355,6 +504,20 @@ pub(crate) async fn lock_and_load(
                 result_count,
             }
         }
+        "immediate_action" => {
+            if row.get::<_, Option<i64>>(2).is_some()
+                || row.get::<_, Option<String>>(6).is_some()
+                || row.get::<_, Option<i64>>(8).is_some()
+            {
+                return Err(IdempotencyError::Unavailable);
+            }
+            let result_count = row
+                .get::<_, Option<i16>>(7)
+                .and_then(|count| u16::try_from(count).ok())
+                .filter(|count| *count <= MAX_IMMEDIATE_ACTION_RESULTS)
+                .ok_or(IdempotencyError::Unavailable)?;
+            StoredResultMetadata::ImmediateAction { result_count }
+        }
         _ => return Err(IdempotencyError::Unavailable),
     };
     let status = u16::try_from(row.get::<_, i16>(3)).map_err(|_| IdempotencyError::Unavailable)?;
@@ -422,6 +585,17 @@ pub(crate) async fn insert_result(
                     Some(record_reference.as_str()),
                     Some(i16::try_from(*result_count).map_err(|_| IdempotencyError::InvalidInput)?),
                     Some(*proposal_version),
+                )
+            }
+            StoredResultMetadata::ImmediateAction { result_count }
+                if *result_count <= MAX_IMMEDIATE_ACTION_RESULTS =>
+            {
+                (
+                    "immediate_action",
+                    None,
+                    None,
+                    Some(i16::try_from(*result_count).map_err(|_| IdempotencyError::InvalidInput)?),
+                    None,
                 )
             }
             _ => return Err(IdempotencyError::InvalidInput),

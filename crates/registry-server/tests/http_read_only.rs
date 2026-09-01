@@ -2125,6 +2125,7 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::ReviseRequest => "revise_request",
         Operation::CancelRequest => "cancel_request",
         Operation::ApplyRequest => "apply_request",
+        Operation::Invoke => "invoke",
     }
 }
 

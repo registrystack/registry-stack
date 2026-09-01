@@ -1,0 +1,94 @@
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: household-contact-actions
+  version: 0.1.0
+  defaultLanguage: en
+package:
+  environment: acceptance
+  instanceId: household-contact-actions-fixture
+  sequence: 1
+  sourceRevision: household-contact-actions-fixture-0.1.0
+manifestProjection:
+  accessProfile: household-operator
+  classificationCeiling: restricted
+  catalog:
+    baseUrl: https://household-contact-actions.example.gov
+    title: Household Contact Actions Catalog
+    description: Portable metadata for the household contact immediate action fixture.
+    publisher:
+      name: Household Registry Authority
+      iri: https://household-contact-actions.example.gov/authority
+  dataset:
+    title: Household Contact Actions Registry
+    description: Household, person, membership, and service-center records used by the immediate action fixture.
+    owner: Household Registry Authority
+    status: active
+modules:
+  - id: "household-contact-actions-core"
+    version: "0.1.0"
+    digest: "sha256:bc78e245ab176e8d328af05cb67b6c9c09c1bc48de94a94b8cc2bbf726fa1838"
+
+entities: []
+accessProfiles:
+  - id: household-operator
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: [registry:household:operate]
+    requiredPurposes: [household-administration]
+    grants:
+      - entity: household
+        operations: [create, get]
+        readableFields: [household-code, household-name, district, contact-person]
+        writableFields: [household-code, household-name, district]
+        rowBoundaries:
+          - {field: district, claim: district, operator: equals}
+      - entity: service-center
+        operations: [create, get]
+        readableFields: [center-code, label, district]
+        writableFields: [center-code, label, district]
+        rowBoundaries:
+          - {field: district, claim: district, operator: equals}
+      - entity: person
+        operations: [get]
+        readableFields: [person-code, legal-name, district]
+        rowBoundaries:
+          - {field: district, claim: district, operator: equals}
+      - entity: group-membership
+        operations: [get, list]
+        readableFields: [person, household, registration-site, district]
+        filterableFields: [household, person]
+        rowBoundaries:
+          - {field: district, claim: district, operator: equals}
+  - id: household-maintainer
+    principalClaim: registry_principal
+    requiredScopes: [registry:household:maintain]
+    requiredPurposes: [household-maintenance]
+    grants:
+      - entity: household
+        operations: [get, patch]
+        readableFields: [household-code, household-name, district, contact-person]
+        writableFields: [household-name]
+        rowBoundaries:
+          - {field: district, claim: district, operator: equals}
+  - id: contact-registrar
+    principalClaim: registry_principal
+    requiredScopes: [registry:contact:register]
+    requiredPurposes: [contact-registration]
+    grants:
+      - action: register-household-contact
+        operations: [invoke]
+        targets:
+          - entity: household
+            rowBoundaries:
+              - {field: district, claim: district, operator: equals}
+          - entity: person
+            rowBoundaries:
+              - {field: district, claim: district, operator: equals}
+          - entity: group-membership
+            rowBoundaries:
+              - {field: district, claim: district, operator: equals}
+          - entity: service-center
+            rowBoundaries:
+              - {field: district, claim: district, operator: equals}
+        results: [person, membership, household]

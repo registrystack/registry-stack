@@ -81,3 +81,15 @@ scenarios:
     state: enforced
     doneWhen: "An external coding agent can author and check but cannot satisfy signature or migration-role authority."
     evidence: [{path: crates/registry-serverctl/tests/cli.rs, name: package_always_uses_production_compilation_and_never_offers_a_signing_command}, {path: crates/registry-serverctl/tests/diff.rs, name: production_trust_is_verified_without_opening_runtime_dependencies}, {path: crates/registry-server/tests/postgres_package.rs, name: wrong_migration_role_is_refused_before_initial_control_plane_or_ddl}, {path: products/registry-server/scripts/test-adopter-workflow.sh, name: test-adopter-workflow.sh}]
+  - id: RS-J18
+    state: enforced
+    domain: asset-registration-actions
+    fixture: fixtures/asset-registration-actions
+    doneWhen: "Configured create-only immediate action journeys run through the authenticated PostgreSQL fixture runner without CRUD grants."
+    evidence: [{path: crates/registry-server/tests/postgres_immediate_action_examples.rs, name: asset_registration_action_example_runs_through_authenticated_postgres_fixture_runner}]
+  - id: RS-J19
+    state: enforced
+    domain: household-contact-actions
+    fixture: fixtures/household-contact-actions
+    doneWhen: "Configured patch immediate action journeys prove target conditions and replay without data loss."
+    evidence: [{path: crates/registry-server/tests/postgres_immediate_action_examples.rs, name: household_contact_action_example_runs_patch_conditions_and_replay_without_data_loss}, {path: crates/registry-server/tests/postgres_immediate_action_activation.rs, name: reviewed_activation_updates_immediate_action_policies_and_consumed_keys}]

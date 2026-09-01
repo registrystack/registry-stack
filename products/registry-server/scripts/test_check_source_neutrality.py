@@ -161,6 +161,25 @@ class SourceNeutralityTests(unittest.TestCase):
                 violations,
             )
 
+    def test_rust_string_scanner_stays_synchronized_after_escaped_quotes_and_raw_literals(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "crates/registry-server/src/lib.rs"
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                'const ORDINARY_CANARY: &str = "quoted \\"value\\" at /v1/records/assets";\n'
+                'const RAW_CANARY: &str = r#"registry.person.requests"#;\n'
+                "impl PostgresFixtureTestRunner {\n"
+                "    fn capture<'a>(observations: &'a BTreeMap<String, Observation>) {}\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            violations = CHECKER.find_violations(root)
+
+        self.assertTrue(any("/v1/records/assets" in item for item in violations), violations)
+        self.assertTrue(any("person" in item for item in violations), violations)
+        self.assertFalse(any("observation" in item.lower() for item in violations), violations)
+
     def test_public_kernel_contract_canary_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

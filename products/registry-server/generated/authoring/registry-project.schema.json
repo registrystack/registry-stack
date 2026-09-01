@@ -1,104 +1,14 @@
 {
   "$defs": {
     "AccessGrantSource": {
-      "additionalProperties": false,
-      "properties": {
-        "allowCount": {
-          "type": "boolean"
+      "anyOf": [
+        {
+          "$ref": "#/$defs/EntityAccessGrantSourceSchema"
         },
-        "allowDataExport": {
-          "default": false,
-          "type": "boolean"
-        },
-        "applyTargets": {
-          "items": {
-            "$ref": "#/$defs/ApplyTargetGrantSource"
-          },
-          "type": "array"
-        },
-        "entity": {
-          "type": "string"
-        },
-        "filterableFields": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
-        "lookups": {
-          "items": {
-            "$ref": "#/$defs/LookupGrantSource"
-          },
-          "type": "array"
-        },
-        "operations": {
-          "items": {
-            "$ref": "#/$defs/Operation"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
-        "readPaths": {
-          "items": {
-            "$ref": "#/$defs/ReadPathGrantSource"
-          },
-          "type": "array"
-        },
-        "readableFields": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
-        "requestPresence": {
-          "items": {
-            "$ref": "#/$defs/RequestPresenceGrantSource"
-          },
-          "type": "array"
-        },
-        "reviewStages": {
-          "items": {
-            "$ref": "#/$defs/ReviewStageGrantSource"
-          },
-          "type": "array"
-        },
-        "revisionAccess": {
-          "default": false,
-          "type": "boolean"
-        },
-        "rowBoundaries": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/RowBoundarySource"
-          },
-          "type": "array"
-        },
-        "sortableFields": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
-        "writableFields": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "uniqueItems": true
+        {
+          "$ref": "#/$defs/ActionAccessGrantSourceSchema"
         }
-      },
-      "required": [
-        "entity",
-        "operations"
-      ],
-      "type": "object"
+      ]
     },
     "AccessRequirementsSource": {
       "additionalProperties": false,
@@ -129,6 +39,419 @@
             "$ref": "#/$defs/RowBoundarySource"
           },
           "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "ActionAccessGrantSourceSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "operations": {
+          "items": {
+            "$ref": "#/$defs/Operation"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "results": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "targets": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ActionTargetGrantSource"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "action",
+        "operations"
+      ],
+      "type": "object"
+    },
+    "ActionEffectSource": {
+      "additionalProperties": false,
+      "properties": {
+        "clear": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operation": {
+          "$ref": "#/$defs/Operation"
+        },
+        "set": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ActionValueSource"
+          },
+          "default": {},
+          "type": "object"
+        },
+        "target": {
+          "$ref": "#/$defs/ActionTargetSource"
+        }
+      },
+      "required": [
+        "target",
+        "operation"
+      ],
+      "type": "object"
+    },
+    "ActionInputSource": {
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "const": "boolean",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "maxLength": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "minLength": {
+              "default": 0,
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "string",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "maxLength"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "maxLength": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "maxLength"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "int64",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "maximum": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "minimum": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "precision": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "scale": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "decimal",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "precision",
+            "scale"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "date",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "timestamp",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "vocabulary-code",
+              "type": "string"
+            },
+            "values": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "vocabulary": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "vocabulary"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "onDelete": {
+              "$ref": "#/$defs/ReferenceDelete",
+              "default": "restrict"
+            },
+            "target": {
+              "type": "string"
+            },
+            "type": {
+              "const": "reference",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "target"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "bbox": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Crs84BboxSource"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "precision": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "crs84-point",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "precision"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "maxBytes": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "schema": true,
+            "type": {
+              "const": "structured",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "maxBytes",
+            "schema"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "apiName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "classification": {
+          "$ref": "#/$defs/Classification"
+        },
+        "id": {
+          "type": "string"
+        },
+        "required": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "classification"
+      ],
+      "type": "object",
+      "unevaluatedProperties": false
+    },
+    "ActionSource": {
+      "additionalProperties": false,
+      "properties": {
+        "effects": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ActionEffectSource"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "inputs": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ActionInputSource"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "ActionTargetGrantSource": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "type": "string"
+        },
+        "rowBoundaries": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RowBoundarySource"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "entity"
+      ],
+      "type": "object"
+    },
+    "ActionTargetSource": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fromField": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ActionValueSource": {
+      "additionalProperties": false,
+      "properties": {
+        "fromEffect": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fromField": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "type": "object"
@@ -1101,6 +1424,112 @@
       ],
       "type": "object"
     },
+    "EntityAccessGrantSourceSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "allowCount": {
+          "default": false,
+          "type": "boolean"
+        },
+        "allowDataExport": {
+          "default": false,
+          "type": "boolean"
+        },
+        "applyTargets": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ApplyTargetGrantSource"
+          },
+          "type": "array"
+        },
+        "entity": {
+          "type": "string"
+        },
+        "filterableFields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "lookups": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/LookupGrantSource"
+          },
+          "type": "array"
+        },
+        "operations": {
+          "items": {
+            "$ref": "#/$defs/Operation"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "readPaths": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ReadPathGrantSource"
+          },
+          "type": "array"
+        },
+        "readableFields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "requestPresence": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RequestPresenceGrantSource"
+          },
+          "type": "array"
+        },
+        "reviewStages": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ReviewStageGrantSource"
+          },
+          "type": "array"
+        },
+        "revisionAccess": {
+          "default": false,
+          "type": "boolean"
+        },
+        "rowBoundaries": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RowBoundarySource"
+          },
+          "type": "array"
+        },
+        "sortableFields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "writableFields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "entity",
+        "operations"
+      ],
+      "type": "object"
+    },
     "EntitySource": {
       "additionalProperties": false,
       "properties": {
@@ -2041,7 +2470,8 @@
         "request_revision",
         "revise_request",
         "cancel_request",
-        "apply_request"
+        "apply_request",
+        "invoke"
       ],
       "type": "string"
     },
@@ -2840,6 +3270,12 @@
       "default": [],
       "items": {
         "$ref": "#/$defs/ProjectAccessProfileSource"
+      },
+      "type": "array"
+    },
+    "actions": {
+      "items": {
+        "$ref": "#/$defs/ActionSource"
       },
       "type": "array"
     },

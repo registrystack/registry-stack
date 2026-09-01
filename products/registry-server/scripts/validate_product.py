@@ -27,7 +27,7 @@ WAVE = re.compile(r"^W[0-9]+$")
 PLACEHOLDER = re.compile(r"\b(?:TODO|TBD|FIXME|placeholder)\b", re.IGNORECASE)
 CONTRACT_STATES = {"enforced", "partial", "planned"}
 V1_REQUIREMENT_IDS = tuple(f"RS-V1-{index:02d}" for index in range(1, 45))
-ACCEPTANCE_JOURNEY_IDS = tuple(f"RS-J{index:02d}" for index in range(1, 18))
+ACCEPTANCE_JOURNEY_IDS = tuple(f"RS-J{index:02d}" for index in range(1, 20))
 ACCEPTANCE_FIXTURES = {
     "RS-J01": ("asset-site-placement", "acceptance/asset-site-placement"),
     "RS-J02": ("asset-site-placement", "acceptance/asset-site-placement"),
@@ -35,6 +35,8 @@ ACCEPTANCE_FIXTURES = {
     "RS-J04": ("inspection", "acceptance/inspection"),
     "RS-J05": ("facility", "acceptance/facility"),
     "RS-J06": ("business", "acceptance/business"),
+    "RS-J18": ("asset-registration-actions", "fixtures/asset-registration-actions"),
+    "RS-J19": ("household-contact-actions", "fixtures/household-contact-actions"),
 }
 RUST_TEST = re.compile(
     r"#\[(?:tokio::)?test(?:\([^\]]*\))?\]"
@@ -49,11 +51,13 @@ PACKAGE_LAYOUT_ENTRIES = {
     ("inventories/access.json", "access-inventory", True),
     ("inventories/queries.json", "query-inventory", True),
     ("inventories/events.json", "event-inventory", True),
+    ("inventories/actions.json", "action-inventory", False),
     ("metadata/registry.json", "caller-safe-metadata", True),
     ("database/ddl.sql", "generated-ddl", True),
     ("database/migration-plan.json", "migration-plan", True),
     ("openapi/openapi.json", "generated-openapi", True),
     ("schemas", "entity-json-schemas", True),
+    ("action-schemas", "action-json-schema", False),
     ("manifest/registry-manifest.json", "lossy-manifest-projection", False),
     ("manifest/dcat.jsonld", "dcat-catalog-projection", False),
     ("source/modules/<module-id>/<relative-sql-path>", "source-module-asset", False),
@@ -81,6 +85,9 @@ POSTGRES_TEST_COMMANDS = (
     "cargo test --locked -p registry-server --features postgres-test --test postgres_read",
     "cargo test --locked -p registry-server --features postgres-test --test postgres_revision_http",
     "cargo test --locked -p registry-server --features postgres-test --test postgres_mutation",
+    "cargo test --locked -p registry-server --features postgres-test --test postgres_immediate_actions",
+    "cargo test --locked -p registry-server --features postgres-test,tooling --test postgres_immediate_action_examples",
+    "cargo test --locked -p registry-server --features postgres-test,tooling --test postgres_immediate_action_activation",
     "cargo test --locked -p registry-server --features postgres-test --test postgres_webhook_outbox",
     "cargo test --locked -p registry-server --features postgres-test --test postgres_webhook_delivery",
     "cargo test --locked -p registry-server --features postgres-test --test postgres_batch",
@@ -349,7 +356,7 @@ def validate_acceptance(errors: list[str]) -> set[str]:
     identifiers = unique_ids(scenarios, "acceptance matrix.scenarios", errors)
     ordered_identifiers = [item.get("id") for item in scenarios if isinstance(item, dict)]
     if ordered_identifiers != list(ACCEPTANCE_JOURNEY_IDS):
-        errors.append("acceptance matrix: must contain RS-J01 through RS-J17 exactly once in order")
+        errors.append("acceptance matrix: must contain RS-J01 through RS-J19 exactly once in order")
     for index, raw in enumerate(scenarios):
         item = as_mapping(raw, f"acceptance matrix.scenarios[{index}]", errors)
         identifier = item.get("id")

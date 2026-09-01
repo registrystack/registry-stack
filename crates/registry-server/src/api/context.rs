@@ -282,6 +282,84 @@ impl fmt::Debug for AuthorizedRequestContext {
     }
 }
 
+/// Authority for one named immediate action, resolved from verified claims.
+///
+/// This context is independent of an entity's ordinary CRUD profile. Target
+/// boundaries apply only within the selected action's compiled effect ceiling.
+#[derive(Clone, Eq, PartialEq)]
+pub struct AuthorizedActionContext {
+    action_id: String,
+    principal: String,
+    purpose: Option<String>,
+    selected_profile: String,
+    target_authority: BTreeMap<String, Vec<VerifiedRowBoundary>>,
+    result_effects: BTreeSet<String>,
+}
+
+impl AuthorizedActionContext {
+    pub(crate) fn new(
+        action_id: String,
+        principal: String,
+        purpose: Option<String>,
+        selected_profile: String,
+        target_authority: BTreeMap<String, Vec<VerifiedRowBoundary>>,
+        result_effects: BTreeSet<String>,
+    ) -> Self {
+        Self {
+            action_id,
+            principal,
+            purpose,
+            selected_profile,
+            target_authority,
+            result_effects,
+        }
+    }
+
+    #[must_use]
+    pub fn action_id(&self) -> &str {
+        &self.action_id
+    }
+
+    #[must_use]
+    pub fn principal(&self) -> &str {
+        &self.principal
+    }
+
+    #[must_use]
+    pub fn purpose(&self) -> Option<&str> {
+        self.purpose.as_deref()
+    }
+
+    #[must_use]
+    pub fn selected_profile(&self) -> &str {
+        &self.selected_profile
+    }
+
+    #[must_use]
+    pub fn target_authority(&self) -> &BTreeMap<String, Vec<VerifiedRowBoundary>> {
+        &self.target_authority
+    }
+
+    #[must_use]
+    pub fn result_effects(&self) -> &BTreeSet<String> {
+        &self.result_effects
+    }
+}
+
+impl fmt::Debug for AuthorizedActionContext {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AuthorizedActionContext")
+            .field("action_id", &self.action_id)
+            .field("principal", &"<redacted>")
+            .field("purpose", &self.purpose.as_ref().map(|_| "<redacted>"))
+            .field("selected_profile", &self.selected_profile)
+            .field("target_authority", &self.target_authority)
+            .field("result_effects", &self.result_effects)
+            .finish()
+    }
+}
+
 #[derive(Clone, Eq, PartialEq)]
 pub struct VerifiedRequestAction {
     route_id: String,

@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Closed Registry Server package verification boundary.
 
+#[cfg(test)]
+#[path = "package/tests/immediate_actions.rs"]
+mod immediate_action_tests;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
@@ -20,7 +24,10 @@ use crate::contract::{
     RegistryProject,
 };
 use crate::derived_sql::MAX_DERIVED_SQL_BYTES;
-use crate::generated_ddl::{add_column_statement, DdlStatement, DdlStatementKind};
+use crate::generated_ddl::{
+    add_column_statement, generate_ddl_with_actions, DdlPolicy, DdlStatement, DdlStatementKind,
+    DdlTable,
+};
 #[cfg(feature = "tooling")]
 use crate::migration_plan::{
     prepare_reviewed_migration_plan, validate_reviewed_migration_plan,
@@ -31,7 +38,8 @@ use crate::migration_plan::{
     reviewed_artifact_kind, ReviewedArtifactKind, ValidatedReviewedMigrationPlan,
 };
 use crate::model::{
-    CompiledAccessInventory, CompiledEntity, CompiledQueryInventory, CompiledRouteInventory,
+    CompiledAccessInventory, CompiledActionInventory, CompiledEntity, CompiledQueryInventory,
+    CompiledRouteInventory,
 };
 use crate::physical_names::PhysicalNameInventory;
 use crate::CompiledRegistry;
@@ -146,11 +154,13 @@ pub enum PackageFileRole {
     AccessInventory,
     QueryInventory,
     EventInventory,
+    ActionInventory,
     CallerSafeMetadata,
     GeneratedDdl,
     MigrationPlan,
     GeneratedOpenapi,
     EntityJsonSchema,
+    ActionJsonSchema,
     LossyManifestProjection,
     DcatCatalogProjection,
     ReviewedMigrationDescriptor,
@@ -189,6 +199,8 @@ pub struct CompiledRegistryMigrationBaseline {
     pub routes: CompiledRouteInventory,
     pub access: CompiledAccessInventory,
     pub queries: CompiledQueryInventory,
+    #[serde(default, skip_serializing_if = "CompiledActionInventory::is_empty")]
+    pub actions: CompiledActionInventory,
 }
 
 impl CompiledRegistryMigrationBaseline {
@@ -203,6 +215,7 @@ impl CompiledRegistryMigrationBaseline {
             routes: compiled.routes().clone(),
             access: compiled.access().clone(),
             queries: compiled.queries().clone(),
+            actions: compiled.actions().clone(),
         }
     }
 }
@@ -274,6 +287,9 @@ pub enum CompiledRegistryChangeCode {
     EventAdded,
     EventRemoved,
     EventChanged,
+    ActionAdded,
+    ActionRemoved,
+    ActionChanged,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -299,6 +315,7 @@ pub enum CompiledRegistryChangeTargetKind {
     Route,
     QueryInventory,
     Event,
+    Action,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -857,6 +874,7 @@ fn compiled_registry_change_set_from_baseline(
     compare_entities(previous, &candidate_baseline, &mut changes);
     compare_routes(previous, &candidate_baseline, &mut changes);
     compare_query_inventory(previous, &candidate_baseline, &mut changes);
+    compare_actions(previous, &candidate_baseline, &mut changes);
     sort_changes(&mut changes);
     changes.dedup();
 
@@ -1311,6 +1329,48 @@ fn compare_map<T: Eq>(
     }
 }
 
+fn compare_actions(
+    previous: &CompiledRegistryMigrationBaseline,
+    candidate: &CompiledRegistryMigrationBaseline,
+    changes: &mut Vec<CompiledRegistryChange>,
+) {
+    let previous_actions = previous
+        .actions
+        .actions
+        .iter()
+        .map(|action| (action.id.as_str(), action))
+        .collect::<BTreeMap<_, _>>();
+    let candidate_actions = candidate
+        .actions
+        .actions
+        .iter()
+        .map(|action| (action.id.as_str(), action))
+        .collect::<BTreeMap<_, _>>();
+    for (id, before) in &previous_actions {
+        let code = match candidate_actions.get(id) {
+            Some(after) if before.contract_fingerprint == after.contract_fingerprint => continue,
+            Some(_) => CompiledRegistryChangeCode::ActionChanged,
+            None => CompiledRegistryChangeCode::ActionRemoved,
+        };
+        push_change(
+            changes,
+            CompiledRegistryChangeClass::AccessOrDisclosureChange,
+            code,
+            target(CompiledRegistryChangeTargetKind::Action, None, Some(id)),
+        );
+    }
+    for id in candidate_actions.keys() {
+        if !previous_actions.contains_key(id) {
+            push_change(
+                changes,
+                CompiledRegistryChangeClass::AccessOrDisclosureChange,
+                CompiledRegistryChangeCode::ActionAdded,
+                target(CompiledRegistryChangeTargetKind::Action, None, Some(id)),
+            );
+        }
+    }
+}
+
 fn compare_routes(
     previous: &CompiledRegistryMigrationBaseline,
     candidate: &CompiledRegistryMigrationBaseline,
@@ -1631,6 +1691,7 @@ fn reviewed_successor_migration_plan(
                 .cloned(),
         );
     }
+    statements.extend(reviewed_immediate_action_policy_delta(baseline, candidate));
     Ok(MigrationPlan {
         from_revision: Some(change_set.from_revision.clone()),
         prior_baseline: Some(baseline.clone()),
@@ -1639,6 +1700,90 @@ fn reviewed_successor_migration_plan(
         reviewed_descriptors: descriptor_paths,
         prior_schema_fingerprint: Some(prior_schema_fingerprint),
     })
+}
+
+fn reviewed_immediate_action_policy_delta(
+    baseline: &CompiledRegistryMigrationBaseline,
+    candidate: &CompiledRegistry,
+) -> Vec<DdlStatement> {
+    let previous_ddl = generate_ddl_with_actions(
+        &baseline.entities,
+        &baseline.physical_names,
+        &baseline.actions,
+    );
+    let previous_tables = previous_ddl
+        .tables
+        .iter()
+        .map(|table| (table.entity_id.as_str(), table))
+        .collect::<BTreeMap<_, _>>();
+    let candidate_tables = candidate
+        .ddl()
+        .tables
+        .iter()
+        .map(|table| (table.entity_id.as_str(), table))
+        .collect::<BTreeMap<_, _>>();
+    let candidate_policy_statements = candidate
+        .ddl()
+        .statements
+        .iter()
+        .filter(|statement| statement.kind == DdlStatementKind::Policy)
+        .map(|statement| (statement.id.as_str(), statement))
+        .collect::<BTreeMap<_, _>>();
+
+    let mut statements = Vec::new();
+    for (entity_id, previous_table) in previous_tables {
+        let Some(candidate_table) = candidate_tables.get(entity_id) else {
+            continue;
+        };
+        if previous_table.physical_name != candidate_table.physical_name {
+            continue;
+        }
+        let previous_policies = immediate_action_policies(previous_table);
+        let candidate_policies = immediate_action_policies(candidate_table);
+        for (name, previous_policy) in &previous_policies {
+            if candidate_policies.get(name) != Some(previous_policy) {
+                statements.push(drop_policy_statement(entity_id, previous_table, name));
+            }
+        }
+        for (name, candidate_policy) in &candidate_policies {
+            if previous_policies.get(name) == Some(candidate_policy) {
+                continue;
+            }
+            let statement_id = format!("entity.{entity_id}.policy.{name}");
+            if let Some(statement) = candidate_policy_statements.get(statement_id.as_str()) {
+                statements.push((*statement).clone());
+            }
+        }
+    }
+    statements
+}
+
+fn immediate_action_policies(table: &DdlTable) -> BTreeMap<&str, &DdlPolicy> {
+    table
+        .policies
+        .iter()
+        .filter(|policy| {
+            policy.name.starts_with("registry_action_rls_")
+                || policy.name.starts_with("registry_action_link_rls_")
+        })
+        .map(|policy| (policy.name.as_str(), policy))
+        .collect()
+}
+
+fn drop_policy_statement(entity_id: &str, table: &DdlTable, policy_name: &str) -> DdlStatement {
+    DdlStatement {
+        id: format!("entity.{entity_id}.policy.{policy_name}.drop"),
+        kind: DdlStatementKind::Policy,
+        sql: format!(
+            "DROP POLICY {} ON registry_data.{}",
+            quote_sql_identifier(policy_name),
+            quote_sql_identifier(&table.physical_name)
+        ),
+    }
+}
+
+fn quote_sql_identifier(identifier: &str) -> String {
+    format!("\"{}\"", identifier.replace('"', "\"\""))
 }
 
 fn table_statement_entity_id(statement_id: &str) -> Option<&str> {
@@ -1986,6 +2131,9 @@ fn add_compiled_artifacts(
     insert_json_file(files, "inventories/routes.json", compiled.routes())?;
     insert_json_file(files, "inventories/access.json", compiled.access())?;
     insert_json_file(files, "inventories/queries.json", compiled.queries())?;
+    if !compiled.actions().is_empty() {
+        insert_json_file(files, "inventories/actions.json", compiled.actions())?;
+    }
     insert_json_file(
         files,
         "inventories/events.json",
@@ -2034,6 +2182,14 @@ fn add_compiled_artifacts(
         _ => return Err(PackageError::Derivation),
     }
     for (path, artifact) in compiled.artifacts().entries() {
+        if let Some(schema_name) = path.strip_prefix("generated/action-schemas/") {
+            insert_generated(
+                files,
+                &format!("action-schemas/{schema_name}"),
+                artifact.bytes.clone(),
+            )?;
+            continue;
+        }
         let Some(schema_name) = path.strip_prefix("generated/schemas/") else {
             continue;
         };
@@ -2103,12 +2259,16 @@ fn package_role_for_path(path: &str) -> Result<PackageFileRole> {
         "inventories/access.json" => PackageFileRole::AccessInventory,
         "inventories/queries.json" => PackageFileRole::QueryInventory,
         "inventories/events.json" => PackageFileRole::EventInventory,
+        "inventories/actions.json" => PackageFileRole::ActionInventory,
         "metadata/registry.json" => PackageFileRole::CallerSafeMetadata,
         "database/ddl.sql" => PackageFileRole::GeneratedDdl,
         "database/migration-plan.json" => PackageFileRole::MigrationPlan,
         "openapi/openapi.json" => PackageFileRole::GeneratedOpenapi,
         path if path.starts_with("schemas/") && path.ends_with(".schema.json") => {
             PackageFileRole::EntityJsonSchema
+        }
+        path if path.starts_with("action-schemas/") && path.ends_with(".schema.json") => {
+            PackageFileRole::ActionJsonSchema
         }
         "manifest/registry-manifest.json" => PackageFileRole::LossyManifestProjection,
         "manifest/dcat.jsonld" => PackageFileRole::DcatCatalogProjection,

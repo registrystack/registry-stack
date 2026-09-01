@@ -68,6 +68,7 @@ pub(crate) struct PublicProblem {
     status: StatusCode,
     detail: &'static str,
     code: &'static str,
+    field_path: Option<String>,
 }
 
 /// Build one value-free public problem. The boundary replaces this provisional
@@ -86,10 +87,42 @@ pub(crate) fn problem_response(
         status,
         detail,
         code,
+        field_path: None,
     };
     let mut response = Problem::new(&type_uri, title, status)
         .detail(detail)
         .with_extra("code", Value::String(code.to_owned()))
+        .into_response();
+    response.extensions_mut().insert(problem);
+    response
+}
+
+/// Build one public problem with a safe action field path.
+///
+/// The field path is produced only from fixed envelope members or compiled
+/// public names that were already admitted for this action surface.
+pub(crate) fn problem_response_with_field_path(
+    status: StatusCode,
+    type_uri: impl Into<String>,
+    title: &'static str,
+    detail: &'static str,
+    code: &'static str,
+    field_path: impl Into<String>,
+) -> Response {
+    let type_uri = type_uri.into();
+    let field_path = field_path.into();
+    let problem = PublicProblem {
+        type_uri: type_uri.clone(),
+        title,
+        status,
+        detail,
+        code,
+        field_path: Some(field_path.clone()),
+    };
+    let mut response = Problem::new(&type_uri, title, status)
+        .detail(detail)
+        .with_extra("code", Value::String(code.to_owned()))
+        .with_extra("fieldPath", Value::String(field_path))
         .into_response();
     response.extensions_mut().insert(problem);
     response
@@ -140,7 +173,18 @@ pub(crate) fn finish_response(
             code: problem.code,
             trace_id: correlation.trace_id().clone(),
         };
-        let body = serde_json::to_vec(&body).expect("ProblemBody serialization is infallible");
+        let body = match &problem.field_path {
+            Some(field_path) => {
+                let mut value =
+                    serde_json::to_value(&body).expect("ProblemBody serialization is infallible");
+                value
+                    .as_object_mut()
+                    .expect("ProblemBody serializes as an object")
+                    .insert("fieldPath".to_owned(), Value::String(field_path.clone()));
+                serde_json::to_vec(&value).expect("ProblemBody serialization is infallible")
+            }
+            None => serde_json::to_vec(&body).expect("ProblemBody serialization is infallible"),
+        };
         parts.headers.remove(CONTENT_LENGTH);
         parts.headers.insert(
             CONTENT_TYPE,

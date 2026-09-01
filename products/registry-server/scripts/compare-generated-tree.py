@@ -45,12 +45,42 @@ ASSET_SITE_PLACEMENT_CHANGE_REQUEST_PATHS = ASSET_SITE_PLACEMENT_PATHS + (
 PUBLICSCHEMA_HOUSEHOLD_CHANGE_REQUEST_PATHS = PUBLICSCHEMA_HOUSEHOLD_PATHS + (
     "generated/schemas/register-household-contact-request.schema.json",
 )
+ASSET_REGISTRATION_ACTIONS_PATHS = (
+    "compiled/actions.json",
+    "generated/action-schemas/register-asset-with-inspection.invoke.input.schema.json",
+    "generated/action-schemas/register-asset-with-inspection.invoke.response.schema.json",
+    "generated/manifest/dcat.jsonld",
+    "generated/manifest/registry-manifest.json",
+    "generated/metadata/registry.json",
+    "generated/openapi.json",
+    "generated/postgres/schema.sql",
+    "generated/schemas/asset-inspection.schema.json",
+    "generated/schemas/asset.schema.json",
+)
+HOUSEHOLD_CONTACT_ACTIONS_PATHS = (
+    "compiled/actions.json",
+    "generated/action-schemas/register-household-contact.invoke.input.schema.json",
+    "generated/action-schemas/register-household-contact.invoke.response.schema.json",
+    "generated/action-schemas/register-household-contact.target-conditions.input.schema.json",
+    "generated/action-schemas/register-household-contact.target-conditions.response.schema.json",
+    "generated/manifest/dcat.jsonld",
+    "generated/manifest/registry-manifest.json",
+    "generated/metadata/registry.json",
+    "generated/openapi.json",
+    "generated/postgres/schema.sql",
+    "generated/schemas/group-membership.schema.json",
+    "generated/schemas/household.schema.json",
+    "generated/schemas/person.schema.json",
+    "generated/schemas/service-center.schema.json",
+)
 
 EXPECTED_PATHS_BY_BASELINE = {
     "asset-site-placement": ASSET_SITE_PLACEMENT_PATHS,
     "business-establishments": BUSINESS_ESTABLISHMENTS_PATHS,
     "asset-site-placement-change-requests": ASSET_SITE_PLACEMENT_CHANGE_REQUEST_PATHS,
     "publicschema-household-change-requests": PUBLICSCHEMA_HOUSEHOLD_CHANGE_REQUEST_PATHS,
+    "asset-registration-actions": ASSET_REGISTRATION_ACTIONS_PATHS,
+    "household-contact-actions": HOUSEHOLD_CONTACT_ACTIONS_PATHS,
 }
 EXPECTED_PATHS = ASSET_SITE_PLACEMENT_PATHS
 

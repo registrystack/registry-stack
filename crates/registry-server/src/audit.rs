@@ -14,7 +14,8 @@ use uuid::Uuid;
 use crate::correlation::RequestCorrelation;
 use crate::model::HttpMethod;
 use crate::postgres::{
-    begin_record_transaction, ClaimContext, ExpectedRegistryIdentity, RegistryLockKey,
+    begin_action_transaction, begin_record_transaction, ActionClaimContext, ClaimContext,
+    ExpectedRegistryIdentity, RegistryLockKey,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -35,6 +36,7 @@ pub(crate) struct HttpRefusalAudit<'a> {
     pub method: HttpMethod,
     pub operation_id: &'a str,
     pub target_record: Option<&'a str>,
+    pub action_id: Option<&'a str>,
     pub principal: Option<&'a str>,
     pub selected_access_profile: Option<&'a str>,
     pub purpose_present: bool,
@@ -53,7 +55,8 @@ pub(crate) struct TerminalAudit {
     pub outcome: TerminalAuditOutcome,
     pub method: HttpMethod,
     pub operation_id: String,
-    pub entity_id: String,
+    pub entity_id: Option<String>,
+    pub action_id: Option<String>,
     pub package_revision: String,
     pub selected_access_profile: String,
     pub purpose_present: bool,
@@ -185,6 +188,56 @@ pub async fn record_pre_io_audit(
         .map_err(|_| RegistryAuditError::Unavailable)
 }
 
+pub(crate) async fn record_action_pre_io_audit(
+    client: &mut Client,
+    lock_key: RegistryLockKey,
+    lock_timeout: Duration,
+    expected: &ExpectedRegistryIdentity,
+    claims: &ActionClaimContext,
+    profile: &AuditProfile,
+    event: PreIoAudit<'_>,
+) -> Result<(), RegistryAuditError> {
+    if event.operation_id.is_empty()
+        || event.target_record.is_some()
+        || event.method != HttpMethod::Post
+        || !profile_is_keyed(profile)
+    {
+        return Err(RegistryAuditError::InvalidContext);
+    }
+    let key_hasher = profile.key_hasher();
+    let principal_reference = key_hasher
+        .audit_reference_hash(
+            "registry-server-principal-v1",
+            &expected.package_revision,
+            claims.principal(),
+        )
+        .map_err(|_| RegistryAuditError::InvalidContext)?;
+    let transaction = begin_action_transaction(client, lock_key, lock_timeout, expected, claims)
+        .await
+        .map_err(|_| RegistryAuditError::Unavailable)?;
+    let record = json!({
+        "schema": "registry-server-audit/v1",
+        "phase": match event.kind {
+            PreIoAuditKind::Attempt => "attempt",
+            PreIoAuditKind::Refusal => "refusal",
+        },
+        "method": method_name(event.method),
+        "operationId": event.operation_id,
+        "requestId": event.correlation.request_id().to_string(),
+        "traceId": event.correlation.trace_id().as_str(),
+        "packageRevision": expected.package_revision,
+        "selectedAccessProfile": claims.access_profile(),
+        "purposePresent": claims.purpose().is_some(),
+        "principalReference": principal_reference,
+        "actionId": claims.action_id(),
+    });
+    append_envelope(transaction.transaction(), profile, record).await?;
+    transaction
+        .commit()
+        .await
+        .map_err(|_| RegistryAuditError::Unavailable)
+}
+
 /// Persist a minimized HTTP-layer mutation refusal when authorization failed
 /// before a forged `ClaimContext` would be safe to construct.
 pub(crate) async fn record_http_refusal_audit(
@@ -196,6 +249,7 @@ pub(crate) async fn record_http_refusal_audit(
     event: HttpRefusalAudit<'_>,
 ) -> Result<(), RegistryAuditError> {
     if event.operation_id.is_empty()
+        || event.action_id.is_some_and(str::is_empty)
         || !profile_is_keyed(profile)
         || lock_timeout.is_zero()
         || lock_timeout > Duration::from_secs(30)
@@ -320,6 +374,9 @@ pub(crate) async fn record_http_refusal_audit(
             Value::String(record_reference),
         );
     }
+    if let Some(action_id) = event.action_id {
+        record.insert("actionId".to_owned(), Value::String(action_id.to_owned()));
+    }
     append_envelope(&transaction, profile, Value::Object(record)).await?;
     transaction
         .commit()
@@ -337,12 +394,58 @@ pub(crate) async fn append_terminal_audit(
     profile: &AuditProfile,
     terminal: TerminalAudit,
 ) -> Result<(), RegistryAuditError> {
+    if !matches!(
+        (&terminal.entity_id, &terminal.action_id),
+        (Some(_), None) | (None, Some(_))
+    ) || terminal.entity_id.as_deref().is_some_and(str::is_empty)
+        || terminal.action_id.as_deref().is_some_and(str::is_empty)
+    {
+        return Err(RegistryAuditError::InvalidContext);
+    }
     append_envelope(
         transaction,
         profile,
         Value::Object(terminal_record(terminal)),
     )
     .await
+}
+
+/// Link an action commit or replay to its retained application provenance.
+/// The reference is derived by the server, never copied from an HTTP input.
+pub(crate) async fn append_action_terminal_audit(
+    transaction: &Transaction<'_>,
+    profile: &AuditProfile,
+    terminal: TerminalAudit,
+    application_reference: &str,
+) -> Result<(), RegistryAuditError> {
+    let record = action_terminal_record(terminal, application_reference)?;
+    append_envelope(transaction, profile, Value::Object(record)).await
+}
+
+fn action_terminal_record(
+    terminal: TerminalAudit,
+    application_reference: &str,
+) -> Result<serde_json::Map<String, Value>, RegistryAuditError> {
+    if terminal.entity_id.is_some()
+        || !terminal
+            .action_id
+            .as_deref()
+            .is_some_and(|id| !id.is_empty())
+        || !matches!(
+            terminal.outcome,
+            TerminalAuditOutcome::Committed | TerminalAuditOutcome::Replayed
+        )
+        || application_reference.is_empty()
+        || application_reference.len() > 512
+    {
+        return Err(RegistryAuditError::InvalidContext);
+    }
+    let mut record = terminal_record(terminal);
+    record.insert(
+        "applicationReference".to_owned(),
+        Value::String(application_reference.to_owned()),
+    );
+    Ok(record)
 }
 
 pub(crate) async fn append_webhook_audit(
@@ -500,7 +603,6 @@ fn terminal_record(terminal: TerminalAudit) -> serde_json::Map<String, Value> {
             "traceId".to_owned(),
             Value::String(terminal.correlation.trace_id().as_str().to_owned()),
         ),
-        ("entityId".to_owned(), Value::String(terminal.entity_id)),
         (
             "packageRevision".to_owned(),
             Value::String(terminal.package_revision),
@@ -514,6 +616,12 @@ fn terminal_record(terminal: TerminalAudit) -> serde_json::Map<String, Value> {
             Value::Bool(terminal.purpose_present),
         ),
     ]);
+    if let Some(entity_id) = terminal.entity_id {
+        record.insert("entityId".to_owned(), Value::String(entity_id));
+    }
+    if let Some(action_id) = terminal.action_id {
+        record.insert("actionId".to_owned(), Value::String(action_id));
+    }
     if let Some(principal_reference) = terminal.principal_reference {
         record.insert(
             "principalReference".to_owned(),
@@ -636,5 +744,67 @@ fn method_name(method: HttpMethod) -> &'static str {
         HttpMethod::Get => "GET",
         HttpMethod::Patch => "PATCH",
         HttpMethod::Post => "POST",
+    }
+}
+
+#[cfg(test)]
+mod action_terminal_tests {
+    use super::*;
+
+    fn terminal(outcome: TerminalAuditOutcome) -> TerminalAudit {
+        TerminalAudit {
+            outcome,
+            method: HttpMethod::Post,
+            operation_id: "actions.register.invoke".to_owned(),
+            entity_id: None,
+            action_id: Some("register".to_owned()),
+            package_revision: "package-revision".to_owned(),
+            selected_access_profile: "registrar".to_owned(),
+            purpose_present: true,
+            principal_reference: Some("protected-principal".to_owned()),
+            record_reference: None,
+            record_revision: None,
+            result_count: Some(0),
+            field_set_reference: None,
+            correlation: RequestCorrelation::server_created(),
+        }
+    }
+
+    #[test]
+    fn action_commit_and_replay_audits_retain_application_without_response_or_record_data() {
+        for outcome in [
+            TerminalAuditOutcome::Committed,
+            TerminalAuditOutcome::Replayed,
+        ] {
+            let record = action_terminal_record(terminal(outcome), "protected-application")
+                .expect("action terminal has protected application provenance");
+            assert_eq!(record["applicationReference"], "protected-application");
+            assert_eq!(record["actionId"], "register");
+            assert_eq!(record["resultCount"], 0);
+            for excluded in ["response", "input", "recordId", "entityId", "applicationId"] {
+                assert!(!record.contains_key(excluded));
+            }
+        }
+    }
+
+    #[test]
+    fn action_application_audit_rejects_entity_or_uncommitted_context() {
+        let mut entity = terminal(TerminalAuditOutcome::Committed);
+        entity.entity_id = Some("item".to_owned());
+        assert_eq!(
+            action_terminal_record(entity, "protected-application"),
+            Err(RegistryAuditError::InvalidContext)
+        );
+        assert_eq!(
+            action_terminal_record(
+                terminal(TerminalAuditOutcome::Returned),
+                "protected-application"
+            ),
+            Err(RegistryAuditError::InvalidContext)
+        );
+        assert_eq!(
+            action_terminal_record(terminal(TerminalAuditOutcome::Committed), ""),
+            Err(RegistryAuditError::InvalidContext)
+        );
     }
 }

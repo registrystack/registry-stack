@@ -2330,6 +2330,76 @@ fn project_access_grants_reject_the_legacy_action_vocabulary() {
 }
 
 #[test]
+fn entity_access_grants_reject_action_target_and_result_fields() {
+    for extra in [
+        r#","targets":[{"entity":"case-file","rowBoundaries":[]}]"#,
+        r#","results":["created"]"#,
+    ] {
+        let source = format!(
+            r#"{{
+              "apiVersion":"registry.registrystack.org/v1alpha1",
+              "kind":"RegistryProject",
+              "registry":{{"id":"profile-vocabulary","version":"1","defaultLanguage":"en"}},
+              "entities":[{{
+                "id":"case-file","route":"case-files","mutationMode":"mutable",
+                "fields":[{{"id":"case-code","type":"string","maxLength":32,"classification":"internal"}}]
+              }}],
+              "accessProfiles":[{{
+                "id":"operator",
+                "principalClaim":"sub",
+                "grants":[{{
+                  "entity":"case-file",
+                  "operations":["get"],
+                  "readableFields":["case-code"]{extra}
+                }}]
+              }}]
+            }}"#
+        );
+        let failure = compile_json(source.as_bytes())
+            .expect_err("entity grants cannot carry action-only fields");
+        assert!(failure.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code == "access_profile.grant.action_fields_forbidden"
+                && diagnostic.path == "project.accessProfiles[].grants[]"
+        }));
+    }
+}
+
+#[test]
+fn project_access_grants_reject_mixed_entity_and_action_targets() {
+    let failure = compile_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"profile-vocabulary","version":"1","defaultLanguage":"en"},
+          "entities":[{
+            "id":"case-file","route":"case-files","mutationMode":"mutable",
+            "fields":[{"id":"case-code","type":"string","maxLength":32,"classification":"internal"}]
+          }],
+          "actions":[{
+            "id":"create-case-file",
+            "inputs":[{"id":"case-code","type":"string","maxLength":32,"classification":"internal"}],
+            "effects":[{"id":"case","target":{"entity":"case-file"},"operation":"create","set":{"case-code":{"fromField":"case-code"}}}]
+          }],
+          "accessProfiles":[{
+            "id":"operator",
+            "principalClaim":"sub",
+            "grants":[{
+              "entity":"case-file",
+              "action":"create-case-file",
+              "operations":["invoke"],
+              "targets":[{"entity":"case-file","rowBoundaries":[]}]
+            }]
+          }]
+        }"#,
+    )
+    .expect_err("grants cannot name both an entity and an action");
+    assert!(failure.diagnostics().iter().any(|diagnostic| {
+        diagnostic.code == "access_profile.grant.target_exclusive"
+            && diagnostic.path == "project.accessProfiles[].grants[]"
+    }));
+}
+
+#[test]
 fn manifest_projection_unknown_nested_keys_are_rejected_without_values() {
     let failure = parse_project_json(
         br#"{
@@ -2456,6 +2526,7 @@ fn all_acceptance_fixtures_compile_manifest_projection_under_production() {
                     dependencies: Vec::new(),
                     entities: Vec::new(),
                     extend_entities: Vec::new(),
+                    actions: Vec::new(),
                 };
                 lock.digest = Some(module_digest(&module));
                 module
@@ -4421,6 +4492,7 @@ fn public_profile_cannot_process_an_internal_field() {
         required_purposes: Default::default(),
         grants: vec![AccessGrantSource {
             entity: "asset-item".to_owned(),
+            action: None,
             operations: [Operation::Get].into_iter().collect(),
             readable_fields: ["asset-code".to_owned()].into_iter().collect(),
             writable_fields: Default::default(),
@@ -4436,6 +4508,8 @@ fn public_profile_cannot_process_an_internal_field() {
             review_stages: Vec::new(),
             apply_targets: Vec::new(),
             request_presence: Vec::new(),
+            targets: Vec::new(),
+            results: Default::default(),
             allow_count: false,
             allow_data_export: false,
             revision_access: false,

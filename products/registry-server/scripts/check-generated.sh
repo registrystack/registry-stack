@@ -3,7 +3,14 @@ set -euo pipefail
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repository_root=$(cd -- "$script_dir/../../.." && pwd)
-fixtures=(asset-site-placement business-establishments asset-site-placement-change-requests publicschema-household-change-requests)
+fixtures=(
+  acceptance/asset-site-placement
+  acceptance/business-establishments
+  acceptance/asset-site-placement-change-requests
+  acceptance/publicschema-household-change-requests
+  fixtures/asset-registration-actions
+  fixtures/household-contact-actions
+)
 authoring_baseline="$repository_root/products/registry-server/generated/authoring"
 runtime_baseline="$repository_root/products/registry-server/generated/runtime"
 temporary_root=""
@@ -42,11 +49,16 @@ mkdir "$runtime_candidate"
   cargo run --manifest-path "$repository_root/Cargo.toml" --locked --quiet \
     -p registry-server --features runtime,schema --example runtime-schema -- \
     --output "$runtime_candidate"
-  for fixture_name in "${fixtures[@]}"; do
+  for fixture_path in "${fixtures[@]}"; do
+    fixture_name=${fixture_path##*/}
     candidate="$temporary_root/$fixture_name"
     mkdir "$candidate"
-    fixture="$repository_root/products/registry-server/acceptance/$fixture_name"
-    for selector in openapi schemas manifest metadata sql; do
+    fixture="$repository_root/products/registry-server/$fixture_path"
+    selectors=(openapi schemas manifest metadata sql)
+    if [[ "$fixture_path" == fixtures/* ]]; then
+      selectors+=(actions)
+    fi
+    for selector in "${selectors[@]}"; do
       selector_candidate="$temporary_root/selector-$fixture_name-$selector"
       selector_output="./selector-$fixture_name-$selector"
       cargo run --manifest-path "$repository_root/Cargo.toml" --locked -p registry-serverctl -- \
@@ -70,7 +82,8 @@ if ! diff -ru "$runtime_baseline" "$runtime_candidate"; then
   exit 1
 fi
 
-for fixture_name in "${fixtures[@]}"; do
+for fixture_path in "${fixtures[@]}"; do
+  fixture_name=${fixture_path##*/}
   python3 "$script_dir/compare-generated-tree.py" \
     "$repository_root/products/registry-server/generated/$fixture_name" \
     "$temporary_root/$fixture_name"

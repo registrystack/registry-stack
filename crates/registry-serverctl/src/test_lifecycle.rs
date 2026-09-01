@@ -56,6 +56,7 @@ pub(crate) enum TestLifecycleError {
     RuntimeConfigPath,
     RuntimeConfig(RuntimeConfigError),
     Candidate,
+    CandidateBinding { path: &'static str },
     ReviewFingerprint,
     Journeys,
     JourneySyntax { path: String, message: &'static str },

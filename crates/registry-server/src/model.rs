@@ -242,6 +242,167 @@ pub struct CompiledChangeRequestPresenceGrant {
     pub request_row_boundaries: Vec<RowBoundarySource>,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledActionInventory {
+    pub actions: Vec<CompiledAction>,
+    pub routes: Vec<CompiledActionRoute>,
+    pub access: Vec<CompiledActionAccessEntry>,
+}
+
+impl CompiledActionInventory {
+    pub fn is_empty(&self) -> bool {
+        self.actions.is_empty() && self.routes.is_empty() && self.access.is_empty()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledAction {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_module: Option<String>,
+    pub route: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub condition_route: Option<String>,
+    pub contract_fingerprint: String,
+    pub inputs: Vec<CompiledActionInput>,
+    pub effects: Vec<CompiledActionEffect>,
+    pub target_uses: Vec<CompiledActionTargetUse>,
+    pub grants: Vec<CompiledActionGrant>,
+    pub result_effects: BTreeSet<String>,
+    pub maximum_targets: u16,
+    pub maximum_field_mutations: u16,
+    pub maximum_snapshot_bytes: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledActionInput {
+    pub id: String,
+    pub api_name: String,
+    pub field_type: FieldTypeSource,
+    pub required: bool,
+    pub classification: Classification,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledActionEffect {
+    pub id: String,
+    pub target: CompiledActionTarget,
+    pub operation: Operation,
+    pub mutations: Vec<CompiledActionMutation>,
+    pub depends_on: BTreeSet<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledActionTarget {
+    pub entity_id: String,
+    pub binding: CompiledActionTargetBinding,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase", tag = "kind")]
+pub enum CompiledActionTargetBinding {
+    Create,
+    Existing { input: String },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase", tag = "kind")]
+pub enum CompiledActionMutation {
+    Set {
+        field: String,
+        value: CompiledActionValue,
+    },
+    Clear {
+        field: String,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase", tag = "kind")]
+pub enum CompiledActionValue {
+    FromInput {
+        input: String,
+    },
+    FromEffect {
+        effect: String,
+        target_entity_id: String,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionRouteKind {
+    Invoke,
+    TargetConditions,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledActionRoute {
+    pub id: String,
+    pub action_id: String,
+    pub kind: ActionRouteKind,
+    pub method: HttpMethod,
+    pub path: String,
+    pub operation: Operation,
+    pub access_profiles: Vec<String>,
+    pub default_access_profile: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledActionAccessEntry {
+    pub route_id: String,
+    pub action_id: String,
+    pub operation: Operation,
+    pub profile_ids: BTreeSet<String>,
+    pub default_profile_id: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledActionGrant {
+    pub profile_id: String,
+    pub default: bool,
+    pub anonymous: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub principal_claim: Option<String>,
+    pub required_scopes: BTreeSet<String>,
+    pub required_purposes: BTreeSet<String>,
+    pub operations: BTreeSet<Operation>,
+    pub targets: Vec<CompiledActionTargetGrant>,
+    pub results: BTreeSet<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledActionTargetGrant {
+    pub entity_id: String,
+    pub row_boundaries: Vec<RowBoundarySource>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledActionTargetUse {
+    pub entity_id: String,
+    pub operation: Operation,
+    pub fields: BTreeSet<String>,
+    pub source: CompiledActionTargetUseSource,
+    pub condition_required: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase", tag = "kind")]
+pub enum CompiledActionTargetUseSource {
+    Effect { effect: String },
+    Input { input: String },
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledEntity {
@@ -623,6 +784,7 @@ pub struct CompiledRegistry {
     module_closure: Vec<CompiledModuleIdentity>,
     entities: BTreeMap<String, CompiledEntity>,
     physical_names: PhysicalNameInventory,
+    action_inventory: CompiledActionInventory,
     route_inventory: CompiledRouteInventory,
     access_inventory: CompiledAccessInventory,
     metadata_inventory: CompiledMetadataInventory,
@@ -646,6 +808,7 @@ impl CompiledRegistry {
         module_closure: Vec<CompiledModuleIdentity>,
         entities: BTreeMap<String, CompiledEntity>,
         physical_names: PhysicalNameInventory,
+        action_inventory: CompiledActionInventory,
         route_inventory: CompiledRouteInventory,
         access_inventory: CompiledAccessInventory,
         metadata_inventory: CompiledMetadataInventory,
@@ -666,6 +829,7 @@ impl CompiledRegistry {
             module_closure,
             entities,
             physical_names,
+            action_inventory,
             route_inventory,
             access_inventory,
             metadata_inventory,
@@ -708,6 +872,10 @@ impl CompiledRegistry {
 
     pub fn physical_names(&self) -> &PhysicalNameInventory {
         &self.physical_names
+    }
+
+    pub fn actions(&self) -> &CompiledActionInventory {
+        &self.action_inventory
     }
 
     pub fn routes(&self) -> &CompiledRouteInventory {

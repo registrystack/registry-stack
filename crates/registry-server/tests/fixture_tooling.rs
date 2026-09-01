@@ -27,9 +27,10 @@ fn fixture_tooling_strict_parser_refuses_unclosed_authority_and_source_shapes() 
     let duplicate = String::from_utf8(JOURNEY_SOURCE.to_vec())
         .expect("fixture is UTF-8")
         .replacen("id: get-widget", "id: create-widget", 1);
+    let error = validate_fixture_journeys(duplicate.as_bytes(), &registry).unwrap_err();
     assert_eq!(
-        validate_fixture_journeys(duplicate.as_bytes(), &registry).unwrap_err(),
-        FixtureError::DuplicateIdentifier
+        underlying_fixture_error(&error),
+        &FixtureError::DuplicateIdentifier
     );
 
     let source = String::from_utf8(JOURNEY_SOURCE.to_vec()).expect("fixture is UTF-8");
@@ -57,7 +58,7 @@ fn fixture_tooling_strict_parser_refuses_unclosed_authority_and_source_shapes() 
         let error = validate_fixture_journeys(changed.as_bytes(), &registry)
             .expect_err("undeclared logical or physical reference is refused");
         assert!(matches!(
-            error,
+            underlying_fixture_error(&error),
             FixtureError::JourneyShapeRefused | FixtureError::LogicalReferenceRefused
         ));
         assert!(!format!("{error:?}").contains(to));
@@ -68,6 +69,97 @@ fn fixture_tooling_strict_parser_refuses_unclosed_authority_and_source_shapes() 
         validate_fixture_journeys(&oversized, &registry).unwrap_err(),
         FixtureError::JourneyTooLarge
     );
+}
+
+#[test]
+fn fixture_tooling_crud_fields_accept_public_names_without_alias_overwrite() {
+    let registry = compiled_crud_alias_fixture();
+    let valid = br#"apiVersion: registry.registrystack.org/server-journeys/v1
+journeys:
+  - id: public-field-crud-flow
+    steps:
+      - id: create-person
+        entity: person
+        accessProfile: registrar
+        claims: &claims
+          principal: fixture-registrar
+          purpose: case-management
+          directClaims: {jurisdiction: zone-a}
+        request:
+          operation: create
+          data: {jurisdiction: zone-a, personCode: P-001, legalName: Alex Example}
+        expect:
+          outcome: success
+          status: 201
+          fields: {jurisdiction: zone-a, personCode: P-001, legalName: Alex Example}
+        capture: person
+      - id: query-person
+        entity: person
+        accessProfile: registrar
+        claims: *claims
+        request: {operation: query, select: [personCode, legalName], count: true}
+        expect: {outcome: success, status: 200, count: 1}
+      - id: patch-person
+        entity: person
+        accessProfile: registrar
+        claims: *claims
+        request:
+          operation: patch
+          recordRef: person
+          etagRef: person
+          changes:
+            - {field: legalName, value: Alicia Example}
+        expect:
+          outcome: success
+          status: 200
+          fields: {jurisdiction: zone-a, personCode: P-001, legalName: Alicia Example}
+"#;
+    validate_fixture_journeys(valid, &registry)
+        .expect("CRUD fixture accepts public API field names");
+
+    for (label, from, to) in [
+        (
+            "create data duplicate alias",
+            "personCode: P-001, legalName",
+            "person-code: P-001, personCode: P-001, legalName",
+        ),
+        (
+            "expectation duplicate alias",
+            "fields: {jurisdiction: zone-a, personCode: P-001, legalName: Alex Example}",
+            "fields: {jurisdiction: zone-a, person-code: P-001, personCode: P-001, legalName: Alex Example}",
+        ),
+        (
+            "query duplicate alias",
+            "select: [personCode, legalName]",
+            "select: [person-code, personCode]",
+        ),
+        (
+            "patch duplicate alias",
+            "- {field: legalName, value: Alicia Example}",
+            "- {field: legal-name, value: Alicia Example}\n            - {field: legalName, value: Alicia Example}",
+        ),
+        (
+            "unknown public field",
+            "legalName: Alex Example",
+            "displayName: Alex Example",
+        ),
+    ] {
+        let changed = String::from_utf8(valid.to_vec())
+            .expect("fixture is UTF-8")
+            .replacen(from, to, 1);
+        let error = match validate_fixture_journeys(changed.as_bytes(), &registry) {
+            Ok(_) => panic!("{label} fixture unexpectedly validated"),
+            Err(error) => error,
+        };
+        assert!(
+            matches!(
+                underlying_fixture_error(&error),
+                FixtureError::LogicalReferenceRefused
+            ),
+            "{label} returned {error:?}"
+        );
+        assert!(!format!("{error:?}").contains(to));
+    }
 }
 
 #[test]
@@ -172,8 +264,143 @@ journeys:
         };
         assert!(
             matches!(
-                error,
+                underlying_fixture_error(&error),
                 FixtureError::JourneyShapeRefused | FixtureError::LogicalReferenceRefused
+            ),
+            "{label} returned {error:?}"
+        );
+        assert!(!format!("{error:?}").contains(to));
+    }
+}
+
+#[test]
+fn fixture_tooling_immediate_actions_use_action_routes_and_public_input_names() {
+    let registry = compiled_action_fixture();
+    let valid = br#"apiVersion: registry.registrystack.org/server-journeys/v1
+journeys:
+  - id: immediate-action-flow
+    steps:
+      - id: create-household
+        entity: household
+        accessProfile: household-seed
+        claims: &seed_claims
+          principal: fixture-seed
+          purpose: case-management
+          directClaims: {jurisdiction: zone-a}
+        request:
+          operation: create
+          data: {jurisdiction: zone-a, household-code: HH-001}
+        expect:
+          outcome: success
+          status: 201
+          fields: {jurisdiction: zone-a, household-code: HH-001}
+        capture: household-before-action
+      - id: read-action-condition
+        action: register-household-contact
+        accessProfile: contact-registrar
+        claims: &registrar_claims
+          principal: fixture-registrar
+          scopes: [registry:contact:register]
+          purpose: contact-registration
+          directClaims: {jurisdiction: zone-a}
+        request:
+          operation: target_conditions
+          input:
+            householdId: {recordRef: household-before-action}
+        expect: {outcome: success, status: 200}
+        capture: household-action-condition
+      - id: invoke-contact-action
+        action: register-household-contact
+        accessProfile: contact-registrar
+        claims: *registrar_claims
+        request:
+          operation: invoke
+          idempotencyKey: register-contact
+          input:
+            householdId: {recordRef: household-before-action}
+            jurisdiction: zone-a
+            personCode: P-001
+            legalName: Alex Example
+          preconditions:
+            householdId: {conditionRef: household-action-condition}
+        expect: {outcome: success, status: 200}
+        capture: contact-application
+        captureResults:
+          person: contact-person
+          household: contact-household
+      - id: replay-contact-action
+        action: register-household-contact
+        accessProfile: contact-registrar
+        claims: *registrar_claims
+        request:
+          operation: invoke
+          idempotencyKey: register-contact
+          input:
+            householdId: {recordRef: household-before-action}
+            jurisdiction: zone-a
+            personCode: P-001
+            legalName: Alex Example
+          preconditions:
+            householdId: {conditionRef: household-action-condition}
+        expect: {outcome: success, status: 200}
+      - id: get-created-person
+        entity: person
+        accessProfile: person-reader
+        claims:
+          principal: fixture-reader
+          purpose: case-management
+          directClaims: {jurisdiction: zone-a}
+        request: {operation: get, recordRef: contact-person}
+        expect: {outcome: success, status: 200}
+"#;
+    validate_fixture_journeys(valid, &registry)
+        .expect("immediate action fixture validates through compiled action routes");
+
+    for (label, from, to) in [
+        (
+            "fake entity selector",
+            "action: register-household-contact",
+            "entity: register-household-contact",
+        ),
+        (
+            "unknown action selector",
+            "action: register-household-contact",
+            "action: missing-action",
+        ),
+        (
+            "logical input in condition read",
+            "householdId: {recordRef: household-before-action}",
+            "household: {recordRef: household-before-action}",
+        ),
+        (
+            "logical precondition role",
+            "householdId: {conditionRef: household-action-condition}",
+            "household: {conditionRef: household-action-condition}",
+        ),
+        (
+            "missing boundary claim",
+            "directClaims: {jurisdiction: zone-a}",
+            "directClaims: {}",
+        ),
+        (
+            "ungranted result capture",
+            "person: contact-person",
+            "membership: contact-person",
+        ),
+    ] {
+        let changed = String::from_utf8(valid.to_vec())
+            .expect("fixture is UTF-8")
+            .replacen(from, to, 1);
+        let error = match validate_fixture_journeys(changed.as_bytes(), &registry) {
+            Ok(_) => panic!("{label} fixture unexpectedly validated"),
+            Err(error) => error,
+        };
+        assert!(
+            matches!(
+                underlying_fixture_error(&error),
+                FixtureError::JourneyShapeRefused
+                    | FixtureError::LogicalReferenceRefused
+                    | FixtureError::AuthorityWideningRefused
             ),
             "{label} returned {error:?}"
         );
@@ -323,4 +550,121 @@ fn compiled_request_fixture() -> registry_server::CompiledRegistry {
     )
     .expect("request fixture source parses");
     compile_project(&project, &[], CompileProfile::Authoring).expect("request fixture compiles")
+}
+
+fn compiled_crud_alias_fixture() -> registry_server::CompiledRegistry {
+    let project = parse_project_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"fixture-crud-aliases","version":"1","defaultLanguage":"en"},
+          "entities":[{
+            "id":"person","route":"people","mutationMode":"mutable","classification":"restricted",
+            "fields":[
+              {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"restricted"},
+              {"id":"person-code","apiName":"personCode","type":"string","maxLength":64,"required":true,"classification":"restricted"},
+              {"id":"legal-name","apiName":"legalName","type":"string","maxLength":160,"required":true,"classification":"restricted"}
+            ],
+            "constraints":[{"kind":"unique","fields":["person-code"]}]
+          }],
+          "accessProfiles":[{
+            "id":"registrar","default":true,"principalClaim":"registry_principal","requiredPurposes":["case-management"],
+            "grants":[{
+              "entity":"person","operations":["create","get","list","patch"],
+              "readableFields":["jurisdiction","person-code","legal-name"],
+              "writableFields":["jurisdiction","person-code","legal-name"],
+              "filterableFields":["jurisdiction","person-code"],
+              "sortableFields":["person-code"],
+              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}],
+              "allowCount":true
+            }]
+          }]
+        }"#,
+    )
+    .expect("CRUD alias fixture source parses");
+    compile_project(&project, &[], CompileProfile::Authoring).expect("CRUD alias fixture compiles")
+}
+
+fn compiled_action_fixture() -> registry_server::CompiledRegistry {
+    let project = parse_project_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"fixture-immediate-actions","version":"1","defaultLanguage":"en"},
+          "entities":[{
+            "id":"person","route":"people","mutationMode":"mutable","classification":"restricted",
+            "fields":[
+              {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"restricted"},
+              {"id":"person-code","apiName":"personCode","type":"string","maxLength":64,"required":true,"classification":"restricted"},
+              {"id":"legal-name","apiName":"legalName","type":"string","maxLength":160,"required":true,"classification":"restricted"}
+            ],
+            "constraints":[{"kind":"unique","fields":["person-code"]}]
+          },{
+            "id":"household","route":"households","mutationMode":"mutable","classification":"restricted",
+            "fields":[
+              {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"restricted"},
+              {"id":"household-code","type":"string","maxLength":64,"required":true,"classification":"restricted"},
+              {"id":"contact-person","apiName":"contactPerson","type":"reference","target":"person","classification":"restricted"}
+            ]
+          },{
+            "id":"group-membership","route":"group-memberships","mutationMode":"mutable","classification":"restricted",
+            "fields":[
+              {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"restricted"},
+              {"id":"person","type":"reference","target":"person","required":true,"classification":"restricted"},
+              {"id":"household","type":"reference","target":"household","required":true,"classification":"restricted"}
+            ]
+          }],
+          "actions":[{
+            "id":"register-household-contact",
+            "inputs":[
+              {"id":"household","apiName":"householdId","type":"reference","target":"household","required":true,"classification":"restricted"},
+              {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"restricted"},
+              {"id":"person-code","apiName":"personCode","type":"string","maxLength":64,"required":true,"classification":"restricted"},
+              {"id":"legal-name","apiName":"legalName","type":"string","maxLength":160,"required":true,"classification":"restricted"}
+            ],
+            "effects":[
+              {"id":"person","target":{"entity":"person"},"operation":"create",
+                "set":{"jurisdiction":{"fromField":"jurisdiction"},"person-code":{"fromField":"person-code"},"legal-name":{"fromField":"legal-name"}}},
+              {"id":"membership","target":{"entity":"group-membership"},"operation":"create",
+                "set":{"jurisdiction":{"fromField":"jurisdiction"},"person":{"fromEffect":"person"},"household":{"fromField":"household"}}},
+              {"id":"household","target":{"fromField":"household"},"operation":"patch",
+                "set":{"contact-person":{"fromEffect":"person"}}}
+            ]
+          }],
+          "accessProfiles":[{
+            "id":"household-seed","default":true,"principalClaim":"registry_principal","requiredPurposes":["case-management"],
+            "grants":[{
+              "entity":"household","operations":["create","get"],"readableFields":["jurisdiction","household-code","contact-person"],
+              "writableFields":["jurisdiction","household-code"],"rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
+            }]
+          },{
+            "id":"contact-registrar","default":true,"principalClaim":"registry_principal",
+            "requiredScopes":["registry:contact:register"],"requiredPurposes":["contact-registration"],
+            "grants":[{
+              "action":"register-household-contact","operations":["invoke"],
+              "targets":[
+                {"entity":"household","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]},
+                {"entity":"person","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]},
+                {"entity":"group-membership","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}
+              ],
+              "results":["person","household"]
+            }]
+          },{
+            "id":"person-reader","default":true,"principalClaim":"registry_principal","requiredPurposes":["case-management"],
+            "grants":[{
+              "entity":"person","operations":["get"],"readableFields":["jurisdiction","person-code","legal-name"],
+              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
+            }]
+          }]
+        }"#,
+    )
+    .expect("action fixture source parses");
+    compile_project(&project, &[], CompileProfile::Authoring).expect("action fixture compiles")
+}
+
+fn underlying_fixture_error(error: &FixtureError) -> &FixtureError {
+    match error {
+        FixtureError::StepFailed { error, .. } => error,
+        other => other,
+    }
 }

@@ -135,6 +135,14 @@ impl ExpectedManagedCatalog {
                 "registry_internal.registry_idempotency",
                 &["INSERT", "SELECT"][..],
             ),
+            (
+                "registry_internal.registry_immediate_action_applications",
+                &["INSERT", "SELECT"][..],
+            ),
+            (
+                "registry_internal.registry_immediate_action_results",
+                &["INSERT", "SELECT"][..],
+            ),
         ] {
             catalog.table(name, privileges.iter().copied(), Some((false, false)));
         }

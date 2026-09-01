@@ -28,6 +28,7 @@ pub enum OutboxError {
 
 pub(crate) struct OutboxMutation<'a> {
     pub trigger: EventTrigger,
+    pub application_reference: Option<&'a str>,
     pub entity_id: &'a str,
     pub record_id: &'a str,
     pub record_reference: &'a str,
@@ -122,10 +123,10 @@ pub(crate) async fn insert_configured_events(
             .execute(
                 "INSERT INTO registry_internal.registry_outbox
                      (event_id, event_type, trigger, entity_id, record_reference,
-                      record_revision, package_revision, schema_fingerprint, payload,
-                      payload_expires_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
-                         transaction_timestamp() + $10::bigint * interval '1 millisecond')",
+                      record_revision, application_reference, package_revision, schema_fingerprint,
+                      payload, payload_expires_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                         transaction_timestamp() + $11::bigint * interval '1 millisecond')",
                 &[
                     &event_id,
                     &event.id,
@@ -133,6 +134,7 @@ pub(crate) async fn insert_configured_events(
                     &mutation.entity_id,
                     &mutation.record_reference,
                     &mutation.record_revision,
+                    &mutation.application_reference,
                     &mutation.package_revision,
                     &mutation.schema_fingerprint,
                     &payload,

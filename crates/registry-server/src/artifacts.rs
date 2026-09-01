@@ -15,7 +15,9 @@ use crate::diagnostics::Diagnostic;
 use crate::generated_ddl::DdlInventory;
 use crate::manifest_adapter::project_manifest_artifacts;
 use crate::model::{
-    CompiledAccessInventory, CompiledChangeRequestMutation, CompiledChangeRequestRetentionMode,
+    ActionRouteKind, CompiledAccessInventory, CompiledAction, CompiledActionInput,
+    CompiledActionInventory, CompiledActionRoute, CompiledActionTargetUseSource,
+    CompiledChangeRequestMutation, CompiledChangeRequestRetentionMode,
     CompiledChangeRequestTargetBinding, CompiledChangeRequestValue, CompiledEntity,
     CompiledEventDeliveryInventory, CompiledMetadataInventory, CompiledModuleIdentity,
     CompiledQueryInventory, CompiledQueryKind, CompiledQueryOperation, CompiledRevisionKind,
@@ -76,6 +78,8 @@ pub(crate) struct EffectiveModel<'a> {
     pub module_closure: &'a [CompiledModuleIdentity],
     pub entities: &'a BTreeMap<String, CompiledEntity>,
     pub physical_names: &'a PhysicalNameInventory,
+    #[serde(skip_serializing_if = "CompiledActionInventory::is_empty")]
+    pub action_inventory: &'a CompiledActionInventory,
     pub metadata_inventory: &'a CompiledMetadataInventory,
     pub query_inventory: &'a CompiledQueryInventory,
     pub event_delivery_inventory: &'a CompiledEventDeliveryInventory,
@@ -92,6 +96,7 @@ pub(crate) fn generate_artifacts(
     module_closure: &[CompiledModuleIdentity],
     entities: &BTreeMap<String, CompiledEntity>,
     physical_names: &PhysicalNameInventory,
+    actions: &CompiledActionInventory,
     routes: &CompiledRouteInventory,
     access: &CompiledAccessInventory,
     metadata: &CompiledMetadataInventory,
@@ -113,12 +118,16 @@ pub(crate) fn generate_artifacts(
             module_closure,
             entities,
             physical_names,
+            action_inventory: actions,
             metadata_inventory: metadata,
             query_inventory: query,
             event_delivery_inventory: event_deliveries,
         },
     )?;
     insert_json(&mut artifacts, "compiled/modules.json", &module_closure)?;
+    if !actions.is_empty() {
+        insert_json(&mut artifacts, "compiled/actions.json", actions)?;
+    }
     insert_json(&mut artifacts, "compiled/routes.json", routes)?;
     insert_json(&mut artifacts, "compiled/access.json", access)?;
     insert_json(&mut artifacts, "compiled/metadata-inventory.json", metadata)?;
@@ -128,7 +137,15 @@ pub(crate) fn generate_artifacts(
         "compiled/event-deliveries.json",
         event_deliveries,
     )?;
-    insert_json(&mut artifacts, REGISTRY_METADATA_ARTIFACT_PATH, metadata)?;
+    if actions.is_empty() {
+        insert_json(&mut artifacts, REGISTRY_METADATA_ARTIFACT_PATH, metadata)?;
+    } else {
+        insert_json_value(
+            &mut artifacts,
+            REGISTRY_METADATA_ARTIFACT_PATH,
+            &registry_metadata_artifact(metadata, actions),
+        )?;
+    }
     insert_bytes(
         &mut artifacts,
         "generated/postgres/schema.sql",
@@ -157,7 +174,51 @@ pub(crate) fn generate_artifacts(
         debug_assert_eq!(delivery.data_schema_artifact_path, binding.artifact_path);
         insert_json_value(&mut artifacts, &binding.artifact_path, &binding.schema)?;
     }
-    let openapi = openapi_document(registry_id, version, entities, routes, query, &schemas);
+    for action in &actions.actions {
+        insert_json_value(
+            &mut artifacts,
+            &format!(
+                "generated/action-schemas/{}.invoke.input.schema.json",
+                action.id
+            ),
+            &openapi_action_input_schema(action),
+        )?;
+        insert_json_value(
+            &mut artifacts,
+            &format!(
+                "generated/action-schemas/{}.invoke.response.schema.json",
+                action.id
+            ),
+            &openapi_action_response_schema(action, None),
+        )?;
+        if action.condition_route.is_some() {
+            insert_json_value(
+                &mut artifacts,
+                &format!(
+                    "generated/action-schemas/{}.target-conditions.input.schema.json",
+                    action.id
+                ),
+                &openapi_action_condition_request_schema(action),
+            )?;
+            insert_json_value(
+                &mut artifacts,
+                &format!(
+                    "generated/action-schemas/{}.target-conditions.response.schema.json",
+                    action.id
+                ),
+                &openapi_action_condition_response_schema(action),
+            )?;
+        }
+    }
+    let openapi = openapi_document(
+        registry_id,
+        version,
+        entities,
+        routes,
+        actions,
+        query,
+        &schemas,
+    );
     insert_json_value(&mut artifacts, "generated/openapi.json", &openapi)?;
     if let Some(projection) = manifest_projection {
         let projected = project_manifest_artifacts(registry_id, projection, entities)?;
@@ -581,6 +642,655 @@ fn render_request_value(value: &CompiledChangeRequestValue) -> Value {
     }
 }
 
+pub(crate) fn openapi_action_input_schema_id(action_id: &str) -> String {
+    format!("action-{action_id}-invoke-input")
+}
+
+pub(crate) fn openapi_action_condition_request_schema_id(action_id: &str) -> String {
+    format!("action-{action_id}-target-conditions-input")
+}
+
+pub(crate) fn openapi_action_condition_response_schema_id(action_id: &str) -> String {
+    format!("action-{action_id}-target-conditions-response")
+}
+
+pub(crate) fn openapi_action_response_schema_id(action_id: &str) -> String {
+    format!("action-{action_id}-invoke-response")
+}
+
+pub(crate) fn openapi_action_input_schema(action: &CompiledAction) -> Value {
+    let input_schema = action_input_properties_schema(action.inputs.iter());
+    let condition_inputs = action_condition_inputs(action);
+    let mut properties = Map::from_iter([("input".to_owned(), input_schema)]);
+    if !condition_inputs.is_empty() {
+        properties.insert(
+            "preconditions".to_owned(),
+            action_preconditions_schema(condition_inputs.iter().copied()),
+        );
+    }
+    let mut required = vec![Value::String("input".to_owned())];
+    if !condition_inputs.is_empty() {
+        required.push(Value::String("preconditions".to_owned()));
+    }
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": format!("urn:registry-server:action:{}:invoke-input", action.id),
+        "type": "object",
+        "additionalProperties": false,
+        "required": required,
+        "properties": properties,
+        "x-registry-action": action.id,
+        "x-registry-requiredConditionKeys": condition_inputs
+            .iter()
+            .map(|input| input.api_name.as_str())
+            .collect::<Vec<_>>(),
+    })
+}
+
+pub(crate) fn openapi_action_condition_request_schema(action: &CompiledAction) -> Value {
+    let condition_inputs = action_condition_inputs(action);
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": format!("urn:registry-server:action:{}:target-conditions-input", action.id),
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["input"],
+        "properties": {
+            "input": action_condition_input_properties_schema(condition_inputs.iter().copied()),
+        },
+        "x-registry-action": action.id,
+        "x-registry-requiredConditionKeys": condition_inputs
+            .iter()
+            .map(|input| input.api_name.as_str())
+            .collect::<Vec<_>>(),
+    })
+}
+
+pub(crate) fn openapi_action_condition_response_schema(action: &CompiledAction) -> Value {
+    let condition_inputs = action_condition_inputs(action);
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": format!("urn:registry-server:action:{}:target-conditions-response", action.id),
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["preconditions"],
+        "properties": {
+            "preconditions": action_preconditions_schema(condition_inputs.iter().copied()),
+        },
+        "x-registry-action": action.id,
+    })
+}
+
+pub(crate) fn openapi_action_response_schema(
+    action: &CompiledAction,
+    selected_result_effects: Option<&BTreeSet<String>>,
+) -> Value {
+    let result_shapes = action_response_result_shapes(action, selected_result_effects);
+    let results_schema = match result_shapes.as_slice() {
+        [shape] => action_results_schema(action, shape),
+        shapes => json!({
+            "oneOf": shapes
+                .iter()
+                .map(|shape| action_results_schema(action, shape))
+                .collect::<Vec<_>>()
+        }),
+    };
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": format!("urn:registry-server:action:{}:invoke-response", action.id),
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["action", "applicationId", "results"],
+        "properties": {
+            "action": {"const": action.id},
+            "applicationId": {"type": "string", "format": "uuid"},
+            "results": results_schema
+        }
+    })
+}
+
+fn action_response_result_shapes(
+    action: &CompiledAction,
+    selected_result_effects: Option<&BTreeSet<String>>,
+) -> Vec<BTreeSet<String>> {
+    if let Some(results) = selected_result_effects {
+        return vec![known_action_result_effects(action, results)];
+    }
+    let mut shapes = action
+        .grants
+        .iter()
+        .map(|grant| known_action_result_effects(action, &grant.results))
+        .collect::<BTreeSet<_>>();
+    if shapes.is_empty() {
+        shapes.insert(known_action_result_effects(action, &action.result_effects));
+    }
+    shapes.into_iter().collect()
+}
+
+fn known_action_result_effects(
+    action: &CompiledAction,
+    results: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    action
+        .effects
+        .iter()
+        .filter(|effect| results.contains(&effect.id))
+        .map(|effect| effect.id.clone())
+        .collect()
+}
+
+fn action_results_schema(action: &CompiledAction, effect_ids: &BTreeSet<String>) -> Value {
+    let result_properties = action
+        .effects
+        .iter()
+        .filter(|effect| effect_ids.contains(&effect.id))
+        .map(|effect| {
+            (
+                effect.id.clone(),
+                json!({
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["entity", "recordId", "revision"],
+                    "properties": {
+                        "entity": {"const": effect.target.entity_id},
+                        "recordId": {"type": "string", "format": "uuid"},
+                        "revision": {"type": "integer", "format": "int64", "minimum": 1}
+                    }
+                }),
+            )
+        })
+        .collect::<Map<_, _>>();
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": effect_ids.iter().cloned().collect::<Vec<_>>(),
+        "properties": result_properties,
+    })
+}
+
+pub(crate) fn openapi_action_operation(
+    route: &CompiledActionRoute,
+    action: &CompiledAction,
+    access_profiles: OpenApiAccessProfiles<'_>,
+) -> Value {
+    let mut operation = Map::from_iter([
+        ("operationId".to_owned(), json!(route.id)),
+        (
+            "x-registry-action".to_owned(),
+            public_action_metadata_entry(
+                action,
+                selected_profile_from_access_profiles(access_profiles),
+            ),
+        ),
+        (
+            "x-registry-operation".to_owned(),
+            json!(operation_name(route.operation)),
+        ),
+        (
+            "x-registry-routeKind".to_owned(),
+            json!(action_route_kind_name(route.kind)),
+        ),
+        (
+            "security".to_owned(),
+            action_operation_security(action, route, access_profiles),
+        ),
+    ]);
+    match access_profiles {
+        OpenApiAccessProfiles::All => {
+            operation.insert(
+                "x-registry-accessProfiles".to_owned(),
+                json!(route.access_profiles),
+            );
+            operation.insert(
+                "x-registry-defaultAccessProfile".to_owned(),
+                json!(route.default_access_profile),
+            );
+        }
+        OpenApiAccessProfiles::Selected(profile) => {
+            operation.insert("x-registry-accessProfile".to_owned(), json!(profile));
+        }
+    }
+    let mut parameters = vec![
+        header_parameter(
+            "traceparent",
+            false,
+            traceparent_schema(),
+            "Optional W3C trace context. Responses carry Registry trace context for the request.",
+        ),
+        access_profile_parameter(),
+    ];
+    if route.kind == ActionRouteKind::Invoke {
+        parameters.push(header_parameter(
+            "Idempotency-Key",
+            true,
+            json!({"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[\\x21-\\x2B\\x2D-\\x3A\\x3C-\\x7E]+$"}),
+            "Idempotency key bound to the action route, selected profile, package revision, normalized action input, preconditions, and granted result contract.",
+        ));
+    }
+    operation.insert("parameters".to_owned(), Value::Array(parameters));
+    operation.insert(
+        "requestBody".to_owned(),
+        json_request_body(json!({"$ref": format!(
+            "#/components/schemas/{}",
+            match route.kind {
+                ActionRouteKind::Invoke => openapi_action_input_schema_id(&action.id),
+                ActionRouteKind::TargetConditions => {
+                    openapi_action_condition_request_schema_id(&action.id)
+                }
+            }
+        )})),
+    );
+    operation.insert(
+        "responses".to_owned(),
+        action_operation_responses(route, action),
+    );
+    Value::Object(operation)
+}
+
+pub(crate) fn public_action_metadata(actions: &CompiledActionInventory) -> Value {
+    json!({
+        "actions": actions
+            .actions
+            .iter()
+            .map(|action| public_action_metadata_entry(action, None))
+            .collect::<Vec<_>>()
+    })
+}
+
+fn registry_metadata_artifact(
+    metadata: &CompiledMetadataInventory,
+    actions: &CompiledActionInventory,
+) -> Value {
+    let mut value = serde_json::to_value(metadata).expect("compiled metadata serializes");
+    let object = value
+        .as_object_mut()
+        .expect("compiled metadata serializes as object");
+    object.insert(
+        "actions".to_owned(),
+        public_action_metadata(actions)["actions"].clone(),
+    );
+    value
+}
+
+pub(crate) fn public_action_metadata_entry(
+    action: &CompiledAction,
+    selected_profile: Option<&str>,
+) -> Value {
+    let condition_inputs = action_condition_inputs(action);
+    let selected_result_effects = action_selected_result_effects(action, selected_profile);
+    let access = match selected_profile {
+        Some(profile) => json!({"selectedProfile": profile}),
+        None => json!({"accessProfiles": action_profile_ids(action)}),
+    };
+    json!({
+        "id": action.id,
+        "route": action.route,
+        "conditionRoute": action.condition_route,
+        "contractFingerprint": action.contract_fingerprint,
+        "inputs": action.inputs.iter().map(action_input_metadata).collect::<Vec<_>>(),
+        "referenceInputs": action.inputs.iter().filter_map(reference_input_metadata).collect::<Vec<_>>(),
+        "requiredConditionKeys": condition_inputs
+            .iter()
+            .map(|input| input.api_name.as_str())
+            .collect::<Vec<_>>(),
+        "resultEffects": action.effects.iter()
+            .filter(|effect| selected_result_effects.contains(&effect.id))
+            .map(|effect| json!({
+                "effect": effect.id,
+                "entity": effect.target.entity_id,
+                "operation": operation_name(effect.operation),
+            }))
+            .collect::<Vec<_>>(),
+        "access": access,
+        "routes": {
+            "invoke": {
+                "method": "POST",
+                "path": action.route,
+                "operationId": format!("actions.{}.invoke", action.id),
+                "requiresIdempotencyKey": true,
+                "inputSchema": openapi_action_input_schema_id(&action.id),
+                "responseSchema": openapi_action_response_schema_id(&action.id),
+            },
+            "targetConditions": action.condition_route.as_ref().map(|path| json!({
+                "method": "POST",
+                "path": path,
+                "operationId": format!("actions.{}.target_conditions", action.id),
+                "requiresIdempotencyKey": false,
+                "inputSchema": openapi_action_condition_request_schema_id(&action.id),
+                "responseSchema": openapi_action_condition_response_schema_id(&action.id),
+            })),
+        },
+        "bounds": {
+            "maximumTargets": action.maximum_targets,
+            "maximumFieldMutations": action.maximum_field_mutations,
+            "maximumSnapshotBytes": action.maximum_snapshot_bytes,
+        }
+    })
+}
+
+fn action_input_metadata(input: &CompiledActionInput) -> Value {
+    json!({
+        "id": input.id,
+        "apiName": input.api_name,
+        "fieldType": input.field_type,
+        "required": input.required,
+        "classification": input.classification,
+    })
+}
+
+fn selected_profile_from_access_profiles(
+    access_profiles: OpenApiAccessProfiles<'_>,
+) -> Option<&str> {
+    match access_profiles {
+        OpenApiAccessProfiles::All => None,
+        OpenApiAccessProfiles::Selected(profile) => Some(profile),
+    }
+}
+
+fn action_profile_ids(action: &CompiledAction) -> Vec<String> {
+    action
+        .grants
+        .iter()
+        .map(|grant| grant.profile_id.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn action_selected_result_effects(
+    action: &CompiledAction,
+    selected_profile: Option<&str>,
+) -> BTreeSet<String> {
+    match selected_profile {
+        Some(profile) => action
+            .grants
+            .iter()
+            .filter(|grant| grant.profile_id == profile)
+            .flat_map(|grant| grant.results.iter().cloned())
+            .collect(),
+        None => action.result_effects.clone(),
+    }
+}
+
+fn reference_input_metadata(input: &CompiledActionInput) -> Option<Value> {
+    let FieldTypeSource::Reference { target, .. } = &input.field_type else {
+        return None;
+    };
+    Some(json!({
+        "input": input.id,
+        "apiName": input.api_name,
+        "targetEntity": target,
+    }))
+}
+
+fn action_input_properties_schema<'a>(
+    inputs: impl IntoIterator<Item = &'a CompiledActionInput>,
+) -> Value {
+    let inputs = inputs.into_iter().collect::<Vec<_>>();
+    let properties = inputs
+        .iter()
+        .map(|input| (input.api_name.clone(), field_schema(&input.field_type)))
+        .collect::<Map<_, _>>();
+    let required = inputs
+        .iter()
+        .filter(|input| input.required)
+        .map(|input| Value::String(input.api_name.clone()))
+        .collect::<Vec<_>>();
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": properties,
+        "required": required,
+    })
+}
+
+fn action_condition_input_properties_schema<'a>(
+    inputs: impl IntoIterator<Item = &'a CompiledActionInput>,
+) -> Value {
+    let inputs = inputs.into_iter().collect::<Vec<_>>();
+    let properties = inputs
+        .iter()
+        .map(|input| (input.api_name.clone(), field_schema(&input.field_type)))
+        .collect::<Map<_, _>>();
+    let required = inputs
+        .iter()
+        .map(|input| Value::String(input.api_name.clone()))
+        .collect::<Vec<_>>();
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": properties,
+        "required": required,
+    })
+}
+
+fn action_preconditions_schema<'a>(
+    inputs: impl IntoIterator<Item = &'a CompiledActionInput>,
+) -> Value {
+    let inputs = inputs.into_iter().collect::<Vec<_>>();
+    let properties = inputs
+        .iter()
+        .map(|input| {
+            (
+                input.api_name.clone(),
+                immediate_action_precondition_schema(),
+            )
+        })
+        .collect::<Map<_, _>>();
+    let required = inputs
+        .iter()
+        .map(|input| Value::String(input.api_name.clone()))
+        .collect::<Vec<_>>();
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": properties,
+        "required": required,
+    })
+}
+
+fn action_condition_inputs(action: &CompiledAction) -> Vec<&CompiledActionInput> {
+    let condition_input_ids = action
+        .target_uses
+        .iter()
+        .filter(|use_| use_.condition_required)
+        .filter_map(|use_| match &use_.source {
+            CompiledActionTargetUseSource::Input { input } => Some(input.as_str()),
+            CompiledActionTargetUseSource::Effect { .. } => None,
+        })
+        .collect::<BTreeSet<_>>();
+    action
+        .inputs
+        .iter()
+        .filter(|input| condition_input_ids.contains(input.id.as_str()))
+        .collect()
+}
+
+fn immediate_action_precondition_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ifMatch"],
+        "properties": {
+            "ifMatch": {"type": "string", "minLength": 3, "maxLength": 256, "pattern": "^\\\"[\\x21\\x23-\\x7E]+\\\"$"}
+        }
+    })
+}
+
+fn immediate_action_result_reference_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["entity", "recordId", "revision"],
+        "properties": {
+            "entity": {"type": "string"},
+            "recordId": {"type": "string", "format": "uuid"},
+            "revision": {"type": "integer", "format": "int64", "minimum": 1}
+        }
+    })
+}
+
+fn action_operation_security(
+    action: &CompiledAction,
+    route: &CompiledActionRoute,
+    access_profiles: OpenApiAccessProfiles<'_>,
+) -> Value {
+    let profiles = match access_profiles {
+        OpenApiAccessProfiles::All => route.access_profiles.clone(),
+        OpenApiAccessProfiles::Selected(profile) => vec![profile.to_owned()],
+    };
+    let mut allows_anonymous = false;
+    let mut requires_bearer = false;
+    for profile in &profiles {
+        let Some(grant) = action
+            .grants
+            .iter()
+            .find(|grant| grant.profile_id == *profile)
+        else {
+            continue;
+        };
+        if grant.anonymous {
+            allows_anonymous = true;
+        } else {
+            requires_bearer = true;
+        }
+    }
+    let mut alternatives = Vec::new();
+    if allows_anonymous {
+        alternatives.push(json!({}));
+    }
+    if requires_bearer {
+        alternatives.push(json!({"bearerAuth": []}));
+    }
+    if alternatives.is_empty() {
+        alternatives.push(json!({"bearerAuth": []}));
+    }
+    Value::Array(alternatives)
+}
+
+fn action_operation_responses(route: &CompiledActionRoute, action: &CompiledAction) -> Value {
+    let success = match route.kind {
+        ActionRouteKind::Invoke => success_response(
+            "Immediate action committed",
+            StatusResponseHeaders::ActionMutation,
+            json!({"$ref": format!("#/components/schemas/{}", openapi_action_response_schema_id(&action.id))}),
+        ),
+        ActionRouteKind::TargetConditions => success_response(
+            "Action target conditions returned",
+            StatusResponseHeaders::NoStore,
+            json!({"$ref": format!(
+                "#/components/schemas/{}",
+                openapi_action_condition_response_schema_id(&action.id)
+            )}),
+        ),
+    };
+    let mut responses = Map::from_iter([("200".to_owned(), success)]);
+    for (status, problems) in action_problem_responses(route.kind) {
+        let examples = problems
+            .iter()
+            .map(|problem| {
+                (
+                    problem.code.to_owned(),
+                    json!({"value": problem_example(status, problem.code, problem.detail)}),
+                )
+            })
+            .collect::<Map<_, _>>();
+        responses.insert(
+            status.to_owned(),
+            json!({
+                "description": "Problem response",
+                "headers": {
+                    "traceparent": traceparent_header("Trace context for this problem response.")
+                },
+                "content": {
+                    "application/problem+json": {
+                        "schema": {"$ref": "#/components/schemas/Problem"},
+                        "examples": examples
+                    }
+                }
+            }),
+        );
+    }
+    Value::Object(responses)
+}
+
+fn action_problem_responses(kind: ActionRouteKind) -> BTreeMap<&'static str, Vec<ProblemExample>> {
+    let mut responses = BTreeMap::from([
+        (
+            "400",
+            vec![ProblemExample {
+                code: "request.invalid",
+                detail: "The action request is invalid.",
+            }],
+        ),
+        (
+            "401",
+            vec![ProblemExample {
+                code: "authentication.refused",
+                detail: "The bearer credential is missing or refused.",
+            }],
+        ),
+        (
+            "404",
+            vec![ProblemExample {
+                code: "resource.not_found",
+                detail: "The requested action or target was not found.",
+            }],
+        ),
+        (
+            "415",
+            vec![ProblemExample {
+                code: "unsupported.media_type",
+                detail: "The request media type is not supported.",
+            }],
+        ),
+        (
+            "503",
+            vec![ProblemExample {
+                code: "source.unavailable",
+                detail: "The Registry data service is unavailable.",
+            }],
+        ),
+        (
+            "504",
+            vec![ProblemExample {
+                code: "request.timeout",
+                detail: "The request timed out.",
+            }],
+        ),
+    ]);
+    if kind == ActionRouteKind::Invoke {
+        responses.insert(
+            "409",
+            vec![
+                ProblemExample {
+                    code: "mutation.conflict",
+                    detail: "The action conflicts with current state.",
+                },
+                ProblemExample {
+                    code: "idempotency.conflict",
+                    detail: "The idempotency key is bound to another request.",
+                },
+            ],
+        );
+        responses.insert(
+            "412",
+            vec![ProblemExample {
+                code: "precondition.failed",
+                detail: "The action target precondition failed.",
+            }],
+        );
+    }
+    responses
+}
+
+fn action_route_kind_name(kind: ActionRouteKind) -> &'static str {
+    match kind {
+        ActionRouteKind::Invoke => "invoke",
+        ActionRouteKind::TargetConditions => "target_conditions",
+    }
+}
+
 fn field_schema(field_type: &FieldTypeSource) -> Value {
     match field_type {
         FieldTypeSource::Boolean => json!({"type": "boolean"}),
@@ -697,6 +1407,7 @@ fn openapi_document(
     version: &str,
     entities: &BTreeMap<String, CompiledEntity>,
     routes: &CompiledRouteInventory,
+    actions: &CompiledActionInventory,
     query: &CompiledQueryInventory,
     schemas: &BTreeMap<String, Value>,
 ) -> Value {
@@ -740,6 +1451,45 @@ fn openapi_document(
             }),
         );
     }
+    let mut has_immediate_actions = false;
+    for action in &actions.actions {
+        has_immediate_actions = true;
+        input_schemas.insert(
+            openapi_action_input_schema_id(&action.id),
+            openapi_action_input_schema(action),
+        );
+        if action.condition_route.is_some() {
+            input_schemas.insert(
+                openapi_action_condition_request_schema_id(&action.id),
+                openapi_action_condition_request_schema(action),
+            );
+            input_schemas.insert(
+                openapi_action_condition_response_schema_id(&action.id),
+                openapi_action_condition_response_schema(action),
+            );
+        }
+        input_schemas.insert(
+            openapi_action_response_schema_id(&action.id),
+            openapi_action_response_schema(action, None),
+        );
+    }
+    for route in &actions.routes {
+        let action = actions
+            .actions
+            .iter()
+            .find(|action| action.id == route.action_id)
+            .expect("compiled action route refers to a compiled action");
+        let path_entry = paths
+            .entry(route.path.clone())
+            .or_insert_with(|| Value::Object(Map::new()));
+        let Value::Object(operations) = path_entry else {
+            unreachable!("OpenAPI path entries are objects")
+        };
+        operations.insert(
+            method_name(route.method).to_owned(),
+            openapi_action_operation(route, action, OpenApiAccessProfiles::All),
+        );
+    }
     let mut component_schemas: Map<String, Value> = schemas
         .iter()
         .map(|(id, schema)| (id.clone(), schema.clone()))
@@ -753,7 +1503,7 @@ fn openapi_document(
         "openapi": "3.1.0",
         "info": {"title": registry_id, "version": version},
         "paths": paths,
-        "components": openapi_components(component_schemas, has_request_actions)
+        "components": openapi_components(component_schemas, has_request_actions, has_immediate_actions)
     })
 }
 
@@ -782,12 +1532,23 @@ const OPENAPI_EXAMPLE_TRACEPARENT: &str = "00-11111111111111111111111111111111-2
 pub(crate) fn openapi_components(
     mut schemas: Map<String, Value>,
     has_request_actions: bool,
+    has_immediate_actions: bool,
 ) -> Value {
     schemas.insert("Problem".to_owned(), problem_schema());
     if has_request_actions {
         schemas.insert(
             "ChangeRequestActionResponse".to_owned(),
             request_action_response_schema(),
+        );
+    }
+    if has_immediate_actions {
+        schemas.insert(
+            "ImmediateActionResultReference".to_owned(),
+            immediate_action_result_reference_schema(),
+        );
+        schemas.insert(
+            "ImmediateActionPrecondition".to_owned(),
+            immediate_action_precondition_schema(),
         );
     }
     json!({
@@ -945,6 +1706,7 @@ fn request_action_target_entities(spec: OpenApiOperationSpec<'_>) -> Vec<String>
                 | Operation::Batch
                 | Operation::Lookup
                 | Operation::Revisions => {}
+                Operation::Invoke => {}
             }
             targets.into_iter().collect()
         }
@@ -1070,6 +1832,7 @@ fn operation_parameters(
             }
         }
         Operation::Revisions => {}
+        Operation::Invoke => {}
         Operation::SubmitRequest
         | Operation::ApproveRequest
         | Operation::RejectRequest
@@ -1247,6 +2010,7 @@ fn operation_request_body(spec: OpenApiOperationSpec<'_>) -> Option<Value> {
             ))
         }
         Operation::Get | Operation::List | Operation::Tombstone | Operation::Revisions => None,
+        Operation::Invoke => None,
         Operation::SubmitRequest
         | Operation::ApproveRequest
         | Operation::RejectRequest
@@ -1419,6 +2183,11 @@ fn operation_responses(spec: OpenApiOperationSpec<'_>) -> Value {
             StatusResponseHeaders::NoStore,
             revision_response_schema(spec.schema_ref, spec.route.revision_kind),
         ),
+        Operation::Invoke => success_response(
+            "Action accepted",
+            StatusResponseHeaders::ActionMutation,
+            json!({"type": "object"}),
+        ),
         Operation::SubmitRequest
         | Operation::ApproveRequest
         | Operation::RejectRequest
@@ -1472,6 +2241,7 @@ enum StatusResponseHeaders {
     NoStore,
     Mutation,
     MutationCreate,
+    ActionMutation,
 }
 
 fn success_response(description: &str, headers: StatusResponseHeaders, schema: Value) -> Value {
@@ -1496,6 +2266,7 @@ fn success_response(description: &str, headers: StatusResponseHeaders, schema: V
             "ETag": etag_header(),
             "Location": {"description": "Relative URL of the created record.", "schema": {"type": "string"}},
         }),
+        StatusResponseHeaders::ActionMutation => json!({}),
     };
     header_map
         .as_object_mut()
@@ -2086,6 +2857,7 @@ fn problem_schema() -> Value {
             "status": {"type": "integer", "minimum": 400, "maximum": 599},
             "detail": {"type": "string", "maxLength": 256},
             "traceId": {"type": "string", "minLength": 32, "maxLength": 32, "pattern": "^[0-9a-f]{32}$"},
+            "fieldPath": {"type": "string", "maxLength": 256},
             "code": {
                 "type": "string",
                 "enum": [
@@ -2406,6 +3178,7 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::ReviseRequest => "revise_request",
         Operation::CancelRequest => "cancel_request",
         Operation::ApplyRequest => "apply_request",
+        Operation::Invoke => "invoke",
     }
 }
 

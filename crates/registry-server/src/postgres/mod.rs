@@ -26,12 +26,14 @@ pub use catalog::{
 };
 pub use config::{ConnectionConfig, PoolBounds, RuntimePool, TlsPolicy};
 pub(crate) use context::validate_field_value;
+pub(crate) use context::{
+    begin_action_transaction, ActionClaimContext, ChangeRequestActionContext,
+    ChangeRequestTargetBinding, ChangeRequestTargetContext, ImmediateActionLinkBinding,
+    ImmediateActionLinkContext, ImmediateActionTargetBinding, ImmediateActionTargetContext,
+};
 pub use context::{
     begin_record_transaction, ClaimContext, GuardedTransaction, RowBoundaryContext,
     RowBoundaryOperator,
-};
-pub(crate) use context::{
-    ChangeRequestActionContext, ChangeRequestTargetBinding, ChangeRequestTargetContext,
 };
 #[cfg(feature = "postgres-test")]
 pub use interlock::DedicatedApplyConnection;

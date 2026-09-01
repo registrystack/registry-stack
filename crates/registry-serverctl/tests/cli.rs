@@ -306,6 +306,85 @@ entities:
 "#
 }
 
+fn action_fixture() -> &'static [u8] {
+    br#"apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: action-fixture
+  version: 1
+  defaultLanguage: en
+entities:
+  - id: household
+    route: households
+    mutationMode: mutable
+    fields:
+      - {id: household-code, apiName: householdCode, type: string, required: true, maxLength: 64, classification: internal}
+      - {id: contact-person, apiName: contactPerson, type: reference, target: person, required: false, classification: restricted}
+  - id: person
+    route: people
+    mutationMode: mutable
+    fields:
+      - {id: person-code, apiName: personCode, type: string, required: true, maxLength: 64, classification: restricted}
+      - {id: legal-name, apiName: legalName, type: string, required: true, maxLength: 160, classification: restricted}
+  - id: group-membership
+    route: group-memberships
+    mutationMode: create_only
+    fields:
+      - {id: person, type: reference, target: person, required: true, classification: restricted}
+      - {id: household, type: reference, target: household, required: true, classification: restricted}
+actions:
+  - id: register-household-contact
+    inputs:
+      - {id: household, apiName: householdId, type: reference, target: household, required: true, classification: restricted}
+      - {id: person-code, apiName: personCode, type: string, required: true, maxLength: 64, classification: restricted}
+      - {id: legal-name, apiName: legalName, type: string, required: true, maxLength: 160, classification: restricted}
+    effects:
+      - id: person
+        target: {entity: person}
+        operation: create
+        set:
+          person-code: {fromField: person-code}
+          legal-name: {fromField: legal-name}
+      - id: membership
+        target: {entity: group-membership}
+        operation: create
+        set:
+          person: {fromEffect: person}
+          household: {fromField: household}
+      - id: household
+        target: {fromField: household}
+        operation: patch
+        set:
+          contact-person: {fromEffect: person}
+accessProfiles:
+  - id: contact-registrar
+    default: true
+    principalClaim: private_claim_name
+    requiredScopes: [registry:contact:register]
+    requiredPurposes: [contact-registration]
+    grants:
+      - action: register-household-contact
+        operations: [invoke]
+        targets:
+          - {entity: household, rowBoundaries: []}
+          - {entity: person, rowBoundaries: []}
+          - {entity: group-membership, rowBoundaries: []}
+        results: [person, membership, household]
+  - id: contact-auditor
+    principalClaim: other_private_claim
+    requiredScopes: [registry:contact:audit]
+    requiredPurposes: [contact-audit]
+    grants:
+      - action: register-household-contact
+        operations: [invoke]
+        targets:
+          - {entity: household, rowBoundaries: []}
+          - {entity: person, rowBoundaries: []}
+          - {entity: group-membership, rowBoundaries: []}
+        results: [household]
+"#
+}
+
 fn packaging_project() -> (TestProject, PrivateJwk, String) {
     let signing = generate_private_jwk(GeneratedKeyAlgorithm::Es384)
         .expect("production package signing key generates");
@@ -979,6 +1058,107 @@ fn generate_selectors_publish_only_selected_artifacts() {
 }
 
 #[test]
+fn action_artifact_selector_publishes_only_compiled_action_surfaces() {
+    let project = TestProject::from_registry_source(action_fixture());
+    let output_root = project.path().join("action-output");
+
+    let output = registry_serverctl(&[
+        "--format",
+        "json",
+        "generate",
+        "actions",
+        project.path().to_str().expect("path is UTF-8"),
+        "--output",
+        output_root.to_str().expect("path is UTF-8"),
+    ]);
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(output_root.join("compiled/actions.json").is_file());
+    assert!(output_root
+        .join("generated/action-schemas/register-household-contact.invoke.input.schema.json")
+        .is_file());
+    assert!(output_root
+        .join("generated/action-schemas/register-household-contact.invoke.response.schema.json")
+        .is_file());
+    assert!(output_root
+        .join(
+            "generated/action-schemas/register-household-contact.target-conditions.input.schema.json"
+        )
+        .is_file());
+    assert!(output_root
+        .join(
+            "generated/action-schemas/register-household-contact.target-conditions.response.schema.json"
+        )
+        .is_file());
+    assert!(!output_root.join("generated/openapi.json").exists());
+    assert!(!output_root
+        .join("generated/schemas/household.schema.json")
+        .exists());
+    assert_eq!(
+        tree(&output_root).keys().cloned().collect::<Vec<_>>(),
+        vec![
+            "compiled/actions.json",
+            "generated/action-schemas/register-household-contact.invoke.input.schema.json",
+            "generated/action-schemas/register-household-contact.invoke.response.schema.json",
+            "generated/action-schemas/register-household-contact.target-conditions.input.schema.json",
+            "generated/action-schemas/register-household-contact.target-conditions.response.schema.json",
+        ]
+    );
+}
+
+#[test]
+fn schema_selector_includes_action_input_output_schemas() {
+    let project = TestProject::from_registry_source(action_fixture());
+    let output_root = project.path().join("schema-output");
+
+    let output = registry_serverctl(&[
+        "--format",
+        "json",
+        "generate",
+        "schemas",
+        project.path().to_str().expect("path is UTF-8"),
+        "--output",
+        output_root.to_str().expect("path is UTF-8"),
+    ]);
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(output_root
+        .join("generated/schemas/household.schema.json")
+        .is_file());
+    assert!(output_root
+        .join("generated/action-schemas/register-household-contact.invoke.input.schema.json")
+        .is_file());
+    assert!(output_root
+        .join("generated/action-schemas/register-household-contact.invoke.response.schema.json")
+        .is_file());
+}
+
+#[test]
+fn metadata_selector_publishes_action_metadata_without_private_grant_details() {
+    let project = TestProject::from_registry_source(action_fixture());
+    let output_root = project.path().join("metadata-output");
+
+    let output = registry_serverctl(&[
+        "--format",
+        "json",
+        "generate",
+        "metadata",
+        project.path().to_str().expect("path is UTF-8"),
+        "--output",
+        output_root.to_str().expect("path is UTF-8"),
+    ]);
+
+    assert!(output.status.success(), "{output:?}");
+    let metadata = fs::read_to_string(output_root.join("generated/metadata/registry.json"))
+        .expect("metadata artifact reads");
+    assert!(metadata.contains("register-household-contact"));
+    assert!(metadata.contains("householdId"));
+    assert!(!metadata.contains("private_claim_name"));
+    assert!(!metadata.contains("other_private_claim"));
+    assert!(!metadata.contains("rowBoundaries"));
+}
+
+#[test]
 fn manifest_selector_requires_the_compiled_manifest_projection() {
     let project = TestProject::asset_fixture();
     let output_root = project.path().join("manifest-output");
@@ -1183,6 +1363,140 @@ fn explain_reports_are_derived_from_compiled_inventories() {
     assert!(!String::from_utf8(queries.stdout)
         .expect("queries JSON is UTF-8")
         .contains("registry_data"));
+}
+
+#[test]
+fn explain_routes_preserves_action_free_output_shape() {
+    let project = TestProject::asset_fixture();
+
+    let output = registry_serverctl(&[
+        "--format",
+        "json",
+        "explain",
+        "routes",
+        project.path().to_str().expect("path is UTF-8"),
+    ]);
+
+    assert!(output.status.success(), "{output:?}");
+    let explanation = json_stdout(&output)["explanation"].clone();
+    assert_eq!(
+        explanation
+            .as_object()
+            .expect("routes explanation is an object")
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec!["routes"]
+    );
+    let routes = explanation["routes"].as_array().expect("routes are listed");
+    assert!(!routes.is_empty());
+    assert!(routes.iter().all(|route| route.get("actionId").is_none()));
+}
+
+#[test]
+fn explain_routes_includes_served_immediate_action_routes() {
+    let project = TestProject::from_registry_source(action_fixture());
+
+    let output = registry_serverctl(&[
+        "--format",
+        "json",
+        "explain",
+        "routes",
+        project.path().to_str().expect("path is UTF-8"),
+    ]);
+
+    assert!(output.status.success(), "{output:?}");
+    let explanation = json_stdout(&output)["explanation"].clone();
+    let action_routes = explanation["routes"]
+        .as_array()
+        .expect("routes are listed")
+        .iter()
+        .filter(|route| route["actionId"] == "register-household-contact")
+        .collect::<Vec<_>>();
+    assert_eq!(action_routes.len(), 2);
+    assert!(action_routes.iter().any(|route| {
+        let profiles = route["accessProfiles"]
+            .as_array()
+            .expect("action route lists access profiles");
+        route["actionRouteKind"] == "invoke"
+            && route["path"] == "/v1/actions/register-household-contact"
+            && route["operation"] == "invoke"
+            && route["requiresIdempotencyKey"] == true
+            && profiles.len() == 2
+            && profiles.contains(&json!("contact-registrar"))
+            && profiles.contains(&json!("contact-auditor"))
+            && route["defaultAccessProfile"] == "contact-registrar"
+    }));
+    assert!(action_routes.iter().any(|route| {
+        route["actionRouteKind"] == "target_conditions"
+            && route["path"] == "/v1/actions/register-household-contact/target-conditions"
+            && route["operation"] == "invoke"
+            && route["requiresIdempotencyKey"] == false
+    }));
+    let rendered = serde_json::to_string(&explanation).expect("routes explanation serializes");
+    assert!(!rendered.contains("private_claim_name"));
+    assert!(!rendered.contains("other_private_claim"));
+    assert!(!rendered.contains("rowBoundaries"));
+}
+
+#[test]
+fn explain_actions_reports_compiled_effects_conditions_results_and_grants() {
+    let project = TestProject::from_registry_source(action_fixture());
+
+    let output = registry_serverctl(&[
+        "--format",
+        "json",
+        "explain",
+        "actions",
+        project.path().to_str().expect("path is UTF-8"),
+    ]);
+
+    assert!(output.status.success(), "{output:?}");
+    let report = json_stdout(&output);
+    let actions = report["explanation"]["actions"]
+        .as_array()
+        .expect("actions are listed");
+    assert_eq!(actions.len(), 1);
+    let action = &actions[0];
+    assert_eq!(action["id"], "register-household-contact");
+    assert_eq!(action["inputs"][0]["input"], "household");
+    assert_eq!(action["inputs"][0]["apiName"], "householdId");
+    assert_eq!(action["requiredConditionKeys"], json!(["householdId"]));
+    assert_eq!(
+        action["routes"][0]["path"],
+        "/v1/actions/register-household-contact"
+    );
+    assert_eq!(
+        action["routes"][1]["path"],
+        "/v1/actions/register-household-contact/target-conditions"
+    );
+    assert_eq!(action["effects"][0]["id"], "person");
+    assert_eq!(
+        action["effects"][1]["fields"][0]["value"]["kind"],
+        "from_effect"
+    );
+    assert_eq!(action["targets"][0]["conditionRequired"], false);
+    assert!(action["targets"]
+        .as_array()
+        .expect("targets are listed")
+        .iter()
+        .any(|target| target["conditionRequired"] == true
+            && target["source"]["input"]["apiName"] == "householdId"));
+    assert!(action["grants"]
+        .as_array()
+        .expect("grants are listed")
+        .iter()
+        .any(|grant| grant["profile"] == "contact-registrar"
+            && grant["results"]
+                .as_array()
+                .expect("results are listed")
+                .len()
+                == 3));
+    assert!(action["results"]
+        .as_array()
+        .expect("results are listed")
+        .iter()
+        .any(|result| result["effect"] == "household"));
 }
 
 #[test]
@@ -2336,6 +2650,11 @@ fn test_runtime_database_id_mismatch_is_candidate_refused_before_rehearsal() {
         &output,
     );
 
+    assert_eq!(
+        json_stdout(&result)["diagnostics"][0]["path"],
+        "runtimeConfig.identity.databaseId"
+    );
+
     assert_schema_test_refusal(
         result,
         "test.candidate.refused",
@@ -2353,6 +2672,56 @@ fn test_runtime_database_id_mismatch_is_candidate_refused_before_rehearsal() {
             "VERIFY_MIGRATION_DATABASE_SECRET_IS_NOT_OPENED",
         ],
     );
+}
+
+#[test]
+fn test_runtime_binding_refusal_identifies_the_field_without_disclosing_values() {
+    for (original, replacement, diagnostic_path) in [
+        (
+            "environment: production".to_owned(),
+            "environment: wrong-environment",
+            "runtimeConfig.identity.environment",
+        ),
+        (
+            format!("instanceId: {PACKAGE_INSTANCE}"),
+            "instanceId: wrong-instance",
+            "runtimeConfig.identity.instanceId",
+        ),
+        (
+            format!("compilerSourceRevision: {PACKAGE_SOURCE_REVISION}"),
+            "compilerSourceRevision: wrong-source",
+            "runtimeConfig.package.compilerSourceRevision",
+        ),
+    ] {
+        let (project, _signing, key_id) = packaging_project();
+        let runtime = test_runtime_config(&project);
+        let source = fs::read_to_string(&runtime).expect("runtime fixture reads");
+        assert!(source.contains(&original));
+        fs::write(&runtime, source.replacen(&original, replacement, 1))
+            .expect("runtime fixture changes");
+        let credentials = project.path().join("credentials-not-opened.yaml");
+        let output = project.path().join("binding-refused-receipt.json");
+        let result =
+            test_candidate_command(&project, 1, &[key_id], &runtime, &credentials, &output);
+        assert_eq!(
+            json_stdout(&result)["diagnostics"][0]["path"],
+            diagnostic_path
+        );
+        assert_schema_test_refusal(
+            result,
+            "test.candidate.refused",
+            "schema_test_candidate",
+            "correct_schema_test_candidate",
+            &output,
+            &[
+                "wrong-environment",
+                "wrong-instance",
+                "wrong-source",
+                path(&runtime),
+                PACKAGE_VALUE_CANARY,
+            ],
+        );
+    }
 }
 
 #[test]

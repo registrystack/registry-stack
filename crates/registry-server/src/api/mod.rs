@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! HTTP surface compiled from one immutable Registry inventory.
 
+mod actions;
 #[cfg(test)]
 #[path = "tests/change_request_action_tests.rs"]
 mod change_request_action_tests;
@@ -26,18 +27,18 @@ use serde_json::{json, Map, Value};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 pub use context::{
-    AuthorizedRequestContext, RowBoundaryOperator, VerifiedClaimValue, VerifiedContextError,
-    VerifiedRequestAction, VerifiedRequestClaims, VerifiedRequestPresence,
+    AuthorizedActionContext, AuthorizedRequestContext, RowBoundaryOperator, VerifiedClaimValue,
+    VerifiedContextError, VerifiedRequestAction, VerifiedRequestClaims, VerifiedRequestPresence,
     VerifiedRequestTargetAuthority, VerifiedRowBoundary,
 };
 pub use service::{
-    BatchMutationInput, CompiledLookupSelector, CompiledReadQuery, ConditionalMutationInput,
-    CreateMutationInput, HeldReadResponse, HttpService, LookupSelectorValue, ReadFilterExpr,
-    ReadFilterOperator, ReadFilterPredicate, ReadLogicalOp, ReadOrderClause, ReadProjectionField,
-    ReadRuntimeIdentity, ReadServiceError, ReadinessProbe, RecordReadKind, RecordReadRefusal,
-    RecordReadRequest, RecordReadService, RequestActionBody, RequestActionInput,
-    RequestActionTargetAuthority, RevisionReadRefusal, RevisionReadRequest, RevisionReadService,
-    ServiceFuture,
+    ActionTargetConditionsInput, BatchMutationInput, CompiledLookupSelector, CompiledReadQuery,
+    ConditionalMutationInput, CreateMutationInput, HeldReadResponse, HttpService,
+    ImmediateActionInput, LookupSelectorValue, ReadFilterExpr, ReadFilterOperator,
+    ReadFilterPredicate, ReadLogicalOp, ReadOrderClause, ReadProjectionField, ReadRuntimeIdentity,
+    ReadServiceError, ReadinessProbe, RecordReadKind, RecordReadRefusal, RecordReadRequest,
+    RecordReadService, RequestActionBody, RequestActionInput, RequestActionTargetAuthority,
+    RevisionReadRefusal, RevisionReadRequest, RevisionReadService, ServiceFuture,
 };
 
 use crate::auth::{authenticate_request, RegistryAuthenticator};
@@ -170,6 +171,15 @@ fn route_set(service: Arc<HttpService>) -> Router {
         };
     }
 
+    if service.mutations.is_some() {
+        for route in &service.registry.actions().routes {
+            app = app.route(
+                &route.path,
+                post(actions::dispatch).layer(Extension(route.clone())),
+            );
+        }
+    }
+
     app.fallback(not_found)
         .method_not_allowed_fallback(not_found)
         .with_state(service)
@@ -220,7 +230,8 @@ async fn openapi(
         .map(|Extension(value)| value)
         .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let visible = visible_surfaces(&service, &claims, &options);
-    if options.access_profile().is_some() && visible.is_empty() {
+    let visible_actions = actions::visible_actions(&service, &claims, &options);
+    if options.access_profile().is_some() && visible.is_empty() && visible_actions.is_empty() {
         return concealed();
     }
 
@@ -300,11 +311,12 @@ async fn openapi(
     ));
     let has_request_actions = !action_input_schemas.is_empty();
     schemas.extend(action_input_schemas);
+    actions::append_openapi(&visible_actions, &mut paths, &mut schemas);
     Json(json!({
         "openapi": "3.1.0",
         "info": {"title": service.registry.registry_id(), "version": service.registry.version()},
         "paths": paths,
-        "components": openapi_components(schemas, has_request_actions)
+        "components": openapi_components(schemas, has_request_actions, !visible_actions.is_empty())
     }))
     .into_response()
 }
@@ -321,7 +333,8 @@ async fn registry_metadata(
         .map(|Extension(value)| value)
         .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let visible = visible_metadata_entries(&service, &claims, &options);
-    if options.access_profile().is_some() && visible.is_empty() {
+    let visible_actions = actions::visible_actions(&service, &claims, &options);
+    if options.access_profile().is_some() && visible.is_empty() && visible_actions.is_empty() {
         return concealed();
     }
 
@@ -373,13 +386,17 @@ async fn registry_metadata(
             metadata
         })
         .collect::<Vec<_>>();
-    Json(json!({
+    let mut metadata = json!({
         "id": service.registry.registry_id(),
         "version": service.registry.version(),
         "revision": service.registry.revision(),
         "entities": entities,
-    }))
-    .into_response()
+    });
+    // Preserve action-free discovery output while omitting unavailable actions.
+    if !visible_actions.is_empty() {
+        metadata["actions"] = actions::metadata(&visible_actions);
+    }
+    Json(metadata).into_response()
 }
 
 async fn entity_schema(
@@ -1914,6 +1931,7 @@ async fn audited_mutation_refusal(
             method: route.method,
             operation_id: &route.id,
             target_record,
+            action_id: None,
             principal: context.principal(),
             selected_access_profile: Some(context.selected_profile()),
             purpose_present: context.purpose().is_some(),
@@ -1943,6 +1961,7 @@ async fn audited_mutation_concealment(
             method: route.method,
             operation_id: &route.id,
             target_record,
+            action_id: None,
             principal: claims.principal(),
             selected_access_profile: selected_profile,
             purpose_present: claims.purpose().is_some(),
@@ -2281,6 +2300,7 @@ fn is_request_operation(operation: Operation) -> bool {
 
 fn served_operation(service: &HttpService, route: &CompiledRoute) -> bool {
     match route.operation {
+        Operation::Invoke => false,
         Operation::Get | Operation::List => true,
         Operation::Lookup => true,
         Operation::Create => service.mutations.is_some(),
@@ -3947,6 +3967,7 @@ fn hex(value: u8) -> Option<u8> {
 
 fn operation_name(operation: Operation) -> &'static str {
     match operation {
+        Operation::Invoke => "invoke",
         Operation::Get => "get",
         Operation::List => "list",
         Operation::Lookup => "lookup",

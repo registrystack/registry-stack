@@ -78,6 +78,12 @@ and an omitted-row-restriction exercise. `explain access` shows effective field
 permissions; `check --deny-findings` makes review findings blocking for automation.
 Entity `accessRequirements` are mandatory compiler checks, not additional grants.
 
+For configured atomic writes across records, see [Immediate actions](immediate-actions.md).
+The create-only asset example introduces typed inputs, fixed effects and an
+action-only grant. The household example adds narrow target conditions and
+recovery from stale input or a lost response. Mandatory reviewed change control
+still applies to every targeted operation.
+
 The pilot lifecycle uses the published `registry-serverctl` and
 `registry-server` executables. It does not require a Rust change for a new
 configured domain or a compatible additive schema change.

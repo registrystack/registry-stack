@@ -602,6 +602,7 @@ enum OutputFormat {
 enum ArtifactSelector {
     Openapi,
     Schemas,
+    Actions,
     Manifest,
     Metadata,
     Sql,
@@ -614,6 +615,7 @@ enum ExplainSubject {
     Access,
     Routes,
     Queries,
+    Actions,
     ChangeRequests,
     Events,
 }
@@ -1028,12 +1030,27 @@ impl CapturedPackageCandidate {
         &self,
         config: &registry_server::runtime_config::RuntimeConfig,
     ) -> Result<(), TestLifecycleError> {
-        if config.identity().environment() != self.environment
-            || config.identity().instance_id() != self.instance_id
-            || config.identity().database_id() != self.database_id
-            || config.package().compiler_source_revision() != self.compiler_source_revision
-        {
-            return Err(TestLifecycleError::Candidate);
+        for (path, matches) in [
+            (
+                "runtimeConfig.identity.environment",
+                config.identity().environment() == self.environment,
+            ),
+            (
+                "runtimeConfig.identity.instanceId",
+                config.identity().instance_id() == self.instance_id,
+            ),
+            (
+                "runtimeConfig.identity.databaseId",
+                config.identity().database_id() == self.database_id,
+            ),
+            (
+                "runtimeConfig.package.compilerSourceRevision",
+                config.package().compiler_source_revision() == self.compiler_source_revision,
+            ),
+        ] {
+            if !matches {
+                return Err(TestLifecycleError::CandidateBinding { path });
+            }
         }
         Ok(())
     }
@@ -2014,6 +2031,16 @@ fn package_lifecycle_failure(error: PackageLifecycleError) -> FailureReport {
 
 fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
     let error = match error {
+        TestLifecycleError::CandidateBinding { path } => {
+            return candidate_failure(
+                "test",
+                "test.candidate.refused",
+                path,
+                "the runtime identity must match the project package identity and the --database-id selection",
+                DiagnosticArtifact::SchemaTestCandidate,
+                SuggestedAction::CorrectSchemaTestCandidate,
+            );
+        }
         TestLifecycleError::JourneyStep { path, message } => {
             return FailureReport {
                 ok: false,
@@ -2052,6 +2079,7 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
         TestLifecycleError::RuntimeConfig(_) => unreachable!("handled before match"),
         TestLifecycleError::JourneySyntax { .. } => unreachable!("handled before match"),
         TestLifecycleError::JourneyStep { .. } => unreachable!("handled before match"),
+        TestLifecycleError::CandidateBinding { .. } => unreachable!("handled before match"),
         TestLifecycleError::Candidate => (
             "test.candidate.refused",
             "candidate",
@@ -2782,8 +2810,9 @@ fn explain(
                 serde_json::to_value(registry_server::access::explain_access(&compiled))
             }
         }
-        ExplainSubject::Routes => serde_json::to_value(compiled.routes()),
+        ExplainSubject::Routes => explain_routes(&compiled),
         ExplainSubject::Queries => explain_queries(&compiled),
+        ExplainSubject::Actions => explain_actions(&compiled),
         ExplainSubject::ChangeRequests => explain_change_requests(&compiled),
         ExplainSubject::Events => serde_json::to_value(compiled.event_deliveries()),
     }
@@ -3491,7 +3520,14 @@ fn selected_artifacts(
         .values()
         .filter(|artifact| match selector {
             ArtifactSelector::Openapi => artifact.path == "generated/openapi.json",
-            ArtifactSelector::Schemas => artifact.path.starts_with("generated/schemas/"),
+            ArtifactSelector::Schemas => {
+                artifact.path.starts_with("generated/schemas/")
+                    || artifact.path.starts_with("generated/action-schemas/")
+            }
+            ArtifactSelector::Actions => {
+                artifact.path == "compiled/actions.json"
+                    || artifact.path.starts_with("generated/action-schemas/")
+            }
             ArtifactSelector::Manifest => artifact.path.starts_with("generated/manifest/"),
             ArtifactSelector::Metadata => artifact.path == "generated/metadata/registry.json",
             ArtifactSelector::Sql => artifact.path == "generated/postgres/schema.sql",
@@ -3662,6 +3698,146 @@ fn explain_change_requests(compiled: &CompiledRegistry) -> serde_json::Result<Va
         "requests": requests,
         "controlledWrites": controlled_writes,
     }))
+}
+
+fn explain_routes(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
+    let mut value = serde_json::to_value(compiled.routes())?;
+    if compiled.actions().routes.is_empty() {
+        return Ok(value);
+    }
+    let routes = value
+        .get_mut("routes")
+        .and_then(Value::as_array_mut)
+        .expect("compiled routes serialize with a routes array");
+    routes.extend(compiled.actions().routes.iter().map(|route| {
+        json!({
+            "id": route.id,
+            "actionId": route.action_id,
+            "actionRouteKind": action_route_kind_wire_name(route.kind),
+            "method": route.method,
+            "path": route.path,
+            "operation": operation_wire_name(route.operation),
+            "accessProfiles": route.access_profiles,
+            "defaultAccessProfile": route.default_access_profile,
+            "requiresIdempotencyKey": route.kind == registry_server::model::ActionRouteKind::Invoke,
+        })
+    }));
+    Ok(value)
+}
+
+fn explain_actions(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
+    let actions = compiled
+        .actions()
+        .actions
+        .iter()
+        .map(|action| {
+            let routes = compiled
+                .actions()
+                .routes
+                .iter()
+                .filter(|route| route.action_id == action.id)
+                .map(|route| {
+                    json!({
+                        "id": route.id,
+                        "kind": action_route_kind_wire_name(route.kind),
+                        "method": "POST",
+                        "path": route.path,
+                        "operation": operation_wire_name(route.operation),
+                        "accessProfiles": route.access_profiles,
+                        "defaultAccessProfile": route.default_access_profile,
+                        "requiresIdempotencyKey": route.kind == registry_server::model::ActionRouteKind::Invoke,
+                    })
+                })
+                .collect::<Vec<_>>();
+            json!({
+                "id": action.id,
+                "sourceModule": action.source_module,
+                "contractFingerprint": action.contract_fingerprint,
+                "routes": routes,
+                "inputs": action.inputs.iter().map(action_input_summary).collect::<Vec<_>>(),
+                "effects": action.effects.iter().map(|effect| {
+                    let target_entity = compiled.entities().get(&effect.target.entity_id);
+                    json!({
+                        "id": effect.id,
+                        "operation": operation_wire_name(effect.operation),
+                        "target": action_target_summary(effect),
+                        "fields": effect.mutations.iter().map(|mutation| match mutation {
+                            registry_server::model::CompiledActionMutation::Set { field, value } => json!({
+                                "kind": "set",
+                                "target": field_summary_optional(target_entity, field),
+                                "value": match value {
+                                    registry_server::model::CompiledActionValue::FromInput { input } => {
+                                        json!({"kind": "from_input", "input": action_input_identity(action, input)})
+                                    }
+                                    registry_server::model::CompiledActionValue::FromEffect { effect, target_entity_id } => {
+                                        json!({"kind": "from_effect", "effect": effect, "targetEntity": target_entity_id})
+                                    }
+                                },
+                            }),
+                            registry_server::model::CompiledActionMutation::Clear { field } => json!({
+                                "kind": "clear",
+                                "target": field_summary_optional(target_entity, field),
+                            }),
+                        }).collect::<Vec<_>>(),
+                        "dependsOn": effect.depends_on.iter().collect::<Vec<_>>(),
+                    })
+                }).collect::<Vec<_>>(),
+                "targets": action.target_uses.iter().map(|target| json!({
+                    "entity": target.entity_id,
+                    "operation": operation_wire_name(target.operation),
+                    "fields": target.fields.iter()
+                        .map(|field| field_summary_optional(compiled.entities().get(&target.entity_id), field))
+                        .collect::<Vec<_>>(),
+                    "source": match &target.source {
+                        registry_server::model::CompiledActionTargetUseSource::Effect { effect } => {
+                            json!({"kind": "effect", "effect": effect})
+                        }
+                        registry_server::model::CompiledActionTargetUseSource::Input { input } => {
+                            json!({"kind": "input", "input": action_input_identity(action, input)})
+                        }
+                    },
+                    "conditionRequired": target.condition_required,
+                })).collect::<Vec<_>>(),
+                "requiredConditionKeys": action.target_uses.iter()
+                    .filter(|target| target.condition_required)
+                    .filter_map(|target| match &target.source {
+                        registry_server::model::CompiledActionTargetUseSource::Input { input } => {
+                            action.inputs.iter().find(|candidate| candidate.id == *input)
+                        }
+                        registry_server::model::CompiledActionTargetUseSource::Effect { .. } => None,
+                    })
+                    .map(|input| input.api_name.as_str())
+                    .collect::<BTreeSet<_>>(),
+                "grants": action.grants.iter().map(|grant| json!({
+                    "profile": grant.profile_id,
+                    "default": grant.default,
+                    "anonymous": grant.anonymous,
+                    "requiredScopes": grant.required_scopes,
+                    "requiredPurposes": grant.required_purposes,
+                    "operations": grant.operations.iter().map(|operation| operation_wire_name(*operation)).collect::<Vec<_>>(),
+                    "targets": grant.targets.iter().map(|target| json!({
+                        "entity": target.entity_id,
+                        "rowBoundaries": target.row_boundaries,
+                    })).collect::<Vec<_>>(),
+                    "results": grant.results,
+                })).collect::<Vec<_>>(),
+                "results": action.effects.iter()
+                    .filter(|effect| action.result_effects.contains(&effect.id))
+                    .map(|effect| json!({
+                        "effect": effect.id,
+                        "entity": effect.target.entity_id,
+                        "operation": operation_wire_name(effect.operation),
+                    }))
+                    .collect::<Vec<_>>(),
+                "bounds": {
+                    "maximumTargets": action.maximum_targets,
+                    "maximumFieldMutations": action.maximum_field_mutations,
+                    "maximumSnapshotBytes": action.maximum_snapshot_bytes,
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::to_value(json!({ "actions": actions }))
 }
 
 fn explain_queries(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
@@ -3842,6 +4018,48 @@ fn field_api_name<'a>(
         })
 }
 
+fn action_input_summary(input: &registry_server::model::CompiledActionInput) -> Value {
+    json!({
+        "input": input.id,
+        "apiName": input.api_name,
+        "fieldType": input.field_type,
+        "required": input.required,
+        "classification": input.classification,
+    })
+}
+
+fn action_input_identity(action: &registry_server::model::CompiledAction, input_id: &str) -> Value {
+    action
+        .inputs
+        .iter()
+        .find(|input| input.id == input_id)
+        .map(action_input_summary)
+        .unwrap_or_else(|| json!({"input": input_id}))
+}
+
+fn action_target_summary(effect: &registry_server::model::CompiledActionEffect) -> Value {
+    match &effect.target.binding {
+        registry_server::model::CompiledActionTargetBinding::Create => json!({
+            "entity": effect.target.entity_id,
+            "binding": {"kind": "create"},
+        }),
+        registry_server::model::CompiledActionTargetBinding::Existing { input } => json!({
+            "entity": effect.target.entity_id,
+            "binding": {
+                "kind": "existing",
+                "input": input,
+            },
+        }),
+    }
+}
+
+fn action_route_kind_wire_name(kind: registry_server::model::ActionRouteKind) -> &'static str {
+    match kind {
+        registry_server::model::ActionRouteKind::Invoke => "invoke",
+        registry_server::model::ActionRouteKind::TargetConditions => "target_conditions",
+    }
+}
+
 fn request_action_preconditions(
     operation: registry_server::contract::Operation,
 ) -> Vec<&'static str> {
@@ -3876,6 +4094,7 @@ fn operation_wire_name(operation: registry_server::contract::Operation) -> &'sta
         registry_server::contract::Operation::ReviseRequest => "revise_request",
         registry_server::contract::Operation::CancelRequest => "cancel_request",
         registry_server::contract::Operation::ApplyRequest => "apply_request",
+        registry_server::contract::Operation::Invoke => "invoke",
     }
 }
 

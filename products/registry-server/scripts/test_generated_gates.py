@@ -32,6 +32,30 @@ class GeneratedGateTests(unittest.TestCase):
             errors = COMPARATOR.compare(baseline, candidate)
         self.assertTrue(any("candidate is missing expected artifacts" in error for error in errors), errors)
 
+    def test_comparator_requires_action_inventory_and_target_condition_schemas(self) -> None:
+        baselines = SCRIPT_DIR.parent / "generated"
+        self.assertEqual([], COMPARATOR.compare(
+            baselines / "asset-registration-actions",
+            baselines / "asset-registration-actions",
+        ))
+        self.assertEqual([], COMPARATOR.compare(
+            baselines / "household-contact-actions",
+            baselines / "household-contact-actions",
+        ))
+
+        with tempfile.TemporaryDirectory() as temporary:
+            candidate = Path(temporary) / "candidate"
+            shutil.copytree(baselines / "household-contact-actions", candidate)
+            (candidate / "compiled/actions.json").unlink()
+            (
+                candidate
+                / "generated/action-schemas/register-household-contact.target-conditions.response.schema.json"
+            ).unlink()
+            errors = COMPARATOR.compare(baselines / "household-contact-actions", candidate)
+
+        self.assertTrue(any("compiled/actions.json" in error for error in errors), errors)
+        self.assertTrue(any("target-conditions.response.schema.json" in error for error in errors), errors)
+
     def test_generated_gate_script_keeps_a_bounded_database_free_cli_journey(self) -> None:
         generated_gate = (SCRIPT_DIR / "check-generated.sh").read_text(encoding="utf-8")
         self.assertIn("mktemp -d", generated_gate)

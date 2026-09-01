@@ -2,6 +2,7 @@
 
 //! One product-owned PostgreSQL transaction for a complete record mutation.
 
+mod action;
 mod request;
 pub(crate) use request::request_action_etag;
 
@@ -21,7 +22,8 @@ use uuid::Uuid;
 
 use crate::artifacts::event_data_schema_binding;
 use crate::audit::{
-    append_terminal_audit, profile_is_keyed, record_pre_io_audit, PreIoAudit, PreIoAuditKind,
+    append_action_terminal_audit, append_terminal_audit, profile_is_keyed,
+    record_action_pre_io_audit, record_pre_io_audit, PreIoAudit, PreIoAuditKind,
     RegistryAuditError, TerminalAudit, TerminalAuditOutcome,
 };
 use crate::compiler::{
@@ -35,17 +37,22 @@ use crate::correlation::RequestCorrelation;
 use crate::data::{validate_field_value, FieldValue};
 use crate::event_destination::ActivatedEventDestinationRegistry;
 use crate::idempotency::{
-    insert_result, lock_and_load, resolve_binding, HeldResponse, IdempotencyBinding,
-    IdempotencyError, PermittedResponseHeader, StoredResultMetadata,
+    insert_result, lock_and_load, resolve_action_binding, resolve_binding,
+    ActionIdempotencyBinding, HeldResponse, IdempotencyBinding, IdempotencyError,
+    PermittedResponseHeader, StoredResultMetadata, MAX_IMMEDIATE_ACTION_RESULTS,
 };
 use crate::model::{
-    CompiledEntity, CompiledEventDelivery, CompiledRegistry, CompiledRoute,
-    CompiledWebhookDeliveryMode, CompiledWebhookRetryProfile, HttpMethod,
+    ActionRouteKind, CompiledAction, CompiledActionEffect, CompiledActionMutation,
+    CompiledActionTargetBinding, CompiledActionValue, CompiledEntity, CompiledEventDelivery,
+    CompiledRegistry, CompiledRoute, CompiledWebhookDeliveryMode, CompiledWebhookRetryProfile,
+    HttpMethod,
 };
 use crate::outbox::{insert_configured_events, OutboxError, OutboxMutation};
 use crate::postgres::{
-    begin_record_transaction, ClaimContext, ExpectedRegistryIdentity, RegistryLockKey,
-    SqlIdentifier,
+    begin_action_transaction, begin_record_transaction, ActionClaimContext, ClaimContext,
+    ExpectedRegistryIdentity, ImmediateActionLinkBinding, ImmediateActionLinkContext,
+    ImmediateActionTargetBinding, ImmediateActionTargetContext, RegistryLockKey,
+    RowBoundaryContext, SqlIdentifier,
 };
 use crate::revision::{canonical_snapshot, insert_revision, RevisionError, RevisionInsert};
 
@@ -61,7 +68,7 @@ pub async fn install_mutation_schema(
     runtime_role: &SqlIdentifier,
 ) -> Result<(), MutationError> {
     migration
-        .batch_execute(
+        .batch_execute(&format!(
             "CREATE TABLE IF NOT EXISTS registry_internal.registry_revisions (
                  entity_id text NOT NULL CHECK (entity_id <> ''),
                  record_id uuid NOT NULL,
@@ -105,6 +112,7 @@ pub async fn install_mutation_schema(
                  entity_id text NOT NULL CHECK (entity_id <> ''),
                  record_reference text NOT NULL CHECK (record_reference <> ''),
                  record_revision bigint NOT NULL CHECK (record_revision > 0),
+                 application_reference text CHECK (application_reference IS NULL OR application_reference <> ''),
                  package_revision text NOT NULL CHECK (package_revision <> ''),
                  schema_fingerprint text NOT NULL CHECK (schema_fingerprint <> ''),
                  payload bytea
@@ -121,9 +129,9 @@ pub async fn install_mutation_schema(
                  compiled_delivery_id text NOT NULL
                      CHECK (compiled_delivery_id <> '' AND octet_length(compiled_delivery_id) <= 256),
                  logical_destination_id text NOT NULL
-                     CHECK (logical_destination_id ~ '^[a-z][a-z0-9_-]{0,63}$'),
+                     CHECK (logical_destination_id ~ '^[a-z][a-z0-9_-]{{0,63}}$'),
                  destination_binding_digest text NOT NULL
-                     CHECK (destination_binding_digest ~ '^sha256:[0-9a-f]{64}$'),
+                     CHECK (destination_binding_digest ~ '^sha256:[0-9a-f]{{64}}$'),
                  package_revision text NOT NULL
                      CHECK (package_revision <> '' AND octet_length(package_revision) <= 256),
                  schema_fingerprint text NOT NULL
@@ -260,10 +268,11 @@ pub async fn install_mutation_schema(
              CREATE TABLE IF NOT EXISTS registry_internal.registry_idempotency (
                  key_reference text PRIMARY KEY CHECK (key_reference <> ''),
                  binding_reference text NOT NULL CHECK (binding_reference <> ''),
-                 result_kind text NOT NULL CHECK (result_kind IN ('record', 'batch', 'application')),
+                 result_kind text NOT NULL CHECK (result_kind IN ('record', 'batch', 'application', 'immediate_action')),
                  record_reference text CHECK (record_reference <> ''),
                  record_revision bigint CHECK (record_revision > 0),
-                 result_count smallint CHECK (result_count > 0 AND result_count <= 100),
+                 result_count smallint CHECK (result_count BETWEEN 1 AND 100 OR
+                     (result_kind = 'immediate_action' AND result_count BETWEEN 0 AND {MAX_IMMEDIATE_ACTION_RESULTS})),
                  proposal_version bigint CHECK (proposal_version > 0),
                  response_status smallint NOT NULL CHECK (response_status BETWEEN 200 AND 299),
                  response_body bytea NOT NULL
@@ -283,7 +292,40 @@ pub async fn install_mutation_schema(
                          AND record_revision IS NOT NULL AND result_count IS NOT NULL
                          AND result_count BETWEEN 1 AND 16
                          AND proposal_version IS NOT NULL)
+                     OR
+                     (result_kind = 'immediate_action' AND record_reference IS NULL
+                         AND record_revision IS NULL AND result_count IS NOT NULL
+                         AND result_count BETWEEN 0 AND {MAX_IMMEDIATE_ACTION_RESULTS}
+                         AND proposal_version IS NULL)
                  )
+             );
+             CREATE TABLE IF NOT EXISTS registry_internal.registry_immediate_action_results (
+                 key_reference text NOT NULL
+                     REFERENCES registry_internal.registry_idempotency(key_reference)
+                     ON DELETE CASCADE,
+                 effect_id text NOT NULL CHECK (effect_id <> ''),
+                 action_id text NOT NULL CHECK (action_id <> ''),
+                 target_entity_id text NOT NULL CHECK (target_entity_id <> ''),
+                 target_record_id uuid NOT NULL,
+                 target_record_reference text NOT NULL CHECK (target_record_reference <> ''),
+                 target_record_revision bigint NOT NULL CHECK (target_record_revision > 0),
+                 mutation_kind text NOT NULL CHECK (mutation_kind IN ('create', 'patch')),
+                 created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+                 PRIMARY KEY (key_reference, effect_id)
+             );
+             CREATE TABLE IF NOT EXISTS registry_internal.registry_immediate_action_applications (
+                 key_reference text PRIMARY KEY
+                     REFERENCES registry_internal.registry_idempotency(key_reference)
+                     ON DELETE CASCADE,
+                 binding_reference text NOT NULL CHECK (binding_reference <> ''),
+                 application_id uuid NOT NULL UNIQUE,
+                 action_id text NOT NULL CHECK (action_id <> ''),
+                 action_contract_fingerprint text NOT NULL
+                     CHECK (action_contract_fingerprint ~ '^sha256:[0-9a-f]{{64}}$'),
+                 package_revision text NOT NULL CHECK (package_revision <> ''),
+                 principal_reference text NOT NULL CHECK (principal_reference <> ''),
+                 result_count smallint NOT NULL CHECK (result_count >= 0 AND result_count <= {MAX_IMMEDIATE_ACTION_RESULTS}),
+                 created_at timestamptz NOT NULL DEFAULT transaction_timestamp()
              );
              REVOKE ALL ON registry_internal.registry_revisions,
                  registry_internal.registry_outbox,
@@ -291,18 +333,26 @@ pub async fn install_mutation_schema(
                  registry_internal.registry_webhook_delivery_state,
                  registry_internal.registry_audit,
                  registry_internal.registry_audit_head,
-                 registry_internal.registry_idempotency FROM PUBLIC;",
-        )
+                 registry_internal.registry_idempotency,
+                 registry_internal.registry_immediate_action_results,
+                 registry_internal.registry_immediate_action_applications FROM PUBLIC;",
+        ))
         .await
         .map_err(|_| MutationError::Unavailable)?;
     // Existing databases keep record/batch receipts intact while admitting the
     // separately typed, proposal-bound result of an atomic application.
     migration
-        .batch_execute(
+        .batch_execute(&format!(
             "ALTER TABLE registry_internal.registry_idempotency
                  ADD COLUMN IF NOT EXISTS proposal_version bigint CHECK (proposal_version > 0);
              ALTER TABLE registry_internal.registry_idempotency
                  ADD COLUMN IF NOT EXISTS erased_at timestamptz;
+             ALTER TABLE registry_internal.registry_idempotency
+                 DROP CONSTRAINT IF EXISTS registry_idempotency_result_count_check;
+             ALTER TABLE registry_internal.registry_idempotency
+                 ADD CONSTRAINT registry_idempotency_result_count_check
+                     CHECK (result_count IS NULL OR result_count BETWEEN 1 AND 100 OR
+                         (result_kind = 'immediate_action' AND result_count BETWEEN 0 AND {MAX_IMMEDIATE_ACTION_RESULTS}));
              ALTER TABLE registry_internal.registry_idempotency
                  ALTER COLUMN response_body DROP NOT NULL;
              ALTER TABLE registry_internal.registry_idempotency
@@ -322,7 +372,7 @@ pub async fn install_mutation_schema(
                  DROP CONSTRAINT IF EXISTS registry_idempotency_result_shape;
              ALTER TABLE registry_internal.registry_idempotency
                  ADD CONSTRAINT registry_idempotency_result_kind_check
-                     CHECK (result_kind IN ('record', 'batch', 'application')),
+                     CHECK (result_kind IN ('record', 'batch', 'application', 'immediate_action')),
                  ADD CONSTRAINT registry_idempotency_result_shape CHECK (
                      (result_kind = 'record' AND record_reference IS NOT NULL
                          AND record_revision IS NOT NULL AND result_count IS NULL
@@ -336,8 +386,13 @@ pub async fn install_mutation_schema(
                          AND record_revision IS NOT NULL AND result_count IS NOT NULL
                          AND result_count BETWEEN 1 AND 16
                          AND proposal_version IS NOT NULL)
+                     OR
+                     (result_kind = 'immediate_action' AND record_reference IS NULL
+                         AND record_revision IS NULL AND result_count IS NOT NULL
+                         AND result_count BETWEEN 0 AND {MAX_IMMEDIATE_ACTION_RESULTS}
+                         AND proposal_version IS NULL)
                  );",
-        )
+        ))
         .await
         .map_err(|_| MutationError::Unavailable)?;
     // `CREATE TABLE IF NOT EXISTS` does not evolve databases activated by an
@@ -352,6 +407,9 @@ pub async fn install_mutation_schema(
         .batch_execute(
             "ALTER TABLE registry_internal.registry_outbox
                  ADD COLUMN IF NOT EXISTS payload_expires_at timestamptz;
+             ALTER TABLE registry_internal.registry_outbox
+                 ADD COLUMN IF NOT EXISTS application_reference text
+                     CHECK (application_reference IS NULL OR application_reference <> '');
              ALTER TABLE registry_internal.registry_outbox
                  DROP CONSTRAINT IF EXISTS registry_outbox_trigger_check;
              ALTER TABLE registry_internal.registry_outbox
@@ -534,12 +592,16 @@ pub async fn install_mutation_schema(
                  registry_internal.registry_webhook_delivery_state,
                  registry_internal.registry_audit,
                  registry_internal.registry_audit_head,
-                 registry_internal.registry_idempotency FROM \"{role}\";
+                 registry_internal.registry_idempotency,
+                 registry_internal.registry_immediate_action_results,
+                 registry_internal.registry_immediate_action_applications FROM \"{role}\";
              GRANT SELECT, INSERT ON registry_internal.registry_revisions,
                  registry_internal.registry_outbox,
                  registry_internal.registry_webhook_deliveries,
                  registry_internal.registry_audit,
-                 registry_internal.registry_idempotency TO \"{role}\";
+                 registry_internal.registry_idempotency,
+                 registry_internal.registry_immediate_action_results,
+                 registry_internal.registry_immediate_action_applications TO \"{role}\";
              GRANT UPDATE (payload) ON registry_internal.registry_outbox TO \"{role}\";
              GRANT SELECT, INSERT, UPDATE
                  ON registry_internal.registry_webhook_delivery_state TO \"{role}\";
@@ -1111,7 +1173,8 @@ impl MutationCoordinator {
                     outcome: TerminalAuditOutcome::Replayed,
                     method: request.plan.route.method,
                     operation_id: request.plan.route.id.clone(),
-                    entity_id: request.plan.entity.id.clone(),
+                    entity_id: Some(request.plan.entity.id.clone()),
+                    action_id: None,
                     package_revision: self.expected.package_revision.clone(),
                     selected_access_profile: request.claims.access_profile().to_owned(),
                     purpose_present: request.claims.purpose().is_some(),
@@ -1121,14 +1184,16 @@ impl MutationCoordinator {
                             record_reference, ..
                         } => Some(record_reference.clone()),
                         StoredResultMetadata::Batch { .. }
-                        | StoredResultMetadata::Application { .. } => None,
+                        | StoredResultMetadata::Application { .. }
+                        | StoredResultMetadata::ImmediateAction { .. } => None,
                     },
                     record_revision: match &stored.metadata {
                         StoredResultMetadata::Record {
                             record_revision, ..
                         } => Some(*record_revision),
                         StoredResultMetadata::Batch { .. }
-                        | StoredResultMetadata::Application { .. } => None,
+                        | StoredResultMetadata::Application { .. }
+                        | StoredResultMetadata::ImmediateAction { .. } => None,
                     },
                     result_count: None,
                     field_set_reference: None,
@@ -1203,6 +1268,7 @@ impl MutationCoordinator {
             self.event_destinations.as_deref(),
             OutboxMutation {
                 trigger: mutation_trigger(request.plan.route.operation),
+                application_reference: None,
                 entity_id: &request.plan.entity.id,
                 record_id: &current.record_id,
                 record_reference: &record_reference,
@@ -1229,7 +1295,8 @@ impl MutationCoordinator {
                 outcome: TerminalAuditOutcome::Committed,
                 method: request.plan.route.method,
                 operation_id: request.plan.route.id.clone(),
-                entity_id: request.plan.entity.id.clone(),
+                entity_id: Some(request.plan.entity.id.clone()),
+                action_id: None,
                 package_revision: self.expected.package_revision.clone(),
                 selected_access_profile: request.claims.access_profile().to_owned(),
                 purpose_present: request.claims.purpose().is_some(),
@@ -1316,7 +1383,8 @@ impl MutationCoordinator {
                     outcome: TerminalAuditOutcome::Replayed,
                     method: request.plan.route.method,
                     operation_id: request.plan.route.id.clone(),
-                    entity_id: request.plan.entity.id.clone(),
+                    entity_id: Some(request.plan.entity.id.clone()),
+                    action_id: None,
                     package_revision: self.expected.package_revision.clone(),
                     selected_access_profile: request.claims.access_profile().to_owned(),
                     purpose_present: request.claims.purpose().is_some(),
@@ -1408,6 +1476,7 @@ impl MutationCoordinator {
                 self.event_destinations.as_deref(),
                 OutboxMutation {
                     trigger: mutation_trigger(item_plan.route.operation),
+                    application_reference: None,
                     entity_id: &item_plan.entity.id,
                     record_id: &current.record_id,
                     record_reference: &record_reference,
@@ -1452,7 +1521,8 @@ impl MutationCoordinator {
                 outcome: TerminalAuditOutcome::Committed,
                 method: request.plan.route.method,
                 operation_id: request.plan.route.id.clone(),
-                entity_id: request.plan.entity.id.clone(),
+                entity_id: Some(request.plan.entity.id.clone()),
+                action_id: None,
                 package_revision: self.expected.package_revision.clone(),
                 selected_access_profile: request.claims.access_profile().to_owned(),
                 purpose_present: request.claims.purpose().is_some(),
@@ -1720,6 +1790,7 @@ impl FaultControl {
     }
 }
 
+#[derive(Clone)]
 struct CurrentRow {
     record_uuid: Uuid,
     record_id: String,

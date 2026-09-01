@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -9,7 +9,8 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use super::context::{
-    AuthorizedRequestContext, VerifiedRequestTargetAuthority, VerifiedRowBoundary,
+    AuthorizedActionContext, AuthorizedRequestContext, VerifiedRequestTargetAuthority,
+    VerifiedRowBoundary,
 };
 use crate::contract::FieldTypeSource;
 use crate::correlation::RequestCorrelation;
@@ -146,6 +147,28 @@ pub struct RequestActionInput<'a> {
     pub action: RequestActionBody,
     pub response_fields: BTreeSet<String>,
     pub target_authority: Vec<RequestActionTargetAuthority>,
+    pub correlation: &'a RequestCorrelation,
+}
+
+/// One invocation whose input and condition keys have been resolved to logical
+/// action input IDs. The runtime still validates values, targets and authority.
+pub struct ImmediateActionInput<'a> {
+    pub route_id: &'a str,
+    pub action_id: &'a str,
+    pub idempotency_key: &'a str,
+    pub context: &'a AuthorizedActionContext,
+    pub input: serde_json::Map<String, Value>,
+    pub preconditions: BTreeMap<String, String>,
+    pub body_bytes: usize,
+    pub correlation: &'a RequestCorrelation,
+}
+
+/// Exact-ID condition acquisition under an action's selected authority.
+pub struct ActionTargetConditionsInput<'a> {
+    pub route_id: &'a str,
+    pub action_id: &'a str,
+    pub context: &'a AuthorizedActionContext,
+    pub input: serde_json::Map<String, Value>,
     pub correlation: &'a RequestCorrelation,
 }
 

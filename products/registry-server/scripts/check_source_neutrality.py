@@ -273,16 +273,61 @@ def without_cfg_test_items(source: str) -> str:
 def rust_string_literals(source: str) -> list[str]:
     """Return simple and raw Rust string bodies for identifier inspection."""
     literals: list[str] = []
-    raw_pattern = re.compile(r'(?:br|r)(?P<hashes>#{0,255})"(?P<body>.*?)"(?P=hashes)', re.DOTALL)
-    occupied: list[tuple[int, int]] = []
-    for match in raw_pattern.finditer(source):
-        literals.append(match.group("body"))
-        occupied.append(match.span())
-    ordinary_pattern = re.compile(r'b?"(?P<body>(?:\\.|[^"\\])*)"', re.DOTALL)
-    for match in ordinary_pattern.finditer(source):
-        if any(start <= match.start() < end for start, end in occupied):
+    index = 0
+    while index < len(source):
+        raw = re.match(r"(?:br|r)(?P<hashes>#{0,255})\"", source[index:])
+        if raw:
+            body_start = index + len(raw.group(0))
+            delimiter = '"' + raw.group("hashes")
+            end = source.find(delimiter, body_start)
+            if end < 0:
+                break
+            literals.append(source[body_start:end])
+            index = end + len(delimiter)
             continue
-        literals.append(match.group("body"))
+        if source.startswith('b"', index) or source[index] == '"':
+            quote_index = index + 1 if source.startswith("b", index) else index
+            body_start = quote_index + 1
+            body: list[str] = []
+            position = body_start
+            while position < len(source):
+                character = source[position]
+                if character == "\\":
+                    if position + 1 < len(source):
+                        body.append(source[position : position + 2])
+                        position += 2
+                        continue
+                    body.append(character)
+                    position += 1
+                    continue
+                if character == '"':
+                    break
+                body.append(character)
+                position += 1
+            literals.append("".join(body))
+            index = position + 1
+            continue
+        if source.startswith("b'", index) or source[index] == "'":
+            quote_index = index + 1 if source.startswith("b", index) else index
+            position = quote_index + 1
+            saw_body = False
+            while position < len(source):
+                character = source[position]
+                if character == "\\":
+                    saw_body = True
+                    position += 2
+                    continue
+                if character == "'":
+                    position += 1
+                    break
+                if character.isspace():
+                    break
+                saw_body = True
+                position += 1
+            if saw_body and position <= len(source) and source[position - 1 : position] == "'":
+                index = position
+                continue
+        index += 1
     return literals
 
 

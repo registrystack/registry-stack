@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::artifacts::{event_data_schema_binding, generate_artifacts};
 use crate::contract::{
-    parsed_bbox, valid_decimal_bounds, valid_structured_schema, AccessProfileSource,
+    parsed_bbox, valid_decimal_bounds, valid_structured_schema, AccessProfileSource, ActionSource,
     Classification, ConstraintSource, DerivedExecutionSource, DerivedFieldSource,
     EntityExtensionSource, EntitySource, EventConditionSource, EventScalarValue, EventTrigger,
     FieldSource, FieldTypeSource, LookupValueOrigin, ManifestProjectionTextSource,
@@ -21,7 +21,8 @@ use crate::contract::{
 };
 use crate::derived_sql::{validate_derived_sql, MAX_DERIVED_SQL_BYTES};
 use crate::diagnostics::{CompileFailure, Diagnostic};
-use crate::generated_ddl::generate_ddl;
+use crate::generated_ddl::generate_ddl_with_actions;
+use crate::immediate_actions::{compile_immediate_actions, CollectedActionSource};
 use crate::logical_names::{
     default_api_name, default_sql_name, reserved_logical_name, valid_api_name,
 };
@@ -65,7 +66,11 @@ pub const MAX_EVENT_PACKAGE_REVISION_BYTES: u32 = 256;
 pub const MAX_WEBHOOK_PAYLOAD_BYTES: u32 = 1_048_576;
 pub const WEBHOOK_BACKOFF_MULTIPLIER: u8 = 2;
 
-type CollectedEntities = (BTreeMap<String, EntitySource>, DerivedOriginMap);
+type CollectedEntities = (
+    BTreeMap<String, EntitySource>,
+    DerivedOriginMap,
+    BTreeMap<String, CollectedActionSource>,
+);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -102,7 +107,7 @@ pub fn compile_project_with_assets(
         &mut findings,
     );
     let (module_order, module_map) = order_modules(project, modules, &mut diagnostics);
-    let (mut sources, mut derived_origins) =
+    let (mut sources, mut derived_origins, mut action_sources) =
         collect_entities(project, &module_order, &module_map, &mut diagnostics);
     apply_temporal_roles(&mut sources, &mut diagnostics);
     apply_extensions(
@@ -114,7 +119,7 @@ pub fn compile_project_with_assets(
     );
     validate_project_entity_access_profiles(project, &mut diagnostics);
     expand_project_access(project, &mut sources, &mut diagnostics);
-    resolve_vocabularies(project, &mut sources, &mut diagnostics);
+    resolve_vocabularies(project, &mut sources, &mut action_sources, &mut diagnostics);
     validate_entities(&sources, profile, &mut diagnostics);
     crate::access::validate_access_requirements(&sources, &mut diagnostics);
     findings.extend(crate::access::access_findings(&sources));
@@ -126,6 +131,9 @@ pub fn compile_project_with_assets(
     let (mut entities, physical_names) = compile_entities(&sources, &derived_origins, assets)?;
     crate::change_request::compile_change_requests(&sources, &mut entities)
         .map_err(CompileFailure::from_errors)?;
+    let action_inventory =
+        compile_immediate_actions(&action_sources, &entities, &project.access_profiles)
+            .map_err(CompileFailure::from_errors)?;
     let (route_inventory, access_inventory) = compile_routes_and_access(&entities)?;
     let metadata_inventory = compile_metadata_inventory(
         &project.registry.id,
@@ -143,7 +151,7 @@ pub fn compile_project_with_assets(
     if !diagnostics.is_empty() {
         return Err(CompileFailure::from_errors(diagnostics));
     }
-    let ddl = generate_ddl(&entities, &physical_names);
+    let ddl = generate_ddl_with_actions(&entities, &physical_names, &action_inventory);
     let artifacts = generate_artifacts(
         &project.registry.id,
         &project.registry.version,
@@ -154,6 +162,7 @@ pub fn compile_project_with_assets(
         &module_closure,
         &entities,
         &physical_names,
+        &action_inventory,
         &route_inventory,
         &access_inventory,
         &metadata_inventory,
@@ -182,6 +191,7 @@ pub fn compile_project_with_assets(
         module_closure,
         entities,
         physical_names,
+        action_inventory,
         route_inventory,
         access_inventory,
         metadata_inventory,
@@ -790,6 +800,7 @@ fn collect_entities(
 ) -> CollectedEntities {
     let mut entities = BTreeMap::new();
     let mut derived_origins = BTreeMap::new();
+    let mut actions = BTreeMap::new();
     for entity in &project.entities {
         insert_entity(
             &mut entities,
@@ -799,6 +810,9 @@ fn collect_entities(
             "project.entities[].id",
             errors,
         );
+    }
+    for action in &project.actions {
+        insert_action(&mut actions, action, None, "project.actions[].id", errors);
     }
     for module_id in module_order {
         if let Some(module) = modules.get(module_id) {
@@ -812,9 +826,18 @@ fn collect_entities(
                     errors,
                 );
             }
+            for action in &module.actions {
+                insert_action(
+                    &mut actions,
+                    action,
+                    Some(module.id.clone()),
+                    "modules[].actions[].id",
+                    errors,
+                );
+            }
         }
     }
-    (entities, derived_origins)
+    (entities, derived_origins, actions)
 }
 
 fn insert_entity(
@@ -835,6 +858,31 @@ fn insert_entity(
     }
     for derived in &entity.derived {
         derived_origins.insert((entity.id.clone(), derived.id.clone()), module.clone());
+    }
+}
+
+fn insert_action(
+    actions: &mut BTreeMap<String, CollectedActionSource>,
+    action: &ActionSource,
+    module: Option<String>,
+    path: &str,
+    errors: &mut Vec<Diagnostic>,
+) {
+    if actions
+        .insert(
+            action.id.clone(),
+            CollectedActionSource {
+                source: action.clone(),
+                source_module: module,
+            },
+        )
+        .is_some()
+    {
+        errors.push(Diagnostic::error(
+            "action.id.duplicate",
+            path,
+            "an action identifier is contributed more than once",
+        ));
     }
 }
 
@@ -1121,6 +1169,31 @@ fn expand_project_access(
         }
         let mut granted_entities = BTreeSet::new();
         for grant in &profile.grants {
+            if grant.action.is_some() {
+                if !grant.entity.is_empty() {
+                    errors.push(Diagnostic::error(
+                        "access_profile.grant.target_exclusive",
+                        "project.accessProfiles[].grants[]",
+                        "an access grant must name either one entity or one action",
+                    ));
+                }
+                continue;
+            }
+            if !grant.targets.is_empty() || !grant.results.is_empty() {
+                errors.push(Diagnostic::error(
+                    "access_profile.grant.action_fields_forbidden",
+                    "project.accessProfiles[].grants[]",
+                    "entity access grants cannot declare action target or result fields",
+                ));
+            }
+            if grant.entity.is_empty() {
+                errors.push(Diagnostic::error(
+                    "access_profile.grant.target_missing",
+                    "project.accessProfiles[].grants[]",
+                    "an access grant must name either one entity or one action",
+                ));
+                continue;
+            }
             if !granted_entities.insert(grant.entity.as_str()) {
                 errors.push(Diagnostic::error(
                     "access_profile.grant.duplicate",
@@ -1178,6 +1251,7 @@ fn expand_project_access(
 fn resolve_vocabularies(
     project: &RegistryProject,
     entities: &mut BTreeMap<String, EntitySource>,
+    actions: &mut BTreeMap<String, CollectedActionSource>,
     errors: &mut Vec<Diagnostic>,
 ) {
     let mut vocabularies = BTreeMap::new();
@@ -1215,6 +1289,23 @@ fn resolve_vocabularies(
                             "field.vocabulary.unknown",
                             "entities[].fields[].vocabulary",
                             "a field refers to an unknown vocabulary",
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    for action in actions.values_mut() {
+        for input in &mut action.source.inputs {
+            if let FieldTypeSource::VocabularyCode { vocabulary, values } = &mut input.field_type {
+                if values.is_empty() {
+                    if let Some(resolved) = vocabularies.get(vocabulary) {
+                        *values = resolved.clone();
+                    } else {
+                        errors.push(Diagnostic::error(
+                            "action.input.vocabulary.unknown",
+                            "actions[].inputs[].vocabulary",
+                            "an action input refers to an unknown vocabulary",
                         ));
                     }
                 }
@@ -2199,6 +2290,7 @@ fn validate_profiles(
                 && matches!(operation, Operation::Patch | Operation::Tombstone))
                 || (*operation == Operation::Tombstone && !entity.tombstone)
                 || (is_request_operation(*operation) && entity.change_request.is_none())
+                || *operation == Operation::Invoke
             {
                 errors.push(Diagnostic::error(
                     "access_profile.operation.unavailable",
@@ -4353,7 +4445,10 @@ fn route_shape(entity: &CompiledEntity, operation: Operation) -> (HttpMethod, St
         | Operation::RequestRevision
         | Operation::ReviseRequest
         | Operation::CancelRequest
-        | Operation::ApplyRequest => unreachable!("request actions use compiled action metadata"),
+        | Operation::ApplyRequest
+        | Operation::Invoke => {
+            unreachable!("request and immediate actions use compiled action metadata")
+        }
     }
 }
 
@@ -4370,7 +4465,7 @@ fn routed_operations() -> [Operation; 8] {
     ]
 }
 
-fn all_operations() -> [Operation; 15] {
+fn all_operations() -> [Operation; 16] {
     [
         Operation::Create,
         Operation::Get,
@@ -4387,6 +4482,7 @@ fn all_operations() -> [Operation; 15] {
         Operation::ReviseRequest,
         Operation::CancelRequest,
         Operation::ApplyRequest,
+        Operation::Invoke,
     ]
 }
 
@@ -4420,6 +4516,7 @@ fn operation_id(operation: Operation) -> &'static str {
         Operation::ReviseRequest => "revise_request",
         Operation::CancelRequest => "cancel_request",
         Operation::ApplyRequest => "apply_request",
+        Operation::Invoke => "invoke",
     }
 }
 

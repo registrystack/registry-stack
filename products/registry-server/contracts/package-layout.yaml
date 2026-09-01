@@ -9,11 +9,13 @@ entries:
   - {path: inventories/access.json, role: access-inventory, required: true}
   - {path: inventories/queries.json, role: query-inventory, required: true}
   - {path: inventories/events.json, role: event-inventory, required: true}
+  - {path: inventories/actions.json, role: action-inventory, required: false}
   - {path: metadata/registry.json, role: caller-safe-metadata, required: true}
   - {path: database/ddl.sql, role: generated-ddl, required: true}
   - {path: database/migration-plan.json, role: migration-plan, required: true}
   - {path: openapi/openapi.json, role: generated-openapi, required: true}
   - {path: schemas, role: entity-json-schemas, required: true}
+  - {path: action-schemas, role: action-json-schema, required: false}
   # These two artifacts form one conditional pair. A package includes both
   # exactly when its governed project configures manifestProjection.
   - {path: manifest/registry-manifest.json, role: lossy-manifest-projection, required: false}

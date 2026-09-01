@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use axum::body::{to_bytes, Body};
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, ETAG, IF_MATCH};
-use axum::http::{Method, Request, Response, StatusCode};
+use axum::http::{HeaderMap, Method, Request, Response, StatusCode};
 use axum::Router;
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use registry_platform_httpsec::{response_trace_id, TraceId};
@@ -31,8 +31,10 @@ use crate::auth::RegistryAuthenticator;
 use crate::compiler::{compile_project_with_assets, module_digest_with_assets, CompileProfile};
 use crate::contract::{parse_module_yaml, parse_project_yaml, ModuleAssetSource};
 use crate::contract::{AccessProfileSource, LookupValueOrigin, Operation};
+use crate::data::{validate_field_value, FieldValue};
 use crate::derived_sql::MAX_DERIVED_SQL_BYTES;
 use crate::model::CompiledRoute;
+use crate::model::{ActionRouteKind, CompiledAction, CompiledActionGrant, CompiledActionRoute};
 use crate::model::{CompiledRegistry, HttpMethod};
 #[cfg(any(test, feature = "postgres-test"))]
 use crate::package::{canonical_signed_bytes as package_canonical_signed_bytes, VerifiedPackage};
@@ -156,6 +158,9 @@ struct JourneySource {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct StepSource {
     id: String,
+    #[serde(default)]
+    action: Option<String>,
+    #[serde(default)]
     entity: String,
     access_profile: String,
     #[serde(default)]
@@ -164,6 +169,8 @@ struct StepSource {
     expect: ExpectationSource,
     #[serde(default)]
     capture: Option<String>,
+    #[serde(default)]
+    capture_results: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -211,6 +218,18 @@ enum ActionSource {
     },
     Batch {
         items: Vec<BatchItemSource>,
+    },
+    TargetConditions {
+        #[serde(default)]
+        input: Map<String, Value>,
+    },
+    Invoke {
+        #[serde(default)]
+        input: Map<String, Value>,
+        #[serde(default)]
+        preconditions: BTreeMap<String, ImmediateActionPreconditionSource>,
+        #[serde(default)]
+        idempotency_key: Option<String>,
     },
     SubmitRequest {
         record_ref: String,
@@ -287,6 +306,7 @@ impl ActionSource {
             Self::Lookup { .. } => Operation::Lookup,
             Self::Patch { .. } => Operation::Patch,
             Self::Batch { .. } => Operation::Batch,
+            Self::TargetConditions { .. } | Self::Invoke { .. } => Operation::Invoke,
             Self::SubmitRequest { .. } => Operation::SubmitRequest,
             Self::ApproveRequest { .. } => Operation::ApproveRequest,
             Self::RejectRequest { .. } => Operation::RejectRequest,
@@ -306,6 +326,8 @@ impl ActionSource {
             Self::ReadPath { path, .. } => format!("path.{path}"),
             Self::Patch { .. } => "patch".to_owned(),
             Self::Batch { .. } => "batch".to_owned(),
+            Self::TargetConditions { .. } => "target_conditions".to_owned(),
+            Self::Invoke { .. } => "invoke".to_owned(),
             Self::SubmitRequest { .. } => "request.submit".to_owned(),
             Self::ApproveRequest { stage, .. } => format!("request.stages.{stage}.approve"),
             Self::RejectRequest { stage, .. } => format!("request.stages.{stage}.reject"),
@@ -318,6 +340,15 @@ impl ActionSource {
         };
         format!("records.{entity_id}.{suffix}")
     }
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ImmediateActionPreconditionSource {
+    #[serde(default)]
+    if_match: Option<String>,
+    #[serde(default)]
+    condition_ref: Option<String>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -416,21 +447,40 @@ struct ValidatedJourney {
 #[derive(Clone)]
 struct ValidatedStep {
     id: String,
-    entity: String,
+    entity: Option<String>,
+    action_id: Option<String>,
     access_profile: String,
     claims: ClaimsSource,
-    route: CompiledRoute,
+    route: FixtureRoute,
     profile: AccessProfileSource,
     response_readable_fields: BTreeSet<String>,
     action: ActionSource,
     expect: ExpectationSource,
     capture: Option<String>,
+    capture_results: BTreeMap<String, String>,
+}
+
+#[derive(Clone)]
+enum FixtureRoute {
+    Entity(CompiledRoute),
+    Action(CompiledActionRoute),
+}
+
+impl FixtureRoute {
+    fn path(&self) -> &str {
+        match self {
+            Self::Entity(route) => &route.path,
+            Self::Action(route) => &route.path,
+        }
+    }
 }
 
 #[derive(Clone)]
 struct CaptureSource {
-    entity: String,
+    entity: Option<String>,
     operation: Operation,
+    has_etag: bool,
+    condition_map: bool,
 }
 
 /// Parse and resolve all journey references before any request executor is
@@ -455,7 +505,7 @@ pub fn validate_fixture_journeys(
     let mut journey_ids = BTreeSet::new();
     let mut total_steps = 0usize;
     let mut journeys = Vec::with_capacity(document.journeys.len());
-    for journey in document.journeys {
+    for (journey_index, journey) in document.journeys.into_iter().enumerate() {
         let mut step_ids = BTreeSet::new();
         let mut capture_ids = BTreeSet::new();
         let mut capture_sources = BTreeMap::new();
@@ -476,98 +526,221 @@ pub fn validate_fixture_journeys(
             return Err(FixtureError::JourneyBoundsRefused);
         }
         let mut steps = Vec::with_capacity(journey.steps.len());
-        for step in journey.steps {
-            if !valid_stable_id(&step.id) || !step_ids.insert(step.id.clone()) {
-                return Err(if valid_stable_id(&step.id) {
-                    FixtureError::DuplicateIdentifier
-                } else {
-                    FixtureError::LogicalReferenceRefused
-                });
-            }
-            validate_action_references(&step.request, &capture_sources, &step.entity)?;
-            let capture = step.capture.clone();
-            if let Some(identifier) = capture.as_deref() {
-                if !valid_stable_id(identifier) || !capture_ids.insert(identifier.to_owned()) {
-                    return Err(if valid_stable_id(identifier) {
+        for (step_index, step) in journey.steps.into_iter().enumerate() {
+            let step_failure = |error| FixtureError::StepFailed {
+                journey_index,
+                step_index,
+                error: Box::new(error),
+            };
+            let validated_step = (|| -> Result<ValidatedStep, FixtureError> {
+                if !valid_stable_id(&step.id) || !step_ids.insert(step.id.clone()) {
+                    return Err(if valid_stable_id(&step.id) {
                         FixtureError::DuplicateIdentifier
                     } else {
                         FixtureError::LogicalReferenceRefused
                     });
                 }
-            }
-            let entity = registry
-                .entities()
-                .get(&step.entity)
-                .ok_or(FixtureError::LogicalReferenceRefused)?;
-            let profile = entity
-                .access_profiles
-                .get(&step.access_profile)
-                .ok_or(FixtureError::LogicalReferenceRefused)?;
-            let operation = step.request.operation();
-            if !matches!(step.request, ActionSource::ReadPath { .. })
-                && !profile.operations.contains(&operation)
-            {
-                return Err(FixtureError::LogicalReferenceRefused);
-            }
-            let expected_route_id = step.request.route_id(&step.entity);
-            let route = registry
-                .routes()
-                .routes
-                .iter()
-                .find(|route| {
-                    route.entity_id == step.entity
-                        && route.id == expected_route_id
-                        && route.operation == operation
-                        && route.method == operation_method(operation)
-                        && route.access_profiles.contains(&step.access_profile)
-                })
-                .cloned()
-                .ok_or(FixtureError::LogicalReferenceRefused)?;
-            validate_claims(&step.claims, profile, step.expect.outcome)?;
-            validate_action_fields(&step.request, registry, entity, profile)?;
-            validate_expectation(&step.expect, operation, profile, capture.is_some())?;
-            let response_entity = match &step.request {
-                ActionSource::ReadPath { path, .. } => entity
-                    .read_paths
-                    .get(path)
-                    .and_then(|read_path| registry.entities().get(&read_path.to))
-                    .ok_or(FixtureError::LogicalReferenceRefused)?,
-                _ => entity,
-            };
-            let response_readable_field_ids = match &step.request {
-                ActionSource::ReadPath { path, .. } => profile
-                    .read_paths
-                    .iter()
-                    .find(|grant| grant.path == *path)
-                    .map(|grant| grant.readable_fields.clone())
-                    .ok_or(FixtureError::LogicalReferenceRefused)?,
-                _ => profile.readable_fields.clone(),
-            };
-            let response_readable_fields =
-                externalize_field_set(response_entity, &response_readable_field_ids)?;
-            let action = externalize_action(&step.request, registry, entity)?;
-            let expect = externalize_expectation(&step.expect, response_entity)?;
-            if let Some(identifier) = capture.as_deref() {
-                capture_sources.insert(
-                    identifier.to_owned(),
-                    CaptureSource {
-                        entity: step.entity.clone(),
+                let step_entity = (!step.entity.is_empty()).then_some(step.entity.as_str());
+                let step_action = step.action.as_deref();
+                if step_entity.is_some() == step_action.is_some() {
+                    return Err(FixtureError::LogicalReferenceRefused);
+                }
+                validate_action_references(&step.request, &capture_sources, step_entity)?;
+                let capture = step.capture.clone();
+                if let Some(identifier) = capture.as_deref() {
+                    if !valid_stable_id(identifier) || !capture_ids.insert(identifier.to_owned()) {
+                        return Err(if valid_stable_id(identifier) {
+                            FixtureError::DuplicateIdentifier
+                        } else {
+                            FixtureError::LogicalReferenceRefused
+                        });
+                    }
+                }
+                for identifier in step.capture_results.values() {
+                    if !valid_stable_id(identifier) || !capture_ids.insert(identifier.to_owned()) {
+                        return Err(if valid_stable_id(identifier) {
+                            FixtureError::DuplicateIdentifier
+                        } else {
+                            FixtureError::LogicalReferenceRefused
+                        });
+                    }
+                }
+                let operation = step.request.operation();
+                let (
+                    entity_id,
+                    action_id,
+                    route,
+                    profile,
+                    response_readable_fields,
+                    action,
+                    expect,
+                    capture_result_entities,
+                ) = if let Some(action_id) = step_action {
+                    let action = registry
+                        .actions()
+                        .actions
+                        .iter()
+                        .find(|action| action.id == action_id)
+                        .ok_or(FixtureError::LogicalReferenceRefused)?;
+                    let route_kind = immediate_action_route_kind(&step.request)?;
+                    let route = registry
+                        .actions()
+                        .routes
+                        .iter()
+                        .find(|route| {
+                            route.action_id == action.id
+                                && route.kind == route_kind
+                                && route.operation == Operation::Invoke
+                                && route.method == HttpMethod::Post
+                                && route.access_profiles.contains(&step.access_profile)
+                        })
+                        .cloned()
+                        .ok_or(FixtureError::LogicalReferenceRefused)?;
+                    let grant = action
+                        .grants
+                        .iter()
+                        .find(|grant| grant.profile_id == step.access_profile)
+                        .ok_or(FixtureError::LogicalReferenceRefused)?;
+                    let profile = action_profile_from_grant(grant);
+                    validate_claims(&step.claims, &profile, step.expect.outcome)?;
+                    validate_immediate_action_fields(&step.request, action, &capture_sources)?;
+                    validate_expectation(
+                        &step.expect,
                         operation,
-                    },
-                );
-            }
-            steps.push(ValidatedStep {
-                id: step.id,
-                entity: step.entity,
-                access_profile: step.access_profile,
-                claims: step.claims,
-                route,
-                profile: profile.clone(),
-                response_readable_fields,
-                action,
-                expect,
-                capture,
-            });
+                        &profile,
+                        capture.is_some(),
+                        !step.capture_results.is_empty(),
+                    )?;
+                    let capture_result_entities = validate_capture_results(
+                        &step.request,
+                        action,
+                        grant,
+                        &step.capture_results,
+                    )?;
+                    (
+                        None,
+                        Some(action.id.clone()),
+                        FixtureRoute::Action(route),
+                        profile,
+                        BTreeSet::new(),
+                        step.request,
+                        step.expect,
+                        capture_result_entities,
+                    )
+                } else {
+                    let entity_id = step.entity.clone();
+                    let entity = registry
+                        .entities()
+                        .get(&entity_id)
+                        .ok_or(FixtureError::LogicalReferenceRefused)?;
+                    let request = internalize_entity_action(&step.request, registry, entity)?;
+                    let profile = entity
+                        .access_profiles
+                        .get(&step.access_profile)
+                        .ok_or(FixtureError::LogicalReferenceRefused)?;
+                    if !matches!(request, ActionSource::ReadPath { .. })
+                        && !profile.operations.contains(&operation)
+                    {
+                        return Err(FixtureError::LogicalReferenceRefused);
+                    }
+                    let expected_route_id = request.route_id(&entity_id);
+                    let route = registry
+                        .routes()
+                        .routes
+                        .iter()
+                        .find(|route| {
+                            route.entity_id == entity_id
+                                && route.id == expected_route_id
+                                && route.operation == operation
+                                && route.method == operation_method(operation)
+                                && route.access_profiles.contains(&step.access_profile)
+                        })
+                        .cloned()
+                        .ok_or(FixtureError::LogicalReferenceRefused)?;
+                    validate_claims(&step.claims, profile, step.expect.outcome)?;
+                    validate_action_fields(&request, registry, entity, profile)?;
+                    let response_entity = match &request {
+                        ActionSource::ReadPath { path, .. } => entity
+                            .read_paths
+                            .get(path)
+                            .and_then(|read_path| registry.entities().get(&read_path.to))
+                            .ok_or(FixtureError::LogicalReferenceRefused)?,
+                        _ => entity,
+                    };
+                    let expect = internalize_expectation(&step.expect, response_entity)?;
+                    validate_expectation(
+                        &expect,
+                        operation,
+                        profile,
+                        capture.is_some(),
+                        !step.capture_results.is_empty(),
+                    )?;
+                    let response_readable_field_ids = match &request {
+                        ActionSource::ReadPath { path, .. } => profile
+                            .read_paths
+                            .iter()
+                            .find(|grant| grant.path == *path)
+                            .map(|grant| grant.readable_fields.clone())
+                            .ok_or(FixtureError::LogicalReferenceRefused)?,
+                        _ => profile.readable_fields.clone(),
+                    };
+                    let response_readable_fields =
+                        externalize_field_set(response_entity, &response_readable_field_ids)?;
+                    let action = externalize_action(&request, registry, entity)?;
+                    let expect = externalize_expectation(&expect, response_entity)?;
+                    (
+                        Some(entity_id),
+                        None,
+                        FixtureRoute::Entity(route),
+                        profile.clone(),
+                        response_readable_fields,
+                        action,
+                        expect,
+                        BTreeMap::new(),
+                    )
+                };
+                if let Some(identifier) = capture.as_deref() {
+                    capture_sources.insert(
+                        identifier.to_owned(),
+                        CaptureSource {
+                            entity: entity_id.clone(),
+                            operation,
+                            has_etag: !matches!(
+                                action,
+                                ActionSource::TargetConditions { .. } | ActionSource::Invoke { .. }
+                            ),
+                            condition_map: matches!(action, ActionSource::TargetConditions { .. }),
+                        },
+                    );
+                }
+                for (identifier, entity) in capture_result_entities {
+                    capture_sources.insert(
+                        identifier.to_owned(),
+                        CaptureSource {
+                            entity: Some(entity),
+                            operation: Operation::Invoke,
+                            has_etag: false,
+                            condition_map: false,
+                        },
+                    );
+                }
+                Ok(ValidatedStep {
+                    id: step.id,
+                    entity: entity_id,
+                    action_id,
+                    access_profile: step.access_profile,
+                    claims: step.claims,
+                    route,
+                    profile: profile.clone(),
+                    response_readable_fields,
+                    action,
+                    expect,
+                    capture,
+                    capture_results: step.capture_results,
+                })
+            })()
+            .map_err(step_failure)?;
+            steps.push(validated_step);
         }
         journeys.push(ValidatedJourney {
             id: journey.id,
@@ -585,7 +758,7 @@ pub fn validate_fixture_journeys(
 fn validate_action_references(
     action: &ActionSource,
     captures: &BTreeMap<String, CaptureSource>,
-    step_entity: &str,
+    step_entity: Option<&str>,
 ) -> Result<(), FixtureError> {
     let references: &[&str] = match action {
         ActionSource::Get { record_ref } => &[record_ref],
@@ -632,13 +805,23 @@ fn validate_action_references(
         | ActionSource::List
         | ActionSource::Query { .. }
         | ActionSource::Lookup { .. }
-        | ActionSource::Batch { .. } => &[],
+        | ActionSource::Batch { .. }
+        | ActionSource::TargetConditions { .. }
+        | ActionSource::Invoke { .. } => &[],
     };
     if references
         .iter()
         .any(|identifier| !valid_stable_id(identifier) || !captures.contains_key(*identifier))
     {
         return Err(FixtureError::LogicalReferenceRefused);
+    }
+    for reference in etag_references(action) {
+        let Some(source) = captures.get(reference) else {
+            return Err(FixtureError::LogicalReferenceRefused);
+        };
+        if !source.has_etag {
+            return Err(FixtureError::LogicalReferenceRefused);
+        }
     }
     let mut value_record_refs = Vec::new();
     collect_action_value_record_refs(action, &mut value_record_refs)?;
@@ -649,11 +832,25 @@ fn validate_action_references(
         return Err(FixtureError::LogicalReferenceRefused);
     }
     if is_request_action(action.operation()) {
+        let step_entity = step_entity.ok_or(FixtureError::LogicalReferenceRefused)?;
         for reference in references {
             let source = captures
                 .get(*reference)
                 .ok_or(FixtureError::LogicalReferenceRefused)?;
-            if source.entity != step_entity || source.operation != Operation::Get {
+            if source.entity.as_deref() != Some(step_entity) || source.operation != Operation::Get {
+                return Err(FixtureError::LogicalReferenceRefused);
+            }
+        }
+    }
+    if let ActionSource::Invoke { preconditions, .. } = action {
+        for condition in preconditions.values() {
+            let Some(reference) = condition.condition_ref.as_deref() else {
+                continue;
+            };
+            let Some(source) = captures.get(reference) else {
+                return Err(FixtureError::LogicalReferenceRefused);
+            };
+            if !valid_stable_id(reference) || !source.condition_map {
                 return Err(FixtureError::LogicalReferenceRefused);
             }
         }
@@ -665,11 +862,25 @@ fn validate_action_references(
         if !valid_stable_id(reference) {
             return Err(FixtureError::LogicalReferenceRefused);
         }
-        if source.entity != step_entity || source.operation != Operation::Get {
+        if source.entity.as_deref() != step_entity || source.operation != Operation::Get {
             return Err(FixtureError::LogicalReferenceRefused);
         }
     }
     Ok(())
+}
+
+fn etag_references(action: &ActionSource) -> Vec<&str> {
+    match action {
+        ActionSource::Patch { etag_ref, .. }
+        | ActionSource::SubmitRequest { etag_ref, .. }
+        | ActionSource::ReviseRequest { etag_ref, .. }
+        | ActionSource::CancelRequest { etag_ref, .. }
+        | ActionSource::ApplyRequest { etag_ref, .. }
+        | ActionSource::ApproveRequest { etag_ref, .. }
+        | ActionSource::RejectRequest { etag_ref, .. }
+        | ActionSource::RequestRevision { etag_ref, .. } => vec![etag_ref],
+        _ => Vec::new(),
+    }
 }
 
 fn collect_action_value_record_refs<'a>(
@@ -695,6 +906,9 @@ fn collect_action_value_record_refs<'a>(
                 }
             }
             Ok(())
+        }
+        ActionSource::TargetConditions { input } | ActionSource::Invoke { input, .. } => {
+            collect_map_value_record_refs(input, references)
         }
         ActionSource::Get { .. }
         | ActionSource::List
@@ -837,6 +1051,218 @@ fn validate_claims(
     Ok(())
 }
 
+fn immediate_action_route_kind(action: &ActionSource) -> Result<ActionRouteKind, FixtureError> {
+    match action {
+        ActionSource::Invoke { .. } => Ok(ActionRouteKind::Invoke),
+        ActionSource::TargetConditions { .. } => Ok(ActionRouteKind::TargetConditions),
+        _ => Err(FixtureError::LogicalReferenceRefused),
+    }
+}
+
+fn action_profile_from_grant(grant: &CompiledActionGrant) -> AccessProfileSource {
+    AccessProfileSource {
+        id: grant.profile_id.clone(),
+        default: grant.default,
+        anonymous: grant.anonymous,
+        principal_claim: grant.principal_claim.clone(),
+        required_scopes: grant.required_scopes.clone(),
+        required_purposes: grant.required_purposes.clone(),
+        operations: grant.operations.clone(),
+        readable_fields: BTreeSet::new(),
+        writable_fields: BTreeSet::new(),
+        filterable_fields: BTreeSet::new(),
+        sortable_fields: BTreeSet::new(),
+        row_boundaries: grant
+            .targets
+            .iter()
+            .flat_map(|target| target.row_boundaries.iter().cloned())
+            .collect(),
+        lookups: Vec::new(),
+        read_paths: Vec::new(),
+        review_stages: Vec::new(),
+        apply_targets: Vec::new(),
+        request_presence: Vec::new(),
+        allow_count: false,
+        revision_access: false,
+        allow_data_export: false,
+    }
+}
+
+fn validate_immediate_action_fields(
+    request: &ActionSource,
+    action: &CompiledAction,
+    captures: &BTreeMap<String, CaptureSource>,
+) -> Result<(), FixtureError> {
+    match request {
+        ActionSource::TargetConditions { input } => {
+            let required = condition_input_api_names(action);
+            validate_action_input_map(input, action, captures, Some(&required))?;
+            if input.keys().collect::<BTreeSet<_>>() != required.iter().collect::<BTreeSet<_>>() {
+                return Err(FixtureError::LogicalReferenceRefused);
+            }
+        }
+        ActionSource::Invoke {
+            input,
+            preconditions,
+            idempotency_key,
+        } => {
+            validate_action_input_map(input, action, captures, None)?;
+            let condition_inputs = condition_input_api_names(action);
+            for (name, condition) in preconditions {
+                if !condition_inputs.contains(name) {
+                    return Err(FixtureError::LogicalReferenceRefused);
+                }
+                if condition.if_match.is_some() == condition.condition_ref.is_some() {
+                    return Err(FixtureError::LogicalReferenceRefused);
+                }
+                if let Some(tag) = condition.if_match.as_deref() {
+                    validate_action_if_match(tag)?;
+                }
+                if let Some(reference) = condition.condition_ref.as_deref() {
+                    if !valid_stable_id(reference) {
+                        return Err(FixtureError::LogicalReferenceRefused);
+                    }
+                }
+            }
+            if condition_inputs
+                .iter()
+                .any(|name| !preconditions.contains_key(name.as_str()))
+            {
+                return Err(FixtureError::LogicalReferenceRefused);
+            }
+            if let Some(key) = idempotency_key {
+                validate_idempotency_key_source(key)?;
+            }
+        }
+        _ => return Err(FixtureError::LogicalReferenceRefused),
+    }
+    Ok(())
+}
+
+fn validate_action_input_map(
+    input: &Map<String, Value>,
+    action: &CompiledAction,
+    captures: &BTreeMap<String, CaptureSource>,
+    accepted_names: Option<&BTreeSet<String>>,
+) -> Result<(), FixtureError> {
+    let inputs_by_api_name = action
+        .inputs
+        .iter()
+        .map(|input| (input.api_name.as_str(), input))
+        .collect::<BTreeMap<_, _>>();
+    for (name, value) in input {
+        if name.len() > MAX_IDENTIFIER_BYTES {
+            return Err(FixtureError::LogicalReferenceRefused);
+        }
+        if accepted_names.is_some_and(|accepted| !accepted.contains(name)) {
+            return Err(FixtureError::LogicalReferenceRefused);
+        }
+        let declared = inputs_by_api_name
+            .get(name.as_str())
+            .ok_or(FixtureError::LogicalReferenceRefused)?;
+        if !fixture_action_input_value_is_valid(value, declared, captures) {
+            return Err(FixtureError::LogicalReferenceRefused);
+        }
+    }
+    for declared in &action.inputs {
+        if declared.required
+            && accepted_names.is_none_or(|accepted| accepted.contains(&declared.api_name))
+            && !input.contains_key(&declared.api_name)
+        {
+            return Err(FixtureError::LogicalReferenceRefused);
+        }
+    }
+    if canonical_size(&Value::Object(input.clone()))? > MAX_BODY_BYTES {
+        return Err(FixtureError::JourneyTooLarge);
+    }
+    Ok(())
+}
+
+fn fixture_action_input_value_is_valid(
+    value: &Value,
+    declared: &crate::model::CompiledActionInput,
+    captures: &BTreeMap<String, CaptureSource>,
+) -> bool {
+    if let crate::contract::FieldTypeSource::Reference { target, .. } = &declared.field_type {
+        if let Some(reference) = value.as_object().and_then(|object| {
+            (object.len() == 1)
+                .then(|| object.get("recordRef"))
+                .flatten()
+                .and_then(Value::as_str)
+        }) {
+            return captures
+                .get(reference)
+                .is_some_and(|source| source.entity.as_deref() == Some(target.as_str()));
+        }
+    }
+    validate_field_value(FieldValue::Json(value), &declared.field_type)
+}
+
+fn condition_input_api_names(action: &CompiledAction) -> BTreeSet<String> {
+    let logical_ids = action
+        .effects
+        .iter()
+        .filter_map(|effect| match &effect.target.binding {
+            crate::model::CompiledActionTargetBinding::Existing { input } => Some(input.as_str()),
+            crate::model::CompiledActionTargetBinding::Create => None,
+        })
+        .collect::<BTreeSet<_>>();
+    action
+        .inputs
+        .iter()
+        .filter(|input| logical_ids.contains(input.id.as_str()))
+        .map(|input| input.api_name.clone())
+        .collect()
+}
+
+fn validate_capture_results(
+    request: &ActionSource,
+    action: &CompiledAction,
+    grant: &CompiledActionGrant,
+    capture_results: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>, FixtureError> {
+    let mut captures = BTreeMap::new();
+    if capture_results.is_empty() {
+        return Ok(captures);
+    }
+    if !matches!(request, ActionSource::Invoke { .. }) {
+        return Err(FixtureError::JourneyShapeRefused);
+    }
+    for (effect, capture) in capture_results {
+        if !grant.results.contains(effect) {
+            return Err(FixtureError::LogicalReferenceRefused);
+        }
+        let target_entity_id = action
+            .effects
+            .iter()
+            .find(|compiled| compiled.id == *effect)
+            .map(|compiled| compiled.target.entity_id.clone())
+            .ok_or(FixtureError::LogicalReferenceRefused)?;
+        captures.insert(capture.clone(), target_entity_id);
+    }
+    Ok(captures)
+}
+
+fn validate_action_if_match(value: &str) -> Result<(), FixtureError> {
+    if !value.is_empty()
+        && value.len() <= MAX_BINDING_BYTES
+        && value.starts_with("\"rs-")
+        && value.ends_with('"')
+    {
+        Ok(())
+    } else {
+        Err(FixtureError::LogicalReferenceRefused)
+    }
+}
+
+fn validate_idempotency_key_source(value: &str) -> Result<(), FixtureError> {
+    if valid_stable_id(value) {
+        Ok(())
+    } else {
+        Err(FixtureError::LogicalReferenceRefused)
+    }
+}
+
 fn validate_action_fields(
     action: &ActionSource,
     registry: &CompiledRegistry,
@@ -962,6 +1388,9 @@ fn validate_action_fields(
             validate_request_action_plan(action, entity)?;
             validate_request_action_proposal_binding(action)?;
             Ok(())
+        }
+        ActionSource::TargetConditions { .. } | ActionSource::Invoke { .. } => {
+            Err(FixtureError::LogicalReferenceRefused)
         }
     }
 }
@@ -1126,6 +1555,227 @@ fn compiled_field_exists(entity: &crate::model::CompiledEntity, field: &str) -> 
     entity.fields.contains_key(field) || entity.derived_fields.contains_key(field)
 }
 
+fn source_field_id(
+    entity: &crate::model::CompiledEntity,
+    field_name: &str,
+) -> Result<String, FixtureError> {
+    if field_name == "id" || field_name == "revision" || compiled_field_exists(entity, field_name) {
+        return Ok(field_name.to_owned());
+    }
+    entity
+        .stored_fields
+        .iter()
+        .map(|field| &field.logical)
+        .chain(entity.derived_fields.values().map(|field| &field.logical))
+        .find(|field| field.api_name == field_name)
+        .map(|field| field.id.clone())
+        .ok_or(FixtureError::LogicalReferenceRefused)
+}
+
+fn internalize_field_set(
+    entity: &crate::model::CompiledEntity,
+    fields: &BTreeSet<String>,
+) -> Result<BTreeSet<String>, FixtureError> {
+    let mut normalized = BTreeSet::new();
+    for field in fields {
+        if !normalized.insert(source_field_id(entity, field)?) {
+            return Err(FixtureError::LogicalReferenceRefused);
+        }
+    }
+    Ok(normalized)
+}
+
+fn internalize_data(
+    entity: &crate::model::CompiledEntity,
+    data: &Map<String, Value>,
+) -> Result<Map<String, Value>, FixtureError> {
+    let mut normalized = Map::new();
+    for (field, value) in data {
+        let field = source_field_id(entity, field)?;
+        if normalized.insert(field, value.clone()).is_some() {
+            return Err(FixtureError::LogicalReferenceRefused);
+        }
+    }
+    Ok(normalized)
+}
+
+fn internalize_entity_action(
+    action: &ActionSource,
+    registry: &CompiledRegistry,
+    entity: &crate::model::CompiledEntity,
+) -> Result<ActionSource, FixtureError> {
+    Ok(match action {
+        ActionSource::Create { data } => ActionSource::Create {
+            data: internalize_data(entity, data)?,
+        },
+        ActionSource::Get { record_ref } => ActionSource::Get {
+            record_ref: record_ref.clone(),
+        },
+        ActionSource::List => ActionSource::List,
+        ActionSource::Query { select, top, count } => ActionSource::Query {
+            select: internalize_field_set(entity, select)?,
+            top: *top,
+            count: *count,
+        },
+        ActionSource::Lookup { selector, values } => ActionSource::Lookup {
+            selector: selector.clone(),
+            values: internalize_data(entity, values)?,
+        },
+        ActionSource::ReadPath {
+            path,
+            record_ref,
+            select,
+            top,
+            count,
+        } => {
+            let target = entity
+                .read_paths
+                .get(path)
+                .and_then(|read_path| registry.entities().get(&read_path.to))
+                .ok_or(FixtureError::LogicalReferenceRefused)?;
+            ActionSource::ReadPath {
+                path: path.clone(),
+                record_ref: record_ref.clone(),
+                select: internalize_field_set(target, select)?,
+                top: *top,
+                count: *count,
+            }
+        }
+        ActionSource::Patch {
+            record_ref,
+            etag_ref,
+            changes,
+        } => ActionSource::Patch {
+            record_ref: record_ref.clone(),
+            etag_ref: etag_ref.clone(),
+            changes: changes
+                .iter()
+                .map(|change| {
+                    source_field_id(entity, &change.field).map(|field| FieldChangeSource {
+                        field,
+                        value: change.value.clone(),
+                    })
+                })
+                .collect::<Result<Vec<_>, FixtureError>>()?,
+        },
+        ActionSource::Batch { items } => ActionSource::Batch {
+            items: items
+                .iter()
+                .map(|item| match item {
+                    BatchItemSource::Create { data } => {
+                        internalize_data(entity, data).map(|data| BatchItemSource::Create { data })
+                    }
+                })
+                .collect::<Result<Vec<_>, FixtureError>>()?,
+        },
+        ActionSource::SubmitRequest {
+            record_ref,
+            etag_ref,
+        } => ActionSource::SubmitRequest {
+            record_ref: record_ref.clone(),
+            etag_ref: etag_ref.clone(),
+        },
+        ActionSource::ApproveRequest {
+            stage,
+            record_ref,
+            etag_ref,
+            proposal_version,
+            proposal_version_ref,
+            effect_digest,
+            effect_digest_ref,
+        } => ActionSource::ApproveRequest {
+            stage: stage.clone(),
+            record_ref: record_ref.clone(),
+            etag_ref: etag_ref.clone(),
+            proposal_version: *proposal_version,
+            proposal_version_ref: proposal_version_ref.clone(),
+            effect_digest: effect_digest.clone(),
+            effect_digest_ref: effect_digest_ref.clone(),
+        },
+        ActionSource::RejectRequest {
+            stage,
+            record_ref,
+            etag_ref,
+            proposal_version,
+            proposal_version_ref,
+            effect_digest,
+            effect_digest_ref,
+        } => ActionSource::RejectRequest {
+            stage: stage.clone(),
+            record_ref: record_ref.clone(),
+            etag_ref: etag_ref.clone(),
+            proposal_version: *proposal_version,
+            proposal_version_ref: proposal_version_ref.clone(),
+            effect_digest: effect_digest.clone(),
+            effect_digest_ref: effect_digest_ref.clone(),
+        },
+        ActionSource::RequestRevision {
+            stage,
+            record_ref,
+            etag_ref,
+            proposal_version,
+            proposal_version_ref,
+            effect_digest,
+            effect_digest_ref,
+        } => ActionSource::RequestRevision {
+            stage: stage.clone(),
+            record_ref: record_ref.clone(),
+            etag_ref: etag_ref.clone(),
+            proposal_version: *proposal_version,
+            proposal_version_ref: proposal_version_ref.clone(),
+            effect_digest: effect_digest.clone(),
+            effect_digest_ref: effect_digest_ref.clone(),
+        },
+        ActionSource::ReviseRequest {
+            record_ref,
+            etag_ref,
+            rebase,
+        } => ActionSource::ReviseRequest {
+            record_ref: record_ref.clone(),
+            etag_ref: etag_ref.clone(),
+            rebase: *rebase,
+        },
+        ActionSource::CancelRequest {
+            record_ref,
+            etag_ref,
+        } => ActionSource::CancelRequest {
+            record_ref: record_ref.clone(),
+            etag_ref: etag_ref.clone(),
+        },
+        ActionSource::ApplyRequest {
+            record_ref,
+            etag_ref,
+            proposal_version,
+            proposal_version_ref,
+            effect_digest,
+            effect_digest_ref,
+        } => ActionSource::ApplyRequest {
+            record_ref: record_ref.clone(),
+            etag_ref: etag_ref.clone(),
+            proposal_version: *proposal_version,
+            proposal_version_ref: proposal_version_ref.clone(),
+            effect_digest: effect_digest.clone(),
+            effect_digest_ref: effect_digest_ref.clone(),
+        },
+        ActionSource::TargetConditions { .. } | ActionSource::Invoke { .. } => {
+            return Err(FixtureError::LogicalReferenceRefused)
+        }
+    })
+}
+
+fn internalize_expectation(
+    expectation: &ExpectationSource,
+    response_entity: &crate::model::CompiledEntity,
+) -> Result<ExpectationSource, FixtureError> {
+    Ok(ExpectationSource {
+        outcome: expectation.outcome,
+        status: expectation.status,
+        fields: internalize_data(response_entity, &expectation.fields)?,
+        count: expectation.count,
+        problem_code: expectation.problem_code.clone(),
+    })
+}
+
 fn field_api_name<'a>(entity: &'a crate::model::CompiledEntity, field_id: &str) -> Option<&'a str> {
     if field_id == "id" {
         return Some("id");
@@ -1240,6 +1890,18 @@ fn externalize_action(
                 })
                 .collect::<Result<Vec<_>, FixtureError>>()?,
         },
+        ActionSource::TargetConditions { input } => ActionSource::TargetConditions {
+            input: input.clone(),
+        },
+        ActionSource::Invoke {
+            input,
+            preconditions,
+            idempotency_key,
+        } => ActionSource::Invoke {
+            input: input.clone(),
+            preconditions: preconditions.clone(),
+            idempotency_key: idempotency_key.clone(),
+        },
         ActionSource::SubmitRequest {
             record_ref,
             etag_ref,
@@ -1350,8 +2012,12 @@ fn validate_expectation(
     operation: Operation,
     profile: &AccessProfileSource,
     captures: bool,
+    captures_results: bool,
 ) -> Result<(), FixtureError> {
-    if is_request_action(operation) {
+    if captures_results && operation != Operation::Invoke {
+        return Err(FixtureError::JourneyShapeRefused);
+    }
+    if is_request_action(operation) || operation == Operation::Invoke {
         if !expectation.fields.is_empty() || expectation.count.is_some() {
             return Err(FixtureError::JourneyShapeRefused);
         }
@@ -1371,7 +2037,8 @@ fn validate_expectation(
                 | Operation::List
                 | Operation::Lookup
                 | Operation::Patch
-                | Operation::Batch => 200,
+                | Operation::Batch
+                | Operation::Invoke => 200,
                 Operation::SubmitRequest
                 | Operation::ApproveRequest
                 | Operation::RejectRequest
@@ -1391,7 +2058,11 @@ fn validate_expectation(
                     return Err(FixtureError::JourneyShapeRefused);
                 }
             } else if is_request_action(operation) {
-                if expectation.count.is_some() || captures {
+                if expectation.count.is_some() || captures || captures_results {
+                    return Err(FixtureError::JourneyShapeRefused);
+                }
+            } else if operation == Operation::Invoke {
+                if expectation.count.is_some() {
                     return Err(FixtureError::JourneyShapeRefused);
                 }
             } else if expectation.count.is_some() {
@@ -1446,10 +2117,75 @@ impl fmt::Debug for SuccessfulFixtureJourneys {
     }
 }
 
+#[derive(Clone)]
 struct Observation {
-    record_id: String,
-    etag: String,
+    kind: ObservationKind,
     document: Value,
+}
+
+#[derive(Clone)]
+enum ObservationKind {
+    Record {
+        record_id: String,
+        etag: String,
+    },
+    ActionConditions {
+        if_match_by_input: BTreeMap<String, String>,
+    },
+    ActionApplication,
+}
+
+#[derive(Clone)]
+struct ActionResultReference {
+    entity: String,
+    record_id: String,
+    revision: u64,
+}
+
+fn observed_record_id<'a>(
+    observations: &'a BTreeMap<String, Observation>,
+    reference: &str,
+) -> Result<&'a str, FixtureError> {
+    match &observations
+        .get(reference)
+        .ok_or(FixtureError::RequestConstructionRefused)?
+        .kind
+    {
+        ObservationKind::Record { record_id, .. } => Ok(record_id),
+        _ => Err(FixtureError::RequestConstructionRefused),
+    }
+}
+
+fn observed_etag<'a>(
+    observations: &'a BTreeMap<String, Observation>,
+    reference: &str,
+) -> Result<&'a str, FixtureError> {
+    match &observations
+        .get(reference)
+        .ok_or(FixtureError::RequestConstructionRefused)?
+        .kind
+    {
+        ObservationKind::Record { etag, .. } => Ok(etag),
+        _ => Err(FixtureError::RequestConstructionRefused),
+    }
+}
+
+fn observed_condition_if_match(
+    observations: &BTreeMap<String, Observation>,
+    reference: &str,
+    input_api_name: &str,
+) -> Result<String, FixtureError> {
+    match &observations
+        .get(reference)
+        .ok_or(FixtureError::RequestConstructionRefused)?
+        .kind
+    {
+        ObservationKind::ActionConditions { if_match_by_input } => if_match_by_input
+            .get(input_api_name)
+            .cloned()
+            .ok_or(FixtureError::RequestConstructionRefused),
+        _ => Err(FixtureError::RequestConstructionRefused),
+    }
 }
 
 /// Concrete state machine used only by the real-PostgreSQL integration gate.
@@ -1524,6 +2260,17 @@ impl PostgresFixtureTestRunner {
         })
     }
 
+    fn current_step_failure(&self, error: FixtureError) -> FixtureError {
+        match error {
+            FixtureError::StepFailed { .. } => error,
+            other => FixtureError::StepFailed {
+                journey_index: self.journey_index,
+                step_index: self.step_index,
+                error: Box::new(other),
+            },
+        }
+    }
+
     fn next_request(&self) -> Result<Option<Request<Body>>, FixtureError> {
         let Some(journey) = self.suite.journeys.get(self.journey_index) else {
             return Ok(None);
@@ -1543,7 +2290,10 @@ impl PostgresFixtureTestRunner {
     /// A failure consumes the runner and therefore cannot be converted into a
     /// completed result or receipt by skipping the remaining steps.
     pub async fn run_all(mut self) -> Result<CompletedPostgresFixtureTest, FixtureError> {
-        while let Some(request) = self.next_request()? {
+        while let Some(request) = self
+            .next_request()
+            .map_err(|error| self.current_step_failure(error))?
+        {
             let response = self
                 .app
                 .call(request)
@@ -1565,7 +2315,18 @@ impl PostgresFixtureTestRunner {
             .and_then(|journey| journey.steps.get(self.step_index))
             .cloned()
             .ok_or(FixtureError::ExecutionRefused)?;
-        accept_response(&step, response, &mut self.observations).await?;
+        let actual = response.status().as_u16();
+        if actual != step.expect.status {
+            return Err(
+                self.current_step_failure(FixtureError::ResponseStatusMismatch {
+                    expected: step.expect.status,
+                    actual,
+                }),
+            );
+        }
+        accept_response(&step, response, &mut self.observations)
+            .await
+            .map_err(|error| self.current_step_failure(error))?;
         self.bearer_index += 1;
         self.step_index += 1;
         let journey = self
@@ -2143,7 +2904,7 @@ fn fixture_request(
     observations: &BTreeMap<String, Observation>,
     bearer_token: Option<&str>,
 ) -> Result<Request<Body>, FixtureError> {
-    let mut path = step.route.path.clone();
+    let mut path = step.route.path().to_owned();
     let mut method = Method::GET;
     let mut body = Body::empty();
     let mut content_type = None;
@@ -2159,10 +2920,8 @@ fn fixture_request(
             content_type = Some("application/json");
         }
         ActionSource::Get { record_ref } => {
-            let observed = observations
-                .get(record_ref)
-                .ok_or(FixtureError::RequestConstructionRefused)?;
-            path = path.replace("{record_id}", &observed.record_id);
+            let record_id = observed_record_id(observations, record_ref)?;
+            path = path.replace("{record_id}", record_id);
         }
         ActionSource::List => {}
         ActionSource::Query { select, top, count } => {
@@ -2185,10 +2944,8 @@ fn fixture_request(
             top,
             count,
         } => {
-            let observed = observations
-                .get(record_ref)
-                .ok_or(FixtureError::RequestConstructionRefused)?;
-            path = path.replace("{record_id}", &observed.record_id);
+            let record_id = observed_record_id(observations, record_ref)?;
+            path = path.replace("{record_id}", record_id);
             extra_query_options =
                 fixture_query_options(step, Some(read_path), select, *top, *count)?;
         }
@@ -2197,13 +2954,9 @@ fn fixture_request(
             etag_ref,
             changes,
         } => {
-            let record = observations
-                .get(record_ref)
-                .ok_or(FixtureError::RequestConstructionRefused)?;
-            let etag = observations
-                .get(etag_ref)
-                .ok_or(FixtureError::RequestConstructionRefused)?;
-            path = path.replace("{record_id}", &record.record_id);
+            let record_id = observed_record_id(observations, record_ref)?;
+            let etag = observed_etag(observations, etag_ref)?;
+            path = path.replace("{record_id}", record_id);
             method = Method::PATCH;
             body = json_body(&Value::Array(
                 changes
@@ -2218,7 +2971,7 @@ fn fixture_request(
                     .collect::<Result<Vec<_>, FixtureError>>()?,
             ))?;
             content_type = Some("application/json-patch+json");
-            if_match = Some(etag.etag.clone());
+            if_match = Some(etag.to_owned());
         }
         ActionSource::Batch { items } => {
             method = Method::POST;
@@ -2261,16 +3014,42 @@ fn fixture_request(
             etag_ref,
             ..
         } => {
-            let record = observations
-                .get(record_ref)
-                .ok_or(FixtureError::RequestConstructionRefused)?;
+            let record_id = observed_record_id(observations, record_ref)?;
             let action_if_match =
                 captured_request_action_if_match(observations, etag_ref, &step.action)?;
-            path = path.replace("{record_id}", &record.record_id);
+            path = path.replace("{record_id}", record_id);
             method = Method::POST;
             body = json_body(&request_action_body(&step.action, observations)?)?;
             content_type = Some("application/json");
             if_match = Some(action_if_match);
+        }
+        ActionSource::TargetConditions { input } => {
+            method = Method::POST;
+            body = json_body(&json!({"input": resolve_fixture_value_refs(
+                &Value::Object(input.clone()),
+                observations
+            )?}))?;
+            content_type = Some("application/json");
+        }
+        ActionSource::Invoke {
+            input,
+            preconditions,
+            ..
+        } => {
+            method = Method::POST;
+            let mut envelope = Map::new();
+            envelope.insert(
+                "input".to_owned(),
+                resolve_fixture_value_refs(&Value::Object(input.clone()), observations)?,
+            );
+            if !preconditions.is_empty() {
+                envelope.insert(
+                    "preconditions".to_owned(),
+                    immediate_action_preconditions_body(preconditions, observations)?,
+                );
+            }
+            body = json_body(&Value::Object(envelope))?;
+            content_type = Some("application/json");
         }
     }
     if !path.starts_with('/') || path.contains(['?', '#']) || path.contains('{') {
@@ -2302,6 +3081,7 @@ fn fixture_request(
         ActionSource::Create { .. }
             | ActionSource::Patch { .. }
             | ActionSource::Batch { .. }
+            | ActionSource::Invoke { .. }
             | ActionSource::SubmitRequest { .. }
             | ActionSource::ApproveRequest { .. }
             | ActionSource::RejectRequest { .. }
@@ -2310,7 +3090,20 @@ fn fixture_request(
             | ActionSource::CancelRequest { .. }
             | ActionSource::ApplyRequest { .. }
     ) {
-        let key = format!("fixture-{}-{}-{}", journey_id, step.entity, step.id);
+        let key_id = match &step.action {
+            ActionSource::Invoke {
+                idempotency_key: Some(key),
+                ..
+            } => key.as_str(),
+            _ => step.id.as_str(),
+        };
+        let target_id = step
+            .action_id
+            .as_deref()
+            .filter(|id| !id.is_empty())
+            .or(step.entity.as_deref())
+            .ok_or(FixtureError::RequestConstructionRefused)?;
+        let key = format!("fixture-{journey_id}-{target_id}-{key_id}");
         request.headers_mut().insert(
             "idempotency-key",
             key.parse()
@@ -2398,7 +3191,12 @@ fn resolve_fixture_value_refs(
                 let observation = observations
                     .get(reference)
                     .ok_or(FixtureError::RequestConstructionRefused)?;
-                Ok(Value::String(observation.record_id.clone()))
+                match &observation.kind {
+                    ObservationKind::Record { record_id, .. } => {
+                        Ok(Value::String(record_id.clone()))
+                    }
+                    _ => Err(FixtureError::RequestConstructionRefused),
+                }
             } else {
                 object
                     .iter()
@@ -2449,6 +3247,32 @@ fn request_action_body(
         }
         _ => Err(FixtureError::RequestConstructionRefused),
     }
+}
+
+fn immediate_action_preconditions_body(
+    preconditions: &BTreeMap<String, ImmediateActionPreconditionSource>,
+    observations: &BTreeMap<String, Observation>,
+) -> Result<Value, FixtureError> {
+    preconditions
+        .iter()
+        .map(|(input_api_name, condition)| {
+            let if_match = match (
+                condition.if_match.as_deref(),
+                condition.condition_ref.as_deref(),
+            ) {
+                (Some(value), None) => {
+                    validate_action_if_match(value)?;
+                    value.to_owned()
+                }
+                (None, Some(reference)) => {
+                    observed_condition_if_match(observations, reference, input_api_name)?
+                }
+                _ => return Err(FixtureError::RequestConstructionRefused),
+            };
+            Ok((input_api_name.clone(), json!({"ifMatch": if_match})))
+        })
+        .collect::<Result<Map<String, Value>, FixtureError>>()
+        .map(Value::Object)
 }
 
 fn captured_request_action_if_match(
@@ -2595,23 +3419,81 @@ async fn accept_response(
             return Err(FixtureError::ResponseShapeRefused);
         }
     }
+    if !step.capture_results.is_empty() {
+        capture_immediate_action_results(step, &document, observations)?;
+    }
     if let Some(capture) = step.capture.as_ref() {
-        let record_id = document
-            .get("id")
-            .and_then(Value::as_str)
-            .filter(|value| uuid::Uuid::parse_str(value).is_ok_and(|id| id.to_string() == *value))
-            .ok_or(FixtureError::ResponseShapeRefused)?;
-        let etag = headers
-            .get(ETAG)
-            .and_then(|value| value.to_str().ok())
-            .filter(|value| !value.is_empty() && value.len() <= MAX_BINDING_BYTES)
+        let kind = capture_observation_kind(step, &headers, &document)?;
+        observations.insert(capture.clone(), Observation { kind, document });
+    }
+    Ok(())
+}
+
+fn capture_observation_kind(
+    step: &ValidatedStep,
+    headers: &HeaderMap,
+    document: &Value,
+) -> Result<ObservationKind, FixtureError> {
+    match step.action {
+        ActionSource::TargetConditions { .. } => Ok(ObservationKind::ActionConditions {
+            if_match_by_input: parse_target_conditions(document)?,
+        }),
+        ActionSource::Invoke { .. } => {
+            let application_id = document
+                .get("applicationId")
+                .and_then(Value::as_str)
+                .filter(|value| {
+                    uuid::Uuid::parse_str(value).is_ok_and(|id| id.to_string() == *value)
+                })
+                .ok_or(FixtureError::ResponseShapeRefused)?;
+            let _ = application_id;
+            parse_immediate_action_results(document)?;
+            Ok(ObservationKind::ActionApplication)
+        }
+        _ => {
+            let record_id = document
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|value| {
+                    uuid::Uuid::parse_str(value).is_ok_and(|id| id.to_string() == *value)
+                })
+                .ok_or(FixtureError::ResponseShapeRefused)?;
+            let etag = headers
+                .get(ETAG)
+                .and_then(|value| value.to_str().ok())
+                .filter(|value| !value.is_empty() && value.len() <= MAX_BINDING_BYTES)
+                .ok_or(FixtureError::ResponseShapeRefused)?;
+            Ok(ObservationKind::Record {
+                record_id: record_id.to_owned(),
+                etag: etag.to_owned(),
+            })
+        }
+    }
+}
+
+fn capture_immediate_action_results(
+    step: &ValidatedStep,
+    document: &Value,
+    observations: &mut BTreeMap<String, Observation>,
+) -> Result<(), FixtureError> {
+    let results = parse_immediate_action_results(document)?;
+    for (effect, capture) in &step.capture_results {
+        let result = results
+            .get(effect)
             .ok_or(FixtureError::ResponseShapeRefused)?;
         observations.insert(
             capture.clone(),
             Observation {
-                record_id: record_id.to_owned(),
-                etag: etag.to_owned(),
-                document,
+                kind: ObservationKind::Record {
+                    record_id: result.record_id.clone(),
+                    etag: format!("\"rs-action-result-{}\"", result.revision),
+                },
+                document: json!({
+                    "id": result.record_id,
+                    "entity": result.entity,
+                    "revision": result.revision,
+                    "data": {}
+                }),
             },
         );
     }
@@ -2744,9 +3626,98 @@ fn assert_response(
             | ActionSource::ApplyRequest { .. } => {
                 assert_request_action_shape(document)?;
             }
+            ActionSource::TargetConditions { .. } => {
+                parse_target_conditions(document)?;
+            }
+            ActionSource::Invoke { .. } => {
+                assert_immediate_action_shape(
+                    document,
+                    step.action_id
+                        .as_deref()
+                        .ok_or(FixtureError::ResponseShapeRefused)?,
+                )?;
+            }
         },
     }
     Ok(())
+}
+
+fn parse_target_conditions(value: &Value) -> Result<BTreeMap<String, String>, FixtureError> {
+    let object = exact_object(value, &["preconditions"])?;
+    let preconditions = object
+        .get("preconditions")
+        .and_then(Value::as_object)
+        .ok_or(FixtureError::ResponseShapeRefused)?;
+    let mut result = BTreeMap::new();
+    for (input, condition) in preconditions {
+        if input.is_empty() || input.len() > MAX_IDENTIFIER_BYTES {
+            return Err(FixtureError::ResponseShapeRefused);
+        }
+        let condition = exact_object(condition, &["ifMatch"])?;
+        let if_match = condition
+            .get("ifMatch")
+            .and_then(Value::as_str)
+            .ok_or(FixtureError::ResponseShapeRefused)?;
+        validate_action_if_match(if_match).map_err(|_| FixtureError::ResponseShapeRefused)?;
+        result.insert(input.clone(), if_match.to_owned());
+    }
+    Ok(result)
+}
+
+fn assert_immediate_action_shape(value: &Value, action_id: &str) -> Result<(), FixtureError> {
+    let object = exact_object(value, &["applicationId", "action", "results"])?;
+    let application_id = object
+        .get("applicationId")
+        .and_then(Value::as_str)
+        .ok_or(FixtureError::ResponseShapeRefused)?;
+    if !uuid::Uuid::parse_str(application_id)
+        .is_ok_and(|parsed| parsed.to_string() == application_id)
+        || object.get("action").and_then(Value::as_str) != Some(action_id)
+    {
+        return Err(FixtureError::ResponseShapeRefused);
+    }
+    parse_immediate_action_results(value)?;
+    Ok(())
+}
+
+fn parse_immediate_action_results(
+    value: &Value,
+) -> Result<BTreeMap<String, ActionResultReference>, FixtureError> {
+    let results = value
+        .get("results")
+        .and_then(Value::as_object)
+        .ok_or(FixtureError::ResponseShapeRefused)?;
+    let mut parsed = BTreeMap::new();
+    for (effect, result) in results {
+        if !valid_stable_id(effect) {
+            return Err(FixtureError::ResponseShapeRefused);
+        }
+        let result = exact_object(result, &["entity", "id", "revision"])?;
+        let entity = result
+            .get("entity")
+            .and_then(Value::as_str)
+            .filter(|value| valid_stable_id(value))
+            .ok_or(FixtureError::ResponseShapeRefused)?;
+        let record_id = result
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|value| uuid::Uuid::parse_str(value).is_ok_and(|id| id.to_string() == *value))
+            .ok_or(FixtureError::ResponseShapeRefused)?;
+        let revision = result
+            .get("revision")
+            .and_then(Value::as_u64)
+            .filter(|revision| *revision > 0)
+            .ok_or(FixtureError::ResponseShapeRefused)?;
+        parsed.insert(
+            effect.clone(),
+            ActionResultReference {
+                entity: entity.to_owned(),
+                record_id: record_id.to_owned(),
+                revision,
+            },
+        );
+    }
+    Ok(parsed)
 }
 
 fn assert_request_action_shape(value: &Value) -> Result<(), FixtureError> {
@@ -3916,7 +4887,9 @@ fn valid_stable_id(value: &str) -> bool {
 
 fn operation_method(operation: Operation) -> HttpMethod {
     match operation {
-        Operation::Create | Operation::Lookup | Operation::Batch => HttpMethod::Post,
+        Operation::Create | Operation::Lookup | Operation::Batch | Operation::Invoke => {
+            HttpMethod::Post
+        }
         Operation::Get | Operation::List | Operation::Revisions => HttpMethod::Get,
         Operation::Patch => HttpMethod::Patch,
         Operation::Tombstone => HttpMethod::Delete,
@@ -4709,23 +5682,12 @@ mod tests {
                 let document =
                     parse_json_strict(&bytes).map_err(|_| FixtureError::ResponseShapeRefused)?;
                 assert_response(step, status, &document)?;
+                if !step.capture_results.is_empty() {
+                    capture_immediate_action_results(step, &document, &mut observations)?;
+                }
                 if let Some(capture) = step.capture.as_ref() {
-                    observations.insert(
-                        capture.clone(),
-                        Observation {
-                            record_id: document
-                                .get("id")
-                                .and_then(Value::as_str)
-                                .ok_or(FixtureError::ResponseShapeRefused)?
-                                .to_owned(),
-                            etag: headers
-                                .get(ETAG)
-                                .and_then(|value| value.to_str().ok())
-                                .ok_or(FixtureError::ResponseShapeRefused)?
-                                .to_owned(),
-                            document,
-                        },
-                    );
+                    let kind = capture_observation_kind(step, &headers, &document)?;
+                    observations.insert(capture.clone(), Observation { kind, document });
                 }
             }
         }
@@ -4760,10 +5722,11 @@ mod tests {
         .expect("test profile parses");
         let step = ValidatedStep {
             id: "submit-request".to_owned(),
-            entity: "request".to_owned(),
+            entity: Some("request".to_owned()),
+            action_id: None,
             access_profile: "submitter".to_owned(),
             claims: ClaimsSource::default(),
-            route,
+            route: FixtureRoute::Entity(route),
             profile,
             response_readable_fields: BTreeSet::new(),
             action: ActionSource::SubmitRequest {
@@ -4778,13 +5741,16 @@ mod tests {
                 count: None,
             },
             capture: None,
+            capture_results: BTreeMap::new(),
         };
         let mut observations = BTreeMap::new();
         observations.insert(
             "before-submit".to_owned(),
             Observation {
-                record_id: "123e4567-e89b-12d3-a456-426614174000".to_owned(),
-                etag: "\"rs-ordinary-get-etag\"".to_owned(),
+                kind: ObservationKind::Record {
+                    record_id: "123e4567-e89b-12d3-a456-426614174000".to_owned(),
+                    etag: "\"rs-ordinary-get-etag\"".to_owned(),
+                },
                 document: json!({
                     "id": "123e4567-e89b-12d3-a456-426614174000",
                     "revision": 1,

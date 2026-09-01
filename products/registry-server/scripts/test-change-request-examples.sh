@@ -1,20 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-repository_root=$(cd -- "$script_dir/../../.." && pwd)
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+repository_root=$(cd -- "$script_dir/../../.." && pwd -P)
 registry_serverctl="$repository_root/target/debug/registry-serverctl"
 temporary_root=""
 created_databases=()
 created_roles=()
-asset_project="$repository_root/products/registry-server/acceptance/asset-site-placement-change-requests"
-household_project="$repository_root/products/registry-server/acceptance/publicschema-household-change-requests"
+mode="change-request"
+asset_project=""
+household_project=""
 
 usage() {
   cat >&2 <<'USAGE'
-usage: products/registry-server/scripts/test-change-request-examples.sh [--env FILE] [--asset-project DIR] [--household-project DIR]
+usage: products/registry-server/scripts/test-change-request-examples.sh [--env FILE] [--asset-project DIR] [--household-project DIR] [--mode change-request|immediate-actions]
 
 Runs both Registry Server change-request example fixtures through registry-serverctl test.
+Use --mode immediate-actions to run the immediate-action fixtures through the same closed harness.
 Set REGISTRY_SERVER_TEST_DATABASE_URL and REGISTRY_SERVER_TEST_TLS_CA_PEM_PATH, or pass --env FILE.
 Requires Python 3 with PyYAML. Use --asset-project or --household-project to run a disposable edited copy instead of the committed fixture.
 USAGE
@@ -46,6 +48,22 @@ while [[ $# -gt 0 ]]; do
       household_project=$2
       shift 2
       ;;
+    --mode)
+      if [[ $# -lt 2 ]]; then
+        usage
+        exit 2
+      fi
+      case "$2" in
+        change-request|immediate-actions)
+          mode=$2
+          ;;
+        *)
+          usage
+          exit 2
+          ;;
+      esac
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -57,9 +75,29 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+case "$mode" in
+  change-request)
+    run_label="change-request"
+    temp_slug="cr"
+    role_slug="cr"
+    default_asset_project="$repository_root/products/registry-server/acceptance/asset-site-placement-change-requests"
+    default_household_project="$repository_root/products/registry-server/acceptance/publicschema-household-change-requests"
+    ;;
+  immediate-actions)
+    run_label="immediate-action"
+    temp_slug="ia"
+    role_slug="ia"
+    default_asset_project="$repository_root/products/registry-server/fixtures/asset-registration-actions"
+    default_household_project="$repository_root/products/registry-server/fixtures/household-contact-actions"
+    ;;
+esac
+
+asset_project="${asset_project:-$default_asset_project}"
+household_project="${household_project:-$default_household_project}"
+
 if [[ -n "${env_file:-}" ]]; then
   if [[ ! -f "$env_file" || -L "$env_file" ]]; then
-    printf '%s\n' 'change-request env file is unavailable or unsafe.' >&2
+    printf '%s\n' "$run_label env file is unavailable or unsafe." >&2
     exit 1
   fi
   source "$env_file"
@@ -78,22 +116,22 @@ cleanup() {
   local database
   local role
   for database in "${created_databases[@]:-}"; do
-    psql "$REGISTRY_SERVER_TEST_DATABASE_URL" -v ON_ERROR_STOP=0 -q \
+    psql_admin -v ON_ERROR_STOP=0 -q \
       -c "DROP DATABASE IF EXISTS \"$database\" WITH (FORCE);" >/dev/null 2>&1 || true
   done
   for role in "${created_roles[@]:-}"; do
-    psql "$REGISTRY_SERVER_TEST_DATABASE_URL" -v ON_ERROR_STOP=0 -q \
+    psql_admin -v ON_ERROR_STOP=0 -q \
       -c "DROP ROLE IF EXISTS \"$role\";" >/dev/null 2>&1 || true
   done
   case "$temporary_root" in
-    "$repository_root"/.registry-server-cr-examples.*)
+    "$repository_root"/.registry-server-cr-examples.*|"$repository_root"/.registry-server-ia-examples.*)
       if [[ -d "$temporary_root" && ! -L "$temporary_root" ]]; then
         rm -rf -- "$temporary_root"
       fi
       ;;
     "") ;;
     *)
-      printf '%s\n' 'change-request example temp directory escaped its owned location.' >&2
+      printf '%s\n' "$run_label example temp directory escaped its owned location." >&2
       return 1
       ;;
   esac
@@ -102,9 +140,59 @@ trap cleanup EXIT HUP INT TERM
 
 require_tool() {
   if ! command -v "$1" >/dev/null 2>&1; then
-    printf '%s\n' "$1 is required for change-request example tests." >&2
+    printf '%s\n' "$1 is required for $run_label example tests." >&2
     exit 1
   fi
+}
+
+psql_admin() {
+  psql_database "$REGISTRY_SERVER_TEST_DATABASE_URL" "$@"
+}
+
+psql_database() {
+  local database_url=$1
+  shift
+  # libpq does not expand a URL supplied through PGDATABASE. Decode it into
+  # native connection variables so credentials never enter the process argv.
+  REGISTRY_SERVER_EXAMPLE_PSQL_URL="$database_url" python3 -c '
+import os
+import sys
+from urllib.parse import parse_qsl, unquote, urlsplit
+
+environment = dict(os.environ)
+url = urlsplit(environment.pop("REGISTRY_SERVER_EXAMPLE_PSQL_URL"))
+if url.scheme not in {"postgres", "postgresql"} or not url.hostname:
+    raise SystemExit("the example database connection must be a PostgreSQL URL")
+environment["PGHOST"] = url.hostname
+environment["PGPORT"] = str(url.port or 5432)
+environment["PGDATABASE"] = unquote(url.path.removeprefix("/"))
+if url.username is not None:
+    environment["PGUSER"] = unquote(url.username)
+if url.password is not None:
+    environment["PGPASSWORD"] = unquote(url.password)
+query_variables = {
+    "application_name": "PGAPPNAME",
+    "channel_binding": "PGCHANNELBINDING",
+    "connect_timeout": "PGCONNECT_TIMEOUT",
+    "hostaddr": "PGHOSTADDR",
+    "options": "PGOPTIONS",
+    "sslmode": "PGSSLMODE",
+    "sslrootcert": "PGSSLROOTCERT",
+    "sslcert": "PGSSLCERT",
+    "sslkey": "PGSSLKEY",
+    "sslcrl": "PGSSLCRL",
+    "sslcrldir": "PGSSLCRLDIR",
+    "ssl_min_protocol_version": "PGSSLMINPROTOCOLVERSION",
+    "ssl_max_protocol_version": "PGSSLMAXPROTOCOLVERSION",
+    "target_session_attrs": "PGTARGETSESSIONATTRS",
+}
+for name, value in parse_qsl(url.query, keep_blank_values=True):
+    variable = query_variables.get(name)
+    if variable is None:
+        raise SystemExit("the example database URL contains an unsupported connection parameter")
+    environment[variable] = value
+os.execvpe("psql", ["psql", *sys.argv[1:]], environment)
+' "$@"
 }
 
 normalize_project() {
@@ -195,21 +283,22 @@ PY
 write_trust_anchor() {
   local public_jwk=$1
   local database_id=$2
-  local instance_id=$3
-  local output=$4
-  python3 - "$public_jwk" "$database_id" "$instance_id" "$output" <<'PY'
+  local package_environment=$3
+  local instance_id=$4
+  local output=$5
+  python3 - "$public_jwk" "$database_id" "$package_environment" "$instance_id" "$output" <<'PY'
 import json
 import sys
 jwk = json.load(open(sys.argv[1], encoding="utf-8"))
 anchor = {
     "apiVersion": "registry.registrystack.org/package-trust/v1",
     "databaseId": sys.argv[2],
-    "environment": "acceptance",
-    "instanceId": sys.argv[3],
+    "environment": sys.argv[3],
+    "instanceId": sys.argv[4],
     "keys": [{"jwk": jwk, "keyId": jwk["kid"]}],
     "threshold": 1,
 }
-open(sys.argv[4], "w", encoding="utf-8").write(json.dumps(anchor, sort_keys=True, separators=(",", ":")))
+open(sys.argv[5], "w", encoding="utf-8").write(json.dumps(anchor, sort_keys=True, separators=(",", ":")))
 PY
 }
 
@@ -220,7 +309,8 @@ write_jwt() {
   local purpose=$4
   local scopes=$5
   local output=$6
-  python3 - "$key_id" "$principal" "$purpose" "$scopes" "$output.signing-input" <<'PY'
+  local direct_claims=${7:-"{}"}
+  python3 - "$key_id" "$principal" "$purpose" "$scopes" "$direct_claims" "$output.signing-input" <<'PY'
 import base64
 import json
 import sys
@@ -244,8 +334,15 @@ if sys.argv[3]:
     claims["registry_purpose"] = sys.argv[3]
 if sys.argv[4]:
     claims["scope"] = sys.argv[4]
+direct_claims = json.loads(sys.argv[5])
+if not isinstance(direct_claims, dict):
+    raise SystemExit("direct claims must be a JSON object")
+for name, value in direct_claims.items():
+    if name in claims:
+        raise SystemExit("direct claim collides with a registered claim")
+    claims[name] = value
 header = {"alg": "EdDSA", "kid": sys.argv[1], "typ": "JWT"}
-open(sys.argv[5], "w", encoding="ascii").write(f"{b64(header)}.{b64(claims)}")
+open(sys.argv[6], "w", encoding="ascii").write(f"{b64(header)}.{b64(claims)}")
 PY
   openssl pkeyutl -sign -rawin -inkey "$private_key" -in "$output.signing-input" -out "$output.signature"
   python3 - "$output.signing-input" "$output.signature" "$output" <<'PY'
@@ -263,12 +360,15 @@ derive_urls() {
   local database=$1
   local migration_role=$2
   local runtime_role=$3
-  local password=$4
-  python3 - "$REGISTRY_SERVER_TEST_DATABASE_URL" "$database" "$migration_role" "$runtime_role" "$password" <<'PY'
+  local password_file=$4
+  python3 - "$database" "$migration_role" "$runtime_role" "$password_file" <<'PY'
+import os
 import sys
+from pathlib import Path
 from urllib.parse import quote, urlsplit, urlunsplit
-admin = urlsplit(sys.argv[1])
-database, migration_role, runtime_role, password = sys.argv[2:]
+admin = urlsplit(os.environ.get("REGISTRY_SERVER_TEST_DATABASE_URL", ""))
+database, migration_role, runtime_role, password_file = sys.argv[1:]
+password = Path(password_file).read_text(encoding="utf-8")
 if admin.scheme not in {"postgres", "postgresql"} or not admin.hostname:
     raise SystemExit("REGISTRY_SERVER_TEST_DATABASE_URL must be a PostgreSQL URL")
 netloc_suffix = admin.hostname if admin.port is None else f"{admin.hostname}:{admin.port}"
@@ -283,13 +383,14 @@ PY
 
 admin_database_url() {
   local database=$1
-  python3 - "$REGISTRY_SERVER_TEST_DATABASE_URL" "$database" <<'PY'
+  python3 - "$database" <<'PY'
+import os
 import sys
 from urllib.parse import quote, urlsplit, urlunsplit
-admin = urlsplit(sys.argv[1])
+admin = urlsplit(os.environ.get("REGISTRY_SERVER_TEST_DATABASE_URL", ""))
 if admin.scheme not in {"postgres", "postgresql"} or not admin.hostname:
     raise SystemExit("REGISTRY_SERVER_TEST_DATABASE_URL must be a PostgreSQL URL")
-print(urlunsplit((admin.scheme, admin.netloc, f"/{quote(sys.argv[2], safe='')}", admin.query, "")))
+print(urlunsplit((admin.scheme, admin.netloc, f"/{quote(sys.argv[1], safe='')}", admin.query, "")))
 PY
 }
 
@@ -299,10 +400,10 @@ provision_database() {
   local runtime_role=$3
   local db_admin
   db_admin=$(admin_database_url "$database")
-  psql "$REGISTRY_SERVER_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -q \
+  psql_admin -v ON_ERROR_STOP=1 -q \
     -c "CREATE DATABASE \"$database\";" >/dev/null
   created_databases+=("$database")
-  psql "$db_admin" -v ON_ERROR_STOP=1 -q \
+  psql_database "$db_admin" -v ON_ERROR_STOP=1 -q \
     -c "CREATE EXTENSION IF NOT EXISTS btree_gist;" \
     -c "REVOKE ALL ON DATABASE \"$database\" FROM PUBLIC;" \
     -c "GRANT CONNECT ON DATABASE \"$database\" TO \"$migration_role\", \"$runtime_role\";" \
@@ -317,13 +418,14 @@ provision_database() {
 render_runtime_config() {
   local output=$1
   local database_id=$2
-  local runtime_ref=$3
-  local migration_ref=$4
-  local source_revision=$5
-  local instance_id=$6
-  local migration_role=$7
-  local runtime_role=$8
-  local trust_anchor=$9
+  local package_environment=$3
+  local runtime_ref=$4
+  local migration_ref=$5
+  local source_revision=$6
+  local instance_id=$7
+  local migration_role=$8
+  local runtime_role=$9
+  local trust_anchor=${10}
   cat >"$output" <<EOF_RUNTIME
 apiVersion: registry.registrystack.org/server-runtime/v1alpha1
 kind: RegistryServerRuntimeConfig
@@ -331,10 +433,10 @@ listener:
   bind: 127.0.0.1:0
   trustedProxy: direct
 identity:
-  environment: acceptance
+  environment: $package_environment
   instanceId: $instance_id
   databaseId: $database_id
-  databaseInitializationEnvironment: acceptance
+  databaseInitializationEnvironment: $package_environment
 secretProviders:
   file:
     root: $temporary_root/secrets
@@ -395,6 +497,31 @@ operationalTimeouts:
 EOF_RUNTIME
 }
 
+read_project_package_identity() {
+  local project=$1
+  python3 - "$project/registry.yaml" <<'PY'
+import sys
+from pathlib import Path
+try:
+    import yaml
+except ImportError as error:
+    raise SystemExit("PyYAML is required for project package identity extraction") from error
+path = Path(sys.argv[1])
+with path.open(encoding="utf-8") as handle:
+    document = yaml.safe_load(handle)
+if not isinstance(document, dict):
+    raise SystemExit("project registry.yaml is malformed")
+package = document.get("package")
+if not isinstance(package, dict):
+    raise SystemExit("project package block is missing")
+for key in ("environment", "instanceId", "sourceRevision"):
+    value = package.get(key)
+    if not isinstance(value, str) or not value:
+        raise SystemExit(f"project package.{key} is missing")
+    print(value)
+PY
+}
+
 write_credentials_from_project() {
   local project=$1
   local output=$2
@@ -412,13 +539,17 @@ except ImportError as error:
 journeys_path = Path(sys.argv[1])
 output = Path(sys.argv[2])
 profile_tokens = {}
+step_tokens = {}
 for value in sys.argv[3:]:
     if "=" not in value:
         raise SystemExit("credential profile mapping is malformed")
-    profile, token = value.split("=", 1)
-    if not profile or not token:
+    selector, token = value.split("=", 1)
+    if not selector or not token:
         raise SystemExit("credential profile mapping is incomplete")
-    profile_tokens[profile] = token
+    if "." in selector:
+        step_tokens[selector] = token
+    else:
+        profile_tokens[selector] = token
 
 with journeys_path.open(encoding="utf-8") as handle:
     document = yaml.safe_load(handle)
@@ -443,7 +574,7 @@ for journey in journeys:
         profile = step.get("accessProfile")
         if not isinstance(step_id, str) or not isinstance(profile, str):
             raise SystemExit("journey step is missing id or accessProfile")
-        token = profile_tokens.get(profile)
+        token = step_tokens.get(f"{journey_id}.{step_id}", profile_tokens.get(profile))
         if token is None:
             raise SystemExit(f"journey step {step_id} uses unmapped accessProfile {profile}")
         bindings.append({
@@ -471,17 +602,18 @@ run_fixture() {
   local database_id=$4
   local runtime_secret=$5
   local migration_secret=$6
-  local source_revision=$7
-  local instance_id=$8
-  local credentials=$9
-  local expected_journey=${10}
+  local package_environment=$7
+  local source_revision=$8
+  local instance_id=$9
+  local credentials=${10}
+  local expected_journeys=${11}
   local urls
   local migration_url
   local runtime_url
   local report="$temporary_root/$fixture_name-report.json"
   local receipt="$temporary_root/$fixture_name-receipt.json"
 
-  urls=$(derive_urls "$database" "$migration_role" "$runtime_role" "$role_password")
+  urls=$(derive_urls "$database" "$migration_role" "$runtime_role" "$role_password_file")
   migration_url=$(printf '%s\n' "$urls" | sed -n '1p')
   runtime_url=$(printf '%s\n' "$urls" | sed -n '2p')
   printf '%s' "$runtime_url" >"$temporary_root/secrets/$runtime_secret"
@@ -490,12 +622,12 @@ run_fixture() {
 
   provision_database "$database" "$migration_role" "$runtime_role"
   local trust_anchor="$temporary_root/$fixture_name-trust-anchor.json"
-  write_trust_anchor "$package_public_jwk" "$database_id" "$instance_id" "$trust_anchor"
+  write_trust_anchor "$package_public_jwk" "$database_id" "$package_environment" "$instance_id" "$trust_anchor"
   render_runtime_config "$temporary_root/$fixture_name-runtime-test.yaml" \
-    "$database_id" "secret:file/$runtime_secret" "secret:file/$migration_secret" \
+    "$database_id" "$package_environment" "secret:file/$runtime_secret" "secret:file/$migration_secret" \
     "$source_revision" "$instance_id" "$migration_role" "$runtime_role" "$trust_anchor"
 
-  printf 'running change-request fixture: %s\n' "$fixture_name"
+  printf 'running %s fixture: %s\n' "$run_label" "$fixture_name"
   "$registry_serverctl" check "$project_path" >/dev/null
   if ! "$registry_serverctl" --format json test "$project_path" \
     --database-id "$database_id" \
@@ -508,15 +640,16 @@ run_fixture() {
     return 1
   fi
   assert_json_ok "$report" test
-  python3 - "$report" "$expected_journey" <<'PY'
+  python3 - "$report" "$expected_journeys" <<'PY'
 import json
 import sys
 report = json.load(open(sys.argv[1], encoding="utf-8"))
-expected = sys.argv[2]
-if expected not in report.get("successfulJourneyIds", []):
-    raise SystemExit(f"{expected} was not reported as successful")
+successful = set(report.get("successfulJourneyIds", []))
+for expected in sys.argv[2].split(","):
+    if expected not in successful:
+        raise SystemExit(f"{expected} was not reported as successful")
 PY
-  printf 'change-request fixture passed: %s\n' "$fixture_name"
+  printf '%s fixture passed: %s\n' "$run_label" "$fixture_name"
 }
 
 require_tool cargo
@@ -532,11 +665,11 @@ export CARGO_PROFILE_TEST_DEBUG=0
 export RUSTC_WRAPPER="${RUSTC_WRAPPER-}"
 export SSL_CERT_FILE="$REGISTRY_SERVER_TEST_TLS_CA_PEM_PATH"
 
-temporary_root=$(mktemp -d "$repository_root/.registry-server-cr-examples.XXXXXX")
+temporary_root=$(mktemp -d "$repository_root/.registry-server-$temp_slug-examples.XXXXXX")
 case "$temporary_root" in
-  "$repository_root"/.registry-server-cr-examples.*) ;;
+  "$repository_root"/.registry-server-cr-examples.*|"$repository_root"/.registry-server-ia-examples.*) ;;
   *)
-    printf '%s\n' 'change-request example temp directory escaped its owned location.' >&2
+    printf '%s\n' "$run_label example temp directory escaped its owned location." >&2
     exit 1
     ;;
 esac
@@ -551,16 +684,21 @@ import secrets
 print(secrets.token_hex(4))
 PY
 )
-migration_role="rs_cr_migration_$suffix"
-runtime_role="rs_cr_runtime_$suffix"
-role_password=$(python3 - <<'PY'
+migration_role="rs_${role_slug}_migration_$suffix"
+runtime_role="rs_${role_slug}_runtime_$suffix"
+role_password_file="$temporary_root/secrets/database-role-password"
+python3 - "$role_password_file" <<'PY'
 import secrets
-print(secrets.token_hex(18))
+import sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(secrets.token_hex(18), encoding="utf-8")
 PY
-)
-psql "$REGISTRY_SERVER_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -q \
-  -c "CREATE ROLE \"$migration_role\" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS PASSWORD '$role_password';" \
-  -c "CREATE ROLE \"$runtime_role\" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS PASSWORD '$role_password';" >/dev/null
+chmod 600 "$role_password_file"
+role_password=$(cat "$role_password_file")
+psql_admin -v ON_ERROR_STOP=1 -q >/dev/null <<EOF_SQL
+CREATE ROLE "$migration_role" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS PASSWORD '$role_password';
+CREATE ROLE "$runtime_role" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS PASSWORD '$role_password';
+EOF_SQL
 created_roles+=("$runtime_role" "$migration_role")
 
 openssl genpkey -algorithm ED25519 -out "$temporary_root/oidc-signer.pem" >/dev/null 2>&1
@@ -582,21 +720,72 @@ write_jwt "$temporary_root/oidc-signer.pem" "change-request-example-oidc-key" "h
 write_jwt "$temporary_root/oidc-signer.pem" "change-request-example-oidc-key" "household-contact-reviewer" "household-contact-review" "registry:household-contact:review" "$temporary_root/secrets/household-contact-reviewer-token"
 write_jwt "$temporary_root/oidc-signer.pem" "change-request-example-oidc-key" "household-contact-supervisor" "household-contact-review" "registry:household-contact:supervise" "$temporary_root/secrets/household-contact-supervisor-token"
 write_jwt "$temporary_root/oidc-signer.pem" "change-request-example-oidc-key" "household-contact-applier" "household-contact-apply" "registry:household-contact:apply" "$temporary_root/secrets/household-contact-applier-token"
-
-asset_credentials="$temporary_root/asset-site-placement-change-requests-credentials.yaml"
-household_credentials="$temporary_root/publicschema-household-change-requests-credentials.yaml"
-write_credentials_from_project "$asset_project" "$asset_credentials" \
-  asset-operator=asset-operator-token \
-  correction-submitter=correction-submitter-token \
-  correction-reviewer=correction-reviewer-token \
-  correction-supervisor=correction-supervisor-token \
-  correction-applier=correction-applier-token
-write_credentials_from_project "$household_project" "$household_credentials" \
-  household-operator=household-operator-token \
-  household-contact-submitter=household-contact-submitter-token \
-  household-contact-reviewer=household-contact-reviewer-token \
-  household-contact-supervisor=household-contact-supervisor-token \
-  household-contact-applier=household-contact-applier-token
+case "$mode" in
+  change-request)
+    asset_fixture_name=asset-site-placement-change-requests
+    household_fixture_name=publicschema-household-change-requests
+    asset_database="rs_cr_asset_$suffix"
+    household_database="rs_cr_household_$suffix"
+    asset_database_id=asset-site-placement-change-requests-local-db
+    household_database_id=publicschema-household-change-requests-local-db
+    asset_runtime_secret=asset-runtime-url
+    asset_migration_secret=asset-migration-url
+    household_runtime_secret=household-runtime-url
+    household_migration_secret=household-migration-url
+    asset_expected_journeys=placement-correction-request-flow
+    household_expected_journeys=household-contact-registration-request-flow
+    asset_credentials="$temporary_root/asset-site-placement-change-requests-credentials.yaml"
+    household_credentials="$temporary_root/publicschema-household-change-requests-credentials.yaml"
+    write_credentials_from_project "$asset_project" "$asset_credentials" \
+      asset-operator=asset-operator-token \
+      correction-submitter=correction-submitter-token \
+      correction-reviewer=correction-reviewer-token \
+      correction-supervisor=correction-supervisor-token \
+      correction-applier=correction-applier-token
+    write_credentials_from_project "$household_project" "$household_credentials" \
+      household-operator=household-operator-token \
+      household-contact-submitter=household-contact-submitter-token \
+      household-contact-reviewer=household-contact-reviewer-token \
+      household-contact-supervisor=household-contact-supervisor-token \
+      household-contact-applier=household-contact-applier-token
+    ;;
+  immediate-actions)
+    write_jwt "$temporary_root/oidc-signer.pem" "change-request-example-oidc-key" "synthetic-asset-registrar" "asset-registration" "registry:asset:register" "$temporary_root/secrets/asset-action-registrar-token" '{"jurisdiction":"north-district"}'
+    write_jwt "$temporary_root/oidc-signer.pem" "change-request-example-oidc-key" "synthetic-contact-registrar" "contact-registration" "registry:contact:register" "$temporary_root/secrets/contact-registrar-token" '{"district":"north-district"}'
+    write_jwt "$temporary_root/oidc-signer.pem" "change-request-example-oidc-key" "synthetic-household-operator" "household-administration" "registry:household:operate" "$temporary_root/secrets/household-operator-north-token" '{"district":"north-district"}'
+    write_jwt "$temporary_root/oidc-signer.pem" "change-request-example-oidc-key" "synthetic-household-operator" "household-administration" "registry:household:operate" "$temporary_root/secrets/household-operator-south-token" '{"district":"south-district"}'
+    write_jwt "$temporary_root/oidc-signer.pem" "change-request-example-oidc-key" "synthetic-household-maintainer" "household-maintenance" "registry:household:maintain" "$temporary_root/secrets/household-maintainer-token" '{"district":"north-district"}'
+    asset_fixture_name=asset-registration-actions
+    household_fixture_name=household-contact-actions
+    asset_database="rs_ia_asset_$suffix"
+    household_database="rs_ia_household_$suffix"
+    asset_database_id=asset-registration-actions-local-db
+    household_database_id=household-contact-actions-local-db
+    asset_runtime_secret=asset-action-runtime-url
+    asset_migration_secret=asset-action-migration-url
+    household_runtime_secret=household-action-runtime-url
+    household_migration_secret=household-action-migration-url
+    asset_expected_journeys=create-asset-and-initial-inspection
+    household_expected_journeys=action-only-household-contact-registration,link-only-target-authority-is-still-enforced
+    asset_credentials="$temporary_root/asset-registration-actions-credentials.yaml"
+    household_credentials="$temporary_root/household-contact-actions-credentials.yaml"
+    write_credentials_from_project "$asset_project" "$asset_credentials" \
+      asset-action-registrar=asset-action-registrar-token
+    write_credentials_from_project "$household_project" "$household_credentials" \
+      household-operator=household-operator-north-token \
+      household-maintainer=household-maintainer-token \
+      contact-registrar=contact-registrar-token \
+      link-only-target-authority-is-still-enforced.create-south-service-center=household-operator-south-token
+    ;;
+esac
+asset_package_identity=$(read_project_package_identity "$asset_project")
+household_package_identity=$(read_project_package_identity "$household_project")
+asset_package_environment=$(printf '%s\n' "$asset_package_identity" | sed -n '1p')
+asset_instance_id=$(printf '%s\n' "$asset_package_identity" | sed -n '2p')
+asset_source_revision=$(printf '%s\n' "$asset_package_identity" | sed -n '3p')
+household_package_environment=$(printf '%s\n' "$household_package_identity" | sed -n '1p')
+household_instance_id=$(printf '%s\n' "$household_package_identity" | sed -n '2p')
+household_source_revision=$(printf '%s\n' "$household_package_identity" | sed -n '3p')
 chmod 600 "$asset_credentials" "$household_credentials"
 
 cargo build --manifest-path "$repository_root/Cargo.toml" --locked \
@@ -605,25 +794,27 @@ cargo build --manifest-path "$repository_root/Cargo.toml" --locked \
   --features registry-server/runtime >/dev/null
 
 run_fixture \
-  asset-site-placement-change-requests \
+  "$asset_fixture_name" \
   "$asset_project" \
-  "rs_cr_asset_$suffix" \
-  asset-site-placement-change-requests-local-db \
-  asset-runtime-url \
-  asset-migration-url \
-  asset-site-placement-change-requests-acceptance-0.1.0 \
-  asset-site-placement-change-requests-acceptance \
+  "$asset_database" \
+  "$asset_database_id" \
+  "$asset_runtime_secret" \
+  "$asset_migration_secret" \
+  "$asset_package_environment" \
+  "$asset_source_revision" \
+  "$asset_instance_id" \
   "$asset_credentials" \
-  placement-correction-request-flow
+  "$asset_expected_journeys"
 
 run_fixture \
-  publicschema-household-change-requests \
+  "$household_fixture_name" \
   "$household_project" \
-  "rs_cr_household_$suffix" \
-  publicschema-household-change-requests-local-db \
-  household-runtime-url \
-  household-migration-url \
-  publicschema-household-change-requests-acceptance-0.1.0 \
-  publicschema-household-change-requests-acceptance \
+  "$household_database" \
+  "$household_database_id" \
+  "$household_runtime_secret" \
+  "$household_migration_secret" \
+  "$household_package_environment" \
+  "$household_source_revision" \
+  "$household_instance_id" \
   "$household_credentials" \
-  household-contact-registration-request-flow
+  "$household_expected_journeys"

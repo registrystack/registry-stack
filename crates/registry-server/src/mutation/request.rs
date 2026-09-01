@@ -1166,6 +1166,7 @@ impl MutationCoordinator {
             self.event_destinations.as_deref(),
             OutboxMutation {
                 trigger: mutation_trigger(target.operation),
+                application_reference: None,
                 entity_id: &entity.id,
                 record_id: &id,
                 record_reference: &reference,
@@ -1229,7 +1230,8 @@ impl MutationCoordinator {
             outcome,
             method: route.method,
             operation_id: route.id.clone(),
-            entity_id: input.entity_id.to_owned(),
+            entity_id: Some(input.entity_id.to_owned()),
+            action_id: None,
             package_revision: self.expected.package_revision.clone(),
             selected_access_profile: claims.access_profile().to_owned(),
             purpose_present: claims.purpose().is_some(),

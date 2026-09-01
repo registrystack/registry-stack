@@ -8,8 +8,9 @@ use std::time::Duration;
 use registry_platform_audit::AuditProfile;
 
 use crate::api::{
-    AuthorizedRequestContext, BatchMutationInput, ConditionalMutationInput, CreateMutationInput,
-    RowBoundaryOperator as ApiRowBoundaryOperator, VerifiedRowBoundary,
+    ActionTargetConditionsInput, AuthorizedActionContext, AuthorizedRequestContext,
+    BatchMutationInput, ConditionalMutationInput, CreateMutationInput, HeldReadResponse,
+    ImmediateActionInput, RowBoundaryOperator as ApiRowBoundaryOperator, VerifiedRowBoundary,
 };
 use crate::audit::{record_http_refusal_audit, HttpRefusalAudit};
 use crate::event_destination::ActivatedEventDestinationRegistry;
@@ -22,7 +23,8 @@ use crate::mutation::{
 };
 
 use super::{
-    ClaimContext, ExpectedRegistryIdentity, RegistryLockKey, RowBoundaryContext, RuntimePool,
+    ActionClaimContext, ClaimContext, ExpectedRegistryIdentity, RegistryLockKey,
+    RowBoundaryContext, RuntimePool,
 };
 
 const REQUEST_ACTION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -37,10 +39,87 @@ pub struct PostgresRecordMutationService {
     lock_key: RegistryLockKey,
     lock_timeout: Duration,
     audit_profile: AuditProfile,
+    action_timeout: Duration,
     fault: MutationFaultControl,
 }
 
 impl PostgresRecordMutationService {
+    pub async fn invoke_action(
+        &self,
+        input: ImmediateActionInput<'_>,
+    ) -> Result<MutationOutcome, MutationError> {
+        let claims = strict_action_context(input.context, input.action_id)?;
+        let target_authority = strict_action_target_authority(input.context)?;
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+        let fault = match self.fault {
+            #[cfg(feature = "postgres-test")]
+            MutationFaultControl::At(point) => crate::mutation::FaultControl::At(point),
+            _ => crate::mutation::FaultControl::Disabled,
+        };
+        let mut guard = RequestActionCancellationGuard::new(self.pool.clone(), client);
+        match tokio::time::timeout(
+            self.action_timeout,
+            self.coordinator.execute_immediate_action(
+                guard.client(),
+                &self.registry,
+                input,
+                &claims,
+                &target_authority,
+                fault,
+            ),
+        )
+        .await
+        {
+            Ok(result) => {
+                guard.disarm();
+                result
+            }
+            Err(_) => {
+                guard.cancel_and_discard().await;
+                Err(MutationError::Unavailable)
+            }
+        }
+    }
+
+    pub async fn action_target_conditions(
+        &self,
+        input: ActionTargetConditionsInput<'_>,
+    ) -> Result<HeldReadResponse, MutationError> {
+        let claims = strict_action_context(input.context, input.action_id)?;
+        let target_authority = strict_action_target_authority(input.context)?;
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+        let mut guard = RequestActionCancellationGuard::new(self.pool.clone(), client);
+        match tokio::time::timeout(
+            self.action_timeout,
+            self.coordinator.action_target_conditions(
+                guard.client(),
+                &self.registry,
+                input,
+                &claims,
+                &target_authority,
+            ),
+        )
+        .await
+        {
+            Ok(result) => {
+                guard.disarm();
+                result
+            }
+            Err(_) => {
+                guard.cancel_and_discard().await;
+                Err(MutationError::Unavailable)
+            }
+        }
+    }
+
     pub async fn request_action(
         &self,
         input: crate::api::RequestActionInput<'_>,
@@ -124,8 +203,17 @@ impl PostgresRecordMutationService {
             lock_key,
             lock_timeout,
             audit_profile,
+            action_timeout: REQUEST_ACTION_TIMEOUT,
             fault: MutationFaultControl::Disabled,
         }
+    }
+
+    #[cfg(feature = "postgres-test")]
+    #[must_use]
+    #[doc(hidden)]
+    pub fn with_action_timeout_for_test(mut self, timeout: Duration) -> Self {
+        self.action_timeout = timeout;
+        self
     }
 
     #[cfg(feature = "postgres-test")]
@@ -167,6 +255,16 @@ impl PostgresRecordMutationService {
         )
         .await
         .map_err(MutationError::from)
+    }
+
+    pub(crate) async fn record_action_refusal<'a>(
+        &self,
+        action_id: &'a str,
+        mut event: HttpRefusalAudit<'a>,
+    ) -> Result<(), MutationError> {
+        event.action_id = Some(action_id);
+        event.target_record = None;
+        self.record_refusal(event).await
     }
 
     pub async fn create(
@@ -376,6 +474,41 @@ fn strict_claim_context(
         row_boundaries,
     )
     .map_err(|_| MutationError::InvalidRequest)
+}
+
+fn strict_action_context(
+    context: &AuthorizedActionContext,
+    action_id: &str,
+) -> Result<ActionClaimContext, MutationError> {
+    if context.action_id() != action_id {
+        return Err(MutationError::InvalidRequest);
+    }
+    ActionClaimContext::new(
+        context.action_id().to_owned(),
+        context.principal().to_owned(),
+        context.selected_profile().to_owned(),
+        context.purpose().map(str::to_owned),
+        context.result_effects().clone(),
+    )
+    .map_err(|_| MutationError::InvalidRequest)
+}
+
+fn strict_action_target_authority(
+    context: &AuthorizedActionContext,
+) -> Result<std::collections::BTreeMap<String, Vec<RowBoundaryContext>>, MutationError> {
+    context
+        .target_authority()
+        .iter()
+        .map(|(entity_id, boundaries)| {
+            Ok((
+                entity_id.clone(),
+                boundaries
+                    .iter()
+                    .map(api_boundary)
+                    .collect::<Result<Vec<_>, _>>()?,
+            ))
+        })
+        .collect()
 }
 
 fn api_boundary(boundary: &VerifiedRowBoundary) -> Result<RowBoundaryContext, MutationError> {

@@ -185,12 +185,39 @@ class RegistryServerProductCatalogTests(unittest.TestCase):
 
     def test_postgres_webhook_outbox_follows_mutation_in_the_owned_gate(self) -> None:
         commands = list(VALIDATOR.POSTGRES_TEST_COMMANDS)
-        mutation = "cargo test --locked -p registry-server --features postgres-test --test postgres_mutation"
+        immediate_activation = (
+            "cargo test --locked -p registry-server --features postgres-test,tooling "
+            "--test postgres_immediate_action_activation"
+        )
         webhook_outbox = (
             "cargo test --locked -p registry-server --features postgres-test "
             "--test postgres_webhook_outbox"
         )
-        self.assertEqual(commands.index(mutation) + 1, commands.index(webhook_outbox))
+        self.assertEqual(commands.index(immediate_activation) + 1, commands.index(webhook_outbox))
+
+    def test_postgres_immediate_action_examples_are_registered_after_core_action_gate(self) -> None:
+        commands = list(VALIDATOR.POSTGRES_TEST_COMMANDS)
+        mutation = "cargo test --locked -p registry-server --features postgres-test --test postgres_mutation"
+        immediate_actions = (
+            "cargo test --locked -p registry-server --features postgres-test "
+            "--test postgres_immediate_actions"
+        )
+        immediate_examples = (
+            "cargo test --locked -p registry-server --features postgres-test,tooling "
+            "--test postgres_immediate_action_examples"
+        )
+        immediate_activation = (
+            "cargo test --locked -p registry-server --features postgres-test,tooling "
+            "--test postgres_immediate_action_activation"
+        )
+        webhook_outbox = (
+            "cargo test --locked -p registry-server --features postgres-test "
+            "--test postgres_webhook_outbox"
+        )
+        self.assertEqual(commands.index(mutation) + 1, commands.index(immediate_actions))
+        self.assertEqual(commands.index(immediate_actions) + 1, commands.index(immediate_examples))
+        self.assertEqual(commands.index(immediate_examples) + 1, commands.index(immediate_activation))
+        self.assertEqual(commands.index(immediate_activation) + 1, commands.index(webhook_outbox))
 
     def test_postgres_webhook_delivery_follows_atomic_capture_in_the_owned_gate(self) -> None:
         commands = list(VALIDATOR.POSTGRES_TEST_COMMANDS)
@@ -404,7 +431,7 @@ class RegistryServerProductCatalogTests(unittest.TestCase):
         with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_without_journey):
             VALIDATOR.validate_acceptance(errors)
         self.assertIn(
-            "acceptance matrix: must contain RS-J01 through RS-J17 exactly once in order",
+            "acceptance matrix: must contain RS-J01 through RS-J19 exactly once in order",
             errors,
         )
 
@@ -522,6 +549,24 @@ class RegistryServerProductCatalogTests(unittest.TestCase):
             VALIDATOR.validate_package_layout(errors)
         self.assertTrue(any("missing required entry tuples" in error for error in errors), errors)
         self.assertTrue(any("unexpected entry tuples" in error for error in errors), errors)
+
+    def test_package_layout_binds_action_inventory_and_schemas_as_optional_generated_outputs(self) -> None:
+        original = VALIDATOR.load_yaml
+
+        def load_without_action_entries(path: Path):
+            value = copy.deepcopy(original(path))
+            if path.name == "package-layout.yaml":
+                value["entries"] = [
+                    entry
+                    for entry in value["entries"]
+                    if entry["path"] not in {"inventories/actions.json", "action-schemas"}
+                ]
+            return value
+
+        errors: list[str] = []
+        with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_without_action_entries):
+            VALIDATOR.validate_package_layout(errors)
+        self.assertTrue(any("missing required entry tuples" in error for error in errors), errors)
 
     def test_package_layout_cannot_allow_embedded_signing_key(self) -> None:
         original = VALIDATOR.load_yaml

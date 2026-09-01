@@ -12,8 +12,9 @@ use uuid::Uuid;
 use crate::contract::{BoundaryOperator, Operation};
 use crate::data::{validate_field_value as validate_data_field_value, FieldValue};
 use crate::model::{
-    CompiledChangeRequestEffect, CompiledChangeRequestMutation, CompiledChangeRequestTargetBinding,
-    CompiledRegistry,
+    CompiledActionEffect, CompiledActionMutation, CompiledActionTargetBinding,
+    CompiledActionTargetUseSource, CompiledChangeRequestEffect, CompiledChangeRequestMutation,
+    CompiledChangeRequestTargetBinding, CompiledRegistry,
 };
 
 use super::{ExpectedRegistryIdentity, PostgresKernelError, RegistryLockKey, Result};
@@ -35,6 +36,96 @@ pub enum RowBoundaryContext {
         field: String,
         values: BTreeSet<String>,
     },
+}
+
+/// Action-level authority installed for named immediate actions.
+///
+/// This is deliberately not an entity `ClaimContext`: invoke authority is
+/// action-owned, and each target row gets a separate effect context before
+/// PostgreSQL row security can admit reads or writes.
+#[derive(Clone, Eq, PartialEq)]
+pub(crate) struct ActionClaimContext {
+    action_id: String,
+    principal: String,
+    access_profile: String,
+    purpose: Option<String>,
+    result_effects: BTreeSet<String>,
+}
+
+impl ActionClaimContext {
+    pub(crate) fn new(
+        action_id: String,
+        principal: String,
+        access_profile: String,
+        purpose: Option<String>,
+        result_effects: BTreeSet<String>,
+    ) -> Result<Self> {
+        let context = Self {
+            action_id,
+            principal,
+            access_profile,
+            purpose,
+            result_effects,
+        };
+        context.validate()?;
+        Ok(context)
+    }
+
+    #[must_use]
+    pub(crate) fn action_id(&self) -> &str {
+        &self.action_id
+    }
+
+    #[must_use]
+    pub(crate) fn principal(&self) -> &str {
+        &self.principal
+    }
+
+    #[must_use]
+    pub(crate) fn access_profile(&self) -> &str {
+        &self.access_profile
+    }
+
+    #[must_use]
+    pub(crate) fn purpose(&self) -> Option<&str> {
+        self.purpose.as_deref()
+    }
+
+    #[must_use]
+    pub(crate) fn result_effects(&self) -> &BTreeSet<String> {
+        &self.result_effects
+    }
+
+    pub(crate) fn validate(&self) -> Result<()> {
+        validate_required_context_value(&self.action_id)?;
+        validate_required_context_value(&self.principal)?;
+        validate_required_context_value(&self.access_profile)?;
+        self.purpose
+            .as_deref()
+            .map(validate_required_context_value)
+            .transpose()?;
+        if self
+            .result_effects
+            .iter()
+            .any(|effect| validate_required_context_value(effect).is_err())
+        {
+            return Err(invalid_context());
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for ActionClaimContext {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ActionClaimContext")
+            .field("action_id", &self.action_id)
+            .field("principal", &"<redacted>")
+            .field("access_profile", &self.access_profile)
+            .field("purpose", &self.purpose.as_ref().map(|_| "<redacted>"))
+            .field("result_effects", &self.result_effects)
+            .finish()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1037,6 +1128,589 @@ impl fmt::Debug for ChangeRequestTargetContext {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ImmediateActionTargetBinding {
+    pub action_id: String,
+    pub contract_fingerprint: String,
+    pub active_package_revision: String,
+    pub effect_ids: BTreeSet<String>,
+    pub target_entity_id: String,
+    pub target_record_id: Uuid,
+    pub operation: Operation,
+    pub fields: BTreeSet<String>,
+    pub expected_revision: Option<i64>,
+    pub lock_only: bool,
+    pub application_id: Option<Uuid>,
+}
+
+impl ImmediateActionTargetBinding {
+    fn validate_basic(&self) -> Result<()> {
+        validate_required_context_value(&self.action_id)?;
+        validate_sha256_fingerprint(&self.contract_fingerprint)?;
+        validate_required_context_value(&self.active_package_revision)?;
+        if self.effect_ids.is_empty()
+            || self.effect_ids.len() > MAX_TARGET_FIELDS
+            || self
+                .effect_ids
+                .iter()
+                .any(|effect_id| validate_required_context_value(effect_id).is_err())
+        {
+            return Err(invalid_context());
+        }
+        validate_required_context_value(&self.target_entity_id)?;
+        if self.lock_only && self.expected_revision.is_some() {
+            return Err(invalid_context());
+        }
+        if self.expected_revision.is_some_and(|revision| revision <= 0)
+            || self.fields.is_empty()
+            || self.fields.len() > MAX_TARGET_FIELDS
+            || self
+                .fields
+                .iter()
+                .any(|field| validate_required_context_value(field).is_err())
+        {
+            return Err(invalid_context());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub(crate) struct ImmediateActionTargetContext {
+    action_id: String,
+    contract_fingerprint: String,
+    active_package_revision: String,
+    selected_profile: String,
+    principal: String,
+    purpose: Option<String>,
+    effect_ids: BTreeSet<String>,
+    target_entity_id: String,
+    target_record_id: Uuid,
+    operation: Operation,
+    fields: BTreeSet<String>,
+    expected_revision: Option<i64>,
+    lock_only: bool,
+    application_id: Option<Uuid>,
+    target_row_boundaries: Vec<RowBoundaryContext>,
+    canonical_context: String,
+}
+
+impl ImmediateActionTargetContext {
+    pub(crate) fn for_effect(
+        registry: &CompiledRegistry,
+        action_claims: &ActionClaimContext,
+        target_boundaries: Vec<RowBoundaryContext>,
+        binding: ImmediateActionTargetBinding,
+    ) -> Result<Self> {
+        action_claims.validate()?;
+        binding.validate_basic()?;
+        if action_claims.action_id() != binding.action_id {
+            return Err(invalid_context());
+        }
+        let action = registry
+            .actions()
+            .actions
+            .iter()
+            .find(|action| action.id == binding.action_id)
+            .ok_or_else(invalid_context)?;
+        if action.contract_fingerprint != binding.contract_fingerprint {
+            return Err(invalid_context());
+        }
+        let mut effects = Vec::with_capacity(binding.effect_ids.len());
+        for effect_id in &binding.effect_ids {
+            effects.push(
+                action
+                    .effects
+                    .iter()
+                    .find(|effect| effect.id == *effect_id)
+                    .ok_or_else(invalid_context)?,
+            );
+        }
+        validate_action_effect_binding(&effects, &binding)?;
+        let grant = action
+            .grants
+            .iter()
+            .find(|grant| {
+                grant.profile_id == action_claims.access_profile()
+                    && grant.operations.contains(&Operation::Invoke)
+                    && grant
+                        .targets
+                        .iter()
+                        .any(|target| target.entity_id == binding.target_entity_id)
+            })
+            .ok_or_else(invalid_context)?;
+        let target_grant = grant
+            .targets
+            .iter()
+            .find(|target| target.entity_id == binding.target_entity_id)
+            .ok_or_else(invalid_context)?;
+        validate_target_boundaries(
+            registry,
+            &binding.target_entity_id,
+            &target_boundaries,
+            &target_grant.row_boundaries,
+        )?;
+        let mut context = Self {
+            action_id: binding.action_id,
+            contract_fingerprint: binding.contract_fingerprint,
+            active_package_revision: binding.active_package_revision,
+            selected_profile: action_claims.access_profile().to_owned(),
+            principal: action_claims.principal().to_owned(),
+            purpose: action_claims.purpose().map(str::to_owned),
+            effect_ids: binding.effect_ids,
+            target_entity_id: binding.target_entity_id,
+            target_record_id: binding.target_record_id,
+            operation: binding.operation,
+            fields: binding.fields,
+            expected_revision: binding.expected_revision,
+            lock_only: binding.lock_only,
+            application_id: binding.application_id,
+            target_row_boundaries: target_boundaries,
+            canonical_context: String::new(),
+        };
+        context.canonical_context = Self::canonicalize(&context)?;
+        context.validate()?;
+        Ok(context)
+    }
+
+    #[must_use]
+    pub(crate) fn canonical_context(&self) -> &str {
+        &self.canonical_context
+    }
+
+    pub(crate) fn authorize_rows(
+        &self,
+        target_entity: &crate::model::CompiledEntity,
+        before: Option<&serde_json::Map<String, Value>>,
+        after: &serde_json::Map<String, Value>,
+        record_id: Uuid,
+    ) -> Result<()> {
+        self.validate()?;
+        if target_entity.id != self.target_entity_id || record_id != self.target_record_id {
+            return Err(invalid_context());
+        }
+        match self.operation {
+            Operation::Create if before.is_some() => return Err(invalid_context()),
+            Operation::Patch if before.is_none() => return Err(invalid_context()),
+            Operation::Create | Operation::Patch => {}
+            _ => return Err(invalid_context()),
+        }
+        if let Some(before) = before {
+            validate_action_field_delta(target_entity, before, after, &self.fields)?;
+            validate_snapshot_boundaries(
+                target_entity,
+                before,
+                record_id,
+                &self.target_row_boundaries,
+            )?;
+        }
+        validate_snapshot_boundaries(target_entity, after, record_id, &self.target_row_boundaries)
+    }
+
+    pub(crate) fn validate(&self) -> Result<()> {
+        validate_required_context_value(&self.action_id)?;
+        validate_sha256_fingerprint(&self.contract_fingerprint)?;
+        validate_required_context_value(&self.active_package_revision)?;
+        validate_required_context_value(&self.selected_profile)?;
+        validate_required_context_value(&self.principal)?;
+        self.purpose
+            .as_deref()
+            .map(validate_required_context_value)
+            .transpose()?;
+        if self.effect_ids.is_empty()
+            || self.effect_ids.len() > MAX_TARGET_FIELDS
+            || self
+                .effect_ids
+                .iter()
+                .any(|effect_id| validate_required_context_value(effect_id).is_err())
+        {
+            return Err(invalid_context());
+        }
+        validate_required_context_value(&self.target_entity_id)?;
+        if self.lock_only && self.expected_revision.is_some() {
+            return Err(invalid_context());
+        }
+        if self.expected_revision.is_some_and(|revision| revision <= 0)
+            || self.fields.is_empty()
+            || self.fields.len() > MAX_TARGET_FIELDS
+            || self
+                .fields
+                .iter()
+                .any(|field| validate_required_context_value(field).is_err())
+        {
+            return Err(invalid_context());
+        }
+        for boundary in &self.target_row_boundaries {
+            validate_boundary(boundary)?;
+        }
+        if Self::canonicalize(self)? != self.canonical_context {
+            return Err(invalid_context());
+        }
+        Ok(())
+    }
+
+    fn canonicalize(context: &Self) -> Result<String> {
+        let target_boundaries = Value::Array(
+            context
+                .target_row_boundaries
+                .iter()
+                .map(|boundary| {
+                    json!({
+                        "field": boundary.field(),
+                        "operator": boundary.operator().as_str(),
+                        "values": boundary.values(),
+                    })
+                })
+                .collect(),
+        );
+        let application_id = context.application_id.map(|id| id.to_string());
+        let payload = json!({
+            "version": 1,
+            "actionId": context.action_id,
+            "contractFingerprint": context.contract_fingerprint,
+            "activePackageRevision": context.active_package_revision,
+            "selectedAccessProfile": context.selected_profile,
+            "principal": context.principal,
+            "purpose": context.purpose,
+            "effectIds": context.effect_ids,
+            "applicationId": application_id,
+            "targetEntityId": context.target_entity_id,
+            "targetRecordId": context.target_record_id.to_string(),
+            "operation": operation_context_name(context.operation),
+            "fields": context.fields,
+            "expectedRevision": context.expected_revision,
+            "lockOnly": context.lock_only,
+            "targetRowBoundaries": target_boundaries,
+        });
+        let bytes = canonicalize_json(&payload).map_err(|_| invalid_context())?;
+        if bytes.len() > MAX_BOUNDARY_CONTEXT_BYTES {
+            return Err(invalid_context());
+        }
+        String::from_utf8(bytes).map_err(|_| invalid_context())
+    }
+}
+
+impl fmt::Debug for ImmediateActionTargetContext {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ImmediateActionTargetContext")
+            .field("action_id", &self.action_id)
+            .field("contract_fingerprint", &self.contract_fingerprint)
+            .field("active_package_revision", &self.active_package_revision)
+            .field("selected_profile", &self.selected_profile)
+            .field("principal", &"<redacted>")
+            .field("purpose", &self.purpose.as_ref().map(|_| "<redacted>"))
+            .field("effect_ids", &self.effect_ids)
+            .field("application_id", &self.application_id)
+            .field("target_entity_id", &self.target_entity_id)
+            .field("target_record_id", &self.target_record_id)
+            .field("operation", &self.operation)
+            .field("fields", &self.fields)
+            .field("expected_revision", &self.expected_revision)
+            .field("lock_only", &self.lock_only)
+            .field("target_row_boundaries", &self.target_row_boundaries)
+            .finish()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ImmediateActionLinkBinding {
+    pub action_id: String,
+    pub contract_fingerprint: String,
+    pub active_package_revision: String,
+    pub input_id: String,
+    pub target_entity_id: String,
+    pub target_record_id: Uuid,
+}
+
+impl ImmediateActionLinkBinding {
+    fn validate_basic(&self) -> Result<()> {
+        validate_required_context_value(&self.action_id)?;
+        validate_sha256_fingerprint(&self.contract_fingerprint)?;
+        validate_required_context_value(&self.active_package_revision)?;
+        validate_required_context_value(&self.input_id)?;
+        validate_required_context_value(&self.target_entity_id)?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub(crate) struct ImmediateActionLinkContext {
+    action_id: String,
+    contract_fingerprint: String,
+    active_package_revision: String,
+    selected_profile: String,
+    principal: String,
+    purpose: Option<String>,
+    input_id: String,
+    target_entity_id: String,
+    target_record_id: Uuid,
+    target_row_boundaries: Vec<RowBoundaryContext>,
+    canonical_context: String,
+}
+
+impl ImmediateActionLinkContext {
+    pub(crate) fn for_input(
+        registry: &CompiledRegistry,
+        action_claims: &ActionClaimContext,
+        target_boundaries: Vec<RowBoundaryContext>,
+        binding: ImmediateActionLinkBinding,
+    ) -> Result<Self> {
+        action_claims.validate()?;
+        binding.validate_basic()?;
+        if action_claims.action_id() != binding.action_id {
+            return Err(invalid_context());
+        }
+        let action = registry
+            .actions()
+            .actions
+            .iter()
+            .find(|action| action.id == binding.action_id)
+            .ok_or_else(invalid_context)?;
+        if action.contract_fingerprint != binding.contract_fingerprint {
+            return Err(invalid_context());
+        }
+        let input = action
+            .inputs
+            .iter()
+            .find(|input| input.id == binding.input_id)
+            .ok_or_else(invalid_context)?;
+        let crate::contract::FieldTypeSource::Reference { target, .. } = &input.field_type else {
+            return Err(invalid_context());
+        };
+        if target != &binding.target_entity_id {
+            return Err(invalid_context());
+        }
+        if !action.target_uses.iter().any(|target_use| {
+            target_use.entity_id == binding.target_entity_id
+                && target_use.operation == Operation::Invoke
+                && target_use.fields.is_empty()
+                && !target_use.condition_required
+                && matches!(
+                    &target_use.source,
+                    CompiledActionTargetUseSource::Input { input } if input == &binding.input_id
+                )
+        }) {
+            return Err(invalid_context());
+        }
+        let grant = action
+            .grants
+            .iter()
+            .find(|grant| {
+                grant.profile_id == action_claims.access_profile()
+                    && grant.operations.contains(&Operation::Invoke)
+                    && grant
+                        .targets
+                        .iter()
+                        .any(|target| target.entity_id == binding.target_entity_id)
+            })
+            .ok_or_else(invalid_context)?;
+        let target_grant = grant
+            .targets
+            .iter()
+            .find(|target| target.entity_id == binding.target_entity_id)
+            .ok_or_else(invalid_context)?;
+        validate_target_boundaries(
+            registry,
+            &binding.target_entity_id,
+            &target_boundaries,
+            &target_grant.row_boundaries,
+        )?;
+        let mut context = Self {
+            action_id: binding.action_id,
+            contract_fingerprint: binding.contract_fingerprint,
+            active_package_revision: binding.active_package_revision,
+            selected_profile: action_claims.access_profile().to_owned(),
+            principal: action_claims.principal().to_owned(),
+            purpose: action_claims.purpose().map(str::to_owned),
+            input_id: binding.input_id,
+            target_entity_id: binding.target_entity_id,
+            target_record_id: binding.target_record_id,
+            target_row_boundaries: target_boundaries,
+            canonical_context: String::new(),
+        };
+        context.canonical_context = Self::canonicalize(&context)?;
+        context.validate()?;
+        Ok(context)
+    }
+
+    #[must_use]
+    pub(crate) fn canonical_context(&self) -> &str {
+        &self.canonical_context
+    }
+
+    pub(crate) fn authorize_row(
+        &self,
+        target_entity: &crate::model::CompiledEntity,
+        row: &serde_json::Map<String, Value>,
+        record_id: Uuid,
+    ) -> Result<()> {
+        self.validate()?;
+        if target_entity.id != self.target_entity_id || record_id != self.target_record_id {
+            return Err(invalid_context());
+        }
+        validate_snapshot_boundaries(target_entity, row, record_id, &self.target_row_boundaries)
+    }
+
+    pub(crate) fn validate(&self) -> Result<()> {
+        validate_required_context_value(&self.action_id)?;
+        validate_sha256_fingerprint(&self.contract_fingerprint)?;
+        validate_required_context_value(&self.active_package_revision)?;
+        validate_required_context_value(&self.selected_profile)?;
+        validate_required_context_value(&self.principal)?;
+        self.purpose
+            .as_deref()
+            .map(validate_required_context_value)
+            .transpose()?;
+        validate_required_context_value(&self.input_id)?;
+        validate_required_context_value(&self.target_entity_id)?;
+        for boundary in &self.target_row_boundaries {
+            validate_boundary(boundary)?;
+        }
+        if Self::canonicalize(self)? != self.canonical_context {
+            return Err(invalid_context());
+        }
+        Ok(())
+    }
+
+    fn canonicalize(context: &Self) -> Result<String> {
+        let target_boundaries = Value::Array(
+            context
+                .target_row_boundaries
+                .iter()
+                .map(|boundary| {
+                    json!({
+                        "field": boundary.field(),
+                        "operator": boundary.operator().as_str(),
+                        "values": boundary.values(),
+                    })
+                })
+                .collect(),
+        );
+        let payload = json!({
+            "version": 1,
+            "actionId": context.action_id,
+            "contractFingerprint": context.contract_fingerprint,
+            "activePackageRevision": context.active_package_revision,
+            "selectedAccessProfile": context.selected_profile,
+            "principal": context.principal,
+            "purpose": context.purpose,
+            "inputId": context.input_id,
+            "targetEntityId": context.target_entity_id,
+            "targetRecordId": context.target_record_id.to_string(),
+            "operation": "invoke",
+            "targetRowBoundaries": target_boundaries,
+        });
+        let bytes = canonicalize_json(&payload).map_err(|_| invalid_context())?;
+        if bytes.len() > MAX_BOUNDARY_CONTEXT_BYTES {
+            return Err(invalid_context());
+        }
+        String::from_utf8(bytes).map_err(|_| invalid_context())
+    }
+}
+
+impl fmt::Debug for ImmediateActionLinkContext {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ImmediateActionLinkContext")
+            .field("action_id", &self.action_id)
+            .field("contract_fingerprint", &self.contract_fingerprint)
+            .field("active_package_revision", &self.active_package_revision)
+            .field("selected_profile", &self.selected_profile)
+            .field("principal", &"<redacted>")
+            .field("purpose", &self.purpose.as_ref().map(|_| "<redacted>"))
+            .field("input_id", &self.input_id)
+            .field("target_entity_id", &self.target_entity_id)
+            .field("target_record_id", &self.target_record_id)
+            .field("target_row_boundaries", &self.target_row_boundaries)
+            .finish()
+    }
+}
+
+fn validate_action_effect_binding(
+    effects: &[&CompiledActionEffect],
+    binding: &ImmediateActionTargetBinding,
+) -> Result<()> {
+    if effects.is_empty() {
+        return Err(invalid_context());
+    }
+    let expected_fields = action_effect_fields(effects);
+    if expected_fields != binding.fields {
+        return Err(invalid_context());
+    }
+    for effect in effects {
+        if effect.target.entity_id != binding.target_entity_id
+            || effect.operation != binding.operation
+        {
+            return Err(invalid_context());
+        }
+    }
+    match (
+        binding.operation,
+        binding.expected_revision,
+        binding.lock_only,
+    ) {
+        (Operation::Create, None, false) => {
+            if effects.len() != 1
+                || !matches!(
+                    effects[0].target.binding,
+                    CompiledActionTargetBinding::Create
+                )
+            {
+                return Err(invalid_context());
+            }
+        }
+        (Operation::Patch, None, true) => {
+            if effects.iter().any(|effect| {
+                !matches!(
+                    effect.target.binding,
+                    CompiledActionTargetBinding::Existing { .. }
+                )
+            }) {
+                return Err(invalid_context());
+            }
+        }
+        (Operation::Patch, _, false) => {
+            if effects.iter().any(|effect| {
+                !matches!(
+                    effect.target.binding,
+                    CompiledActionTargetBinding::Existing { .. }
+                )
+            }) {
+                return Err(invalid_context());
+            }
+        }
+        _ => return Err(invalid_context()),
+    }
+    Ok(())
+}
+
+fn action_effect_fields(effects: &[&CompiledActionEffect]) -> BTreeSet<String> {
+    effects
+        .iter()
+        .flat_map(|effect| &effect.mutations)
+        .map(|mutation| match mutation {
+            CompiledActionMutation::Set { field, .. } | CompiledActionMutation::Clear { field } => {
+                field.clone()
+            }
+        })
+        .collect()
+}
+
+fn validate_action_field_delta(
+    target_entity: &crate::model::CompiledEntity,
+    before: &serde_json::Map<String, Value>,
+    after: &serde_json::Map<String, Value>,
+    allowed_fields: &BTreeSet<String>,
+) -> Result<()> {
+    for field_id in target_entity.fields.keys() {
+        if before.get(field_id) != after.get(field_id) && !allowed_fields.contains(field_id) {
+            return Err(invalid_context());
+        }
+    }
+    Ok(())
+}
+
 fn validate_effect_binding(
     effect: &CompiledChangeRequestEffect,
     binding: &ChangeRequestTargetBinding,
@@ -1176,6 +1850,7 @@ fn operation_context_name(operation: Operation) -> &'static str {
     match operation {
         Operation::Create => "create",
         Operation::Patch => "patch",
+        Operation::Invoke => "invoke",
         _ => "unsupported",
     }
 }
@@ -1384,6 +2059,38 @@ impl GuardedTransaction<'_> {
             .await?;
         Ok(())
     }
+
+    pub(crate) async fn install_immediate_action_target_context(
+        &self,
+        context: &ImmediateActionTargetContext,
+    ) -> Result<()> {
+        context.validate()?;
+        self.transaction
+            .execute(
+                "SELECT set_config('registry.immediate_action_target_context', $1, true)",
+                &[&context.canonical_context()],
+            )
+            .await?;
+        Ok(())
+    }
+
+    #[allow(
+        dead_code,
+        reason = "action runtime currently installs this link-only context from a raw transaction"
+    )]
+    pub(crate) async fn install_immediate_action_link_context(
+        &self,
+        context: &ImmediateActionLinkContext,
+    ) -> Result<()> {
+        context.validate()?;
+        self.transaction
+            .execute(
+                "SELECT set_config('registry.immediate_action_link_context', $1, true)",
+                &[&context.canonical_context()],
+            )
+            .await?;
+        Ok(())
+    }
 }
 
 /// Starts a record transaction and installs authority only after the shared
@@ -1453,6 +2160,81 @@ pub async fn begin_record_transaction<'a>(
                 &claims.access_profile,
                 &claims.purpose.as_deref().unwrap_or(""),
                 &claims.canonical_row_boundaries,
+                &expected.package_revision,
+            ],
+        )
+        .await?;
+    Ok(GuardedTransaction { transaction })
+}
+
+/// Starts an action transaction after the shared Registry lock and active
+/// package checks. It installs action authority without claiming entity CRUD
+/// rights; target RLS is supplied later through `ImmediateActionTargetContext`.
+pub async fn begin_action_transaction<'a>(
+    client: &'a mut Client,
+    lock_key: RegistryLockKey,
+    lock_timeout: Duration,
+    expected: &ExpectedRegistryIdentity,
+    claims: &ActionClaimContext,
+) -> Result<GuardedTransaction<'a>> {
+    expected.validate()?;
+    claims.validate()?;
+    if lock_timeout.is_zero() || lock_timeout > Duration::from_secs(30) {
+        return Err(PostgresKernelError::Configuration(
+            "record lock timeout must be between 1 millisecond and 30 seconds",
+        ));
+    }
+    let transaction = client.transaction().await?;
+    let timeout_millis = i32::try_from(lock_timeout.as_millis()).map_err(|_| {
+        PostgresKernelError::Configuration("record lock timeout is outside PostgreSQL bounds")
+    })?;
+    transaction
+        .execute(
+            "SELECT set_config('lock_timeout', $1::text, true)",
+            &[&format!("{timeout_millis}ms")],
+        )
+        .await?;
+    transaction
+        .execute(
+            "SELECT pg_advisory_xact_lock_shared($1)",
+            &[&lock_key.get()],
+        )
+        .await
+        .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+    let state = transaction
+        .query_opt(
+            "SELECT package_id, environment, instance_id, database_id,
+                    active_package_revision, schema_fingerprint, package_sequence,
+                    maintenance_status
+             FROM registry_internal.registry_state
+             WHERE singleton",
+            &[],
+        )
+        .await?
+        .ok_or(PostgresKernelError::RegistryUnavailable)?;
+    let ready = state.get::<_, String>(7) == "ready"
+        && state.get::<_, String>(0) == expected.package_id
+        && state.get::<_, String>(1) == expected.environment
+        && state.get::<_, String>(2) == expected.instance_id
+        && state.get::<_, String>(3) == expected.database_id
+        && state.get::<_, String>(4) == expected.package_revision
+        && state.get::<_, String>(5) == expected.schema_fingerprint
+        && state.get::<_, i64>(6) == expected.package_sequence;
+    if !ready {
+        return Err(PostgresKernelError::RegistryUnavailable);
+    }
+    transaction
+        .execute(
+            "SELECT set_config('registry.principal', $1, true),
+                    set_config('registry.access_profile', $2, true),
+                    set_config('registry.purpose', $3, true),
+                    set_config('registry.row_boundaries', $4, true),
+                    set_config('registry.active_package_revision', $5, true)",
+            &[
+                &claims.principal(),
+                &claims.access_profile(),
+                &claims.purpose().unwrap_or(""),
+                &"[]",
                 &expected.package_revision,
             ],
         )
@@ -1615,6 +2397,124 @@ mod tests {
             "viewer",
             None,
             vec![equals("id", "not-a-uuid")],
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn immediate_action_target_context_binds_grouped_effects_fields_and_application() {
+        let registry = compiled_action_context_registry();
+        let action = registry
+            .actions()
+            .actions
+            .iter()
+            .find(|action| action.id == "rename-household-local")
+            .expect("action compiles");
+        let claims = ActionClaimContext::new(
+            action.id.clone(),
+            "principal-canary".to_owned(),
+            "contact-registrar".to_owned(),
+            Some("contact-registration".to_owned()),
+            BTreeSet::from([
+                "household-code-update".to_owned(),
+                "household-note-update".to_owned(),
+            ]),
+        )
+        .expect("action claims compile");
+        let target_id =
+            Uuid::parse_str("00000000-0000-4000-8000-000000000101").expect("target UUID parses");
+        let application_id = Uuid::parse_str("00000000-0000-4000-8000-000000000a11")
+            .expect("application UUID parses");
+        let binding = ImmediateActionTargetBinding {
+            action_id: action.id.clone(),
+            contract_fingerprint: action.contract_fingerprint.clone(),
+            active_package_revision: "package-1".to_owned(),
+            effect_ids: BTreeSet::from([
+                "household-code-update".to_owned(),
+                "household-note-update".to_owned(),
+            ]),
+            target_entity_id: "household".to_owned(),
+            target_record_id: target_id,
+            operation: Operation::Patch,
+            fields: BTreeSet::from(["household-code".to_owned(), "status-note".to_owned()]),
+            expected_revision: Some(7),
+            lock_only: false,
+            application_id: Some(application_id),
+        };
+        let context = ImmediateActionTargetContext::for_effect(
+            &registry,
+            &claims,
+            vec![equals("jurisdiction", "zone-a")],
+            binding.clone(),
+        )
+        .expect("grouped action target context derives from compiled action grant");
+        assert!(context
+            .canonical_context()
+            .contains("\"effectIds\":[\"household-code-update\",\"household-note-update\"]"));
+        assert!(context
+            .canonical_context()
+            .contains("\"fields\":[\"household-code\",\"status-note\"]"));
+        assert!(context
+            .canonical_context()
+            .contains("\"applicationId\":\"00000000-0000-4000-8000-000000000a11\""));
+        let before = serde_json::Map::from_iter([
+            ("household-code".to_owned(), json!("H-001")),
+            ("jurisdiction".to_owned(), json!("zone-a")),
+            ("status-note".to_owned(), json!("old note")),
+        ]);
+        let after = serde_json::Map::from_iter([
+            ("household-code".to_owned(), json!("H-RENAMED")),
+            ("jurisdiction".to_owned(), json!("zone-a")),
+            ("status-note".to_owned(), json!("new note")),
+        ]);
+        context
+            .authorize_rows(
+                &registry.entities()["household"],
+                Some(&before),
+                &after,
+                target_id,
+            )
+            .expect("the grouped field plan admits only its declared field changes");
+        let mut escaped_after = after.clone();
+        escaped_after.insert("jurisdiction".to_owned(), json!("zone-b"));
+        assert!(context
+            .authorize_rows(
+                &registry.entities()["household"],
+                Some(&before),
+                &escaped_after,
+                target_id,
+            )
+            .is_err());
+
+        let mut subset_effects = binding.clone();
+        subset_effects.effect_ids.remove("household-note-update");
+        assert!(ImmediateActionTargetContext::for_effect(
+            &registry,
+            &claims,
+            vec![equals("jurisdiction", "zone-a")],
+            subset_effects,
+        )
+        .is_err());
+
+        let mut superset_effects = binding.clone();
+        superset_effects
+            .effect_ids
+            .insert("unknown-effect".to_owned());
+        assert!(ImmediateActionTargetContext::for_effect(
+            &registry,
+            &claims,
+            vec![equals("jurisdiction", "zone-a")],
+            superset_effects,
+        )
+        .is_err());
+
+        let mut mismatched_fields = binding;
+        mismatched_fields.fields.insert("jurisdiction".to_owned());
+        assert!(ImmediateActionTargetContext::for_effect(
+            &registry,
+            &claims,
+            vec![equals("jurisdiction", "zone-a")],
+            mismatched_fields,
         )
         .is_err());
     }
@@ -2041,6 +2941,7 @@ mod tests {
                 access_profiles: Vec::new(),
                 events: Vec::new(),
             }],
+            actions: Vec::new(),
             access_profiles: vec![
                 ProjectAccessProfileSource {
                     id: "operator".to_owned(),
@@ -2051,6 +2952,7 @@ mod tests {
                     required_purposes: BTreeSet::from(["operations".to_owned()]),
                     grants: vec![AccessGrantSource {
                         entity: "entry".to_owned(),
+                        action: None,
                         operations: operations.clone(),
                         readable_fields: BTreeSet::from(["tenant".to_owned(), "region".to_owned()]),
                         writable_fields: BTreeSet::new(),
@@ -2075,6 +2977,8 @@ mod tests {
                         review_stages: Vec::new(),
                         apply_targets: Vec::new(),
                         request_presence: Vec::new(),
+                        targets: Vec::new(),
+                        results: BTreeSet::new(),
                         allow_count: false,
                     }],
                 },
@@ -2087,6 +2991,7 @@ mod tests {
                     required_purposes: BTreeSet::new(),
                     grants: vec![AccessGrantSource {
                         entity: "entry".to_owned(),
+                        action: None,
                         operations,
                         readable_fields: BTreeSet::from(["tenant".to_owned()]),
                         writable_fields: BTreeSet::new(),
@@ -2104,6 +3009,8 @@ mod tests {
                         review_stages: Vec::new(),
                         apply_targets: Vec::new(),
                         request_presence: Vec::new(),
+                        targets: Vec::new(),
+                        results: BTreeSet::new(),
                         allow_count: false,
                     }],
                 },
@@ -2111,6 +3018,53 @@ mod tests {
             vocabularies: Vec::new(),
         };
         compile_project(&project, &[], CompileProfile::Authoring).expect("test project compiles")
+    }
+
+    fn compiled_action_context_registry() -> CompiledRegistry {
+        let project = parse_project_json(
+            br#"{
+              "apiVersion":"registry.registrystack.org/v1alpha1",
+              "kind":"RegistryProject",
+              "registry":{"id":"action-context","version":"1","defaultLanguage":"en"},
+              "entities":[{
+                "id":"household","route":"households","mutationMode":"mutable",
+                "fields":[
+                  {"id":"household-code","apiName":"householdCode","type":"string","maxLength":64,"required":true,"classification":"restricted"},
+                  {"id":"jurisdiction","apiName":"jurisdiction","type":"string","maxLength":64,"required":true,"classification":"restricted"},
+                  {"id":"status-note","apiName":"statusNote","type":"string","maxLength":160,"classification":"restricted"}
+                ]
+              }],
+              "actions":[{
+                "id":"rename-household-local",
+                "inputs":[
+                  {"id":"household","apiName":"householdId","type":"reference","target":"household","required":true,"classification":"restricted"},
+                  {"id":"household-code","apiName":"householdCode","type":"string","maxLength":64,"required":true,"classification":"restricted"},
+                  {"id":"status-note","apiName":"statusNote","type":"string","maxLength":160,"required":true,"classification":"restricted"}
+                ],
+                "effects":[
+                  {"id":"household-code-update","target":{"fromField":"household"},"operation":"patch",
+                    "set":{"household-code":{"fromField":"household-code"}}},
+                  {"id":"household-note-update","target":{"fromField":"household"},"operation":"patch",
+                    "set":{"status-note":{"fromField":"status-note"}}}
+                ]
+              }],
+              "accessProfiles":[{
+                "id":"contact-registrar",
+                "default":true,
+                "principalClaim":"registry_principal",
+                "requiredPurposes":["contact-registration"],
+                "grants":[{
+                  "action":"rename-household-local",
+                  "operations":["invoke"],
+                  "targets":[{"entity":"household","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}],
+                  "results":["household-code-update","household-note-update"]
+                }]
+              }]
+            }"#,
+        )
+        .expect("action context project parses");
+        compile_project(&project, &[], CompileProfile::Authoring)
+            .expect("action context project compiles")
     }
 
     fn compiled_change_request_registry() -> CompiledRegistry {

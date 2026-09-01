@@ -30,6 +30,21 @@ path = "tests/postgres_mutation.rs"
 required-features = ["postgres-test"]
 
 [[test]]
+name = "postgres_immediate_actions"
+path = "tests/postgres_immediate_actions.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_immediate_action_examples"
+path = "tests/postgres_immediate_action_examples.rs"
+required-features = ["postgres-test", "tooling"]
+
+[[test]]
+name = "postgres_immediate_action_activation"
+path = "tests/postgres_immediate_action_activation.rs"
+required-features = ["postgres-test", "tooling"]
+
+[[test]]
 name = "postgres_webhook_outbox"
 path = "tests/postgres_webhook_outbox.rs"
 required-features = ["postgres-test"]

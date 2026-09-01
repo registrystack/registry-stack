@@ -1593,6 +1593,9 @@ fn covers_are_metadata_only(covers: &[ReviewedChangeCover]) -> bool {
                 | CompiledRegistryChangeCode::EventAdded
                 | CompiledRegistryChangeCode::EventRemoved
                 | CompiledRegistryChangeCode::EventChanged
+                | CompiledRegistryChangeCode::ActionAdded
+                | CompiledRegistryChangeCode::ActionRemoved
+                | CompiledRegistryChangeCode::ActionChanged
         )
     })
 }

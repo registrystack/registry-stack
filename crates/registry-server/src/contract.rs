@@ -27,6 +27,8 @@ pub struct RegistryProject {
     pub modules: Vec<ModuleLockSource>,
     #[serde(default)]
     pub entities: Vec<EntitySource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<ActionSource>,
     #[serde(default)]
     pub access_profiles: Vec<ProjectAccessProfileSource>,
     #[serde(default)]
@@ -269,6 +271,9 @@ pub struct RegistryModule {
     /// Additive contributions to entities already declared by the project or another module.
     #[serde(default)]
     pub extend_entities: Vec<EntityExtensionSource>,
+    /// Named immediate actions introduced by this module.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<ActionSource>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -434,6 +439,87 @@ pub struct ChangeRequestTargetSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ChangeRequestValueSource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_field: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_effect: Option<String>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ActionSource {
+    pub id: String,
+    #[serde(default)]
+    pub inputs: Vec<ActionInputSource>,
+    #[serde(default)]
+    pub effects: Vec<ActionEffectSource>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ActionInputSource {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_name: Option<String>,
+    #[serde(flatten)]
+    pub field_type: FieldTypeSource,
+    #[serde(default)]
+    pub required: bool,
+    pub classification: Classification,
+}
+
+impl<'de> Deserialize<'de> for ActionInputSource {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = RawFieldSource::deserialize(deserializer)?;
+        if raw.valid_time_role.is_some() {
+            return Err(D::Error::custom(
+                "action inputs cannot declare validTimeRole",
+            ));
+        }
+        let field_type = parse_field_type::<D::Error>(&raw)?;
+        Ok(Self {
+            id: raw.id,
+            api_name: raw.api_name,
+            field_type,
+            required: raw.required,
+            classification: raw.classification,
+        })
+    }
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ActionEffectSource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub target: ActionTargetSource,
+    pub operation: Operation,
+    #[serde(default)]
+    pub set: BTreeMap<String, ActionValueSource>,
+    #[serde(default)]
+    pub clear: BTreeSet<String>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ActionTargetSource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_field: Option<String>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ActionValueSource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from_field: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1668,6 +1754,7 @@ pub enum Operation {
     ReviseRequest,
     CancelRequest,
     ApplyRequest,
+    Invoke,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1816,11 +1903,13 @@ pub struct ProjectAccessProfileSource {
     pub grants: Vec<AccessGrantSource>,
 }
 
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AccessGrantSource {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub entity: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
     pub operations: BTreeSet<Operation>,
     #[serde(default)]
     pub readable_fields: BTreeSet<String>,
@@ -1842,12 +1931,88 @@ pub struct AccessGrantSource {
     pub apply_targets: Vec<ApplyTargetGrantSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub request_presence: Vec<RequestPresenceGrantSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub targets: Vec<ActionTargetGrantSource>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub results: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub allow_count: bool,
     #[serde(default)]
     pub revision_access: bool,
     #[serde(default)]
     pub allow_data_export: bool,
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for AccessGrantSource {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("AccessGrantSource")
+    }
+
+    fn schema_id() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed(concat!(module_path!(), "::AccessGrantSource"))
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        AccessGrantSourceSchema::json_schema(generator)
+    }
+}
+
+#[cfg(feature = "schema")]
+#[allow(dead_code)]
+#[derive(schemars::JsonSchema)]
+#[serde(untagged)]
+enum AccessGrantSourceSchema {
+    Entity(EntityAccessGrantSourceSchema),
+    Action(ActionAccessGrantSourceSchema),
+}
+
+#[cfg(feature = "schema")]
+#[allow(dead_code)]
+#[derive(schemars::JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct EntityAccessGrantSourceSchema {
+    entity: String,
+    operations: BTreeSet<Operation>,
+    #[serde(default)]
+    readable_fields: BTreeSet<String>,
+    #[serde(default)]
+    writable_fields: BTreeSet<String>,
+    #[serde(default)]
+    filterable_fields: BTreeSet<String>,
+    #[serde(default)]
+    sortable_fields: BTreeSet<String>,
+    #[serde(default)]
+    row_boundaries: Vec<RowBoundarySource>,
+    #[serde(default)]
+    lookups: Vec<LookupGrantSource>,
+    #[serde(default)]
+    read_paths: Vec<ReadPathGrantSource>,
+    #[serde(default)]
+    review_stages: Vec<ReviewStageGrantSource>,
+    #[serde(default)]
+    apply_targets: Vec<ApplyTargetGrantSource>,
+    #[serde(default)]
+    request_presence: Vec<RequestPresenceGrantSource>,
+    #[serde(default)]
+    allow_count: bool,
+    #[serde(default)]
+    revision_access: bool,
+    #[serde(default)]
+    allow_data_export: bool,
+}
+
+#[cfg(feature = "schema")]
+#[allow(dead_code)]
+#[derive(schemars::JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ActionAccessGrantSourceSchema {
+    action: String,
+    operations: BTreeSet<Operation>,
+    #[serde(default)]
+    targets: Vec<ActionTargetGrantSource>,
+    #[serde(default)]
+    results: BTreeSet<String>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1917,6 +2082,15 @@ pub struct ApplyTargetGrantSource {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RequestPresenceGrantSource {
     pub request_type: String,
+    #[serde(default)]
+    pub row_boundaries: Vec<RowBoundarySource>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ActionTargetGrantSource {
+    pub entity: String,
     #[serde(default)]
     pub row_boundaries: Vec<RowBoundarySource>,
 }
