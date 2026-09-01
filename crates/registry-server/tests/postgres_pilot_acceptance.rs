@@ -214,7 +214,7 @@ async fn establishments_journey(harness: &PilotHarness) {
     );
     assert_eq!(
         openapi["components"]["schemas"]["establishment"]["properties"]["preferredLanguage"]
-            ["x-registry-vocabulary"],
+            ["anyOf"][0]["x-registry-vocabulary"],
         "preferred-language"
     );
 

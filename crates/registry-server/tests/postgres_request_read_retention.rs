@@ -23,8 +23,8 @@ use registry_server::contract::parse_project_json;
 use registry_server::cursor::CursorCodec;
 use registry_server::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema, ExpectedManagedCatalog,
-    PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey,
-    RegistryStateTestIdentity,
+    PostgresRecordMutationService, PostgresRecordReadService, PostgresSnapshotReadService,
+    RegistryLockKey, RegistryStateTestIdentity,
 };
 use registry_server::request_retention::{
     RequestDetailErasureScope, RequestRetentionOperatorService,
@@ -362,6 +362,208 @@ async fn erased_terminal_request_get_keeps_metadata_and_scopes_result_links_to_t
     database.cleanup().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn snapshot_reads_exclude_soft_erased_request_revisions() {
+    let database = TestDatabase::create(6).await;
+    let registry = Arc::new(compiled_registry());
+    let identity = install_registry(&database, &registry).await;
+    let app = request_router(&database, registry.clone(), identity.clone());
+    let operator = claims("operator", "operator-principal");
+    let reader = claims("snapshot-reader", "snapshot-principal");
+
+    let old_site = create_record(
+        &app,
+        "/v1/records/sites?accessProfile=operator",
+        operator.clone(),
+        "snapshot-erasure-old-site",
+        json!({"tenant": TENANT, "name": "old"}),
+    )
+    .await;
+    let new_site = create_record(
+        &app,
+        "/v1/records/sites?accessProfile=operator",
+        operator.clone(),
+        "snapshot-erasure-new-site",
+        json!({"tenant": TENANT, "name": "new"}),
+    )
+    .await;
+    let placement = create_record(
+        &app,
+        "/v1/records/placements?accessProfile=operator",
+        operator.clone(),
+        "snapshot-erasure-placement",
+        json!({"tenant": TENANT, "site": old_site.id}),
+    )
+    .await;
+    let request = create_record(
+        &app,
+        "/v1/records/correction-requests?accessProfile=operator",
+        operator.clone(),
+        "snapshot-erasure-request",
+        json!({
+            "tenant": TENANT,
+            "placement": placement.id,
+            "proposedSite": new_site.id,
+            "reason": "erase this request detail"
+        }),
+    )
+    .await;
+    let submitted = run_action(
+        &app,
+        &request.id,
+        "submit_request",
+        "snapshot-erasure-submit",
+        operator.clone(),
+        |_| json!({}),
+    )
+    .await;
+    let effect_digest = submitted["request"]["effectDigest"]
+        .as_str()
+        .expect("submission has effect digest")
+        .to_owned();
+    run_action(
+        &app,
+        &request.id,
+        "approve_request",
+        "snapshot-erasure-approve",
+        operator.clone(),
+        |_| json!({"proposalVersion": 1, "effectDigest": effect_digest}),
+    )
+    .await;
+    let before_apply = get_record(
+        &app,
+        &format!(
+            "/v1/records/correction-requests/{}?accessProfile=operator",
+            request.id
+        ),
+        operator.clone(),
+    )
+    .await;
+    let apply_action = action(&before_apply.body, "apply_request");
+    let applied = send_action(
+        &app,
+        &apply_action,
+        "snapshot-erasure-apply",
+        operator,
+        json!({"proposalVersion": 1, "effectDigest": effect_digest}),
+    )
+    .await;
+    assert_eq!(
+        applied.status,
+        StatusCode::OK,
+        "apply_request failed with {}",
+        applied.body
+    );
+
+    let snapshot_count =
+        "/v1/records/correction-requests:snapshot?accessProfile=snapshot-reader&$select=reason&$count=true";
+    let snapshot_page =
+        "/v1/records/correction-requests:snapshot?accessProfile=snapshot-reader&$select=reason";
+    let before = response_parts(
+        send(
+            &app,
+            Method::GET,
+            snapshot_count,
+            Some(reader.clone()),
+            &[],
+            Vec::new(),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        before.status,
+        StatusCode::OK,
+        "snapshot count before erasure failed with {}",
+        before.body
+    );
+    assert_eq!(before.body["count"], 1);
+    let before_items = before.body["items"]
+        .as_array()
+        .expect("snapshot items are an array");
+    assert_eq!(before_items.len(), 1);
+    assert_eq!(before_items[0]["id"], request.id);
+
+    let retention = RequestRetentionOperatorService::new_for_test(
+        registry.as_ref().clone(),
+        identity,
+        ExpectedManagedCatalog::compiled(&registry),
+        RegistryLockKey::derive(PACKAGE_ID).expect("lock key derives"),
+        database.migration_config.clone(),
+        database.migration_role.clone(),
+        database.runtime_role.clone(),
+        AuditProfile::production_from_secret_bytes(vec![0x8b; 32].into())
+            .expect("test audit profile is keyed"),
+    );
+    retention
+        .erase(RequestDetailErasureScope {
+            request_entity_id: "correction-request",
+            request_id: Uuid::parse_str(&request.id).expect("request id parses"),
+            proposal_version: 1,
+        })
+        .await
+        .expect("terminal request detail erases through the verified operator boundary");
+
+    let after = response_parts(
+        send(
+            &app,
+            Method::GET,
+            snapshot_count,
+            Some(reader.clone()),
+            &[],
+            Vec::new(),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        after.status,
+        StatusCode::OK,
+        "snapshot count after erasure failed with {}",
+        after.body
+    );
+    assert_eq!(
+        after.body["count"], 0,
+        "soft-erased request revisions must not be counted by snapshot reads"
+    );
+    assert_eq!(
+        after.body["items"]
+            .as_array()
+            .expect("snapshot items are an array")
+            .len(),
+        0,
+        "soft-erased request revisions must not be paged by snapshot reads"
+    );
+
+    let after_page = response_parts(
+        send(
+            &app,
+            Method::GET,
+            snapshot_page,
+            Some(reader),
+            &[],
+            Vec::new(),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        after_page.status,
+        StatusCode::OK,
+        "snapshot page after erasure failed with {}",
+        after_page.body
+    );
+    assert!(
+        !after_page
+            .body
+            .to_string()
+            .contains("erase this request detail"),
+        "soft-erased snapshot payloads are not served by snapshot reads"
+    );
+
+    database.cleanup().await;
+}
+
 async fn install_registry(
     database: &TestDatabase,
     registry: &Arc<registry_server::CompiledRegistry>,
@@ -413,12 +615,21 @@ fn request_router(
         cursors.clone(),
     ));
     let mutations = Arc::new(PostgresRecordMutationService::new(
+        pool.clone(),
+        registry.clone(),
+        identity.clone(),
+        lock_key,
+        Duration::from_secs(2),
+        audit.clone(),
+    ));
+    let snapshots = Arc::new(PostgresSnapshotReadService::new(
         pool,
         registry.clone(),
         identity.clone(),
         lock_key,
         Duration::from_secs(2),
         audit,
+        cursors.clone(),
     ));
     router(Arc::new(
         HttpService::new(
@@ -431,7 +642,8 @@ fn request_router(
             Arc::new(AlwaysReady),
             cursors,
         )
-        .with_postgres_mutations(mutations),
+        .with_postgres_mutations(mutations)
+        .with_snapshots(snapshots),
     ))
 }
 
@@ -770,6 +982,15 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
                 "entity":"correction-request",
                 "operations":["get","list"],
                 "readableFields":["tenant","placement","proposed-site","reason"]
+              }]
+            },
+            {
+              "id":"snapshot-reader","principalClaim":"registry_principal",
+              "grants":[{
+                "entity":"correction-request",
+                "operations":["snapshot"],
+                "readableFields":["tenant","placement","proposed-site","reason"],
+                "allowCount":true
               }]
             }
           ]
