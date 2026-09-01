@@ -28,9 +28,9 @@ use registry_server::mutation::{
     MutationPlan, MutationRequest, PatchOperation,
 };
 use registry_server::postgres::{
-    initialize_registry_state_for_catalog_test, install_compiled_schema, ClaimContext,
-    ExpectedManagedCatalog, PostgresRecordMutationService, PostgresRecordReadService,
-    RegistryLockKey, RegistryStateTestIdentity, RowBoundaryContext,
+    initialize_compiled_registry_state_for_test, install_compiled_schema, ClaimContext,
+    PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey,
+    RegistryStateTestIdentity, RowBoundaryContext,
 };
 use serde_json::{json, Map, Value};
 use tower::Service as _;
@@ -61,11 +61,10 @@ async fn real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable()
     install_compiled_schema(&migration, &compiled, &database.runtime_role)
         .await
         .expect("migration installs the complete compiler-owned PostgreSQL schema");
-    let catalog = ExpectedManagedCatalog::compiled(&compiled);
-    let identity = initialize_registry_state_for_catalog_test(
+    let identity = initialize_compiled_registry_state_for_test(
         &migration,
         &database.runtime_role,
-        &catalog,
+        &compiled,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
             environment: "local",
@@ -507,13 +506,13 @@ async fn real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable()
         .response()
         .headers()
         .contains_key(&PermittedResponseHeader::Location));
-    assert_eq!(
-        patched.response().body(),
-        format!(
-            "{{\"data\":{{\"label\":\"after-patch\",\"quantity\":41}},\"id\":\"{patch_id}\",\"revision\":2}}"
-        )
-        .as_bytes()
-    );
+    let patched_body: Value =
+        serde_json::from_slice(patched.response().body()).expect("patch response is JSON");
+    assert_eq!(patched_body["data"]["label"], "after-patch");
+    assert_eq!(patched_body["data"]["quantity"], 41);
+    assert_eq!(patched_body["id"], patch_id);
+    assert_eq!(patched_body["revision"], 2);
+    assert_snapshot_reference(&patched_body["snapshot"]);
     let patched_etag = response_etag(&patched);
     assert_one_complete_effect(before_patch, durable_counts(&database, table).await, 0, 2);
     assert_patch_preserved_omitted_field(&database, table, &patch_id).await;
@@ -787,11 +786,10 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
     install_compiled_schema(&migration, &compiled, &database.runtime_role)
         .await
         .expect("migration installs schema");
-    let catalog = ExpectedManagedCatalog::compiled(&compiled);
-    let identity = initialize_registry_state_for_catalog_test(
+    let identity = initialize_compiled_registry_state_for_test(
         &migration,
         &database.runtime_role,
-        &catalog,
+        &compiled,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
             environment: "local",
@@ -2175,13 +2173,13 @@ fn response_id(outcome: &MutationOutcome) -> String {
 
 fn assert_created_response(outcome: &MutationOutcome, record_id: &str, label: &str, quantity: i64) {
     assert_eq!(outcome.response().status(), 201);
-    assert_eq!(
-        outcome.response().body(),
-        format!(
-            "{{\"data\":{{\"label\":\"{label}\",\"quantity\":{quantity}}},\"id\":\"{record_id}\",\"revision\":1}}"
-        )
-        .as_bytes()
-    );
+    let body: Value =
+        serde_json::from_slice(outcome.response().body()).expect("create response is JSON");
+    assert_eq!(body["data"]["label"], label);
+    assert_eq!(body["data"]["quantity"], quantity);
+    assert_eq!(body["id"], record_id);
+    assert_eq!(body["revision"], 1);
+    assert_snapshot_reference(&body["snapshot"]);
     assert_eq!(
         outcome.response().headers()[&PermittedResponseHeader::ContentType],
         b"application/json"
@@ -2193,6 +2191,13 @@ fn assert_created_response(outcome: &MutationOutcome, record_id: &str, label: &s
     );
 }
 
+fn assert_snapshot_reference(value: &Value) {
+    let snapshot = value.as_str().expect("response carries snapshot reference");
+    assert_eq!(snapshot.len(), 40);
+    assert!(snapshot.starts_with("rs1_"));
+    Uuid::parse_str(&snapshot[4..]).expect("snapshot suffix is a UUID");
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct DurableCounts {
     current: i64,
@@ -2200,6 +2205,8 @@ struct DurableCounts {
     outbox: i64,
     audit: i64,
     idempotency: i64,
+    commits: i64,
+    commit_members: i64,
 }
 
 fn assert_one_complete_effect(
@@ -2216,6 +2223,8 @@ fn assert_one_complete_effect(
             outbox: before.outbox + 1,
             audit: before.audit + audit_delta,
             idempotency: before.idempotency + 1,
+            commits: before.commits + 1,
+            commit_members: before.commit_members + 1,
         },
         "one successful request creates one complete atomic packet"
     );
@@ -2378,7 +2387,9 @@ async fn durable_counts(database: &TestDatabase, table: &str) -> DurableCounts {
                    (SELECT count(*) FROM registry_internal.registry_revisions),
                    (SELECT count(*) FROM registry_internal.registry_outbox),
                    (SELECT count(*) FROM registry_internal.registry_audit),
-                   (SELECT count(*) FROM registry_internal.registry_idempotency)"
+                   (SELECT count(*) FROM registry_internal.registry_idempotency),
+                   (SELECT count(*) FROM registry_internal.registry_revision_commits),
+                   (SELECT count(*) FROM registry_internal.registry_revision_commit_members)"
             ),
             &[],
         )
@@ -2390,6 +2401,8 @@ async fn durable_counts(database: &TestDatabase, table: &str) -> DurableCounts {
         outbox: row.get(2),
         audit: row.get(3),
         idempotency: row.get(4),
+        commits: row.get(5),
+        commit_members: row.get(6),
     }
 }
 

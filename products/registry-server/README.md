@@ -23,11 +23,12 @@ package review, signature policy, or the separate migration database role.
 
 ## First-hour local quickstart
 
-The documentation site has three adopter pages:
+The documentation site has four adopter pages:
 
 - [Registry Server overview](../../docs/site/src/content/docs/explanation/configuration-defined-registry.mdx)
 - [Create and query your first registry](../../docs/site/src/content/docs/tutorials/first-registry-server.mdx)
 - [Configure your registry](../../docs/site/src/content/docs/configure/registry-server.mdx)
+- [Registry Server history reference](../../docs/site/src/content/docs/reference/registry-server-history.mdx)
 
 For a generic, domain-neutral local path, run:
 
@@ -142,6 +143,9 @@ database, authority, role, and secret-reference fields explicit.
 
 ## Scope
 
+For atomic interval corrections, saved historical queries and their access and
+retention boundaries, see [Corrections and historical queries](HISTORY.md).
+
 Registry Server owns typed configured storage, generated REST contracts,
 authorization, record revisions, audit ordering, idempotency, outbox creation,
 and governed migrations. It does not provide a UI, GraphQL, workflow,
@@ -175,6 +179,8 @@ while the public-binary adopter workflow proves signed activation, authenticated
 data access, an additive upgrade, failure recovery, and unchanged server bytes
 for the asset project. See [change-request examples](CHANGE_REQUEST_EXAMPLES.md)
 for the approval workflows.
+The separate `household-history` fixture proves correction batches and retained
+snapshot answers through the same compiler and runtime.
 
 Run the current deterministic contract checks with:
 

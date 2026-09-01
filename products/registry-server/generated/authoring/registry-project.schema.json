@@ -40,6 +40,12 @@
           "type": "array",
           "uniqueItems": true
         },
+        "provenanceFields": {
+          "items": {
+            "$ref": "#/$defs/ProvenanceFieldSource"
+          },
+          "type": "array"
+        },
         "readPaths": {
           "items": {
             "$ref": "#/$defs/ReadPathGrantSource"
@@ -2035,6 +2041,7 @@
         "tombstone",
         "batch",
         "revisions",
+        "snapshot",
         "submit_request",
         "approve_request",
         "reject_request",
@@ -2122,6 +2129,15 @@
         "id"
       ],
       "type": "object"
+    },
+    "ProvenanceFieldSource": {
+      "enum": [
+        "kind",
+        "reasonCode",
+        "reasonText",
+        "sourceReferences"
+      ],
+      "type": "string"
     },
     "ReadPathGrantSource": {
       "additionalProperties": false,
@@ -2496,6 +2512,7 @@
           "type": "string"
         },
         "scopeFields": {
+          "description": "Deprecated bounded predecessor bridge. New authoring should declare\nexclusivity only through `constraints[].scopeFields`.",
           "items": {
             "type": "string"
           },
@@ -2507,8 +2524,7 @@
       },
       "required": [
         "startField",
-        "endField",
-        "scopeFields"
+        "endField"
       ],
       "type": "object"
     },

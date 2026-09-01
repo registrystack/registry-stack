@@ -22,12 +22,14 @@ use registry_server::api::{
 use registry_server::compiler::{compile_project, CompileProfile};
 use registry_server::contract::parse_project_json;
 use registry_server::cursor::CursorCodec;
+use registry_server::history_schema::{serialize_descriptor, HistorySchemaDescriptor};
 use registry_server::postgres::{
     initialize_registry_state_for_catalog_test, install_compiled_schema, ExpectedManagedCatalog,
     PostgresRecordReadService, PostgresRevisionReadService, RegistryLockKey,
     RegistryStateTestIdentity, RevisionReadFaultPoint,
 };
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tower::Service as _;
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -42,10 +44,15 @@ const ACTOR_REFERENCE: &str =
     "hmac-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const REQUEST_REFERENCE: &str =
     "hmac-sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const MIGRATION_SYSTEM_ORIGIN: &str = "registry-server-reviewed-migration-v1";
+const MIGRATION_REFERENCE: &str =
+    "modules/core/migrations/status-classification/descriptor.json#backfill-status";
 const RECORD_ID: &str = "00000000-0000-4000-8000-000000000001";
 const HIDDEN_RECORD_ID: &str = "00000000-0000-4000-8000-000000000002";
 const BOUNDED_RECORD_ID: &str = "00000000-0000-4000-8000-000000000003";
 const MALFORMED_RECORD_ID: &str = "00000000-0000-4000-8000-000000000004";
+const CONTEXT_REASON_CODE: &str = "effective-date-corrected";
+const CONTEXT_SOURCE_REFERENCE: &str = "case-document:review-204";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn real_postgres_revision_http_is_bounded_authorized_atomic_and_audit_gated() {
@@ -71,7 +78,9 @@ async fn real_postgres_revision_http_is_bounded_authorized_atomic_and_audit_gate
     )
     .await
     .expect("migration initializes durable Registry identity");
+    retain_history_descriptor(&migration, &registry).await;
     seed_revision_history(&migration).await;
+    seed_revision_commit_contexts(&migration).await;
     migration_task.abort();
 
     let pool = database
@@ -118,9 +127,36 @@ async fn real_postgres_revision_http_is_bounded_authorized_atomic_and_audit_gate
     assert_eq!(items[0]["actorReference"], ACTOR_REFERENCE);
     assert_eq!(items[0]["requestReference"], REQUEST_REFERENCE);
     assert_eq!(items[0]["data"], json!({"label": "tombstoned"}));
+    assert!(items.iter().all(|item| item.get("changeContext").is_none()));
     assert!(!String::from_utf8(list_bytes)
         .expect("response is UTF-8")
         .contains(SECRET_CANARY));
+
+    let provenance = send(
+        &app,
+        &format!("/v1/records/widgets/{RECORD_ID}/revisions?accessProfile=provenance"),
+        Some(history_claims("case-review", ["zone-a"])),
+    )
+    .await;
+    assert_eq!(provenance.status(), StatusCode::OK);
+    let provenance = body_json(provenance).await;
+    let provenance_items = provenance["items"]
+        .as_array()
+        .expect("provenance list returns items");
+    assert_eq!(provenance_items.len(), 3);
+    assert!(
+        provenance_items[0].get("changeContext").is_none(),
+        "shared context is omitted when any member is outside current row authority"
+    );
+    assert_eq!(
+        provenance_items[1]["changeContext"],
+        json!({
+            "kind": "correction",
+            "reasonCode": CONTEXT_REASON_CODE,
+            "sourceReferences": [CONTEXT_SOURCE_REFERENCE],
+        })
+    );
+    assert!(provenance_items[2].get("changeContext").is_none());
 
     let tombstoned_detail = send(
         &app,
@@ -248,6 +284,94 @@ async fn real_postgres_revision_http_is_bounded_authorized_atomic_and_audit_gate
     database.cleanup().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_revision_http_lists_internal_migration_revisions() {
+    let database = TestDatabase::create(2).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    let registry = Arc::new(compiled_registry());
+    install_compiled_schema(&migration, &registry, &database.runtime_role)
+        .await
+        .expect("migration installs the complete compiled PostgreSQL schema");
+    let catalog = ExpectedManagedCatalog::compiled(&registry);
+    let identity = initialize_registry_state_for_catalog_test(
+        &migration,
+        &database.runtime_role,
+        &catalog,
+        RegistryStateTestIdentity {
+            package_id: PACKAGE_ID,
+            environment: "local",
+            instance_id: INSTANCE_ID,
+            database_id: DATABASE_ID,
+            package_revision: PACKAGE_REVISION,
+            package_sequence: 1,
+        },
+    )
+    .await
+    .expect("migration initializes durable Registry identity");
+    retain_history_descriptor(&migration, &registry).await;
+    insert_revision(
+        &migration,
+        RECORD_ID,
+        1,
+        None,
+        "active",
+        "create",
+        json!({
+            "jurisdiction": "zone-a",
+            "label": "created",
+            "secret": SECRET_CANARY,
+        }),
+    )
+    .await;
+    insert_migration_revision(
+        &migration,
+        RECORD_ID,
+        2,
+        json!({
+            "jurisdiction": "zone-a",
+            "label": "migrated",
+            "secret": SECRET_CANARY,
+        }),
+    )
+    .await;
+    migration_task.abort();
+
+    let pool = database
+        .runtime_config
+        .build_pool()
+        .expect("bounded runtime pool builds");
+    let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock identity is bounded");
+    let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x5d; 32].into())
+        .expect("test owns a strongly keyed audit profile");
+    let app = revision_router(
+        pool,
+        Arc::clone(&registry),
+        identity,
+        lock_key,
+        audit_profile,
+        None,
+    );
+
+    let response = send(
+        &app,
+        &format!("/v1/records/widgets/{RECORD_ID}/revisions"),
+        Some(history_claims("case-review", ["zone-a"])),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    let items = body["items"].as_array().expect("list returns items");
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0]["revision"], 2);
+    assert_eq!(items[0]["mutationKind"], "migration");
+    assert_eq!(items[0]["operationId"], MIGRATION_REFERENCE);
+    assert_eq!(items[0]["actorReference"], MIGRATION_SYSTEM_ORIGIN);
+    assert_eq!(items[0]["requestReference"], MIGRATION_REFERENCE);
+    assert_eq!(items[0]["data"], json!({"label": "migrated"}));
+    assert_eq!(items[1]["mutationKind"], "create");
+    database.cleanup().await;
+}
+
 #[allow(clippy::too_many_arguments)]
 fn revision_router(
     pool: registry_server::postgres::RuntimePool,
@@ -340,6 +464,23 @@ fn history_claims<const N: usize>(
     .expect("claims are verified")
 }
 
+async fn retain_history_descriptor(
+    migration: &tokio_postgres::Client,
+    registry: &registry_server::CompiledRegistry,
+) {
+    let descriptor = HistorySchemaDescriptor::from_compiled_registry(registry, PACKAGE_REVISION);
+    let descriptor = serialize_descriptor(&descriptor).expect("descriptor canonicalizes");
+    migration
+        .execute(
+            "INSERT INTO registry_internal.registry_history_schemas
+                 (package_revision, descriptor)
+             VALUES ($1, $2)",
+            &[&PACKAGE_REVISION, &descriptor],
+        )
+        .await
+        .expect("fixture retains the package-bound history descriptor");
+}
+
 async fn seed_revision_history(migration: &tokio_postgres::Client) {
     for (revision, predecessor, lifecycle, mutation, label) in [
         (1_i64, None, "active", "create", "created"),
@@ -421,6 +562,101 @@ async fn seed_revision_history(migration: &tokio_postgres::Client) {
     .await;
 }
 
+async fn seed_revision_commit_contexts(migration: &tokio_postgres::Client) {
+    let history_lineage = Uuid::parse_str("00000000-0000-4000-8000-000000000100")
+        .expect("fixture history lineage is valid");
+    migration
+        .execute(
+            "INSERT INTO registry_internal.registry_commit_head
+                 (singleton, history_lineage, latest_position,
+                  coverage_baseline_position, coverage_ready)
+             VALUES (true, $1, 2, 0, true)",
+            &[&history_lineage],
+        )
+        .await
+        .expect("fixture seeds history head");
+
+    insert_commit_context(
+        migration,
+        history_lineage,
+        1,
+        "00000000-0000-4000-8000-000000000101",
+        "00000000-0000-4000-8000-000000000102",
+        json!({
+            "kind": "correction",
+            "reasonCode": CONTEXT_REASON_CODE,
+            "reasonText": "This text is intentionally not in the provenance profile.",
+            "sourceReferences": [CONTEXT_SOURCE_REFERENCE],
+        }),
+        &[(RECORD_ID, 2_i64)],
+    )
+    .await;
+    insert_commit_context(
+        migration,
+        history_lineage,
+        2,
+        "00000000-0000-4000-8000-000000000103",
+        "00000000-0000-4000-8000-000000000104",
+        json!({
+            "kind": "correction",
+            "reasonCode": "hidden-shared-row",
+            "sourceReferences": ["case-document:hidden-row"],
+        }),
+        &[(RECORD_ID, 3_i64), (HIDDEN_RECORD_ID, 1_i64)],
+    )
+    .await;
+}
+
+async fn insert_commit_context(
+    migration: &tokio_postgres::Client,
+    history_lineage: Uuid,
+    commit_position: i64,
+    change_id: &str,
+    snapshot_reference: &str,
+    change_context: Value,
+    members: &[(&str, i64)],
+) {
+    let change_id = Uuid::parse_str(change_id).expect("fixture change ID is valid");
+    let snapshot_reference =
+        Uuid::parse_str(snapshot_reference).expect("fixture snapshot reference is valid");
+    let change_context = canonicalize_json(&change_context).expect("context canonicalizes");
+    let digest = Sha256::digest(&change_context).to_vec();
+    migration
+        .execute(
+            "INSERT INTO registry_internal.registry_revision_commits
+                 (commit_position, change_id, snapshot_reference, history_lineage,
+                  originating_package_revision, origin_kind, actor_reference,
+                  request_reference, change_context, change_context_digest)
+             VALUES ($1, $2, $3, $4, $5, 'mutation', $6, $7, $8, $9)",
+            &[
+                &commit_position,
+                &change_id,
+                &snapshot_reference,
+                &history_lineage,
+                &PACKAGE_REVISION,
+                &ACTOR_REFERENCE,
+                &REQUEST_REFERENCE,
+                &change_context,
+                &digest,
+            ],
+        )
+        .await
+        .expect("fixture seeds a revision commit");
+    for (index, (record_id, record_revision)) in members.iter().enumerate() {
+        let record_id = Uuid::parse_str(record_id).expect("fixture member record ID is valid");
+        let member_index = i32::try_from(index).expect("fixture member index fits");
+        migration
+            .execute(
+                "INSERT INTO registry_internal.registry_revision_commit_members
+                     (entity_id, record_id, record_revision, commit_position, member_index)
+                 VALUES ('widget', $1, $2, $3, $4)",
+                &[&record_id, record_revision, &commit_position, &member_index],
+            )
+            .await
+            .expect("fixture seeds a revision commit member");
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn insert_revision(
     migration: &tokio_postgres::Client,
@@ -457,6 +693,38 @@ async fn insert_revision(
         )
         .await
         .expect("migration seeds one canonical revision row");
+}
+
+async fn insert_migration_revision(
+    migration: &tokio_postgres::Client,
+    record_id: &str,
+    revision: i64,
+    snapshot: Value,
+) {
+    let snapshot = canonicalize_json(&snapshot).expect("fixture snapshot canonicalizes");
+    let record_id = Uuid::parse_str(record_id).expect("fixture UUID is valid");
+    migration
+        .execute(
+            "INSERT INTO registry_internal.registry_revisions
+                 (entity_id, record_id, record_reference, record_revision,
+                  predecessor_revision, record_lifecycle, package_revision, operation_id,
+                  mutation_kind, principal_reference, request_reference, snapshot)
+             VALUES ($1, $2, $3, $4, $5, 'active', $6, $7,
+                     'migration', $8, $7, $9)",
+            &[
+                &"widget",
+                &record_id,
+                &"hmac-sha256:record-reference",
+                &revision,
+                &Some(revision - 1),
+                &PACKAGE_REVISION,
+                &MIGRATION_REFERENCE,
+                &MIGRATION_SYSTEM_ORIGIN,
+                &snapshot,
+            ],
+        )
+        .await
+        .expect("migration seeds one internal migration revision row");
 }
 
 async fn audit_count(database: &TestDatabase) -> i64 {
@@ -528,6 +796,10 @@ async fn assert_revision_audit_is_ordered_and_minimized(
         "zone-b",
         "tombstoned",
         "wrong-type",
+        CONTEXT_REASON_CODE,
+        CONTEXT_SOURCE_REFERENCE,
+        "hidden-shared-row",
+        "case-document:hidden-row",
         "SELECT",
         "registry_revisions",
         &registry.entities()["widget"].physical_table,
@@ -578,6 +850,16 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
               "operations":["revisions"],"revisionAccess":true,
               "readableFields":["label"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
+            }]
+          },{
+            "id":"provenance","principalClaim":"registry_principal",
+            "requiredScopes":["history.read"],"requiredPurposes":["case-review"],
+            "grants":[{
+              "entity":"widget",
+              "operations":["revisions"],"revisionAccess":true,
+              "readableFields":["label"],
+              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}],
+              "provenanceFields":["kind","reasonCode","sourceReferences"]
             }]
           }]
         }"#,

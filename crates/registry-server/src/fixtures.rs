@@ -1371,7 +1371,8 @@ fn validate_expectation(
                 | Operation::List
                 | Operation::Lookup
                 | Operation::Patch
-                | Operation::Batch => 200,
+                | Operation::Batch
+                | Operation::Snapshot => 200,
                 Operation::SubmitRequest
                 | Operation::ApproveRequest
                 | Operation::RejectRequest
@@ -2699,7 +2700,8 @@ fn assert_response(
                 }
             }
             ActionSource::Batch { .. } => {
-                let object = exact_object(document, &["results"])?;
+                let object = exact_object(document, &["results", "snapshot"])?;
+                assert_snapshot_reference(object)?;
                 let results = object
                     .get("results")
                     .and_then(Value::as_array)
@@ -2725,10 +2727,12 @@ fn assert_response(
                     assert_record_members(object, &step.response_readable_fields, &Map::new())?;
                 }
             }
-            ActionSource::Create { .. }
-            | ActionSource::Get { .. }
-            | ActionSource::Lookup { .. }
-            | ActionSource::Patch { .. } => {
+            ActionSource::Create { .. } | ActionSource::Patch { .. } => {
+                let object = exact_object(document, &["id", "revision", "data", "snapshot"])?;
+                assert_snapshot_reference(object)?;
+                assert_record_members(object, &step.response_readable_fields, &step.expect.fields)?;
+            }
+            ActionSource::Get { .. } | ActionSource::Lookup { .. } => {
                 assert_record_shape(
                     document,
                     &step.response_readable_fields,
@@ -2829,6 +2833,16 @@ fn assert_record_shape(
     if let Some(request) = object.get("request") {
         assert_request_record_metadata_shape(request)?;
     }
+    Ok(())
+}
+
+fn assert_snapshot_reference(object: &Map<String, Value>) -> Result<(), FixtureError> {
+    let reference = object
+        .get("snapshot")
+        .and_then(Value::as_str)
+        .ok_or(FixtureError::ResponseShapeRefused)?;
+    crate::history_reference::SnapshotReference::parse(reference)
+        .map_err(|_| FixtureError::ResponseShapeRefused)?;
     Ok(())
 }
 
@@ -3917,7 +3931,9 @@ fn valid_stable_id(value: &str) -> bool {
 fn operation_method(operation: Operation) -> HttpMethod {
     match operation {
         Operation::Create | Operation::Lookup | Operation::Batch => HttpMethod::Post,
-        Operation::Get | Operation::List | Operation::Revisions => HttpMethod::Get,
+        Operation::Get | Operation::List | Operation::Revisions | Operation::Snapshot => {
+            HttpMethod::Get
+        }
         Operation::Patch => HttpMethod::Patch,
         Operation::Tombstone => HttpMethod::Delete,
         Operation::SubmitRequest
@@ -4418,6 +4434,7 @@ mod tests {
         let unreadable = json!({
             "id": identifier,
             "revision": 1,
+            "snapshot": "rs1_00000000-0000-4000-8000-000000000001",
             "data": {
                 "jurisdiction": "zone-a", "label": "first", "note": "initial",
                 "quantity": 1, "record_id": "canary"
@@ -4426,6 +4443,20 @@ mod tests {
         assert_eq!(
             assert_response(create, StatusCode::CREATED, &unreadable),
             Err(FixtureError::ExpectationMismatch)
+        );
+        let mut bounded = unreadable.clone();
+        bounded["data"].as_object_mut().unwrap().remove("record_id");
+        assert_response(create, StatusCode::CREATED, &bounded)
+            .expect("current closed mutation envelope is admitted");
+        bounded["snapshot"] = json!("not-a-snapshot-reference");
+        assert_eq!(
+            assert_response(create, StatusCode::CREATED, &bounded),
+            Err(FixtureError::ResponseShapeRefused)
+        );
+        bounded.as_object_mut().unwrap().remove("snapshot");
+        assert_eq!(
+            assert_response(create, StatusCode::CREATED, &bounded),
+            Err(FixtureError::ResponseShapeRefused)
         );
 
         let refusal = &suite.journeys[0].steps[5];
@@ -4487,8 +4518,10 @@ mod tests {
             assert_response(&suite.journeys[0].steps[2], StatusCode::OK, &malformed_list,).is_err()
         );
 
-        let malformed_batch =
-            json!({"results": [{"operation": "create"}, {"operation": "create"}]});
+        let malformed_batch = json!({
+            "results": [{"operation": "create"}, {"operation": "create"}],
+            "snapshot": "rs1_00000000-0000-4000-8000-000000000001"
+        });
         assert_eq!(
             assert_response(
                 &suite.journeys[0].steps[4],
@@ -4840,7 +4873,7 @@ mod tests {
         let (status, document, etag) = match index {
             0 => (
                 201,
-                json!({"id":id,"revision":1,"data":{"jurisdiction":"zone-a","label":"first","note":"initial","quantity":1}}),
+                json!({"id":id,"revision":1,"data":{"jurisdiction":"zone-a","label":"first","note":"initial","quantity":1},"snapshot":"rs1_00000000-0000-4000-8000-000000000001"}),
                 Some("\"rs-one\""),
             ),
             1 => (
@@ -4855,7 +4888,7 @@ mod tests {
             ),
             3 => (
                 200,
-                json!({"id":id,"revision":2,"data":{"jurisdiction":"zone-a","label":"first","note":"revised","quantity":1}}),
+                json!({"id":id,"revision":2,"data":{"jurisdiction":"zone-a","label":"first","note":"revised","quantity":1},"snapshot":"rs1_00000000-0000-4000-8000-000000000002"}),
                 Some("\"rs-two\""),
             ),
             4 => (
@@ -4863,7 +4896,7 @@ mod tests {
                 json!({"results":[
                     {"operation":"create","id":second,"revision":1,"etag":"\"rs-second\"","data":{"jurisdiction":"zone-a","label":"second","quantity":2}},
                     {"operation":"create","id":third,"revision":1,"etag":"\"rs-third\"","data":{"jurisdiction":"zone-a","label":"third","quantity":3}}
-                ]}),
+                ],"snapshot":"rs1_00000000-0000-4000-8000-000000000003"}),
                 None,
             ),
             5 => (

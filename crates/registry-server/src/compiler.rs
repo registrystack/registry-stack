@@ -1169,6 +1169,7 @@ fn expand_project_access(
                 request_presence: grant.request_presence.clone(),
                 allow_count: grant.allow_count,
                 revision_access: grant.revision_access,
+                provenance_fields: grant.provenance_fields.clone(),
                 allow_data_export: grant.allow_data_export,
             });
         }
@@ -1650,7 +1651,17 @@ fn validate_constraints(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
             ConstraintSource::Compare { left, right, .. } => vec![left.clone(), right.clone()],
             ConstraintSource::IntRange { field, .. }
             | ConstraintSource::Vocabulary { field, .. } => vec![field.clone()],
-            ConstraintSource::TemporalNonOverlap { scope_fields, .. } => scope_fields.clone(),
+            ConstraintSource::TemporalNonOverlap {
+                scope_fields,
+                start_field,
+                end_field,
+                ..
+            } => scope_fields
+                .iter()
+                .cloned()
+                .chain(start_field.iter().cloned())
+                .chain(end_field.iter().cloned())
+                .collect(),
         };
         if referenced.is_empty()
             || referenced
@@ -1791,26 +1802,71 @@ fn validate_constraints(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
     }
     validate_anonymous_constraint_processing(entity, &fields, errors);
     if let Some(temporal) = &entity.temporal {
-        let matched = entity.constraints.iter().any(|constraint| {
-            matches!(
-                constraint,
-                ConstraintSource::TemporalNonOverlap {
-                    scope_fields,
-                    start_field,
-                    end_field,
-                    ..
-                } if scope_fields == &temporal.scope_fields
-                    && start_field.as_ref() == Some(&temporal.start_field)
-                    && end_field.as_ref() == Some(&temporal.end_field)
-            )
+        validate_temporal_deprecated_scope_bridge(entity, temporal, errors);
+        validate_anonymous_temporal_processing(entity, &fields, temporal, errors);
+    }
+}
+
+fn validate_temporal_deprecated_scope_bridge(
+    entity: &EntitySource,
+    temporal: &crate::contract::TemporalSource,
+    errors: &mut Vec<Diagnostic>,
+) {
+    if temporal.scope_fields.is_empty() {
+        return;
+    }
+    let matched = entity.constraints.iter().any(|constraint| {
+        matches!(
+            constraint,
+            ConstraintSource::TemporalNonOverlap {
+                scope_fields,
+                start_field,
+                end_field,
+                ..
+            } if scope_fields == &temporal.scope_fields
+                && start_field
+                    .as_ref()
+                    .is_none_or(|field| field == &temporal.start_field)
+                && end_field
+                    .as_ref()
+                    .is_none_or(|field| field == &temporal.end_field)
+        )
+    });
+    if !matched {
+        errors.push(Diagnostic::error(
+            "temporal.scope_fields.deprecated_mismatch",
+            "entities[].temporal.scopeFields",
+            "deprecated temporal scopeFields must match an explicit temporal-non-overlap constraint during the predecessor transition",
+        ));
+    }
+}
+
+fn validate_anonymous_temporal_processing(
+    entity: &EntitySource,
+    fields: &BTreeMap<&str, &FieldSource>,
+    temporal: &crate::contract::TemporalSource,
+    errors: &mut Vec<Diagnostic>,
+) {
+    if !entity
+        .access_profiles
+        .iter()
+        .any(|profile| profile.anonymous)
+    {
+        return;
+    }
+    let processes_non_public = [&temporal.start_field, &temporal.end_field]
+        .into_iter()
+        .any(|field| {
+            fields
+                .get(field.as_str())
+                .is_some_and(|field| field.classification != Classification::Public)
         });
-        if !matched {
-            errors.push(Diagnostic::error(
-                "temporal.constraint.missing",
-                "entities[].temporal",
-                "the temporal declaration must match one non-overlap constraint",
-            ));
-        }
+    if processes_non_public {
+        errors.push(Diagnostic::error(
+            "access_profile.public.processing_non_public",
+            "entities[].temporal",
+            "an anonymous temporal surface may process only public boundary fields",
+        ));
     }
 }
 
@@ -2243,6 +2299,24 @@ fn validate_profiles(
                 "an anonymous access profile cannot grant a mutation operation",
             ));
         }
+        if access.anonymous && access.operations.contains(&Operation::Snapshot) {
+            errors.push(Diagnostic::error(
+                "access_profile.snapshot.anonymous_forbidden",
+                "entities[].accessProfiles[].operations",
+                "a snapshot access profile must be authenticated",
+            ));
+        }
+        if !access.provenance_fields.is_empty()
+            && (access.anonymous
+                || !access.revision_access
+                || has_duplicates(&access.provenance_fields))
+        {
+            errors.push(Diagnostic::error(
+                "access_profile.provenance_fields.invalid",
+                "entities[].accessProfiles[].provenanceFields",
+                "provenance fields require authenticated revision access and must be duplicate-free",
+            ));
+        }
         if access.allow_data_export
             && (access.anonymous
                 || !access.operations.contains(&Operation::List)
@@ -2338,11 +2412,14 @@ fn validate_profiles(
         }
         validate_lookup_grants(access, entity, &fields, errors);
         validate_read_path_grants(access, entity, entities, errors);
-        if access.allow_count && !access.operations.contains(&Operation::List) {
+        if access.allow_count
+            && !access.operations.contains(&Operation::List)
+            && !access.operations.contains(&Operation::Snapshot)
+        {
             errors.push(Diagnostic::error(
                 "access_profile.count.unavailable",
                 "entities[].accessProfiles[].allowCount",
-                "direct count access requires an explicit list grant",
+                "direct count access requires an explicit list or snapshot grant",
             ));
         }
     }
@@ -3448,6 +3525,7 @@ fn compile_routes_and_access(
                     profile.operations.contains(&operation)
                         && (operation != Operation::Revisions
                             || profile.revision_access && !profile.anonymous)
+                        && (operation != Operation::Snapshot || !profile.anonymous)
                 })
                 .collect();
             if profiles.is_empty() {
@@ -3471,7 +3549,13 @@ fn compile_routes_and_access(
                 method,
                 path,
                 operation,
-                query_kind: (operation == Operation::List).then_some(CompiledQueryKind::List),
+                query_kind: if operation == Operation::List {
+                    Some(CompiledQueryKind::List)
+                } else if operation == Operation::Snapshot {
+                    Some(CompiledQueryKind::Snapshot)
+                } else {
+                    None
+                },
                 revision_kind: None,
                 request_stage: None,
                 maximum_records: None,
@@ -3840,6 +3924,11 @@ fn compile_metadata_inventory(
                     access_profile: profile_id.clone(),
                     response_entity_id: response_entity.id.clone(),
                     readable_fields,
+                    provenance_fields: if route.operation == Operation::Revisions {
+                        profile.provenance_fields.clone()
+                    } else {
+                        Vec::new()
+                    },
                 });
         }
     }
@@ -3892,6 +3981,10 @@ fn metadata_response_surface<'a>(
     let readable_fields = configured_fields
         .iter()
         .filter(|field| {
+            route.operation != Operation::Snapshot
+                || response_entity.fields.contains_key(field.as_str())
+        })
+        .filter(|field| {
             !profile.anonymous
                 || response_entity
                     .fields
@@ -3923,6 +4016,7 @@ fn compile_query_inventory(
                 (entity.id.clone(), CompiledQueryKind::List),
                 (entity.id.clone(), CompiledQueryKind::Current),
                 (entity.id.clone(), CompiledQueryKind::AsOf),
+                (entity.id.clone(), CompiledQueryKind::Snapshot),
             ]
         })
         .map(|(entity_id, kind)| {
@@ -3945,13 +4039,16 @@ fn compile_query_inventory(
                         allow_count: profile.allow_count,
                         selector_fields: Vec::new(),
                         read_path: None,
+                        stored_only: false,
                     },
                     errors,
                 ) {
                     operations.push(operation);
                 }
                 if let Some(temporal) = &entity.temporal {
-                    let binding = temporal_binding(temporal);
+                    let Some(binding) = temporal_binding(entity, temporal) else {
+                        continue;
+                    };
                     if let Some(operation) = query_operation(
                         QueryOperationInput {
                             entity,
@@ -3962,6 +4059,7 @@ fn compile_query_inventory(
                             allow_count: profile.allow_count,
                             selector_fields: Vec::new(),
                             read_path: None,
+                            stored_only: false,
                         },
                         errors,
                     ) {
@@ -3977,11 +4075,34 @@ fn compile_query_inventory(
                             allow_count: profile.allow_count,
                             selector_fields: Vec::new(),
                             read_path: None,
+                            stored_only: false,
                         },
                         errors,
                     ) {
                         operations.push(operation);
                     }
+                }
+            }
+            if profile.operations.contains(&Operation::Snapshot) && !profile.anonymous {
+                let binding = entity
+                    .temporal
+                    .as_ref()
+                    .and_then(|temporal| temporal_binding(entity, temporal));
+                if let Some(operation) = query_operation(
+                    QueryOperationInput {
+                        entity,
+                        profile,
+                        route_id: &route_ids[&(entity.id.clone(), CompiledQueryKind::Snapshot)],
+                        kind: CompiledQueryKind::Snapshot,
+                        temporal: binding,
+                        allow_count: profile.allow_count,
+                        selector_fields: Vec::new(),
+                        read_path: None,
+                        stored_only: true,
+                    },
+                    errors,
+                ) {
+                    operations.push(operation);
                 }
             }
             if profile.operations.contains(&Operation::Lookup) {
@@ -3998,6 +4119,7 @@ fn compile_query_inventory(
                                 allow_count: false,
                                 selector_fields: selector.fields.clone(),
                                 read_path: None,
+                                stored_only: false,
                             },
                             errors,
                         ) {
@@ -4088,6 +4210,7 @@ struct QueryOperationInput<'a> {
     allow_count: bool,
     selector_fields: Vec<String>,
     read_path: Option<String>,
+    stored_only: bool,
 }
 
 fn query_operation(
@@ -4103,6 +4226,7 @@ fn query_operation(
         allow_count,
         selector_fields,
         read_path,
+        stored_only,
     } = input;
     if let Some(binding) = &temporal {
         let temporal_fields = [&binding.start_field, &binding.end_field];
@@ -4137,12 +4261,14 @@ fn query_operation(
     let mut projection_fields = profile
         .readable_fields
         .iter()
+        .filter(|field| !stored_only || entity.fields.contains_key(field.as_str()))
         .cloned()
         .collect::<Vec<String>>();
     projection_fields.sort();
     let filter_fields = profile
         .filterable_fields
         .iter()
+        .filter(|field| !stored_only || entity.fields.contains_key(field.as_str()))
         .filter_map(|field| {
             let (field_type, _) = compiled_field_type(entity, field)?;
             query_filter_field(field_type, field, errors)
@@ -4152,6 +4278,7 @@ fn query_operation(
     let sort_fields = profile
         .sortable_fields
         .iter()
+        .filter(|field| !stored_only || entity.fields.contains_key(field.as_str()))
         .filter_map(|field| {
             let (field_type, _) = compiled_field_type(entity, field)?;
             query_sort_field(field_type, field, errors)
@@ -4178,9 +4305,21 @@ fn query_operation(
                 }),
         );
     }
-    let mut processing_fields = profile.readable_fields.clone();
-    processing_fields.extend(profile.filterable_fields.iter().cloned());
-    processing_fields.extend(profile.sortable_fields.iter().cloned());
+    let mut processing_fields = projection_fields.iter().cloned().collect::<BTreeSet<_>>();
+    processing_fields.extend(
+        profile
+            .filterable_fields
+            .iter()
+            .filter(|field| !stored_only || entity.fields.contains_key(field.as_str()))
+            .cloned(),
+    );
+    processing_fields.extend(
+        profile
+            .sortable_fields
+            .iter()
+            .filter(|field| !stored_only || entity.fields.contains_key(field.as_str()))
+            .cloned(),
+    );
     processing_fields.extend(selector_fields.iter().cloned());
     processing_fields.extend(
         profile
@@ -4319,13 +4458,23 @@ fn query_sort_field(
     })
 }
 
-fn temporal_binding(temporal: &CompiledTemporal) -> CompiledQueryTemporalBinding {
-    CompiledQueryTemporalBinding {
+fn temporal_binding(
+    entity: &CompiledEntity,
+    temporal: &CompiledTemporal,
+) -> Option<CompiledQueryTemporalBinding> {
+    let start = entity.fields.get(&temporal.start_field)?;
+    let value_kind = match start.field_type {
+        FieldTypeSource::Date => crate::model::CompiledQueryTemporalValueKind::Date,
+        FieldTypeSource::Timestamp => crate::model::CompiledQueryTemporalValueKind::Timestamp,
+        _ => return None,
+    };
+    Some(CompiledQueryTemporalBinding {
         start_field: temporal.start_field.clone(),
         end_field: temporal.end_field.clone(),
-        scope_fields: temporal.scope_fields.clone(),
+        value_kind,
+        scope_fields: Vec::new(),
         semantics: CompiledQueryTemporalSemantics::StartInclusiveEndExclusive,
-    }
+    })
 }
 
 fn query_kind_id(kind: CompiledQueryKind) -> &'static str {
@@ -4333,6 +4482,7 @@ fn query_kind_id(kind: CompiledQueryKind) -> &'static str {
         CompiledQueryKind::List => "list",
         CompiledQueryKind::Current => "current",
         CompiledQueryKind::AsOf => "as-of",
+        CompiledQueryKind::Snapshot => "snapshot",
     }
 }
 
@@ -4347,6 +4497,7 @@ fn route_shape(entity: &CompiledEntity, operation: Operation) -> (HttpMethod, St
         Operation::Tombstone => (HttpMethod::Delete, format!("{base}/{{record_id}}")),
         Operation::Batch => (HttpMethod::Post, format!("{base}:batch")),
         Operation::Revisions => (HttpMethod::Get, format!("{base}/{{record_id}}/revisions")),
+        Operation::Snapshot => (HttpMethod::Get, format!("{base}:snapshot")),
         Operation::SubmitRequest
         | Operation::ApproveRequest
         | Operation::RejectRequest
@@ -4357,7 +4508,7 @@ fn route_shape(entity: &CompiledEntity, operation: Operation) -> (HttpMethod, St
     }
 }
 
-fn routed_operations() -> [Operation; 8] {
+fn routed_operations() -> [Operation; 9] {
     [
         Operation::Create,
         Operation::Get,
@@ -4367,10 +4518,11 @@ fn routed_operations() -> [Operation; 8] {
         Operation::Tombstone,
         Operation::Batch,
         Operation::Revisions,
+        Operation::Snapshot,
     ]
 }
 
-fn all_operations() -> [Operation; 15] {
+fn all_operations() -> [Operation; 16] {
     [
         Operation::Create,
         Operation::Get,
@@ -4380,6 +4532,7 @@ fn all_operations() -> [Operation; 15] {
         Operation::Tombstone,
         Operation::Batch,
         Operation::Revisions,
+        Operation::Snapshot,
         Operation::SubmitRequest,
         Operation::ApproveRequest,
         Operation::RejectRequest,
@@ -4413,6 +4566,7 @@ fn operation_id(operation: Operation) -> &'static str {
         Operation::Tombstone => "tombstone",
         Operation::Batch => "batch",
         Operation::Revisions => "revisions",
+        Operation::Snapshot => "snapshot",
         Operation::SubmitRequest => "submit_request",
         Operation::ApproveRequest => "approve_request",
         Operation::RejectRequest => "reject_request",

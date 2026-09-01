@@ -1582,6 +1582,9 @@ impl ConstraintSource {
 pub struct TemporalSource {
     pub start_field: String,
     pub end_field: String,
+    /// Deprecated bounded predecessor bridge. New authoring should declare
+    /// exclusivity only through `constraints[].scopeFields`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub scope_fields: Vec<String>,
 }
 
@@ -1645,6 +1648,8 @@ pub struct AccessProfileSource {
     pub allow_count: bool,
     #[serde(default)]
     pub revision_access: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provenance_fields: Vec<ProvenanceFieldSource>,
     #[serde(default)]
     pub allow_data_export: bool,
 }
@@ -1661,6 +1666,7 @@ pub enum Operation {
     Tombstone,
     Batch,
     Revisions,
+    Snapshot,
     SubmitRequest,
     ApproveRequest,
     RejectRequest,
@@ -1668,6 +1674,16 @@ pub enum Operation {
     ReviseRequest,
     CancelRequest,
     ApplyRequest,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProvenanceFieldSource {
+    Kind,
+    ReasonCode,
+    ReasonText,
+    SourceReferences,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1846,6 +1862,8 @@ pub struct AccessGrantSource {
     pub allow_count: bool,
     #[serde(default)]
     pub revision_access: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provenance_fields: Vec<ProvenanceFieldSource>,
     #[serde(default)]
     pub allow_data_export: bool,
 }

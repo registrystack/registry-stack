@@ -20,3 +20,4 @@ __pycache__/
 /products/evidence/.env
 /products/evidence/.first-curl/
 /products/evidence/.sd-jwt-vc-demo/
+.registry-server-history.*/

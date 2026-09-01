@@ -13,6 +13,7 @@ const MAX_MIGRATION_STEPS: usize = 1024;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MigrationPlanKind {
     CompiledAdditive,
+    MetadataOnly,
     Reviewed,
 }
 
@@ -20,6 +21,7 @@ impl MigrationPlanKind {
     fn as_str(self) -> &'static str {
         match self {
             Self::CompiledAdditive => "compiled_additive",
+            Self::MetadataOnly => "metadata_only",
             Self::Reviewed => "reviewed",
         }
     }
@@ -78,7 +80,6 @@ impl MigrationLedgerEntry {
                 .source_revision
                 .as_deref()
                 .is_some_and(|source| source.is_empty() || source == self.target_revision)
-            || self.statement_checksums.is_empty()
             || self.statement_checksums.len() > MAX_MIGRATION_STATEMENTS
             || self
                 .statement_checksums
@@ -112,13 +113,20 @@ impl MigrationLedgerEntry {
         }
         match self.plan_kind {
             MigrationPlanKind::CompiledAdditive
-                if !self.artifact_bindings.is_empty() || !self.steps.is_empty() =>
+                if self.statement_checksums.is_empty()
+                    || !self.artifact_bindings.is_empty()
+                    || !self.steps.is_empty() =>
             {
                 return invalid_identity();
             }
-            MigrationPlanKind::Reviewed
-                if self.artifact_bindings.is_empty() || self.steps.is_empty() =>
+            MigrationPlanKind::MetadataOnly
+                if !self.statement_checksums.is_empty()
+                    || !self.artifact_bindings.is_empty()
+                    || !self.steps.is_empty() =>
             {
+                return invalid_identity();
+            }
+            MigrationPlanKind::Reviewed if self.artifact_bindings.is_empty() => {
                 return invalid_identity();
             }
             _ => {}
@@ -172,13 +180,19 @@ pub(crate) async fn install_migration_ledger(
                      CHECK (package_sequence > 0),
                  plan_kind text NOT NULL
                      CONSTRAINT registry_migrations_plan_kind_closed
-                     CHECK (plan_kind IN ('compiled_additive', 'reviewed')),
+                     CHECK (plan_kind IN ('compiled_additive', 'metadata_only', 'reviewed')),
                  statement_checksums text[] NOT NULL
                      CONSTRAINT registry_migrations_checksums_nonempty
                      CHECK (
-                         array_ndims(statement_checksums) = 1
-                         AND cardinality(statement_checksums) BETWEEN 1 AND 1024
+                         COALESCE(array_ndims(statement_checksums), 1) = 1
+                         AND cardinality(statement_checksums) BETWEEN 0 AND 1024
                          AND array_position(statement_checksums, '') IS NULL
+                         AND (
+                             (plan_kind = 'metadata_only' AND cardinality(statement_checksums) = 0)
+                             OR (plan_kind = 'reviewed' AND cardinality(statement_checksums) = 0)
+                             OR (plan_kind IN ('compiled_additive', 'reviewed')
+                                 AND cardinality(statement_checksums) BETWEEN 1 AND 1024)
+                         )
                      ),
                  artifact_paths text[] NOT NULL,
                  artifact_checksums text[] NOT NULL,
@@ -201,7 +215,7 @@ pub(crate) async fn install_migration_ledger(
                      AND array_position(artifact_paths, '') IS NULL
                      AND array_position(artifact_checksums, '') IS NULL
                      AND (
-                         (plan_kind = 'compiled_additive' AND cardinality(artifact_paths) = 0)
+                         (plan_kind IN ('compiled_additive', 'metadata_only') AND cardinality(artifact_paths) = 0)
                          OR (plan_kind = 'reviewed' AND cardinality(artifact_paths) > 0)
                      )
                  ),
@@ -214,6 +228,39 @@ pub(crate) async fn install_migration_ledger(
                      OR (outcome IN ('failed', 'applied') AND completed_at IS NOT NULL)
                  )
              );
+             ALTER TABLE registry_internal.registry_migrations
+                 DROP CONSTRAINT IF EXISTS registry_migrations_plan_kind_closed,
+                 ADD CONSTRAINT registry_migrations_plan_kind_closed
+                     CHECK (plan_kind IN ('compiled_additive', 'metadata_only', 'reviewed'));
+             ALTER TABLE registry_internal.registry_migrations
+                 DROP CONSTRAINT IF EXISTS registry_migrations_checksums_nonempty,
+                 ADD CONSTRAINT registry_migrations_checksums_nonempty
+                     CHECK (
+                         COALESCE(array_ndims(statement_checksums), 1) = 1
+                         AND cardinality(statement_checksums) BETWEEN 0 AND 1024
+                         AND array_position(statement_checksums, '') IS NULL
+                         AND (
+                             (plan_kind = 'metadata_only' AND cardinality(statement_checksums) = 0)
+                             OR (plan_kind = 'reviewed' AND cardinality(statement_checksums) = 0)
+                             OR (plan_kind IN ('compiled_additive', 'reviewed')
+                                 AND cardinality(statement_checksums) BETWEEN 1 AND 1024)
+                         )
+                     );
+             ALTER TABLE registry_internal.registry_migrations
+                 DROP CONSTRAINT IF EXISTS registry_migrations_artifacts_consistent,
+                 ADD CONSTRAINT registry_migrations_artifacts_consistent CHECK (
+                     COALESCE(array_ndims(artifact_paths), 1) = 1
+                     AND COALESCE(array_ndims(artifact_checksums), 1) = 1
+                     AND cardinality(artifact_paths) = cardinality(artifact_checksums)
+                     AND cardinality(artifact_paths) BETWEEN 0 AND 1024
+                     AND array_position(artifact_paths, '') IS NULL
+                     AND array_position(artifact_checksums, '') IS NULL
+                     AND (
+                         (plan_kind IN ('compiled_additive', 'metadata_only')
+                             AND cardinality(artifact_paths) = 0)
+                         OR (plan_kind = 'reviewed' AND cardinality(artifact_paths) > 0)
+                     )
+                 );
              CREATE TABLE IF NOT EXISTS registry_internal.registry_migration_steps (
                  target_package_revision text NOT NULL,
                  migration_ordinal integer NOT NULL CHECK (migration_ordinal >= 0),
@@ -248,6 +295,49 @@ pub(crate) async fn install_migration_ledger(
             runtime_role.quoted(),
             runtime_role.quoted(),
         ))
+        .await?;
+    Ok(())
+}
+
+pub(crate) async fn reconcile_migration_ledger_metadata_only_constraints(
+    migration: &impl GenericClient,
+) -> Result<()> {
+    migration
+        .batch_execute(
+            "ALTER TABLE registry_internal.registry_migrations
+                 DROP CONSTRAINT IF EXISTS registry_migrations_plan_kind_closed,
+                 ADD CONSTRAINT registry_migrations_plan_kind_closed
+                     CHECK (plan_kind IN ('compiled_additive', 'metadata_only', 'reviewed'));
+             ALTER TABLE registry_internal.registry_migrations
+                 DROP CONSTRAINT IF EXISTS registry_migrations_checksums_nonempty,
+                 ADD CONSTRAINT registry_migrations_checksums_nonempty
+                     CHECK (
+                         COALESCE(array_ndims(statement_checksums), 1) = 1
+                         AND cardinality(statement_checksums) BETWEEN 0 AND 1024
+                         AND array_position(statement_checksums, '') IS NULL
+                         AND (
+                             (plan_kind = 'metadata_only' AND cardinality(statement_checksums) = 0)
+                             OR (plan_kind = 'reviewed' AND cardinality(statement_checksums) = 0)
+                             OR (plan_kind IN ('compiled_additive', 'reviewed')
+                                 AND cardinality(statement_checksums) BETWEEN 1 AND 1024)
+                         )
+                     );
+             ALTER TABLE registry_internal.registry_migrations
+                 DROP CONSTRAINT IF EXISTS registry_migrations_artifacts_consistent,
+                 ADD CONSTRAINT registry_migrations_artifacts_consistent CHECK (
+                     COALESCE(array_ndims(artifact_paths), 1) = 1
+                     AND COALESCE(array_ndims(artifact_checksums), 1) = 1
+                     AND cardinality(artifact_paths) = cardinality(artifact_checksums)
+                     AND cardinality(artifact_paths) BETWEEN 0 AND 1024
+                     AND array_position(artifact_paths, '') IS NULL
+                     AND array_position(artifact_checksums, '') IS NULL
+                     AND (
+                         (plan_kind IN ('compiled_additive', 'metadata_only')
+                             AND cardinality(artifact_paths) = 0)
+                         OR (plan_kind = 'reviewed' AND cardinality(artifact_paths) > 0)
+                     )
+                 );",
+        )
         .await?;
     Ok(())
 }
@@ -580,7 +670,7 @@ pub(crate) async fn record_applied(
 ) -> Result<()> {
     entry.validate()?;
     let closure = match entry.plan_kind {
-        MigrationPlanKind::CompiledAdditive => "",
+        MigrationPlanKind::CompiledAdditive | MigrationPlanKind::MetadataOnly => "",
         MigrationPlanKind::Reviewed => {
             "AND preconditions_complete
              AND postconditions_complete
@@ -680,7 +770,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn migration_ledger_refuses_empty_or_unbound_statement_checksums() {
+    fn migration_ledger_refuses_unbound_statement_checksums_except_metadata_only() {
         let entry = MigrationLedgerEntry {
             source_revision: Some("prior".to_owned()),
             target_revision: "target".to_owned(),
@@ -695,6 +785,12 @@ mod tests {
             Err(PostgresKernelError::Configuration(_))
         ));
 
+        let mut metadata_only = entry.clone();
+        metadata_only.plan_kind = MigrationPlanKind::MetadataOnly;
+        metadata_only
+            .validate()
+            .expect("metadata-only ledger binds the package transition without DDL");
+
         let mut malformed = entry;
         malformed.statement_checksums = vec!["sha256:not-a-digest".to_owned()];
         assert!(matches!(
@@ -704,28 +800,33 @@ mod tests {
     }
 
     #[test]
-    fn reviewed_migration_ledger_identity_requires_ordered_artifacts_and_steps() {
+    fn reviewed_migration_ledger_identity_requires_ordered_artifacts_and_allows_no_step_reviews() {
         let mut entry = MigrationLedgerEntry {
             source_revision: Some("prior".to_owned()),
             target_revision: "target".to_owned(),
             package_sequence: 2,
             plan_kind: MigrationPlanKind::Reviewed,
-            statement_checksums: vec![statement_checksum("SELECT true")],
+            statement_checksums: Vec::new(),
             artifact_bindings: vec![MigrationArtifactBinding {
                 path: "modules/core/migrations/change/descriptor.json".to_owned(),
                 checksum: statement_checksum("descriptor"),
             }],
-            steps: vec![MigrationLedgerStep {
-                migration_ordinal: 1,
-                step_ordinal: 0,
-                step_id: "backfill".to_owned(),
-                kind: MigrationLedgerStepKind::ChunkedBackfill,
-                checksum: statement_checksum("UPDATE"),
-            }],
+            steps: Vec::new(),
         };
         entry
             .validate()
-            .expect("closed reviewed identity validates");
+            .expect("closed reviewed metadata-only identity validates");
+        entry.statement_checksums = vec![statement_checksum("SELECT true")];
+        entry.steps = vec![MigrationLedgerStep {
+            migration_ordinal: 1,
+            step_ordinal: 0,
+            step_id: "backfill".to_owned(),
+            kind: MigrationLedgerStepKind::ChunkedBackfill,
+            checksum: statement_checksum("UPDATE"),
+        }];
+        entry
+            .validate()
+            .expect("closed reviewed SQL identity validates");
         entry
             .artifact_bindings
             .push(entry.artifact_bindings[0].clone());

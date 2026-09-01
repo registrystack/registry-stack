@@ -8,7 +8,8 @@ use registry_server::migration::{
     ApplyVerifiedPackageRequest, DestructiveBackupEvidence, MigrationError,
 };
 use registry_server::package::{
-    load_package, PackageError, PackageIntent, PackageLoadContext, VerifiedPackage,
+    load_package, load_predecessor_package, PackageError, PackageIntent, PackageLoadContext,
+    PredecessorPackageContext, VerifiedPredecessorPackage,
 };
 use registry_server::postgres::ExpectedRegistryIdentity;
 use registry_server::runtime_config::{load_runtime_config, RuntimeConfigError};
@@ -60,14 +61,30 @@ pub(crate) fn run(
         None
     } else {
         Some(
-            load_package(config.package().root(), &config.package_load_context())
-                .map_err(ApplyLifecycleError::CurrentPackage)?,
+            load_predecessor_package(
+                config.package().root(),
+                &PredecessorPackageContext {
+                    environment: config.identity().environment(),
+                    instance_id: config.identity().instance_id(),
+                    database_id: config.identity().database_id(),
+                    database_initialization_environment: config
+                        .identity()
+                        .database_initialization_environment(),
+                    trust_anchor: config.package_trust_anchor(),
+                    expected_package_revision: config.package().active_revision(),
+                    expected_sequence: config.package().active_sequence(),
+                },
+            )
+            .map_err(ApplyLifecycleError::CurrentPackage)?,
         )
     };
     let current_identity = current_package
         .as_ref()
         .map(expected_identity)
         .transpose()?;
+    let current_history_descriptor = current_package
+        .as_ref()
+        .map(VerifiedPredecessorPackage::history_schema_descriptor);
     let target_intent = match current_identity.as_ref() {
         Some(current) => PackageIntent::Activation {
             active_revision: &current.package_revision,
@@ -122,7 +139,7 @@ pub(crate) fn run(
         .map_or(ApplyPrecondition::InitialActivation, |current| {
             ApplyPrecondition::Successor { current }
         });
-    let apply = ApplyVerifiedPackageRequest::new(
+    let mut apply = ApplyVerifiedPackageRequest::new(
         &connection,
         &target,
         precondition,
@@ -134,6 +151,12 @@ pub(crate) fn run(
     )
     .with_destructive_backup_evidence(&backup_evidence)
     .with_event_destination_compatibility_inventory(&event_destination_compatibility);
+    if let Some(package) = current_package.as_ref() {
+        apply = apply.with_predecessor_migration_baseline(package.migration_baseline());
+    }
+    if let Some(descriptor) = current_history_descriptor.as_ref() {
+        apply = apply.with_predecessor_history_descriptor(descriptor);
+    }
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -150,17 +173,16 @@ pub(crate) fn run(
 }
 
 fn expected_identity(
-    package: &VerifiedPackage,
+    package: &VerifiedPredecessorPackage,
 ) -> Result<ExpectedRegistryIdentity, ApplyLifecycleError> {
-    let manifest = package.manifest();
     Ok(ExpectedRegistryIdentity {
-        package_id: manifest.package_id.clone(),
-        environment: manifest.environment.clone(),
-        instance_id: manifest.instance_id.clone(),
-        database_id: manifest.database_id.clone(),
-        package_revision: manifest.package_revision.clone(),
-        schema_fingerprint: manifest.schema_fingerprint.clone(),
-        package_sequence: i64::try_from(manifest.sequence)
+        package_id: package.package_id().to_owned(),
+        environment: package.environment().to_owned(),
+        instance_id: package.instance_id().to_owned(),
+        database_id: package.database_id().to_owned(),
+        package_revision: package.package_revision().to_owned(),
+        schema_fingerprint: package.schema_fingerprint().to_owned(),
+        package_sequence: i64::try_from(package.sequence())
             .map_err(|_| ApplyLifecycleError::CurrentPackage(PackageError::Binding))?,
     })
 }

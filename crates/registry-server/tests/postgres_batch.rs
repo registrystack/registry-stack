@@ -23,16 +23,19 @@ use registry_server::contract::parse_project_json;
 use registry_server::cursor::CursorCodec;
 use registry_server::mutation::MutationFaultPoint;
 use registry_server::postgres::{
-    initialize_registry_state_for_catalog_test, install_compiled_schema, ExpectedManagedCatalog,
+    initialize_compiled_registry_state_for_test, install_compiled_schema,
     PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey,
     RegistryStateTestIdentity,
 };
 use serde_json::{json, Value};
 use tower::Service as _;
+use uuid::Uuid;
 use zeroize::Zeroizing;
 
 const PRINCIPAL: &str = "batch-principal-must-not-enter-audit";
 const RECORD_CANARY: &str = "batch-record-value-must-not-enter-audit";
+const REASON_CANARY: &str = "effective-date-corrected-batch-canary";
+const SOURCE_CANARY: &str = "case-document:batch-source-canary";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable() {
@@ -42,10 +45,10 @@ async fn real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable
     install_compiled_schema(&migration, &registry, &database.runtime_role)
         .await
         .expect("migration installs the compiler-owned schema");
-    let identity = initialize_registry_state_for_catalog_test(
+    let identity = initialize_compiled_registry_state_for_test(
         &migration,
         &database.runtime_role,
-        &ExpectedManagedCatalog::compiled(&registry),
+        &registry,
         RegistryStateTestIdentity {
             package_id: "batch-registry",
             environment: "local",
@@ -109,14 +112,21 @@ async fn real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable
     let seed_body = body_json(seed).await;
     let seed_id = seed_body["id"].as_str().expect("seed id").to_owned();
 
-    let batch_body = json!({"items": [
-        {"operation":"create", "data": {
-            "jurisdiction":"zone-a", "label":"batch-created", "secret":"not-disclosed", "quantity":2
-        }},
-        {"operation":"patch", "recordId":seed_id, "ifMatch":seed_etag, "patch":[
-            {"op":"replace", "path":"/data/label", "value":"batch-patched"}
-        ]}
-    ]});
+    let batch_body = json!({
+        "changeContext": {
+            "kind": "correction",
+            "reasonCode": REASON_CANARY,
+            "sourceReferences": [SOURCE_CANARY]
+        },
+        "items": [
+            {"operation":"create", "data": {
+                "jurisdiction":"zone-a", "label":"batch-created", "secret":"not-disclosed", "quantity":2
+            }},
+            {"operation":"patch", "recordId":seed_id, "ifMatch":seed_etag, "patch":[
+                {"op":"replace", "path":"/data/label", "value":"batch-patched"}
+            ]}
+        ]
+    });
     let before = effect_counts(&database, table).await;
     let first = send_json(
         &app,
@@ -129,6 +139,8 @@ async fn real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable
     assert_eq!(first.status(), StatusCode::OK);
     let first_bytes = response_bytes(first).await;
     let first_json: Value = serde_json::from_slice(&first_bytes).expect("batch response JSON");
+    assert_snapshot_reference(&first_json["snapshot"]);
+    assert!(first_json.get("changeContext").is_none());
     let items = first_json["results"]
         .as_array()
         .expect("ordered batch results");
@@ -148,6 +160,21 @@ async fn real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable
     assert_eq!(after.revisions, before.revisions + 2);
     assert_eq!(after.outbox, before.outbox + 2);
     assert_eq!(after.idempotency, before.idempotency + 1);
+    assert_eq!(after.commits, before.commits + 1);
+    assert_eq!(after.commit_members, before.commit_members + 2);
+    let context = database
+        .admin
+        .query_one(
+            "SELECT convert_from(change_context, 'UTF8')
+               FROM registry_internal.registry_revision_commits
+              WHERE commit_position = 2",
+            &[],
+        )
+        .await
+        .expect("administrator inspects stored restricted change context")
+        .get::<_, String>(0);
+    assert!(context.contains(REASON_CANARY));
+    assert!(context.contains(SOURCE_CANARY));
 
     let replay = send_json(
         &app,
@@ -190,14 +217,34 @@ async fn real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable
         "concurrent exact replay cannot repeat any mutation effect"
     );
 
-    let changed_order =
-        json!({"items": [batch_body["items"][1].clone(), batch_body["items"][0].clone()]});
+    let changed_order = json!({
+        "changeContext": batch_body["changeContext"].clone(),
+        "items": [batch_body["items"][1].clone(), batch_body["items"][0].clone()]
+    });
     let conflict = send_json(
         &app,
         "/v1/records/widgets:batch",
         Some(authorized_claims.clone()),
         "batch-key",
         changed_order,
+    )
+    .await;
+    assert_eq!(conflict.status(), StatusCode::CONFLICT);
+    assert_eq!(body_json(conflict).await["code"], "idempotency.conflict");
+
+    let changed_context = json!({
+        "changeContext": {
+            "kind": "correction",
+            "reasonCode": "different-reason"
+        },
+        "items": batch_body["items"].clone()
+    });
+    let conflict = send_json(
+        &app,
+        "/v1/records/widgets:batch",
+        Some(authorized_claims.clone()),
+        "batch-key",
+        changed_context,
     )
     .await;
     assert_eq!(conflict.status(), StatusCode::CONFLICT);
@@ -497,6 +544,8 @@ async fn real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable
     assert!(audit_text.contains("\"resultCount\":2"));
     assert!(!audit_text.contains(PRINCIPAL));
     assert!(!audit_text.contains(RECORD_CANARY));
+    assert!(!audit_text.contains(REASON_CANARY));
+    assert!(!audit_text.contains(SOURCE_CANARY));
     assert!(!audit_text.contains(&seed_id));
     assert!(!audit_text.contains("batch-created"));
     assert!(!audit_text.contains("registry_data"));
@@ -718,11 +767,20 @@ struct EffectCounts {
     outbox: i64,
     audit: i64,
     idempotency: i64,
+    commits: i64,
+    commit_members: i64,
 }
 
 impl EffectCounts {
-    fn without_audit(self) -> (i64, i64, i64, i64) {
-        (self.current, self.revisions, self.outbox, self.idempotency)
+    fn without_audit(self) -> (i64, i64, i64, i64, i64, i64) {
+        (
+            self.current,
+            self.revisions,
+            self.outbox,
+            self.idempotency,
+            self.commits,
+            self.commit_members,
+        )
     }
 }
 
@@ -736,7 +794,9 @@ async fn effect_counts(database: &TestDatabase, table: &str) -> EffectCounts {
                    (SELECT count(*) FROM registry_internal.registry_revisions),
                    (SELECT count(*) FROM registry_internal.registry_outbox),
                    (SELECT count(*) FROM registry_internal.registry_audit),
-                   (SELECT count(*) FROM registry_internal.registry_idempotency)"
+                   (SELECT count(*) FROM registry_internal.registry_idempotency),
+                   (SELECT count(*) FROM registry_internal.registry_revision_commits),
+                   (SELECT count(*) FROM registry_internal.registry_revision_commit_members)"
             ),
             &[],
         )
@@ -748,5 +808,14 @@ async fn effect_counts(database: &TestDatabase, table: &str) -> EffectCounts {
         outbox: row.get(2),
         audit: row.get(3),
         idempotency: row.get(4),
+        commits: row.get(5),
+        commit_members: row.get(6),
     }
+}
+
+fn assert_snapshot_reference(value: &Value) {
+    let snapshot = value.as_str().expect("response carries snapshot reference");
+    assert_eq!(snapshot.len(), 40);
+    assert!(snapshot.starts_with("rs1_"));
+    Uuid::parse_str(&snapshot[4..]).expect("snapshot suffix is a UUID");
 }

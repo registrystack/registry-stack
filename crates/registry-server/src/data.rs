@@ -1701,7 +1701,13 @@ fn validate_import_response(
     require_success_json(response)?;
     let value = parse_canonical_response(&response.body)?;
     let object = value.as_object().ok_or(DataError::InvalidResponse)?;
-    require_exact_keys(object, &["results"]).map_err(|_| DataError::InvalidResponse)?;
+    require_exact_keys(object, &["results", "snapshot"]).map_err(|_| DataError::InvalidResponse)?;
+    crate::history_reference::SnapshotReference::parse(
+        object["snapshot"]
+            .as_str()
+            .ok_or(DataError::InvalidResponse)?,
+    )
+    .map_err(|_| DataError::InvalidResponse)?;
     let results = object["results"]
         .as_array()
         .ok_or(DataError::InvalidResponse)?;

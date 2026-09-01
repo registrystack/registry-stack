@@ -32,9 +32,9 @@ use registry_server::cursor::CursorCodec;
 use registry_server::event_destination::ActivatedEventDestinationRegistry;
 use registry_server::mutation::install_mutation_schema;
 use registry_server::postgres::{
-    initialize_registry_state_for_catalog_test, install_compiled_schema, ExpectedManagedCatalog,
-    ExpectedRegistryIdentity, PostgresRecordMutationService, PostgresRecordReadService,
-    RegistryLockKey, RegistryStateTestIdentity,
+    initialize_compiled_registry_state_for_test, install_compiled_schema, ExpectedRegistryIdentity,
+    PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey,
+    RegistryStateTestIdentity,
 };
 use registry_server::request_events::{insert_request_lifecycle_events, RequestLifecycleEvent};
 use registry_server::runtime_config::parse_runtime_config;
@@ -225,10 +225,10 @@ async fn real_postgres_request_lifecycle_webhook_retries_and_operator_replay_kee
     install_compiled_schema(&migration, &compiled, &database.runtime_role)
         .await
         .expect("compiled lifecycle event schema installs");
-    let identity = initialize_registry_state_for_catalog_test(
+    let identity = initialize_compiled_registry_state_for_test(
         &migration,
         &database.runtime_role,
-        &ExpectedManagedCatalog::compiled(&compiled),
+        &compiled,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
             environment: "local",
@@ -372,10 +372,10 @@ async fn authenticated_webhook_service_event_material_does_not_grant_request_act
     install_compiled_schema(&migration, &registry, &database.runtime_role)
         .await
         .expect("compiled lifecycle authority schema installs");
-    let identity = initialize_registry_state_for_catalog_test(
+    let identity = initialize_compiled_registry_state_for_test(
         &migration,
         &database.runtime_role,
-        &ExpectedManagedCatalog::compiled(&registry),
+        &registry,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
             environment: "local",

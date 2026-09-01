@@ -419,13 +419,25 @@ impl fmt::Debug for CursorOrderClause {
 #[serde(rename_all = "camelCase", tag = "kind", deny_unknown_fields)]
 pub enum CursorQueryScope {
     Collection {},
-    Relationship { path_id: String, root_id: String },
+    Relationship {
+        path_id: String,
+        root_id: String,
+    },
+    /// `None` is accepted only on a first-page plan, before the historical
+    /// reader captures a committed reference. Every issued cursor contains it.
+    Snapshot {
+        reference: Option<String>,
+    },
 }
 
 impl fmt::Debug for CursorQueryScope {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Collection {} => formatter.write_str("Collection"),
+            Self::Snapshot { reference } => formatter
+                .debug_struct("Snapshot")
+                .field("reference", &reference.as_ref().map(|_| "<redacted>"))
+                .finish(),
             Self::Relationship {
                 path_id,
                 root_id: _,

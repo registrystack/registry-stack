@@ -17,8 +17,8 @@ use registry_server::mutation::{
     MutationBody, MutationCoordinator, MutationError, MutationPlan, MutationRequest,
 };
 use registry_server::postgres::{
-    initialize_registry_state_for_catalog_test, install_compiled_schema, ClaimContext,
-    ExpectedManagedCatalog, RegistryLockKey, RegistryStateTestIdentity,
+    initialize_compiled_registry_state_for_test, install_compiled_schema, ClaimContext,
+    RegistryLockKey, RegistryStateTestIdentity,
 };
 use serde_json::{Map, Value};
 use tokio_postgres::Client;
@@ -48,11 +48,10 @@ async fn real_postgres_reference_and_temporal_races_leave_no_dangling_or_overlap
     install_compiled_schema(&migration, &registry, &database.runtime_role)
         .await
         .expect("migration installs the compiler-owned constraint schema");
-    let catalog = ExpectedManagedCatalog::compiled(&registry);
-    let identity = initialize_registry_state_for_catalog_test(
+    let identity = initialize_compiled_registry_state_for_test(
         &migration,
         &database.runtime_role,
-        &catalog,
+        &registry,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
             environment: "local",

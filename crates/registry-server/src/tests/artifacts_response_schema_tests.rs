@@ -249,10 +249,39 @@ fn target_get_schema_accepts_bounded_request_presence_annotations() {
 fn action_response_schema_matches_application_receipt_shape() {
     let registry = compiled_registry();
     let openapi = generated_openapi(&registry);
+    let component = &openapi["components"]["schemas"]["ChangeRequestActionResponse"];
+    assert!(component["required"]
+        .as_array()
+        .expect("action response required properties render")
+        .contains(&json!("snapshot")));
+    assert_eq!(
+        component["properties"]["snapshot"]["maxLength"],
+        crate::query::MAX_OPAQUE_VALUE_BYTES
+    );
     let schema = component_validator(&openapi, "ChangeRequestActionResponse");
     let digest = effect_digest();
 
     assert_valid(
+        &schema,
+        &json!({
+            "id": "00000000-0000-4000-8000-000000000001",
+            "revision": 10,
+            "snapshot": snapshot_reference(),
+            "request": {
+                "serverState": "applied",
+                "proposalVersion": 2,
+                "effectDigest": digest,
+                "application": {
+                    "applicationId": "00000000-0000-4000-8000-0000000000aa",
+                    "proposalVersion": 2,
+                    "effectDigest": digest,
+                    "appliedAt": "2026-08-31T01:02:03.700350Z"
+                }
+            }
+        }),
+    );
+
+    assert_invalid(
         &schema,
         &json!({
             "id": "00000000-0000-4000-8000-000000000001",
@@ -276,6 +305,7 @@ fn action_response_schema_matches_application_receipt_shape() {
         &json!({
             "id": "00000000-0000-4000-8000-000000000001",
             "revision": 10,
+            "snapshot": snapshot_reference(),
             "request": {
                 "serverState": "applied",
                 "proposalVersion": 2,
@@ -376,6 +406,10 @@ fn route_path<'a>(
 
 fn effect_digest() -> &'static str {
     "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+}
+
+fn snapshot_reference() -> &'static str {
+    "rs1_018feaa0-68f9-4a45-b9e3-58436df07af7"
 }
 
 fn compiled_registry() -> CompiledRegistry {

@@ -85,6 +85,7 @@ pub struct BatchMutationInput<'a> {
     pub context: &'a AuthorizedRequestContext,
     pub entity_id: &'a str,
     pub items: Vec<BatchMutationItem>,
+    pub change_context: Option<crate::history_context::ChangeContext>,
     pub response_fields: BTreeSet<String>,
     pub body_bytes: usize,
     pub correlation: &'a RequestCorrelation,
@@ -458,6 +459,34 @@ pub struct RevisionReadRequest {
     pub correlation: RequestCorrelation,
 }
 
+/// Authorized stored-record history query. The plan's snapshot scope carries
+/// an exact reference, or requests one capture on the first page. It must never
+/// be executed against live record relations.
+#[derive(Clone)]
+pub struct SnapshotReadRequest {
+    pub entity_id: String,
+    pub operation_id: String,
+    pub method: HttpMethod,
+    pub context: AuthorizedRequestContext,
+    pub selected_fields: BTreeSet<String>,
+    pub plan: CompiledReadQuery,
+    pub maximum_records: usize,
+    pub correlation: RequestCorrelation,
+}
+
+impl fmt::Debug for SnapshotReadRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SnapshotReadRequest")
+            .field("entity_id", &self.entity_id)
+            .field("operation_id", &self.operation_id)
+            .field("context", &"<redacted>")
+            .field("plan", &self.plan)
+            .field("maximum_records", &self.maximum_records)
+            .finish()
+    }
+}
+
 impl fmt::Debug for RevisionReadRequest {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -585,18 +614,47 @@ pub trait ReadinessProbe: Send + Sync {
     fn is_ready(&self) -> ServiceFuture<'_, bool>;
 }
 
+/// A distinct execution boundary for historical rows and retained schemas.
+pub trait SnapshotReadService: Send + Sync {
+    fn list(
+        &self,
+        request: SnapshotReadRequest,
+    ) -> ServiceFuture<'_, Result<HeldReadResponse, ReadServiceError>>;
+
+    fn refusal(
+        &self,
+        request: RecordReadRefusal,
+    ) -> ServiceFuture<'_, Result<(), ReadServiceError>>;
+}
+
 #[derive(Clone)]
 pub struct HttpService {
     pub(crate) registry: Arc<CompiledRegistry>,
     pub(crate) identity: ReadRuntimeIdentity,
     pub(crate) records: Arc<dyn RecordReadService>,
     pub(crate) revisions: Option<Arc<dyn RevisionReadService>>,
+    pub(crate) snapshots: Option<Arc<dyn SnapshotReadService>>,
     pub(crate) cursors: Arc<CursorCodec>,
     pub(crate) mutations: Option<Arc<PostgresRecordMutationService>>,
     pub(crate) readiness: Arc<dyn ReadinessProbe>,
 }
 
 impl HttpService {
+    pub(crate) fn read_refusal(
+        &self,
+        operation: crate::contract::Operation,
+        request: RecordReadRefusal,
+    ) -> ServiceFuture<'_, Result<(), ReadServiceError>> {
+        if operation == crate::contract::Operation::Snapshot {
+            match &self.snapshots {
+                Some(snapshots) => snapshots.refusal(request),
+                None => Box::pin(async { Err(ReadServiceError::Unavailable) }),
+            }
+        } else {
+            self.records.refusal(request)
+        }
+    }
+
     #[must_use]
     pub fn new(
         registry: Arc<CompiledRegistry>,
@@ -610,6 +668,7 @@ impl HttpService {
             identity,
             records,
             revisions: None,
+            snapshots: None,
             cursors,
             mutations: None,
             readiness,
@@ -634,6 +693,12 @@ impl HttpService {
     #[must_use]
     pub fn with_revisions(mut self, revisions: Arc<dyn RevisionReadService>) -> Self {
         self.revisions = Some(revisions);
+        self
+    }
+
+    #[must_use]
+    pub fn with_snapshots(mut self, snapshots: Arc<dyn SnapshotReadService>) -> Self {
+        self.snapshots = Some(snapshots);
         self
     }
 }

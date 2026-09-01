@@ -20,9 +20,8 @@ use registry_server::mutation::{
     MutationPlan, MutationRequest, PatchOperation,
 };
 use registry_server::postgres::{
-    initialize_registry_state_for_catalog_test, install_compiled_schema, ClaimContext,
-    ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey, RegistryStateTestIdentity,
-    RowBoundaryContext,
+    initialize_compiled_registry_state_for_test, install_compiled_schema, ClaimContext,
+    ExpectedRegistryIdentity, RegistryLockKey, RegistryStateTestIdentity, RowBoundaryContext,
 };
 use serde_json::{json, Map, Value};
 
@@ -482,11 +481,10 @@ impl Fixture {
         install_compiled_schema(&migration, &compiled, &database.runtime_role)
             .await
             .expect("migration installs schema");
-        let catalog = ExpectedManagedCatalog::compiled(&compiled);
-        let identity = initialize_registry_state_for_catalog_test(
+        let identity = initialize_compiled_registry_state_for_test(
             &migration,
             &database.runtime_role,
-            &catalog,
+            &compiled,
             RegistryStateTestIdentity {
                 package_id: PACKAGE_ID,
                 environment: "local",

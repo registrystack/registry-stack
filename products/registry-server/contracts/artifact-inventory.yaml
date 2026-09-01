@@ -7,6 +7,7 @@ artifacts:
   - {path: ACCEPTANCE-JOURNEYS.md, kind: acceptance-guide, state: authored}
   - {path: CHANGE_REQUEST_EXAMPLES.md, kind: change-request-example-guide, state: authored}
   - {path: EVENTS-AND-WEBHOOKS.md, kind: extension-direction-spec, state: authored}
+  - {path: HISTORY.md, kind: historical-query-guide, state: authored}
   - {path: contracts/definition-of-done.yaml, kind: machine-readable-dod, state: authored}
   - {path: contracts/implementation-schedule.yaml, kind: delivery-schedule, state: authored}
   - {path: contracts/acceptance-scenario-matrix.yaml, kind: acceptance-matrix, state: authored}
@@ -21,6 +22,7 @@ artifacts:
   - {path: acceptance/asset-site-placement-change-requests, kind: authored-fixture, state: authored}
   - {path: acceptance/publicschema-household-change-requests, kind: authored-fixture, state: authored}
   - {path: acceptance/business, kind: authored-fixture, state: authored}
+  - {path: acceptance/household-history, kind: authored-fixture, state: authored}
   - {path: demo, kind: local-mint-server-demo, state: authored}
   - {path: quickstart, kind: generic-first-hour-quickstart, state: authored}
   - {path: generated/authoring/registry-project.schema.json, kind: generated-authoring-schema, state: authored}
@@ -34,3 +36,4 @@ artifacts:
   - {path: scripts/test-postgres.sh, kind: real-postgresql-entrypoint, state: authored}
   - {path: scripts/test-postgres-tls.sh, kind: real-postgresql-tls-entrypoint, state: authored}
   - {path: scripts/test-adopter-workflow.sh, kind: adopter-workflow-entrypoint, state: authored}
+  - {path: scripts/test-historical-workflow.sh, kind: historical-workflow-entrypoint, state: authored}

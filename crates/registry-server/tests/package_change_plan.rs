@@ -185,7 +185,7 @@ fn new_reference_constraint_and_index_are_supported_additive_statements() {
 }
 
 #[test]
-fn non_additive_changes_are_classified_and_cannot_create_applicable_plans() {
+fn data_destructive_and_unsupported_changes_cannot_create_applicable_plans() {
     for (previous_variant, candidate_variant, class, code) in [
         (
             Variant::Base,
@@ -207,45 +207,9 @@ fn non_additive_changes_are_classified_and_cannot_create_applicable_plans() {
         ),
         (
             Variant::Base,
-            Variant::RouteChanged,
-            CompiledRegistryChangeClass::AccessOrDisclosureChange,
-            CompiledRegistryChangeCode::EntityRouteChanged,
-        ),
-        (
-            Variant::Base,
-            Variant::EntityClassificationChanged,
-            CompiledRegistryChangeClass::AccessOrDisclosureChange,
-            CompiledRegistryChangeCode::EntityClassificationChanged,
-        ),
-        (
-            Variant::Base,
-            Variant::ClassificationChanged,
-            CompiledRegistryChangeClass::AccessOrDisclosureChange,
-            CompiledRegistryChangeCode::FieldClassificationChanged,
-        ),
-        (
-            Variant::Base,
-            Variant::AuthorizationChanged,
-            CompiledRegistryChangeClass::AccessOrDisclosureChange,
-            CompiledRegistryChangeCode::AccessProfileChanged,
-        ),
-        (
-            Variant::Base,
-            Variant::MutationModeChanged,
-            CompiledRegistryChangeClass::AccessOrDisclosureChange,
-            CompiledRegistryChangeCode::EntityMutationModeChanged,
-        ),
-        (
-            Variant::Base,
             Variant::TemporalChanged,
             CompiledRegistryChangeClass::DestructiveOrIrreversible,
             CompiledRegistryChangeCode::EntityTemporalChanged,
-        ),
-        (
-            Variant::TemporalRoleBase,
-            Variant::TemporalRoleChanged,
-            CompiledRegistryChangeClass::AccessOrDisclosureChange,
-            CompiledRegistryChangeCode::FieldTemporalRoleChanged,
         ),
         (
             Variant::Base,
@@ -272,6 +236,59 @@ fn non_additive_changes_are_classified_and_cannot_create_applicable_plans() {
         assert_change(&change_set, class, code);
         assert_eq!(change_set.migration_plan, None);
         assert!(change_set_to_applicable_migration_plan(&change_set).is_err());
+    }
+}
+
+#[test]
+fn metadata_only_access_or_disclosure_changes_create_empty_applicable_plans() {
+    for (previous_variant, candidate_variant, code) in [
+        (
+            Variant::Base,
+            Variant::RouteChanged,
+            CompiledRegistryChangeCode::EntityRouteChanged,
+        ),
+        (
+            Variant::Base,
+            Variant::EntityClassificationChanged,
+            CompiledRegistryChangeCode::EntityClassificationChanged,
+        ),
+        (
+            Variant::Base,
+            Variant::ClassificationChanged,
+            CompiledRegistryChangeCode::FieldClassificationChanged,
+        ),
+        (
+            Variant::Base,
+            Variant::AuthorizationChanged,
+            CompiledRegistryChangeCode::AccessProfileChanged,
+        ),
+        (
+            Variant::Base,
+            Variant::MutationModeChanged,
+            CompiledRegistryChangeCode::EntityMutationModeChanged,
+        ),
+        (
+            Variant::TemporalRoleBase,
+            Variant::TemporalRoleChanged,
+            CompiledRegistryChangeCode::FieldTemporalRoleChanged,
+        ),
+    ] {
+        let previous = compile_variant(previous_variant, 1);
+        let candidate = compile_variant(candidate_variant, 2);
+        let change_set = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
+        assert_change(
+            &change_set,
+            CompiledRegistryChangeClass::AccessOrDisclosureChange,
+            code,
+        );
+        let plan = change_set_to_applicable_migration_plan(&change_set)
+            .expect("metadata-only policy changes create an applicable plan");
+        assert!(plan.statements.is_empty());
+        assert!(plan.reviewed_descriptors.is_empty());
+        assert!(plan
+            .changes
+            .iter()
+            .all(|change| change.class == CompiledRegistryChangeClass::AccessOrDisclosureChange));
     }
 }
 
@@ -483,7 +500,7 @@ fn oversized_derived_sql_asset_is_refused_before_compilation() {
 
 #[cfg(feature = "tooling")]
 #[test]
-fn metadata_only_reviewed_migration_covers_non_sql_surface_without_dummy_sql() {
+fn metadata_only_policy_surface_can_apply_automatically_and_be_reviewed_without_dummy_sql() {
     let previous = compile_variant(Variant::MetadataOnlyBase, 1);
     let candidate = compile_variant(Variant::MetadataOnlyChanged, 2);
     let change_set = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
@@ -504,7 +521,10 @@ fn metadata_only_reviewed_migration_covers_non_sql_surface_without_dummy_sql() {
             code,
         );
     }
-    assert!(change_set_to_applicable_migration_plan(&change_set).is_err());
+    let automatic = change_set_to_applicable_migration_plan(&change_set)
+        .expect("metadata-only policy surface creates an automatic applicable plan");
+    assert!(automatic.statements.is_empty());
+    assert!(automatic.reviewed_descriptors.is_empty());
 
     let source = source_for_variant(Variant::MetadataOnlyChanged, 2);
     let reviewed = prepare_package(build_request(
