@@ -3,6 +3,24 @@
   "baseUrl": "https://id.registrystack.org",
   "entries": [
     {
+      "uri": "https://id.registrystack.org/contexts/registry-record/v1",
+      "kind": "context",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "registry-record",
+      "title": "Registry Record v1 JSON-LD context",
+      "description": "Governed JSON-LD terms for the Registry Record v1 base response profile.",
+      "source": {
+        "path": "products/registry-record/profile/registry-record-v1.md",
+        "sha256": "7e0eee88e2c08af556081d4efcf43aaa272bcfd7c58c4a188e13feea5f06e517"
+      },
+      "artifact": {
+        "path": "products/registry-record/context/registry-record-v1.jsonld",
+        "sha256": "9b8bf452538214d8559b4e8034446bfade37b5f409cfeaaace650a567423be71",
+        "mediaType": "application/ld+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/ns/registry-manifest/v1#",
       "kind": "namespace",
       "status": "active",
@@ -776,6 +794,24 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/profiles/registry-record/v1",
+      "kind": "profile",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "registry-record",
+      "title": "Registry Record v1 profile",
+      "description": "Open base response profile for one Registry record or a homogeneous Registry record collection.",
+      "source": {
+        "path": "products/registry-record/profile/registry-record-v1.md",
+        "sha256": "7e0eee88e2c08af556081d4efcf43aaa272bcfd7c58c4a188e13feea5f06e517"
+      },
+      "artifact": {
+        "path": "products/registry-record/profile/registry-record-v1.md",
+        "sha256": "7e0eee88e2c08af556081d4efcf43aaa272bcfd7c58c4a188e13feea5f06e517",
+        "mediaType": "text/markdown"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/identifiers/catalog.v1.schema.json",
       "kind": "schema",
       "status": "active",
@@ -785,11 +821,29 @@
       "description": "JSON Schema for the Registry Stack identifier catalog.",
       "source": {
         "path": "products/identifiers/contracts/catalog.v1.schema.json",
-        "sha256": "25eb7b86185ab1d3aa5919752790c2600b5610b484397836eab17b82924e9d01"
+        "sha256": "e45632976b2436dc468805b78e6ac35d4cb05340b260370d011eee68fcf28c5d"
       },
       "artifact": {
         "path": "products/identifiers/contracts/catalog.v1.schema.json",
-        "sha256": "25eb7b86185ab1d3aa5919752790c2600b5610b484397836eab17b82924e9d01",
+        "sha256": "e45632976b2436dc468805b78e6ac35d4cb05340b260370d011eee68fcf28c5d",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/registry-record/v1",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "registry-record",
+      "title": "Registry Record v1 base response",
+      "description": "Registry Record base response profile JSON Schema.",
+      "source": {
+        "path": "products/registry-record/schema/registry-record-v1.schema.json",
+        "sha256": "77167603834da2ca3ba7d8dfc68341464e66be130b54796c6624023236cd7501"
+      },
+      "artifact": {
+        "path": "products/registry-record/schema/registry-record-v1.schema.json",
+        "sha256": "77167603834da2ca3ba7d8dfc68341464e66be130b54796c6624023236cd7501",
         "mediaType": "application/schema+json"
       }
     },
@@ -964,6 +1018,19 @@
       "source": {
         "path": "products/relay-v2/CONCEPT.md",
         "sha256": "6502c4860b3ff48cb85f5833099be607c8d4b2d0d1126fb4b8e3a7790820a7d7"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/vocab/registry-record/",
+      "kind": "vocabulary",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "registry-record",
+      "title": "Registry Record vocabulary",
+      "description": "Vocabulary base for Registry Record v1 response-profile terms.",
+      "source": {
+        "path": "products/registry-record/context/registry-record-v1.jsonld",
+        "sha256": "9b8bf452538214d8559b4e8034446bfade37b5f409cfeaaace650a567423be71"
       }
     },
     {

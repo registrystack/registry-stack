@@ -1,0 +1,11 @@
+{
+  "items": [],
+  "pageInfo": {
+    "nextCursor": ""
+  },
+  "meta": {
+    "registryIdentifier": "business-registry",
+    "datasetIdentifier": "legal-entities",
+    "entityTypeIdentifier": "company"
+  }
+}

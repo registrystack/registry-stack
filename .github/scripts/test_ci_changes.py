@@ -323,6 +323,19 @@ class CiChangesTest(unittest.TestCase):
             with self.subTest(pattern=pattern):
                 self.assertTrue(classify(self.workspace, (sample,))["identifiers"])
 
+    def test_registry_record_profile_inputs_select_the_catalog_gate(self) -> None:
+        for path in (
+            "products/registry-record/profile/registry-record-v1.md",
+            "products/registry-record/schema/registry-record-v1.schema.json",
+            "products/registry-record/context/registry-record-v1.jsonld",
+            "products/registry-record/fixtures/positive/single.json",
+            "products/registry-record/scripts/test_contract.py",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["identifiers"])
+                self.assertFalse(outputs["rust"])
+
     def test_identifier_exporters_and_indirect_inputs_select_the_catalog_gate(
         self,
     ) -> None:
@@ -342,6 +355,7 @@ class CiChangesTest(unittest.TestCase):
             "products/identifiers/scripts/generate.py --check-references",
             workflow,
         )
+        self.assertIn("products/registry-record/scripts/check.sh", workflow)
 
     def test_identifier_tooling_does_not_force_the_rust_matrix(self) -> None:
         outputs = classify(

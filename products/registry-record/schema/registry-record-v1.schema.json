@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://id.registrystack.org/schemas/registry-record/v1",
+  "title": "Registry Record v1 base response",
+  "description": "Open base conformance schema for one Registry record or a homogeneous Registry record collection.",
+  "properties": {
+    "@context": {
+      "const": "https://id.registrystack.org/contexts/registry-record/v1"
+    }
+  },
+  "oneOf": [
+    { "$ref": "#/$defs/singleResponse" },
+    { "$ref": "#/$defs/collectionResponse" }
+  ],
+  "$defs": {
+    "opaqueIdentifier": {
+      "type": "string",
+      "minLength": 1
+    },
+    "domainData": {
+      "type": "object",
+      "propertyNames": {
+        "not": { "const": "@context" }
+      },
+      "not": {
+        "anyOf": [
+          { "required": ["data"] },
+          { "required": ["items"] },
+          { "required": ["pageInfo"] },
+          { "required": ["meta"] },
+          { "required": ["registryIdentifier"] },
+          { "required": ["datasetIdentifier"] },
+          { "required": ["entityTypeIdentifier"] },
+          { "required": ["recordIdentifier"] },
+          { "required": ["revisionIdentifier"] },
+          { "required": ["nextCursor"] }
+        ]
+      },
+      "additionalProperties": true
+    },
+    "record": {
+      "type": "object",
+      "required": ["recordIdentifier", "revisionIdentifier", "domainData"],
+      "not": {
+        "anyOf": [
+          { "required": ["data"] },
+          { "required": ["items"] },
+          { "required": ["pageInfo"] },
+          { "required": ["meta"] },
+          { "required": ["registryIdentifier"] },
+          { "required": ["datasetIdentifier"] },
+          { "required": ["entityTypeIdentifier"] },
+          { "required": ["nextCursor"] },
+          { "required": ["@context"] }
+        ]
+      },
+      "properties": {
+        "recordIdentifier": { "$ref": "#/$defs/opaqueIdentifier" },
+        "revisionIdentifier": { "$ref": "#/$defs/opaqueIdentifier" },
+        "domainData": { "$ref": "#/$defs/domainData" }
+      },
+      "additionalProperties": true
+    },
+    "responseMeta": {
+      "type": "object",
+      "required": ["registryIdentifier", "datasetIdentifier", "entityTypeIdentifier"],
+      "not": {
+        "anyOf": [
+          { "required": ["data"] },
+          { "required": ["items"] },
+          { "required": ["pageInfo"] },
+          { "required": ["recordIdentifier"] },
+          { "required": ["revisionIdentifier"] },
+          { "required": ["domainData"] },
+          { "required": ["nextCursor"] },
+          { "required": ["@context"] }
+        ]
+      },
+      "properties": {
+        "registryIdentifier": { "$ref": "#/$defs/opaqueIdentifier" },
+        "datasetIdentifier": { "$ref": "#/$defs/opaqueIdentifier" },
+        "entityTypeIdentifier": { "$ref": "#/$defs/opaqueIdentifier" }
+      },
+      "additionalProperties": true
+    },
+    "pageInfo": {
+      "type": "object",
+      "required": ["nextCursor"],
+      "not": {
+        "anyOf": [
+          { "required": ["data"] },
+          { "required": ["items"] },
+          { "required": ["meta"] },
+          { "required": ["registryIdentifier"] },
+          { "required": ["datasetIdentifier"] },
+          { "required": ["entityTypeIdentifier"] },
+          { "required": ["recordIdentifier"] },
+          { "required": ["revisionIdentifier"] },
+          { "required": ["domainData"] },
+          { "required": ["@context"] }
+        ]
+      },
+      "properties": {
+        "nextCursor": {
+          "anyOf": [
+            { "$ref": "#/$defs/opaqueIdentifier" },
+            { "type": "null" }
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "singleResponse": {
+      "type": "object",
+      "required": ["data", "meta"],
+      "not": {
+        "anyOf": [
+          { "required": ["items"] },
+          { "required": ["pageInfo"] },
+          { "required": ["registryIdentifier"] },
+          { "required": ["datasetIdentifier"] },
+          { "required": ["entityTypeIdentifier"] },
+          { "required": ["recordIdentifier"] },
+          { "required": ["revisionIdentifier"] },
+          { "required": ["domainData"] },
+          { "required": ["nextCursor"] }
+        ]
+      },
+      "properties": {
+        "data": { "$ref": "#/$defs/record" },
+        "meta": { "$ref": "#/$defs/responseMeta" }
+      },
+      "additionalProperties": true
+    },
+    "collectionResponse": {
+      "type": "object",
+      "required": ["items", "pageInfo", "meta"],
+      "not": {
+        "anyOf": [
+          { "required": ["data"] },
+          { "required": ["registryIdentifier"] },
+          { "required": ["datasetIdentifier"] },
+          { "required": ["entityTypeIdentifier"] },
+          { "required": ["recordIdentifier"] },
+          { "required": ["revisionIdentifier"] },
+          { "required": ["domainData"] },
+          { "required": ["nextCursor"] }
+        ]
+      },
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/record" }
+        },
+        "pageInfo": { "$ref": "#/$defs/pageInfo" },
+        "meta": { "$ref": "#/$defs/responseMeta" }
+      },
+      "additionalProperties": true
+    }
+  }
+}

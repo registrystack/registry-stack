@@ -1,0 +1,19 @@
+{
+  "data": {
+    "recordIdentifier": "company-123",
+    "revisionIdentifier": "42",
+    "domainData": {
+      "legalName": "Example Ltd"
+    },
+    "productRecordExtension": "retained by a product schema"
+  },
+  "meta": {
+    "registryIdentifier": "business-registry",
+    "datasetIdentifier": "legal-entities",
+    "entityTypeIdentifier": "company",
+    "productMetaExtension": true
+  },
+  "productResponseExtension": {
+    "selectedFields": ["legalName"]
+  }
+}
