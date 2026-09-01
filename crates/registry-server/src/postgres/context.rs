@@ -2868,14 +2868,14 @@ mod tests {
             br#"{
               "apiVersion":"registry.registrystack.org/v1alpha1",
               "kind":"RegistryProject",
-              "registry":{"id":"typed-context","version":"1","defaultLanguage":"en"},
+              "registry":{"id":"typed-context","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
               "entities":[
                 {
-                  "id":"parent-entry","route":"parents","mutationMode":"mutable",
+                  "id":"parent-entry","primaryDataset":"test-dataset","route":"parents","mutationMode":"mutable",
                   "fields":[{"id":"name","type":"string","minLength":1,"maxLength":8,"required":true,"classification":"internal"}]
                 },
                 {
-                  "id":"typed-entry","route":"typed","mutationMode":"mutable",
+                  "id":"typed-entry","primaryDataset":"test-dataset","route":"typed","mutationMode":"mutable",
                   "fields":[
                     {"id":"enabled","type":"boolean","required":true,"classification":"internal"},
                     {"id":"count","type":"int64","required":true,"classification":"internal"},
@@ -2932,12 +2932,14 @@ mod tests {
                 id: "context-test".to_owned(),
                 version: "0.1.0".to_owned(),
                 default_language: "en".to_owned(),
+                canonical_base_iri: "https://context.example.test".to_owned(),
             },
             package: None,
             manifest_projection: None,
             modules: Vec::new(),
             entities: vec![EntitySource {
                 id: "entry".to_owned(),
+                primary_dataset: "context-test".to_owned(),
                 route: "entries".to_owned(),
                 mutation_mode: MutationMode::Mutable,
                 tombstone: false,
@@ -3068,9 +3070,9 @@ mod tests {
             br#"{
               "apiVersion":"registry.registrystack.org/v1alpha1",
               "kind":"RegistryProject",
-              "registry":{"id":"action-context","version":"1","defaultLanguage":"en"},
+              "registry":{"id":"action-context","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
               "entities":[{
-                "id":"household","route":"households","mutationMode":"mutable",
+                "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
                 "fields":[
                   {"id":"household-code","apiName":"householdCode","type":"string","maxLength":64,"required":true,"classification":"restricted"},
                   {"id":"jurisdiction","apiName":"jurisdiction","type":"string","maxLength":64,"required":true,"classification":"restricted"},
@@ -3115,17 +3117,17 @@ mod tests {
             br#"{
               "apiVersion":"registry.registrystack.org/v1alpha1",
               "kind":"RegistryProject",
-              "registry":{"id":"change-request-context","version":"1","defaultLanguage":"en"},
+              "registry":{"id":"change-request-context","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
               "entities":[
                 {
-                  "id":"asset-site","route":"sites","mutationMode":"mutable",
+                  "id":"asset-site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable",
                   "fields":[
                     {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
                     {"id":"name","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}
                   ]
                 },
                 {
-                  "id":"asset-placement","route":"placements","mutationMode":"mutable",
+                  "id":"asset-placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable",
                   "changeControl":{"requiredFor":["patch"]},
                   "fields":[
                     {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
@@ -3133,7 +3135,7 @@ mod tests {
                   ]
                 },
                 {
-                  "id":"placement-correction-request","route":"placement-correction-requests","mutationMode":"mutable",
+                  "id":"placement-correction-request","primaryDataset":"test-dataset","route":"placement-correction-requests","mutationMode":"mutable",
                   "fields":[
                     {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
                     {"id":"placement","type":"reference","target":"asset-placement","required":true,"classification":"internal"},

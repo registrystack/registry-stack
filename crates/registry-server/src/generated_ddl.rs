@@ -3411,9 +3411,9 @@ mod tests {
             br#"{
               "apiVersion":"registry.registrystack.org/v1alpha1",
               "kind":"RegistryProject",
-              "registry":{"id":"spatial-ddl","version":"1","defaultLanguage":"en"},
+              "registry":{"id":"spatial-ddl","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://spatial-ddl.example.test"},
               "entities":[{
-                "id":"site","route":"sites","mutationMode":"mutable","classification":"internal",
+                "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"internal",
                 "fields":[
                   {"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"},
                   {"id":"location","type":"crs84-point","precision":6,"required":true,"classification":"internal"}

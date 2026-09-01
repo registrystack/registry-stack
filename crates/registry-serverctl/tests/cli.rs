@@ -29,6 +29,269 @@ static TEMPORARY_COUNTER: AtomicU64 = AtomicU64::new(0);
 #[path = "cli/reviewed_migrations.rs"]
 mod reviewed_migration_tests;
 
+fn legacy_project(dataset_id: Option<&str>) -> Vec<u8> {
+    let dataset_id = dataset_id
+        .map(|id| format!("    id: {id}\n"))
+        .unwrap_or_default();
+    format!(
+        r#"apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: legacy-registry
+  # This comment and the author's scalar style are not migration inputs.
+  version: "1"
+  defaultLanguage: en
+manifestProjection:
+  # Projection defaults remain in their original order.
+  accessProfile: reader
+  classificationCeiling: internal
+  catalog:
+    baseUrl: https://registry.example.test/legacy
+    title: "Legacy Registry"
+    publisher:
+      name: 'Legacy Authority'
+  dataset:
+{dataset_id}    title: Legacy Dataset
+  dataService:
+    id: registry-api
+    title: Registry API
+    endpointUrl: https://registry.example.test/v1
+entities:
+  - id: record
+    route: records
+    mutationMode: mutable
+    fields:
+      - id: label
+        type: string
+        maxLength: 100
+        classification: internal
+accessProfiles:
+  - id: reader
+    default: true
+    principalClaim: sub
+    requiredScopes: [registry.read]
+    grants:
+      - entity: record
+        operations: [get, list]
+        readableFields: [label]
+"#,
+    )
+    .into_bytes()
+}
+
+fn legacy_module() -> &'static [u8] {
+    br#"id: core
+# Module comments and authored scalar style must survive migration.
+version: "1"
+entities:
+  - id: module-record
+    # Unrelated entity key ordering is not a migration input.
+    route: module-records
+    mutationMode: create_only
+    fields:
+      - id: label
+        type: string
+        maxLength: 50
+        classification: internal
+    accessProfiles:
+      - id: reader
+        principalClaim: sub
+        operations: [get, list]
+        readableFields: [label]
+"#
+}
+
+#[test]
+fn project_migrate_is_dry_run_by_default_writes_explicitly_and_is_idempotent() {
+    for (legacy_id, expected_id) in [
+        (Some("kept-dataset"), "kept-dataset"),
+        (None, "legacy-registry"),
+    ] {
+        let project = TestProject::from_registry_source(&legacy_project(legacy_id));
+        let registry_path = project.path().join("registry.yaml");
+        let before = fs::read(&registry_path).unwrap();
+
+        let dry_run = registry_serverctl(&[
+            "--format",
+            "json",
+            "project",
+            "migrate",
+            project.path().to_str().unwrap(),
+        ]);
+        assert!(dry_run.status.success(), "{dry_run:?}");
+        let report = json_stdout(&dry_run);
+        assert_eq!(report["changed"], true);
+        assert_eq!(report["written"], false);
+        assert_eq!(report["datasetId"], expected_id);
+        assert_eq!(report["proposedAuthorityId"], "legacy-registry-authority");
+        assert_eq!(report["proposedPublicServiceId"], "legacy-registry-service");
+        let diff = report["diff"].as_str().unwrap();
+        assert!(diff.contains("datasets:"));
+        assert!(diff.contains("@@ -"));
+        for unchanged in [
+            "  version: \"1\"",
+            "  # Projection defaults remain in their original order.",
+            "      name: 'Legacy Authority'",
+        ] {
+            assert!(!diff.contains(&format!("-{unchanged}")), "{diff}");
+            assert!(!diff.contains(&format!("+{unchanged}")), "{diff}");
+        }
+        assert_eq!(fs::read(&registry_path).unwrap(), before);
+
+        let write = registry_serverctl(&[
+            "--format",
+            "json",
+            "project",
+            "migrate",
+            project.path().to_str().unwrap(),
+            "--write",
+        ]);
+        assert!(write.status.success(), "{write:?}");
+        let migrated = parse_project_yaml(&fs::read(&registry_path).unwrap()).unwrap();
+        assert_eq!(
+            migrated.registry.canonical_base_iri,
+            "https://registry.example.test/legacy"
+        );
+        let projection = migrated.manifest_projection.unwrap();
+        assert_eq!(projection.datasets[0].id, expected_id);
+        assert_eq!(projection.data_services[0].serves_datasets, [expected_id]);
+        assert_eq!(migrated.entities[0].primary_dataset, expected_id);
+        let migrated_source = fs::read_to_string(&registry_path).unwrap();
+        for preserved in [
+            "  # This comment and the author's scalar style are not migration inputs.\n  version: \"1\"\n  defaultLanguage: en",
+            "  # Projection defaults remain in their original order.\n  accessProfile: reader\n  classificationCeiling: internal",
+            "      name: 'Legacy Authority'",
+        ] {
+            assert!(migrated_source.contains(preserved), "{migrated_source}");
+        }
+
+        let repeated = registry_serverctl(&[
+            "--format",
+            "json",
+            "project",
+            "migrate",
+            project.path().to_str().unwrap(),
+        ]);
+        assert!(repeated.status.success(), "{repeated:?}");
+        assert_eq!(json_stdout(&repeated)["changed"], false);
+    }
+}
+
+#[test]
+fn project_migrate_refuses_yaml_that_cannot_be_patched_without_reformatting() {
+    let project = TestProject::from_registry_source(
+        br#"apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry: {id: legacy-registry, version: "1", defaultLanguage: en}
+manifestProjection:
+  accessProfile: reader
+  classificationCeiling: internal
+  catalog:
+    baseUrl: https://registry.example.test/legacy
+    title: Legacy Registry
+    publisher: {name: Legacy Authority}
+  dataset: {title: Legacy Dataset}
+"#,
+    );
+    let output = registry_serverctl(&[
+        "--format",
+        "json",
+        "project",
+        "migrate",
+        project.path().to_str().unwrap(),
+    ]);
+    assert!(!output.status.success());
+    assert_eq!(
+        json_stdout(&output)["diagnostics"][0]["code"],
+        "project.migrate.source_unsafe"
+    );
+}
+
+#[test]
+fn project_migrate_preserves_module_source_and_refreshes_only_its_lock_digest() {
+    let mut source = legacy_project(None);
+    source.extend_from_slice(
+        br#"modules:
+  - id: core
+    version: "1"
+    # Only this digest is expected to change when membership is added.
+    digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+"#,
+    );
+    let project = TestProject::from_registry_source(&source);
+    let module_directory = project.path().join("modules/core");
+    fs::create_dir_all(&module_directory).expect("module directory creates");
+    fs::write(module_directory.join("module.yaml"), legacy_module()).expect("legacy module writes");
+    let registry_before = fs::read(project.path().join("registry.yaml")).unwrap();
+    let module_before = fs::read(module_directory.join("module.yaml")).unwrap();
+
+    let dry_run = registry_serverctl(&[
+        "--format",
+        "json",
+        "project",
+        "migrate",
+        project.path().to_str().unwrap(),
+    ]);
+    assert!(dry_run.status.success(), "{dry_run:?}");
+    let diff = json_stdout(&dry_run)["diff"].as_str().unwrap().to_owned();
+    assert!(diff.contains("--- a/modules/core/module.yaml"), "{diff}");
+    assert!(
+        diff.contains("+    primaryDataset: \"legacy-registry\""),
+        "{diff}"
+    );
+    for unchanged in [
+        "# Module comments and authored scalar style must survive migration.",
+        "version: \"1\"",
+        "    # Unrelated entity key ordering is not a migration input.",
+        "    route: module-records",
+    ] {
+        assert!(!diff.contains(&format!("-{unchanged}")), "{diff}");
+        assert!(!diff.contains(&format!("+{unchanged}")), "{diff}");
+    }
+    assert_eq!(
+        fs::read(project.path().join("registry.yaml")).unwrap(),
+        registry_before
+    );
+    assert_eq!(
+        fs::read(module_directory.join("module.yaml")).unwrap(),
+        module_before
+    );
+
+    let write = registry_serverctl(&[
+        "--format",
+        "json",
+        "project",
+        "migrate",
+        project.path().to_str().unwrap(),
+        "--write",
+    ]);
+    assert!(write.status.success(), "{write:?}");
+    let expected_module = String::from_utf8(module_before).unwrap().replace(
+        "  - id: module-record\n",
+        "  - id: module-record\n    primaryDataset: \"legacy-registry\"\n",
+    );
+    assert_eq!(
+        fs::read_to_string(module_directory.join("module.yaml")).unwrap(),
+        expected_module
+    );
+    let registry_after = fs::read_to_string(project.path().join("registry.yaml")).unwrap();
+    assert!(
+        registry_after.contains("    version: \"1\""),
+        "{registry_after}"
+    );
+    assert!(registry_after.contains("    # Only this digest is expected to change"));
+    assert!(!registry_after
+        .contains("sha256:1111111111111111111111111111111111111111111111111111111111111111"));
+
+    let check = registry_serverctl(&[
+        "--format",
+        "json",
+        "check",
+        project.path().to_str().unwrap(),
+    ]);
+    assert!(check.status.success(), "{check:?}");
+}
+
 #[test]
 fn access_review_example_explains_simulates_and_refuses_footguns_without_live_data() {
     let project = TestProject::from_registry_source(include_bytes!(
@@ -295,8 +558,10 @@ registry:
   id: cli-authoring-fixture
   version: 1
   defaultLanguage: en
+  canonicalBaseIri: https://cli-authoring-fixture.example.test
 entities:
   - id: record
+    primaryDataset: test-dataset
     route: records
     mutationMode: create_only
     fields:
@@ -314,20 +579,24 @@ registry:
   id: action-fixture
   version: 1
   defaultLanguage: en
+  canonicalBaseIri: https://action-fixture.example.test
 entities:
   - id: household
+    primaryDataset: test-dataset
     route: households
     mutationMode: mutable
     fields:
       - {id: household-code, apiName: householdCode, type: string, required: true, maxLength: 64, classification: internal}
       - {id: contact-person, apiName: contactPerson, type: reference, target: person, required: false, classification: restricted}
   - id: person
+    primaryDataset: test-dataset
     route: people
     mutationMode: mutable
     fields:
       - {id: person-code, apiName: personCode, type: string, required: true, maxLength: 64, classification: restricted}
       - {id: legal-name, apiName: legalName, type: string, required: true, maxLength: 160, classification: restricted}
   - id: group-membership
+    primaryDataset: test-dataset
     route: group-memberships
     mutationMode: create_only
     fields:
@@ -938,6 +1207,7 @@ registry:
   id: modular-lock-missing
   version: 1
   defaultLanguage: en
+  canonicalBaseIri: https://modular-lock-missing.example.test
 modules:
   - id: {MODULE_CANARY}
     version: 1
@@ -1573,8 +1843,10 @@ registry:
   id: typed-query-examples
   version: 1
   defaultLanguage: en
+  canonicalBaseIri: https://typed-query-examples.example.test
 entities:
   - id: typed-record
+    primaryDataset: test-dataset
     route: typed-records
     mutationMode: create_only
     fields:
@@ -1653,9 +1925,10 @@ fn explain_spatial_queries_maps_the_exact_profile_and_api_geometry() {
     let project = TestProject::from_registry_source(
         br#"apiVersion: registry.registrystack.org/v1alpha1
 kind: RegistryProject
-registry: {id: map-explanation, version: 1, defaultLanguage: en}
+registry: {id: map-explanation, version: 1, defaultLanguage: en, canonicalBaseIri: https://map-explanation.example.test}
 entities:
   - id: service-site
+    primaryDataset: test-dataset
     route: service-sites
     mutationMode: create_only
     geojson: {geometryField: location}
@@ -1721,6 +1994,7 @@ registry:
   id: derived-diagnostic-fixture
   version: 1
   defaultLanguage: en
+  canonicalBaseIri: https://derived-diagnostic-fixture.example.test
 modules:
   - id: core
     version: 1
@@ -1734,6 +2008,7 @@ modules:
 version: 1
 entities:
   - id: record
+    primaryDataset: test-dataset
     route: records
     mutationMode: create_only
     fields:
@@ -1801,8 +2076,10 @@ registry:
   id: event-explain-outbox
   version: 1
   defaultLanguage: en
+  canonicalBaseIri: https://event-explain-outbox.example.test
 entities:
   - id: case
+    primaryDataset: test-dataset
     route: cases
     mutationMode: mutable
     fields:
@@ -1833,8 +2110,10 @@ registry:
   id: event-explain-webhook
   version: 1
   defaultLanguage: en
+  canonicalBaseIri: https://event-explain-webhook.example.test
 entities:
   - id: case
+    primaryDataset: test-dataset
     route: cases
     mutationMode: mutable
     fields:
@@ -3664,7 +3943,7 @@ fn generation_refuses_a_broken_symlink_destination_without_publishing_output() {
 
 fn package_project_bytes(module_digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"verify-registry","version":"1","defaultLanguage":"en"}},"package":{{"environment":"production","instanceId":"{PACKAGE_INSTANCE}","sequence":1,"sourceRevision":"{PACKAGE_SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"restricted","catalog":{{"baseUrl":"https://package.example.test","title":"Verify Registry Catalog","publisher":{{"name":"Verify Publisher"}}}},"dataset":{{"title":"Verify Registry Dataset","owner":"Verify Publisher","status":"active"}}}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
+        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"verify-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"environment":"production","instanceId":"{PACKAGE_INSTANCE}","sequence":1,"sourceRevision":"{PACKAGE_SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"restricted","catalog":{{"baseUrl":"https://package.example.test","title":"Verify Registry Catalog","publisher":{{"id":"verify-registry-authority","name":"Verify Publisher"}}}},"publicService":{{"id":"verify-registry-service","title":"Verify Registry Catalog"}},"datasets":[{{"id":"verify-registry","title":"Verify Registry Dataset","owner":"Verify Publisher","status":"active"}}],"dataServices":[{{"id":"verify-registry-data-service","title":"Verify Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["verify-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
     )
     .into_bytes()
 }
@@ -3676,6 +3955,7 @@ registry:
   id: modular-lock-fixture
   version: 1
   defaultLanguage: en
+  canonicalBaseIri: https://modular-lock-fixture.example.test
 "#
 }
 
@@ -3684,6 +3964,7 @@ fn modular_project_module() -> &'static [u8] {
 version: 1
 entities:
   - id: record
+    primaryDataset: test-dataset
     route: records
     mutationMode: create_only
     fields:
@@ -3700,17 +3981,17 @@ entities:
 }
 
 fn package_module_bytes() -> Vec<u8> {
-    br#"{"id":"core","version":"1","entities":[{"id":"record","route":"records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":16,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}]}]}"#
+    br#"{"id":"core","version":"1","entities":[{"id":"record","primaryDataset":"verify-registry","route":"records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":16,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}]}]}"#
         .to_vec()
 }
 
 fn data_package_fixture() -> (TestProject, PathBuf) {
-    let module_bytes = br#"{"id":"core","version":"1","entities":[{"id":"record","route":"records","mutationMode":"create_only","batch":{"maximumItems":2,"maximumBytes":400},"fields":[{"id":"code","type":"string","minLength":2,"maxLength":16,"required":true,"classification":"internal"}],"accessProfiles":[{"id":"operator","principalClaim":"principal","operations":["create","batch","list"],"readableFields":["code"],"writableFields":["code"],"allowDataExport":true}]}]}"#.to_vec();
+    let module_bytes = br#"{"id":"core","version":"1","entities":[{"id":"record","primaryDataset":"data-registry","route":"records","mutationMode":"create_only","batch":{"maximumItems":2,"maximumBytes":400},"fields":[{"id":"code","type":"string","minLength":2,"maxLength":16,"required":true,"classification":"internal"}],"accessProfiles":[{"id":"operator","principalClaim":"principal","operations":["create","batch","list"],"readableFields":["code"],"writableFields":["code"],"allowDataExport":true}]}]}"#.to_vec();
     let module = parse_module_json(&module_bytes).expect("data module parses");
     let module_digest = module_digest(&module);
     let project = TestProject::from_registry_source(
         format!(
-            r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"data-registry","version":"1","defaultLanguage":"en"}},"package":{{"environment":"local","instanceId":"data-instance","sequence":1,"sourceRevision":"data-source"}},"manifestProjection":{{"accessProfile":"operator","classificationCeiling":"restricted","catalog":{{"baseUrl":"https://data.example.test","title":"Data Registry Catalog","publisher":{{"name":"Data Publisher"}}}},"dataset":{{"title":"Data Registry Dataset","owner":"Data Publisher","status":"active"}}}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
+            r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"data-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://data.example.test"}},"package":{{"environment":"local","instanceId":"data-instance","sequence":1,"sourceRevision":"data-source"}},"manifestProjection":{{"accessProfile":"operator","classificationCeiling":"restricted","catalog":{{"baseUrl":"https://data.example.test","title":"Data Registry Catalog","publisher":{{"id":"data-registry-authority","name":"Data Publisher"}}}},"publicService":{{"id":"data-registry-service","title":"Data Registry Catalog"}},"datasets":[{{"id":"data-registry","title":"Data Registry Dataset","owner":"Data Publisher","status":"active"}}],"dataServices":[{{"id":"data-registry-data-service","title":"Data Registry Catalog","endpointUrl":"https://data.example.test","servesDatasets":["data-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
         )
         .as_bytes(),
     );

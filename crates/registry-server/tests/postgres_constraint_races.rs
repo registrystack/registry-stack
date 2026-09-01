@@ -470,26 +470,26 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"constraint-race-registry","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"constraint-race-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"parent","route":"parents","mutationMode":"create_only","classification":"public",
+            "id":"parent","primaryDataset":"test-dataset","route":"parents","mutationMode":"create_only","classification":"public",
             "fields":[{"id":"name","type":"string","maxLength":64,"required":true,"classification":"public"}]
           },{
-            "id":"child","route":"children","mutationMode":"create_only","classification":"public",
+            "id":"child","primaryDataset":"test-dataset","route":"children","mutationMode":"create_only","classification":"public",
             "fields":[
               {"id":"parent","type":"reference","target":"parent","onDelete":"restrict","required":true,"classification":"public"},
               {"id":"alternate-parent","type":"reference","target":"parent","onDelete":"restrict","classification":"public"},
               {"id":"name","type":"string","maxLength":64,"required":true,"classification":"public"}
             ]
           },{
-            "id":"unique-entry","route":"unique-entries","mutationMode":"create_only","classification":"public",
+            "id":"unique-entry","primaryDataset":"test-dataset","route":"unique-entries","mutationMode":"create_only","classification":"public",
             "fields":[
               {"id":"scope","type":"string","maxLength":64,"required":true,"classification":"public"},
               {"id":"code","type":"string","maxLength":64,"required":true,"classification":"public"}
             ],
             "constraints":[{"kind":"unique","fields":["scope","code"]}]
           },{
-            "id":"period","route":"periods","mutationMode":"create_only","classification":"public",
+            "id":"period","primaryDataset":"test-dataset","route":"periods","mutationMode":"create_only","classification":"public",
             "fields":[
               {"id":"scope","type":"string","maxLength":64,"required":true,"classification":"public"},
               {"id":"valid-from","type":"timestamp","required":true,"classification":"public"},
@@ -552,6 +552,7 @@ fn create_request<'a>(
             .iter()
             .map(|field| (*field).to_owned())
             .collect::<BTreeSet<_>>(),
+        representation: registry_server::record_profile::RecordRepresentation::Json,
         correlation: registry_server::correlation::RequestCorrelation::server_created(),
     }
 }
@@ -567,7 +568,7 @@ fn temporal_data(start: &str, end: &str) -> Map<String, Value> {
 fn response_id(outcome: &registry_server::mutation::MutationOutcome) -> String {
     let body: Value = serde_json::from_slice(outcome.response().body())
         .expect("mutation response is canonical JSON");
-    body["id"]
+    body["data"]["recordIdentifier"]
         .as_str()
         .expect("create response contains its record id")
         .to_owned()

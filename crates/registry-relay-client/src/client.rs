@@ -602,8 +602,12 @@ fn decode_record_conditional(
     format: RecordFormat,
 ) -> Result<Conditional<RecordResponse>, RelayClientError> {
     match format {
-        RecordFormat::Json | RecordFormat::JsonLd => {
-            decode_json_conditional::<RecordEnvelope>(wire, format.media_type())
+        RecordFormat::Json => {
+            decode_registry_record_conditional(wire, RecordEnvelope::matches_json_representation)
+                .map(|value| map_conditional(value, RecordResponse::Json))
+        }
+        RecordFormat::JsonLd => {
+            decode_registry_record_conditional(wire, RecordEnvelope::matches_json_ld_representation)
                 .map(|value| map_conditional(value, RecordResponse::Json))
         }
         RecordFormat::GeoJsonRfc7946 | RecordFormat::JsonFg => {
@@ -618,14 +622,56 @@ fn decode_collection_conditional(
     format: RecordFormat,
 ) -> Result<Conditional<RecordCollectionResponse>, RelayClientError> {
     match format {
-        RecordFormat::Json | RecordFormat::JsonLd => {
-            decode_json_conditional::<RecordCollection>(wire, format.media_type())
-                .map(|value| map_conditional(value, RecordCollectionResponse::Json))
-        }
+        RecordFormat::Json => decode_registry_record_collection_conditional(
+            wire,
+            RecordCollection::matches_json_representation,
+        )
+        .map(|value| map_conditional(value, RecordCollectionResponse::Json)),
+        RecordFormat::JsonLd => decode_registry_record_collection_conditional(
+            wire,
+            RecordCollection::matches_json_ld_representation,
+        )
+        .map(|value| map_conditional(value, RecordCollectionResponse::Json)),
         RecordFormat::GeoJsonRfc7946 | RecordFormat::JsonFg => {
             decode_json_conditional::<GeoJsonFeatureCollection>(wire, APPLICATION_GEO_JSON)
                 .map(|value| map_conditional(value, RecordCollectionResponse::GeoJson))
         }
+    }
+}
+
+fn decode_registry_record_conditional(
+    wire: WireOutcome,
+    validates_representation: impl FnOnce(&RecordEnvelope) -> bool,
+) -> Result<Conditional<RecordEnvelope>, RelayClientError> {
+    validate_record_representation(
+        decode_json_conditional::<RecordEnvelope>(wire, APPLICATION_JSON)?,
+        validates_representation,
+    )
+}
+
+fn decode_registry_record_collection_conditional(
+    wire: WireOutcome,
+    validates_representation: impl FnOnce(&RecordCollection) -> bool,
+) -> Result<Conditional<RecordCollection>, RelayClientError> {
+    validate_record_representation(
+        decode_json_conditional::<RecordCollection>(wire, APPLICATION_JSON)?,
+        validates_representation,
+    )
+}
+
+fn validate_record_representation<T>(
+    value: Conditional<T>,
+    validates_representation: impl FnOnce(&T) -> bool,
+) -> Result<Conditional<T>, RelayClientError> {
+    match value {
+        Conditional::Complete(complete) if !validates_representation(&complete.value) => {
+            Err(RelayClientError::protocol(
+                200,
+                ProtocolFailure::Body,
+                Some(complete.metadata.trace_id().clone()),
+            ))
+        }
+        value => Ok(value),
     }
 }
 

@@ -991,6 +991,7 @@ async fn create_event(
                     "label".to_owned(),
                     "restricted_note".to_owned(),
                 ]),
+                representation: registry_server::record_profile::RecordRepresentation::Json,
                 correlation: registry_server::correlation::RequestCorrelation::server_created(),
             },
         )
@@ -1370,9 +1371,9 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"webhook-delivery-registry","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"webhook-delivery-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"case","route":"cases","mutationMode":"create_only","classification":"restricted",
+            "id":"case","primaryDataset":"test-dataset","route":"cases","mutationMode":"create_only","classification":"restricted",
             "fields":[
               {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"},
               {"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"},

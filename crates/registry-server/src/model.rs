@@ -7,9 +7,12 @@ use serde::{Deserialize, Serialize};
 use crate::artifacts::GeneratedArtifacts;
 use crate::contract::{
     AccessProfileSource, BatchSource, Classification, ConstraintSource, EventConditionSource,
-    EventSource, FieldTypeSource, ManifestProjectionSource, MutationMode, Operation,
-    PackageIdentitySource, ProvenanceFieldSource, RowBoundarySource, TemporalSource, ValidTimeRole,
-    WebhookAuthenticationProfile, WebhookDeadLetterMode,
+    EventSource, FieldTypeSource, ManifestProjectionCatalogSource,
+    ManifestProjectionDataServiceSource, ManifestProjectionDatasetSource,
+    ManifestProjectionDistributionSource, ManifestProjectionEntitySource,
+    ManifestProjectionPublicServiceSource, ManifestProjectionVocabularySource, MutationMode,
+    Operation, PackageIdentitySource, ProvenanceFieldSource, RowBoundarySource, TemporalSource,
+    ValidTimeRole, WebhookAuthenticationProfile, WebhookDeadLetterMode,
 };
 use crate::diagnostics::Diagnostic;
 use crate::generated_ddl::DdlInventory;
@@ -407,6 +410,8 @@ pub enum CompiledActionTargetUseSource {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledEntity {
     pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub primary_dataset: Option<String>,
     pub route: String,
     pub mutation_mode: MutationMode,
     pub tombstone: bool,
@@ -436,6 +441,72 @@ pub struct CompiledEntity {
     pub indexes: BTreeMap<String, Vec<String>>,
     pub access_profiles: BTreeMap<String, AccessProfileSource>,
     pub events: BTreeMap<String, EventSource>,
+}
+
+/// Governed catalogue projection with every resource reference resolved once.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledManifestProjection {
+    pub canonical_base_iri: String,
+    pub access_profile: String,
+    pub classification_ceiling: Classification,
+    pub catalog: ManifestProjectionCatalogSource,
+    pub primary_authority: CompiledManifestAuthority,
+    pub public_service: CompiledManifestPublicService,
+    pub datasets: BTreeMap<String, CompiledManifestDataset>,
+    pub data_services: BTreeMap<String, CompiledManifestDataService>,
+    pub distributions: BTreeMap<String, CompiledManifestDistribution>,
+    pub entity_datasets: BTreeMap<String, String>,
+    pub entities: Vec<ManifestProjectionEntitySource>,
+    pub vocabularies: Vec<ManifestProjectionVocabularySource>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledManifestAuthority {
+    pub id: String,
+    pub iri: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authority_type: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledManifestPublicService {
+    pub source: ManifestProjectionPublicServiceSource,
+    pub iri: String,
+    pub competent_authority: String,
+    pub produces: BTreeSet<String>,
+    pub data_services: BTreeSet<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledManifestDataset {
+    pub source: ManifestProjectionDatasetSource,
+    pub iri: String,
+    pub effective_access_profile: String,
+    pub effective_classification_ceiling: Classification,
+    pub entities: BTreeSet<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledManifestDataService {
+    pub source: ManifestProjectionDataServiceSource,
+    pub iri: String,
+    pub serves_datasets: BTreeSet<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledManifestDistribution {
+    pub source: ManifestProjectionDistributionSource,
+    pub iri: String,
+    pub dataset: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access_service: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -836,7 +907,7 @@ pub struct CompiledRegistry {
     version: String,
     default_language: String,
     package: Option<PackageIdentitySource>,
-    manifest_projection: Option<ManifestProjectionSource>,
+    manifest_projection: Option<CompiledManifestProjection>,
     module_order: Vec<String>,
     module_closure: Vec<CompiledModuleIdentity>,
     entities: BTreeMap<String, CompiledEntity>,
@@ -860,7 +931,7 @@ impl CompiledRegistry {
         version: String,
         default_language: String,
         package: Option<PackageIdentitySource>,
-        manifest_projection: Option<ManifestProjectionSource>,
+        manifest_projection: Option<CompiledManifestProjection>,
         module_order: Vec<String>,
         module_closure: Vec<CompiledModuleIdentity>,
         entities: BTreeMap<String, CompiledEntity>,
@@ -911,7 +982,7 @@ impl CompiledRegistry {
         self.package.as_ref()
     }
 
-    pub fn manifest_projection(&self) -> Option<&ManifestProjectionSource> {
+    pub fn manifest_projection(&self) -> Option<&CompiledManifestProjection> {
         self.manifest_projection.as_ref()
     }
 

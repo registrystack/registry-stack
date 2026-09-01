@@ -95,11 +95,19 @@ The source schema and public schema are deliberately separate. One table may sup
 
 The compiler rejects incomplete or inconsistent contracts before serving. It also detects drift in live databases and never silently widens the public contract.
 
-### Native Registry Core record context
+### Native Registry Record context
 
-Every returned Record carries a non-selectable core context:
+Every resource declares governed `datasetIdentifier` and
+`entityTypeIdentifier` values beside its `id`. Every successful JSON or
+JSON-LD response carries this non-selectable homogeneous context once in
+response `meta`:
 
 - `registryIdentifier`;
+- `datasetIdentifier`;
+- `entityTypeIdentifier`.
+
+Every returned Record carries:
+
 - `recordIdentifier`;
 - `revisionIdentifier`;
 - `lifecycleState`;
@@ -112,7 +120,9 @@ Every returned Record carries a non-selectable core context:
 The pair `(registryIdentifier, recordIdentifier)` identifies a Record. The
 record identifier is stable and cannot be reassigned. JSON-LD adds a derived
 global `@id` and the resource semantic class as `@type`, but neither replaces
-or changes the authoritative record identifier.
+or changes the authoritative record identifier. Records do not duplicate the
+three response-level context identifiers. GeoJSON remains under its separate
+media profile and shape.
 
 Record identifier, record revision, lifecycle state, and recorded time are
 explicitly bound from the reviewed source view. Registry identity, authority,
@@ -404,26 +414,31 @@ Lists use `pageSize`, `cursor`, and the envelope
 `{items, pageInfo: {nextCursor}, meta}`. `nextCursor` is nullable. Ordering is
 contract-defined with the Record identifier as a unique tie-breaker. The
 client-opaque authenticated-encrypted cursor binds the contract and source
-revisions, operation, selected access profile and disclosure profile, filters,
-order, selected fields, authorization context, and expiry. Every page is
+revisions, dataset, entity type, response profile, representation, operation,
+selected access profile and disclosure profile, filters, order, selected
+fields, authorization context, and expiry. Every page is
 reauthorized. Encryption prevents its filter and keyset-order state from
 bypassing field minimization. Callers treat it as an uninterpreted continuation
 token and cannot choose an order or replay a cursor across access profiles.
 
 Single-record reads and resolved lookups use `{data, meta}`. `data` contains
-the Registry Core context and `domainData`. `fields` is a documented Relay
+the Record core fields and `domainData`; `meta` contains the homogeneous
+Registry, dataset, and entity-type context. `fields` is a documented Relay
 extension: a non-empty, duplicate-free comma-separated list of public property
 keys. A property key is the contract's URL-safe camelCase name, not a source
 column or semantic IRI. Exactly one `fields` parameter is accepted; empty
 members, whitespace, repeats, and duplicate keys are invalid. It only narrows
-the selected access profile's `domainData`; Registry Core context cannot be
+the selected access profile's `domainData`; Registry Record context cannot be
 removed, and response ordering remains contract-defined rather than
 request-defined. A field outside the selected access profile is rejected
 before source access.
 
-Ordinary JSON is the default. `application/ld+json` adds the generated context
-and a derived global `@id` while preserving all Registry Core identifiers and
-the same selected domain values. Responses vary on `Accept`; unsupported wire
+Ordinary JSON is the default. `application/ld+json` adds the shared Registry
+Record context followed by the generated operation context, plus a derived
+global `@id`, while preserving all Registry Record identifiers and
+the same selected domain values. The operation context defines only Relay-owned
+extensions and selected domain terms; it never redefines a shared Registry
+Record term. Responses vary on `Accept`; unsupported wire
 formats receive `406 format.unsupported`. Where caching is allowed, the strong ETag hashes
 the exact response bytes, including the selected access profile, wire format, and field
 subset, and supports `If-None-Match` with `304`. Only a public access profile

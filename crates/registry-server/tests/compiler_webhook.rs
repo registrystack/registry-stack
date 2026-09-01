@@ -14,9 +14,11 @@ fn project_value() -> Value {
     json!({
         "apiVersion": "registry.registrystack.org/v1alpha1",
         "kind": "RegistryProject",
-        "registry": {"id": "webhook-contract", "version": "1", "defaultLanguage": "en"},
+        "registry": {"id": "webhook-contract", "version": "1", "defaultLanguage": "en",
+                     "canonicalBaseIri": "https://webhook-contract.example.test"},
         "entities": [{
             "id": "case",
+            "primaryDataset": "test-dataset",
             "route": "cases",
             "mutationMode": "mutable",
             "tombstone": true,
@@ -71,9 +73,10 @@ fn change_request_event_project() -> Value {
     json!({
         "apiVersion":"registry.registrystack.org/v1alpha1",
         "kind":"RegistryProject",
-        "registry":{"id":"request-events","version":"1","defaultLanguage":"en"},
+        "registry":{"id":"request-events","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://request-events.example.test"},
         "entities":[{
             "id":"asset-site",
+            "primaryDataset":"test-dataset",
             "route":"asset-sites",
             "mutationMode":"create_only",
             "classification":"internal",
@@ -82,6 +85,7 @@ fn change_request_event_project() -> Value {
             ]
         },{
             "id":"asset-placement",
+            "primaryDataset":"test-dataset",
             "route":"asset-placements",
             "mutationMode":"mutable",
             "classification":"internal",
@@ -91,6 +95,7 @@ fn change_request_event_project() -> Value {
             ]
         },{
             "id":"placement-correction-request",
+            "primaryDataset":"test-dataset",
             "route":"placement-correction-requests",
             "mutationMode":"mutable",
             "classification":"internal",
@@ -674,6 +679,7 @@ fn event_ids_are_unique_across_entities_for_unambiguous_external_types() {
         .expect("entities array")
         .push(json!({
             "id": "appeal",
+            "primaryDataset": "test-dataset",
             "route": "appeals",
             "mutationMode": "create_only",
             "fields": [

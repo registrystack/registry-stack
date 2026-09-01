@@ -294,6 +294,23 @@ mod tests {
         extension["extendEntities"][0]["events"][0]["webhook"]["url"] =
             Value::String("https://example.com/events".into());
         assert!(!schema.is_valid(&extension));
+
+        let mut module_with_entity = serde_json::json!({
+            "id": "records", "version": "1",
+            "entities": [{
+                "id": "record", "primaryDataset": "records",
+                "route": "records", "mutationMode": "create_only"
+            }]
+        });
+        assert!(schema.is_valid(&module_with_entity));
+        module_with_entity["entities"][0]
+            .as_object_mut()
+            .expect("entity is an object")
+            .remove("primaryDataset");
+        assert!(
+            !schema.is_valid(&module_with_entity),
+            "module entities structurally require primaryDataset"
+        );
     }
 
     #[test]
@@ -354,6 +371,40 @@ mod tests {
         instance["unexpected"] = Value::Bool(true);
 
         assert!(!schema.is_valid(&instance));
+    }
+
+    #[test]
+    fn project_schema_structurally_requires_canonical_iri_and_entity_dataset() {
+        let document = schema_document();
+        let value: Value = serde_json::from_str(&document).expect("the schema is JSON");
+        for (definition, field) in [
+            ("RegistryIdentitySource", "canonicalBaseIri"),
+            ("EntitySource", "primaryDataset"),
+        ] {
+            let required = value["$defs"][definition]["required"]
+                .as_array()
+                .expect("definition has required members");
+            assert!(required.iter().any(|member| member == field));
+            assert_eq!(
+                value["$defs"][definition]["properties"][field]["type"],
+                "string"
+            );
+        }
+
+        let schema = compile(&document);
+        let mut missing_iri = fixture("asset-site-placement");
+        missing_iri["registry"]
+            .as_object_mut()
+            .expect("registry is an object")
+            .remove("canonicalBaseIri");
+        assert!(!schema.is_valid(&missing_iri));
+
+        let mut missing_dataset = fixture("asset-site-placement");
+        missing_dataset["entities"][0]
+            .as_object_mut()
+            .expect("entity is an object")
+            .remove("primaryDataset");
+        assert!(!schema.is_valid(&missing_dataset));
     }
 
     #[test]

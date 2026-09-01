@@ -29,3 +29,10 @@ server bytes. The business pilot fixture also exercises configured selector,
 derived-field, and relationship read-path surfaces without making business or
 establishment a runtime type. This is a pilot exit claim, not a claim that a release
 has been published.
+
+The HTTP record contract is also explicit: caller-filtered and generated
+OpenAPI artifacts assign every record-related route to the shared single or
+collection Registry Record profile, or to a named Server-specific shape.
+Real-router PostgreSQL tests prove the exact JSON and JSON-LD bytes, structural
+identifier disclosure after authorization, concealment before I/O, lookup
+cardinality collapse, audit-gated release, and representation-bound replay.

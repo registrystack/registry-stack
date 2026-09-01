@@ -176,8 +176,10 @@ async fn real_postgres_request_queues_filter_count_and_page_on_server_owned_stat
         .expect("submitted queue returns items");
     assert_eq!(submitted_items.len(), 1);
     assert_eq!(submitted_items[0]["request"]["serverState"], "submitted");
-    assert_ne!(submitted_items[0]["id"], draft_request.id);
-    assert!(submitted_items[0]["data"].get("serverState").is_none());
+    assert_ne!(submitted_items[0]["recordIdentifier"], draft_request.id);
+    assert!(submitted_items[0]["domainData"]
+        .get("serverState")
+        .is_none());
     assert!(submitted_page.body["pageInfo"]["nextCursor"].is_string());
 
     let cursor = submitted_page.body["pageInfo"]["nextCursor"]
@@ -203,7 +205,10 @@ async fn real_postgres_request_queues_filter_count_and_page_on_server_owned_stat
         .expect("cursor returns items");
     assert_eq!(continuation_items.len(), 1);
     assert_eq!(continuation_items[0]["request"]["serverState"], "submitted");
-    assert_ne!(continuation_items[0]["id"], submitted_items[0]["id"]);
+    assert_ne!(
+        continuation_items[0]["recordIdentifier"],
+        submitted_items[0]["recordIdentifier"]
+    );
     assert!(continuation.body["pageInfo"]["nextCursor"].is_null());
 
     let cursor_wrong_profile = response_parts(
@@ -238,12 +243,15 @@ async fn real_postgres_request_queues_filter_count_and_page_on_server_owned_stat
     .await;
     assert_eq!(draft_count.status, StatusCode::OK, "{}", draft_count.body);
     assert_eq!(draft_count.body["count"], 1);
-    assert_eq!(draft_count.body["items"][0]["id"], draft_request.id);
+    assert_eq!(
+        draft_count.body["items"][0]["recordIdentifier"],
+        draft_request.id
+    );
     assert_eq!(
         draft_count.body["items"][0]["request"]["serverState"],
         "draft"
     );
-    assert!(draft_count.body["items"][0]["data"]
+    assert!(draft_count.body["items"][0]["domainData"]
         .get("effectDigest")
         .is_none());
 
@@ -354,7 +362,7 @@ async fn create_record(
     )
     .await;
     assert_eq!(response.status, StatusCode::CREATED, "{}", response.body);
-    let id = response.body["id"]
+    let id = response.body["data"]["recordIdentifier"]
         .as_str()
         .expect("created response includes id")
         .to_owned();
@@ -381,7 +389,7 @@ async fn submit_request(
     )
     .await;
     assert_eq!(before.status, StatusCode::OK, "{}", before.body);
-    let action = before.body["request"]["actions"]
+    let action = before.body["data"]["request"]["actions"]
         .as_array()
         .expect("request read exposes action links")
         .iter()
@@ -516,17 +524,17 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"request-query-registry","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"request-query-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[
             {
-              "id":"asset-site","route":"sites","mutationMode":"create_only","classification":"internal",
+              "id":"asset-site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create_only","classification":"internal",
               "fields":[
                 {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
                 {"id":"name","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}
               ]
             },
             {
-              "id":"asset-placement","route":"placements","mutationMode":"mutable","classification":"internal",
+              "id":"asset-placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable","classification":"internal",
               "changeControl":{"requiredFor":["patch"]},
               "fields":[
                 {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
@@ -534,7 +542,7 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
               ]
             },
             {
-              "id":"correction-request","route":"correction-requests","mutationMode":"mutable","classification":"internal",
+              "id":"correction-request","primaryDataset":"test-dataset","route":"correction-requests","mutationMode":"mutable","classification":"internal",
               "fields":[
                 {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
                 {"id":"placement","type":"reference","target":"asset-placement","required":true,"classification":"internal"},

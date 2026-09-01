@@ -1640,6 +1640,9 @@
         "mutationMode": {
           "$ref": "#/$defs/MutationMode"
         },
+        "primaryDataset": {
+          "type": "string"
+        },
         "readPaths": {
           "items": {
             "$ref": "#/$defs/ReadPathSource"
@@ -1673,6 +1676,7 @@
       },
       "required": [
         "id",
+        "primaryDataset",
         "route",
         "mutationMode"
       ],
@@ -2089,6 +2093,12 @@
             "null"
           ]
         },
+        "servesDatasets": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "title": {
           "$ref": "#/$defs/ManifestProjectionTextSource"
         }
@@ -2096,19 +2106,36 @@
       "required": [
         "id",
         "title",
-        "endpointUrl"
+        "endpointUrl",
+        "servesDatasets"
       ],
       "type": "object"
     },
     "ManifestProjectionDatasetSource": {
       "additionalProperties": false,
       "properties": {
+        "accessProfile": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "applicableLegislation": {
           "default": [],
           "items": {
             "type": "string"
           },
           "type": "array"
+        },
+        "classificationCeiling": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Classification"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "conformsTo": {
           "default": [],
@@ -2128,6 +2155,9 @@
           ]
         },
         "id": {
+          "type": "string"
+        },
+        "iri": {
           "type": [
             "string",
             "null"
@@ -2157,9 +2187,16 @@
         },
         "title": {
           "$ref": "#/$defs/ManifestProjectionTextSource"
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
+        "id",
         "title"
       ],
       "type": "object"
@@ -2173,6 +2210,78 @@
         "withdrawn"
       ],
       "type": "string"
+    },
+    "ManifestProjectionDistributionSource": {
+      "additionalProperties": false,
+      "properties": {
+        "accessService": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "accessUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dataset": {
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ManifestProjectionTextSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "downloadUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "format": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "iri": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mediaType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ManifestProjectionTextSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "dataset"
+      ],
+      "type": "object"
     },
     "ManifestProjectionEntitySource": {
       "additionalProperties": false,
@@ -2285,6 +2394,22 @@
       ],
       "type": "object"
     },
+    "ManifestProjectionPublicServiceSource": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "$ref": "#/$defs/ManifestProjectionTextSource"
+        }
+      },
+      "required": [
+        "id",
+        "title"
+      ],
+      "type": "object"
+    },
     "ManifestProjectionPublisherSource": {
       "additionalProperties": false,
       "properties": {
@@ -2293,6 +2418,9 @@
             "string",
             "null"
           ]
+        },
+        "id": {
+          "type": "string"
         },
         "iri": {
           "type": [
@@ -2305,6 +2433,7 @@
         }
       },
       "required": [
+        "id",
         "name"
       ],
       "type": "object"
@@ -2321,18 +2450,23 @@
         "classificationCeiling": {
           "$ref": "#/$defs/Classification"
         },
-        "dataService": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ManifestProjectionDataServiceSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
+        "dataServices": {
+          "items": {
+            "$ref": "#/$defs/ManifestProjectionDataServiceSource"
+          },
+          "type": "array"
         },
-        "dataset": {
-          "$ref": "#/$defs/ManifestProjectionDatasetSource"
+        "datasets": {
+          "items": {
+            "$ref": "#/$defs/ManifestProjectionDatasetSource"
+          },
+          "type": "array"
+        },
+        "distributions": {
+          "items": {
+            "$ref": "#/$defs/ManifestProjectionDistributionSource"
+          },
+          "type": "array"
         },
         "entities": {
           "default": [],
@@ -2340,6 +2474,9 @@
             "$ref": "#/$defs/ManifestProjectionEntitySource"
           },
           "type": "array"
+        },
+        "publicService": {
+          "$ref": "#/$defs/ManifestProjectionPublicServiceSource"
         },
         "vocabularies": {
           "default": [],
@@ -2353,7 +2490,9 @@
         "accessProfile",
         "classificationCeiling",
         "catalog",
-        "dataset"
+        "publicService",
+        "datasets",
+        "dataServices"
       ],
       "type": "object"
     },
@@ -2716,6 +2855,9 @@
     "RegistryIdentitySource": {
       "additionalProperties": false,
       "properties": {
+        "canonicalBaseIri": {
+          "type": "string"
+        },
         "defaultLanguage": {
           "type": "string"
         },
@@ -2729,7 +2871,8 @@
       "required": [
         "id",
         "version",
-        "defaultLanguage"
+        "defaultLanguage",
+        "canonicalBaseIri"
       ],
       "type": "object"
     },

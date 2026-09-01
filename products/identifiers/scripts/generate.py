@@ -293,7 +293,7 @@ def explicit_entries(
     repo_root: Path, records: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
-    expected = {
+    required = {
         "uri",
         "kind",
         "status",
@@ -304,21 +304,36 @@ def explicit_entries(
         "sourcePath",
     }
     for index, record in enumerate(records):
-        if not isinstance(record, dict) or set(record) != expected:
+        keys = set(record) if isinstance(record, dict) else set()
+        if not isinstance(record, dict) or keys not in (
+            required,
+            required | {"artifactPath", "mediaType"},
+        ):
             raise CatalogError(f"records[{index}] has an invalid shape")
+        has_artifact = "artifactPath" in record
+        if has_artifact != ("mediaType" in record):
+            raise CatalogError(f"records[{index}] has an incomplete artifact")
         source_path = repo_root / record["sourcePath"]
-        entries.append(
-            {
-                "uri": record["uri"],
-                "kind": record["kind"],
-                "status": record["status"],
-                "compatibilityLine": record["compatibilityLine"],
-                "owner": record["owner"],
-                "title": record["title"],
-                "description": record["description"],
-                "source": source_record(repo_root, source_path),
+        entry = {
+            "uri": record["uri"],
+            "kind": record["kind"],
+            "status": record["status"],
+            "compatibilityLine": record["compatibilityLine"],
+            "owner": record["owner"],
+            "title": record["title"],
+            "description": record["description"],
+            "source": source_record(repo_root, source_path),
+        }
+        if has_artifact:
+            artifact_path = repo_root / record["artifactPath"]
+            if not isinstance(record["mediaType"], str) or not record["mediaType"]:
+                raise CatalogError(f"records[{index}] has an invalid artifact media type")
+            entry["artifact"] = {
+                "path": relative_path(repo_root, artifact_path),
+                "sha256": sha256(artifact_path),
+                "mediaType": record["mediaType"],
             }
-        )
+        entries.append(entry)
     return entries
 
 
@@ -373,6 +388,7 @@ def validate_entries(repo_root: Path, entries: list[dict[str, Any]]) -> None:
         seen[uri] = entry["source"]["path"]
         if entry["kind"] not in {
             "problem",
+            "profile",
             "schema",
             "context",
             "namespace",
@@ -424,6 +440,7 @@ def validate_catalog_contract(catalog: dict[str, Any]) -> None:
     allowed = common_required | {"artifact", "problem"}
     valid_kinds = {
         "problem",
+        "profile",
         "schema",
         "context",
         "namespace",
@@ -468,7 +485,7 @@ def validate_catalog_contract(catalog: dict[str, Any]) -> None:
             )
 
         artifact = entry.get("artifact")
-        if entry["kind"] in {"schema", "context"} and artifact is None:
+        if entry["kind"] in {"profile", "schema", "context"} and artifact is None:
             raise CatalogError(f"generated catalog entry {index} requires an artifact")
         if artifact is not None:
             if not isinstance(artifact, dict) or set(artifact) != {

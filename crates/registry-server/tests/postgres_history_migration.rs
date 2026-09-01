@@ -208,7 +208,9 @@ async fn bounded_update_establishes_existing_baseline_and_appends_migration_revi
     .await;
     assert_eq!(created.status(), StatusCode::CREATED);
     let created = body_json(created).await;
-    let created_id = created["id"].as_str().expect("create response id");
+    let created_id = created["data"]["recordIdentifier"]
+        .as_str()
+        .expect("create response id");
     let created_revision = send(
         &app,
         Method::GET,
@@ -220,9 +222,12 @@ async fn bounded_update_establishes_existing_baseline_and_appends_migration_revi
     .await;
     assert_eq!(created_revision.status(), StatusCode::OK);
     let created_revision = body_json(created_revision).await;
-    assert_eq!(created_revision["items"][0]["revision"], 1);
+    assert_eq!(created_revision["items"][0]["revisionIdentifier"], "1");
     assert_eq!(created_revision["items"][0]["mutationKind"], "create");
-    assert_eq!(created_revision["items"][0]["data"], json!({"code": "B1"}));
+    assert_eq!(
+        created_revision["items"][0]["domainData"],
+        json!({"code": "B1"})
+    );
     database.cleanup().await;
 }
 
@@ -698,7 +703,7 @@ fn compile_registry(variant: Variant, sequence: u64) -> CompiledRegistry {
 
 fn project_bytes(sequence: u64, digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"{PACKAGE_ID}","version":"1","defaultLanguage":"en"}},"package":{{"environment":"local","instanceId":"{INSTANCE_ID}","sequence":{sequence},"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://history-migration.example.test","title":"History Migration Registry","publisher":{{"name":"History Migration Publisher"}}}},"dataset":{{"title":"History Migration Dataset","owner":"History Migration Publisher","status":"active"}}}},"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
+        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"{PACKAGE_ID}","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://history-migration.example.test"}},"package":{{"environment":"local","instanceId":"{INSTANCE_ID}","sequence":{sequence},"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://history-migration.example.test","title":"History Migration Registry","publisher":{{"id":"history-migration-registry-authority","name":"History Migration Publisher"}}}},"publicService":{{"id":"history-migration-registry-service","title":"History Migration Registry"}},"datasets":[{{"id":"history-migration-registry","title":"History Migration Dataset","owner":"History Migration Publisher","status":"active"}}],"dataServices":[{{"id":"history-migration-registry-data-service","title":"History Migration Registry","endpointUrl":"https://history-migration.example.test","servesDatasets":["history-migration-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
     )
     .into_bytes()
 }
@@ -709,7 +714,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         Variant::StatusRestricted => "restricted",
     };
     format!(
-        r#"{{"id":"core","version":"1","entities":[{{"id":"asset","route":"assets","mutationMode":"create_only","fields":[{{"id":"code","type":"string","required":true,"maxLength":8,"classification":"internal"}},{{"id":"status","type":"string","required":true,"maxLength":16,"classification":"{status_classification}"}}],"accessProfiles":[{{"id":"reader","principalClaim":"principal","operations":["create","get","list","revisions"],"revisionAccess":true,"readableFields":["code"],"writableFields":["code","status"]}}]}}]}}"#
+        r#"{{"id":"core","version":"1","entities":[{{"id":"asset","primaryDataset":"history-migration-registry","route":"assets","mutationMode":"create_only","fields":[{{"id":"code","type":"string","required":true,"maxLength":8,"classification":"internal"}},{{"id":"status","type":"string","required":true,"maxLength":16,"classification":"{status_classification}"}}],"accessProfiles":[{{"id":"reader","principalClaim":"principal","operations":["create","get","list","revisions"],"revisionAccess":true,"readableFields":["code"],"writableFields":["code","status"]}}]}}]}}"#
     )
     .into_bytes()
 }

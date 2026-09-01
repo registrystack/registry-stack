@@ -2,6 +2,7 @@ apiVersion: registry.registrystack.org/v1alpha1
 kind: RegistryProject
 registry:
   id: business
+  canonicalBaseIri: "https://business-register.example.gov"
   version: 0.1.0
   defaultLanguage: en
 package:
@@ -17,19 +18,34 @@ manifestProjection:
     title: Business Register Catalog
     description: Portable metadata for the public business register slice.
     publisher:
+      id: "business-authority"
       name: Business Register Authority
       iri: https://business-register.example.gov/authority
-  dataset:
-    title: Public Business Register
-    description: Public legal entity and officer appointment metadata.
-    owner: Business Register Authority
-    status: active
+  datasets:
+    -
+      id: "business"
+      title: Public Business Register
+      description: Public legal entity and officer appointment metadata.
+      owner: Business Register Authority
+      status: active
+  dataServices:
+    -
+      id: "business-data-service"
+      title: Business Register Catalog
+      endpointUrl: "https://business-register.example.gov"
+      servesDatasets:
+        - "business"
+  publicService:
+    id: "business-service"
+    title: Business Register Catalog
+  distributions: []
 modules:
   - id: business-core
     version: 0.1.0
     digest: sha256:fe95523a7c5c061af80f3b85f361ffa0913f6532c1834e1ae0e67e017dd50c2f
 entities:
   - id: legal-entity
+    primaryDataset: "business"
     route: legal-entities
     mutationMode: mutable
     classification: public
@@ -80,6 +96,7 @@ entities:
           - jurisdiction-code
           - registration-number
   - id: filing
+    primaryDataset: "business"
     route: filings
     mutationMode: create_only
     fields:
@@ -132,6 +149,7 @@ entities:
           - source-system
           - source-record-id
   - id: officer-appointment
+    primaryDataset: "business"
     route: officer-appointments
     mutationMode: mutable
     classification: public

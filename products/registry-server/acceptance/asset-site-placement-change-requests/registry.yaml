@@ -2,6 +2,7 @@ apiVersion: registry.registrystack.org/v1alpha1
 kind: RegistryProject
 registry:
   id: asset-site-placement-change-requests
+  canonicalBaseIri: "https://asset-site-placement.example.gov"
   version: 0.1.0
   defaultLanguage: en
 package:
@@ -17,19 +18,34 @@ manifestProjection:
     title: Asset Site Placement Catalog
     description: Portable metadata for the asset site placement registry.
     publisher:
+      id: "asset-site-placement-change-requests-authority"
       name: Asset Site Placement Authority
       iri: https://asset-site-placement.example.gov/authority
-  dataset:
-    title: Asset Site Placement Registry
-    description: Asset placement, site, item, and inspection metadata.
-    owner: Asset Site Placement Authority
-    status: active
+  datasets:
+    -
+      id: "asset-site-placement-change-requests"
+      title: Asset Site Placement Registry
+      description: Asset placement, site, item, and inspection metadata.
+      owner: Asset Site Placement Authority
+      status: active
+  dataServices:
+    -
+      id: "asset-site-placement-change-requests-data-service"
+      title: Asset Site Placement Catalog
+      endpointUrl: "https://asset-site-placement.example.gov"
+      servesDatasets:
+        - "asset-site-placement-change-requests"
+  publicService:
+    id: "asset-site-placement-change-requests-service"
+    title: Asset Site Placement Catalog
+  distributions: []
 modules:
   - id: asset-site-placement-core
     version: 0.1.0
     digest: sha256:6bfb23a7780219187d3f30fab0a37d51e739bb0a26669e4c162b59c1f502ebf3
 entities:
   - id: asset-item
+    primaryDataset: "asset-site-placement-change-requests"
     route: assets
     mutationMode: mutable
     batch: {maximumItems: 4, maximumBytes: 16384}
@@ -40,6 +56,7 @@ entities:
     constraints:
       - {kind: unique, fields: [asset-code]}
   - id: asset-site
+    primaryDataset: "asset-site-placement-change-requests"
     route: sites
     mutationMode: mutable
     fields:
@@ -48,6 +65,7 @@ entities:
     constraints:
       - {kind: unique, fields: [site-code]}
   - id: asset-placement
+    primaryDataset: "asset-site-placement-change-requests"
     route: placements
     mutationMode: mutable
     changeControl:
@@ -64,6 +82,7 @@ entities:
     constraints:
       - {kind: temporal-non-overlap, scopeFields: [asset], startField: valid-from, endField: valid-to}
   - id: placement-correction-request
+    primaryDataset: "asset-site-placement-change-requests"
     route: placement-correction-requests
     mutationMode: mutable
     classification: internal
@@ -84,6 +103,7 @@ entities:
           - {id: review, approvals: 1, excludeSubmitter: true}
           - {id: final-approval, approvals: 1, excludeSubmitter: true}
   - id: inspection-event
+    primaryDataset: "asset-site-placement-change-requests"
     route: inspections
     mutationMode: create_only
     fields:

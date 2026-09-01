@@ -2,6 +2,7 @@ id: inspection-core
 version: 0.1.0
 entities:
   - id: public-authority
+    primaryDataset: "inspection"
     route: authorities
     mutationMode: mutable
     classification: restricted

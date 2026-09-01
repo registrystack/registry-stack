@@ -249,7 +249,7 @@ pub(super) async fn dispatch(
                 })
                 .await
             {
-                Ok(response) => exact_json_no_store(response),
+                Ok(response) => exact_non_record_no_store(response),
                 Err(crate::mutation::MutationError::PreconditionFailed) => concealed(),
                 Err(error) => mutation_problem(error),
             }

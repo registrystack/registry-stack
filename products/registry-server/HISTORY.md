@@ -1,3 +1,82 @@
+# Breaking HTTP response change: Registry Record profile
+
+Successful record HTTP responses now use the shared Registry Record v1 profile.
+The previous single-record shape `{id, revision, data}` and mutation shape
+`{id, revision, snapshot, data}` are no longer served. A single record is now:
+
+```json
+{
+  "data": {
+    "recordIdentifier": "00000000-0000-4000-8000-000000000001",
+    "revisionIdentifier": "1",
+    "domainData": {"label": "Example"}
+  },
+  "meta": {
+    "registryIdentifier": "example-registry",
+    "datasetIdentifier": "example-dataset",
+    "entityTypeIdentifier": "example-record"
+  }
+}
+```
+
+Collections use `items`, `pageInfo.nextCursor`, and `meta`. Create, patch, and
+tombstone keep the committed `snapshot` as a closed Server-owned member of the
+record in `data`. Revision detail and list responses use the same record and
+collection envelopes; revision provenance remains outside `domainData`.
+Snapshot queries add their Server-owned `snapshot`, optional `validAt`, and
+optional `count` collection members.
+
+`application/json` never contains `@context`, `@id`, or `@type` profile terms.
+`application/ld+json` adds the scalar context
+`https://id.registrystack.org/contexts/registry-record/v1`. Successful profiled
+responses carry the exact Registry Record profile Link and a relative
+`describedby` schema link. Neither link is derived from Host or forwarded
+headers. ETags and idempotency request identity include the negotiated response
+representation.
+
+Selecting and authorizing a compiled record operation authorizes publication of
+its structural registry, primary-dataset, and entity-type identifiers. These
+identifiers are not `$select` domain fields and are not gated by the optional
+Registry Manifest catalogue publication profile. Concealed requests complete
+before record I/O and disclose no profile, schema, context, or link hint.
+
+Lookup still queries at most two rows. Exactly one row returns the shared single
+record. Unknown or ungranted selectors, missing verified claims, zero rows, and
+multiple rows return the same value-free `lookup.unresolved` problem. Malformed
+requests remain `400`; source and audit failures remain `503`. Existing Registry
+Server problem identifiers are unchanged in this release.
+
+Batch mutations, change-request actions, immediate actions, and GeoJSON remain
+named separate response shapes. Generated and caller-filtered OpenAPI documents
+declare each route's exact shape and media-specific closed schema. Operations
+that also serve GeoJSON use `x-registry-responseShapes` to assign every media
+branch explicitly. Their stable singular `x-registry-responseProfile` marker
+governs only the `application/json` and `application/ld+json` branches; the
+GeoJSON branch remains the named Server shape in the media map.
+
+| Route family | Response shape |
+| --- | --- |
+| Get, lookup, create, patch, tombstone | `RegistryRecordSingleV1` |
+| List, relationship traversal | `RegistryRecordCollectionV1` |
+| Revision detail | `RegistryServerRevisionRecordV1`, a shared record with closed Server history metadata |
+| Revision list | `RegistryServerRevisionCollectionV1`, a shared collection of revision records |
+| Snapshot query | `RegistryServerSnapshotCollectionV1`, a shared collection with snapshot selection metadata |
+| Batch mutation | `RegistryServerAtomicBatchMutationResponseV1` |
+| Change-request and immediate actions | Their operation-specific Server response shapes |
+| GeoJSON get and list | `RegistryServerGeoJsonFeatureV1` and `RegistryServerGeoJsonFeatureCollectionV1` |
+
+# Breaking authoring change: plural catalogue resources
+
+`manifestProjection.dataset` and `manifestProjection.dataService` were removed.
+Projects now declare `registry.canonicalBaseIri`, publisher `id`, one
+`publicService`, plural `datasets`, plural `dataServices` with nonempty
+`servesDatasets`, optional `distributions`, and one `primaryDataset` on every
+entity. Run `registry-serverctl project migrate PROJECT` to review the exact
+rewrite, then repeat it with `--write` only after approving the proposed
+`<registry-id>-authority` and `<registry-id>-service` identifiers. The migration
+preserves an explicit legacy dataset id and otherwise preserves the old
+effective fallback to `registry.id`.
+
 # Corrections and historical queries
 
 Registry Server retains complete stored-record revisions. A successful mutation
@@ -53,8 +132,9 @@ move's effective date to June 15, a newly captured snapshot returns A for June 5
 The original saved reference still returns B, subject to current authorization
 and retained history.
 
-Responses contain `items` with `id`, `revision` and selected `data`, plus
-`snapshot`, `pageInfo.nextCursor`, optional `count`, and `validAt` when supplied.
+Responses contain `items` with `recordIdentifier`, `revisionIdentifier`, and
+selected `domainData`, plus collection `meta`, `snapshot`,
+`pageInfo.nextCursor`, optional `count`, and `validAt` when supplied.
 Use the usual `$select`, `$filter`, `$orderby`, `$top` and `$count` options. Follow
 a continuation using only `$skiptoken` and, if needed, `accessProfile`; do not
 repeat or override its snapshot, effective time or query options.

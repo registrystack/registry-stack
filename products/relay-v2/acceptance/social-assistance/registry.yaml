@@ -44,6 +44,8 @@ sources:
     expectedSchemaFingerprint: sha256:936a90a03d06be67a76226d6999a830c04f6604a3ff8b340a62fdd378d8c6d91
 resources:
   - id: assistance-enrolment
+    datasetIdentifier: assistance-enrolments
+    entityTypeIdentifier: assistance-enrolment
     title: Assistance enrolment
     description: Current synthetic assistance enrolment status.
     semanticClass: local:AssistanceEnrolment

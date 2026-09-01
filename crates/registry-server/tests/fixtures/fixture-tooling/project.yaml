@@ -2,6 +2,7 @@ apiVersion: registry.registrystack.org/v1alpha1
 kind: RegistryProject
 registry:
   id: fixture-registry
+  canonicalBaseIri: https://fixture.invalid
   version: 1.0.0
   defaultLanguage: en
 package:
@@ -15,17 +16,26 @@ manifestProjection:
   catalog:
     baseUrl: https://fixture.invalid
     title: Fixture Registry
-    publisher: {name: Fixture Publisher}
-  dataset:
-    title: Fixture Dataset
-    owner: Fixture Publisher
-    status: active
+    publisher: {id: fixture-registry-authority, name: Fixture Publisher}
+  publicService: {id: fixture-registry-service, title: Fixture Registry}
+  datasets:
+    - id: fixture-registry
+      title: Fixture Dataset
+      owner: Fixture Publisher
+      status: active
+  dataServices:
+    - id: fixture-registry-data-service
+      title: Fixture Registry
+      endpointUrl: https://fixture.invalid
+      servesDatasets: [fixture-registry]
+  distributions: []
 modules:
   - id: fixture-core
     version: 1.0.0
     digest: MODULE_DIGEST
 entities:
   - id: widget
+    primaryDataset: fixture-registry
     route: widgets
     mutationMode: mutable
     classification: public

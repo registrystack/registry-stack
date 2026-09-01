@@ -376,7 +376,7 @@ fn project_bytes(environment: &str, instance_id: &str, source_revision: &str) ->
         r#"{{
   "apiVersion": "registry.registrystack.org/v1alpha1",
   "kind": "RegistryProject",
-  "registry": {{"id": "rehearsal-registry", "version": "1", "defaultLanguage": "en"}},
+  "registry": {{"id": "rehearsal-registry", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"}},
   "package": {{
     "environment": "{environment}",
     "instanceId": "{instance_id}",
@@ -389,16 +389,23 @@ fn project_bytes(environment: &str, instance_id: &str, source_revision: &str) ->
     "catalog": {{
       "baseUrl": "https://rehearsal.example.test",
       "title": "Rehearsal Registry",
-      "publisher": {{"name": "Rehearsal Publisher"}}
+      "publisher": {{"id": "rehearsal-authority", "name": "Rehearsal Publisher"}}
     }},
-    "dataset": {{
-      "title": "Rehearsal Dataset",
-      "owner": "Rehearsal Publisher",
-      "status": "active"
-    }}
+    "publicService": {{"id": "rehearsal-service", "title": "Rehearsal Registry"}},
+    "datasets": [{{
+      "id": "test-dataset", "title": "Rehearsal Dataset",
+      "owner": "Rehearsal Publisher", "status": "active"
+    }}],
+    "dataServices": [{{
+      "id": "rehearsal-data-service", "title": "Rehearsal Registry",
+      "endpointUrl": "https://rehearsal.example.test",
+      "servesDatasets": ["test-dataset"]
+    }}],
+    "distributions": []
   }},
   "entities": [{{
     "id": "case",
+    "primaryDataset": "test-dataset",
     "route": "cases",
     "mutationMode": "create_only",
     "fields": [{{

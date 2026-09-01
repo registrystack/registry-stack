@@ -690,6 +690,9 @@ jobs:
       - name: Check public identifier catalog
         run: products/identifiers/scripts/check.sh
 
+      - name: Check Registry Record profile artifacts
+        run: products/registry-record/scripts/check.sh
+
   rust-result:
     name: Rust workspace
     if: always()

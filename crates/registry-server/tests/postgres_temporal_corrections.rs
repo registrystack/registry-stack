@@ -268,9 +268,9 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"temporal-corrections","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"temporal-corrections","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"membership","route":"memberships","mutationMode":"mutable","classification":"internal",
+            "id":"membership","primaryDataset":"test-dataset","route":"memberships","mutationMode":"mutable","classification":"internal",
             "batch":{"maximumItems":4,"maximumBytes":16384},
             "fields":[
               {"id":"subject","type":"string","maxLength":96,"required":true,"classification":"internal"},
@@ -395,7 +395,10 @@ async fn seed_pair(
     assert_eq!(a.status(), StatusCode::CREATED);
     let a_etag = header(&a, "etag");
     let a_body = body_json(a).await;
-    let a_id = a_body["id"].as_str().expect("A record id").to_owned();
+    let a_id = a_body["data"]["recordIdentifier"]
+        .as_str()
+        .expect("A record id")
+        .to_owned();
 
     let b = send_json(
         app,
@@ -414,7 +417,10 @@ async fn seed_pair(
     assert_eq!(b.status(), StatusCode::CREATED);
     let b_etag = header(&b, "etag");
     let b_body = body_json(b).await;
-    let b_id = b_body["id"].as_str().expect("B record id").to_owned();
+    let b_id = b_body["data"]["recordIdentifier"]
+        .as_str()
+        .expect("B record id")
+        .to_owned();
     MembershipPair {
         a_id,
         a_etag,

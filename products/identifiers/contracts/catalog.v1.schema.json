@@ -58,7 +58,7 @@
       "properties": {
         "uri": { "type": "string", "pattern": "^https://id\\.registrystack\\.org/" },
         "kind": {
-          "enum": ["problem", "schema", "context", "namespace", "vocabulary", "vocabulary-term"]
+          "enum": ["problem", "profile", "schema", "context", "namespace", "vocabulary", "vocabulary-term"]
         },
         "status": { "const": "active" },
         "compatibilityLine": { "type": "string", "minLength": 1 },
@@ -75,7 +75,7 @@
           "then": { "required": ["problem"] }
         },
         {
-          "if": { "properties": { "kind": { "enum": ["schema", "context"] } }, "required": ["kind"] },
+          "if": { "properties": { "kind": { "enum": ["profile", "schema", "context"] } }, "required": ["kind"] },
           "then": { "required": ["artifact"] }
         }
       ]

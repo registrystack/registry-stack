@@ -110,7 +110,10 @@ async fn real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable
     assert_eq!(seed.status(), StatusCode::CREATED);
     let seed_etag = header(&seed, "etag");
     let seed_body = body_json(seed).await;
-    let seed_id = seed_body["id"].as_str().expect("seed id").to_owned();
+    let seed_id = seed_body["data"]["recordIdentifier"]
+        .as_str()
+        .expect("seed id")
+        .to_owned();
 
     let batch_body = json!({
         "changeContext": {
@@ -571,9 +574,9 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"batch-registry","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"batch-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"widget","route":"widgets","mutationMode":"mutable","classification":"public",
+            "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
             "batch":{"maximumItems":3,"maximumBytes":8192},
             "constraints":[{"kind":"unique","fields":["label"]}],
             "fields":[

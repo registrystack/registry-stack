@@ -118,7 +118,10 @@ async fn unrelated_package_activation_preserves_pending_request_application() {
         applier.clone(),
     )
     .await;
-    assert_eq!(before_apply.body["request"]["serverState"], "approved");
+    assert_eq!(
+        before_apply.body["data"]["request"]["serverState"],
+        "approved"
+    );
     let apply = action(&before_apply.body, "apply_request", None);
     assert_eq!(apply.proposal_version, Some(1));
     assert_eq!(
@@ -154,8 +157,11 @@ async fn unrelated_package_activation_preserves_pending_request_application() {
         steward,
     )
     .await;
-    assert_eq!(changed_placement.body["revision"], 2);
-    assert_eq!(changed_placement.body["data"]["site"], approved.new_site_id);
+    assert_eq!(changed_placement.body["data"]["revisionIdentifier"], "2");
+    assert_eq!(
+        changed_placement.body["data"]["domainData"]["site"],
+        approved.new_site_id
+    );
     assert_eq!(
         active_package_revision(&database).await,
         successor_active.package_revision
@@ -201,25 +207,28 @@ async fn unrelated_package_activation_preserves_pending_request_application() {
         applier,
     )
     .await;
-    assert_eq!(erased_request.body["request"]["serverState"], "applied");
-    assert_eq!(erased_request.body["request"]["proposalVersion"], 1);
-    assert_eq!(erased_request.body["request"]["detailErased"], true);
-    assert_eq!(erased_request.body["data"], json!({}));
     assert_eq!(
-        erased_request.body["request"]["effectDigest"],
+        erased_request.body["data"]["request"]["serverState"],
+        "applied"
+    );
+    assert_eq!(erased_request.body["data"]["request"]["proposalVersion"], 1);
+    assert_eq!(erased_request.body["data"]["request"]["detailErased"], true);
+    assert_eq!(erased_request.body["data"]["domainData"], json!({}));
+    assert_eq!(
+        erased_request.body["data"]["request"]["effectDigest"],
         approved.effect_digest
     );
     assert_eq!(
-        erased_request.body["request"]["application"]["proposalVersion"],
+        erased_request.body["data"]["request"]["application"]["proposalVersion"],
         1
     );
     assert!(
-        erased_request.body["request"]["application"]["applicationId"]
+        erased_request.body["data"]["request"]["application"]["applicationId"]
             .as_str()
             .is_some(),
         "operator erasure preserves terminal application provenance"
     );
-    let retained = &erased_request.body["request"]["history"]["proposals"][0];
+    let retained = &erased_request.body["data"]["request"]["history"]["proposals"][0];
     assert_eq!(retained["serverState"], "applied");
     assert_eq!(retained["proposalVersion"], 1);
     assert_eq!(retained["current"], true);
@@ -231,7 +240,7 @@ async fn unrelated_package_activation_preserves_pending_request_application() {
     );
     assert_eq!(
         retained["applicationId"],
-        erased_request.body["request"]["application"]["applicationId"]
+        erased_request.body["data"]["request"]["application"]["applicationId"]
     );
 
     let pool = database
@@ -789,7 +798,7 @@ async fn create_record(
         response.body
     );
     CreatedRecord {
-        id: response.body["id"]
+        id: response.body["data"]["recordIdentifier"]
             .as_str()
             .expect("created response includes id")
             .to_owned(),
@@ -867,7 +876,7 @@ async fn send_action(
 }
 
 fn action(body: &Value, operation: &str, stage: Option<&str>) -> RequestAction {
-    let actions = body["request"]["actions"]
+    let actions = body["data"]["request"]["actions"]
         .as_array()
         .expect("request read exposes action links");
     let action = actions
@@ -1030,18 +1039,18 @@ fn project_bytes_for_variant(variant: Variant, sequence: u64) -> Vec<u8> {
         r#"{{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{{"id":"{PACKAGE_ID}","version":"1","defaultLanguage":"en"}},
+          "registry":{{"id":"{PACKAGE_ID}","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
           "package":{{"environment":"local","instanceId":"{INSTANCE_ID}","sequence":{sequence},"sourceRevision":"{SOURCE_REVISION}"}},
           "entities":[
             {{
-              "id":"asset-site","route":"sites","mutationMode":"create_only","classification":"internal",
+              "id":"asset-site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create_only","classification":"internal",
               "fields":[
                 {{"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}},
                 {{"id":"name","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}}{site_extra_field}
               ]
             }},
             {{
-              "id":"asset-placement","route":"placements","mutationMode":"mutable","classification":"internal",
+              "id":"asset-placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable","classification":"internal",
               "changeControl":{{"requiredFor":["patch"]}},
               "fields":[
                 {{"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}},
@@ -1049,7 +1058,7 @@ fn project_bytes_for_variant(variant: Variant, sequence: u64) -> Vec<u8> {
               ]
             }},
             {{
-              "id":"correction-request","route":"correction-requests","mutationMode":"mutable","classification":"internal",
+              "id":"correction-request","primaryDataset":"test-dataset","route":"correction-requests","mutationMode":"mutable","classification":"internal",
               "fields":[
                 {{"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}},
                 {{"id":"placement","type":"reference","target":"asset-placement","required":true,"classification":"internal"}},

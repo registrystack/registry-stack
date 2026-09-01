@@ -1879,9 +1879,9 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"immediate-action-registry","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"immediate-action-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"person","route":"people","mutationMode":"mutable",
+            "id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable",
             "constraints":[{"kind":"unique","fields":["person-code"]}],
             "fields":[
               {"id":"person-code","apiName":"personCode","type":"string","maxLength":64,"required":true,"classification":"restricted"},
@@ -1890,7 +1890,7 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
             ],
             "events":[{"id":"person-created","trigger":"created","projection":["person-code"]}]
           },{
-            "id":"household","route":"households","mutationMode":"mutable",
+            "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
             "fields":[
               {"id":"household-code","type":"string","maxLength":64,"required":true,"classification":"restricted"},
               {"id":"jurisdiction","apiName":"jurisdiction","type":"string","maxLength":64,"required":true,"classification":"restricted"},
@@ -1899,7 +1899,7 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
             ],
             "events":[{"id":"household-patched","trigger":"patched","projection":["contact-person"]}]
           },{
-            "id":"group-membership","route":"group-memberships","mutationMode":"mutable",
+            "id":"group-membership","primaryDataset":"test-dataset","route":"group-memberships","mutationMode":"mutable",
             "fields":[
               {"id":"person","type":"reference","target":"person","required":true,"classification":"restricted"},
               {"id":"household","type":"reference","target":"household","required":true,"classification":"restricted"},

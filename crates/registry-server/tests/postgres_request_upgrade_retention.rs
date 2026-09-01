@@ -1249,7 +1249,7 @@ fn change_request_project(
     request_reason_classification: &str,
 ) -> Vec<u8> {
     let extra_entity = if include_extra_entity {
-        r#",{"id":"audit-note","route":"audit-notes","mutationMode":"create_only","fields":[{"id":"label","type":"string","maxLength":16,"classification":"internal"}]}"#
+        r#",{"id":"audit-note","primaryDataset":"test-dataset","route":"audit-notes","mutationMode":"create_only","fields":[{"id":"label","type":"string","maxLength":16,"classification":"internal"}]}"#
     } else {
         ""
     };
@@ -1257,19 +1257,19 @@ fn change_request_project(
         r#"{{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{{"id":"change-request-retention","version":"1","defaultLanguage":"en"}},
+          "registry":{{"id":"change-request-retention","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
           "entities":[{{
-            "id":"site","route":"sites","mutationMode":"create_only",
+            "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create_only",
             "fields":[{{"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"}}]
           }},{{
-            "id":"placement","route":"placements","mutationMode":"mutable",
+            "id":"placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable",
             "changeControl":{{"requiredFor":["patch"]}},
             "fields":[
               {{"id":"site","type":"reference","target":"site","required":true,"classification":"internal"}},
               {{"id":"label","type":"string","maxLength":64,"classification":"internal"}}
             ]
           }},{{
-            "id":"placement-correction-request","route":"placement-correction-requests","mutationMode":"mutable",
+            "id":"placement-correction-request","primaryDataset":"test-dataset","route":"placement-correction-requests","mutationMode":"mutable",
             "fields":[
               {{"id":"tenant","type":"string","maxLength":64,"required":true,"classification":"internal"}},
               {{"id":"placement","type":"reference","target":"placement","required":true,"classification":"internal"}},

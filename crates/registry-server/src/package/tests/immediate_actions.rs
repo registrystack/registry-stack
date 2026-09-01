@@ -7,8 +7,8 @@ use serde_json::json;
 fn source() -> Value {
     json!({
         "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
-        "registry":{"id":"action-package", "version":"1", "defaultLanguage":"en"},
-        "entities":[{"id":"item", "route":"items", "mutationMode":"mutable",
+        "registry":{"id":"action-package", "version":"1", "defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+        "entities":[{"id":"item", "primaryDataset":"test-dataset", "route":"items", "mutationMode":"mutable",
             "fields":[{"id":"label", "type":"string", "maxLength":40, "required":true, "classification":"internal"}]}],
         "actions":[{"id":"rename-item", "inputs":[
             {"id":"item", "apiName":"itemId", "type":"reference", "target":"item", "required":true, "classification":"internal"},
@@ -134,6 +134,7 @@ fn reviewed_successor_does_not_duplicate_action_policies_for_new_entity() {
         .expect("entities are an array")
         .push(json!({
             "id":"task",
+            "primaryDataset":"test-dataset",
             "route":"tasks",
             "mutationMode":"mutable",
             "fields":[{"id":"label", "type":"string", "maxLength":40, "required":true, "classification":"internal"}]
@@ -207,7 +208,7 @@ fn reviewed_successor_tracks_link_only_reference_policies() {
         .as_array_mut()
         .unwrap()
         .push(json!({
-            "id":"group", "route":"groups", "mutationMode":"mutable",
+            "id":"group", "primaryDataset":"test-dataset", "route":"groups", "mutationMode":"mutable",
             "fields":[{"id":"label", "type":"string", "maxLength":40,
                 "required":true, "classification":"internal"}]
         }));
@@ -278,6 +279,7 @@ fn reviewed_successor_does_not_drop_action_policies_for_absent_entity_table() {
     let mut removed_entity = source_without_actions();
     removed_entity["entities"] = json!([{
         "id":"other",
+        "primaryDataset":"test-dataset",
         "route":"others",
         "mutationMode":"mutable",
         "fields":[{"id":"label", "type":"string", "maxLength":40, "required":true, "classification":"internal"}]

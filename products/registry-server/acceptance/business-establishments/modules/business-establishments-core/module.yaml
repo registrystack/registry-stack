@@ -2,6 +2,7 @@ id: business-establishments-core
 version: 0.1.0
 entities:
   - id: establishment
+    primaryDataset: "business-registry"
     route: establishments
     mutationMode: mutable
     classification: restricted
@@ -35,6 +36,7 @@ entities:
         fields:
           - establishment-code
   - id: business
+    primaryDataset: registered-businesses
     route: businesses
     mutationMode: mutable
     classification: restricted
@@ -85,6 +87,7 @@ entities:
         to: establishment
         route: establishments
   - id: operator-assignment
+    primaryDataset: "business-registry"
     route: operator-assignments
     mutationMode: mutable
     classification: restricted

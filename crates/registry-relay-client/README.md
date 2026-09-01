@@ -79,6 +79,22 @@ wire format, and access profile. Its validated serializable projection supports
 language bindings and persistence without admitting first-page fields,
 filters, bbox, or page size. A caller cannot combine those facts with a cursor.
 
+### Registry Record response profile
+
+Relay's pre-1.0 Registry Record compatibility line places the homogeneous
+Registry, dataset, and entity-type identifiers in
+`RecordEnvelope.meta` or `RecordCollection.meta`. They are exposed by
+`RecordResponseMetadata`, not by `Record`; `Record` contains only the
+per-record fields and Relay-owned extensions. This deliberately rejects the
+former per-record `registryIdentifier` placement.
+
+For `RecordFormat::JsonLd`, `json_ld_context` is present as a
+`RelayJsonLdContext` only when Relay returns exactly the governed two-item
+context array. The client verifies its fixed Registry Record context identifier
+and that its Relay context matches `meta.links.context`. Ordinary JSON has no
+JSON-LD context. GeoJSON remains a separately named media profile with
+`GeoJsonRecordProperties` and `RelayRecordMetadata`.
+
 List and named search use distinct first-page types. `ListRequest` permits only
 declared equality filters and has no bbox API. `SearchRequest::new(bbox)` makes
 the closed point-bbox search input mandatory and exposes no filter API.

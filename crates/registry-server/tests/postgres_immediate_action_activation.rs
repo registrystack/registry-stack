@@ -1028,10 +1028,10 @@ fn project_bytes(variant: Variant, sequence: u64) -> Vec<u8> {
         r#"{{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{{"id":"{PACKAGE_ID}","version":"1","defaultLanguage":"en"}},
+          "registry":{{"id":"{PACKAGE_ID}","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
           "package":{{"environment":"{ENVIRONMENT}","instanceId":"{INSTANCE_ID}","sequence":{sequence},"sourceRevision":"{SOURCE_REVISION}"}},
           "entities":[{{
-            "id":"person","route":"people","mutationMode":"mutable",
+            "id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable",
             "constraints":[{{"kind":"unique","fields":["person-code"]}}],
             "fields":[
               {{"id":"person-code","apiName":"personCode","type":"string","maxLength":64,"required":true,"classification":"restricted"}},
@@ -1039,14 +1039,14 @@ fn project_bytes(variant: Variant, sequence: u64) -> Vec<u8> {
               {{"id":"jurisdiction","apiName":"jurisdiction","type":"string","maxLength":64,"required":true,"classification":"restricted"}}
             ]
           }},{{
-            "id":"household","route":"households","mutationMode":"mutable",
+            "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
             "fields":[
               {{"id":"household-code","type":"string","maxLength":64,"required":true,"classification":"restricted"}},
               {{"id":"jurisdiction","apiName":"jurisdiction","type":"string","maxLength":64,"required":true,"classification":"restricted"}},
               {{"id":"contact-person","apiName":"contactPerson","type":"reference","target":"person","classification":"restricted"}}
             ]
           }},{{
-            "id":"group-membership","route":"group-memberships","mutationMode":"mutable",
+            "id":"group-membership","primaryDataset":"test-dataset","route":"group-memberships","mutationMode":"mutable",
             "fields":[
               {{"id":"person","type":"reference","target":"person","required":true,"classification":"restricted"}},
               {{"id":"household","type":"reference","target":"household","required":true,"classification":"restricted"}},

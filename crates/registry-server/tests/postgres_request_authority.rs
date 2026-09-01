@@ -978,17 +978,17 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"change-request-authority","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"change-request-authority","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[
             {
-              "id":"asset-site","route":"sites","mutationMode":"mutable",
+              "id":"asset-site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable",
               "fields":[
                 {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
                 {"id":"name","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}
               ]
             },
             {
-              "id":"asset-placement","route":"placements","mutationMode":"mutable",
+              "id":"asset-placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable",
               "changeControl":{"requiredFor":["patch"]},
               "fields":[
                 {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
@@ -996,7 +996,7 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
               ]
             },
             {
-              "id":"placement-correction-request","route":"placement-correction-requests","mutationMode":"mutable",
+              "id":"placement-correction-request","primaryDataset":"test-dataset","route":"placement-correction-requests","mutationMode":"mutable",
               "fields":[
                 {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
                 {"id":"placement","type":"reference","target":"asset-placement","required":true,"classification":"internal"},

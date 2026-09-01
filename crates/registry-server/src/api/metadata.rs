@@ -3,8 +3,9 @@
 
 use super::*;
 use crate::artifacts::{field_schema, field_value_schema};
-use crate::contract::{ConstraintSource, ManifestProjectionSource, ManifestProjectionTextSource};
+use crate::contract::{ConstraintSource, ManifestProjectionTextSource};
 use crate::model::CompiledLogicalField;
+use crate::model::CompiledManifestProjection;
 
 /// Wrap authentication as well as handlers. Even refusals must not persist in an HTTP cache.
 /// This changes only the cache policy, never held response bytes or replay headers.
@@ -323,7 +324,7 @@ fn field_identity(entity: &CompiledEntity, id: &str) -> Option<Value> {
 fn projection<'a>(
     service: &'a HttpService,
     surface: &AuthorizedSurface<'_>,
-) -> Option<&'a ManifestProjectionSource> {
+) -> Option<&'a CompiledManifestProjection> {
     service
         .registry
         .manifest_projection()

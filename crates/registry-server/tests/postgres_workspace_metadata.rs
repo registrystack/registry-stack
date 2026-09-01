@@ -65,7 +65,7 @@ async fn real_postgres_workspace_metadata_marks_request_lifecycle_without_direct
             .unwrap()["changeControl"],
         json!({
             "controlledOperations": ["patch"],
-            "eligibleRequestTypes": [{"id": "placement-correction-request", "route": "placement-correction-requests"}]
+            "eligibleRequestTypes": [{"id": "placement-correction-request", "primaryDataset": "asset-site-placement-change-requests", "route": "placement-correction-requests"}]
         })
     );
 

@@ -28,13 +28,14 @@ fn request_get_schema_accepts_runtime_annotations_and_erased_terminal_data() {
     assert_valid(
         &schema,
         &json!({
-            "id": request_id,
-            "revision": 4,
             "data": {
-                "placement": placement_id,
-                "proposedSite": replacement_site_id
-            },
-            "request": {
+                "recordIdentifier": request_id,
+                "revisionIdentifier": "4",
+                "domainData": {
+                    "placement": placement_id,
+                    "proposedSite": replacement_site_id
+                },
+                "request": {
                 "serverState": "submitted",
                 "proposalVersion": 2,
                 "effectDigest": digest,
@@ -80,6 +81,12 @@ fn request_get_schema_accepts_runtime_annotations_and_erased_terminal_data() {
                     }],
                     "nextAfterProposalVersion": null
                 }
+            },
+            },
+            "meta": {
+                "registryIdentifier": "change-request-openapi",
+                "datasetIdentifier": "test-dataset",
+                "entityTypeIdentifier": "placement-correction-request"
             }
         }),
     );
@@ -87,10 +94,11 @@ fn request_get_schema_accepts_runtime_annotations_and_erased_terminal_data() {
     assert_valid(
         &schema,
         &json!({
-            "id": request_id,
-            "revision": 9,
-            "data": {},
-            "request": {
+            "data": {
+                "recordIdentifier": request_id,
+                "revisionIdentifier": "9",
+                "domainData": {},
+                "request": {
                 "serverState": "applied",
                 "proposalVersion": 2,
                 "detailErased": true,
@@ -120,6 +128,12 @@ fn request_get_schema_accepts_runtime_annotations_and_erased_terminal_data() {
                     }],
                     "nextAfterProposalVersion": null
                 }
+            },
+            },
+            "meta": {
+                "registryIdentifier": "change-request-openapi",
+                "datasetIdentifier": "test-dataset",
+                "entityTypeIdentifier": "placement-correction-request"
             }
         }),
     );
@@ -127,30 +141,44 @@ fn request_get_schema_accepts_runtime_annotations_and_erased_terminal_data() {
     assert_invalid(
         &schema,
         &json!({
-            "id": request_id,
-            "revision": 9,
-            "data": {},
-            "request": {
-                "serverState": "applied",
-                "proposalVersion": 2,
-                "editable": false
+            "data": {
+                "recordIdentifier": request_id,
+                "revisionIdentifier": "9",
+                "domainData": {},
+                "request": {
+                    "serverState": "applied",
+                    "proposalVersion": 2,
+                    "editable": false
+                }
+            },
+            "meta": {
+                "registryIdentifier": "change-request-openapi",
+                "datasetIdentifier": "test-dataset",
+                "entityTypeIdentifier": "placement-correction-request"
             }
         }),
     );
     assert_invalid(
         &schema,
         &json!({
-            "id": request_id,
-            "revision": 4,
             "data": {
-                "placement": placement_id,
-                "proposedSite": replacement_site_id
+                "recordIdentifier": request_id,
+                "revisionIdentifier": "4",
+                "domainData": {
+                    "placement": placement_id,
+                    "proposedSite": replacement_site_id
+                },
+                "request": {
+                    "serverState": "submitted",
+                    "proposalVersion": 2,
+                    "editable": false,
+                    "operatorSecret": "must-not-be-modeled"
+                }
             },
-            "request": {
-                "serverState": "submitted",
-                "proposalVersion": 2,
-                "editable": false,
-                "operatorSecret": "must-not-be-modeled"
+            "meta": {
+                "registryIdentifier": "change-request-openapi",
+                "datasetIdentifier": "test-dataset",
+                "entityTypeIdentifier": "placement-correction-request"
             }
         }),
     );
@@ -187,31 +215,45 @@ fn served_field_projection_keeps_response_data_strict_but_subsettable() {
     assert_valid(
         &schema,
         &json!({
-            "id": "00000000-0000-4000-8000-000000000001",
-            "revision": 4,
             "data": {
-                "placement": "00000000-0000-4000-8000-000000000010"
+                "recordIdentifier": "00000000-0000-4000-8000-000000000001",
+                "revisionIdentifier": "4",
+                "domainData": {
+                    "placement": "00000000-0000-4000-8000-000000000010"
+                },
+                "request": {
+                    "serverState": "submitted",
+                    "proposalVersion": 2,
+                    "editable": false
+                }
             },
-            "request": {
-                "serverState": "submitted",
-                "proposalVersion": 2,
-                "editable": false
+            "meta": {
+                "registryIdentifier": "change-request-openapi",
+                "datasetIdentifier": "test-dataset",
+                "entityTypeIdentifier": "placement-correction-request"
             }
         }),
     );
     assert_invalid(
         &schema,
         &json!({
-            "id": "00000000-0000-4000-8000-000000000001",
-            "revision": 4,
             "data": {
-                "placement": "00000000-0000-4000-8000-000000000010",
-                "proposedSite": "00000000-0000-4000-8000-000000000021"
+                "recordIdentifier": "00000000-0000-4000-8000-000000000001",
+                "revisionIdentifier": "4",
+                "domainData": {
+                    "placement": "00000000-0000-4000-8000-000000000010",
+                    "proposedSite": "00000000-0000-4000-8000-000000000021"
+                },
+                "request": {
+                    "serverState": "submitted",
+                    "proposalVersion": 2,
+                    "editable": false
+                }
             },
-            "request": {
-                "serverState": "submitted",
-                "proposalVersion": 2,
-                "editable": false
+            "meta": {
+                "registryIdentifier": "change-request-openapi",
+                "datasetIdentifier": "test-dataset",
+                "entityTypeIdentifier": "placement-correction-request"
             }
         }),
     );
@@ -228,22 +270,29 @@ fn target_get_schema_accepts_bounded_request_presence_annotations() {
         "200",
     );
     let record = json!({
-        "id": "00000000-0000-4000-8000-000000000010",
-        "revision": 8,
         "data": {
-            "site": "00000000-0000-4000-8000-000000000020"
+            "recordIdentifier": "00000000-0000-4000-8000-000000000010",
+            "revisionIdentifier": "8",
+            "domainData": {
+                "site": "00000000-0000-4000-8000-000000000020"
+            },
+            "requestPresence": {
+                "requests": [{
+                    "requestType": "placement-correction-request",
+                    "pending": true
+                }]
+            }
         },
-        "requestPresence": {
-            "requests": [{
-                "requestType": "placement-correction-request",
-                "pending": true
-            }]
+        "meta": {
+            "registryIdentifier": "change-request-openapi",
+            "datasetIdentifier": "test-dataset",
+            "entityTypeIdentifier": "placement"
         }
     });
     assert_valid(&schema, &record);
 
     let mut widened = record;
-    widened["requestPresence"]["requests"][0]["effectDigest"] = json!(effect_digest());
+    widened["data"]["requestPresence"]["requests"][0]["effectDigest"] = json!(effect_digest());
     assert_invalid(&schema, &widened);
 }
 
@@ -725,19 +774,19 @@ fn compiled_registry() -> CompiledRegistry {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"change-request-openapi","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"change-request-openapi","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://change-request-openapi.example.test"},
           "entities":[{
-            "id":"site","route":"sites","mutationMode":"create_only",
+            "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create_only",
             "fields":[{"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"}]
           },{
-            "id":"placement","route":"placements","mutationMode":"mutable",
+            "id":"placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable",
             "changeControl":{"requiredFor":["patch"]},
             "fields":[
               {"id":"site","type":"reference","target":"site","required":true,"classification":"internal"},
               {"id":"label","type":"string","maxLength":64,"classification":"internal"}
             ]
           },{
-            "id":"placement-correction-request","route":"placement-correction-requests","mutationMode":"mutable",
+            "id":"placement-correction-request","primaryDataset":"test-dataset","route":"placement-correction-requests","mutationMode":"mutable",
             "fields":[
               {"id":"placement","type":"reference","target":"placement","required":true,"classification":"internal"},
               {"id":"proposed-site","apiName":"proposedSite","type":"reference","target":"site","required":true,"classification":"internal"}
@@ -802,21 +851,21 @@ fn compiled_action_registry() -> CompiledRegistry {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"action-openapi","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"action-openapi","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://action-openapi.example.test"},
           "entities":[{
-            "id":"household","route":"households","mutationMode":"mutable",
+            "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
             "fields":[
               {"id":"household-code","apiName":"householdCode","type":"string","maxLength":64,"required":true,"classification":"internal"},
               {"id":"contact-person","apiName":"contactPerson","type":"reference","target":"person","classification":"restricted"}
             ]
           },{
-            "id":"person","route":"people","mutationMode":"mutable",
+            "id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable",
             "fields":[
               {"id":"person-code","apiName":"personCode","type":"string","maxLength":64,"required":true,"classification":"restricted"},
               {"id":"legal-name","apiName":"legalName","type":"string","maxLength":160,"required":true,"classification":"restricted"}
             ]
           },{
-            "id":"group-membership","route":"group-memberships","mutationMode":"create_only",
+            "id":"group-membership","primaryDataset":"test-dataset","route":"group-memberships","mutationMode":"create_only",
             "fields":[
               {"id":"person","type":"reference","target":"person","required":true,"classification":"restricted"},
               {"id":"household","type":"reference","target":"household","required":true,"classification":"restricted"}
@@ -895,14 +944,14 @@ fn compiled_asset_result_action_registry() -> CompiledRegistry {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"asset-action-openapi","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"asset-action-openapi","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://asset-action-openapi.example.test"},
           "entities":[{
-            "id":"asset","route":"assets","mutationMode":"create_only",
+            "id":"asset","primaryDataset":"test-dataset","route":"assets","mutationMode":"create_only",
             "fields":[
               {"id":"asset-code","apiName":"assetCode","type":"string","maxLength":64,"required":true,"classification":"internal"}
             ]
           },{
-            "id":"inspection","route":"inspections","mutationMode":"create_only",
+            "id":"inspection","primaryDataset":"test-dataset","route":"inspections","mutationMode":"create_only",
             "fields":[
               {"id":"asset","type":"reference","target":"asset","required":true,"classification":"internal"}
             ]

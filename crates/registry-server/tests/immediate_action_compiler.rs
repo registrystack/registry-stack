@@ -18,21 +18,21 @@ fn household_contact_project(extra: &str) -> String {
     r#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"immediate-actions","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"immediate-actions","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"person","route":"people","mutationMode":"mutable",
+            "id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable",
             "fields":[
               {"id":"person-code","apiName":"personCode","type":"string","maxLength":64,"required":true,"classification":"restricted"},
               {"id":"legal-name","apiName":"legalName","type":"string","maxLength":160,"required":true,"classification":"restricted"}
             ]
           },{
-            "id":"household","route":"households","mutationMode":"mutable",
+            "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
             "fields":[
               {"id":"household-code","type":"string","maxLength":64,"required":true,"classification":"restricted"},
               {"id":"contact-person","apiName":"contactPerson","type":"reference","target":"person","classification":"restricted"}
             ]
           },{
-            "id":"group-membership","route":"group-memberships","mutationMode":"mutable",
+            "id":"group-membership","primaryDataset":"test-dataset","route":"group-memberships","mutationMode":"mutable",
             "fields":[
               {"id":"person","type":"reference","target":"person","required":true,"classification":"restricted"},
               {"id":"household","type":"reference","target":"household","required":true,"classification":"restricted"}
@@ -236,8 +236,8 @@ fn action_grants_must_cover_every_derived_target_and_result() {
 #[test]
 fn immediate_actions_preserve_review_control_and_request_lifecycle_boundaries() {
     let controlled = household_contact_project("").replace(
-        r#""id":"household","route":"households","mutationMode":"mutable","#,
-        r#""id":"household","route":"households","mutationMode":"mutable","changeControl":{"requiredFor":["patch"]},"#,
+        r#""id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable","#,
+        r#""id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable","changeControl":{"requiredFor":["patch"]},"#,
     );
     let failure =
         compile_json(controlled.as_bytes()).expect_err("controlled target patches are refused");
@@ -249,13 +249,13 @@ fn immediate_actions_preserve_review_control_and_request_lifecycle_boundaries() 
     let request_target = br#"{
       "apiVersion":"registry.registrystack.org/v1alpha1",
       "kind":"RegistryProject",
-      "registry":{"id":"request-target-action","version":"1","defaultLanguage":"en"},
+      "registry":{"id":"request-target-action","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
       "entities":[{
-        "id":"record","route":"records","mutationMode":"mutable",
+        "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable",
         "changeControl":{"requiredFor":["patch"]},
         "fields":[{"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"}]
       },{
-        "id":"record-change","route":"record-changes","mutationMode":"mutable",
+        "id":"record-change","primaryDataset":"test-dataset","route":"record-changes","mutationMode":"mutable",
         "fields":[
           {"id":"record","type":"reference","target":"record","required":true,"classification":"internal"},
           {"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"}
@@ -326,15 +326,15 @@ fn action_effect_graph_rejects_invalid_sources_cycles_and_overlaps() {
     let cycle = br#"{
       "apiVersion":"registry.registrystack.org/v1alpha1",
       "kind":"RegistryProject",
-      "registry":{"id":"action-cycle","version":"1","defaultLanguage":"en"},
+      "registry":{"id":"action-cycle","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
       "entities":[{
-        "id":"alpha","route":"alphas","mutationMode":"mutable",
+        "id":"alpha","primaryDataset":"test-dataset","route":"alphas","mutationMode":"mutable",
         "fields":[
           {"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"},
           {"id":"beta","type":"reference","target":"beta","classification":"internal"}
         ]
       },{
-        "id":"beta","route":"betas","mutationMode":"mutable",
+        "id":"beta","primaryDataset":"test-dataset","route":"betas","mutationMode":"mutable",
         "fields":[
           {"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"},
           {"id":"alpha","type":"reference","target":"alpha","classification":"internal"}
@@ -374,10 +374,10 @@ fn action_inputs_resolve_project_vocabulary_values_for_type_compatibility() {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"action-vocabulary","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"action-vocabulary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "vocabularies":[{"id":"asset-type","values":["bridge","road"]}],
           "entities":[{
-            "id":"asset","route":"assets","mutationMode":"mutable",
+            "id":"asset","primaryDataset":"test-dataset","route":"assets","mutationMode":"mutable",
             "fields":[{"id":"kind","type":"vocabulary-code","vocabulary":"asset-type","required":true,"classification":"internal"}]
           }],
           "actions":[{
@@ -408,9 +408,9 @@ fn action_inputs_reject_unknown_project_vocabulary_references() {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"action-vocabulary","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"action-vocabulary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"asset","route":"assets","mutationMode":"mutable",
+            "id":"asset","primaryDataset":"test-dataset","route":"assets","mutationMode":"mutable",
             "fields":[{"id":"kind","type":"string","maxLength":32,"required":true,"classification":"internal"}]
           }],
           "actions":[{
@@ -455,8 +455,8 @@ fn action_bounds_apply_before_runtime_target_work() {
         r#"{{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{{"id":"action-bounds","version":"1","defaultLanguage":"en"}},
-          "entities":[{{"id":"record","route":"records","mutationMode":"mutable",
+          "registry":{{"id":"action-bounds","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
+          "entities":[{{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable",
             "fields":[{{"id":"label","type":"string","maxLength":32,"classification":"internal"}}]}}],
           "actions":[{{"id":"bulk-fix","inputs":[{}],"effects":[{}]}}],
           "accessProfiles":[{{"id":"operator","default":true,"principalClaim":"principal",
@@ -510,9 +510,9 @@ fn action_field_and_snapshot_ceilings_refuse_otherwise_valid_plans() {
         let project = json!({
             "apiVersion": "registry.registrystack.org/v1alpha1",
             "kind": "RegistryProject",
-            "registry": {"id": "action-size-bounds", "version": "1", "defaultLanguage": "en"},
+            "registry": {"id": "action-size-bounds", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
             "entities": [{
-                "id": "bounded-record", "route": "bounded-records", "mutationMode": "mutable",
+                "id": "bounded-record", "primaryDataset": "test-dataset", "route": "bounded-records", "mutationMode": "mutable",
                 "fields": fields
             }],
             "actions": [{

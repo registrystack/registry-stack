@@ -7,6 +7,10 @@ scenarios:
   - {id: civil-provider-discovery, project: civil-event, journeyStep: provider-discovery-description, assertion: The anonymous discovery artifact route serves the exact compiled provider-publication bytes without exposing protected operations.}
   - {id: labour-provider-discovery, project: labour-statistics, journeyStep: provider-discovery-description, assertion: The anonymous discovery artifact route serves the exact compiled provider-publication bytes.}
   - {id: social-ready, project: social-assistance, journeyStep: readiness, assertion: One local protected Registry becomes ready from a generated package.}
+  - {id: relay-record-lookup-context, project: social-assistance, journeyStep: lookup-success, assertion: A JSON lookup carries the exact Registry plus assistance-enrolments dataset and assistance-enrolment entity context once in response meta.}
+  - {id: relay-record-list-context, project: business-registry, journeyStep: first-page, assertion: A JSON list carries the exact homogeneous legal-entities and company context once in response meta and not per item.}
+  - {id: relay-record-read-context, project: business-registry, journeyStep: identifier-read, assertion: A JSON read carries the exact Registry plus legal-entities dataset and company entity context once in response meta.}
+  - {id: relay-record-search-context, project: business-registry, journeyStep: premises-first-page, assertion: A JSON search carries the exact homogeneous business-premises and premises context once in response meta and not per item.}
   - {id: social-lookup, project: social-assistance, journeyStep: lookup-success, assertion: A bounded protected lookup returns only its selected governed properties.}
   - {id: social-lookup-default, project: social-assistance, journeyStep: lookup-default, assertion: The default access profile contains exactly the compiled disclosure profile and the exact safe partial-string result rather than the source identifier.}
   - {id: social-caseworker-access-profile, project: social-assistance, journeyStep: caseworker-access-profile, assertion: An entitled caseworker explicitly selects its full access profile then narrows fields within it.}
@@ -33,6 +37,7 @@ scenarios:
   - {id: social-quota, project: social-assistance, journeyStep: quota-exhausted, assertion: The named lookup fails closed after its compiled-operation quota is exhausted.}
   - {id: business-discovery, project: business-registry, journeyStep: registry-discovery, assertion: Discovery derives only the public Consultation capabilities.}
   - {id: business-first-page, project: business-registry, journeyStep: first-page, assertion: The snapshot list is paginated and has a cursor.}
+  - {id: business-first-page-jsonld, project: business-registry, journeyStep: first-page-jsonld, assertion: The list's JSON-LD encoding conforms to the shared Registry Record base schema and carries the exact shared-then-governed context composition.}
   - {id: business-second-page, project: business-registry, journeyStep: second-page, assertion: The emitted cursor retrieves a distinct second page.}
   - {id: business-terminal-page, project: business-registry, journeyStep: terminal-page, assertion: A terminal page carries an explicit null next cursor.}
   - {id: business-status-filter, project: business-registry, journeyStep: status-filter, assertion: The declared status equality filter is executable by itself.}

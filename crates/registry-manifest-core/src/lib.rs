@@ -379,6 +379,8 @@ pub struct MetadataManifest {
     pub public_services: Vec<ServiceManifest>,
     #[serde(default)]
     pub data_services: Vec<DataServiceManifest>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub distributions: Vec<DistributionManifest>,
     #[serde(default)]
     pub forms: Vec<FormManifest>,
     #[serde(default)]
@@ -442,6 +444,8 @@ struct MetadataManifestFields {
     #[serde(default)]
     data_services: Vec<DataServiceManifest>,
     #[serde(default)]
+    distributions: Vec<DistributionManifest>,
+    #[serde(default)]
     forms: Vec<FormManifest>,
     #[serde(default)]
     datasets: Vec<DatasetManifest>,
@@ -463,6 +467,7 @@ impl From<MetadataManifestFields> for MetadataManifest {
             authorities: fields.authorities,
             public_services: fields.public_services,
             data_services: fields.data_services,
+            distributions: fields.distributions,
             forms: fields.forms,
             datasets: fields.datasets,
             codelists: fields.codelists,
@@ -737,6 +742,29 @@ pub struct DataServiceManifest {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+pub struct DistributionManifest {
+    pub id: String,
+    pub dataset: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_service: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<LocalizedText>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<LocalizedText>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub iri: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct FormManifest {
     pub id: String,
     #[serde(default)]
@@ -829,6 +857,10 @@ pub struct FormFulfillmentManifest {
 #[serde(deny_unknown_fields)]
 pub struct DatasetManifest {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub iri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
     pub title: LocalizedText,
     #[serde(default)]
     pub description: Option<LocalizedText>,
@@ -1236,6 +1268,7 @@ pub struct CompiledMetadataInner {
     pub authorities: BTreeMap<String, CompiledAuthority>,
     pub public_services: BTreeMap<String, CompiledService>,
     pub data_services: BTreeMap<String, CompiledDataService>,
+    pub distributions: BTreeMap<String, CompiledDistribution>,
     pub forms: BTreeMap<String, CompiledForm>,
     pub requirements: BTreeMap<String, CompiledRequirement>,
     pub evidence_types: BTreeMap<String, CompiledEvidenceType>,
@@ -1318,6 +1351,25 @@ pub struct CompiledDataService {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CompiledDistribution {
+    pub id: String,
+    pub iri: String,
+    pub dataset: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access_service: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub download_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+    pub title: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct CompiledForm {
     pub id: String,
     pub iri: String,
@@ -1381,6 +1433,9 @@ pub struct CompiledFormField {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct CompiledDataset {
     pub dataset_id: String,
+    pub iri: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
     pub title: String,
     pub description: String,
     pub owner: String,
@@ -1617,6 +1672,14 @@ impl CompiledMetadata {
         self.inner.data_services.get(data_service_id)
     }
 
+    pub fn distributions(&self) -> impl Iterator<Item = &CompiledDistribution> {
+        self.inner.distributions.values()
+    }
+
+    pub fn distribution(&self, distribution_id: &str) -> Option<&CompiledDistribution> {
+        self.inner.distributions.get(distribution_id)
+    }
+
     pub fn forms(&self) -> impl Iterator<Item = &CompiledForm> {
         self.inner.forms.values()
     }
@@ -1724,6 +1787,50 @@ impl CompiledMetadata {
             .filter(|(id, _)| visible_evidence_types.contains(id.as_str()))
             .map(|(id, evidence_type)| (id.clone(), evidence_type.clone()))
             .collect::<BTreeMap<_, _>>();
+        let data_services = self
+            .inner
+            .data_services
+            .iter()
+            .filter_map(|(id, data_service)| {
+                let mut data_service = data_service.clone();
+                data_service
+                    .serves_datasets
+                    .retain(|dataset_id| datasets.contains_key(dataset_id));
+                (!data_service.serves_datasets.is_empty()).then(|| (id.clone(), data_service))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let visible_data_service_iris = data_services
+            .values()
+            .map(|data_service| data_service.iri.as_str())
+            .collect::<BTreeSet<_>>();
+        let distributions = self
+            .inner
+            .distributions
+            .iter()
+            .filter(|(_, distribution)| {
+                datasets.contains_key(&distribution.dataset)
+                    && distribution
+                        .access_service
+                        .as_deref()
+                        .is_none_or(|iri| visible_data_service_iris.contains(iri))
+            })
+            .map(|(id, distribution)| (id.clone(), distribution.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let public_services = self
+            .inner
+            .public_services
+            .iter()
+            .map(|(id, service)| {
+                let mut service = service.clone();
+                service
+                    .produces
+                    .retain(|dataset_id| datasets.contains_key(dataset_id));
+                service
+                    .data_services
+                    .retain(|data_service_id| data_services.contains_key(data_service_id));
+                (id.clone(), service)
+            })
+            .collect::<BTreeMap<_, _>>();
         let visible_requirements = evidence_types
             .values()
             .flat_map(|evidence_type| evidence_type.proves.iter().map(String::as_str))
@@ -1752,8 +1859,9 @@ impl CompiledMetadata {
             inner: Arc::new(CompiledMetadataInner {
                 catalog: self.inner.catalog.clone(),
                 authorities: self.inner.authorities.clone(),
-                public_services: self.inner.public_services.clone(),
-                data_services: self.inner.data_services.clone(),
+                public_services,
+                data_services,
+                distributions,
                 forms: self.inner.forms.clone(),
                 requirements,
                 evidence_types,
@@ -2236,6 +2344,12 @@ fn validate_collection_limits(manifest: &MetadataManifest, errors: &mut Vec<Vali
         errors,
     );
     validate_count_limit(
+        manifest.distributions.len(),
+        "distributions",
+        MAX_TOP_LEVEL_COLLECTION_ITEMS,
+        errors,
+    );
+    validate_count_limit(
         manifest.forms.len(),
         "forms",
         MAX_TOP_LEVEL_COLLECTION_ITEMS,
@@ -2485,6 +2599,17 @@ pub fn validate_manifest(manifest: &MetadataManifest) -> Result<(), MetadataErro
             ));
         }
         validate_non_empty(&dataset.title.text(), format!("{path}.title"), &mut errors);
+        validate_optional_uri(
+            dataset.iri.as_deref(),
+            format!("{path}.iri"),
+            &manifest.vocabularies,
+            &mut errors,
+        );
+        validate_optional_non_empty(
+            dataset.version.as_deref(),
+            format!("{path}.version"),
+            &mut errors,
+        );
         validate_uri_list(
             &dataset.conforms_to,
             format!("{path}.conforms_to"),
@@ -2549,6 +2674,7 @@ pub fn validate_manifest(manifest: &MetadataManifest) -> Result<(), MetadataErro
         );
     }
     validate_service_catalog_dataset_refs(manifest, &service_refs, &dataset_ids, &mut errors);
+    validate_distributions(manifest, &service_refs, &dataset_ids, &mut errors);
 
     if errors.is_empty() {
         Ok(())
@@ -2633,6 +2759,16 @@ pub fn compile_manifest(manifest: &MetadataManifest) -> Result<CompiledMetadata,
             )
         })
         .collect::<BTreeMap<_, _>>();
+    let distributions = manifest
+        .distributions
+        .iter()
+        .map(|distribution| {
+            (
+                distribution.id.clone(),
+                compile_distribution(manifest, &base_url, &data_services, distribution),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     let forms = manifest
         .forms
         .iter()
@@ -2696,6 +2832,7 @@ pub fn compile_manifest(manifest: &MetadataManifest) -> Result<CompiledMetadata,
             authorities,
             public_services,
             data_services,
+            distributions,
             forms,
             requirements,
             evidence_types,
@@ -2741,6 +2878,10 @@ pub fn render_catalog(compiled: &CompiledMetadata) -> Value {
     let data_services = compiled.data_services().collect::<Vec<_>>();
     if !data_services.is_empty() {
         catalog["data_services"] = json!(data_services);
+    }
+    let distributions = compiled.distributions().collect::<Vec<_>>();
+    if !distributions.is_empty() {
+        catalog["distributions"] = json!(distributions);
     }
     let forms = compiled.forms().collect::<Vec<_>>();
     if !forms.is_empty() {
@@ -3955,6 +4096,13 @@ fn validate_service_catalog_dataset_refs(
         }
     }
     for (index, data_service) in manifest.data_services.iter().enumerate() {
+        if data_service.serves_datasets.is_empty() {
+            errors.push(ValidationError::new(
+                format!("data_services[{index}].serves_datasets"),
+                "data service serves_datasets must contain at least one dataset",
+            ));
+        }
+        let mut served_dataset_ids = BTreeSet::new();
         for (dataset_index, dataset_id) in data_service.serves_datasets.iter().enumerate() {
             validate_id(
                 dataset_id,
@@ -3967,6 +4115,12 @@ fn validate_service_catalog_dataset_refs(
                     "data service serves_datasets must reference a known dataset",
                 ));
             }
+            if !served_dataset_ids.insert(dataset_id.as_str()) {
+                errors.push(ValidationError::new(
+                    format!("data_services[{index}].serves_datasets[{dataset_index}]"),
+                    "data service serves_datasets must not contain duplicates",
+                ));
+            }
         }
     }
     let _ = (
@@ -3975,6 +4129,97 @@ fn validate_service_catalog_dataset_refs(
         &service_refs.form_ids,
         &service_refs.channel_ids,
     );
+}
+
+fn validate_distributions(
+    manifest: &MetadataManifest,
+    service_refs: &ServiceCatalogRefs<'_>,
+    dataset_ids: &BTreeSet<&str>,
+    errors: &mut Vec<ValidationError>,
+) {
+    let data_services = manifest
+        .data_services
+        .iter()
+        .map(|service| (service.id.as_str(), service))
+        .collect::<BTreeMap<_, _>>();
+    let mut distribution_ids = BTreeSet::new();
+
+    for (index, distribution) in manifest.distributions.iter().enumerate() {
+        let path = format!("distributions[{index}]");
+        validate_id(&distribution.id, format!("{path}.id"), errors);
+        if !distribution_ids.insert(distribution.id.as_str()) {
+            errors.push(ValidationError::new(
+                format!("{path}.id"),
+                "distribution id must be unique",
+            ));
+        }
+        validate_id(&distribution.dataset, format!("{path}.dataset"), errors);
+        if !dataset_ids.contains(distribution.dataset.as_str()) {
+            errors.push(ValidationError::new(
+                format!("{path}.dataset"),
+                "distribution dataset must reference a known dataset",
+            ));
+        }
+        validate_optional_uri(
+            distribution.iri.as_deref(),
+            format!("{path}.iri"),
+            &manifest.vocabularies,
+            errors,
+        );
+        if let Some(access_service_id) = distribution.access_service.as_deref() {
+            validate_id(access_service_id, format!("{path}.access_service"), errors);
+            if !service_refs.data_service_ids.contains(access_service_id) {
+                errors.push(ValidationError::new(
+                    format!("{path}.access_service"),
+                    "distribution access_service must reference a known data service",
+                ));
+            } else if data_services.get(access_service_id).is_some_and(|service| {
+                !service
+                    .serves_datasets
+                    .iter()
+                    .any(|dataset| dataset == &distribution.dataset)
+            }) {
+                errors.push(ValidationError::new(
+                    format!("{path}.access_service"),
+                    "distribution access_service must serve the distribution dataset",
+                ));
+            }
+        }
+        if distribution.access_service.is_none()
+            && distribution.access_url.is_none()
+            && distribution.download_url.is_none()
+        {
+            errors.push(ValidationError::new(
+                path.clone(),
+                "distribution must declare access_service, access_url, or download_url",
+            ));
+        }
+        validate_optional_distribution_url(
+            distribution.access_url.as_deref(),
+            format!("{path}.access_url"),
+            errors,
+        );
+        validate_optional_distribution_url(
+            distribution.download_url.as_deref(),
+            format!("{path}.download_url"),
+            errors,
+        );
+        if let Some(media_type) = distribution.media_type.as_deref() {
+            validate_media_type(media_type, format!("{path}.media_type"), errors);
+        }
+        validate_optional_uri(
+            distribution.format.as_deref(),
+            format!("{path}.format"),
+            &manifest.vocabularies,
+            errors,
+        );
+        if let Some(title) = distribution.title.as_ref() {
+            validate_non_empty(&title.text(), format!("{path}.title"), errors);
+        }
+        if let Some(description) = distribution.description.as_ref() {
+            validate_non_empty(&description.text(), format!("{path}.description"), errors);
+        }
+    }
 }
 
 fn validate_entities(
@@ -4666,6 +4911,45 @@ fn compile_data_service(
     }
 }
 
+fn compile_distribution(
+    manifest: &MetadataManifest,
+    base_url: &str,
+    data_services: &BTreeMap<String, CompiledDataService>,
+    distribution: &DistributionManifest,
+) -> CompiledDistribution {
+    CompiledDistribution {
+        id: distribution.id.clone(),
+        iri: distribution
+            .iri
+            .as_deref()
+            .and_then(|iri| expand_uri(iri, &manifest.vocabularies))
+            .unwrap_or_else(|| format!("{base_url}/metadata/distributions/{}", distribution.id)),
+        dataset: distribution.dataset.clone(),
+        access_service: distribution
+            .access_service
+            .as_deref()
+            .and_then(|id| data_services.get(id))
+            .map(|service| service.iri.clone()),
+        access_url: distribution.access_url.clone(),
+        download_url: distribution.download_url.clone(),
+        media_type: distribution.media_type.clone(),
+        format: distribution
+            .format
+            .as_deref()
+            .and_then(|format| expand_uri(format, &manifest.vocabularies)),
+        title: distribution
+            .title
+            .as_ref()
+            .map(LocalizedText::text)
+            .unwrap_or_default(),
+        description: distribution
+            .description
+            .as_ref()
+            .map(LocalizedText::text)
+            .unwrap_or_default(),
+    }
+}
+
 fn compile_form(manifest: &MetadataManifest, base_url: &str, form: &FormManifest) -> CompiledForm {
     CompiledForm {
         id: form.id.clone(),
@@ -4773,6 +5057,12 @@ fn compile_dataset(
         .collect();
     CompiledDataset {
         dataset_id: dataset.id.clone(),
+        iri: dataset
+            .iri
+            .as_deref()
+            .and_then(|iri| expand_uri(iri, &manifest.vocabularies))
+            .unwrap_or_else(|| dataset_url_from_id(&dataset.id)),
+        version: dataset.version.clone(),
         title: dataset.title.text(),
         description: dataset
             .description
@@ -5025,7 +5315,11 @@ fn compile_dataset_policy(
     base_url: &str,
     dataset: &DatasetManifest,
 ) -> CompiledDatasetPolicy {
-    let dataset_target = dataset_url_from_id(&dataset.id);
+    let dataset_target = dataset
+        .iri
+        .as_deref()
+        .and_then(|iri| expand_uri(iri, &manifest.vocabularies))
+        .unwrap_or_else(|| dataset_url_from_id(&dataset.id));
     let default_uid = format!("#policy-{}-offer", dataset.id);
     let default_assigner = manifest
         .catalog
@@ -5259,6 +5553,12 @@ fn catalog_dataset_json(dataset: &CompiledDataset) -> Value {
         "conforms_to": dataset.conforms_to,
         "entities": dataset.entities.values().map(catalog_entity_json).collect::<Vec<_>>(),
     });
+    if !dataset.iri.starts_with("#dataset-") {
+        dataset_json["iri"] = json!(dataset.iri);
+    }
+    if let Some(version) = dataset.version.as_deref() {
+        dataset_json["version"] = json!(version);
+    }
     if !dataset.evidence_offerings.is_empty() {
         dataset_json["evidence_offerings"] =
             json!(dataset.evidence_offerings.values().collect::<Vec<_>>());
@@ -5299,7 +5599,7 @@ fn catalog_field_json(field: &CompiledField) -> Value {
     })
 }
 
-fn base_dcat_dataset(_compiled: &CompiledMetadata, dataset: &CompiledDataset) -> Value {
+fn base_dcat_dataset(compiled: &CompiledMetadata, dataset: &CompiledDataset) -> Value {
     let mut obj = json!({
         "@id": dataset_url(dataset),
         "@type": "dcat:Dataset",
@@ -5309,8 +5609,49 @@ fn base_dcat_dataset(_compiled: &CompiledMetadata, dataset: &CompiledDataset) ->
         "dcterms:conformsTo": dataset.conforms_to,
         "dcat:landingPage": dataset_url(dataset),
     });
+    if let Some(version) = dataset.version.as_deref() {
+        obj["dcat:version"] = json!(version);
+    }
+    let distributions = compiled
+        .distributions()
+        .filter(|distribution| distribution.dataset == dataset.dataset_id)
+        .map(distribution_node)
+        .collect::<Vec<_>>();
+    if !distributions.is_empty() {
+        obj["dcat:distribution"] = Value::Array(distributions);
+    }
     obj["odrl:hasPolicy"] = render_dataset_policy(dataset);
     obj
+}
+
+fn distribution_node(distribution: &CompiledDistribution) -> Value {
+    let mut node = json!({
+        "@id": distribution.iri,
+        "@type": "dcat:Distribution",
+        "dcterms:identifier": distribution.id,
+    });
+    if !distribution.title.is_empty() {
+        node["dcterms:title"] = json!(distribution.title);
+    }
+    if !distribution.description.is_empty() {
+        node["dcterms:description"] = json!(distribution.description);
+    }
+    if let Some(access_service) = distribution.access_service.as_deref() {
+        node["dcat:accessService"] = json!(access_service);
+    }
+    if let Some(access_url) = distribution.access_url.as_deref() {
+        node["dcat:accessURL"] = json!(access_url);
+    }
+    if let Some(download_url) = distribution.download_url.as_deref() {
+        node["dcat:downloadURL"] = iri_object(download_url);
+    }
+    if let Some(media_type) = distribution.media_type.as_deref() {
+        node["dcat:mediaType"] = json!(media_type_iri(media_type));
+    }
+    if let Some(format) = distribution.format.as_deref() {
+        node["dcterms:format"] = json!(format);
+    }
+    node
 }
 
 fn breg_dcat_dataset(compiled: &CompiledMetadata, dataset: &CompiledDataset) -> Value {
@@ -5948,7 +6289,13 @@ fn evidence_jsonld_nodes(compiled: &CompiledMetadata) -> Vec<Value> {
             "registry_manifest:evidenceType": iri_object(&offering.evidence_type_iri),
             "registry_manifest:issuingAuthority": issuing_authority_node(&offering.issuing_authority),
             "registry_manifest:accessKind": offering.access.kind,
-            "registry_manifest:servesEntity": serves_entity_iri(&dataset_url_from_id(&offering.dataset_id), &offering.entity),
+            "registry_manifest:servesEntity": serves_entity_iri(
+                &compiled
+                    .dataset(&offering.dataset_id)
+                    .map(dataset_url)
+                    .unwrap_or_else(|| dataset_url_from_id(&offering.dataset_id)),
+                &offering.entity,
+            ),
         });
         if let Some(endpoint_url) = offering.access.endpoint_url.as_deref() {
             let mut service = json!({
@@ -6603,6 +6950,54 @@ fn validate_http_url(value: &str, path: impl Into<String>, errors: &mut Vec<Vali
     }
 }
 
+fn validate_optional_distribution_url(
+    value: Option<&str>,
+    path: impl Into<String>,
+    errors: &mut Vec<ValidationError>,
+) {
+    if value.is_some_and(|value| !is_well_formed_http_https_iri(value)) {
+        errors.push(ValidationError::new(
+            path,
+            "URL must be an absolute http:// or https:// IRI with a host",
+        ));
+    }
+}
+
+fn validate_media_type(value: &str, path: impl Into<String>, errors: &mut Vec<ValidationError>) {
+    let valid_token = |token: &str| {
+        !token.is_empty()
+            && token.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric()
+                    || matches!(
+                        byte,
+                        b'!' | b'#'
+                            | b'$'
+                            | b'%'
+                            | b'&'
+                            | b'\''
+                            | b'*'
+                            | b'+'
+                            | b'-'
+                            | b'.'
+                            | b'^'
+                            | b'_'
+                            | b'`'
+                            | b'|'
+                            | b'~'
+                    )
+            })
+    };
+    let valid = value
+        .split_once('/')
+        .is_some_and(|(kind, subtype)| valid_token(kind) && valid_token(subtype));
+    if !valid {
+        errors.push(ValidationError::new(
+            path,
+            "media type must use the type/subtype syntax without parameters",
+        ));
+    }
+}
+
 fn validate_https_url(value: &str, path: impl Into<String>, errors: &mut Vec<ValidationError>) {
     if !value.starts_with("https://") || https_url_host(value).is_none() {
         errors.push(ValidationError::new(
@@ -6781,11 +7176,15 @@ fn normalized_base_url(base_url: &str) -> String {
 }
 
 fn dataset_url(dataset: &CompiledDataset) -> String {
-    dataset_url_from_id(&dataset.dataset_id)
+    dataset.iri.clone()
 }
 
 fn dataset_url_from_id(dataset_id: &str) -> String {
     format!("#dataset-{dataset_id}")
+}
+
+fn media_type_iri(media_type: &str) -> String {
+    format!("https://www.iana.org/assignments/media-types/{media_type}")
 }
 
 fn entity_schema_id(

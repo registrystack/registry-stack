@@ -142,17 +142,19 @@ async fn erased_terminal_request_get_keeps_metadata_and_scopes_result_links_to_t
         operator,
     )
     .await;
-    assert_eq!(visible.body["request"]["serverState"], "applied");
+    assert_eq!(visible.body["data"]["request"]["serverState"], "applied");
     assert_eq!(
-        visible.body["request"]["history"]["proposals"][0]["resultLinkCount"],
+        visible.body["data"]["request"]["history"]["proposals"][0]["resultLinkCount"],
         1
     );
     assert_eq!(
-        visible.body["request"]["history"]["proposals"][0]["resultLinks"][0]["targetEntityId"],
+        visible.body["data"]["request"]["history"]["proposals"][0]["resultLinks"][0]
+            ["targetEntityId"],
         "placement"
     );
     assert_eq!(
-        visible.body["request"]["history"]["proposals"][0]["resultLinks"][0]["targetRecordId"],
+        visible.body["data"]["request"]["history"]["proposals"][0]["resultLinks"][0]
+            ["targetRecordId"],
         placement.id
     );
 
@@ -166,11 +168,11 @@ async fn erased_terminal_request_get_keeps_metadata_and_scopes_result_links_to_t
     )
     .await;
     assert_eq!(
-        hidden.body["request"]["history"]["proposals"][0]["resultLinkCount"],
+        hidden.body["data"]["request"]["history"]["proposals"][0]["resultLinkCount"],
         0
     );
     assert_eq!(
-        hidden.body["request"]["history"]["proposals"][0]["resultLinks"]
+        hidden.body["data"]["request"]["history"]["proposals"][0]["resultLinks"]
             .as_array()
             .expect("result links are an array")
             .len(),
@@ -186,9 +188,12 @@ async fn erased_terminal_request_get_keeps_metadata_and_scopes_result_links_to_t
         ),
     )
     .await;
-    assert_eq!(public_detail.body["request"]["serverState"], "applied");
-    assert_eq!(public_detail.body["request"]["proposalVersion"], 1);
-    assert_effect_digests_withheld(&public_detail.body);
+    assert_eq!(
+        public_detail.body["data"]["request"]["serverState"],
+        "applied"
+    );
+    assert_eq!(public_detail.body["data"]["request"]["proposalVersion"], 1);
+    assert_effect_digests_withheld(&public_detail.body["data"]);
 
     let public_list = get_record_anonymous(
         &app,
@@ -199,7 +204,7 @@ async fn erased_terminal_request_get_keeps_metadata_and_scopes_result_links_to_t
         .as_array()
         .expect("public list returns items")
         .iter()
-        .find(|item| item["id"] == request.id)
+        .find(|item| item["recordIdentifier"] == request.id)
         .expect("public list includes created request");
     assert_eq!(public_item["request"]["serverState"], "applied");
     assert_eq!(public_item["request"]["proposalVersion"], 1);
@@ -234,20 +239,24 @@ async fn erased_terminal_request_get_keeps_metadata_and_scopes_result_links_to_t
         claims("operator", "operator-principal"),
     )
     .await;
-    assert_eq!(erased.body["request"]["serverState"], "applied");
-    assert_eq!(erased.body["request"]["detailErased"], true);
-    assert_eq!(erased.body["data"], json!({}));
-    assert_eq!(erased.body["revision"], request.revision + 4);
+    assert_eq!(erased.body["data"]["request"]["serverState"], "applied");
+    assert_eq!(erased.body["data"]["request"]["detailErased"], true);
+    assert_eq!(erased.body["data"]["domainData"], json!({}));
     assert_eq!(
-        erased.body["request"]["history"]["proposals"][0]["detailErased"],
+        erased.body["data"]["revisionIdentifier"],
+        (request.revision + 4).to_string()
+    );
+    assert_eq!(
+        erased.body["data"]["request"]["history"]["proposals"][0]["detailErased"],
         true
     );
     assert_eq!(
-        erased.body["request"]["history"]["proposals"][0]["resultLinkCount"],
+        erased.body["data"]["request"]["history"]["proposals"][0]["resultLinkCount"],
         1
     );
     assert_eq!(
-        erased.body["request"]["history"]["proposals"][0]["resultLinks"][0]["targetRecordId"],
+        erased.body["data"]["request"]["history"]["proposals"][0]["resultLinks"][0]
+            ["targetRecordId"],
         placement.id
     );
     assert!(
@@ -267,13 +276,13 @@ async fn erased_terminal_request_get_keeps_metadata_and_scopes_result_links_to_t
         claims("request-only", "request-principal"),
     )
     .await;
-    assert_eq!(erased_hidden.body["request"]["detailErased"], true);
+    assert_eq!(erased_hidden.body["data"]["request"]["detailErased"], true);
     assert_eq!(
-        erased_hidden.body["request"]["history"]["proposals"][0]["resultLinkCount"],
+        erased_hidden.body["data"]["request"]["history"]["proposals"][0]["resultLinkCount"],
         0
     );
     assert_eq!(
-        erased_hidden.body["request"]["history"]["proposals"][0]["resultLinks"]
+        erased_hidden.body["data"]["request"]["history"]["proposals"][0]["resultLinks"]
             .as_array()
             .expect("result links are an array")
             .len(),
@@ -288,9 +297,9 @@ async fn erased_terminal_request_get_keeps_metadata_and_scopes_result_links_to_t
         ),
     )
     .await;
-    assert_eq!(erased_public.body["request"]["detailErased"], true);
-    assert_eq!(erased_public.body["data"], json!({}));
-    assert_effect_digests_withheld(&erased_public.body);
+    assert_eq!(erased_public.body["data"]["request"]["detailErased"], true);
+    assert_eq!(erased_public.body["data"]["domainData"], json!({}));
+    assert_effect_digests_withheld(&erased_public.body["data"]);
 
     let same_key_replay = send_action(
         &app,
@@ -324,7 +333,7 @@ async fn erased_terminal_request_get_keeps_metadata_and_scopes_result_links_to_t
     )
     .await;
     assert_eq!(
-        empty_history.body["request"]["history"],
+        empty_history.body["data"]["request"]["history"],
         Value::Null,
         "continuing after the only proposal returns no retained-history page"
     );
@@ -482,7 +491,7 @@ async fn snapshot_reads_exclude_soft_erased_request_revisions() {
         .as_array()
         .expect("snapshot items are an array");
     assert_eq!(before_items.len(), 1);
-    assert_eq!(before_items[0]["id"], request.id);
+    assert_eq!(before_items[0]["recordIdentifier"], request.id);
 
     let retention = RequestRetentionOperatorService::new_for_test(
         registry.as_ref().clone(),
@@ -682,12 +691,13 @@ async fn create_record(
         response.body
     );
     CreatedRecord {
-        id: response.body["id"]
+        id: response.body["data"]["recordIdentifier"]
             .as_str()
             .expect("created response has id")
             .to_owned(),
-        revision: response.body["revision"]
-            .as_u64()
+        revision: response.body["data"]["revisionIdentifier"]
+            .as_str()
+            .and_then(|revision| revision.parse().ok())
             .expect("created response has revision"),
     }
 }
@@ -812,7 +822,7 @@ struct RequestAction {
 }
 
 fn action(body: &Value, operation: &str) -> RequestAction {
-    let actions = body["request"]["actions"]
+    let actions = body["data"]["request"]["actions"]
         .as_array()
         .expect("request read exposes actions");
     let action = actions
@@ -902,17 +912,17 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"request-read-retention","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"request-read-retention","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[
             {
-              "id":"site","route":"sites","mutationMode":"create_only","classification":"internal",
+              "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create_only","classification":"internal",
               "fields":[
                 {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
                 {"id":"name","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}
               ]
             },
             {
-              "id":"placement","route":"placements","mutationMode":"mutable","classification":"internal",
+              "id":"placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable","classification":"internal",
               "changeControl":{"requiredFor":["patch"]},
               "fields":[
                 {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
@@ -920,7 +930,7 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
               ]
             },
             {
-              "id":"correction-request","route":"correction-requests","mutationMode":"mutable","classification":"public",
+              "id":"correction-request","primaryDataset":"test-dataset","route":"correction-requests","mutationMode":"mutable","classification":"public",
               "fields":[
                 {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"public"},
                 {"id":"placement","type":"reference","target":"placement","required":true,"classification":"public"},

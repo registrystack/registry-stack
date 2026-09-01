@@ -250,7 +250,7 @@ async fn real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_determ
     assert!(!first.replayed());
     let first_response: Value = serde_json::from_slice(first.response().body())
         .expect("held create response is strict JSON");
-    let raw_record_id = first_response["id"]
+    let raw_record_id = first_response["data"]["recordIdentifier"]
         .as_str()
         .expect("create response contains a record id");
     let first_capture = capture(&database, 0).await;
@@ -613,9 +613,9 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"webhook-outbox-registry","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"webhook-outbox-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"case","route":"cases","mutationMode":"mutable","classification":"restricted",
+            "id":"case","primaryDataset":"test-dataset","route":"cases","mutationMode":"mutable","classification":"restricted",
             "fields":[
               {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"},
               {"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"},
@@ -691,6 +691,7 @@ fn create_request<'a>(
             "label".to_owned(),
             "restricted_note".to_owned(),
         ]),
+        representation: registry_server::record_profile::RecordRepresentation::Json,
         correlation: registry_server::correlation::RequestCorrelation::server_created(),
     }
 }
@@ -718,6 +719,7 @@ fn patch_request<'a>(
             "label".to_owned(),
             "restricted_note".to_owned(),
         ]),
+        representation: registry_server::record_profile::RecordRepresentation::Json,
         correlation: registry_server::correlation::RequestCorrelation::server_created(),
     }
 }

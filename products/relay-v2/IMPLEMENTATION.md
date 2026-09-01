@@ -257,29 +257,37 @@ source values. `relayctl tooling editor` embeds reproducible JSON Schemas
 derived from the strict `RegistryContract` and `RelayRuntime` Rust types and
 writes collision-safe project-local mappings for VS Code and Zed.
 
-### Registry Core and response shapes
+### Registry Record and response shapes
 
-Every successful Record has:
+Every successful JSON or JSON-LD response has one homogeneous context and a
+Record that does not duplicate it:
 
 ```json
 {
-  "registryIdentifier": "urn:example:registry:businesses",
-  "recordIdentifier": "B-00142",
-  "revisionIdentifier": "17",
-  "lifecycleState": "ACTIVE",
-  "schemaReference": "https://registry.example/v2/artifacts/business.schema.json",
-  "semanticModelReference": "https://registry.example/v2/artifacts/business.vocabulary.jsonld",
-  "authorityIdentifier": "urn:example:authority:registrar",
-  "recordedAt": "2026-08-01T10:30:00Z",
-  "domainData": {}
+  "data": {
+    "recordIdentifier": "B-00142",
+    "revisionIdentifier": "17",
+    "lifecycleState": "ACTIVE",
+    "schemaReference": "https://registry.example/v2/artifacts/business.schema.json",
+    "semanticModelReference": "https://registry.example/v2/artifacts/business.vocabulary.jsonld",
+    "authorityIdentifier": "urn:example:authority:registrar",
+    "recordedAt": "2026-08-01T10:30:00Z",
+    "domainData": {}
+  },
+  "meta": {
+    "registryIdentifier": "urn:example:registry:businesses",
+    "datasetIdentifier": "legal-entities",
+    "entityTypeIdentifier": "company"
+  }
 }
 ```
 
 The Registry and Record identifier pair is authoritative. JSON-LD adds a
-derived global `@id` and the resource semantic class as `@type` but retains
-both identifiers. Lifecycle values come from
-the resource's governed codelist. `recordedAt` is source-owned and is never
-Relay observation time.
+derived global `@id` and the resource semantic class as `@type`. Its ordered
+context composes the shared Registry Record context before a generated
+operation context that cannot redefine shared terms. Lifecycle values come
+from the resource's governed codelist. `recordedAt` is source-owned and is
+never Relay observation time.
 
 Single read and resolved lookup responses use `{data, meta}`. Lists use:
 
@@ -439,8 +447,9 @@ A named `point-bbox` search requires exactly one
 are ordered without antimeridian wrapping, and compiled longitude and latitude
 span limits are enforced before source access. Containment is inclusive. A
 list rejects `bbox`, and list and search scopes do not imply one another. The
-cursor binds the search identifier, bbox, selected access and disclosure
-profiles, fields, wire format, format profile, order, revisions, and expiry.
+cursor binds the search identifier, dataset, entity type, response profile,
+bbox, selected access and disclosure profiles, fields, wire format, format
+profile, order, revisions, and expiry.
 
 `GET /v2` returns the closed service document
 `{registryIdentifier, name, authority, operator, authoritativeScope, product,

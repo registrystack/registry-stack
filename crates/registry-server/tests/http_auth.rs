@@ -44,8 +44,10 @@ registry:
   id: authenticated-read-surface
   version: 0.1.0
   defaultLanguage: en
+  canonicalBaseIri: https://authoring.example.test
 entities:
   - id: case
+    primaryDataset: test-dataset
     route: cases
     mutationMode: mutable
     tombstone: false
@@ -83,8 +85,10 @@ registry:
   id: canonical-id-auth-boundary
   version: 0.1.0
   defaultLanguage: en
+  canonicalBaseIri: https://authoring.example.test
 entities:
   - id: case
+    primaryDataset: test-dataset
     route: cases
     mutationMode: mutable
     tombstone: false

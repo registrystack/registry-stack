@@ -440,7 +440,7 @@ async fn authenticated_webhook_service_event_material_does_not_grant_request_act
     .await;
     assert_eq!(service_view.status, StatusCode::OK);
     assert!(
-        service_view.body["request"]["actions"]
+        service_view.body["data"]["request"]["actions"]
             .as_array()
             .is_none_or(|actions| actions.is_empty()),
         "service read profile must not receive request action links"
@@ -493,7 +493,10 @@ async fn authenticated_webhook_service_event_material_does_not_grant_request_act
         api_claims("submitter-principal", None),
     )
     .await;
-    assert_eq!(submitter_view.body["request"]["serverState"], "draft");
+    assert_eq!(
+        submitter_view.body["data"]["request"]["serverState"],
+        "draft"
+    );
     assert_eq!(
         outbox_count(&database.admin).await,
         0,
@@ -523,22 +526,22 @@ fn compiled_lifecycle_registry() -> registry_server::CompiledRegistry {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"request-event-registry","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"request-event-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"asset-site","route":"sites","mutationMode":"create_only","classification":"internal",
+            "id":"asset-site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create_only","classification":"internal",
             "fields":[
               {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
               {"id":"name","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}
             ]
           },{
-            "id":"asset-placement","route":"placements","mutationMode":"mutable","classification":"internal",
+            "id":"asset-placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable","classification":"internal",
             "changeControl":{"requiredFor":["patch"]},
             "fields":[
               {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
               {"id":"site","type":"reference","target":"asset-site","required":true,"classification":"internal"}
             ]
           },{
-            "id":"placement-correction-request","route":"correction-requests","mutationMode":"mutable","classification":"internal",
+            "id":"placement-correction-request","primaryDataset":"test-dataset","route":"correction-requests","mutationMode":"mutable","classification":"internal",
             "fields":[
               {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
               {"id":"placement","type":"reference","target":"asset-placement","required":true,"classification":"internal"},
@@ -795,12 +798,12 @@ async fn create_record(
         "create {uri} failed with body {}",
         response.body
     );
-    let id = response.body["id"]
+    let id = response.body["data"]["recordIdentifier"]
         .as_str()
         .expect("created response includes id")
         .to_owned();
     assert!(Uuid::parse_str(&id).is_ok_and(|uuid| uuid.to_string() == id));
-    assert_eq!(response.body["revision"], 1);
+    assert_eq!(response.body["data"]["revisionIdentifier"], "1");
     assert!(response.etag.starts_with("\"rs-"));
     CreatedRecord {
         id,

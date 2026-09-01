@@ -36,8 +36,10 @@ registry:
   id: read-surface
   version: 0.1.0
   defaultLanguage: en
+  canonicalBaseIri: https://authoring.example.test
 entities:
   - id: case
+    primaryDataset: test-dataset
     route: cases
     mutationMode: mutable
     tombstone: true
@@ -48,6 +50,7 @@ entities:
       - {id: secret, type: string, required: true, maxLength: 100, classification: restricted}
       - {id: jurisdiction, type: string, required: true, maxLength: 32, classification: internal}
   - id: protected-note
+    primaryDataset: test-dataset
     route: notes
     mutationMode: create_only
     classification: restricted
@@ -90,8 +93,10 @@ registry:
   id: lookup-path-surface
   version: 0.1.0
   defaultLanguage: en
+  canonicalBaseIri: https://authoring.example.test
 entities:
   - id: household
+    primaryDataset: test-dataset
     route: households
     mutationMode: mutable
     tombstone: true
@@ -108,6 +113,7 @@ entities:
     readPaths:
       - {id: people, through: membership, to: person, route: people}
   - id: membership
+    primaryDataset: test-dataset
     route: memberships
     mutationMode: mutable
     classification: restricted
@@ -115,6 +121,7 @@ entities:
       - {id: household, type: reference, target: household, required: true, classification: restricted}
       - {id: person, type: reference, target: person, required: true, classification: restricted}
   - id: person
+    primaryDataset: test-dataset
     route: people
     mutationMode: mutable
     classification: restricted
@@ -170,8 +177,10 @@ registry:
   id: derived-discovery
   version: 0.1.0
   defaultLanguage: en
+  canonicalBaseIri: https://authoring.example.test
 entities:
   - id: benefit-record
+    primaryDataset: test-dataset
     route: benefit-records
     mutationMode: mutable
     classification: restricted
@@ -203,8 +212,10 @@ registry:
   id: discovery-matrix
   version: 1
   defaultLanguage: en
+  canonicalBaseIri: https://authoring.example.test
 entities:
   - id: public-record
+    primaryDataset: test-dataset
     route: public-records
     mutationMode: mutable
     classification: public
@@ -212,6 +223,7 @@ entities:
       - {id: label, type: string, required: true, maxLength: 100, classification: public}
       - {id: restricted-canary-field, type: string, maxLength: 100, classification: restricted}
   - id: protected-ledger
+    primaryDataset: test-dataset
     route: classified-records
     mutationMode: mutable
     classification: restricted
@@ -268,8 +280,10 @@ registry:
   id: logical-schema-surface
   version: 1
   defaultLanguage: en
+  canonicalBaseIri: https://authoring.example.test
 entities:
   - id: logical-record
+    primaryDataset: test-dataset
     route: logical-records
     mutationMode: mutable
     classification: public
@@ -297,20 +311,30 @@ registry:
   id: metadata-labels
   version: 1
   defaultLanguage: en
+  canonicalBaseIri: https://authoring.example.test
 manifestProjection:
   accessProfile: operator
   classificationCeiling: public
   catalog:
     baseUrl: https://metadata-labels.example.test
     title: Metadata Labels
-    publisher: {name: Publisher}
-  dataset: {title: Metadata Labels}
+    publisher: {id: metadata-labels-authority, name: Publisher}
+  datasets:
+    - {id: test-dataset, title: Metadata Labels, owner: Publisher, status: active}
+  dataServices:
+    - id: metadata-labels-data-service
+      title: Metadata Labels
+      endpointUrl: https://metadata-labels.example.test
+      servesDatasets: [test-dataset]
+  publicService: {id: metadata-labels-service, title: Metadata Labels}
+  distributions: []
   entities:
     - id: permit
       identifiers:
         - {field: display-token, kind: display}
 entities:
   - id: permit
+    primaryDataset: test-dataset
     route: permits
     mutationMode: mutable
     classification: public
@@ -332,6 +356,7 @@ entities:
       - {kind: unique, fields: [import-source, source-record-id]}
       - {kind: temporal-non-overlap, scopeFields: [permit-number], startField: valid-from, endField: valid-to}
   - id: inspection
+    primaryDataset: test-dataset
     route: inspections
     mutationMode: mutable
     classification: public
@@ -352,12 +377,14 @@ entities:
       - {kind: unique, fields: [import-source, source-record-id]}
       - {kind: temporal-non-overlap, scopeFields: [inspection-code], startField: valid-from, endField: valid-to}
   - id: finding
+    primaryDataset: test-dataset
     route: findings
     mutationMode: mutable
     classification: public
     fields:
       - {id: inspection, type: reference, target: inspection, required: true, classification: public}
   - id: certificate
+    primaryDataset: test-dataset
     route: certificates
     mutationMode: mutable
     classification: public
@@ -405,8 +432,10 @@ registry:
   id: spatial-read-surface
   version: 0.1.0
   defaultLanguage: en
+  canonicalBaseIri: https://authoring.example.test
 entities:
   - id: site
+    primaryDataset: test-dataset
     route: sites
     mutationMode: mutable
     classification: public
@@ -487,9 +516,10 @@ impl SnapshotReadService for RecordingSnapshotReadService {
 const SNAPSHOT_PROJECT: &str = r#"
 apiVersion: registry.registrystack.org/v1alpha1
 kind: RegistryProject
-registry: {id: snapshot-surface, version: 1, defaultLanguage: en}
+registry: {id: snapshot-surface, version: 1, defaultLanguage: en, canonicalBaseIri: https://authoring.example.test}
 entities:
   - id: assignment
+    primaryDataset: test-dataset
     route: assignments
     mutationMode: mutable
     tombstone: true
@@ -908,6 +938,10 @@ async fn bbox_reaches_record_service_only_with_declared_spatial_grant() {
     assert_eq!(accepted.headers()["content-type"], "application/geo+json");
     assert_eq!(accepted.headers()["cache-control"], "no-store");
     assert_eq!(accepted.headers()["vary"], "authorization, accept");
+    assert!(
+        accepted.headers().get("link").is_none(),
+        "GeoJSON is outside the Registry Record profile"
+    );
     let body = body_json(accepted).await;
     assert_eq!(body["numberReturned"], 1);
     assert_eq!(body["features"][0]["geometry"]["type"], "Point");
@@ -923,6 +957,41 @@ async fn bbox_reaches_record_service_only_with_declared_spatial_grant() {
     assert_eq!(spatial.bbox.east, "101");
     assert_eq!(spatial.bbox.north, "11");
     assert!(query.filter.is_some(), "scalar filter composes with bbox");
+
+    for media_type in ["application/json", "application/ld+json"] {
+        let registry_record = harness
+            .send_with_accept(
+                Method::GET,
+                "/v1/records/sites?$select=code,location",
+                None,
+                Some(media_type),
+            )
+            .await;
+        assert_eq!(registry_record.status(), StatusCode::OK, "{media_type}");
+        assert_eq!(
+            registry_record.headers()["content-type"],
+            media_type,
+            "{media_type}"
+        );
+        assert_eq!(
+            registry_record.headers()["link"],
+            "<https://id.registrystack.org/profiles/registry-record/v1>; rel=\"profile\", </v1/schemas/site>; rel=\"describedby\"",
+            "{media_type}"
+        );
+    }
+    let openapi = body_json(harness.send(Method::GET, "/openapi.json", None).await).await;
+    let spatial_success = &openapi["paths"]["/v1/records/sites"]["get"]["responses"]["200"];
+    assert!(spatial_success["content"]
+        .get("application/geo+json")
+        .is_some());
+    assert_eq!(
+        spatial_success["headers"]["Link"]["description"],
+        "Emitted only for application/json and application/ld+json Registry Record responses and omitted for application/geo+json. Carries the Registry Record profile and caller-visible entity schema. The describedby target is a relative Server route and is never derived from Host or forwarded headers."
+    );
+    assert_eq!(
+        spatial_success["headers"]["Link"]["schema"]["const"],
+        "<https://id.registrystack.org/profiles/registry-record/v1>; rel=\"profile\", </v1/schemas/site>; rel=\"describedby\""
+    );
 
     let before = harness.records.calls();
     let undeclared = harness
@@ -1444,6 +1513,69 @@ async fn relationship_route_uses_path_grant_not_direct_target_rights() {
 }
 
 #[tokio::test]
+async fn relationship_route_conceals_geojson_before_record_service_access() {
+    let project = LOOKUP_PATH_PROJECT
+        .replace(
+            "      - {id: sensitive-note, type: string, required: false, maxLength: 64, classification: restricted}",
+            "      - {id: sensitive-note, type: string, required: false, maxLength: 64, classification: restricted}\n      - {id: location, type: crs84-point, precision: 6, required: false, classification: restricted}\n    geojson:\n      geometryField: location",
+        )
+        .replace(
+            "            readableFields: [person-code]",
+            "            readableFields: [person-code, location]",
+        );
+    let harness = Harness::from_project(&project, true);
+    let root = "00000000-0000-4000-8000-000000000001";
+    let route = format!(
+        "/v1/records/households/{root}/people?accessProfile=operator&$select=personCode,location"
+    );
+
+    for (media_type, representation) in [
+        ("application/json", CursorRepresentation::Json),
+        ("application/ld+json", CursorRepresentation::JsonLd),
+    ] {
+        let response = harness
+            .send_with_accept(
+                Method::GET,
+                &route,
+                Some(caseworker_claims("case-management")),
+                Some(media_type),
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::OK, "{media_type}");
+        assert_eq!(
+            response.headers()["content-type"],
+            media_type,
+            "{media_type}"
+        );
+        assert_eq!(
+            harness.records.last_request().representation,
+            representation,
+            "{media_type}"
+        );
+    }
+
+    let calls_before = harness.records.calls();
+    let refusals_before = harness.records.refusal_calls();
+    let response = harness
+        .send_with_accept(
+            Method::GET,
+            &route,
+            Some(caseworker_claims("case-management")),
+            Some("application/geo+json"),
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(body_json(response).await["code"], "resource.not_found");
+    assert_eq!(harness.records.calls(), calls_before);
+    assert_eq!(harness.records.refusal_calls(), refusals_before + 1);
+    assert_eq!(
+        harness.records.last_request().representation,
+        CursorRepresentation::JsonLd,
+        "the refused GeoJSON representation never reaches the record service"
+    );
+}
+
+#[tokio::test]
 async fn relationship_discovery_uses_target_entity_and_unions_authorized_operation_fields() {
     let project =
         parse_project_yaml(LOOKUP_PATH_PROJECT.as_bytes()).expect("relationship project parses");
@@ -1804,10 +1936,11 @@ impl RecordReadService for RecordingReadService {
                 }),
                 &selected_fields,
             );
-            if representation == CursorRepresentation::GeoJson {
-                Ok(Some(geojson_feature(record)))
-            } else {
-                Ok(Some(held(record)))
+            match representation {
+                CursorRepresentation::GeoJson => Ok(Some(geojson_feature(record))),
+                CursorRepresentation::Json | CursorRepresentation::JsonLd => {
+                    Ok(Some(held_json_representation(record, representation)))
+                }
             }
         })
     }
@@ -1870,7 +2003,7 @@ impl RecordReadService for RecordingReadService {
                 if include_count {
                     response["count"] = json!(1);
                 }
-                Ok(held(response))
+                Ok(held_json_representation(response, representation))
             }
         })
     }
@@ -2110,6 +2243,13 @@ async fn health_and_readiness_are_operational_and_independent() {
 #[tokio::test]
 async fn profile_and_resource_concealment_complete_before_record_io() {
     let harness = Harness::new(true);
+    let anonymous_protected = harness
+        .send(
+            Method::GET,
+            "/v1/records/notes/00000000-0000-4000-8000-000000000001",
+            None,
+        )
+        .await;
     let wrong_purpose = caseworker_claims("another-purpose");
     let unauthorized = harness
         .send(
@@ -2136,7 +2276,27 @@ async fn profile_and_resource_concealment_complete_before_record_io() {
     assert_eq!(unauthorized.status(), StatusCode::NOT_FOUND);
     assert_eq!(unknown_profile.status(), StatusCode::NOT_FOUND);
     assert_eq!(unknown_resource.status(), StatusCode::NOT_FOUND);
+    assert_eq!(anonymous_protected.status(), StatusCode::NOT_FOUND);
+    for response in [
+        &anonymous_protected,
+        &unauthorized,
+        &unknown_profile,
+        &unknown_resource,
+    ] {
+        assert!(response.headers().get("link").is_none());
+        assert!(response.headers().get("content-location").is_none());
+        assert_eq!(
+            response.headers().get(CONTENT_TYPE).unwrap(),
+            "application/problem+json"
+        );
+        let headers = format!("{:?}", response.headers());
+        assert!(!headers.contains("registry-record"));
+        assert!(!headers.contains("schemas"));
+        assert!(!headers.contains("contexts"));
+    }
+    let anonymous_protected = problem_shape(anonymous_protected).await;
     let unauthorized = problem_shape(unauthorized).await;
+    assert_eq!(anonymous_protected, unauthorized);
     assert_eq!(unauthorized, problem_shape(unknown_profile).await);
     assert_eq!(unauthorized, problem_shape(unknown_resource).await);
     assert_eq!(unauthorized["code"], "resource.not_found");
@@ -2259,6 +2419,7 @@ async fn discovery_surfaces_share_caller_filtered_routes_and_fields() {
             "$select",
             "$skiptoken",
             "$top",
+            "Accept",
             "accessProfile",
             "traceparent",
         ]
@@ -2972,7 +3133,53 @@ async fn runtime_openapi_contract_is_filtered_to_the_selected_acceptance_profile
         query_parameter_names(
             &openapi["paths"]["/v1/records/assets/{record_id}"]["get"]["parameters"]
         ),
-        ["$select", "accessProfile", "record_id", "traceparent"]
+        [
+            "$select",
+            "Accept",
+            "accessProfile",
+            "record_id",
+            "traceparent"
+        ]
+    );
+    let record_operation = &openapi["paths"]["/v1/records/assets/{record_id}"]["get"];
+    assert_eq!(
+        record_operation["x-registry-responseProfile"],
+        "https://id.registrystack.org/profiles/registry-record/v1"
+    );
+    assert_eq!(
+        record_operation["x-registry-responseShape"],
+        "RegistryRecordSingleV1"
+    );
+    let ordinary = &record_operation["responses"]["200"]["content"]["application/json"]["schema"];
+    let json_ld = &record_operation["responses"]["200"]["content"]["application/ld+json"]["schema"];
+    assert!(ordinary["properties"].get("@context").is_none());
+    assert_eq!(
+        json_ld["properties"]["@context"]["const"],
+        "https://id.registrystack.org/contexts/registry-record/v1"
+    );
+    assert_eq!(
+        ordinary["properties"]["meta"]["properties"],
+        json!({
+            "registryIdentifier": {"const": "asset-site-placement"},
+            "datasetIdentifier": {"const": "asset-site-placement"},
+            "entityTypeIdentifier": {"const": "asset-item"}
+        })
+    );
+    assert_eq!(
+        ordinary["properties"]["data"]["required"],
+        json!(["recordIdentifier", "revisionIdentifier", "domainData"])
+    );
+    assert!(ordinary.to_string().contains("domainData"));
+    assert!(!ordinary.to_string().contains("\"@id\""));
+    assert!(!ordinary.to_string().contains("\"@type\""));
+    let link = &record_operation["responses"]["200"]["headers"]["Link"];
+    assert_eq!(
+        link["description"],
+        "Emitted only for application/json and application/ld+json Registry Record responses and omitted for application/geo+json. Carries the Registry Record profile and caller-visible entity schema. The describedby target is a relative Server route and is never derived from Host or forwarded headers."
+    );
+    assert_eq!(
+        link["schema"]["const"],
+        "<https://id.registrystack.org/profiles/registry-record/v1>; rel=\"profile\", </v1/schemas/asset-item>; rel=\"describedby\""
     );
     assert!(
         openapi["paths"]["/v1/records/assets/{record_id}"]["get"]["responses"]["200"]["headers"]
@@ -3094,6 +3301,18 @@ fn project_fixture(mut record: Value, selected_fields: &BTreeSet<String>) -> Val
 
 fn held(value: Value) -> HeldReadResponse {
     HeldReadResponse::from_json(&value).expect("fake read response serializes")
+}
+
+fn held_json_representation(
+    value: Value,
+    representation: CursorRepresentation,
+) -> HeldReadResponse {
+    match representation {
+        CursorRepresentation::Json => HeldReadResponse::from_json(&value),
+        CursorRepresentation::JsonLd => HeldReadResponse::from_json_ld(&value),
+        CursorRepresentation::GeoJson => unreachable!("GeoJSON uses its dedicated fake"),
+    }
+    .expect("fake Registry Record response serializes")
 }
 
 fn geojson_feature(record: Value) -> HeldReadResponse {

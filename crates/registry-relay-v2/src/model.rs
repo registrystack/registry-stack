@@ -141,6 +141,8 @@ pub struct CompiledSource {
 #[serde(rename_all = "camelCase")]
 pub struct CompiledResource {
     pub id: String,
+    pub dataset_identifier: String,
+    pub entity_type_identifier: String,
     pub title: String,
     pub description: String,
     pub semantic_class: String,

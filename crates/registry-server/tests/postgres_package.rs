@@ -3427,7 +3427,7 @@ impl Drop for TempRoot {
 
 fn project_bytes(environment: &str, sequence: u64, module_digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"1","defaultLanguage":"en"}},"package":{{"environment":"{environment}","instanceId":"{INSTANCE}","sequence":{sequence},"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"name":"Package Test Publisher"}}}},"dataset":{{"title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
+        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"environment":"{environment}","instanceId":"{INSTANCE}","sequence":{sequence},"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
     )
     .into_bytes()
 }
@@ -3438,7 +3438,7 @@ fn project_bytes_without_manifest(
     module_digest: &str,
 ) -> Vec<u8> {
     format!(
-        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"1","defaultLanguage":"en"}},"package":{{"environment":"{environment}","instanceId":"{INSTANCE}","sequence":{sequence},"sourceRevision":"{SOURCE_REVISION}"}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
+        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"environment":"{environment}","instanceId":"{INSTANCE}","sequence":{sequence},"sourceRevision":"{SOURCE_REVISION}"}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
     )
     .into_bytes()
 }
@@ -3531,7 +3531,7 @@ fn temporal_policy_module_bytes_with(
         r#""get","list""#
     };
     format!(
-        r#"{{"id":"core","version":"1","entities":[{{"id":"neutral-record","route":"neutral-records","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}}],"accessProfiles":[{{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]}},{{"id":"membership","route":"memberships","mutationMode":"mutable","fields":[{{"id":"person","type":"string","maxLength":32,"required":true,"classification":"internal"}},{{"id":"valid-from","type":"date","required":true,"classification":"internal"}},{{"id":"valid-to","type":"date","classification":"internal"}}{extra_membership_fields}],"temporal":{{"startField":"valid-from","endField":"valid-to"}},"constraints":[{{"id":"membership-window","kind":"temporal-non-overlap","scopeFields":["person"],"startField":"valid-from","endField":"valid-to"}}],"accessProfiles":[{{"id":"reader","principalClaim":"principal","operations":[{operations}],"readableFields":["person","valid-from","valid-to"],"filterableFields":["person","valid-from"]{reader_profile_extra}}}]}}]}}"#
+        r#"{{"id":"core","version":"1","entities":[{{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}}],"accessProfiles":[{{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]}},{{"id":"membership","primaryDataset":"neutral-registry","route":"memberships","mutationMode":"mutable","fields":[{{"id":"person","type":"string","maxLength":32,"required":true,"classification":"internal"}},{{"id":"valid-from","type":"date","required":true,"classification":"internal"}},{{"id":"valid-to","type":"date","classification":"internal"}}{extra_membership_fields}],"temporal":{{"startField":"valid-from","endField":"valid-to"}},"constraints":[{{"id":"membership-window","kind":"temporal-non-overlap","scopeFields":["person"],"startField":"valid-from","endField":"valid-to"}}],"accessProfiles":[{{"id":"reader","principalClaim":"principal","operations":[{operations}],"readableFields":["person","valid-from","valid-to"],"filterableFields":["person","valid-from"]{reader_profile_extra}}}]}}]}}"#
     )
     .into_bytes()
 }
@@ -3567,19 +3567,19 @@ fn publish_temporal_policy_package(
 
 fn module_bytes(plan: PlanChoice) -> Vec<u8> {
     if matches!(plan, PlanChoice::TemporalSchema) {
-        return br#"{"id":"core","version":"1","entities":[{"id":"neutral-record","route":"neutral-records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}]},{"id":"membership","route":"memberships","mutationMode":"mutable","fields":[{"id":"person","type":"string","maxLength":32,"required":true,"classification":"internal"},{"id":"valid-from","type":"date","required":true,"classification":"internal"},{"id":"valid-to","type":"date","classification":"internal"}],"temporal":{"startField":"valid-from","endField":"valid-to"},"constraints":[{"id":"membership-window","kind":"temporal-non-overlap","scopeFields":["person"],"startField":"valid-from","endField":"valid-to"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["person","valid-from","valid-to"]}]}]}"#
+        return br#"{"id":"core","version":"1","entities":[{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}]},{"id":"membership","primaryDataset":"neutral-registry","route":"memberships","mutationMode":"mutable","fields":[{"id":"person","type":"string","maxLength":32,"required":true,"classification":"internal"},{"id":"valid-from","type":"date","required":true,"classification":"internal"},{"id":"valid-to","type":"date","classification":"internal"}],"temporal":{"startField":"valid-from","endField":"valid-to"},"constraints":[{"id":"membership-window","kind":"temporal-non-overlap","scopeFields":["person"],"startField":"valid-from","endField":"valid-to"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["person","valid-from","valid-to"]}]}]}"#
             .to_vec();
     }
     let second = if matches!(
         plan,
         PlanChoice::SecondTable | PlanChoice::ThirdTable | PlanChoice::WebhookSecondTable
     ) {
-        r#",{"id":"second-record","route":"second-records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}],"accessProfiles":[{"id":"writer","principalClaim":"principal","operations":["get","create"],"readableFields":["code"],"writableFields":["code"]}]}"#
+        r#",{"id":"second-record","primaryDataset":"neutral-registry","route":"second-records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}],"accessProfiles":[{"id":"writer","principalClaim":"principal","operations":["get","create"],"readableFields":["code"],"writableFields":["code"]}]}"#
     } else {
         ""
     };
     let third = if matches!(plan, PlanChoice::ThirdTable) {
-        r#",{"id":"third-record","route":"third-records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}]}"#
+        r#",{"id":"third-record","primaryDataset":"neutral-registry","route":"third-records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}]}"#
     } else {
         ""
     };
@@ -3592,13 +3592,13 @@ fn module_bytes(plan: PlanChoice) -> Vec<u8> {
         ""
     };
     format!(
-        r#"{{"id":"core","version":"1","entities":[{{"id":"neutral-record","route":"neutral-records","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}}],"accessProfiles":[{{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]{events}}}{second}{third}]}}"#
+        r#"{{"id":"core","version":"1","entities":[{{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}}],"accessProfiles":[{{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]{events}}}{second}{third}]}}"#
     )
     .into_bytes()
 }
 
 fn derived_module_bytes() -> Vec<u8> {
-    br#"{"id":"core","version":"1","entities":[{"id":"neutral-record","route":"neutral-records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"}],"derived":[{"id":"summary","sql":"sql/summary.sql","key":"id","fields":[{"id":"summary","type":"string","maxLength":64,"classification":"internal"}]}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code","summary"]}]}]}"#.to_vec()
+    br#"{"id":"core","version":"1","entities":[{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"}],"derived":[{"id":"summary","sql":"sql/summary.sql","key":"id","fields":[{"id":"summary","type":"string","maxLength":64,"classification":"internal"}]}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code","summary"]}]}]}"#.to_vec()
 }
 
 fn derived_asset_request(sql: &[u8]) -> PackageBuildRequest {

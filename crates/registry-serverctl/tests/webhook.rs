@@ -36,8 +36,10 @@ registry:
   id: webhook-sample
   version: 1
   defaultLanguage: en
+  canonicalBaseIri: https://webhook-sample.example.test
 entities:
   - id: record
+    primaryDataset: test-dataset
     route: records
     mutationMode: mutable
     fields:

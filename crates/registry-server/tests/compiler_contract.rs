@@ -64,6 +64,452 @@ fn compile_json_with_assets(
     compile_project_with_assets(&project, &[], &assets, CompileProfile::Authoring)
 }
 
+fn multi_dataset_project() -> registry_server::contract::RegistryProject {
+    parse_project_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"multi-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test/multi"},
+          "manifestProjection":{
+            "accessProfile":"reader",
+            "classificationCeiling":"restricted",
+            "catalog":{"baseUrl":"https://registry.example.test/multi","title":"Multi Registry","publisher":{"id":"multi-authority","name":"Registry Authority","iri":"https://registry.example.test/authority"}},
+            "publicService":{"id":"multi-service","title":"Registry service"},
+            "datasets":[
+              {"id":"people","iri":"https://identity.example.test/datasets/people","title":"People","version":"2026.1"},
+              {"id":"residences","title":"Residences","accessProfile":"reader","classificationCeiling":"internal"}
+            ],
+            "dataServices":[{"id":"registry-api","title":"Registry API","endpointUrl":"https://registry.example.test/v1","servesDatasets":["people","residences"]}],
+            "distributions":[{"id":"people-json","dataset":"people","accessService":"registry-api","mediaType":"application/json"}]
+          },
+          "entities":[
+            {"id":"person","primaryDataset":"people","route":"people","mutationMode":"mutable","classification":"restricted","fields":[{"id":"name","type":"string","maxLength":100,"classification":"restricted"}]},
+            {"id":"residence","primaryDataset":"residences","route":"residences","mutationMode":"mutable","classification":"internal","fields":[
+              {"id":"place","type":"string","maxLength":100,"classification":"internal"},
+              {"id":"resident","type":"reference","target":"person","classification":"internal"}
+            ]}
+          ],
+          "accessProfiles":[{"id":"reader","default":true,"principalClaim":"sub","requiredScopes":["registry.read"],"grants":[
+            {"entity":"person","operations":["get","list"],"readableFields":["name"]},
+            {"entity":"residence","operations":["get","list"],"readableFields":["place","resident"]}
+          ]}]
+        }"#,
+    )
+    .expect("multi-dataset source parses")
+}
+
+#[test]
+fn plural_projection_compiles_resolved_membership_and_manifest_resources() {
+    let compiled = compile_project(&multi_dataset_project(), &[], CompileProfile::Authoring)
+        .expect("plural multi-dataset project compiles");
+    let projection = compiled
+        .manifest_projection()
+        .expect("compiled projection exists");
+    assert_eq!(
+        projection.canonical_base_iri,
+        "https://registry.example.test/multi"
+    );
+    assert_eq!(projection.primary_authority.id, "multi-authority");
+    assert_eq!(
+        projection.primary_authority.iri,
+        "https://registry.example.test/authority"
+    );
+    assert_eq!(
+        projection.public_service.competent_authority,
+        "multi-authority"
+    );
+    assert_eq!(
+        projection.public_service.produces,
+        ["people".to_owned(), "residences".to_owned()].into()
+    );
+    assert_eq!(
+        projection.public_service.data_services,
+        ["registry-api".to_owned()].into()
+    );
+    assert_eq!(
+        projection.public_service.iri,
+        "https://registry.example.test/multi/public-services/multi-service"
+    );
+    assert_eq!(
+        projection.datasets["people"].iri,
+        "https://identity.example.test/datasets/people"
+    );
+    assert_eq!(
+        projection.datasets["residences"].iri,
+        "https://registry.example.test/multi/datasets/residences"
+    );
+    assert_eq!(
+        projection.data_services["registry-api"].iri,
+        "https://registry.example.test/multi/data-services/registry-api"
+    );
+    assert_eq!(
+        projection.distributions["people-json"].iri,
+        "https://registry.example.test/multi/distributions/people-json"
+    );
+    assert_eq!(projection.datasets.len(), 2);
+    assert_eq!(projection.entity_datasets["person"], "people");
+    assert_eq!(projection.entity_datasets["residence"], "residences");
+    assert!(matches!(
+        &compiled.entities()["residence"].fields["resident"].field_type,
+        FieldTypeSource::Reference { target, .. } if target == "person"
+    ));
+    assert_eq!(
+        projection.datasets["residences"].effective_access_profile,
+        "reader"
+    );
+    assert_eq!(
+        projection.datasets["residences"].effective_classification_ceiling,
+        Classification::Internal
+    );
+
+    let manifest_bytes = &compiled
+        .artifacts()
+        .get("generated/manifest/registry-manifest.json")
+        .expect("Manifest artifact exists")
+        .bytes;
+    let manifest: MetadataManifest = serde_json::from_slice(manifest_bytes).unwrap();
+    assert_eq!(manifest.authorities.len(), 1);
+    assert_eq!(manifest.public_services.len(), 1);
+    assert_eq!(manifest.datasets.len(), 2);
+    assert_eq!(manifest.data_services[0].serves_datasets.len(), 2);
+    assert_eq!(manifest.distributions[0].dataset, "people");
+    assert_eq!(manifest.datasets[0].version.as_deref(), Some("2026.1"));
+    let residence = manifest
+        .datasets
+        .iter()
+        .find(|dataset| dataset.id == "residences")
+        .expect("residences remains visible in the portable projection");
+    assert!(residence.entities[0]
+        .relationships
+        .iter()
+        .all(|relationship| relationship.name != "resident"));
+}
+
+#[test]
+fn manifest_projection_excludes_every_protected_resource_from_public_bytes() {
+    let mut project = parse_project_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"classified-catalog","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://catalog.example.test"},
+          "manifestProjection":{
+            "accessProfile":"public-reader",
+            "classificationCeiling":"public",
+            "catalog":{"baseUrl":"https://catalog.example.test","title":"Classified Catalog","publisher":{"id":"catalog-authority","name":"Catalog Authority"}},
+            "publicService":{"id":"catalog-service","title":"Catalog service"},
+            "datasets":[
+              {"id":"public-records","title":"Public records","accessProfile":"public-reader","classificationCeiling":"public"},
+              {"id":"protected-records","title":"Protected records title","accessProfile":"protected-reader","classificationCeiling":"restricted"}
+            ],
+            "dataServices":[
+              {"id":"public-api","title":"Public API","endpointUrl":"https://catalog.example.test/public","servesDatasets":["public-records"]},
+              {"id":"protected-api","title":"Protected API title","endpointUrl":"https://protected.example.test/private","servesDatasets":["protected-records"]}
+            ],
+            "distributions":[
+              {"id":"public-json","dataset":"public-records","accessService":"public-api","downloadUrl":"https://catalog.example.test/public.ndjson"},
+              {"id":"protected-json","dataset":"protected-records","accessService":"protected-api","downloadUrl":"https://protected.example.test/private.ndjson","title":"Protected distribution title"}
+            ]
+          },
+          "entities":[
+            {"id":"public-record","primaryDataset":"public-records","route":"public-records","mutationMode":"create_only","classification":"public","fields":[
+              {"id":"label","type":"string","maxLength":64,"classification":"public"},
+              {"id":"protected-link","type":"reference","target":"protected-record","classification":"public"}
+            ]},
+            {"id":"protected-record","primaryDataset":"protected-records","route":"protected-records","mutationMode":"create_only","classification":"restricted","fields":[
+              {"id":"protected-title","type":"string","maxLength":64,"classification":"restricted"}
+            ]}
+          ],
+          "accessProfiles":[
+            {"id":"public-reader","anonymous":true,"grants":[{"entity":"public-record","operations":["get"],"readableFields":["label","protected-link"]}]},
+            {"id":"protected-reader","principalClaim":"sub","requiredScopes":["protected.read"],"grants":[{"entity":"protected-record","operations":["get"],"readableFields":["protected-title"]}]}
+          ]
+        }"#,
+    )
+    .expect("classified project parses");
+
+    let public = compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("public publication context compiles");
+    let operational_link = &public.entities()["public-record"].fields["protected-link"];
+    assert!(matches!(
+        &operational_link.field_type,
+        FieldTypeSource::Reference { target, .. } if target == "protected-record"
+    ));
+
+    let manifest_bytes = &public
+        .artifacts()
+        .get("generated/manifest/registry-manifest.json")
+        .expect("public Manifest exists")
+        .bytes;
+    let dcat_bytes = &public
+        .artifacts()
+        .get("generated/manifest/dcat.jsonld")
+        .expect("public DCAT exists")
+        .bytes;
+    for bytes in [manifest_bytes, dcat_bytes] {
+        let rendered = std::str::from_utf8(bytes).expect("generated metadata is UTF-8");
+        for protected in [
+            "protected-records",
+            "Protected records title",
+            "protected-record",
+            "protected-link",
+            "protected-api",
+            "Protected API title",
+            "protected.example.test",
+            "protected-json",
+            "Protected distribution title",
+        ] {
+            assert!(
+                !rendered.contains(protected),
+                "public metadata disclosed {protected}: {rendered}"
+            );
+        }
+    }
+
+    let manifest: MetadataManifest =
+        serde_json::from_slice(manifest_bytes).expect("public Manifest parses");
+    assert_eq!(
+        manifest
+            .datasets
+            .iter()
+            .map(|dataset| dataset.id.as_str())
+            .collect::<Vec<_>>(),
+        ["public-records"]
+    );
+    assert_eq!(manifest.data_services[0].id, "public-api");
+    assert_eq!(
+        manifest.data_services[0].serves_datasets,
+        ["public-records"]
+    );
+    assert_eq!(manifest.public_services[0].produces, ["public-records"]);
+    assert_eq!(manifest.public_services[0].data_services, ["public-api"]);
+    assert!(manifest.datasets[0].entities[0].relationships.is_empty());
+
+    let projection = project
+        .manifest_projection
+        .as_mut()
+        .expect("projection exists");
+    projection.access_profile = "protected-reader".to_owned();
+    projection.classification_ceiling = Classification::Restricted;
+    let protected = compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("authorized protected publication context compiles");
+    let protected_manifest = protected
+        .artifacts()
+        .get("generated/manifest/registry-manifest.json")
+        .expect("protected Manifest exists");
+    let protected_rendered =
+        std::str::from_utf8(&protected_manifest.bytes).expect("protected Manifest is UTF-8");
+    for expected in [
+        "protected-records",
+        "Protected records title",
+        "protected-record",
+        "protected-api",
+        "protected-json",
+    ] {
+        assert!(
+            protected_rendered.contains(expected),
+            "authorized metadata omitted {expected}: {protected_rendered}"
+        );
+    }
+}
+
+#[test]
+fn plural_projection_refuses_duplicate_and_dangling_membership() {
+    let mut missing_canonical_iri = multi_dataset_project();
+    missing_canonical_iri.registry.canonical_base_iri.clear();
+    assert_compile_diagnostic(
+        missing_canonical_iri,
+        "registry.canonical_base_iri.required",
+    );
+
+    let mut duplicate = multi_dataset_project();
+    let repeated = duplicate.manifest_projection.as_ref().unwrap().datasets[0].clone();
+    duplicate
+        .manifest_projection
+        .as_mut()
+        .unwrap()
+        .datasets
+        .push(repeated);
+    let failure = compile_project(&duplicate, &[], CompileProfile::Authoring)
+        .expect_err("duplicate dataset fails");
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "manifest_projection.dataset.duplicate"));
+
+    let mut dangling = multi_dataset_project();
+    dangling.entities[0].primary_dataset = "missing".to_owned();
+    let failure = compile_project(&dangling, &[], CompileProfile::Authoring)
+        .expect_err("dangling entity dataset fails");
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "manifest_projection.entity.dataset_dangling"));
+
+    let mut missing = multi_dataset_project();
+    missing.entities[0].primary_dataset.clear();
+    assert_compile_diagnostic(
+        missing,
+        "manifest_projection.entity.primary_dataset_required",
+    );
+
+    let mut empty_dataset = multi_dataset_project();
+    empty_dataset.entities[1].primary_dataset = "people".to_owned();
+    assert_compile_diagnostic(empty_dataset, "manifest_projection.dataset.entities_empty");
+
+    let mut duplicate_service = multi_dataset_project();
+    let service = duplicate_service
+        .manifest_projection
+        .as_ref()
+        .unwrap()
+        .data_services[0]
+        .clone();
+    duplicate_service
+        .manifest_projection
+        .as_mut()
+        .unwrap()
+        .data_services
+        .push(service);
+    assert_compile_diagnostic(
+        duplicate_service,
+        "manifest_projection.data_service.duplicate",
+    );
+
+    let mut dangling_service_dataset = multi_dataset_project();
+    dangling_service_dataset
+        .manifest_projection
+        .as_mut()
+        .unwrap()
+        .data_services[0]
+        .serves_datasets
+        .push("missing".to_owned());
+    assert_compile_diagnostic(
+        dangling_service_dataset,
+        "manifest_projection.data_service.dataset_dangling",
+    );
+
+    let mut duplicate_distribution = multi_dataset_project();
+    let distribution = duplicate_distribution
+        .manifest_projection
+        .as_ref()
+        .unwrap()
+        .distributions[0]
+        .clone();
+    duplicate_distribution
+        .manifest_projection
+        .as_mut()
+        .unwrap()
+        .distributions
+        .push(distribution);
+    assert_compile_diagnostic(
+        duplicate_distribution,
+        "manifest_projection.distribution.duplicate",
+    );
+
+    let mut dangling_distribution_service = multi_dataset_project();
+    dangling_distribution_service
+        .manifest_projection
+        .as_mut()
+        .unwrap()
+        .distributions[0]
+        .access_service = Some("missing".to_owned());
+    assert_compile_diagnostic(
+        dangling_distribution_service,
+        "manifest_projection.distribution.access_service_dangling",
+    );
+
+    let mut unknown_effective_profile = multi_dataset_project();
+    unknown_effective_profile
+        .manifest_projection
+        .as_mut()
+        .unwrap()
+        .datasets[1]
+        .access_profile = Some("missing".to_owned());
+    assert_compile_diagnostic(
+        unknown_effective_profile,
+        "manifest_projection.dataset.access_profile_unknown",
+    );
+}
+
+#[test]
+fn missing_resource_identity_members_have_actionable_authoring_diagnostics() {
+    let project = parse_project_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"missing-identity","version":"1","defaultLanguage":"en"},
+          "entities":[{"id":"record","route":"records","mutationMode":"create_only"}]
+        }"#,
+    )
+    .expect("omissions reach the compiler diagnostic domain");
+    let project = compile_project(&project, &[], CompileProfile::Authoring)
+        .expect_err("project identity members are required for compilation");
+    let project_codes = project
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+        .collect::<BTreeSet<_>>();
+    assert!(project_codes.contains(&(
+        "registry.canonical_base_iri.required",
+        "project.registry.canonicalBaseIri"
+    )));
+    assert!(project_codes.contains(&(
+        "manifest_projection.entity.primary_dataset_required",
+        "entities[].primaryDataset"
+    )));
+
+    let module = parse_module_json(
+        br#"{"id":"missing-membership","version":"1","entities":[{"id":"record","route":"records","mutationMode":"create_only"}]}"#,
+    )
+    .expect("module omission reaches the compiler diagnostic domain");
+    let project = parse_project_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"module-host","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://module-host.example.test"},
+          "modules":[{"id":"missing-membership","version":"1"}]
+        }"#,
+    )
+    .expect("module host parses");
+    let module = compile_project(&project, &[module], CompileProfile::Authoring)
+        .expect_err("module entity membership is required for compilation");
+    assert!(module.diagnostics().iter().any(|diagnostic| {
+        diagnostic.code == "manifest_projection.entity.primary_dataset_required"
+            && diagnostic.path == "entities[].primaryDataset"
+    }));
+}
+
+fn assert_compile_diagnostic(project: registry_server::contract::RegistryProject, code: &str) {
+    let failure = compile_project(&project, &[], CompileProfile::Authoring)
+        .expect_err("invalid multi-dataset references fail compilation");
+    assert!(
+        failure
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == code),
+        "expected {code}, got {:?}",
+        failure.diagnostics()
+    );
+}
+
+#[test]
+fn removed_singular_projection_keys_name_plural_replacements() {
+    let failure = parse_project_json(
+        br#"{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{"id":"legacy","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},"manifestProjection":{"accessProfile":"reader","classificationCeiling":"public","catalog":{"baseUrl":"https://registry.example.test","title":"Registry","publisher":{"name":"Authority"}},"dataset":{"title":"Dataset"},"dataService":{"id":"api","title":"API","endpointUrl":"https://registry.example.test"}}}"#,
+    )
+    .expect_err("singular projection is rejected");
+    let messages = failure
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert!(messages
+        .iter()
+        .any(|message| message.contains("datasets[]")));
+    assert!(messages
+        .iter()
+        .any(|message| message.contains("dataServices[]")));
+}
+
 fn derived_sql_asset(path: &str, sql: &str) -> ModuleAssetSource {
     ModuleAssetSource {
         module: None,
@@ -104,19 +550,19 @@ fn change_request_correction_project(
         r#"{{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{{"id":"{registry_id}","version":"1","defaultLanguage":"en"}}{package_entry},
+          "registry":{{"id":"{registry_id}","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}}{package_entry},
           "entities":[{{
-            "id":"site","route":"sites","mutationMode":"create_only",
+            "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create_only",
             "fields":[{{"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"}}]
           }},{{
-            "id":"placement","route":"placements","mutationMode":"mutable",
+            "id":"placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable",
             "changeControl":{{"requiredFor":["patch"]}},
             "fields":[
               {{"id":"site","type":"reference","target":"site","required":true,"classification":"internal"}},
               {{"id":"label","type":"string","maxLength":64,"classification":"{target_label_classification}"}}
             ]
           }},{{
-            "id":"placement-correction-request","route":"placement-correction-requests","mutationMode":"mutable",
+            "id":"placement-correction-request","primaryDataset":"test-dataset","route":"placement-correction-requests","mutationMode":"mutable",
             "fields":[
               {{"id":"placement","type":"reference","target":"placement","required":true,"classification":"internal"}},
               {{"id":"proposed-site","type":"reference","target":"site","required":true,"classification":"internal"}},
@@ -242,19 +688,19 @@ fn change_request_correction_compiles_to_immutable_plan_and_scoped_grants() {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"change-request-correction","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"change-request-correction","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"site","route":"sites","mutationMode":"create_only",
+            "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create_only",
             "fields":[{"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"}]
           },{
-            "id":"placement","route":"placements","mutationMode":"mutable",
+            "id":"placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable",
             "changeControl":{"requiredFor":["patch"]},
             "fields":[
               {"id":"site","type":"reference","target":"site","required":true,"classification":"internal"},
               {"id":"label","type":"string","maxLength":64,"classification":"internal"}
             ]
           },{
-            "id":"placement-correction-request","route":"placement-correction-requests","mutationMode":"mutable",
+            "id":"placement-correction-request","primaryDataset":"test-dataset","route":"placement-correction-requests","mutationMode":"mutable",
             "fields":[
               {"id":"placement","type":"reference","target":"placement","required":true,"classification":"internal"},
               {"id":"proposed-site","type":"reference","target":"site","required":true,"classification":"internal"},
@@ -418,19 +864,19 @@ fn change_request_openapi_exposes_finite_action_contract_and_request_metadata() 
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"change-request-openapi","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"change-request-openapi","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"site","route":"sites","mutationMode":"create_only",
+            "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create_only",
             "fields":[{"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"}]
           },{
-            "id":"placement","route":"placements","mutationMode":"mutable",
+            "id":"placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable",
             "changeControl":{"requiredFor":["patch"]},
             "fields":[
               {"id":"site","type":"reference","target":"site","required":true,"classification":"internal"},
               {"id":"label","type":"string","maxLength":64,"classification":"internal"}
             ]
           },{
-            "id":"placement-correction-request","route":"placement-correction-requests","mutationMode":"mutable",
+            "id":"placement-correction-request","primaryDataset":"test-dataset","route":"placement-correction-requests","mutationMode":"mutable",
             "fields":[
               {"id":"placement","type":"reference","target":"placement","required":true,"classification":"internal"},
               {"id":"proposed-site","type":"reference","target":"site","required":true,"classification":"internal"},
@@ -610,7 +1056,7 @@ fn change_request_fingerprint_tracks_relevant_contract_closure_only() {
     let unrelated = compiled_request(change_request_correction_project(
         "change-request-fingerprint",
         ",\"package\":{\"environment\":\"local\",\"instanceId\":\"local\",\"sequence\":7,\"sourceRevision\":\"unrelated\"}",
-        r#"{"id":"audit-note","route":"audit-notes","mutationMode":"create_only","fields":[{"id":"label","type":"string","maxLength":16,"classification":"internal"}]}"#,
+        r#"{"id":"audit-note","primaryDataset":"test-dataset","route":"audit-notes","mutationMode":"create_only","fields":[{"id":"label","type":"string","maxLength":16,"classification":"internal"}]}"#,
         "internal",
         "internal",
         "[]",
@@ -912,21 +1358,21 @@ fn change_request_multi_record_create_and_patch_orders_reserved_references() {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"change-request-registration","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"change-request-registration","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"person","route":"people","mutationMode":"mutable","changeControl":{"requiredFor":["create"]},
+            "id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable","changeControl":{"requiredFor":["create"]},
             "fields":[{"id":"display-name","type":"string","maxLength":200,"required":true,"classification":"internal"}]
           },{
-            "id":"membership","route":"memberships","mutationMode":"mutable","changeControl":{"requiredFor":["create"]},
+            "id":"membership","primaryDataset":"test-dataset","route":"memberships","mutationMode":"mutable","changeControl":{"requiredFor":["create"]},
             "fields":[
               {"id":"person","type":"reference","target":"person","required":true,"classification":"internal"},
               {"id":"household","type":"reference","target":"household","required":true,"classification":"internal"}
             ]
           },{
-            "id":"household","route":"households","mutationMode":"mutable","changeControl":{"requiredFor":["patch"]},
+            "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable","changeControl":{"requiredFor":["patch"]},
             "fields":[{"id":"contact-person","type":"reference","target":"person","classification":"internal"}]
           },{
-            "id":"registration-request","route":"registration-requests","mutationMode":"mutable",
+            "id":"registration-request","primaryDataset":"test-dataset","route":"registration-requests","mutationMode":"mutable",
             "fields":[
               {"id":"household","type":"reference","target":"household","required":true,"classification":"internal"},
               {"id":"name","type":"string","maxLength":200,"required":true,"classification":"internal"}
@@ -998,15 +1444,15 @@ fn change_request_compile_refuses_direct_write_bypass_and_incomplete_grants() {
             r#"{{
               "apiVersion":"registry.registrystack.org/v1alpha1",
               "kind":"RegistryProject",
-              "registry":{{"id":"change-request-refusals","version":"1","defaultLanguage":"en"}},
+              "registry":{{"id":"change-request-refusals","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
               "entities":[{{
-                "id":"site","route":"sites","mutationMode":"create_only",
+                "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create_only",
                 "fields":[{{"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"}}]
               }},{{
-                "id":"placement","route":"placements","mutationMode":"mutable","changeControl":{{"requiredFor":["patch"]}},
+                "id":"placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable","changeControl":{{"requiredFor":["patch"]}},
                 "fields":[{{"id":"site","type":"reference","target":"site","required":true,"classification":"internal"}}]
               }},{{
-                "id":"correction-request","route":"correction-requests","mutationMode":"mutable",
+                "id":"correction-request","primaryDataset":"test-dataset","route":"correction-requests","mutationMode":"mutable",
                 "fields":[
                   {{"id":"placement","type":"reference","target":"placement","required":true,"classification":"internal"}},
                   {{"id":"site","type":"reference","target":"site","required":true,"classification":"internal"}}
@@ -1063,12 +1509,12 @@ fn change_request_compile_refuses_ambiguous_references_cycles_overlaps_and_null_
             r#"{{
               "apiVersion":"registry.registrystack.org/v1alpha1",
               "kind":"RegistryProject",
-              "registry":{{"id":"change-request-negative","version":"1","defaultLanguage":"en"}},
+              "registry":{{"id":"change-request-negative","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
               "entities":[{{
-                "id":"record","route":"records","mutationMode":"mutable","changeControl":{{"requiredFor":["patch","create"]}},
+                "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable","changeControl":{{"requiredFor":["patch","create"]}},
                 "fields":[{target_fields}]
               }},{{
-                "id":"request","route":"requests","mutationMode":"mutable",
+                "id":"request","primaryDataset":"test-dataset","route":"requests","mutationMode":"mutable",
                 "fields":[{request_fields}],
                 "changeRequest":{{"effects":[{effect}],"review":{{"stages":[{{"id":"review","approvals":1}}]}}}}
               }}],
@@ -1213,12 +1659,12 @@ fn change_request_compile_refuses_uncontrolled_targets_tombstone_requests_and_pl
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"uncontrolled-request","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"uncontrolled-request","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"target","route":"targets","mutationMode":"mutable",
+            "id":"target","primaryDataset":"test-dataset","route":"targets","mutationMode":"mutable",
             "fields":[{"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}]
           },{
-            "id":"request","route":"requests","mutationMode":"mutable",
+            "id":"request","primaryDataset":"test-dataset","route":"requests","mutationMode":"mutable",
             "fields":[
               {"id":"target","type":"reference","target":"target","required":true,"classification":"internal"},
               {"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}
@@ -1245,12 +1691,12 @@ fn change_request_compile_refuses_uncontrolled_targets_tombstone_requests_and_pl
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"request-tombstone","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"request-tombstone","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"target","route":"targets","mutationMode":"mutable","changeControl":{"requiredFor":["patch"]},
+            "id":"target","primaryDataset":"test-dataset","route":"targets","mutationMode":"mutable","changeControl":{"requiredFor":["patch"]},
             "fields":[{"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}]
           },{
-            "id":"request","route":"requests","mutationMode":"mutable","tombstone":true,
+            "id":"request","primaryDataset":"test-dataset","route":"requests","mutationMode":"mutable","tombstone":true,
             "fields":[
               {"id":"target","type":"reference","target":"target","required":true,"classification":"internal"},
               {"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}
@@ -1302,9 +1748,9 @@ fn change_request_compile_refuses_uncontrolled_targets_tombstone_requests_and_pl
         r#"{{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{{"id":"request-bounds","version":"1","defaultLanguage":"en"}},
-          "entities":[{{"id":"target","route":"targets","mutationMode":"mutable","changeControl":{{"requiredFor":["patch"]}},
-            "fields":[{}]}},{{"id":"request","route":"requests","mutationMode":"mutable",
+          "registry":{{"id":"request-bounds","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
+          "entities":[{{"id":"target","primaryDataset":"test-dataset","route":"targets","mutationMode":"mutable","changeControl":{{"requiredFor":["patch"]}},
+            "fields":[{}]}},{{"id":"request","primaryDataset":"test-dataset","route":"requests","mutationMode":"mutable",
             "fields":[{}],
             "changeRequest":{{"effects":[{}],"review":{{"stages":[{{"id":"review","approvals":1}}]}}}}
           }}],
@@ -1331,8 +1777,8 @@ fn change_request_compile_refuses_invalid_lifecycle_surface_bounds_and_controls(
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"misplaced-lifecycle","version":"1","defaultLanguage":"en"},
-          "entities":[{"id":"record","route":"records","mutationMode":"create_only",
+          "registry":{"id":"misplaced-lifecycle","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "entities":[{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create_only",
             "fields":[{"id":"label","type":"string","maxLength":32,"classification":"internal"}]}],
           "accessProfiles":[{"id":"operator","principalClaim":"principal","grants":[{"entity":"record","operations":["get","submit_request"],"readableFields":["label"]}]}]
         }"#,
@@ -1347,8 +1793,8 @@ fn change_request_compile_refuses_invalid_lifecycle_surface_bounds_and_controls(
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"unsupported-control","version":"1","defaultLanguage":"en"},
-          "entities":[{"id":"record","route":"records","mutationMode":"mutable","changeControl":{"requiredFor":["tombstone"]},
+          "registry":{"id":"unsupported-control","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "entities":[{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable","changeControl":{"requiredFor":["tombstone"]},
             "fields":[{"id":"label","type":"string","maxLength":32,"classification":"internal"}]}],
           "accessProfiles":[{"id":"reader","principalClaim":"principal","grants":[{"entity":"record","operations":["get"],"readableFields":["label"]}]}]
         }"#,
@@ -1363,12 +1809,12 @@ fn change_request_compile_refuses_invalid_lifecycle_surface_bounds_and_controls(
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"self-controlled-request","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"self-controlled-request","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"target","route":"targets","mutationMode":"mutable","changeControl":{"requiredFor":["patch"]},
+            "id":"target","primaryDataset":"test-dataset","route":"targets","mutationMode":"mutable","changeControl":{"requiredFor":["patch"]},
             "fields":[{"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}]
           },{
-            "id":"request","route":"requests","mutationMode":"mutable","changeControl":{"requiredFor":["patch"]},
+            "id":"request","primaryDataset":"test-dataset","route":"requests","mutationMode":"mutable","changeControl":{"requiredFor":["patch"]},
             "fields":[
               {"id":"target","type":"reference","target":"target","required":true,"classification":"internal"},
               {"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}
@@ -1391,12 +1837,12 @@ fn change_request_compile_refuses_invalid_lifecycle_surface_bounds_and_controls(
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"nested-request-target","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"nested-request-target","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"target","route":"targets","mutationMode":"mutable","changeControl":{"requiredFor":["patch"]},
+            "id":"target","primaryDataset":"test-dataset","route":"targets","mutationMode":"mutable","changeControl":{"requiredFor":["patch"]},
             "fields":[{"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}]
           },{
-            "id":"inner-request","route":"inner-requests","mutationMode":"mutable",
+            "id":"inner-request","primaryDataset":"test-dataset","route":"inner-requests","mutationMode":"mutable",
             "fields":[
               {"id":"target","type":"reference","target":"target","required":true,"classification":"internal"},
               {"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}
@@ -1404,7 +1850,7 @@ fn change_request_compile_refuses_invalid_lifecycle_surface_bounds_and_controls(
             "changeRequest":{"effects":[{"target":{"fromField":"target"},"operation":"patch","set":{"label":{"fromField":"label"}}}],
               "review":{"stages":[{"id":"review","approvals":1}]}}
           },{
-            "id":"outer-request","route":"outer-requests","mutationMode":"mutable",
+            "id":"outer-request","primaryDataset":"test-dataset","route":"outer-requests","mutationMode":"mutable",
             "fields":[
               {"id":"inner","type":"reference","target":"inner-request","required":true,"classification":"internal"},
               {"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}
@@ -1437,10 +1883,10 @@ fn change_request_compile_refuses_invalid_lifecycle_surface_bounds_and_controls(
         r#"{{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{{"id":"too-many-stages","version":"1","defaultLanguage":"en"}},
-          "entities":[{{"id":"target","route":"targets","mutationMode":"mutable","changeControl":{{"requiredFor":["patch"]}},
+          "registry":{{"id":"too-many-stages","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
+          "entities":[{{"id":"target","primaryDataset":"test-dataset","route":"targets","mutationMode":"mutable","changeControl":{{"requiredFor":["patch"]}},
             "fields":[{{"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}}]
-          }},{{"id":"request","route":"requests","mutationMode":"mutable",
+          }},{{"id":"request","primaryDataset":"test-dataset","route":"requests","mutationMode":"mutable",
             "fields":[
               {{"id":"target","type":"reference","target":"target","required":true,"classification":"internal"}},
               {{"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}}
@@ -1466,9 +1912,9 @@ fn derived_fields_selectors_and_read_paths_compile_to_route_specific_inventories
     let project = br#"{
       "apiVersion":"registry.registrystack.org/v1alpha1",
       "kind":"RegistryProject",
-      "registry":{"id":"household-demo","version":"1","defaultLanguage":"en"},
+      "registry":{"id":"household-demo","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
       "entities":[{
-        "id":"household","route":"households","mutationMode":"mutable",
+        "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
         "fields":[
           {"id":"household-code","type":"string","maxLength":32,"required":true,"classification":"internal"},
           {"id":"administrative-area","type":"string","maxLength":32,"required":true,"classification":"internal"},
@@ -1487,13 +1933,13 @@ fn derived_fields_selectors_and_read_paths_compile_to_route_specific_inventories
         ],
         "readPaths":[{"id":"people","through":"group-membership","to":"person","route":"people"}]
       },{
-        "id":"person","route":"people","mutationMode":"mutable",
+        "id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable",
         "fields":[
           {"id":"legal-name","type":"string","maxLength":80,"classification":"internal"},
           {"id":"date-of-birth","type":"date","classification":"internal"}
         ]
       },{
-        "id":"group-membership","route":"memberships","mutationMode":"mutable",
+        "id":"group-membership","primaryDataset":"test-dataset","route":"memberships","mutationMode":"mutable",
         "fields":[
           {"id":"household","type":"reference","target":"household","classification":"internal"},
           {"id":"person","type":"reference","target":"person","classification":"internal"}
@@ -1624,9 +2070,9 @@ fn canonical_id_row_boundary_targets_the_physical_record_id_column() {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"canonical-id-boundary","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"canonical-id-boundary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"household","route":"households","mutationMode":"mutable",
+            "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
             "fields":[
               {"id":"household-code","type":"string","maxLength":32,"classification":"internal"}
             ]
@@ -1670,9 +2116,9 @@ fn derived_sql_is_asset_backed_value_free_and_validates_output_aliases() {
     let project = br#"{
       "apiVersion":"registry.registrystack.org/v1alpha1",
       "kind":"RegistryProject",
-      "registry":{"id":"derived-demo","version":"1","defaultLanguage":"en"},
+      "registry":{"id":"derived-demo","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
       "entities":[{
-        "id":"household","route":"households","mutationMode":"mutable",
+        "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
         "fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"}],
         "derived":[{
           "id":"demographics","sql":"sql/demographics.sql","key":"id",
@@ -1734,9 +2180,9 @@ fn anonymous_access_cannot_process_selector_path_or_derived_private_fields() {
             r#"{{
               "apiVersion":"registry.registrystack.org/v1alpha1",
               "kind":"RegistryProject",
-              "registry":{{"id":"public-demo","version":"1","defaultLanguage":"en"}},
+              "registry":{{"id":"public-demo","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
               "entities":[{{
-                "id":"household","route":"households","mutationMode":"mutable","classification":"public",
+                "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable","classification":"public",
                 "fields":[{{"id":"public-code","type":"string","maxLength":32,"classification":"public"}},
                   {{"id":"private-code","type":"string","maxLength":32,"classification":"restricted"}}],
                 "derived":[{{"id":"flags","sql":"sql/flags.sql","key":"id","fields":[{{"id":"risk-flag","type":"boolean","classification":"public"}}]}}],
@@ -1777,7 +2223,7 @@ fn anonymous_access_cannot_process_selector_path_or_derived_private_fields() {
 #[test]
 fn module_digest_can_bind_explicit_sql_assets() {
     let module = parse_module_json(
-        br#"{"id":"core","version":"1","entities":[{"id":"record","route":"records","mutationMode":"mutable","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}]}]}"#,
+        br#"{"id":"core","version":"1","entities":[{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}]}]}"#,
     )
     .expect("module parses");
     let yaml_only = module_digest(&module);
@@ -1812,9 +2258,9 @@ fn batch_route_requires_explicit_bounds_and_compiles_bounded_openapi() {
             r#"{{
               "apiVersion":"registry.registrystack.org/v1alpha1",
               "kind":"RegistryProject",
-              "registry":{{"id":"batch-contract","version":"1","defaultLanguage":"en"}},
+              "registry":{{"id":"batch-contract","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
               "entities":[{{
-                "id":"record","route":"records","mutationMode":"mutable"{batch},
+                "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable"{batch},
                 "fields":[{{"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}}]
               }}],
               "accessProfiles":[{{
@@ -2068,10 +2514,10 @@ fn production_allows_missing_manifest_projection_and_emits_no_manifest_artifacts
             br#"{
               "apiVersion":"registry.registrystack.org/v1alpha1",
               "kind":"RegistryProject",
-              "registry":{"id":"neutral","version":"1","defaultLanguage":"en"},
+              "registry":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
               "package":{"environment":"local","instanceId":"local-instance","sequence":1,"sourceRevision":"source"},
               "entities":[{
-                "id":"record","route":"records","mutationMode":"create_only",
+                "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create_only",
                 "fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"}]
               }],
               "accessProfiles":[{
@@ -2113,9 +2559,9 @@ fn project_access_profiles_use_the_entity_access_vocabulary() {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"profile-vocabulary","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"profile-vocabulary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"case-file","route":"case-files","mutationMode":"mutable",
+            "id":"case-file","primaryDataset":"test-dataset","route":"case-files","mutationMode":"mutable",
             "fields":[
               {"id":"case-code","type":"string","maxLength":32,"classification":"internal"},
               {"id":"status","type":"string","maxLength":32,"classification":"internal"}
@@ -2175,9 +2621,9 @@ fn root_project_entity_access_profiles_are_compile_time_errors() {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"profile-vocabulary","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"profile-vocabulary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"case-file","route":"case-files","mutationMode":"mutable",
+            "id":"case-file","primaryDataset":"test-dataset","route":"case-files","mutationMode":"mutable",
             "fields":[{"id":"case-code","type":"string","maxLength":32,"classification":"internal"}],
             "accessProfiles":[{
               "id":"entity-local-reader",
@@ -2206,9 +2652,9 @@ fn module_entity_access_profiles_remain_supported_for_module_composition() {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"module-profile","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"module-profile","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"case-file","route":"case-files","mutationMode":"mutable",
+            "id":"case-file","primaryDataset":"test-dataset","route":"case-files","mutationMode":"mutable",
             "fields":[{"id":"case-code","type":"string","maxLength":32,"classification":"internal"}]
           }],
           "modules":[{"id":"core","version":"1"}]
@@ -2220,7 +2666,7 @@ fn module_entity_access_profiles_remain_supported_for_module_composition() {
           "id":"core",
           "version":"1",
           "entities":[{
-            "id":"module-record","route":"module-records","mutationMode":"mutable",
+            "id":"module-record","primaryDataset":"test-dataset","route":"module-records","mutationMode":"mutable",
             "fields":[{"id":"case-code","type":"string","maxLength":32,"classification":"internal"}],
             "accessProfiles":[{
               "id":"module-reader",
@@ -2258,9 +2704,9 @@ fn anonymous_project_access_profiles_expand_without_authenticated_claims() {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"anonymous-profile","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"anonymous-profile","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"public-record","route":"public-records","mutationMode":"mutable","classification":"public",
+            "id":"public-record","primaryDataset":"test-dataset","route":"public-records","mutationMode":"mutable","classification":"public",
             "fields":[
               {"id":"code","type":"string","maxLength":32,"classification":"public"},
               {"id":"name","type":"string","maxLength":80,"classification":"public"}
@@ -2306,9 +2752,9 @@ fn anonymous_project_access_profiles_cannot_require_authenticated_claims() {
             r#"{{
               "apiVersion":"registry.registrystack.org/v1alpha1",
               "kind":"RegistryProject",
-              "registry":{{"id":"anonymous-profile","version":"1","defaultLanguage":"en"}},
+              "registry":{{"id":"anonymous-profile","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
               "entities":[{{
-                "id":"public-record","route":"public-records","mutationMode":"mutable","classification":"public",
+                "id":"public-record","primaryDataset":"test-dataset","route":"public-records","mutationMode":"mutable","classification":"public",
                 "fields":[{{"id":"code","type":"string","maxLength":32,"classification":"public"}}]
               }}],
               "accessProfiles":[{{
@@ -2354,9 +2800,9 @@ fn project_access_profiles_reject_the_legacy_purpose_vocabulary() {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"profile-vocabulary","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"profile-vocabulary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"case-file","route":"case-files","mutationMode":"mutable",
+            "id":"case-file","primaryDataset":"test-dataset","route":"case-files","mutationMode":"mutable",
             "fields":[{"id":"case-code","type":"string","maxLength":32,"classification":"internal"}]
           }],
           "accessProfiles":[{
@@ -2380,9 +2826,9 @@ fn project_access_grants_reject_the_legacy_action_vocabulary() {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"profile-vocabulary","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"profile-vocabulary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"case-file","route":"case-files","mutationMode":"mutable",
+            "id":"case-file","primaryDataset":"test-dataset","route":"case-files","mutationMode":"mutable",
             "fields":[{"id":"case-code","type":"string","maxLength":32,"classification":"internal"}]
           }],
           "accessProfiles":[{
@@ -2413,9 +2859,9 @@ fn entity_access_grants_reject_action_target_and_result_fields() {
             r#"{{
               "apiVersion":"registry.registrystack.org/v1alpha1",
               "kind":"RegistryProject",
-              "registry":{{"id":"profile-vocabulary","version":"1","defaultLanguage":"en"}},
+              "registry":{{"id":"profile-vocabulary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
               "entities":[{{
-                "id":"case-file","route":"case-files","mutationMode":"mutable",
+                "id":"case-file","primaryDataset":"test-dataset","route":"case-files","mutationMode":"mutable",
                 "fields":[{{"id":"case-code","type":"string","maxLength":32,"classification":"internal"}}]
               }}],
               "accessProfiles":[{{
@@ -2444,9 +2890,9 @@ fn project_access_grants_reject_mixed_entity_and_action_targets() {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"profile-vocabulary","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"profile-vocabulary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"case-file","route":"case-files","mutationMode":"mutable",
+            "id":"case-file","primaryDataset":"test-dataset","route":"case-files","mutationMode":"mutable",
             "fields":[{"id":"case-code","type":"string","maxLength":32,"classification":"internal"}]
           }],
           "actions":[{
@@ -2479,16 +2925,18 @@ fn manifest_projection_unknown_nested_keys_are_rejected_without_values() {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"neutral","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
           "manifestProjection":{
             "accessProfile":"reader",
             "classificationCeiling":"internal",
             "catalog":{
               "baseUrl":"https://registry.example.test",
               "title":"Registry Catalog",
-              "publisher":{"name":"Publisher","privateKey":"do-not-echo"}
+              "publisher":{"id":"publisher","name":"Publisher","privateKey":"do-not-echo"}
             },
-            "dataset":{"title":"Registry Dataset"}
+            "publicService":{"id":"registry-service","title":"Registry service"},
+            "datasets":[{"id":"neutral","title":"Registry Dataset"}],
+            "dataServices":[{"id":"registry-api","title":"Registry API","endpointUrl":"https://registry.example.test","servesDatasets":["neutral"]}]
           }
         }"#,
     )
@@ -2636,17 +3084,13 @@ fn all_acceptance_fixtures_compile_manifest_projection_under_production() {
                 dataset.entities["establishment"].concept_uri.as_deref(),
                 Some("https://business-establishments.example.gov/model/establishment")
             );
-            assert_eq!(
-                dataset.entities["operator-assignment"]
-                    .relationships
-                    .iter()
-                    .find(|relationship| relationship.name == "business")
-                    .expect("operator relationship is projected")
-                    .concept_uri
-                    .as_deref(),
-                Some("https://business-establishments.example.gov/model/business")
-            );
+            assert!(dataset.entities["operator-assignment"]
+                .relationships
+                .iter()
+                .all(|relationship| relationship.name != "business"));
+            assert!(manifest.dataset("registered-businesses").is_some());
             assert_eq!(manifest.data_services().count(), 1);
+            assert_eq!(manifest.distributions().count(), 1);
             assert!(manifest
                 .codelists()
                 .any(|codelist| codelist.id == "establishment-role"));
@@ -2664,19 +3108,21 @@ fn manifest_projection_filters_by_selected_profile_and_classification_ceiling() 
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"public-slice","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"public-slice","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://public-slice.example.test"},
           "manifestProjection":{
             "accessProfile":"operator",
             "classificationCeiling":"public",
-            "catalog":{"baseUrl":"https://public-slice.example.test","title":"Public Slice","publisher":{"name":"Publisher"}},
-            "dataset":{"title":"Public Slice Dataset","status":"active"}
+            "catalog":{"baseUrl":"https://public-slice.example.test","title":"Public Slice","publisher":{"id":"publisher","name":"Publisher"}},
+            "publicService":{"id":"public-slice-service","title":"Public Slice"},
+            "datasets":[{"id":"public-slice","title":"Public Slice Dataset","status":"active"}],
+            "dataServices":[{"id":"public-slice-api","title":"Public Slice API","endpointUrl":"https://public-slice.example.test/v1","servesDatasets":["public-slice"]}]
           },
           "entities":[
-            {"id":"visible-target","route":"visible-targets","mutationMode":"create_only","classification":"public",
+            {"id":"visible-target","primaryDataset":"public-slice","route":"visible-targets","mutationMode":"create_only","classification":"public",
              "fields":[{"id":"label","type":"string","maxLength":64,"classification":"public"}]},
-            {"id":"hidden-target","route":"hidden-targets","mutationMode":"create_only","classification":"restricted",
+            {"id":"hidden-target","primaryDataset":"public-slice","route":"hidden-targets","mutationMode":"create_only","classification":"restricted",
              "fields":[{"id":"label","type":"string","maxLength":64,"classification":"restricted"}]},
-            {"id":"link","route":"links","mutationMode":"create_only","classification":"public",
+            {"id":"link","primaryDataset":"public-slice","route":"links","mutationMode":"create_only","classification":"public",
              "fields":[
                {"id":"name","type":"string","maxLength":64,"classification":"public"},
                {"id":"operator-note","type":"string","maxLength":64,"classification":"internal"},
@@ -2732,12 +3178,14 @@ fn manifest_projection_metadata_cannot_describe_hidden_entities_or_fields() {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"public-slice","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"public-slice","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://public-slice.example.test"},
           "manifestProjection":{
             "accessProfile":"reader",
             "classificationCeiling":"restricted",
-            "catalog":{"baseUrl":"https://public-slice.example.test","title":"Public Slice","publisher":{"name":"Publisher"}},
-            "dataset":{"title":"Public Slice Dataset"},
+            "catalog":{"baseUrl":"https://public-slice.example.test","title":"Public Slice","publisher":{"id":"publisher","name":"Publisher"}},
+            "publicService":{"id":"public-slice-service","title":"Public Slice"},
+            "datasets":[{"id":"public-slice","title":"Public Slice Dataset"}],
+            "dataServices":[{"id":"public-slice-api","title":"Public Slice API","endpointUrl":"https://public-slice.example.test/v1","servesDatasets":["public-slice"]}],
             "entities":[
               {"id":"record","fields":[
                 {"id":"secret-note","concepts":["https://example.test/secret-note"]},
@@ -2747,13 +3195,13 @@ fn manifest_projection_metadata_cannot_describe_hidden_entities_or_fields() {
             ]
           },
           "entities":[
-            {"id":"record","route":"records","mutationMode":"create_only","classification":"public",
+            {"id":"record","primaryDataset":"public-slice","route":"records","mutationMode":"create_only","classification":"public",
              "fields":[
                {"id":"name","type":"string","maxLength":64,"classification":"public"},
                {"id":"secret-note","type":"string","maxLength":64,"classification":"restricted"},
                {"id":"profile","type":"structured","maxBytes":1024,"schema":{"type":"object","additionalProperties":false},"classification":"public"}
              ]},
-            {"id":"secret-record","route":"secret-records","mutationMode":"create_only","classification":"restricted",
+            {"id":"secret-record","primaryDataset":"public-slice","route":"secret-records","mutationMode":"create_only","classification":"restricted",
              "fields":[{"id":"name","type":"string","maxLength":64,"classification":"restricted"}]}
           ],
           "accessProfiles":[
@@ -2806,14 +3254,14 @@ fn independent_additive_modules_are_order_independent() {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"neutral-registry","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "modules":[
             {"id":"core","version":"1"},
             {"id":"alpha","version":"1"},
             {"id":"beta","version":"1"}
           ],
           "entities":[{
-            "id":"object","route":"objects","mutationMode":"mutable",
+            "id":"object","primaryDataset":"test-dataset","route":"objects","mutationMode":"mutable",
             "fields":[{"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"}]
           }],
           "accessProfiles":[{
@@ -2862,9 +3310,9 @@ fn project_access_profile_required_scopes_compile_into_each_grant() {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"scope-bound-registry","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"scope-bound-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"record","route":"records","mutationMode":"mutable",
+            "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable",
             "fields":[{"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"}]
           }],
           "accessProfiles":[{
@@ -2896,7 +3344,7 @@ fn strict_parse_refuses_unknown_and_duplicate_members_without_echoing_values() {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"neutral","version":"1","defaultLanguage":"en","secretField":"do-not-echo"}
+          "registry":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test","secretField":"do-not-echo"}
         }"#,
     )
     .expect_err("unknown member is refused");
@@ -2913,7 +3361,7 @@ fn strict_parse_refuses_unknown_and_duplicate_members_without_echoing_values() {
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
           "kind":"Other",
-          "registry":{"id":"neutral","version":"1","defaultLanguage":"en"}
+          "registry":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}
         }"#,
     )
     .expect_err("duplicate member is refused");
@@ -2954,9 +3402,9 @@ fn deferred_query_features_are_strictly_unknown_key_rejected() {
             r#"{{
               "apiVersion":"registry.registrystack.org/v1alpha1",
               "kind":"RegistryProject",
-              "registry":{{"id":"closed-query-grammar","version":"1","defaultLanguage":"en"}},
+              "registry":{{"id":"closed-query-grammar","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
               "entities":[{{
-                "id":"record","route":"records","mutationMode":"create_only",
+                "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create_only",
                 {member}
               }}]
             }}"#
@@ -2996,9 +3444,9 @@ fn generic_decimal_crs84_point_and_structured_fields_compile_to_deterministic_dd
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"generic-scalars","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"generic-scalars","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"reading","route":"readings","mutationMode":"mutable",
+            "id":"reading","primaryDataset":"test-dataset","route":"readings","mutationMode":"mutable",
             "fields":[
               {"id":"amount","type":"decimal","precision":6,"scale":2,"minimum":"-10.00","maximum":"9999.99","classification":"internal"},
               {"id":"location","type":"crs84-point","precision":4,"bbox":{"west":"100.0000","south":"10.0000","east":"110.0000","north":"20.0000"},"classification":"internal"},
@@ -3073,9 +3521,9 @@ fn scalar_field_sources_reject_incompatible_type_options_during_strict_parse() {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"generic-scalars","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"generic-scalars","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"reading","route":"readings","mutationMode":"mutable",
+            "id":"reading","primaryDataset":"test-dataset","route":"readings","mutationMode":"mutable",
             "fields":[{"id":"flag","type":"boolean","precision":2,"classification":"internal"}]
           }]
         }"#,
@@ -3090,11 +3538,11 @@ fn scalar_grammar_is_exactly_the_typed_allowlist_and_rejects_json_or_reference_l
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"scalar-allowlist","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"scalar-allowlist","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[
-            {"id":"target","route":"targets","mutationMode":"create_only"},
+            {"id":"target","primaryDataset":"test-dataset","route":"targets","mutationMode":"create_only"},
             {
-              "id":"record","route":"records","mutationMode":"create_only",
+              "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create_only",
               "fields":[
                 {"id":"flag","type":"boolean","classification":"internal"},
                 {"id":"code","type":"string","maxLength":32,"classification":"internal"},
@@ -3173,9 +3621,9 @@ fn scalar_grammar_is_exactly_the_typed_allowlist_and_rejects_json_or_reference_l
             r#"{{
               "apiVersion":"registry.registrystack.org/v1alpha1",
               "kind":"RegistryProject",
-              "registry":{{"id":"scalar-allowlist","version":"1","defaultLanguage":"en"}},
+              "registry":{{"id":"scalar-allowlist","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
               "entities":[{{
-                "id":"record","route":"records","mutationMode":"create_only",
+                "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create_only",
                 "fields":[{field}]
               }}]
             }}"#
@@ -3233,9 +3681,9 @@ fn generic_scalar_option_and_schema_negatives_fail_before_ddl_generation() {
             r#"{{
               "apiVersion":"registry.registrystack.org/v1alpha1",
               "kind":"RegistryProject",
-              "registry":{{"id":"generic-scalars","version":"1","defaultLanguage":"en"}},
+              "registry":{{"id":"generic-scalars","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
               "entities":[{{
-                "id":"reading","route":"readings","mutationMode":"mutable",
+                "id":"reading","primaryDataset":"test-dataset","route":"readings","mutationMode":"mutable",
                 "fields":[{field}]
               }}],
               "accessProfiles":[{{"id":"operator","default":true,"principalClaim":"principal","grants":[{{"entity":"reading","operations":["get"],"readableFields":["{}"]}}]}}]
@@ -3273,9 +3721,9 @@ fn crs84_point_and_structured_fields_cannot_be_row_boundaries_until_equality_is_
             r#"{{
               "apiVersion":"registry.registrystack.org/v1alpha1",
               "kind":"RegistryProject",
-              "registry":{{"id":"generic-scalars","version":"1","defaultLanguage":"en"}},
+              "registry":{{"id":"generic-scalars","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
               "entities":[{{
-                "id":"reading","route":"readings","mutationMode":"mutable",
+                "id":"reading","primaryDataset":"test-dataset","route":"readings","mutationMode":"mutable",
                 "fields":[{field}]
               }}],
               "accessProfiles":[{{
@@ -3302,9 +3750,9 @@ fn geojson_and_bbox_compile_only_for_direct_current_lists() {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"spatial-authoring","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"spatial-authoring","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"site","route":"sites","mutationMode":"mutable","classification":"internal",
+            "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"internal",
             "fields":[
               {"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"},
               {"id":"location","type":"crs84-point","precision":6,"required":true,"classification":"internal"},
@@ -3378,9 +3826,9 @@ fn geojson_and_bbox_compile_only_for_direct_current_lists() {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"ordinary","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"ordinary","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"entry","route":"entries","mutationMode":"mutable",
+            "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
             "fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"}]
           }],
           "accessProfiles":[{
@@ -3465,9 +3913,9 @@ fn bbox_authoring_requires_declared_readable_primary_point_and_bounded_spans() {
             r#"{{
               "apiVersion":"registry.registrystack.org/v1alpha1",
               "kind":"RegistryProject",
-              "registry":{{"id":"spatial-negative","version":"1","defaultLanguage":"en"}},
+              "registry":{{"id":"spatial-negative","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
               "entities":[{{
-                "id":"site","route":"sites","mutationMode":"mutable","classification":"internal",
+                "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"internal",
                 "fields":[
                   {{"id":"code","type":"string","maxLength":32,"classification":"internal"}},
                   {{"id":"location","type":"crs84-point","precision":6,"classification":"internal"}}
@@ -3499,9 +3947,9 @@ fn bbox_authoring_is_strict_and_does_not_make_points_scalar_query_fields() {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"spatial-strict","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"spatial-strict","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"site","route":"sites","mutationMode":"mutable",
+            "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable",
             "fields":[{"id":"location","type":"crs84-point","precision":6,"classification":"internal"}],
             "geojson":{"geometryField":"location"}
           }],
@@ -3532,9 +3980,9 @@ fn bbox_authoring_is_strict_and_does_not_make_points_scalar_query_fields() {
             r#"{{
               "apiVersion":"registry.registrystack.org/v1alpha1",
               "kind":"RegistryProject",
-              "registry":{{"id":"point-scalar-negative","version":"1","defaultLanguage":"en"}},
+              "registry":{{"id":"point-scalar-negative","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
               "entities":[{{
-                "id":"site","route":"sites","mutationMode":"mutable",
+                "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable",
                 "fields":[{{"id":"location","type":"crs84-point","precision":6,"classification":"internal"}}]
               }}],
               "accessProfiles":[{{
@@ -3562,9 +4010,9 @@ fn anonymous_bbox_queries_cannot_process_hidden_geometry() {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"spatial-public-negative","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"spatial-public-negative","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"site","route":"sites","mutationMode":"mutable","classification":"public",
+            "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"public",
             "fields":[
               {"id":"code","type":"string","maxLength":32,"classification":"public"},
               {"id":"location","type":"crs84-point","precision":6,"classification":"internal"}
@@ -3599,10 +4047,10 @@ fn modules_can_add_geojson_once_but_conflicting_geometry_is_refused() {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"module-spatial","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"module-spatial","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "modules":[{"id":"maps","version":"1"}],
           "entities":[{
-            "id":"site","route":"sites","mutationMode":"mutable",
+            "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable",
             "fields":[
               {"id":"code","type":"string","maxLength":32,"classification":"internal"},
               {"id":"location","type":"crs84-point","precision":6,"classification":"internal"},
@@ -3667,11 +4115,11 @@ fn closed_constraint_grammar_compiles_typed_checks_and_refuses_expression_escape
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"constraint-matrix","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"constraint-matrix","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[
-            {"id":"parent","route":"parents","mutationMode":"create_only"},
+            {"id":"parent","primaryDataset":"test-dataset","route":"parents","mutationMode":"create_only"},
             {
-              "id":"record","route":"records","mutationMode":"create_only",
+              "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create_only",
               "fields":[
                 {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"internal"},
                 {"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"},
@@ -3871,9 +4319,9 @@ fn closed_constraint_grammar_compiles_typed_checks_and_refuses_expression_escape
             r#"{{
               "apiVersion":"registry.registrystack.org/v1alpha1",
               "kind":"RegistryProject",
-              "registry":{{"id":"constraint-matrix","version":"1","defaultLanguage":"en"}},
+              "registry":{{"id":"constraint-matrix","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
               "entities":[{{
-                "id":"record","route":"records","mutationMode":"create_only",
+                "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create_only",
                 "fields":[
                   {{"id":"left","type":"int64","classification":"internal"}},
                   {{"id":"right","type":"int64","classification":"internal"}}
@@ -3896,9 +4344,9 @@ fn closed_constraint_grammar_compiles_typed_checks_and_refuses_expression_escape
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"constraint-matrix","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"constraint-matrix","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"record","route":"records","mutationMode":"create_only",
+            "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create_only",
             "fields":[{"id":"cascade-reference-canary","type":"reference","target":"record","onDelete":"cascade","classification":"internal"}]
           }]
         }"#,
@@ -3918,9 +4366,9 @@ fn partial_unique_when_predicates_are_strictly_tagged_and_closed() {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"partial-unique","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"entry","route":"entries","mutationMode":"mutable",
+            "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
             "fields":[
               {"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"},
               {"id":"status","type":"vocabulary-code","vocabulary":"status","required":true,"classification":"internal"}
@@ -3943,9 +4391,9 @@ fn partial_unique_when_predicates_are_strictly_tagged_and_closed() {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"partial-unique","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"entry","route":"entries","mutationMode":"mutable",
+            "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
             "fields":[{"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"}],
             "constraints":[{
               "kind":"unique","fields":["code"],
@@ -3966,9 +4414,9 @@ fn partial_unique_typed_literals_are_canonical_for_each_supported_field_type() {
     let source = br#"{
       "apiVersion":"registry.registrystack.org/v1alpha1",
       "kind":"RegistryProject",
-      "registry":{"id":"partial-unique","version":"1","defaultLanguage":"en"},
+      "registry":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
       "entities":[{
-        "id":"entry","route":"entries","mutationMode":"mutable",
+        "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
         "fields":[
           {"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"},
           {"id":"flag","type":"boolean","classification":"internal"},
@@ -4039,9 +4487,9 @@ fn partial_unique_rejects_invalid_literals_and_json_predicate_fields() {
             r#"{{
               "apiVersion":"registry.registrystack.org/v1alpha1",
               "kind":"RegistryProject",
-              "registry":{{"id":"partial-unique","version":"1","defaultLanguage":"en"}},
+              "registry":{{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
               "entities":[{{
-                "id":"entry","route":"entries","mutationMode":"mutable",
+                "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
                 "fields":[
                   {{"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"}},
                   {field}
@@ -4089,9 +4537,9 @@ fn partial_unique_rejects_empty_unknown_duplicate_and_contradictory_when_predica
             r#"{{
               "apiVersion":"registry.registrystack.org/v1alpha1",
               "kind":"RegistryProject",
-              "registry":{{"id":"partial-unique","version":"1","defaultLanguage":"en"}},
+              "registry":{{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
               "entities":[{{
-                "id":"entry","route":"entries","mutationMode":"mutable",
+                "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
                 "fields":[
                   {{"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"}},
                   {{"id":"required","type":"string","maxLength":32,"required":true,"classification":"internal"}},
@@ -4114,9 +4562,9 @@ fn partial_unique_ddl_is_quoted_and_deterministic_across_predicate_order() {
     let left = br#"{
       "apiVersion":"registry.registrystack.org/v1alpha1",
       "kind":"RegistryProject",
-      "registry":{"id":"partial-unique","version":"1","defaultLanguage":"en"},
+      "registry":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
       "entities":[{
-        "id":"entry","route":"entries","mutationMode":"mutable",
+        "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
         "fields":[
           {"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"},
           {"id":"ended-on","type":"date","classification":"internal"},
@@ -4135,9 +4583,9 @@ fn partial_unique_ddl_is_quoted_and_deterministic_across_predicate_order() {
     let right = br#"{
       "apiVersion":"registry.registrystack.org/v1alpha1",
       "kind":"RegistryProject",
-      "registry":{"id":"partial-unique","version":"1","defaultLanguage":"en"},
+      "registry":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
       "entities":[{
-        "id":"entry","route":"entries","mutationMode":"mutable",
+        "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
         "fields":[
           {"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"},
           {"id":"ended-on","type":"date","classification":"internal"},
@@ -4177,9 +4625,9 @@ fn equivalent_partial_unique_extension_constraints_merge_deterministically() {
     let project = parse_project_json(
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject",
-          "registry":{"id":"partial-unique","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "modules":[{"id":"a","version":"1"},{"id":"b","version":"1"}],
-          "entities":[{"id":"entry","route":"entries","mutationMode":"mutable","fields":[
+          "entities":[{"id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","fields":[
             {"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"},
             {"id":"ended-on","type":"date","classification":"internal"}
           ]}]
@@ -4214,9 +4662,9 @@ fn anonymous_profiles_cannot_inherit_partial_unique_processing_over_non_public_f
     let source = br#"{
       "apiVersion":"registry.registrystack.org/v1alpha1",
       "kind":"RegistryProject",
-      "registry":{"id":"partial-unique","version":"1","defaultLanguage":"en"},
+      "registry":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
       "entities":[{
-        "id":"entry","route":"entries","mutationMode":"mutable","classification":"public",
+        "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","classification":"public",
         "fields":[
           {"id":"code","type":"string","maxLength":32,"required":true,"classification":"public"},
           {"id":"protected-marker","type":"string","maxLength":32,"classification":"restricted"}
@@ -4246,9 +4694,9 @@ fn anonymous_public_surface_rejects_every_non_public_constraint_field() {
     let source = br#"{
       "apiVersion":"registry.registrystack.org/v1alpha1",
       "kind":"RegistryProject",
-      "registry":{"id":"constraint-processing","version":"1","defaultLanguage":"en"},
+      "registry":{"id":"constraint-processing","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
       "entities":[{
-        "id":"record","route":"records","mutationMode":"mutable","classification":"public",
+        "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable","classification":"public",
         "fields":[
           {"id":"label","type":"string","maxLength":32,"required":true,"classification":"public"},
           {"id":"unique-field","type":"string","maxLength":32,"required":true,"classification":"public"},
@@ -4346,9 +4794,9 @@ fn compiled_partial_unique_constraint_keeps_closed_predicates_in_the_model() {
     let source = br#"{
       "apiVersion":"registry.registrystack.org/v1alpha1",
       "kind":"RegistryProject",
-      "registry":{"id":"partial-unique","version":"1","defaultLanguage":"en"},
+      "registry":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
       "entities":[{
-        "id":"entry","route":"entries","mutationMode":"mutable","classification":"public",
+        "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","classification":"public",
         "fields":[
           {"id":"code","type":"string","maxLength":32,"required":true,"classification":"public"},
           {"id":"status","type":"vocabulary-code","vocabulary":"status","classification":"public"}
@@ -4579,9 +5027,9 @@ fn generated_openapi_separates_security_and_mutation_input_from_read_schema() {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"business-contract","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"business-contract","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"business-record","route":"business-records","mutationMode":"mutable","classification":"public",
+            "id":"business-record","primaryDataset":"test-dataset","route":"business-records","mutationMode":"mutable","classification":"public",
             "fields":[
               {"id":"code","type":"string","required":true,"maxLength":32,"classification":"public"},
               {"id":"business-note","apiName":"businessNote","type":"string","maxLength":80,"classification":"public"},
@@ -4663,9 +5111,9 @@ fn entity_schema_uses_compiled_api_names_and_preserves_field_contracts() {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"logical-schema","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"logical-schema","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"household","route":"households","mutationMode":"mutable",
+            "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
             "fields":[
               {"id":"household-code","type":"string","required":true,"maxLength":64,"classification":"restricted"},
               {"id":"household-kind-code","apiName":"householdKind","type":"vocabulary-code","vocabulary":"household-kind","required":true,"classification":"restricted"},
@@ -4812,9 +5260,9 @@ fn compiler_produces_both_revision_routes_when_explicitly_configured() {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"revision-surface","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"revision-surface","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"entry","route":"entries","mutationMode":"create_only","classification":"internal",
+            "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"create_only","classification":"internal",
             "fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"}]
           }],
           "accessProfiles":[{
@@ -4917,9 +5365,9 @@ fn compiler_omits_revision_routes_when_not_configured_or_revision_access_is_fals
             r#"{{
               "apiVersion":"registry.registrystack.org/v1alpha1",
               "kind":"RegistryProject",
-              "registry":{{"id":"revision-surface","version":"1","defaultLanguage":"en"}},
+              "registry":{{"id":"revision-surface","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
               "entities":[{{
-                "id":"entry","route":"entries","mutationMode":"create_only","classification":"public",
+                "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"create_only","classification":"public",
                 "fields":[{{"id":"code","type":"string","maxLength":32,"classification":"public"}}]
               }}],
               "accessProfiles":[{{
@@ -5007,9 +5455,9 @@ fn anonymous_public_profile_cannot_filter_a_non_public_field() {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"public-filter","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"public-filter","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"entry","route":"entries","mutationMode":"create_only","classification":"public",
+            "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"create_only","classification":"public",
             "fields":[
               {"id":"label","type":"string","maxLength":32,"classification":"public"},
               {"id":"hidden-filter-canary","type":"string","maxLength":32,"classification":"restricted"}
@@ -5064,9 +5512,9 @@ fn additive_module_conflicts_fail_instead_of_using_input_precedence() {
     let project = parse_project_json(
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject",
-          "registry":{"id":"neutral","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "modules":[{"id":"core","version":"1"},{"id":"a","version":"1"},{"id":"b","version":"1"}],
-          "entities":[{"id":"object","route":"objects","mutationMode":"mutable","fields":[
+          "entities":[{"id":"object","primaryDataset":"test-dataset","route":"objects","mutationMode":"mutable","fields":[
             {"id":"code","type":"string","maxLength":8,"classification":"internal"}
           ]}],
           "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","grants":[{"entity":"object","operations":["get"],"readableFields":["code"]}]}]
@@ -5096,12 +5544,12 @@ fn operation_ids_preserve_distinct_valid_entity_ids_without_collisions() {
     let project = parse_project_json(
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject",
-          "registry":{"id":"neutral","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[
-            {"id":"case-file","route":"case-files","mutationMode":"create_only","fields":[
+            {"id":"case-file","primaryDataset":"test-dataset","route":"case-files","mutationMode":"create_only","fields":[
               {"id":"code","type":"string","maxLength":8,"classification":"internal"}
             ]},
-            {"id":"case_file","route":"case_file_records","mutationMode":"create_only","fields":[
+            {"id":"case_file","primaryDataset":"test-dataset","route":"case_file_records","mutationMode":"create_only","fields":[
               {"id":"code","type":"string","maxLength":8,"classification":"internal"}
             ]}
           ],
@@ -5492,9 +5940,9 @@ fn temporal_validity_compiles_without_non_overlap_constraint() {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"temporal-open","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"temporal-open","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"membership","route":"memberships","mutationMode":"mutable","classification":"internal",
+            "id":"membership","primaryDataset":"test-dataset","route":"memberships","mutationMode":"mutable","classification":"internal",
             "fields":[
               {"id":"person","type":"string","maxLength":32,"required":true,"classification":"internal"},
               {"id":"role","type":"string","maxLength":32,"required":true,"classification":"internal"},
@@ -5540,9 +5988,9 @@ fn deprecated_temporal_scope_fields_must_match_explicit_non_overlap() {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"temporal-bridge","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"temporal-bridge","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"membership","route":"memberships","mutationMode":"mutable","classification":"internal",
+            "id":"membership","primaryDataset":"test-dataset","route":"memberships","mutationMode":"mutable","classification":"internal",
             "fields":[
               {"id":"person","type":"string","maxLength":32,"required":true,"classification":"internal"},
               {"id":"household","type":"string","maxLength":32,"required":true,"classification":"internal"},
@@ -5575,9 +6023,9 @@ fn anonymous_temporal_processing_floor_survives_without_exclusion() {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"temporal-public-floor","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"temporal-public-floor","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"membership","route":"memberships","mutationMode":"mutable","classification":"public",
+            "id":"membership","primaryDataset":"test-dataset","route":"memberships","mutationMode":"mutable","classification":"public",
             "fields":[
               {"id":"label","type":"string","maxLength":32,"classification":"public"},
               {"id":"valid-from","type":"date","required":true,"classification":"internal"},
@@ -5604,9 +6052,9 @@ fn snapshot_operation_is_authenticated_stored_field_history_contract() {
     let project = br#"{
       "apiVersion":"registry.registrystack.org/v1alpha1",
       "kind":"RegistryProject",
-      "registry":{"id":"snapshot-demo","version":"1","defaultLanguage":"en"},
+      "registry":{"id":"snapshot-demo","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
       "entities":[{
-        "id":"household","route":"households","mutationMode":"mutable","classification":"internal",
+        "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable","classification":"internal",
         "fields":[
           {"id":"household-code","type":"string","maxLength":32,"required":true,"classification":"internal"},
           {"id":"administrative-area","type":"string","maxLength":32,"required":true,"classification":"internal"},
@@ -5828,9 +6276,9 @@ fn snapshot_operation_rejects_anonymous_and_unauthorized_provenance() {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"snapshot-anonymous","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"snapshot-anonymous","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"record","route":"records","mutationMode":"mutable","classification":"public",
+            "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable","classification":"public",
             "fields":[{"id":"code","type":"string","maxLength":32,"classification":"public"}]
           }],
           "accessProfiles":[{
@@ -5850,9 +6298,9 @@ fn snapshot_operation_rejects_anonymous_and_unauthorized_provenance() {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"snapshot-provenance","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"snapshot-provenance","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"record","route":"records","mutationMode":"mutable","classification":"internal",
+            "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable","classification":"internal",
             "fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"}]
           }],
           "accessProfiles":[{
@@ -5876,9 +6324,9 @@ fn snapshot_valid_at_openapi_schema_matches_temporal_value_type() {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"snapshot-timestamp","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"snapshot-timestamp","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"record","route":"records","mutationMode":"mutable","classification":"internal",
+            "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable","classification":"internal",
             "fields":[
               {"id":"code","type":"string","maxLength":32,"classification":"internal"},
               {"id":"valid-from","type":"timestamp","required":true,"classification":"internal"},
@@ -6075,9 +6523,9 @@ fn query_inventory_rejects_unsupported_filter_and_sort_field_types() {
             r#"{{
               "apiVersion":"registry.registrystack.org/v1alpha1",
               "kind":"RegistryProject",
-              "registry":{{"id":"query-shape","version":"1","defaultLanguage":"en"}},
+              "registry":{{"id":"query-shape","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
               "entities":[{{
-                "id":"entry","route":"entries","mutationMode":"mutable",
+                "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
                 "fields":[
                   {{"id":"payload","type":"structured","maxBytes":256,"classification":"internal","schema":{{"type":"object","additionalProperties":false}}}}
                 ]
@@ -6125,9 +6573,9 @@ fn reordered_stored_field_authoring_changes_revision_but_not_query_inventory() {
     let left = parse_project_json(
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject",
-          "registry":{"id":"query-shape","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"query-shape","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"entry","route":"entries","mutationMode":"mutable",
+            "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
             "fields":[
               {"id":"code","type":"string","maxLength":32,"classification":"internal"},
               {"id":"count","type":"int64","classification":"internal"}
@@ -6145,9 +6593,9 @@ fn reordered_stored_field_authoring_changes_revision_but_not_query_inventory() {
     let right = parse_project_json(
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject",
-          "registry":{"id":"query-shape","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"query-shape","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"entry","route":"entries","mutationMode":"mutable",
+            "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
             "fields":[
               {"id":"count","type":"int64","classification":"internal"},
               {"id":"code","type":"string","maxLength":32,"classification":"internal"}
@@ -6180,12 +6628,12 @@ fn duplicate_routes_fail_before_artifact_generation() {
     let project = parse_project_json(
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject",
-          "registry":{"id":"neutral","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[
-            {"id":"first-record","route":"hidden-route-value","mutationMode":"create_only","fields":[
+            {"id":"first-record","primaryDataset":"test-dataset","route":"hidden-route-value","mutationMode":"create_only","fields":[
               {"id":"code","type":"string","maxLength":8,"classification":"internal"}
             ]},
-            {"id":"second-record","route":"hidden-route-value","mutationMode":"create_only","fields":[
+            {"id":"second-record","primaryDataset":"test-dataset","route":"hidden-route-value","mutationMode":"create_only","fields":[
               {"id":"code","type":"string","maxLength":8,"classification":"internal"}
             ]}
           ],
@@ -6216,9 +6664,9 @@ fn anonymous_profiles_cannot_grant_mutation_operations() {
     let project = parse_project_json(
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject",
-          "registry":{"id":"neutral","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"public-entry","route":"public-entries","mutationMode":"mutable","classification":"public",
+            "id":"public-entry","primaryDataset":"test-dataset","route":"public-entries","mutationMode":"mutable","classification":"public",
             "fields":[{"id":"label","type":"string","maxLength":32,"classification":"public"}]
           }],
           "accessProfiles":[{
@@ -6248,10 +6696,10 @@ fn production_refuses_a_digest_present_lock_without_module_source() {
     let project = parse_project_json(
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject",
-          "registry":{"id":"neutral","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "package":{"environment":"production","instanceId":"neutral-instance","sequence":1,"sourceRevision":"revision-1"},
           "modules":[{"id":"missing-module","version":"1","digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}],
-          "entities":[{"id":"object","route":"objects","mutationMode":"create_only","fields":[
+          "entities":[{"id":"object","primaryDataset":"test-dataset","route":"objects","mutationMode":"create_only","fields":[
             {"id":"code","type":"string","maxLength":8,"classification":"internal"}
           ]}],
           "accessProfiles":[{"id":"reader","principalClaim":"principal","grants":[{"entity":"object","operations":["get"],"readableFields":["code"]}]}]
@@ -6277,17 +6725,17 @@ fn production_refuses_a_digest_present_lock_without_module_source() {
 fn verified_module_digest_changes_compiled_closure_artifact_and_revision() {
     let project_source = br#"{
       "apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject",
-      "registry":{"id":"neutral","version":"1","defaultLanguage":"en"},
+      "registry":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://neutral.example.test"},
       "package":{"environment":"production","instanceId":"neutral-instance","sequence":1,"sourceRevision":"revision-1"},
-      "manifestProjection":{"accessProfile":"reader","classificationCeiling":"internal","catalog":{"baseUrl":"https://neutral.example.test","title":"Neutral Catalog","publisher":{"name":"Neutral Publisher"}},"dataset":{"title":"Neutral Dataset"}},
+      "manifestProjection":{"accessProfile":"reader","classificationCeiling":"internal","catalog":{"baseUrl":"https://neutral.example.test","title":"Neutral Catalog","publisher":{"id":"neutral-authority","name":"Neutral Publisher"}},"publicService":{"id":"neutral-service","title":"Neutral service"},"datasets":[{"id":"neutral","title":"Neutral Dataset"}],"dataServices":[{"id":"neutral-api","title":"Neutral API","endpointUrl":"https://neutral.example.test","servesDatasets":["neutral"]}]},
       "modules":[{"id":"core","version":"1","digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}]
     }"#;
     let module_source = br#"{
       "id":"core","version":"1","entities":[
-        {"id":"alpha-record","route":"alpha-records","mutationMode":"create_only","fields":[
+        {"id":"alpha-record","primaryDataset":"neutral","route":"alpha-records","mutationMode":"create_only","fields":[
           {"id":"code","type":"string","maxLength":8,"classification":"internal"}
         ],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get"],"readableFields":["code"]}]},
-        {"id":"beta-record","route":"beta-records","mutationMode":"create_only","fields":[
+        {"id":"beta-record","primaryDataset":"neutral","route":"beta-records","mutationMode":"create_only","fields":[
           {"id":"code","type":"string","maxLength":8,"classification":"internal"}
         ],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get"],"readableFields":["code"]}]}
       ]

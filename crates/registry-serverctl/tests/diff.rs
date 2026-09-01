@@ -540,14 +540,14 @@ fn write_project(parent: &Path, name: &str, environment: &str, classification: &
 
 fn project_bytes(environment: &str, module_digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"1","defaultLanguage":"en"}},"package":{{"environment":"{environment}","instanceId":"{INSTANCE}","sequence":1,"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"restricted","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"name":"Package Test Publisher"}}}},"dataset":{{"title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
+        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"environment":"{environment}","instanceId":"{INSTANCE}","sequence":1,"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"restricted","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
     )
     .into_bytes()
 }
 
 fn module_bytes(classification: &str) -> Vec<u8> {
     format!(
-        r#"{{"id":"core","version":"1","entities":[{{"id":"record","route":"records","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":16,"classification":"{classification}"}}],"accessProfiles":[{{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]}}]}}"#
+        r#"{{"id":"core","version":"1","entities":[{{"id":"record","primaryDataset":"neutral-registry","route":"records","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":16,"classification":"{classification}"}}],"accessProfiles":[{{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]}}]}}"#
     )
     .into_bytes()
 }

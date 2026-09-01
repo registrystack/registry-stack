@@ -216,9 +216,10 @@ fn compiled_webhooks(destinations: &[(&str, u32, u8)]) -> registry_server::Compi
     let project = json!({
         "apiVersion": "registry.registrystack.org/v1alpha1",
         "kind": "RegistryProject",
-        "registry": {"id": "runtime-event-destinations", "version": "1", "defaultLanguage": "en"},
+        "registry": {"id": "runtime-event-destinations", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
         "entities": [{
             "id": "case",
+            "primaryDataset": "test-dataset",
             "route": "cases",
             "mutationMode": "mutable",
             "tombstone": true,

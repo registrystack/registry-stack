@@ -2,6 +2,7 @@ apiVersion: registry.registrystack.org/v1alpha1
 kind: RegistryProject
 registry:
   id: facility
+  canonicalBaseIri: "https://facility-registry.example.gov"
   version: 0.1.0
   defaultLanguage: en
 package:
@@ -17,13 +18,27 @@ manifestProjection:
     title: Environmental Facility Registry Catalog
     description: Facility, operating permit, installation, and discharge reporting metadata.
     publisher:
+      id: "facility-authority"
       name: Environmental Authority
       iri: https://facility-registry.example.gov/authority
-  dataset:
-    title: Environmental Facility Registry
-    description: Facilities, operating permits, installations, and dated discharge reports.
-    owner: Environmental Authority
-    status: active
+  datasets:
+    -
+      id: "facility"
+      title: Environmental Facility Registry
+      description: Facilities, operating permits, installations, and dated discharge reports.
+      owner: Environmental Authority
+      status: active
+  dataServices:
+    -
+      id: "facility-data-service"
+      title: Environmental Facility Registry Catalog
+      endpointUrl: "https://facility-registry.example.gov"
+      servesDatasets:
+        - "facility"
+  publicService:
+    id: "facility-service"
+    title: Environmental Facility Registry Catalog
+  distributions: []
 modules:
   - id: facility-core
     version: 0.1.0
@@ -31,6 +46,7 @@ modules:
 
 entities:
   - id: facility
+    primaryDataset: "facility"
     route: facilities
     mutationMode: mutable
     accessRequirements:
@@ -61,6 +77,7 @@ entities:
         fields:
           - facility-code
   - id: permit
+    primaryDataset: "facility"
     route: permits
     mutationMode: mutable
     fields:
@@ -122,6 +139,7 @@ entities:
         startField: valid-from
         endField: valid-to
   - id: installation
+    primaryDataset: "facility"
     route: installations
     mutationMode: mutable
     batch:
@@ -184,6 +202,7 @@ entities:
           - import-source
           - source-record-id
   - id: discharge-report
+    primaryDataset: "facility"
     route: discharge-reports
     mutationMode: mutable
     fields:

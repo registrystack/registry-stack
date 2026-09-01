@@ -15,9 +15,10 @@ use zeroize::Zeroizing;
 const PROJECT: &str = r#"
 apiVersion: registry.registrystack.org/v1alpha1
 kind: RegistryProject
-registry: {id: action-admission, version: "1", defaultLanguage: en}
+registry: {id: action-admission, version: "1", defaultLanguage: en, canonicalBaseIri: https://action-admission.example.test}
 entities:
   - id: case
+    primaryDataset: test-dataset
     route: cases
     mutationMode: mutable
     classification: restricted

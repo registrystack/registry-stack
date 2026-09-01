@@ -2,6 +2,7 @@ apiVersion: registry.registrystack.org/v1alpha1
 kind: RegistryProject
 registry:
   id: inspection
+  canonicalBaseIri: "https://inspection-registry.example.gov"
   version: 0.1.0
   defaultLanguage: en
 package:
@@ -17,20 +18,35 @@ manifestProjection:
     title: Facility Inspection and Permit Registry Catalog
     description: Protected facility inspection observations and permit records.
     publisher:
+      id: "inspection-authority"
       name: Environmental Authority
       iri: https://inspection-registry.example.gov/authority
-  dataset:
-    title: Facility Inspection and Permit Registry
-    description: Inspection findings, measurement metadata, and permit validity records.
-    owner: Environmental Authority
-    status: active
+  datasets:
+    -
+      id: "inspection"
+      title: Facility Inspection and Permit Registry
+      description: Inspection findings, measurement metadata, and permit validity records.
+      owner: Environmental Authority
+      status: active
+  dataServices:
+    -
+      id: "inspection-data-service"
+      title: Facility Inspection and Permit Registry Catalog
+      endpointUrl: "https://inspection-registry.example.gov"
+      servesDatasets:
+        - "inspection"
+  publicService:
+    id: "inspection-service"
+    title: Facility Inspection and Permit Registry Catalog
+  distributions: []
 modules:
   - id: "inspection-core"
     version: "0.1.0"
-    digest: "sha256:00d3c0c6f1305073cedd737cfbc3b096d89996ed427755d20ea4425888253747"
+    digest: "sha256:01d8e9e41a6b5578d55635cc42d79b34141f6ab6d867128a6bd0aec673c17619"
 
 entities:
   - id: inspection
+    primaryDataset: "inspection"
     route: inspections
     mutationMode: mutable
     classification: restricted
@@ -63,6 +79,7 @@ entities:
         fields:
           - inspection-code
   - id: inspection-observation
+    primaryDataset: "inspection"
     route: inspection-observations
     mutationMode: create_only
     classification: restricted
@@ -121,6 +138,7 @@ entities:
         minimum: 0
         maximum: 4
   - id: permit
+    primaryDataset: "inspection"
     route: permits
     mutationMode: create_only
     classification: restricted

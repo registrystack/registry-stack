@@ -24,9 +24,9 @@ async fn real_postgres_partial_unique_index_enforces_only_the_closed_predicate()
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"partial-unique","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"entry","route":"entries","mutationMode":"mutable",
+            "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
             "fields":[
               {"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"},
               {"id":"status","type":"vocabulary-code","vocabulary":"status","classification":"internal"},

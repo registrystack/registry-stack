@@ -1,0 +1,25 @@
+schema_version: registry-manifest/v1
+catalog:
+  id: fuzz-multi-dataset
+  base_url: https://metadata.example.test
+  title: Fuzz multi-dataset
+  publisher:
+    name: Publisher
+data_services:
+  - id: shared-api
+    title: Shared API
+    endpoint_url: https://api.example.test/v1
+    serves_datasets: [people, organisations]
+datasets:
+  - id: people
+    iri: https://metadata.example.test/datasets/people
+    version: "2026.1"
+    title: People
+  - id: organisations
+    title: Organisations
+distributions:
+  - id: people-json
+    dataset: people
+    access_service: shared-api
+    download_url: https://metadata.example.test/downloads/people.json
+    media_type: application/json

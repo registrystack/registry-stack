@@ -16,7 +16,10 @@ use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
-use crate::artifacts::{ArtifactAccessBinding, GeneratedArtifact};
+use crate::artifacts::{
+    ArtifactAccessBinding, GeneratedArtifact, REGISTRY_RECORD_CONTEXT_ID,
+    REGISTRY_RECORD_PROFILE_ID, RELAY_PROFILE_ID,
+};
 use crate::audit::{
     AuditContext, AuditOutcome, OperationSurface, PrincipalKind, RelayAudit, RowBoundaryKind,
 };
@@ -89,11 +92,11 @@ impl ResponseFormat {
         }
     }
 
-    const fn profile_link(self) -> Option<&'static str> {
+    const fn response_profile(self) -> &'static str {
         match self {
-            Self::GeoJson(GeoJsonProfile::JsonFg) => Some(JSON_FG_PROFILE_URI),
-            Self::GeoJson(GeoJsonProfile::Rfc7946) => Some(RFC7946_PROFILE_URI),
-            Self::Json | Self::JsonLd => None,
+            Self::GeoJson(GeoJsonProfile::JsonFg) => JSON_FG_PROFILE_URI,
+            Self::GeoJson(GeoJsonProfile::Rfc7946) => RFC7946_PROFILE_URI,
+            Self::Json | Self::JsonLd => REGISTRY_RECORD_PROFILE_ID,
         }
     }
 }
@@ -612,7 +615,7 @@ async fn record_collection(
             .await
         }
     };
-    if !cursor_context_within_bound(service, operation, &access, &query) {
+    if !cursor_context_within_bound(service, resource, operation, &access, &query) {
         return refuse_known(
             service,
             resource,
@@ -711,6 +714,7 @@ async fn record_collection(
         };
         match next_cursor(
             service,
+            resource,
             operation,
             &access,
             &query,
@@ -723,7 +727,7 @@ async fn record_collection(
     } else {
         None
     };
-    let meta = record_meta(
+    let mut meta = record_meta(
         service,
         resource,
         operation,
@@ -731,6 +735,15 @@ async fn record_collection(
         &query.selected_fields,
         &result.source_revision,
     );
+    if matches!(
+        query.response_format,
+        ResponseFormat::Json | ResponseFormat::JsonLd
+    ) {
+        add_registry_record_context(service, resource, &mut meta);
+        for item in &mut items {
+            remove_item_registry_context(item);
+        }
+    }
     let response_cacheable =
         next_cursor.is_none() && cacheable(&access.access_profile, &result.source_revision);
     let mut document = match query.response_format {
@@ -752,10 +765,13 @@ async fn record_collection(
     );
     release_document(
         service,
+        resource,
         &audit,
         document,
-        query.response_format,
-        response_cacheable,
+        DocumentRelease {
+            representation: query.response_format,
+            cacheable: response_cacheable,
+        },
         &headers,
         &trace,
     )
@@ -1128,7 +1144,7 @@ async fn single_operation(
         }
         return ProblemCode::ConsultationUnresolved.response(trace);
     }
-    let record = match record_value(
+    let mut record = match record_value(
         service,
         resource,
         &access.access_profile,
@@ -1140,7 +1156,7 @@ async fn single_operation(
             return source_shape_failure(&service.audit, &audit, trace).await;
         }
     };
-    let meta = record_meta(
+    let mut meta = record_meta(
         service,
         resource,
         operation,
@@ -1148,6 +1164,13 @@ async fn single_operation(
         &fields,
         &result.source_revision,
     );
+    if matches!(
+        representation,
+        ResponseFormat::Json | ResponseFormat::JsonLd
+    ) {
+        add_registry_record_context(service, resource, &mut meta);
+        remove_item_registry_context(&mut record);
+    }
     let mut document = match representation {
         ResponseFormat::GeoJson(profile) => {
             geojson_feature(service, resource, record, Some(meta), profile, true)
@@ -1163,10 +1186,13 @@ async fn single_operation(
     );
     release_document(
         service,
+        resource,
         &audit,
         document,
-        representation,
-        cacheable(&access.access_profile, &result.source_revision),
+        DocumentRelease {
+            representation,
+            cacheable: cacheable(&access.access_profile, &result.source_revision),
+        },
         headers,
         trace,
     )
@@ -1885,6 +1911,7 @@ fn prepare_collection(
             .cursor_value();
         let request = cursor_template(
             service,
+            resource,
             operation,
             access,
             CursorQueryContext {
@@ -2617,6 +2644,34 @@ fn record_meta(
     })
 }
 
+fn add_registry_record_context(
+    service: &RelayService,
+    resource: &CompiledResource,
+    meta: &mut Value,
+) {
+    let Some(meta) = meta.as_object_mut() else {
+        return;
+    };
+    meta.insert(
+        "registryIdentifier".into(),
+        Value::String(service.registry.registry_identifier.clone()),
+    );
+    meta.insert(
+        "datasetIdentifier".into(),
+        Value::String(resource.dataset_identifier.clone()),
+    );
+    meta.insert(
+        "entityTypeIdentifier".into(),
+        Value::String(resource.entity_type_identifier.clone()),
+    );
+}
+
+fn remove_item_registry_context(record: &mut Value) {
+    if let Some(record) = record.as_object_mut() {
+        record.remove("registryIdentifier");
+    }
+}
+
 fn source_revision_value(source: &SourceRevision) -> Value {
     match source {
         SourceRevision::Snapshot(value) => {
@@ -2720,7 +2775,10 @@ fn apply_json_ld(
     }
     let context = selected.context_reference.clone();
     if let Some(object) = document.as_object_mut() {
-        object.insert("@context".into(), Value::String(context));
+        object.insert(
+            "@context".into(),
+            json!([REGISTRY_RECORD_CONTEXT_ID, context]),
+        );
         if let Some(data) = object.get_mut("data") {
             add_record_id(service, resource, data);
         }
@@ -2757,10 +2815,10 @@ fn add_record_id(service: &RelayService, resource: &CompiledResource, record: &m
 
 async fn release_document(
     service: &RelayService,
+    resource: &CompiledResource,
     audit: &AuditContext,
     document: Value,
-    representation: ResponseFormat,
-    cacheable: bool,
+    release: DocumentRelease,
     headers: &HeaderMap,
     trace: &TraceContext,
 ) -> Response<Body> {
@@ -2771,7 +2829,9 @@ async fn release_document(
             return terminal_problem(&service.audit, audit, outcome, code, trace).await;
         }
     };
-    let etag = cacheable.then(|| exact_etag(&bytes));
+    let etag = release
+        .cacheable
+        .then(|| record_etag(resource, audit, release.representation, &bytes));
     if etag
         .as_deref()
         .is_some_and(|tag| if_none_match(headers, tag))
@@ -2785,7 +2845,7 @@ async fn release_document(
             return ProblemCode::AuditUnavailable.response(trace);
         }
         let mut response = not_modified(etag.as_deref().unwrap_or_default(), trace);
-        apply_profile_link(&mut response, representation);
+        apply_profile_link(&mut response, release.representation);
         return response;
     }
     if service
@@ -2798,20 +2858,34 @@ async fn release_document(
     }
     let mut response = bytes_response(
         bytes,
-        representation.media_type(),
-        cacheable,
+        release.representation.media_type(),
+        release.cacheable,
         etag.as_deref(),
         trace,
     );
-    apply_profile_link(&mut response, representation);
+    apply_profile_link(&mut response, release.representation);
     response
 }
 
+#[derive(Clone, Copy)]
+struct DocumentRelease {
+    representation: ResponseFormat,
+    cacheable: bool,
+}
+
 fn apply_profile_link(response: &mut Response<Body>, representation: ResponseFormat) {
-    let Some(uri) = representation.profile_link() else {
-        return;
+    let value = match representation {
+        ResponseFormat::Json | ResponseFormat::JsonLd => format!(
+            "<{REGISTRY_RECORD_PROFILE_ID}>; rel=\"profile\", <{RELAY_PROFILE_ID}>; rel=\"profile\""
+        ),
+        ResponseFormat::GeoJson(GeoJsonProfile::JsonFg) => {
+            format!("<{JSON_FG_PROFILE_URI}>; rel=\"profile\"")
+        }
+        ResponseFormat::GeoJson(GeoJsonProfile::Rfc7946) => {
+            format!("<{RFC7946_PROFILE_URI}>; rel=\"profile\"")
+        }
     };
-    if let Ok(value) = HeaderValue::from_str(&format!("<{uri}>; rel=\"profile\"")) {
+    if let Ok(value) = HeaderValue::from_str(&value) {
         response.headers_mut().insert(LINK, value);
     }
 }
@@ -3058,6 +3132,7 @@ fn is_json_content_type(headers: &HeaderMap) -> bool {
 
 fn next_cursor(
     service: &RelayService,
+    resource: &CompiledResource,
     operation: &CompiledOperation,
     access: &Access,
     query: &PreparedCollection,
@@ -3080,6 +3155,7 @@ fn next_cursor(
     let source_revision = source_revision.cursor_value();
     let mut payload = cursor_template(
         service,
+        resource,
         operation,
         access,
         CursorQueryContext {
@@ -3123,6 +3199,7 @@ fn cursor_boundary_order_values(order_by: &[String], row: &ResultRow) -> Option<
 /// the maximum text value that source conversion will accept.
 fn cursor_context_within_bound(
     service: &RelayService,
+    resource: &CompiledResource,
     operation: &CompiledOperation,
     access: &Access,
     query: &PreparedCollection,
@@ -3136,6 +3213,7 @@ fn cursor_context_within_bound(
     };
     let Ok(mut payload) = cursor_template(
         service,
+        resource,
         operation,
         access,
         CursorQueryContext {
@@ -3166,6 +3244,7 @@ fn cursor_context_within_bound(
 
 fn cursor_template(
     service: &RelayService,
+    resource: &CompiledResource,
     operation: &CompiledOperation,
     access: &Access,
     context: CursorQueryContext<'_>,
@@ -3195,6 +3274,9 @@ fn cursor_template(
         context.source_revision.to_owned(),
         operation.identifier.clone(),
         CursorBindings {
+            dataset_identifier: resource.dataset_identifier.clone(),
+            entity_type_identifier: resource.entity_type_identifier.clone(),
+            response_profile: context.response_format.response_profile().to_owned(),
             access_profile: access.access_profile.id.clone(),
             disclosure_profile: access.access_profile.disclosure_profile.clone(),
             transforms_digest: key
@@ -3252,6 +3334,9 @@ fn metadata_cursor_template(
         format!("metadata:{}", service.registry.contract_revision),
         "registry.resources".to_owned(),
         CursorBindings {
+            dataset_identifier: "registry-metadata".to_owned(),
+            entity_type_identifier: "resource-description".to_owned(),
+            response_profile: RELAY_PROFILE_ID.to_owned(),
             access_profile: "metadata".to_owned(),
             disclosure_profile: "metadata".to_owned(),
             transforms_digest: key
@@ -3748,6 +3833,37 @@ fn exact_etag(bytes: &[u8]) -> String {
     format!("\"{}\"", hex::encode(Sha256::digest(bytes)))
 }
 
+fn record_etag(
+    resource: &CompiledResource,
+    audit: &AuditContext,
+    representation: ResponseFormat,
+    bytes: &[u8],
+) -> String {
+    let mut digest = Sha256::new();
+    for binding in [
+        "registry-relay-v2-record-etag-v1",
+        audit.registry_identifier.as_str(),
+        audit.resource_identifier.as_deref().unwrap_or(""),
+        audit.operation_identifier.as_deref().unwrap_or(""),
+        resource.dataset_identifier.as_str(),
+        resource.entity_type_identifier.as_str(),
+        representation.response_profile(),
+        representation.cursor_kind(),
+        audit.access_profile.as_deref().unwrap_or(""),
+    ] {
+        digest.update((binding.len() as u64).to_be_bytes());
+        digest.update(binding.as_bytes());
+    }
+    digest.update((audit.selected_properties.len() as u64).to_be_bytes());
+    for field in &audit.selected_properties {
+        digest.update((field.len() as u64).to_be_bytes());
+        digest.update(field.as_bytes());
+    }
+    digest.update((bytes.len() as u64).to_be_bytes());
+    digest.update(bytes);
+    format!("\"{}\"", hex::encode(digest.finalize()))
+}
+
 fn if_none_match(headers: &HeaderMap, etag: &str) -> bool {
     let Some(current) = weak_entity_tag(etag) else {
         return false;
@@ -3921,6 +4037,64 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("<http://www.opengis.net/def/profile/OGC/0/jsonfg>; rel=\"profile\"")
         );
+    }
+
+    #[test]
+    fn record_etag_binds_dataset_entity_profile_representation_access_and_fields() {
+        let registry = compiled_spatial();
+        let resource = registry.resources[0].clone();
+        let audit = AuditContext {
+            operation_id: "attempt-1".into(),
+            trace_id: crate::problem::TraceId::parse("0123456789abcdef0123456789abcdef")
+                .expect("trace parses"),
+            registry_identifier: registry.registry_identifier.clone(),
+            resource_identifier: Some(resource.id.clone()),
+            operation_identifier: Some(resource.operations[0].identifier.clone()),
+            operation_surface: OperationSurface::RecordSearch,
+            query_shape: None,
+            access_rule_revision: None,
+            purpose: None,
+            row_boundary_kind: RowBoundaryKind::None,
+            access_profile: Some("public".into()),
+            disclosure_profile: Some("public".into()),
+            wire_format: Some("application/json".into()),
+            format_profile: None,
+            processing_description_identifiers: Vec::new(),
+            selected_properties: vec!["name".into()],
+            processing_handling: Some("public".into()),
+            disclosure_handling: Some("public".into()),
+            transform_identifiers: Vec::new(),
+            contract_revision: registry.contract_revision.clone(),
+            source_revision: None,
+            principal_kind: PrincipalKind::Anonymous,
+        };
+        let bytes = br#"{"data":"same-held-bytes"}"#;
+        let baseline = record_etag(&resource, &audit, ResponseFormat::Json, bytes);
+
+        let mut changed_dataset = resource.clone();
+        changed_dataset.dataset_identifier = "other-dataset".into();
+        let mut changed_entity = resource.clone();
+        changed_entity.entity_type_identifier = "other-entity".into();
+        let mut changed_access = audit.clone();
+        changed_access.access_profile = Some("other-access".into());
+        let mut changed_fields = audit.clone();
+        changed_fields.selected_properties = vec!["status".into()];
+
+        for changed in [
+            record_etag(&changed_dataset, &audit, ResponseFormat::Json, bytes),
+            record_etag(&changed_entity, &audit, ResponseFormat::Json, bytes),
+            record_etag(&resource, &audit, ResponseFormat::JsonLd, bytes),
+            record_etag(
+                &resource,
+                &audit,
+                ResponseFormat::GeoJson(GeoJsonProfile::Rfc7946),
+                bytes,
+            ),
+            record_etag(&resource, &changed_access, ResponseFormat::Json, bytes),
+            record_etag(&resource, &changed_fields, ResponseFormat::Json, bytes),
+        ] {
+            assert_ne!(baseline, changed);
+        }
     }
 
     #[test]

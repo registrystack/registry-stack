@@ -31,6 +31,7 @@ The initial boundary is intentionally narrow:
 | `CONFIGURATION-EXAMPLES.md` | Illustrative authoring examples. |
 | `IMPLEMENTATION.md` | Approved implementation sequence and verification policy. |
 | `STANDARDS-ALIGNMENT.md` | Maintained directional mapping to the pinned GovStack drafts. |
+| `CHANGELOG.md` | Breaking contract changes and migration guidance. |
 | `contracts/` | Hand-authored product catalogs and security invariants. |
 | `acceptance/` | Four coequal one-Registry deployment projects. |
 | `scripts/` | Product-local validation, neutrality, and fixture checks. |

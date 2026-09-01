@@ -13,6 +13,9 @@ The generated active-only catalog closes three maintained surfaces:
   compatibility line.
 - Public JSON Schemas come from the `$id` values in the source groups declared
   by `contracts/catalog-source.json`; their exact bytes are SHA-256 bound.
+- Published profiles and JSON-LD contexts come from explicit records in the
+  same source file and bind both their reviewed source and exact artifact
+  bytes with SHA-256.
 - Namespace and vocabulary records come from the explicit entries in the same
   source file and are SHA-256 bound to the source that defines them.
 

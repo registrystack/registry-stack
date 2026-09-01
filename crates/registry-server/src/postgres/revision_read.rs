@@ -23,6 +23,7 @@ use crate::audit::{
     ReadTerminalAudit, TerminalAudit, TerminalAuditOutcome,
 };
 use crate::contract::{FieldTypeSource, Operation, ProvenanceFieldSource};
+use crate::cursor::CursorRepresentation;
 use crate::history_context::ChangeContext;
 use crate::history_migration::HISTORY_MIGRATION_SYSTEM_ORIGIN;
 use crate::history_schema::{
@@ -33,6 +34,7 @@ use crate::model::{
     CompiledEntity, CompiledRegistry, CompiledRevisionKind, HttpMethod,
     MAX_REVISION_HISTORY_RECORDS,
 };
+use crate::record_profile::{self, RecordRepresentation};
 
 use super::{
     begin_record_transaction, validate_field_value, ClaimContext, ExpectedRegistryIdentity,
@@ -156,7 +158,13 @@ impl PostgresRevisionReadService {
                 return Err(error);
             }
         };
-        let held = RevisionReadResult::from_rows(plan.kind, materialized)?;
+        let held = RevisionReadResult::from_rows(
+            &self.registry,
+            &plan.entity,
+            request.representation,
+            plan.kind,
+            materialized,
+        )?;
         self.fault
             .fail_at(RevisionReadFaultPoint::BeforeTerminalAudit)?;
         let outcome = if held.result_count == 0 {
@@ -591,6 +599,42 @@ struct RevisionEnvelope {
     data: Map<String, Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     change_context: Option<Map<String, Value>>,
+}
+
+impl RevisionEnvelope {
+    fn into_record_member(self) -> Result<Value, ReadServiceError> {
+        let mut extensions = Map::from_iter([
+            (
+                "predecessorRevision".to_owned(),
+                self.predecessor_revision
+                    .map_or(Value::Null, |value| json!(value)),
+            ),
+            ("lifecycle".to_owned(), Value::String(self.lifecycle)),
+            (
+                "packageRevision".to_owned(),
+                Value::String(self.package_revision),
+            ),
+            (
+                "operationIdentifier".to_owned(),
+                Value::String(self.operation_id),
+            ),
+            ("mutationKind".to_owned(), Value::String(self.mutation_kind)),
+            ("createdAt".to_owned(), Value::String(self.created_at)),
+            (
+                "actorReference".to_owned(),
+                Value::String(self.actor_reference),
+            ),
+            (
+                "requestReference".to_owned(),
+                Value::String(self.request_reference),
+            ),
+        ]);
+        if let Some(change_context) = self.change_context {
+            extensions.insert("changeContext".to_owned(), Value::Object(change_context));
+        }
+        record_profile::record_member(self.id, self.revision.to_string(), self.data, extensions)
+            .map_err(|_| ReadServiceError::Unavailable)
+    }
 }
 
 #[allow(clippy::too_many_arguments)] // Authority, projection and retained-schema caches stay separate.
@@ -1029,18 +1073,49 @@ impl RevisionReadResult {
     }
 
     fn from_rows(
+        registry: &CompiledRegistry,
+        entity: &CompiledEntity,
+        representation: CursorRepresentation,
         kind: CompiledRevisionKind,
         rows: Vec<RevisionEnvelope>,
     ) -> Result<Self, ReadServiceError> {
         let result_count = rows.len();
+        let representation = match representation {
+            CursorRepresentation::Json => RecordRepresentation::Json,
+            CursorRepresentation::JsonLd => RecordRepresentation::JsonLd,
+            CursorRepresentation::GeoJson => return Err(ReadServiceError::Unavailable),
+        };
         let response = match kind {
             CompiledRevisionKind::List if rows.is_empty() => return Ok(Self::missing()),
-            CompiledRevisionKind::List => HeldReadResponse::from_json(&json!({"items": rows}))?,
+            CompiledRevisionKind::List => {
+                let items = rows
+                    .into_iter()
+                    .map(RevisionEnvelope::into_record_member)
+                    .collect::<Result<Vec<_>, _>>()?;
+                let body = record_profile::collection_response(
+                    registry.registry_id(),
+                    entity,
+                    items,
+                    None,
+                    Map::new(),
+                    representation,
+                )
+                .map_err(|_| ReadServiceError::Unavailable)?;
+                HeldReadResponse::from_registry_record(&body, representation)?
+            }
             CompiledRevisionKind::Detail => {
                 let Some(row) = rows.into_iter().next() else {
                     return Ok(Self::missing());
                 };
-                HeldReadResponse::from_json(&json!(row))?
+                let member = row.into_record_member()?;
+                let body = record_profile::single_response(
+                    registry.registry_id(),
+                    entity,
+                    member,
+                    representation,
+                )
+                .map_err(|_| ReadServiceError::Unavailable)?;
+                HeldReadResponse::from_registry_record(&body, representation)?
             }
         };
         Ok(Self {

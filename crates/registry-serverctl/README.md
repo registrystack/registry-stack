@@ -13,6 +13,17 @@ digests for discovered `modules/<id>/module.yaml` sources and their declared
 SQL assets, then rewrites only `PROJECT/registry.yaml`. `--check` performs the
 same deterministic comparison without writing and fails when locks are stale.
 
+`registry-serverctl project migrate PROJECT` is the only reader for the retired
+singular Manifest projection dialect. By default it prints a deterministic,
+reviewable diff and writes nothing. `--write` explicitly applies the same bytes,
+including module entity memberships and refreshed module locks. The rewrite
+preserves the explicit legacy dataset id or its effective `registry.id`
+fallback, uses the already governed catalogue base URL as `canonicalBaseIri`,
+and proposes `<registry-id>-authority` and `<registry-id>-service` for review.
+It preserves comments, scalar quoting, and unrelated key order in conventional
+block-style YAML. Ambiguous flow-style or partially migrated source fails closed
+with a manual-rewrite diagnostic instead of being reformatted.
+
 `registry-serverctl explain queries PROJECT [--production]` renders query
 operations using HTTP API field names as the primary copyable identifiers.
 Every filterable, sortable, and selector field also includes its logical field

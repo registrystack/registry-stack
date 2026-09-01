@@ -20,6 +20,7 @@ from ci_changes import (
     EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_INPUTS,
     EVIDENCE_TUTORIAL_INPUTS,
     IDENTIFIER_CATALOG_INPUTS,
+    REGISTRY_RECORD_CROSS_PRODUCT_INPUTS,
     REGISTRY_SERVER_PACKAGES,
     SECURITY_WORKFLOW_GATES,
     SHARDS,
@@ -323,6 +324,47 @@ class CiChangesTest(unittest.TestCase):
             with self.subTest(pattern=pattern):
                 self.assertTrue(classify(self.workspace, (sample,))["identifiers"])
 
+    def test_registry_record_cross_product_inputs_select_both_product_gates(self) -> None:
+        for path in (
+            "products/registry-record/profile/registry-record-v1.md",
+            "products/registry-record/schema/registry-record-v1.schema.json",
+            "products/registry-record/context/registry-record-v1.jsonld",
+            "products/registry-record/fixtures/cross-product/semantic-gold.json",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["identifiers"])
+                self.assertTrue(outputs["registry_server_contracts"])
+                self.assertTrue(outputs["relay_v2_contracts"])
+                self.assertFalse(outputs["rust"])
+                self.assertEqual([], outputs["rust_matrix"]["include"])
+
+    def test_cross_product_registry_record_patterns_are_narrow_and_live(self) -> None:
+        self.assertEqual(
+            REGISTRY_RECORD_CROSS_PRODUCT_INPUTS,
+            (
+                "products/registry-record/schema/**",
+                "products/registry-record/context/**",
+                "products/registry-record/profile/**",
+                "products/registry-record/fixtures/cross-product/**",
+            ),
+        )
+        for pattern in REGISTRY_RECORD_CROSS_PRODUCT_INPUTS:
+            with self.subTest(pattern=pattern):
+                self.assertTrue(list(Path().glob(pattern)))
+
+    def test_registry_record_tooling_and_ordinary_fixtures_stay_profile_only(
+        self,
+    ) -> None:
+        for path in (
+            "products/registry-record/fixtures/positive/single.json",
+            "products/registry-record/scripts/test_contract.py",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["identifiers"])
+                self.assertFalse(outputs["rust"])
+
     def test_identifier_exporters_and_indirect_inputs_select_the_catalog_gate(
         self,
     ) -> None:
@@ -342,6 +384,7 @@ class CiChangesTest(unittest.TestCase):
             "products/identifiers/scripts/generate.py --check-references",
             workflow,
         )
+        self.assertIn("products/registry-record/scripts/check.sh", workflow)
 
     def test_identifier_tooling_does_not_force_the_rust_matrix(self) -> None:
         outputs = classify(
@@ -906,7 +949,7 @@ class CiChangesTest(unittest.TestCase):
         )[1].split("\n  identifiers:\n", 1)[0]
 
         self.assertIn(
-            "postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675",
+            "postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6",
             registry_server_job,
         )
         self.assertIn(

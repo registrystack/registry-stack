@@ -1149,6 +1149,7 @@ impl MutationCoordinator {
             .get(&entity.id)
             .ok_or(MutationError::InvalidRequest)?;
         let plan = MutationPlan {
+            registry_id: registry.registry_id().to_owned(),
             route: target_route,
             entity: entity.clone(),
             event_deliveries: exact_entity_event_deliveries(registry, entity)?,
@@ -1165,6 +1166,7 @@ impl MutationCoordinator {
             expected_etag: None,
             body: MutationBody::Create(target.after.clone()),
             response_fields: BTreeSet::new(),
+            representation: crate::record_profile::RecordRepresentation::Json,
             correlation: input.correlation.clone(),
         };
         let mut current = match target.expected_revision {

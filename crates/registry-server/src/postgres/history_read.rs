@@ -43,6 +43,7 @@ use crate::model::{
     CompiledRegistry, HttpMethod,
 };
 use crate::query_binding::{CursorBindingQuery, CursorBindingReferences};
+use crate::record_profile::{self, RecordRepresentation};
 
 use super::{
     begin_record_transaction, validate_field_value, ClaimContext, ExpectedRegistryIdentity,
@@ -177,7 +178,12 @@ impl PostgresSnapshotReadService {
                 return Err(error);
             }
         };
-        let held = SnapshotReadResult::from_materialized(materialized)?;
+        let held = SnapshotReadResult::from_materialized(
+            &self.registry,
+            &plan.entity,
+            request.plan.cursor_binding.representation,
+            materialized,
+        )?;
         self.fault
             .fail_at(SnapshotReadFaultPoint::BeforeTerminalAudit)?;
         let outcome = if held.result_count == 0 {
@@ -1281,6 +1287,13 @@ struct RecordEnvelope {
     data: Map<String, Value>,
 }
 
+impl RecordEnvelope {
+    fn into_record_member(self) -> Result<Value, ReadServiceError> {
+        record_profile::record_member(self.id, self.revision.to_string(), self.data, Map::new())
+            .map_err(|_| ReadServiceError::Unavailable)
+    }
+}
+
 fn row_to_record(
     row: &tokio_postgres::Row,
     selected_fields: &[String],
@@ -1357,21 +1370,42 @@ struct SnapshotReadResult {
 }
 
 impl SnapshotReadResult {
-    fn from_materialized(materialized: MaterializedSnapshotRead) -> Result<Self, ReadServiceError> {
+    fn from_materialized(
+        registry: &CompiledRegistry,
+        entity: &CompiledEntity,
+        representation: CursorRepresentation,
+        materialized: MaterializedSnapshotRead,
+    ) -> Result<Self, ReadServiceError> {
         let result_count = materialized.rows.len();
-        let mut body = json!({
-            "items": materialized.rows,
-            "pageInfo": {"nextCursor": materialized.next_cursor},
-            "snapshot": materialized.snapshot,
-        });
+        let items = materialized
+            .rows
+            .into_iter()
+            .map(RecordEnvelope::into_record_member)
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut extensions =
+            Map::from_iter([("snapshot".to_owned(), Value::String(materialized.snapshot))]);
         if let Some(valid_at) = materialized.valid_at {
-            body["validAt"] = json!(valid_at);
+            extensions.insert("validAt".to_owned(), Value::String(valid_at));
         }
         if let Some(count) = materialized.total_count {
-            body["count"] = json!(count);
+            extensions.insert("count".to_owned(), json!(count));
         }
+        let representation = match representation {
+            CursorRepresentation::Json => RecordRepresentation::Json,
+            CursorRepresentation::JsonLd => RecordRepresentation::JsonLd,
+            CursorRepresentation::GeoJson => return Err(ReadServiceError::Unavailable),
+        };
+        let body = record_profile::collection_response(
+            registry.registry_id(),
+            entity,
+            items,
+            materialized.next_cursor,
+            extensions,
+            representation,
+        )
+        .map_err(|_| ReadServiceError::Unavailable)?;
         Ok(Self {
-            response: HeldReadResponse::from_json(&body)?,
+            response: HeldReadResponse::from_registry_record(&body, representation)?,
             result_count,
             effective_binding: materialized.effective_binding,
         })

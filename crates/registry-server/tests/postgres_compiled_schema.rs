@@ -1177,10 +1177,11 @@ fn additive_catalog_registry(variant: AdditiveCatalogVariant) -> registry_server
         "registry": {
             "id": "additive-catalog",
             "version": "1",
-            "defaultLanguage": "en"
+            "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"
         },
         "entities": [{
             "id": "entry",
+            "primaryDataset": "test-dataset",
             "route": "entries",
             "mutationMode": "mutable",
             "fields": fields
@@ -1208,10 +1209,10 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"compiled-postgres","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"compiled-postgres","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[
             {
-              "id":"entry","route":"entries","mutationMode":"mutable",
+              "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
               "fields":[
                 {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
                 {"id":"region","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
@@ -1219,7 +1220,7 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
               ]
             },
             {
-              "id":"event","route":"events","mutationMode":"create_only",
+              "id":"event","primaryDataset":"test-dataset","route":"events","mutationMode":"create_only",
               "fields":[
                 {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}
               ]
@@ -1270,9 +1271,9 @@ fn derived_registry() -> registry_server::CompiledRegistry {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"derived-postgres","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"derived-postgres","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"household","route":"households","mutationMode":"mutable",
+            "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
             "fields":[
               {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
               {"id":"size","type":"int64","required":true,"classification":"internal"}

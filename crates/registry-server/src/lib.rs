@@ -64,6 +64,7 @@ pub mod postgres;
 pub mod query;
 #[cfg(feature = "runtime")]
 pub(crate) mod query_binding;
+pub mod record_profile;
 #[cfg(feature = "runtime")]
 pub mod request_events;
 #[cfg(feature = "runtime")]

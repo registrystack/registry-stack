@@ -919,9 +919,10 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"history-erasure-registry","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"history-erasure-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"membership",
+            "primaryDataset":"test-dataset",
             "route":"memberships",
             "mutationMode":"mutable",
             "tombstone":true,

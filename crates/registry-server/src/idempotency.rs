@@ -28,6 +28,7 @@ const ERASED_RESPONSE_BODY: &[u8] = br#"{"kind":"erased"}"#;
 pub enum PermittedResponseHeader {
     ContentType,
     Etag,
+    Link,
     Location,
 }
 
@@ -36,6 +37,7 @@ impl PermittedResponseHeader {
         match self {
             Self::ContentType => "content-type",
             Self::Etag => "etag",
+            Self::Link => "link",
             Self::Location => "location",
         }
     }
@@ -45,6 +47,7 @@ impl PermittedResponseHeader {
             1 => Some(Self::ContentType),
             2 => Some(Self::Etag),
             3 => Some(Self::Location),
+            4 => Some(Self::Link),
             _ => None,
         }
     }
@@ -54,6 +57,7 @@ impl PermittedResponseHeader {
             Self::ContentType => 1,
             Self::Etag => 2,
             Self::Location => 3,
+            Self::Link => 4,
         }
     }
 }

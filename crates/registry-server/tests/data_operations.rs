@@ -19,9 +19,10 @@ fn compiled(allow_data_export: bool) -> registry_server::CompiledRegistry {
     let source = json!({
         "apiVersion": "registry.registrystack.org/v1alpha1",
         "kind": "RegistryProject",
-        "registry": {"id": "data-contract", "version": "1", "defaultLanguage": "en"},
+        "registry": {"id": "data-contract", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
         "entities": [{
             "id": ENTITY,
+            "primaryDataset": "test-dataset",
             "route": "records",
             "mutationMode": "mutable",
             "batch": {"maximumItems": 2, "maximumBytes": 400},
@@ -89,9 +90,9 @@ fn data_export_requires_explicit_nonanonymous_profile_permission() {
         json!({
             "apiVersion": "registry.registrystack.org/v1alpha1",
             "kind": "RegistryProject",
-            "registry": {"id": "export-contract", "version": "1", "defaultLanguage": "en"},
+            "registry": {"id": "export-contract", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
             "entities": [{
-                "id": ENTITY, "route": "records", "mutationMode": "create_only",
+                "id": ENTITY, "primaryDataset": "test-dataset", "route": "records", "mutationMode": "create_only",
                 "fields": [{"id": "code", "type": "string", "maxLength": 16,
                             "classification": "internal"}]
             }],
@@ -127,14 +128,14 @@ fn data_export_requires_explicit_nonanonymous_profile_permission() {
     let project_profile = json!({
         "apiVersion": "registry.registrystack.org/v1alpha1",
         "kind": "RegistryProject",
-        "registry": {"id": "project-export", "version": "1", "defaultLanguage": "en"},
+        "registry": {"id": "project-export", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
         "accessProfiles": [{
             "id": "project-exporter", "principalClaim": "principal",
             "grants": [{"entity": ENTITY, "operations": ["list"],
                         "readableFields": ["code"], "allowDataExport": true}]
         }],
         "entities": [{
-            "id": ENTITY, "route": "records", "mutationMode": "create_only",
+            "id": ENTITY, "primaryDataset": "test-dataset", "route": "records", "mutationMode": "create_only",
             "fields": [{"id": "code", "type": "string", "maxLength": 16,
                         "classification": "internal"}]
         }]
@@ -256,8 +257,8 @@ fn data_validate_and_chunk_plan_reuse_runtime_rules_and_compiled_batch_bounds() 
     let oversized_valid_field_registry = {
         let source = json!({
             "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
-            "registry":{"id":"oversize", "version":"1", "defaultLanguage":"en"},
-            "entities":[{"id":ENTITY,"route":"records","mutationMode":"create_only",
+            "registry":{"id":"oversize", "version":"1", "defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+            "entities":[{"id":ENTITY,"primaryDataset":"test-dataset","route":"records","mutationMode":"create_only",
                 "batch":{"maximumItems":2,"maximumBytes":100},
                 "fields":[{"id":"code","type":"text","maxLength":1000,"required":true,
                            "classification":"internal"}]}],
@@ -292,9 +293,10 @@ fn data_lifecycle_uses_exact_compiled_api_names() {
     let registry = compile_source(json!({
         "apiVersion": "registry.registrystack.org/v1alpha1",
         "kind": "RegistryProject",
-        "registry": {"id": "data-logical-names", "version": "1", "defaultLanguage": "en"},
+        "registry": {"id": "data-logical-names", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
         "entities": [{
             "id": ENTITY,
+            "primaryDataset": "test-dataset",
             "route": "records",
             "mutationMode": "mutable",
             "batch": {"maximumItems": 2, "maximumBytes": 400},

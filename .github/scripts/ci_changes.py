@@ -71,6 +71,17 @@ RELAY_V2_PACKAGES = frozenset(SHARDS["relay-v2"])
 RELAY_CLIENT_PACKAGES = frozenset(SHARDS["relay-client"])
 REGISTRY_SERVER_PACKAGES = frozenset(SHARDS["registry-server"])
 
+# These are the cross-product semantic commitments implemented independently by
+# Registry Server and Relay V2. A change must replay both real product routers,
+# while profile-only tooling and ordinary positive/negative fixtures remain on
+# the identifier/profile gate without widening the Rust matrix.
+REGISTRY_RECORD_CROSS_PRODUCT_INPUTS = (
+    "products/registry-record/schema/**",
+    "products/registry-record/context/**",
+    "products/registry-record/profile/**",
+    "products/registry-record/fixtures/cross-product/**",
+)
+
 # Provider publication is part of the Discovery product contract even though
 # Evidence and Relay own its generation and serving code. Keep this explicit:
 # a publisher-only change must run the cross-product profile and journey gates
@@ -341,6 +352,7 @@ def identifier_catalog_inputs(
 
     inputs = [
         "products/identifiers/**",
+        "products/registry-record/**",
         "crates/registry-relay-v2/examples/audit-event-schema.rs",
         "crates/registry-relay-v2/src/audit.rs",
     ]
@@ -488,6 +500,9 @@ def classify(
         for path in paths
         for gate in SECURITY_WORKFLOW_GATES.get(path, ())
     )
+    registry_record_cross_product = any(
+        matches(path, *REGISTRY_RECORD_CROSS_PRODUCT_INPUTS) for path in paths
+    )
     force_all = run_all or any(
         path
         in {
@@ -523,6 +538,11 @@ def classify(
             elif path.startswith("products/identifiers/"):
                 # The catalog gate compiles its focused Relay V2 exporter.
                 # Catalog-only tooling does not require the full Rust matrix.
+                pass
+            elif path.startswith("products/registry-record/"):
+                # Shared-profile material remains outside the broad Rust shard.
+                # Cross-product commitments select the two owning product gates
+                # explicitly below; each gate compiles and exercises its router.
                 pass
             elif path.startswith(("crates/", "products/")):
                 # A new or moved Rust package must not silently escape the test matrix.
@@ -712,9 +732,11 @@ def classify(
         or bool(affected & DISCOVERY_PACKAGES)
         or any(matches(path, *DISCOVERY_PROVIDER_INPUTS) for path in paths)
         or any(path in DISCOVERY_TUTORIAL_INPUTS for path in paths),
-        "relay_v2_contracts": bool(affected & RELAY_V2_PACKAGES),
+        "relay_v2_contracts": registry_record_cross_product
+        or bool(affected & RELAY_V2_PACKAGES),
         "relay_client_contracts": bool(affected & RELAY_CLIENT_PACKAGES),
-        "registry_server_contracts": bool(affected & REGISTRY_SERVER_PACKAGES),
+        "registry_server_contracts": registry_record_cross_product
+        or bool(affected & REGISTRY_SERVER_PACKAGES),
         "evidence_contracts": bool(affected & EVIDENCE_PACKAGES),
         "release_tool": release_tool,
         "release_source_proof": release_source_proof,

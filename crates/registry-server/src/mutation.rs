@@ -59,6 +59,7 @@ use crate::postgres::{
     ImmediateActionTargetBinding, ImmediateActionTargetContext, RegistryLockKey,
     RowBoundaryContext, SqlIdentifier,
 };
+use crate::record_profile::{self, RecordRepresentation};
 use crate::revision::{canonical_snapshot, insert_revision, RevisionError, RevisionInsert};
 
 const MAX_LOGICAL_ID_BYTES: usize = 256;
@@ -689,6 +690,7 @@ pub async fn install_mutation_schema(
 
 #[derive(Clone)]
 pub struct MutationPlan {
+    registry_id: String,
     route: CompiledRoute,
     entity: CompiledEntity,
     event_deliveries: Vec<CompiledEventDelivery>,
@@ -746,6 +748,7 @@ impl MutationPlan {
         let temporal_exclusion_constraints =
             temporal_exclusion_constraints(registry, entity, inventory)?;
         Ok(Self {
+            registry_id: registry.registry_id().to_owned(),
             route: route.clone(),
             entity: entity.clone(),
             event_deliveries,
@@ -781,6 +784,7 @@ impl MutationPlan {
             _ => return Err(MutationError::InvalidRequest),
         };
         Ok(Self {
+            registry_id: self.registry_id.clone(),
             route: CompiledRoute {
                 id: format!(
                     "records.{}.{}",
@@ -963,6 +967,7 @@ pub struct MutationRequest<'a> {
     pub expected_etag: Option<&'a str>,
     pub body: MutationBody,
     pub response_fields: BTreeSet<String>,
+    pub representation: RecordRepresentation,
     pub correlation: RequestCorrelation,
 }
 
@@ -1126,6 +1131,7 @@ impl MutationCoordinator {
             expected_etag: request.expected_etag,
             body: normalized_body,
             response_fields: request.response_fields.clone(),
+            representation: request.representation,
             correlation: request.correlation.clone(),
         };
         if let Err(error) = validate_request(&request, &self.expected) {
@@ -1561,6 +1567,7 @@ impl MutationCoordinator {
                 expected_etag,
                 body,
                 response_fields: request.response_fields.clone(),
+                representation: RecordRepresentation::Json,
                 correlation: request.correlation.clone(),
             };
             fault.fail_at(MutationFaultPoint::BeforeCurrentRow)?;
@@ -1771,26 +1778,41 @@ impl MutationCoordinator {
             &current.data,
             &request.response_fields,
         )?;
-        let body = json!({
-            "id": current.record_id,
-            "revision": current.record_revision,
-            "snapshot": snapshot_reference,
-            "data": data,
-        });
-        let etag = strong_record_etag(
+        let member = record_profile::record_member(
+            current.record_id.clone(),
+            current.record_revision.to_string(),
+            data,
+            Map::from_iter([("snapshot".to_owned(), Value::String(snapshot_reference))]),
+        )
+        .map_err(|_| MutationError::Unavailable)?;
+        let body = record_profile::single_response(
+            &request.plan.registry_id,
+            &request.plan.entity,
+            member,
+            request.representation,
+        )
+        .map_err(|_| MutationError::Unavailable)?;
+        let etag = strong_record_etag_for_representation(
             &self.audit_profile,
             request.claims,
             &self.expected.package_revision,
             &current.record_id,
             current.record_revision,
             &request.response_fields,
+            request.representation,
         )?;
         let mut headers = BTreeMap::from([
             (
                 PermittedResponseHeader::ContentType,
-                b"application/json".to_vec(),
+                request.representation.content_type().as_bytes().to_vec(),
             ),
             (PermittedResponseHeader::Etag, etag.into_bytes()),
+            (
+                PermittedResponseHeader::Link,
+                record_profile::link_header_value(&request.plan.entity)
+                    .map_err(|_| MutationError::Unavailable)?
+                    .into_bytes(),
+            ),
         ]);
         let status = match request.plan.route.operation {
             Operation::Create => {
@@ -1820,6 +1842,26 @@ pub(crate) fn strong_record_etag(
     record_id: &str,
     record_revision: i64,
     response_fields: &BTreeSet<String>,
+) -> Result<String, MutationError> {
+    strong_record_etag_for_representation(
+        profile,
+        claims,
+        package_revision,
+        record_id,
+        record_revision,
+        response_fields,
+        RecordRepresentation::Json,
+    )
+}
+
+pub(crate) fn strong_record_etag_for_representation(
+    profile: &AuditProfile,
+    claims: &ClaimContext,
+    package_revision: &str,
+    record_id: &str,
+    record_revision: i64,
+    response_fields: &BTreeSet<String>,
+    representation: RecordRepresentation,
 ) -> Result<String, MutationError> {
     let key_hasher = profile.key_hasher();
     let principal_reference = claims
@@ -1874,6 +1916,7 @@ pub(crate) fn strong_record_etag(
         "recordId": record_id,
         "recordRevision": record_revision,
         "responseFields": response_fields,
+        "responseRepresentation": representation.content_type(),
     }))
     .map_err(|_| MutationError::InvalidRequest)?;
     let etag_input = std::str::from_utf8(&etag_input).map_err(|_| MutationError::InvalidRequest)?;
@@ -2048,13 +2091,14 @@ async fn apply_current_row(
                 .expected_etag
                 .ok_or(MutationError::InvalidRequest)?
                 .as_bytes();
-            let current_etag = strong_record_etag(
+            let current_etag = strong_record_etag_for_representation(
                 audit_profile,
                 request.claims,
                 package_revision,
                 &current.record_id,
                 current.record_revision,
                 &request.response_fields,
+                request.representation,
             )?;
             if expected.ct_eq(current_etag.as_bytes()).unwrap_u8() != 1 {
                 return Err(MutationError::PreconditionFailed);
@@ -2073,13 +2117,14 @@ async fn apply_current_row(
                 .expected_etag
                 .ok_or(MutationError::InvalidRequest)?
                 .as_bytes();
-            let current_etag = strong_record_etag(
+            let current_etag = strong_record_etag_for_representation(
                 audit_profile,
                 request.claims,
                 package_revision,
                 &current.record_id,
                 current.record_revision,
                 &request.response_fields,
+                request.representation,
             )?;
             if expected.ct_eq(current_etag.as_bytes()).unwrap_u8() != 1 {
                 return Err(MutationError::PreconditionFailed);
@@ -2823,6 +2868,7 @@ fn validate_batch_request(
             expected_etag,
             body,
             response_fields: request.response_fields.clone(),
+            representation: RecordRepresentation::Json,
             correlation: request.correlation.clone(),
         };
         validate_request(&item_request, expected)?;
@@ -2912,6 +2958,7 @@ fn canonical_request_digest(request: &MutationRequest<'_>) -> Result<[u8; 32], M
         "targetRecord": request.record_id,
         "expectedEtag": request.expected_etag,
         "mutationBody": mutation_body_json(&request.body),
+        "responseRepresentation": request.representation.content_type(),
     }))
     .map_err(|_| MutationError::InvalidRequest)?;
     Ok(Sha256::digest(canonical).into())

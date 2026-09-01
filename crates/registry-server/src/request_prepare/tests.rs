@@ -14,9 +14,9 @@ const TARGET: &str = "00000000-0000-4000-8000-000000000001";
 fn fixture(effects: Value) -> CompiledRegistry {
     let source = json!({
         "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
-        "registry":{"id":"request-preparation","version":"1","defaultLanguage":"en"},
+        "registry":{"id":"request-preparation","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
         "entities":[{
-            "id":"target","route":"targets","mutationMode":"mutable",
+            "id":"target","primaryDataset":"test-dataset","route":"targets","mutationMode":"mutable",
             "changeControl":{"requiredFor":["create","patch"]},
             "fields":[
                 {"id":"first","type":"string","maxLength":64,"classification":"internal"},
@@ -25,7 +25,7 @@ fn fixture(effects: Value) -> CompiledRegistry {
                 {"id":"notes","type":"text","maxLength":1048576,"classification":"internal"}
             ]
         },{
-            "id":"request","route":"requests","mutationMode":"mutable",
+            "id":"request","primaryDataset":"test-dataset","route":"requests","mutationMode":"mutable",
             "fields":[
                 {"id":"one","type":"reference","target":"target","classification":"internal"},
                 {"id":"two","type":"reference","target":"target","classification":"internal"},

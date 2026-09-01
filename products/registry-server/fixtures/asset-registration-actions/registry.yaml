@@ -2,6 +2,7 @@ apiVersion: registry.registrystack.org/v1alpha1
 kind: RegistryProject
 registry:
   id: asset-registration-actions
+  canonicalBaseIri: https://asset-registration-actions.example.gov
   version: 0.1.0
   defaultLanguage: en
 package:
@@ -17,17 +18,26 @@ manifestProjection:
     title: Asset Registration Actions Catalog
     description: Portable metadata for the asset registration action fixture.
     publisher:
+      id: asset-registration-actions-authority
       name: Asset Registration Authority
       iri: https://asset-registration-actions.example.gov/authority
-  dataset:
-    title: Asset Registration Actions Registry
-    description: Asset records and initial inspection events created by one configured immediate action.
-    owner: Asset Registration Authority
-    status: active
+  publicService: {id: asset-registration-actions-service, title: Asset Registration Actions Catalog}
+  datasets:
+    - id: asset-registration-actions
+      title: Asset Registration Actions Registry
+      description: Asset records and initial inspection events created by one configured immediate action.
+      owner: Asset Registration Authority
+      status: active
+  dataServices:
+    - id: asset-registration-actions-data-service
+      title: Asset Registration Actions Catalog
+      endpointUrl: https://asset-registration-actions.example.gov
+      servesDatasets: [asset-registration-actions]
+  distributions: []
 modules:
   - id: "asset-registration-actions-core"
     version: "0.1.0"
-    digest: "sha256:e13f162e06a076afeb03646454ef8e022f700967fef819101faab44b8a7ca172"
+    digest: "sha256:e0948d6e7f9eebcbf9ce366510ca9ce4bf6d5b30c58ee68dc22638431a94e8b1"
 
 entities: []
 accessProfiles:

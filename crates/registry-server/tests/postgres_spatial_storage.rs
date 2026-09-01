@@ -132,9 +132,9 @@ fn compiled_spatial_registry() -> registry_server::CompiledRegistry {
             br#"{
               "apiVersion":"registry.registrystack.org/v1alpha1",
               "kind":"RegistryProject",
-              "registry":{"id":"spatial-storage","version":"1","defaultLanguage":"en"},
+              "registry":{"id":"spatial-storage","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
               "entities":[{
-                "id":"site","route":"sites","mutationMode":"mutable","tombstone":true,"classification":"internal",
+                "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","tombstone":true,"classification":"internal",
                 "fields":[
                   {"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"},
                   {"id":"location","type":"crs84-point","precision":6,"classification":"internal"}
@@ -162,9 +162,9 @@ fn compiled_spatial_derived_registry() -> registry_server::CompiledRegistry {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"spatial-derived-storage","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"spatial-derived-storage","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"site","route":"sites","mutationMode":"mutable","classification":"internal",
+            "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"internal",
             "fields":[
               {"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"},
               {"id":"location","type":"crs84-point","precision":6,"classification":"internal"}
@@ -206,15 +206,15 @@ fn compiled_spatial_cross_entity_derived_registry() -> registry_server::Compiled
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"spatial-cross-derived-storage","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"spatial-cross-derived-storage","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"zone","route":"zones","mutationMode":"mutable","classification":"internal",
+            "id":"zone","primaryDataset":"test-dataset","route":"zones","mutationMode":"mutable","classification":"internal",
             "fields":[
               {"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"},
               {"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"}
             ]
           },{
-            "id":"site","route":"sites","mutationMode":"mutable","classification":"internal",
+            "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"internal",
             "fields":[
               {"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"},
               {"id":"zone","type":"reference","target":"zone","required":true,"classification":"internal"},
@@ -363,9 +363,9 @@ fn crs84_point_without_bbox_keeps_non_gis_ddl_and_inventory_stable() {
             br#"{
               "apiVersion":"registry.registrystack.org/v1alpha1",
               "kind":"RegistryProject",
-              "registry":{"id":"ordinary-point","version":"1","defaultLanguage":"en"},
+              "registry":{"id":"ordinary-point","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
               "entities":[{
-                "id":"site","route":"sites","mutationMode":"mutable","classification":"internal",
+                "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"internal",
                 "fields":[
                   {"id":"code","type":"string","maxLength":32,"classification":"internal"},
                   {"id":"location","type":"crs84-point","precision":6,"classification":"internal"}

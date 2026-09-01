@@ -1,0 +1,25 @@
+id: registry-record-conformance-core
+version: 0.1.0
+entities:
+  - id: public-unit
+    primaryDataset: public-units
+    route: public-units
+    mutationMode: mutable
+    classification: public
+    fields:
+      - id: label
+        type: string
+        required: true
+        maxLength: 160
+        classification: public
+  - id: protected-unit
+    primaryDataset: protected-units
+    route: protected-units
+    mutationMode: mutable
+    classification: internal
+    fields:
+      - id: label
+        type: string
+        required: true
+        maxLength: 160
+        classification: internal

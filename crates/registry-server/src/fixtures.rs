@@ -3462,7 +3462,7 @@ fn captured_request_action_if_match(
         .ok_or(FixtureError::RequestConstructionRefused)?;
     let actions = observation
         .document
-        .pointer("/request/actions")
+        .pointer("/data/request/actions")
         .and_then(Value::as_array)
         .ok_or(FixtureError::RequestConstructionRefused)?;
     let expected_operation = request_action_name(action)?;
@@ -3518,7 +3518,7 @@ fn captured_proposal_version(
         .and_then(|observation| {
             observation
                 .document
-                .pointer("/request/proposalVersion")
+                .pointer("/data/request/proposalVersion")
                 .and_then(Value::as_u64)
         })
         .filter(|version| *version > 0 && *version <= u64::from(u32::MAX))
@@ -3535,7 +3535,7 @@ fn captured_effect_digest(
         .and_then(|observation| {
             observation
                 .document
-                .pointer("/request/effectDigest")
+                .pointer("/data/request/effectDigest")
                 .and_then(Value::as_str)
         })
         .ok_or(FixtureError::RequestConstructionRefused)?;
@@ -3629,7 +3629,7 @@ fn capture_observation_kind(
         }
         _ => {
             let record_id = document
-                .get("id")
+                .pointer("/data/recordIdentifier")
                 .and_then(Value::as_str)
                 .filter(|value| {
                     uuid::Uuid::parse_str(value).is_ok_and(|id| id.to_string() == *value)
@@ -3725,11 +3725,12 @@ fn assert_response(
                         | ActionSource::ReadPath { count: true, .. }
                 );
                 let expected_keys: &[&str] = if include_count {
-                    &["items", "pageInfo", "count"]
+                    &["items", "pageInfo", "meta", "count"]
                 } else {
-                    &["items", "pageInfo"]
+                    &["items", "pageInfo", "meta"]
                 };
                 let object = exact_object(document, expected_keys)?;
+                assert_record_meta(object)?;
                 let items = object
                     .get("items")
                     .and_then(Value::as_array)
@@ -3784,17 +3785,36 @@ fn assert_response(
                     {
                         return Err(FixtureError::ResponseShapeRefused);
                     }
-                    assert_record_members(object, &step.response_readable_fields, &Map::new())?;
+                    assert_batch_record_members(
+                        object,
+                        &step.response_readable_fields,
+                        &Map::new(),
+                    )?;
                 }
             }
             ActionSource::Create { .. } | ActionSource::Patch { .. } => {
-                let object = exact_object(document, &["id", "revision", "data", "snapshot"])?;
-                assert_snapshot_reference(object)?;
-                assert_record_members(object, &step.response_readable_fields, &step.expect.fields)?;
+                let object = assert_single_record_envelope(document)?;
+                let member = object
+                    .get("data")
+                    .ok_or(FixtureError::ResponseShapeRefused)?;
+                let member = exact_object(
+                    member,
+                    &[
+                        "recordIdentifier",
+                        "revisionIdentifier",
+                        "domainData",
+                        "snapshot",
+                    ],
+                )?;
+                assert_snapshot_reference(member)?;
+                assert_record_members(member, &step.response_readable_fields, &step.expect.fields)?;
             }
             ActionSource::Get { .. } | ActionSource::Lookup { .. } => {
+                let object = assert_single_record_envelope(document)?;
                 assert_record_shape(
-                    document,
+                    object
+                        .get("data")
+                        .ok_or(FixtureError::ResponseShapeRefused)?,
                     &step.response_readable_fields,
                     &step.expect.fields,
                 )?;
@@ -3969,12 +3989,18 @@ fn assert_record_shape(
     let object = value
         .as_object()
         .ok_or(FixtureError::ResponseShapeRefused)?;
-    if object
-        .keys()
-        .any(|key| !matches!(key.as_str(), "id" | "revision" | "data" | "request"))
-        || !["id", "revision", "data"]
-            .iter()
-            .all(|key| object.contains_key(*key))
+    if object.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "recordIdentifier"
+                | "revisionIdentifier"
+                | "domainData"
+                | "request"
+                | "requestPresence"
+        )
+    }) || !["recordIdentifier", "revisionIdentifier", "domainData"]
+        .iter()
+        .all(|key| object.contains_key(*key))
     {
         return Err(FixtureError::ResponseShapeRefused);
     }
@@ -4001,6 +4027,38 @@ fn assert_record_members(
     expected_fields: &Map<String, Value>,
 ) -> Result<(), FixtureError> {
     let identifier = object
+        .get("recordIdentifier")
+        .and_then(Value::as_str)
+        .ok_or(FixtureError::ResponseShapeRefused)?;
+    let revision = object
+        .get("revisionIdentifier")
+        .and_then(Value::as_str)
+        .and_then(|value| value.parse::<u64>().ok())
+        .ok_or(FixtureError::ResponseShapeRefused)?;
+    let data = object
+        .get("domainData")
+        .and_then(Value::as_object)
+        .ok_or(FixtureError::ResponseShapeRefused)?;
+    if revision == 0
+        || !uuid::Uuid::parse_str(identifier).is_ok_and(|parsed| parsed.to_string() == identifier)
+        || !data
+            .keys()
+            .all(|field| readable_fields.contains(field.as_str()))
+        || expected_fields
+            .iter()
+            .any(|(field, expected)| data.get(field) != Some(expected))
+    {
+        return Err(FixtureError::ExpectationMismatch);
+    }
+    Ok(())
+}
+
+fn assert_batch_record_members(
+    object: &Map<String, Value>,
+    readable_fields: &BTreeSet<String>,
+    expected_fields: &Map<String, Value>,
+) -> Result<(), FixtureError> {
+    let identifier = object
         .get("id")
         .and_then(Value::as_str)
         .ok_or(FixtureError::ResponseShapeRefused)?;
@@ -4022,6 +4080,35 @@ fn assert_record_members(
             .any(|(field, expected)| data.get(field) != Some(expected))
     {
         return Err(FixtureError::ExpectationMismatch);
+    }
+    Ok(())
+}
+
+fn assert_single_record_envelope(value: &Value) -> Result<&Map<String, Value>, FixtureError> {
+    let object = exact_object(value, &["data", "meta"])?;
+    assert_record_meta(object)?;
+    Ok(object)
+}
+
+fn assert_record_meta(object: &Map<String, Value>) -> Result<(), FixtureError> {
+    let meta = object
+        .get("meta")
+        .and_then(Value::as_object)
+        .ok_or(FixtureError::ResponseShapeRefused)?;
+    if meta.len() != 3
+        || [
+            "registryIdentifier",
+            "datasetIdentifier",
+            "entityTypeIdentifier",
+        ]
+        .iter()
+        .any(|key| {
+            meta.get(*key)
+                .and_then(Value::as_str)
+                .is_none_or(|value| value.is_empty() || value.len() > MAX_BINDING_BYTES)
+        })
+    {
+        return Err(FixtureError::ResponseShapeRefused);
     }
     Ok(())
 }
@@ -5583,28 +5670,38 @@ mod tests {
         let create = &suite.journeys[0].steps[0];
         let identifier = "123e4567-e89b-12d3-a456-426614174000";
         let unreadable = json!({
-            "id": identifier,
-            "revision": 1,
-            "snapshot": "rs1_00000000-0000-4000-8000-000000000001",
             "data": {
-                "jurisdiction": "zone-a", "label": "first", "note": "initial",
-                "quantity": 1, "record_id": "canary"
-            }
+                "recordIdentifier": identifier,
+                "revisionIdentifier": "1",
+                "snapshot": "rs1_00000000-0000-4000-8000-000000000001",
+                "domainData": {
+                    "jurisdiction": "zone-a", "label": "first", "note": "initial",
+                    "quantity": 1, "record_id": "canary"
+                }
+            },
+            "meta": {
+                "registryIdentifier": "fixture-registry",
+                "datasetIdentifier": "fixture-registry",
+                "entityTypeIdentifier": "widget"
+            },
         });
         assert_eq!(
             assert_response(create, StatusCode::CREATED, &unreadable),
             Err(FixtureError::ExpectationMismatch)
         );
         let mut bounded = unreadable.clone();
-        bounded["data"].as_object_mut().unwrap().remove("record_id");
+        bounded["data"]["domainData"]
+            .as_object_mut()
+            .unwrap()
+            .remove("record_id");
         assert_response(create, StatusCode::CREATED, &bounded)
             .expect("current closed mutation envelope is admitted");
-        bounded["snapshot"] = json!("not-a-snapshot-reference");
+        bounded["data"]["snapshot"] = json!("not-a-snapshot-reference");
         assert_eq!(
             assert_response(create, StatusCode::CREATED, &bounded),
             Err(FixtureError::ResponseShapeRefused)
         );
-        bounded.as_object_mut().unwrap().remove("snapshot");
+        bounded["data"].as_object_mut().unwrap().remove("snapshot");
         assert_eq!(
             assert_response(create, StatusCode::CREATED, &bounded),
             Err(FixtureError::ResponseShapeRefused)
@@ -5662,8 +5759,17 @@ mod tests {
         );
 
         let malformed_list = json!({
-            "items": [{"id": identifier, "revision": 1, "data": {"record_id": "canary"}}],
-            "pageInfo": {"nextCursor": null}
+            "items": [{
+                "recordIdentifier": identifier,
+                "revisionIdentifier": "1",
+                "domainData": {"record_id": "canary"}
+            }],
+            "pageInfo": {"nextCursor": null},
+            "meta": {
+                "registryIdentifier": "fixture-registry",
+                "datasetIdentifier": "fixture-registry",
+                "entityTypeIdentifier": "widget"
+            }
         });
         assert!(
             assert_response(&suite.journeys[0].steps[2], StatusCode::OK, &malformed_list,).is_err()
@@ -5963,20 +6069,27 @@ mod tests {
                     etag: "\"rs-ordinary-get-etag\"".to_owned(),
                 },
                 document: json!({
-                    "id": "123e4567-e89b-12d3-a456-426614174000",
-                    "revision": 1,
-                    "request": {
-                        "serverState": "draft",
-                        "proposalVersion": 1,
-                        "effectDigest": null,
-                        "actions": [{
-                            "operation": "submit_request",
-                            "stage": null,
-                            "href": "/v1/records/requests/123e4567-e89b-12d3-a456-426614174000/actions/submit",
-                            "ifMatch": "\"rs-action-submit\""
-                        }]
+                    "data": {
+                        "recordIdentifier": "123e4567-e89b-12d3-a456-426614174000",
+                        "revisionIdentifier": "1",
+                        "request": {
+                            "serverState": "draft",
+                            "proposalVersion": 1,
+                            "effectDigest": null,
+                            "actions": [{
+                                "operation": "submit_request",
+                                "stage": null,
+                                "href": "/v1/records/requests/123e4567-e89b-12d3-a456-426614174000/actions/submit",
+                                "ifMatch": "\"rs-action-submit\""
+                            }]
+                        },
+                        "domainData": {}
                     },
-                    "data": {}
+                    "meta": {
+                        "registryIdentifier": "fixture-registry",
+                        "datasetIdentifier": "fixture-registry",
+                        "entityTypeIdentifier": "request"
+                    }
                 }),
             },
         );
@@ -5994,7 +6107,7 @@ mod tests {
         observations
             .get_mut("before-submit")
             .expect("observation exists")
-            .document["request"]
+            .document["data"]["request"]
             .as_object_mut()
             .expect("request metadata is object")
             .remove("actions");
@@ -6014,25 +6127,61 @@ mod tests {
         let id = "123e4567-e89b-12d3-a456-426614174000";
         let second = "123e4567-e89b-12d3-a456-426614174001";
         let third = "123e4567-e89b-12d3-a456-426614174002";
+        let meta = json!({
+            "registryIdentifier": "fixture-registry",
+            "datasetIdentifier": "fixture-registry",
+            "entityTypeIdentifier": "widget"
+        });
         let (status, document, etag) = match index {
             0 => (
                 201,
-                json!({"id":id,"revision":1,"data":{"jurisdiction":"zone-a","label":"first","note":"initial","quantity":1},"snapshot":"rs1_00000000-0000-4000-8000-000000000001"}),
+                json!({
+                    "data": {
+                        "recordIdentifier": id,
+                        "revisionIdentifier": "1",
+                        "domainData": {"jurisdiction":"zone-a","label":"first","note":"initial","quantity":1},
+                        "snapshot":"rs1_00000000-0000-4000-8000-000000000001"
+                    },
+                    "meta": meta
+                }),
                 Some("\"rs-one\""),
             ),
             1 => (
                 200,
-                json!({"id":id,"revision":1,"data":{"jurisdiction":"zone-a","label":"first","note":"initial","quantity":1}}),
+                json!({
+                    "data": {
+                        "recordIdentifier": id,
+                        "revisionIdentifier": "1",
+                        "domainData": {"jurisdiction":"zone-a","label":"first","note":"initial","quantity":1}
+                    },
+                    "meta": meta
+                }),
                 Some("\"rs-one\""),
             ),
             2 => (
                 200,
-                json!({"items":[{"id":id,"revision":1,"data":{"jurisdiction":"zone-a","label":"first","note":"initial","quantity":1}}],"pageInfo":{"nextCursor":null}}),
+                json!({
+                    "items":[{
+                        "recordIdentifier": id,
+                        "revisionIdentifier": "1",
+                        "domainData": {"jurisdiction":"zone-a","label":"first","note":"initial","quantity":1}
+                    }],
+                    "pageInfo":{"nextCursor":null},
+                    "meta": meta
+                }),
                 None,
             ),
             3 => (
                 200,
-                json!({"id":id,"revision":2,"data":{"jurisdiction":"zone-a","label":"first","note":"revised","quantity":1},"snapshot":"rs1_00000000-0000-4000-8000-000000000002"}),
+                json!({
+                    "data": {
+                        "recordIdentifier": id,
+                        "revisionIdentifier": "2",
+                        "domainData": {"jurisdiction":"zone-a","label":"first","note":"revised","quantity":1},
+                        "snapshot":"rs1_00000000-0000-4000-8000-000000000002"
+                    },
+                    "meta": meta
+                }),
                 Some("\"rs-two\""),
             ),
             4 => (
