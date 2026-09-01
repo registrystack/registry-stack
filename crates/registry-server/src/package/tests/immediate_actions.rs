@@ -7,7 +7,7 @@ use serde_json::json;
 fn source() -> Value {
     json!({
         "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
-        "registry":{"id":"action-package", "version":"1", "defaultLanguage":"en"},
+        "registry":{"id":"action-package", "version":"1", "defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
         "entities":[{"id":"item", "route":"items", "mutationMode":"mutable",
             "fields":[{"id":"label", "type":"string", "maxLength":40, "required":true, "classification":"internal"}]}],
         "actions":[{"id":"rename-item", "inputs":[

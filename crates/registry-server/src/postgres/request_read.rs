@@ -1167,9 +1167,9 @@ mod tests {
             br#"{
               "apiVersion":"registry.registrystack.org/v1alpha1",
               "kind":"RegistryProject",
-              "registry":{"id":"editable-profile","version":"1","defaultLanguage":"en"},
+              "registry":{"id":"editable-profile","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
               "entities":[{
-                "id":"request","route":"requests","mutationMode":"mutable",
+                "id":"request","primaryDataset":"test-dataset","route":"requests","mutationMode":"mutable",
                 "fields":[{"id":"label","type":"string","maxLength":64,"classification":"internal"}]
               }],
               "accessProfiles":[{
@@ -1342,9 +1342,9 @@ mod tests {
             br#"{
               "apiVersion":"registry.registrystack.org/v1alpha1",
               "kind":"RegistryProject",
-              "registry":{"id":"snapshot-api-name","version":"1","defaultLanguage":"en"},
+              "registry":{"id":"snapshot-api-name","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
               "entities":[{
-                "id":"target","route":"targets","mutationMode":"mutable",
+                "id":"target","primaryDataset":"test-dataset","route":"targets","mutationMode":"mutable",
                 "fields":[
                   {"id":"proposed-site","apiName":"proposedSite","type":"string","maxLength":64,"classification":"internal"},
                   {"id":"hidden-field","apiName":"hiddenField","type":"string","maxLength":64,"classification":"internal"}

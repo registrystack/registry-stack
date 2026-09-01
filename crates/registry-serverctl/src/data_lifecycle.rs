@@ -854,9 +854,11 @@ mod tests {
         let source = json!({
             "apiVersion": "registry.registrystack.org/v1alpha1",
             "kind": "RegistryProject",
-            "registry": {"id": "ctl-data", "version": "1", "defaultLanguage": "en"},
+            "registry": {"id": "ctl-data", "version": "1", "defaultLanguage": "en",
+                         "canonicalBaseIri": "https://ctl-data.example.test"},
             "entities": [{
                 "id": ENTITY,
+                "primaryDataset": "test-dataset",
                 "route": "records",
                 "mutationMode": "create_only",
                 "batch": {"maximumItems": 2, "maximumBytes": 400},

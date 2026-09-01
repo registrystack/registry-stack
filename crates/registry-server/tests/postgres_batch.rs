@@ -571,9 +571,9 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"batch-registry","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"batch-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"widget","route":"widgets","mutationMode":"mutable","classification":"public",
+            "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
             "batch":{"maximumItems":3,"maximumBytes":8192},
             "constraints":[{"kind":"unique","fields":["label"]}],
             "fields":[

@@ -549,16 +549,16 @@ fn compiled_registry(tombstone: bool) -> registry_server::CompiledRegistry {
             r#"{{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{{"id":"tombstone-registry","version":"1","defaultLanguage":"en"}},
+          "registry":{{"id":"tombstone-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
           "entities":[{{
-            "id":"widget","route":"widgets","mutationMode":"mutable"{tombstone_fragment},"classification":"public",
+            "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable"{tombstone_fragment},"classification":"public",
             "fields":[
               {{"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"}},
               {{"id":"label","type":"string","maxLength":128,"required":true,"classification":"public"}},
               {{"id":"quantity","type":"int64","required":true,"classification":"public"}}
             ]{events}
           }},{{
-            "id":"log","route":"logs","mutationMode":"create_only","classification":"public",
+            "id":"log","primaryDataset":"test-dataset","route":"logs","mutationMode":"create_only","classification":"public",
             "fields":[
               {{"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"}},
               {{"id":"message","type":"string","maxLength":128,"required":true,"classification":"public"}}

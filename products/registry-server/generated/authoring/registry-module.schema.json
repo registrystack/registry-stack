@@ -1539,6 +1539,9 @@
         "mutationMode": {
           "$ref": "#/$defs/MutationMode"
         },
+        "primaryDataset": {
+          "type": "string"
+        },
         "readPaths": {
           "items": {
             "$ref": "#/$defs/ReadPathSource"
@@ -1572,6 +1575,7 @@
       },
       "required": [
         "id",
+        "primaryDataset",
         "route",
         "mutationMode"
       ],

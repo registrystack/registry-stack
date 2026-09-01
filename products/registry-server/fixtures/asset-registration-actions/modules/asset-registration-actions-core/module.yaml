@@ -2,6 +2,7 @@ id: asset-registration-actions-core
 version: 0.1.0
 entities:
   - id: asset
+    primaryDataset: asset-registration-actions
     route: assets
     mutationMode: mutable
     fields:
@@ -12,6 +13,7 @@ entities:
     constraints:
       - {kind: unique, fields: [asset-code]}
   - id: asset-inspection
+    primaryDataset: asset-registration-actions
     route: inspections
     mutationMode: create_only
     fields:

@@ -631,12 +631,12 @@ fn compiled_request_fixture() -> registry_server::CompiledRegistry {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"fixture-request-actions","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"fixture-request-actions","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"target","route":"targets","mutationMode":"mutable","changeControl":{"requiredFor":["patch"]},
+            "id":"target","primaryDataset":"test-dataset","route":"targets","mutationMode":"mutable","changeControl":{"requiredFor":["patch"]},
             "fields":[{"id":"label","type":"string","required":true,"maxLength":64,"classification":"public"}]
           },{
-            "id":"correction-request","route":"correction-requests","mutationMode":"mutable","classification":"public",
+            "id":"correction-request","primaryDataset":"test-dataset","route":"correction-requests","mutationMode":"mutable","classification":"public",
             "fields":[
               {"id":"target","type":"reference","target":"target","required":true,"classification":"public"},
               {"id":"value","type":"string","required":true,"maxLength":64,"classification":"public"}
@@ -672,9 +672,9 @@ fn compiled_crud_alias_fixture() -> registry_server::CompiledRegistry {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"fixture-crud-aliases","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"fixture-crud-aliases","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"person","route":"people","mutationMode":"mutable","classification":"restricted",
+            "id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable","classification":"restricted",
             "fields":[
               {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"restricted"},
               {"id":"person-code","apiName":"personCode","type":"string","maxLength":64,"required":true,"classification":"restricted"},
@@ -705,9 +705,9 @@ fn compiled_action_fixture() -> registry_server::CompiledRegistry {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"fixture-immediate-actions","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"fixture-immediate-actions","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"person","route":"people","mutationMode":"mutable","classification":"restricted",
+            "id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable","classification":"restricted",
             "fields":[
               {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"restricted"},
               {"id":"person-code","apiName":"personCode","type":"string","maxLength":64,"required":true,"classification":"restricted"},
@@ -715,14 +715,14 @@ fn compiled_action_fixture() -> registry_server::CompiledRegistry {
             ],
             "constraints":[{"kind":"unique","fields":["person-code"]}]
           },{
-            "id":"household","route":"households","mutationMode":"mutable","classification":"restricted",
+            "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable","classification":"restricted",
             "fields":[
               {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"restricted"},
               {"id":"household-code","type":"string","maxLength":64,"required":true,"classification":"restricted"},
               {"id":"contact-person","apiName":"contactPerson","type":"reference","target":"person","classification":"restricted"}
             ]
           },{
-            "id":"group-membership","route":"group-memberships","mutationMode":"mutable","classification":"restricted",
+            "id":"group-membership","primaryDataset":"test-dataset","route":"group-memberships","mutationMode":"mutable","classification":"restricted",
             "fields":[
               {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"restricted"},
               {"id":"person","type":"reference","target":"person","required":true,"classification":"restricted"},
@@ -789,10 +789,10 @@ fn compiled_spatial_fixture() -> registry_server::CompiledRegistry {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"spatial-fixture","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"spatial-fixture","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "package":{"environment":"local","instanceId":"spatial-fixture-instance","sequence":1,"sourceRevision":"spatial-fixture-source"},
           "entities":[{
-            "id":"site","route":"sites","mutationMode":"mutable","classification":"public",
+            "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"public",
             "fields":[
               {"id":"code","type":"string","maxLength":32,"required":true,"classification":"public"},
               {"id":"location","type":"crs84-point","precision":9,"required":false,"classification":"public"}

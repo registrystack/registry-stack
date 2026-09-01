@@ -40,6 +40,7 @@ mod doctor;
 mod history_erasure_lifecycle;
 mod package_inspection;
 mod package_lifecycle;
+mod project_migration;
 mod request_retention;
 mod reviewed_migrations;
 mod test_lifecycle;
@@ -159,6 +160,8 @@ struct ProjectArgs {
 enum ProjectCommand {
     /// Compute and write module source digests in registry.yaml.
     Lock(ProjectLockArgs),
+    /// Migrate the retired singular Manifest projection to the plural resource model.
+    Migrate(ProjectMigrateArgs),
 }
 
 #[derive(Debug, Args)]
@@ -170,6 +173,17 @@ struct ProjectLockArgs {
     /// Refuse when registry.yaml is not already locked instead of rewriting it.
     #[arg(long)]
     check: bool,
+}
+
+#[derive(Debug, Args)]
+struct ProjectMigrateArgs {
+    /// Registry Server project directory.
+    #[arg(value_name = "PROJECT")]
+    project: PathBuf,
+
+    /// Write the reviewed migration. Without this flag, only a diff is emitted.
+    #[arg(long)]
+    write: bool,
 }
 
 #[derive(Debug, Args)]
@@ -1021,6 +1035,19 @@ struct DiffSuccessReport {
     diff: CompiledRegistryDiff,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectMigrateSuccessReport {
+    ok: bool,
+    command: &'static str,
+    changed: bool,
+    written: bool,
+    dataset_id: String,
+    proposed_authority_id: String,
+    proposed_public_service_id: String,
+    diff: String,
+}
+
 #[derive(Debug)]
 struct CapturedProjectSource {
     project: RegistryProject,
@@ -1202,6 +1229,12 @@ where
         }),
         Command::Project(args) => match args.command {
             ProjectCommand::Lock(args) => project_lock(&args.project, args.check),
+            ProjectCommand::Migrate(args) => {
+                return match project_migrate(&args.project, args.write) {
+                    Ok(report) => write_project_migrate_success(&report, format, stdout, stderr),
+                    Err(failure) => write_failure(&failure, format, stdout, stderr),
+                };
+            }
         },
         Command::Generate(args) => generate(
             args.artifact,
@@ -2796,6 +2829,185 @@ fn check(project_path: &Path, profile: ProfileArg) -> Result<SuccessReport, Fail
     })
 }
 
+fn project_migrate(
+    project_path: &Path,
+    write: bool,
+) -> Result<ProjectMigrateSuccessReport, FailureReport> {
+    validate_project_directory(project_path).map_err(|diagnostic| {
+        source_failure(
+            "project migrate",
+            diagnostic,
+            DiagnosticArtifact::RegistryProject,
+            SuggestedAction::CorrectAuthoringSource,
+        )
+    })?;
+    let registry_path = project_path.join("registry.yaml");
+    let original = read_bounded_regular_file(
+        &registry_path,
+        "source.project.missing",
+        AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
+    )
+    .map_err(|diagnostic| {
+        source_failure(
+            "project migrate",
+            diagnostic,
+            DiagnosticArtifact::RegistryProject,
+            SuggestedAction::CorrectAuthoringSource,
+        )
+    })?;
+
+    if let Ok(project) = parse_project_yaml(&original) {
+        let projection = project.manifest_projection.ok_or_else(|| FailureReport {
+            ok: false,
+            command: "project migrate",
+            diagnostics: vec![tool_diagnostic(
+                diagnostic(
+                    "project.migrate.projection_missing",
+                    "project.manifestProjection",
+                    "the project has no singular Manifest projection to migrate",
+                ),
+                DiagnosticArtifact::RegistryProject,
+                SuggestedAction::CorrectAuthoringSource,
+            )],
+        })?;
+        let dataset = projection.datasets.first().ok_or_else(|| FailureReport {
+            ok: false,
+            command: "project migrate",
+            diagnostics: vec![tool_diagnostic(
+                diagnostic(
+                    "project.migrate.datasets_empty",
+                    "project.manifestProjection.datasets",
+                    "the plural project has no dataset; add at least one datasets[] entry",
+                ),
+                DiagnosticArtifact::RegistryProject,
+                SuggestedAction::CorrectAuthoringSource,
+            )],
+        })?;
+        return Ok(ProjectMigrateSuccessReport {
+            ok: true,
+            command: "project migrate",
+            changed: false,
+            written: false,
+            dataset_id: dataset.id.clone(),
+            proposed_authority_id: projection.catalog.publisher.id,
+            proposed_public_service_id: projection.public_service.id,
+            diff: String::new(),
+        });
+    }
+
+    let mut migrated =
+        project_migration::migrate_registry_yaml(&original).map_err(|diagnostic| {
+            source_failure(
+                "project migrate",
+                diagnostic,
+                DiagnosticArtifact::RegistryProject,
+                SuggestedAction::CorrectAuthoringSource,
+            )
+        })?;
+    let mut files = BTreeMap::new();
+    files.insert(
+        "registry.yaml".to_owned(),
+        (original.clone(), migrated.bytes.clone()),
+    );
+    let mut module_locks = Vec::new();
+    for (module_id, bytes) in discover_module_files(project_path).map_err(|diagnostic| {
+        source_failure(
+            "project migrate",
+            diagnostic,
+            DiagnosticArtifact::RegistryProject,
+            SuggestedAction::CorrectAuthoringSource,
+        )
+    })? {
+        let updated = project_migration::add_module_entity_membership(&bytes, &migrated.dataset_id)
+            .map_err(|diagnostic| {
+                source_failure(
+                    "project migrate",
+                    diagnostic,
+                    DiagnosticArtifact::RegistryProject,
+                    SuggestedAction::CorrectAuthoringSource,
+                )
+            })?
+            .unwrap_or_else(|| bytes.clone());
+        let module = parse_module_yaml(&updated).map_err(|failure| FailureReport {
+            ok: false,
+            command: "project migrate",
+            diagnostics: failure
+                .diagnostics()
+                .iter()
+                .cloned()
+                .map(|diagnostic| {
+                    tool_diagnostic(
+                        diagnostic,
+                        DiagnosticArtifact::RegistryProject,
+                        SuggestedAction::CorrectAuthoringSource,
+                    )
+                })
+                .collect(),
+        })?;
+        let assets = load_module_asset_files(project_path, &module_id, &module)
+            .map_err(|diagnostic| {
+                source_failure(
+                    "project migrate",
+                    diagnostic,
+                    DiagnosticArtifact::RegistryProject,
+                    SuggestedAction::CorrectAuthoringSource,
+                )
+            })?
+            .into_iter()
+            .map(|asset| ModuleAssetSource {
+                module: Some(module_id.clone()),
+                path: asset.path,
+                bytes: asset.bytes,
+            })
+            .collect::<Vec<_>>();
+        module_locks.push(ModuleLockSource {
+            id: module.id.clone(),
+            version: module.version.clone(),
+            digest: Some(module_digest_with_assets(&module, &assets)),
+        });
+        if updated != bytes {
+            files.insert(format!("modules/{module_id}/module.yaml"), (bytes, updated));
+        }
+    }
+    module_locks.sort_by(|left, right| left.id.cmp(&right.id));
+    if !module_locks.is_empty() {
+        migrated.bytes = project_migration::update_module_locks(&migrated.bytes, &module_locks)
+            .map_err(|diagnostic| {
+                source_failure(
+                    "project migrate",
+                    diagnostic,
+                    DiagnosticArtifact::RegistryProject,
+                    SuggestedAction::CorrectAuthoringSource,
+                )
+            })?;
+        files
+            .get_mut("registry.yaml")
+            .expect("registry diff exists")
+            .1 = migrated.bytes.clone();
+    }
+    let diff = project_migration::review_diff(&files);
+    if write {
+        write_migration_files(project_path, &files).map_err(|diagnostic| {
+            source_failure(
+                "project migrate",
+                diagnostic,
+                DiagnosticArtifact::RegistryProject,
+                SuggestedAction::CorrectAuthoringSource,
+            )
+        })?;
+    }
+    Ok(ProjectMigrateSuccessReport {
+        ok: true,
+        command: "project migrate",
+        changed: true,
+        written: write,
+        dataset_id: migrated.dataset_id,
+        proposed_authority_id: migrated.authority_id,
+        proposed_public_service_id: migrated.public_service_id,
+        diff,
+    })
+}
+
 fn project_lock(project_path: &Path, check_only: bool) -> Result<SuccessReport, FailureReport> {
     let mut source = capture_project_source_for_lock(project_path).map_err(|diagnostic| {
         source_failure(
@@ -3448,8 +3660,10 @@ registry:
   id: generic-registry
   version: 0.1.0
   defaultLanguage: en
+  canonicalBaseIri: https://generic-registry.example.invalid
 entities:
   - id: record
+    primaryDataset: generic-registry
     route: records
     mutationMode: mutable
     fields:
@@ -3691,6 +3905,332 @@ fn write_project_registry(
         let _ = fs::remove_file(&temporary);
     }
     write_result
+}
+
+struct MigrationWriteTarget {
+    relative_path: String,
+    path: PathBuf,
+    parent: PathBuf,
+    original: Vec<u8>,
+    updated: Vec<u8>,
+    metadata: fs::Metadata,
+    transaction_directory: PathBuf,
+    staged_path: PathBuf,
+    backup_path: PathBuf,
+}
+
+#[derive(Clone, Copy, Default)]
+enum MigrationWriteFault {
+    #[default]
+    None,
+    #[cfg(test)]
+    ConcurrentChange(usize),
+    #[cfg(test)]
+    Stage(usize),
+    #[cfg(test)]
+    Commit(usize),
+}
+
+fn write_migration_files(
+    project_path: &Path,
+    files: &BTreeMap<String, (Vec<u8>, Vec<u8>)>,
+) -> Result<(), Diagnostic> {
+    write_migration_files_with_fault(project_path, files, MigrationWriteFault::None)
+}
+
+fn write_migration_files_with_fault(
+    project_path: &Path,
+    files: &BTreeMap<String, (Vec<u8>, Vec<u8>)>,
+    _fault: MigrationWriteFault,
+) -> Result<(), Diagnostic> {
+    // Preflight the complete write set before creating even a staging
+    // directory. A refusal here therefore cannot partially migrate a project.
+    let mut targets = Vec::with_capacity(files.len());
+    for (relative_path, (original, updated)) in files {
+        let relative = Path::new(relative_path);
+        if relative.is_absolute()
+            || has_parent_component(relative)
+            || relative.file_name().is_none()
+        {
+            return Err(migration_write_diagnostic(
+                "project.migrate.write_failed",
+                relative_path,
+            ));
+        }
+        let path = project_path.join(relative);
+        let parent = path.parent().map(Path::to_owned).ok_or_else(|| {
+            migration_write_diagnostic("project.migrate.write_failed", relative_path)
+        })?;
+        validate_directory_for(
+            &parent,
+            "project.migrate.write_failed",
+            relative_path,
+            "the project directory is not available",
+            "the project directory must be a directory and must not be a symbolic link",
+        )?;
+        let current = read_bounded_regular_file(
+            &path,
+            "project.migrate.source_missing",
+            AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
+        )?;
+        if current != *original {
+            return Err(migration_concurrent_change_diagnostic(relative_path));
+        }
+        let metadata = fs::symlink_metadata(&path).map_err(|_| {
+            migration_write_diagnostic("project.migrate.write_failed", relative_path)
+        })?;
+        if !migration_target_permissions_are_safe(&metadata) {
+            return Err(migration_write_diagnostic(
+                "project.migrate.permissions_invalid",
+                relative_path,
+            ));
+        }
+        let transaction_directory = parent.join(format!(
+            ".registry-serverctl-migrate-{}-{}",
+            std::process::id(),
+            STAGING_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        targets.push(MigrationWriteTarget {
+            relative_path: relative_path.clone(),
+            path,
+            parent,
+            original: original.clone(),
+            updated: updated.clone(),
+            metadata,
+            staged_path: transaction_directory.join("staged"),
+            backup_path: transaction_directory.join("original"),
+            transaction_directory,
+        });
+    }
+
+    #[cfg(test)]
+    if let MigrationWriteFault::ConcurrentChange(index) = _fault {
+        if let Some(target) = targets.get(index) {
+            fs::write(&target.path, b"concurrent author edit\n").expect("fault injection writes");
+        }
+    }
+
+    let stage_result = (|| {
+        for (index, target) in targets.iter().enumerate() {
+            #[cfg(not(test))]
+            let _ = index;
+            #[cfg(test)]
+            if matches!(_fault, MigrationWriteFault::Stage(failed) if failed == index) {
+                return Err(migration_write_diagnostic(
+                    "project.migrate.write_failed",
+                    &target.relative_path,
+                ));
+            }
+            fs::create_dir(&target.transaction_directory).map_err(|_| {
+                migration_write_diagnostic("project.migrate.write_failed", &target.relative_path)
+            })?;
+            let mut staged = File::options()
+                .write(true)
+                .create_new(true)
+                .open(&target.staged_path)
+                .map_err(|_| {
+                    migration_write_diagnostic(
+                        "project.migrate.write_failed",
+                        &target.relative_path,
+                    )
+                })?;
+            staged.write_all(&target.updated).map_err(|_| {
+                migration_write_diagnostic("project.migrate.write_failed", &target.relative_path)
+            })?;
+            fs::set_permissions(&target.staged_path, target.metadata.permissions()).map_err(
+                |_| {
+                    migration_write_diagnostic(
+                        "project.migrate.write_failed",
+                        &target.relative_path,
+                    )
+                },
+            )?;
+            staged.sync_all().map_err(|_| {
+                migration_write_diagnostic("project.migrate.write_failed", &target.relative_path)
+            })?;
+            sync_directory(&target.transaction_directory).map_err(|_| {
+                migration_write_diagnostic("project.migrate.write_failed", &target.relative_path)
+            })?;
+            sync_directory(&target.parent).map_err(|_| {
+                migration_write_diagnostic("project.migrate.write_failed", &target.relative_path)
+            })?;
+        }
+        Ok(())
+    })();
+    if let Err(error) = stage_result {
+        cleanup_migration_transaction(&targets);
+        return Err(error);
+    }
+
+    // Revalidate every source after staging and before the first rename. This
+    // closes the concurrent-edit window without letting one file advance while
+    // another is stale.
+    let revalidation = targets.iter().try_for_each(|target| {
+        let current = read_bounded_regular_file(
+            &target.path,
+            "project.migrate.source_missing",
+            AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
+        )
+        .map_err(|_| migration_concurrent_change_diagnostic(&target.relative_path))?;
+        let metadata = fs::symlink_metadata(&target.path)
+            .map_err(|_| migration_concurrent_change_diagnostic(&target.relative_path))?;
+        if current == target.original
+            && same_file_metadata(&target.metadata, &metadata)
+            && same_migration_permissions(&target.metadata, &metadata)
+        {
+            Ok(())
+        } else {
+            Err(migration_concurrent_change_diagnostic(
+                &target.relative_path,
+            ))
+        }
+    });
+    if let Err(error) = revalidation {
+        cleanup_migration_transaction(&targets);
+        return Err(error);
+    }
+
+    let mut backed_up = 0usize;
+    for target in &targets {
+        if fs::rename(&target.path, &target.backup_path).is_err() {
+            let rollback = restore_migration_targets(&targets, backed_up, 0);
+            return Err(rollback.unwrap_or_else(|| {
+                migration_write_diagnostic("project.migrate.write_failed", &target.relative_path)
+            }));
+        }
+        backed_up += 1;
+    }
+
+    let mut promoted = 0usize;
+    for (index, target) in targets.iter().enumerate() {
+        #[cfg(not(test))]
+        let _ = index;
+        #[cfg(test)]
+        if matches!(_fault, MigrationWriteFault::Commit(failed) if failed == index) {
+            let rollback = restore_migration_targets(&targets, backed_up, promoted);
+            return Err(rollback.unwrap_or_else(|| {
+                migration_write_diagnostic("project.migrate.write_failed", &target.relative_path)
+            }));
+        }
+        if fs::rename(&target.staged_path, &target.path).is_err() {
+            let rollback = restore_migration_targets(&targets, backed_up, promoted);
+            return Err(rollback.unwrap_or_else(|| {
+                migration_write_diagnostic("project.migrate.write_failed", &target.relative_path)
+            }));
+        }
+        promoted += 1;
+    }
+
+    for target in &targets {
+        if sync_directory(&target.parent).is_err() {
+            let rollback = restore_migration_targets(&targets, backed_up, promoted);
+            return Err(rollback.unwrap_or_else(|| {
+                migration_write_diagnostic("project.migrate.write_failed", &target.relative_path)
+            }));
+        }
+    }
+
+    for target in &targets {
+        fs::remove_file(&target.backup_path).map_err(|_| {
+            migration_write_diagnostic("project.migrate.write_failed", &target.relative_path)
+        })?;
+        fs::remove_dir(&target.transaction_directory).map_err(|_| {
+            migration_write_diagnostic("project.migrate.write_failed", &target.relative_path)
+        })?;
+        sync_directory(&target.parent).map_err(|_| {
+            migration_write_diagnostic("project.migrate.write_failed", &target.relative_path)
+        })?;
+    }
+    Ok(())
+}
+
+fn restore_migration_targets(
+    targets: &[MigrationWriteTarget],
+    backed_up: usize,
+    promoted: usize,
+) -> Option<Diagnostic> {
+    let mut failed = false;
+    for target in targets.iter().take(promoted).rev() {
+        if fs::rename(&target.path, &target.staged_path).is_err() {
+            // The promoted target contains only the already-fsynced migrated
+            // bytes. Removing that exact file is safe when moving it back into
+            // staging is unavailable, and lets the original backup be restored
+            // on platforms whose rename cannot replace an existing file.
+            if fs::remove_file(&target.path).is_err() {
+                failed = true;
+            }
+        }
+    }
+    for target in targets.iter().take(backed_up).rev() {
+        if fs::rename(&target.backup_path, &target.path).is_err() {
+            failed = true;
+        }
+    }
+    for target in targets {
+        if sync_directory(&target.parent).is_err() {
+            failed = true;
+        }
+    }
+    cleanup_migration_transaction(targets);
+    failed.then(|| {
+        migration_write_diagnostic(
+            "project.migrate.rollback_failed",
+            targets
+                .first()
+                .map(|target| target.relative_path.as_str())
+                .unwrap_or("project"),
+        )
+    })
+}
+
+fn cleanup_migration_transaction(targets: &[MigrationWriteTarget]) {
+    for target in targets {
+        let _ = fs::remove_file(&target.staged_path);
+        let _ = fs::remove_file(&target.backup_path);
+        let _ = fs::remove_dir(&target.transaction_directory);
+    }
+}
+
+fn migration_write_diagnostic(code: &str, path: &str) -> Diagnostic {
+    diagnostic(
+        code,
+        path,
+        "the migrated project source could not be written transactionally",
+    )
+}
+
+fn migration_concurrent_change_diagnostic(path: &str) -> Diagnostic {
+    diagnostic(
+        "project.migrate.concurrent_change",
+        path,
+        "the project source changed after its migration diff was prepared",
+    )
+}
+
+fn migration_target_permissions_are_safe(metadata: &fs::Metadata) -> bool {
+    metadata.is_file() && !metadata.permissions().readonly()
+}
+
+#[cfg(unix)]
+fn same_migration_permissions(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    left.permissions().mode() == right.permissions().mode()
+}
+
+#[cfg(not(unix))]
+fn same_migration_permissions(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.permissions().readonly() == right.permissions().readonly()
+}
+
+#[cfg(unix)]
+fn sync_directory(path: &Path) -> io::Result<()> {
+    File::open(path)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_directory(_path: &Path) -> io::Result<()> {
+    Ok(())
 }
 
 fn selected_artifacts(
@@ -5043,6 +5583,42 @@ fn write_success(
     }
 }
 
+fn write_project_migrate_success(
+    report: &ProjectMigrateSuccessReport,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format == OutputFormat::Json {
+        serde_json::to_writer_pretty(&mut *stdout, report)
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout))
+    } else if !report.changed {
+        writeln!(
+            stdout,
+            "project migrate: already uses the plural authoring model"
+        )
+    } else {
+        writeln!(
+            stdout,
+            "project migrate: {}",
+            if report.written {
+                "wrote the reviewed migration"
+            } else {
+                "dry run; pass --write to apply this diff"
+            }
+        )
+        .and_then(|()| writeln!(stdout, "{}", report.diff.trim_end()))
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(_) => {
+            let _ = writeln!(stderr, "registry-serverctl: output could not be written");
+            ExitCode::from(OPERATIONAL_FAILURE_EXIT)
+        }
+    }
+}
+
 fn write_access_explanation(explanation: &Value, stdout: &mut dyn Write) -> io::Result<()> {
     if explanation.get("mode").and_then(Value::as_str) == Some("offline_synthetic") {
         let admitted = explanation["admitted"].as_bool() == Some(true);
@@ -5940,6 +6516,127 @@ mod tests {
         }
     }
 
+    fn migration_transaction_fixture(
+        directory: &TestDirectory,
+    ) -> BTreeMap<String, (Vec<u8>, Vec<u8>)> {
+        let module_directory = directory.path.join("modules/core");
+        fs::create_dir_all(&module_directory).expect("module directory creates");
+        fs::write(
+            directory.path.join("registry.yaml"),
+            b"registry: original\n",
+        )
+        .expect("registry source writes");
+        fs::write(module_directory.join("module.yaml"), b"module: original\n")
+            .expect("module source writes");
+        BTreeMap::from([
+            (
+                "registry.yaml".to_owned(),
+                (
+                    b"registry: original\n".to_vec(),
+                    b"registry: migrated\n".to_vec(),
+                ),
+            ),
+            (
+                "modules/core/module.yaml".to_owned(),
+                (
+                    b"module: original\n".to_vec(),
+                    b"module: migrated\n".to_vec(),
+                ),
+            ),
+        ])
+    }
+
+    fn assert_no_migration_transaction_directories(directory: &TestDirectory) {
+        for parent in [
+            directory.path.as_path(),
+            &directory.path.join("modules/core"),
+        ] {
+            let names = fs::read_dir(parent)
+                .expect("directory is readable")
+                .map(|entry| entry.expect("entry is readable").file_name())
+                .collect::<Vec<_>>();
+            assert!(
+                names.iter().all(|name| !name
+                    .to_string_lossy()
+                    .starts_with(".registry-serverctl-migrate-")),
+                "staging directory remains in {parent:?}: {names:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn project_migration_staging_failure_changes_no_target() {
+        let directory = TestDirectory::create();
+        let files = migration_transaction_fixture(&directory);
+
+        let failure = write_migration_files_with_fault(
+            &directory.path,
+            &files,
+            MigrationWriteFault::Stage(1),
+        )
+        .expect_err("injected staging failure refuses the transaction");
+
+        assert_eq!(failure.code, "project.migrate.write_failed");
+        assert_eq!(
+            fs::read(directory.path.join("registry.yaml")).unwrap(),
+            b"registry: original\n"
+        );
+        assert_eq!(
+            fs::read(directory.path.join("modules/core/module.yaml")).unwrap(),
+            b"module: original\n"
+        );
+        assert_no_migration_transaction_directories(&directory);
+    }
+
+    #[test]
+    fn project_migration_concurrent_change_advances_no_other_target() {
+        let directory = TestDirectory::create();
+        let files = migration_transaction_fixture(&directory);
+
+        let failure = write_migration_files_with_fault(
+            &directory.path,
+            &files,
+            MigrationWriteFault::ConcurrentChange(1),
+        )
+        .expect_err("concurrent source edit refuses the transaction");
+
+        assert_eq!(failure.code, "project.migrate.concurrent_change");
+        // BTree ordering puts the module at index zero and registry at one.
+        assert_eq!(
+            fs::read(directory.path.join("modules/core/module.yaml")).unwrap(),
+            b"module: original\n"
+        );
+        assert_eq!(
+            fs::read(directory.path.join("registry.yaml")).unwrap(),
+            b"concurrent author edit\n"
+        );
+        assert_no_migration_transaction_directories(&directory);
+    }
+
+    #[test]
+    fn project_migration_late_commit_failure_restores_every_target() {
+        let directory = TestDirectory::create();
+        let files = migration_transaction_fixture(&directory);
+
+        let failure = write_migration_files_with_fault(
+            &directory.path,
+            &files,
+            MigrationWriteFault::Commit(1),
+        )
+        .expect_err("injected late commit failure rolls back");
+
+        assert_eq!(failure.code, "project.migrate.write_failed");
+        assert_eq!(
+            fs::read(directory.path.join("registry.yaml")).unwrap(),
+            b"registry: original\n"
+        );
+        assert_eq!(
+            fs::read(directory.path.join("modules/core/module.yaml")).unwrap(),
+            b"module: original\n"
+        );
+        assert_no_migration_transaction_directories(&directory);
+    }
+
     #[test]
     fn public_command_surface_is_explicit() {
         let command = command();
@@ -6101,8 +6798,10 @@ registry:
   id: example-registry
   version: 0.1.0
   defaultLanguage: en
+  canonicalBaseIri: https://example-registry.example.test
 entities:
   - id: record
+    primaryDataset: test-dataset
     route: records
     mutationMode: mutable
     fields:

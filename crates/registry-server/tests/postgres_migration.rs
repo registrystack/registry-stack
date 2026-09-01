@@ -700,7 +700,7 @@ fn compile_variant(variant: Variant, sequence: u64) -> CompiledRegistry {
 
 fn project_bytes(sequence: u64, digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"migration-registry","version":"1","defaultLanguage":"en"}},"package":{{"environment":"local","instanceId":"{INSTANCE}","sequence":{sequence},"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://migration.example.test","title":"Migration Registry","publisher":{{"name":"Migration Publisher"}}}},"dataset":{{"title":"Migration Dataset","owner":"Migration Publisher","status":"active"}}}},"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
+        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"migration-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://migration.example.test"}},"package":{{"environment":"local","instanceId":"{INSTANCE}","sequence":{sequence},"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://migration.example.test","title":"Migration Registry","publisher":{{"id":"migration-registry-authority","name":"Migration Publisher"}}}},"publicService":{{"id":"migration-registry-service","title":"Migration Registry"}},"datasets":[{{"id":"migration-registry","title":"Migration Dataset","owner":"Migration Publisher","status":"active"}}],"dataServices":[{{"id":"migration-registry-data-service","title":"Migration Registry","endpointUrl":"https://migration.example.test","servesDatasets":["migration-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
     )
     .into_bytes()
 }
@@ -717,7 +717,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         r#",{"id":"legacy","type":"string","maxLength":16,"classification":"internal"}"#
     };
     format!(
-        r#"{{"id":"core","version":"1","entities":[{{"id":"asset","route":"assets","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}},{{"id":"rank","type":"int64","classification":"internal"{rank_required}}}{legacy}],"accessProfiles":[{{"id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}}]}}"#
+        r#"{{"id":"core","version":"1","entities":[{{"id":"asset","primaryDataset":"migration-registry","route":"assets","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}},{{"id":"rank","type":"int64","classification":"internal"{rank_required}}}{legacy}],"accessProfiles":[{{"id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}}]}}"#
     )
     .into_bytes()
 }

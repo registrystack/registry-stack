@@ -649,6 +649,7 @@ mod tests {
             })
             .collect();
         CompiledEntity {
+            primary_dataset: None,
             id: "membership".to_owned(),
             route: "memberships".to_owned(),
             mutation_mode: MutationMode::Mutable,

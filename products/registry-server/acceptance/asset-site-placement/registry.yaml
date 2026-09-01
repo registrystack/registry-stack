@@ -2,6 +2,7 @@ apiVersion: registry.registrystack.org/v1alpha1
 kind: RegistryProject
 registry:
   id: asset-site-placement
+  canonicalBaseIri: "https://asset-site-placement.example.gov"
   version: 0.1.0
   defaultLanguage: en
 package:
@@ -17,19 +18,34 @@ manifestProjection:
     title: Asset Site Placement Catalog
     description: Portable metadata for the asset site placement registry.
     publisher:
+      id: "asset-site-placement-authority"
       name: Asset Site Placement Authority
       iri: https://asset-site-placement.example.gov/authority
-  dataset:
-    title: Asset Site Placement Registry
-    description: Asset placement, site, item, and inspection metadata.
-    owner: Asset Site Placement Authority
-    status: active
+  datasets:
+    -
+      id: "asset-site-placement"
+      title: Asset Site Placement Registry
+      description: Asset placement, site, item, and inspection metadata.
+      owner: Asset Site Placement Authority
+      status: active
+  dataServices:
+    -
+      id: "asset-site-placement-data-service"
+      title: Asset Site Placement Catalog
+      endpointUrl: "https://asset-site-placement.example.gov"
+      servesDatasets:
+        - "asset-site-placement"
+  publicService:
+    id: "asset-site-placement-service"
+    title: Asset Site Placement Catalog
+  distributions: []
 modules:
   - id: asset-site-placement-core
     version: 0.1.0
     digest: sha256:6bfb23a7780219187d3f30fab0a37d51e739bb0a26669e4c162b59c1f502ebf3
 entities:
   - id: asset-item
+    primaryDataset: "asset-site-placement"
     route: assets
     mutationMode: mutable
     batch:
@@ -56,6 +72,7 @@ entities:
         fields:
           - asset-code
   - id: asset-site
+    primaryDataset: "asset-site-placement"
     route: sites
     mutationMode: mutable
     fields:
@@ -74,6 +91,7 @@ entities:
         fields:
           - site-code
   - id: asset-placement
+    primaryDataset: "asset-site-placement"
     route: placements
     mutationMode: mutable
     fields:
@@ -107,6 +125,7 @@ entities:
         startField: valid-from
         endField: valid-to
   - id: inspection-event
+    primaryDataset: "asset-site-placement"
     route: inspections
     mutationMode: create_only
     fields:

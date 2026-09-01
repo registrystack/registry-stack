@@ -218,14 +218,43 @@ from `/v1/registry`, including exact route/profile fields, schemas, selectors,
 reference bindings, and query capabilities.
 
 Domain-semantic entries in `manifestProjection` are optional overlays on the
-configured data model. They can declare localized catalogue text, dataset and
-API metadata, entity concept URIs, identifiers, field concepts, relationship
-roles, and codelist schemes. The compiler refuses overlay entries outside the
-selected access profile and classification ceiling. It does not infer or
-hardcode a domain model.
+configured data model. One project declares one publisher authority, one public
+service, one catalogue, one or more datasets, one or more data services, and
+optional distributions. Every entity names exactly one `primaryDataset`, while
+each data service explicitly lists its nonempty `servesDatasets`. Project-level
+`accessProfile` and `classificationCeiling` values are defaults that a dataset
+may narrow or replace. The compiler resolves every membership and reference
+before generation, and refuses duplicates, missing memberships, and dangling
+dataset, service, or distribution references.
 
-The business-establishments fixture defines businesses, establishments, and dated
-operator assignments. Its local example concept URIs demonstrate semantic metadata
+Generated Manifest and DCAT bytes are one classified publication slice. A
+dataset appears only when its effective access profile matches the governed
+project publication profile and its effective classification ceiling does not
+exceed the governed project ceiling. Services, distributions, public-service
+references, entities, fields, and relationship edges are pruned with that
+slice, so a public artifact cannot disclose a protected dataset by reference.
+
+The singular `dataset` and `dataService` keys are no longer accepted. Preview
+their deterministic migration without writing, then apply the reviewed result:
+
+```bash
+registry-serverctl project migrate ./my-registry
+registry-serverctl project migrate ./my-registry --write
+```
+
+The projection can also declare localized catalogue and resource text, entity
+concept URIs, identifiers, field concepts, relationship roles, and codelist
+schemes. Registry Manifest remains the only portable metadata compiler and DCAT
+renderer. Registry Server does not infer or hardcode a domain model.
+Operational references may cross datasets, but Registry Manifest v1 accepts
+portable relationship targets only within the same dataset. Registry Server
+therefore keeps the operational reference valid while omitting that edge from
+the lossy portable projection until Registry Manifest defines cross-dataset
+relationship semantics.
+
+The business-establishments fixture defines two datasets, one data service that
+serves both, one distribution attached to the registered-businesses dataset,
+and entities with explicit primary-dataset membership. Its local example concept URIs demonstrate semantic metadata
 without claiming conformance to an external domain model. It also declares exact
 selectors, a business-to-establishments read path, and a reviewed SQL module that
 counts head offices, branches, production sites, and suspended establishments.

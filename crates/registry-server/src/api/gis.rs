@@ -1135,6 +1135,7 @@ kind: RegistryProject
 registry: {id: gis-test, version: "1", defaultLanguage: en}
 entities:
   - id: service-site
+    primaryDataset: test-dataset
     route: service-sites
     mutationMode: create_only
     geojson: {geometryField: location}

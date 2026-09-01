@@ -523,22 +523,22 @@ fn compiled_lifecycle_registry() -> registry_server::CompiledRegistry {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"request-event-registry","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"request-event-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"asset-site","route":"sites","mutationMode":"create_only","classification":"internal",
+            "id":"asset-site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create_only","classification":"internal",
             "fields":[
               {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
               {"id":"name","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}
             ]
           },{
-            "id":"asset-placement","route":"placements","mutationMode":"mutable","classification":"internal",
+            "id":"asset-placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable","classification":"internal",
             "changeControl":{"requiredFor":["patch"]},
             "fields":[
               {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
               {"id":"site","type":"reference","target":"asset-site","required":true,"classification":"internal"}
             ]
           },{
-            "id":"placement-correction-request","route":"correction-requests","mutationMode":"mutable","classification":"internal",
+            "id":"placement-correction-request","primaryDataset":"test-dataset","route":"correction-requests","mutationMode":"mutable","classification":"internal",
             "fields":[
               {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
               {"id":"placement","type":"reference","target":"asset-placement","required":true,"classification":"internal"},

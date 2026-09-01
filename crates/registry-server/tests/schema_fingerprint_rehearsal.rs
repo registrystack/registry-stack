@@ -376,7 +376,7 @@ fn project_bytes(environment: &str, instance_id: &str, source_revision: &str) ->
         r#"{{
   "apiVersion": "registry.registrystack.org/v1alpha1",
   "kind": "RegistryProject",
-  "registry": {{"id": "rehearsal-registry", "version": "1", "defaultLanguage": "en"}},
+  "registry": {{"id": "rehearsal-registry", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"}},
   "package": {{
     "environment": "{environment}",
     "instanceId": "{instance_id}",
@@ -399,6 +399,7 @@ fn project_bytes(environment: &str, instance_id: &str, source_revision: &str) ->
   }},
   "entities": [{{
     "id": "case",
+    "primaryDataset": "test-dataset",
     "route": "cases",
     "mutationMode": "create_only",
     "fields": [{{

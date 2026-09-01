@@ -18,6 +18,7 @@ kind: RegistryProject
 registry: {id: action-admission, version: "1", defaultLanguage: en}
 entities:
   - id: case
+    primaryDataset: test-dataset
     route: cases
     mutationMode: mutable
     classification: restricted

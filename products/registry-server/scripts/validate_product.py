@@ -607,9 +607,16 @@ def validate_fixture(errors: list[str]) -> None:
     if document.get("apiVersion") != "registry.registrystack.org/v1alpha1" or document.get("kind") != "RegistryProject":
         errors.append("asset fixture: must identify the strict Registry Project authoring form")
     registry = as_mapping(document.get("registry"), "asset fixture.registry", errors)
-    exact_keys(registry, {"id", "version", "defaultLanguage"}, "asset fixture.registry", errors)
+    exact_keys(
+        registry,
+        {"id", "version", "defaultLanguage", "canonicalBaseIri"},
+        "asset fixture.registry",
+        errors,
+    )
     if registry.get("id") != "asset-site-placement":
         errors.append("asset fixture: wrong non-person project identity")
+    if registry.get("canonicalBaseIri") != "https://asset-site-placement.example.gov":
+        errors.append("asset fixture: canonical base IRI must remain explicitly governed")
     package = as_mapping(document.get("package"), "asset fixture.package", errors)
     exact_keys(
         package,
@@ -638,6 +645,29 @@ def validate_fixture(errors: list[str]) -> None:
     create_only = [item for item in entities if isinstance(item, dict) and item.get("id") == "inspection-event"]
     if len(create_only) != 1 or create_only[0].get("mutationMode") != "create_only":
         errors.append("asset fixture: inspection event must prove create-only configuration")
+    if any(item.get("primaryDataset") != "asset-site-placement" for item in entities if isinstance(item, dict)):
+        errors.append("asset fixture: every entity must resolve to the governed primary dataset")
+    projection = as_mapping(document.get("manifestProjection"), "asset fixture.manifestProjection", errors)
+    exact_keys(
+        projection,
+        {
+            "accessProfile",
+            "classificationCeiling",
+            "catalog",
+            "publicService",
+            "datasets",
+            "dataServices",
+            "distributions",
+        },
+        "asset fixture.manifestProjection",
+        errors,
+    )
+    datasets = as_list(projection.get("datasets"), "asset fixture.manifestProjection.datasets", errors)
+    services = as_list(projection.get("dataServices"), "asset fixture.manifestProjection.dataServices", errors)
+    if [item.get("id") for item in datasets if isinstance(item, dict)] != ["asset-site-placement"]:
+        errors.append("asset fixture: must expose one explicitly identified dataset")
+    if len(services) != 1 or services[0].get("servesDatasets") != ["asset-site-placement"]:
+        errors.append("asset fixture: data service membership must resolve to the governed dataset")
     placement = next((item for item in entities if isinstance(item, dict) and item.get("id") == "asset-placement"), {})
     temporal = placement.get("temporal") if isinstance(placement, dict) else None
     if not isinstance(temporal, dict) or temporal.get("scopeFields") != ["asset"]:

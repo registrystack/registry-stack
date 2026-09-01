@@ -1262,7 +1262,7 @@ fn registry_source() -> String {
     r#"{
 	          "apiVersion":"registry.registrystack.org/v1alpha1",
 	          "kind":"RegistryProject",
-	          "registry":{"id":"read-registry","version":"1","defaultLanguage":"en"},
+	          "registry":{"id":"read-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"widget",
             "route":"widgets",

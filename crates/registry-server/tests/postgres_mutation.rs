@@ -2002,9 +2002,9 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"mutation-registry","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"mutation-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"widget","route":"widgets","mutationMode":"mutable","tombstone":true,"classification":"public",
+            "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","tombstone":true,"classification":"public",
             "constraints":[{"kind":"unique","fields":["label"]}],
             "fields":[
               {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"},
@@ -2018,13 +2018,13 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
               {"id":"widget-tombstoned","trigger":"tombstoned","projection":["label","quantity"]}
             ]
           },{
-            "id":"log","route":"logs","mutationMode":"create_only","classification":"public",
+            "id":"log","primaryDataset":"test-dataset","route":"logs","mutationMode":"create_only","classification":"public",
             "fields":[
               {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"},
               {"id":"message","type":"string","maxLength":128,"required":true,"classification":"public"}
             ]
           },{
-            "id":"archive","route":"archives","mutationMode":"mutable","classification":"public",
+            "id":"archive","primaryDataset":"test-dataset","route":"archives","mutationMode":"mutable","classification":"public",
             "fields":[
               {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"},
               {"id":"name","type":"string","maxLength":128,"required":true,"classification":"public"}

@@ -53,8 +53,10 @@ registry:
   id: startup-http
   version: 1
   defaultLanguage: en
+  canonicalBaseIri: https://authoring.example.test
 entities:
   - id: public-record
+    primaryDataset: test-dataset
     route: public-records
     mutationMode: create_only
     tombstone: false

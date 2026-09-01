@@ -2,6 +2,7 @@ apiVersion: registry.registrystack.org/v1alpha1
 kind: RegistryProject
 registry:
   id: spatial-service-sites
+  canonicalBaseIri: "https://spatial-service-sites.example.gov"
   version: 0.1.0
   defaultLanguage: en
 package:
@@ -17,20 +18,26 @@ manifestProjection:
     title: Service Site Map Catalog
     description: Portable public metadata for synthetic service-site map records.
     publisher:
+      id: "spatial-service-sites-authority"
       name: Service Site Registry Authority
       iri: https://spatial-service-sites.example.gov/authority
-  dataset:
-    title: Service Site Map Registry
-    description: Public service-site labels, zones and CRS84 point locations for map-reader clients.
-    owner: Service Site Registry Authority
-    status: active
-  dataService:
-    id: service-site-map-api
-    iri: https://spatial-service-sites.example.gov/services/registry-api
-    title: Service Site Map API
-    endpointUrl: https://spatial-service-sites.example.gov/v1
-    endpointDescription: https://spatial-service-sites.example.gov/openapi.json
-    conformsTo: https://spec.openapis.org/oas/v3.1.0
+  datasets:
+    -
+      id: "spatial-service-sites"
+      title: Service Site Map Registry
+      description: Public service-site labels, zones and CRS84 point locations for map-reader clients.
+      owner: Service Site Registry Authority
+      status: active
+  dataServices:
+    -
+      id: service-site-map-api
+      iri: https://spatial-service-sites.example.gov/services/registry-api
+      title: Service Site Map API
+      endpointUrl: https://spatial-service-sites.example.gov/v1
+      endpointDescription: https://spatial-service-sites.example.gov/openapi.json
+      conformsTo: https://spec.openapis.org/oas/v3.1.0
+      servesDatasets:
+        - "spatial-service-sites"
   entities:
     - id: service-site
       title: Service site
@@ -43,6 +50,10 @@ manifestProjection:
         - {id: site-code, concepts: [https://example.gov/service-site/code]}
         - {id: label, concepts: [https://example.gov/service-site/label]}
         - {id: zone, concepts: [https://example.gov/service-site/zone]}
+  publicService:
+    id: "spatial-service-sites-service"
+    title: Service Site Map Catalog
+  distributions: []
 modules:
   - id: "spatial-service-sites-core"
     version: "0.1.0"
@@ -50,6 +61,7 @@ modules:
 
 entities:
   - id: service-site
+    primaryDataset: "spatial-service-sites"
     route: service-sites
     mutationMode: mutable
     classification: public

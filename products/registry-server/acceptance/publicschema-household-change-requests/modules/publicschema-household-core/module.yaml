@@ -2,6 +2,7 @@ id: publicschema-household-core
 version: 0.1.0
 entities:
   - id: person
+    primaryDataset: "household-registry"
     route: persons
     mutationMode: mutable
     classification: restricted
@@ -16,6 +17,7 @@ entities:
     constraints:
       - {kind: unique, fields: [person-code]}
   - id: household
+    primaryDataset: "household-registry"
     route: households
     mutationMode: mutable
     classification: restricted
@@ -37,6 +39,7 @@ entities:
     readPaths:
       - {id: people, through: group-membership, to: person, route: people}
   - id: group-membership
+    primaryDataset: "household-registry"
     route: group-memberships
     mutationMode: mutable
     classification: restricted

@@ -8,8 +8,8 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::contract::{
-    EventSource, EventTrigger, FieldTypeSource, ManifestProjectionSource, MutationMode, Operation,
-    PackageIdentitySource, ProvenanceFieldSource,
+    EventSource, EventTrigger, FieldTypeSource, MutationMode, Operation, PackageIdentitySource,
+    ProvenanceFieldSource,
 };
 use crate::diagnostics::Diagnostic;
 use crate::generated_ddl::DdlInventory;
@@ -19,8 +19,8 @@ use crate::model::{
     CompiledActionInventory, CompiledActionRoute, CompiledActionTargetUseSource,
     CompiledChangeRequestMutation, CompiledChangeRequestRetentionMode,
     CompiledChangeRequestTargetBinding, CompiledChangeRequestValue, CompiledEntity,
-    CompiledEventDeliveryInventory, CompiledMetadataInventory, CompiledModuleIdentity,
-    CompiledQueryInventory, CompiledQueryKind, CompiledQueryOperation,
+    CompiledEventDeliveryInventory, CompiledManifestProjection, CompiledMetadataInventory,
+    CompiledModuleIdentity, CompiledQueryInventory, CompiledQueryKind, CompiledQueryOperation,
     CompiledQueryTemporalValueKind, CompiledRevisionKind, CompiledRoute, CompiledRouteInventory,
     HttpMethod,
 };
@@ -74,7 +74,7 @@ pub(crate) struct EffectiveModel<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub package: Option<&'a PackageIdentitySource>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub manifest_projection: Option<&'a ManifestProjectionSource>,
+    pub manifest_projection: Option<&'a CompiledManifestProjection>,
     pub module_order: &'a [String],
     pub module_closure: &'a [CompiledModuleIdentity],
     pub entities: &'a BTreeMap<String, CompiledEntity>,
@@ -92,7 +92,7 @@ pub(crate) fn generate_artifacts(
     version: &str,
     default_language: &str,
     package: Option<&PackageIdentitySource>,
-    manifest_projection: Option<&ManifestProjectionSource>,
+    manifest_projection: Option<&CompiledManifestProjection>,
     module_order: &[String],
     module_closure: &[CompiledModuleIdentity],
     entities: &BTreeMap<String, CompiledEntity>,
@@ -3708,9 +3708,9 @@ mod spatial_tests {
         let project = parse_project_json(br#"{
             "apiVersion":"registry.registrystack.org/v1alpha1",
             "kind":"RegistryProject",
-            "registry":{"id":"spatial-artifacts","version":"1","defaultLanguage":"en"},
+            "registry":{"id":"spatial-artifacts","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://spatial-artifacts.example.test"},
             "entities":[{
-                "id":"site","route":"sites","mutationMode":"mutable",
+                "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable",
                 "geojson":{"geometryField":"location"},
                 "fields":[
                     {"id":"code","type":"string","maxLength":32,"classification":"internal"},

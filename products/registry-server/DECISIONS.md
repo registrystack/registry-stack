@@ -30,6 +30,20 @@
   is optional, so a basic registry is not forced to invent catalogue metadata.
   The server does not maintain a second catalogue model or claim conformance
   that was not explicitly authored.
+- One Registry project may contain several explicitly identified master
+  datasets under one primary publisher authority, public service, and catalogue.
+  Every entity belongs to exactly one primary dataset; data services and
+  distributions carry resolved dataset membership. Dataset-specific access and
+  classification values inherit from explicit project defaults. The compiled
+  Server model projects these resources once into Registry Manifest and owns no
+  parallel DCAT model.
+- An operational reference may cross dataset boundaries when the ordinary
+  compiled model and access checks permit it. Registry Manifest v1 currently
+  requires relationship targets to be entities in the same dataset, so the
+  lossy portable projection intentionally omits cross-dataset relationship
+  edges. First-class portable cross-dataset relationships are deferred until
+  Registry Manifest defines and validates that representation; the omission
+  does not weaken or invalidate the operational relationship.
 - `registry-serverctl init` emits one small inline entity and no empty module.
   Module locks are discovered and refreshed explicitly with `project lock`;
   lock digests still bind every module source and declared SQL asset before a

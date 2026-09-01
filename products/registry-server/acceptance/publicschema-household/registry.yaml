@@ -2,6 +2,7 @@ apiVersion: registry.registrystack.org/v1alpha1
 kind: RegistryProject
 registry:
   id: publicschema-household
+  canonicalBaseIri: "https://publicschema-household.example.gov"
   version: 0.1.0
   defaultLanguage: en
 package:
@@ -21,31 +22,36 @@ manifestProjection:
       en: Portable metadata for household, person, and group membership records.
       fr: Métadonnées portables pour les personnes, les ménages et leur appartenance.
     publisher:
+      id: "publicschema-household-authority"
       name: PublicSchema Household Authority
       iri: https://publicschema-household.example.gov/authority
     conformsTo: [https://www.w3.org/TR/vocab-dcat-3/]
     standards:
       dcat: "3.0"
       jsonSchema: "2020-12"
-  dataset:
-    id: household-registry
-    title:
-      en: PublicSchema Household Registry
-      fr: Registre des ménages PublicSchema
-    description:
-      en: Household, person, and time-bounded group membership metadata.
-      fr: Métadonnées sur les ménages, les personnes et les appartenances limitées dans le temps.
-    owner: PublicSchema Household Authority
-    status: active
-  dataService:
-    id: household-registry-api
-    iri: https://publicschema-household.example.gov/services/registry-api
-    title:
-      en: Household Registry REST API
-      fr: API REST du registre des ménages
-    endpointUrl: https://publicschema-household.example.gov/v1
-    endpointDescription: https://publicschema-household.example.gov/openapi.json
-    conformsTo: https://spec.openapis.org/oas/v3.1.0
+  datasets:
+    -
+      id: household-registry
+      title:
+        en: PublicSchema Household Registry
+        fr: Registre des ménages PublicSchema
+      description:
+        en: Household, person, and time-bounded group membership metadata.
+        fr: Métadonnées sur les ménages, les personnes et les appartenances limitées dans le temps.
+      owner: PublicSchema Household Authority
+      status: active
+  dataServices:
+    -
+      id: household-registry-api
+      iri: https://publicschema-household.example.gov/services/registry-api
+      title:
+        en: Household Registry REST API
+        fr: API REST du registre des ménages
+      endpointUrl: https://publicschema-household.example.gov/v1
+      endpointDescription: https://publicschema-household.example.gov/openapi.json
+      conformsTo: https://spec.openapis.org/oas/v3.1.0
+      servesDatasets:
+        - "household-registry"
   entities:
     - id: person
       title: {en: Person, fr: Personne}
@@ -115,10 +121,16 @@ manifestProjection:
         - {code: female, iri: https://publicschema.org/Sex/female, label: {en: Female, fr: Féminin}}
         - {code: male, iri: https://publicschema.org/Sex/male, label: {en: Male, fr: Masculin}}
         - {code: unknown, iri: https://publicschema.org/Sex/unknown, label: {en: Unknown, fr: Inconnu}}
+  publicService:
+    id: "publicschema-household-service"
+    title:
+      en: PublicSchema Household Registry Catalog
+      fr: Catalogue du registre des ménages PublicSchema
+  distributions: []
 modules:
   - id: publicschema-household-core
     version: 0.1.0
-    digest: sha256:b13240f2ce7d17b18e8cde04289a341a6517d7952f64adaf7a5341eca4aa340b
+    digest: "sha256:d4e1006567136af7e266115b617b4b7956730a468b182681c026ce0d6d401454"
   - id: publicschema-household-demographics
     version: 0.1.0
     digest: sha256:cc40de1b9ede8cb727980022f966da5ced9a26e56853ca3a5b3355ce8aff37d5

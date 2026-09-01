@@ -2049,7 +2049,7 @@ fn spatial_registry_project_source(module_digest: &str) -> String {
         r#"{{
       "apiVersion":"registry.registrystack.org/v1alpha1",
       "kind":"RegistryProject",
-      "registry":{{"id":"spatial-read-registry","version":"1","defaultLanguage":"en"}},
+      "registry":{{"id":"spatial-read-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
       "modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]
     }}"#
     )
@@ -2232,7 +2232,7 @@ fn plain_geojson_registry_source() -> &'static str {
     r#"{
       "apiVersion":"registry.registrystack.org/v1alpha1",
       "kind":"RegistryProject",
-      "registry":{"id":"plain-geojson-registry","version":"1","defaultLanguage":"en"},
+      "registry":{"id":"plain-geojson-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
       "entities":[{
         "id":"plain-site",
         "route":"plain-sites",

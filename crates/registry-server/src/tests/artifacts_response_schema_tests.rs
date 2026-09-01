@@ -725,19 +725,19 @@ fn compiled_registry() -> CompiledRegistry {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"change-request-openapi","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"change-request-openapi","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://change-request-openapi.example.test"},
           "entities":[{
-            "id":"site","route":"sites","mutationMode":"create_only",
+            "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create_only",
             "fields":[{"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"}]
           },{
-            "id":"placement","route":"placements","mutationMode":"mutable",
+            "id":"placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable",
             "changeControl":{"requiredFor":["patch"]},
             "fields":[
               {"id":"site","type":"reference","target":"site","required":true,"classification":"internal"},
               {"id":"label","type":"string","maxLength":64,"classification":"internal"}
             ]
           },{
-            "id":"placement-correction-request","route":"placement-correction-requests","mutationMode":"mutable",
+            "id":"placement-correction-request","primaryDataset":"test-dataset","route":"placement-correction-requests","mutationMode":"mutable",
             "fields":[
               {"id":"placement","type":"reference","target":"placement","required":true,"classification":"internal"},
               {"id":"proposed-site","apiName":"proposedSite","type":"reference","target":"site","required":true,"classification":"internal"}
@@ -802,21 +802,21 @@ fn compiled_action_registry() -> CompiledRegistry {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"action-openapi","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"action-openapi","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://action-openapi.example.test"},
           "entities":[{
-            "id":"household","route":"households","mutationMode":"mutable",
+            "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
             "fields":[
               {"id":"household-code","apiName":"householdCode","type":"string","maxLength":64,"required":true,"classification":"internal"},
               {"id":"contact-person","apiName":"contactPerson","type":"reference","target":"person","classification":"restricted"}
             ]
           },{
-            "id":"person","route":"people","mutationMode":"mutable",
+            "id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable",
             "fields":[
               {"id":"person-code","apiName":"personCode","type":"string","maxLength":64,"required":true,"classification":"restricted"},
               {"id":"legal-name","apiName":"legalName","type":"string","maxLength":160,"required":true,"classification":"restricted"}
             ]
           },{
-            "id":"group-membership","route":"group-memberships","mutationMode":"create_only",
+            "id":"group-membership","primaryDataset":"test-dataset","route":"group-memberships","mutationMode":"create_only",
             "fields":[
               {"id":"person","type":"reference","target":"person","required":true,"classification":"restricted"},
               {"id":"household","type":"reference","target":"household","required":true,"classification":"restricted"}
@@ -895,14 +895,14 @@ fn compiled_asset_result_action_registry() -> CompiledRegistry {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"asset-action-openapi","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"asset-action-openapi","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://asset-action-openapi.example.test"},
           "entities":[{
-            "id":"asset","route":"assets","mutationMode":"create_only",
+            "id":"asset","primaryDataset":"test-dataset","route":"assets","mutationMode":"create_only",
             "fields":[
               {"id":"asset-code","apiName":"assetCode","type":"string","maxLength":64,"required":true,"classification":"internal"}
             ]
           },{
-            "id":"inspection","route":"inspections","mutationMode":"create_only",
+            "id":"inspection","primaryDataset":"test-dataset","route":"inspections","mutationMode":"create_only",
             "fields":[
               {"id":"asset","type":"reference","target":"asset","required":true,"classification":"internal"}
             ]

@@ -832,9 +832,9 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"revision-http-registry","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"revision-http-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"widget","route":"widgets","mutationMode":"mutable","tombstone":true,
+            "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","tombstone":true,
             "classification":"restricted",
             "fields":[
               {"id":"jurisdiction","type":"string","required":true,"maxLength":32,"classification":"internal"},

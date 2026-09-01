@@ -2,6 +2,7 @@ id: household-contact-actions-core
 version: 0.1.0
 entities:
   - id: person
+    primaryDataset: household-contact-actions
     route: persons
     mutationMode: mutable
     classification: restricted
@@ -12,6 +13,7 @@ entities:
     constraints:
       - {kind: unique, fields: [person-code]}
   - id: household
+    primaryDataset: household-contact-actions
     route: households
     mutationMode: mutable
     classification: restricted
@@ -23,6 +25,7 @@ entities:
     constraints:
       - {kind: unique, fields: [household-code]}
   - id: service-center
+    primaryDataset: household-contact-actions
     route: service-centers
     mutationMode: mutable
     classification: restricted
@@ -33,6 +36,7 @@ entities:
     constraints:
       - {kind: unique, fields: [center-code]}
   - id: group-membership
+    primaryDataset: household-contact-actions
     route: group-memberships
     mutationMode: mutable
     classification: restricted

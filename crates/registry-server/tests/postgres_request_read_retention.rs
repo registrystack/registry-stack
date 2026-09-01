@@ -690,17 +690,17 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"request-read-retention","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"request-read-retention","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[
             {
-              "id":"site","route":"sites","mutationMode":"create_only","classification":"internal",
+              "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create_only","classification":"internal",
               "fields":[
                 {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
                 {"id":"name","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}
               ]
             },
             {
-              "id":"placement","route":"placements","mutationMode":"mutable","classification":"internal",
+              "id":"placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable","classification":"internal",
               "changeControl":{"requiredFor":["patch"]},
               "fields":[
                 {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
@@ -708,7 +708,7 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
               ]
             },
             {
-              "id":"correction-request","route":"correction-requests","mutationMode":"mutable","classification":"public",
+              "id":"correction-request","primaryDataset":"test-dataset","route":"correction-requests","mutationMode":"mutable","classification":"public",
               "fields":[
                 {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"public"},
                 {"id":"placement","type":"reference","target":"placement","required":true,"classification":"public"},

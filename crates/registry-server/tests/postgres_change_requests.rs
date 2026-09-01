@@ -2997,17 +2997,17 @@ fn bounded_snapshot_registry() -> registry_server::CompiledRegistry {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"bounded-snapshot-change-request","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"bounded-snapshot-change-request","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[
             {
-              "id":"asset-site","route":"sites","mutationMode":"create_only","classification":"internal",
+              "id":"asset-site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create_only","classification":"internal",
               "fields":[
                 {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
                 {"id":"name","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}
               ]
             },
             {
-              "id":"asset-placement","route":"placements","mutationMode":"mutable","classification":"internal",
+              "id":"asset-placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable","classification":"internal",
               "changeControl":{"requiredFor":["patch"]},
               "fields":[
                 {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
@@ -3016,7 +3016,7 @@ fn bounded_snapshot_registry() -> registry_server::CompiledRegistry {
               ]
             },
             {
-              "id":"correction-request","route":"correction-requests","mutationMode":"mutable","classification":"internal",
+              "id":"correction-request","primaryDataset":"test-dataset","route":"correction-requests","mutationMode":"mutable","classification":"internal",
               "fields":[
                 {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
                 {"id":"placement","type":"reference","target":"asset-placement","required":true,"classification":"internal"},
@@ -3099,17 +3099,17 @@ fn long_logical_id_registry() -> registry_server::CompiledRegistry {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"long-logical-change-request","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"long-logical-change-request","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[
             {
-              "id":"asset-site","route":"sites","mutationMode":"create_only","classification":"internal",
+              "id":"asset-site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create_only","classification":"internal",
               "fields":[
                 {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
                 {"id":"name","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}
               ]
             },
             {
-              "id":"asset-placement","route":"placements","mutationMode":"mutable","classification":"internal",
+              "id":"asset-placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable","classification":"internal",
               "changeControl":{"requiredFor":["patch"]},
               "fields":[
                 {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
@@ -3117,7 +3117,7 @@ fn long_logical_id_registry() -> registry_server::CompiledRegistry {
               ]
             },
             {
-              "id":"placement-correction-request","route":"placement-correction-requests","mutationMode":"mutable","classification":"internal",
+              "id":"placement-correction-request","primaryDataset":"test-dataset","route":"placement-correction-requests","mutationMode":"mutable","classification":"internal",
               "fields":[
                 {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
                 {"id":"placement","type":"reference","target":"asset-placement","required":true,"classification":"internal"},
@@ -3155,10 +3155,10 @@ fn registration_registry() -> registry_server::CompiledRegistry {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"registration-change-request","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"registration-change-request","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[
             {
-              "id":"person","route":"people","mutationMode":"mutable","classification":"internal",
+              "id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable","classification":"internal",
               "changeControl":{"requiredFor":["create"]},
               "fields":[
                 {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
@@ -3166,7 +3166,7 @@ fn registration_registry() -> registry_server::CompiledRegistry {
               ]
             },
             {
-              "id":"membership","route":"memberships","mutationMode":"mutable","classification":"internal",
+              "id":"membership","primaryDataset":"test-dataset","route":"memberships","mutationMode":"mutable","classification":"internal",
               "changeControl":{"requiredFor":["create"]},
               "fields":[
                 {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
@@ -3175,7 +3175,7 @@ fn registration_registry() -> registry_server::CompiledRegistry {
               ]
             },
             {
-              "id":"household","route":"households","mutationMode":"mutable","classification":"internal",
+              "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable","classification":"internal",
               "changeControl":{"requiredFor":["patch"]},
               "fields":[
                 {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
@@ -3184,7 +3184,7 @@ fn registration_registry() -> registry_server::CompiledRegistry {
               ]
             },
             {
-              "id":"registration-request","route":"registration-requests","mutationMode":"mutable","classification":"internal",
+              "id":"registration-request","primaryDataset":"test-dataset","route":"registration-requests","mutationMode":"mutable","classification":"internal",
               "fields":[
                 {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
                 {"id":"household","type":"reference","target":"household","required":true,"classification":"internal"},
@@ -3270,17 +3270,17 @@ fn two_stage_registry() -> registry_server::CompiledRegistry {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"two-stage-change-request","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"two-stage-change-request","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[
             {
-              "id":"asset-site","route":"sites","mutationMode":"create_only","classification":"internal",
+              "id":"asset-site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create_only","classification":"internal",
               "fields":[
                 {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
                 {"id":"name","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}
               ]
             },
             {
-              "id":"asset-placement","route":"placements","mutationMode":"mutable","classification":"internal",
+              "id":"asset-placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable","classification":"internal",
               "changeControl":{"requiredFor":["patch"]},
               "fields":[
                 {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
@@ -3288,7 +3288,7 @@ fn two_stage_registry() -> registry_server::CompiledRegistry {
               ]
             },
             {
-              "id":"correction-request","route":"correction-requests","mutationMode":"mutable","classification":"internal",
+              "id":"correction-request","primaryDataset":"test-dataset","route":"correction-requests","mutationMode":"mutable","classification":"internal",
               "fields":[
                 {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
                 {"id":"placement","type":"reference","target":"asset-placement","required":true,"classification":"internal"},
@@ -3388,17 +3388,17 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"change-request-http-registry","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"change-request-http-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[
             {
-              "id":"asset-site","route":"sites","mutationMode":"create_only","classification":"internal",
+              "id":"asset-site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create_only","classification":"internal",
               "fields":[
                 {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
                 {"id":"name","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}
               ]
             },
             {
-              "id":"asset-placement","route":"placements","mutationMode":"mutable","classification":"internal",
+              "id":"asset-placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable","classification":"internal",
               "changeControl":{"requiredFor":["patch"]},
               "temporal":{"startField":"valid-from","endField":"valid-to","scopeFields":["site"]},
               "constraints":[{
@@ -3415,7 +3415,7 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
               ]
             },
             {
-              "id":"correction-request","route":"correction-requests","mutationMode":"mutable","classification":"internal",
+              "id":"correction-request","primaryDataset":"test-dataset","route":"correction-requests","mutationMode":"mutable","classification":"internal",
               "fields":[
                 {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
                 {"id":"placement","type":"reference","target":"asset-placement","required":true,"classification":"internal"},

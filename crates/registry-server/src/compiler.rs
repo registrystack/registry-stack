@@ -34,7 +34,9 @@ use crate::model::{
     ChangeRequestOperation, CompiledAccessEntry, CompiledAccessInventory,
     CompiledBboxQueryCapability, CompiledChangeControl, CompiledDerivedField,
     CompiledDerivedRelation, CompiledEntity, CompiledEventDelivery, CompiledEventDeliveryInventory,
-    CompiledField, CompiledGeoJsonBinding, CompiledLogicalField, CompiledMetadataEntity,
+    CompiledField, CompiledGeoJsonBinding, CompiledLogicalField, CompiledManifestAuthority,
+    CompiledManifestDataService, CompiledManifestDataset, CompiledManifestDistribution,
+    CompiledManifestProjection, CompiledManifestPublicService, CompiledMetadataEntity,
     CompiledMetadataEntry, CompiledMetadataInventory, CompiledModuleIdentity,
     CompiledQueryFilterField, CompiledQueryFilterOperator, CompiledQueryInventory,
     CompiledQueryKind, CompiledQueryOperation, CompiledQuerySortDirection, CompiledQuerySortField,
@@ -153,12 +155,13 @@ pub fn compile_project_with_assets(
         return Err(CompileFailure::from_errors(diagnostics));
     }
     let ddl = generate_ddl_with_actions(&entities, &physical_names, &action_inventory);
+    let manifest_projection = compile_manifest_projection(project, &entities);
     let artifacts = generate_artifacts(
         &project.registry.id,
         &project.registry.version,
         &project.registry.default_language,
         project.package.as_ref(),
-        project.manifest_projection.as_ref(),
+        manifest_projection.as_ref(),
         &module_order,
         &module_closure,
         &entities,
@@ -187,7 +190,7 @@ pub fn compile_project_with_assets(
         project.registry.version.clone(),
         project.registry.default_language.clone(),
         project.package.clone(),
-        project.manifest_projection.clone(),
+        manifest_projection,
         module_order,
         module_closure,
         entities,
@@ -233,6 +236,12 @@ fn validate_project_header(
         errors,
     );
     validate_language(&project.registry.default_language, errors);
+    nonempty(
+        &project.registry.canonical_base_iri,
+        "project.registry.canonicalBaseIri",
+        "registry.canonical_base_iri.required",
+        errors,
+    );
 
     match (&project.package, profile) {
         (None, CompileProfile::Authoring) => findings.push(Diagnostic::finding(
@@ -289,6 +298,17 @@ fn validate_project_header(
                 errors,
             );
             nonempty(
+                &projection.catalog.publisher.id,
+                "project.manifestProjection.catalog.publisher.id",
+                "manifest_projection.catalog.publisher.id_empty",
+                errors,
+            );
+            validate_id(
+                &projection.catalog.publisher.id,
+                "project.manifestProjection.catalog.publisher.id",
+                errors,
+            );
+            nonempty(
                 &projection.catalog.publisher.name,
                 "project.manifestProjection.catalog.publisher.name",
                 "manifest_projection.catalog.publisher.name_empty",
@@ -301,54 +321,83 @@ fn validate_project_header(
                     errors,
                 );
             }
-            if let Some(description) = projection.dataset.description.as_ref() {
-                validate_projection_text(
-                    description,
-                    "project.manifestProjection.dataset.description",
-                    errors,
-                );
-            }
-            validate_projection_text(
-                &projection.dataset.title,
-                "project.manifestProjection.dataset.title",
+            validate_id(
+                &projection.public_service.id,
+                "project.manifestProjection.publicService.id",
                 errors,
             );
-            if projection
-                .dataset
-                .owner
-                .as_deref()
-                .is_some_and(|value| value.trim().is_empty())
-            {
+            validate_projection_text(
+                &projection.public_service.title,
+                "project.manifestProjection.publicService.title",
+                errors,
+            );
+            if projection.datasets.is_empty() {
                 errors.push(Diagnostic::error(
-                    "manifest_projection.dataset.owner_empty",
-                    "project.manifestProjection.dataset.owner",
-                    "optional Registry Manifest projection text must not be empty",
+                    "manifest_projection.datasets.empty",
+                    "project.manifestProjection.datasets",
+                    "manifestProjection.datasets must contain at least one dataset",
                 ));
             }
-            if let Some(service) = projection.data_service.as_ref() {
-                validate_id(
-                    &service.id,
-                    "project.manifestProjection.dataService.id",
-                    errors,
-                );
-                validate_projection_text(
-                    &service.title,
-                    "project.manifestProjection.dataService.title",
-                    errors,
-                );
+            for (index, dataset) in projection.datasets.iter().enumerate() {
+                let path = format!("project.manifestProjection.datasets[{index}]");
+                validate_id(&dataset.id, &format!("{path}.id"), errors);
+                validate_projection_text(&dataset.title, &format!("{path}.title"), errors);
+                if let Some(description) = dataset.description.as_ref() {
+                    validate_projection_text(description, &format!("{path}.description"), errors);
+                }
+                if dataset
+                    .owner
+                    .as_deref()
+                    .is_some_and(|value| value.trim().is_empty())
+                {
+                    errors.push(Diagnostic::error(
+                        "manifest_projection.dataset.owner_empty",
+                        format!("{path}.owner"),
+                        "optional Registry Manifest projection text must not be empty",
+                    ));
+                }
+                if let Some(access_profile) = dataset.access_profile.as_deref() {
+                    validate_id(access_profile, &format!("{path}.accessProfile"), errors);
+                }
+            }
+            if projection.data_services.is_empty() {
+                errors.push(Diagnostic::error(
+                    "manifest_projection.data_services.empty",
+                    "project.manifestProjection.dataServices",
+                    "manifestProjection.dataServices must contain at least one data service",
+                ));
+            }
+            for (index, service) in projection.data_services.iter().enumerate() {
+                let path = format!("project.manifestProjection.dataServices[{index}]");
+                validate_id(&service.id, &format!("{path}.id"), errors);
+                validate_projection_text(&service.title, &format!("{path}.title"), errors);
                 if let Some(description) = service.description.as_ref() {
-                    validate_projection_text(
-                        description,
-                        "project.manifestProjection.dataService.description",
-                        errors,
-                    );
+                    validate_projection_text(description, &format!("{path}.description"), errors);
                 }
                 nonempty(
                     &service.endpoint_url,
-                    "project.manifestProjection.dataService.endpointUrl",
+                    &format!("{path}.endpointUrl"),
                     "manifest_projection.data_service.endpoint_url_empty",
                     errors,
                 );
+                if service.serves_datasets.is_empty() {
+                    errors.push(Diagnostic::error(
+                        "manifest_projection.data_service.datasets_empty",
+                        format!("{path}.servesDatasets"),
+                        "a data service must serve at least one dataset",
+                    ));
+                }
+            }
+            for (index, distribution) in projection.distributions.iter().enumerate() {
+                let path = format!("project.manifestProjection.distributions[{index}]");
+                validate_id(&distribution.id, &format!("{path}.id"), errors);
+                validate_id(&distribution.dataset, &format!("{path}.dataset"), errors);
+                if let Some(title) = distribution.title.as_ref() {
+                    validate_projection_text(title, &format!("{path}.title"), errors);
+                }
+                if let Some(description) = distribution.description.as_ref() {
+                    validate_projection_text(description, &format!("{path}.description"), errors);
+                }
             }
         }
     }
@@ -392,33 +441,189 @@ fn validate_manifest_projection(
     let Some(projection) = project.manifest_projection.as_ref() else {
         return;
     };
-    let selected_profiles = entities
-        .values()
-        .filter_map(|entity| entity.access_profiles.get(&projection.access_profile))
-        .collect::<Vec<_>>();
-    if selected_profiles.is_empty() {
-        errors.push(Diagnostic::error(
-            "manifest_projection.access_profile.unknown",
-            "project.manifestProjection.accessProfile",
-            "the Registry Manifest projection selects an unknown access profile",
-        ));
+    let mut dataset_ids = BTreeSet::new();
+    for (index, dataset) in projection.datasets.iter().enumerate() {
+        if !dataset_ids.insert(dataset.id.as_str()) {
+            errors.push(Diagnostic::error(
+                "manifest_projection.dataset.duplicate",
+                format!("project.manifestProjection.datasets[{index}].id"),
+                "a dataset identifier is duplicated",
+            ));
+        }
     }
-    if selected_profiles
+    let datasets = projection
+        .datasets
         .iter()
-        .any(|profile| profile.anonymous != selected_profiles[0].anonymous)
-    {
-        errors.push(Diagnostic::error(
-            "manifest_projection.access_profile.ambiguous",
-            "project.manifestProjection.accessProfile",
-            "the Registry Manifest projection access profile must have one disclosure mode",
-        ));
+        .map(|dataset| (dataset.id.as_str(), dataset))
+        .collect::<BTreeMap<_, _>>();
+
+    let mut members = BTreeMap::<&str, BTreeSet<&str>>::new();
+    for entity in entities.values() {
+        let path = format!("project.entities[{}].primaryDataset", entity.id);
+        let Some(dataset_id) = entity.primary_dataset.as_deref() else {
+            errors.push(Diagnostic::error(
+                "manifest_projection.entity.primary_dataset_required",
+                path,
+                "every exposed entity must name one primaryDataset",
+            ));
+            continue;
+        };
+        if dataset_id.is_empty() {
+            continue;
+        }
+        if !datasets.contains_key(dataset_id) {
+            errors.push(Diagnostic::error(
+                "manifest_projection.entity.dataset_dangling",
+                path,
+                "entity primaryDataset must reference manifestProjection.datasets[]",
+            ));
+            continue;
+        }
+        members.entry(dataset_id).or_default().insert(&entity.id);
+    }
+    for (index, dataset) in projection.datasets.iter().enumerate() {
+        if !members.contains_key(dataset.id.as_str()) {
+            errors.push(Diagnostic::error(
+                "manifest_projection.dataset.entities_empty",
+                format!("project.manifestProjection.datasets[{index}]"),
+                "every dataset must contain at least one exposed entity",
+            ));
+        }
+        let effective_profile = dataset
+            .access_profile
+            .as_deref()
+            .unwrap_or(&projection.access_profile);
+        let selected_profiles = entities
+            .values()
+            .filter(|entity| entity.primary_dataset.as_deref() == Some(dataset.id.as_str()))
+            .filter_map(|entity| entity.access_profiles.get(effective_profile))
+            .collect::<Vec<_>>();
+        if selected_profiles.is_empty() {
+            let path = dataset.access_profile.as_ref().map_or_else(
+                || "project.manifestProjection.accessProfile".to_owned(),
+                |_| format!("project.manifestProjection.datasets[{index}].accessProfile"),
+            );
+            errors.push(Diagnostic::error(
+                "manifest_projection.dataset.access_profile_unknown",
+                path,
+                "the effective dataset access profile is not exposed by any member entity",
+            ));
+        } else if selected_profiles
+            .iter()
+            .any(|profile| profile.anonymous != selected_profiles[0].anonymous)
+        {
+            let path = dataset.access_profile.as_ref().map_or_else(
+                || "project.manifestProjection.accessProfile".to_owned(),
+                |_| format!("project.manifestProjection.datasets[{index}].accessProfile"),
+            );
+            errors.push(Diagnostic::error(
+                "manifest_projection.dataset.access_profile_ambiguous",
+                path,
+                "the effective dataset access profile must have one disclosure mode",
+            ));
+        }
+    }
+
+    let mut data_service_ids = BTreeSet::new();
+    for (index, service) in projection.data_services.iter().enumerate() {
+        if !data_service_ids.insert(service.id.as_str()) {
+            errors.push(Diagnostic::error(
+                "manifest_projection.data_service.duplicate",
+                format!("project.manifestProjection.dataServices[{index}].id"),
+                "a data service identifier is duplicated",
+            ));
+        }
+        let mut served = BTreeSet::new();
+        for (dataset_index, dataset_id) in service.serves_datasets.iter().enumerate() {
+            let path = format!(
+                "project.manifestProjection.dataServices[{index}].servesDatasets[{dataset_index}]"
+            );
+            if !served.insert(dataset_id.as_str()) {
+                errors.push(Diagnostic::error(
+                    "manifest_projection.data_service.dataset_duplicate",
+                    path,
+                    "servesDatasets must not contain duplicate dataset references",
+                ));
+            } else if !datasets.contains_key(dataset_id.as_str()) {
+                errors.push(Diagnostic::error(
+                    "manifest_projection.data_service.dataset_dangling",
+                    path,
+                    "servesDatasets must reference manifestProjection.datasets[]",
+                ));
+            }
+        }
+    }
+
+    let mut distribution_ids = BTreeSet::new();
+    for (index, distribution) in projection.distributions.iter().enumerate() {
+        let path = format!("project.manifestProjection.distributions[{index}]");
+        if !distribution_ids.insert(distribution.id.as_str()) {
+            errors.push(Diagnostic::error(
+                "manifest_projection.distribution.duplicate",
+                format!("{path}.id"),
+                "a distribution identifier is duplicated",
+            ));
+        }
+        if !datasets.contains_key(distribution.dataset.as_str()) {
+            errors.push(Diagnostic::error(
+                "manifest_projection.distribution.dataset_dangling",
+                format!("{path}.dataset"),
+                "distribution dataset must reference manifestProjection.datasets[]",
+            ));
+        }
+        if let Some(service_id) = distribution.access_service.as_deref() {
+            let service = projection
+                .data_services
+                .iter()
+                .find(|service| service.id == service_id);
+            match service {
+                None => errors.push(Diagnostic::error(
+                    "manifest_projection.distribution.access_service_dangling",
+                    format!("{path}.accessService"),
+                    "distribution accessService must reference manifestProjection.dataServices[]",
+                )),
+                Some(service)
+                    if !service
+                        .serves_datasets
+                        .iter()
+                        .any(|dataset| dataset == &distribution.dataset) =>
+                {
+                    errors.push(Diagnostic::error(
+                        "manifest_projection.distribution.service_coverage",
+                        format!("{path}.accessService"),
+                        "distribution accessService must serve the distribution dataset",
+                    ));
+                }
+                _ => {}
+            }
+        }
+        if distribution.access_service.is_none()
+            && distribution.access_url.is_none()
+            && distribution.download_url.is_none()
+        {
+            errors.push(Diagnostic::error(
+                "manifest_projection.distribution.location_missing",
+                path,
+                "a distribution must declare accessService, accessUrl, or downloadUrl",
+            ));
+        }
     }
 
     let visible = entities
         .values()
-        .filter(|entity| entity.classification <= projection.classification_ceiling)
         .filter_map(|entity| {
-            let profile = entity.access_profiles.get(&projection.access_profile)?;
+            let dataset = datasets.get(entity.primary_dataset.as_deref()?)?;
+            let access_profile = dataset
+                .access_profile
+                .as_deref()
+                .unwrap_or(&projection.access_profile);
+            let ceiling = dataset
+                .classification_ceiling
+                .unwrap_or(projection.classification_ceiling);
+            if entity.classification > ceiling {
+                return None;
+            }
+            let profile = entity.access_profiles.get(access_profile)?;
             (profile.operations.contains(&Operation::Get)
                 || profile.operations.contains(&Operation::List))
             .then(|| {
@@ -426,7 +631,7 @@ fn validate_manifest_projection(
                     .fields
                     .values()
                     .filter(|field| profile.readable_fields.contains(&field.id))
-                    .filter(|field| field.classification <= projection.classification_ceiling)
+                    .filter(|field| field.classification <= ceiling)
                     .map(|field| (field.id.as_str(), field))
                     .collect::<BTreeMap<_, _>>();
                 (entity.id.as_str(), (entity, fields))
@@ -562,6 +767,152 @@ fn validate_manifest_projection(
             }
         }
     }
+}
+
+fn compile_manifest_projection(
+    project: &RegistryProject,
+    entities: &BTreeMap<String, CompiledEntity>,
+) -> Option<CompiledManifestProjection> {
+    let projection = project.manifest_projection.as_ref()?;
+    let canonical_base_iri = project.registry.canonical_base_iri.clone();
+    let entity_datasets = entities
+        .values()
+        .map(|entity| {
+            (
+                entity.id.clone(),
+                entity
+                    .primary_dataset
+                    .clone()
+                    .expect("compiled entity dataset membership was validated"),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let datasets = projection
+        .datasets
+        .iter()
+        .map(|source| {
+            let members = entity_datasets
+                .iter()
+                .filter_map(|(entity, dataset)| (dataset == &source.id).then_some(entity.clone()))
+                .collect();
+            (
+                source.id.clone(),
+                CompiledManifestDataset {
+                    iri: compiled_resource_iri(
+                        &canonical_base_iri,
+                        "datasets",
+                        &source.id,
+                        source.iri.as_deref(),
+                    ),
+                    source: source.clone(),
+                    effective_access_profile: source
+                        .access_profile
+                        .clone()
+                        .unwrap_or_else(|| projection.access_profile.clone()),
+                    effective_classification_ceiling: source
+                        .classification_ceiling
+                        .unwrap_or(projection.classification_ceiling),
+                    entities: members,
+                },
+            )
+        })
+        .collect();
+    let data_services = projection
+        .data_services
+        .iter()
+        .map(|source| {
+            (
+                source.id.clone(),
+                CompiledManifestDataService {
+                    iri: compiled_resource_iri(
+                        &canonical_base_iri,
+                        "data-services",
+                        &source.id,
+                        source.iri.as_deref(),
+                    ),
+                    source: source.clone(),
+                    serves_datasets: source.serves_datasets.iter().cloned().collect(),
+                },
+            )
+        })
+        .collect();
+    let distributions = projection
+        .distributions
+        .iter()
+        .map(|source| {
+            (
+                source.id.clone(),
+                CompiledManifestDistribution {
+                    iri: compiled_resource_iri(
+                        &canonical_base_iri,
+                        "distributions",
+                        &source.id,
+                        source.iri.as_deref(),
+                    ),
+                    source: source.clone(),
+                    dataset: source.dataset.clone(),
+                    access_service: source.access_service.clone(),
+                },
+            )
+        })
+        .collect();
+    Some(CompiledManifestProjection {
+        canonical_base_iri: canonical_base_iri.clone(),
+        access_profile: projection.access_profile.clone(),
+        classification_ceiling: projection.classification_ceiling,
+        catalog: projection.catalog.clone(),
+        primary_authority: CompiledManifestAuthority {
+            id: projection.catalog.publisher.id.clone(),
+            iri: compiled_resource_iri(
+                &canonical_base_iri,
+                "authorities",
+                &projection.catalog.publisher.id,
+                projection.catalog.publisher.iri.as_deref(),
+            ),
+            name: projection.catalog.publisher.name.clone(),
+            authority_type: projection.catalog.publisher.authority_type.clone(),
+        },
+        public_service: CompiledManifestPublicService {
+            source: projection.public_service.clone(),
+            iri: compiled_resource_iri(
+                &canonical_base_iri,
+                "public-services",
+                &projection.public_service.id,
+                None,
+            ),
+            competent_authority: projection.catalog.publisher.id.clone(),
+            produces: projection
+                .datasets
+                .iter()
+                .map(|dataset| dataset.id.clone())
+                .collect(),
+            data_services: projection
+                .data_services
+                .iter()
+                .map(|service| service.id.clone())
+                .collect(),
+        },
+        datasets,
+        data_services,
+        distributions,
+        entity_datasets,
+        entities: projection.entities.clone(),
+        vocabularies: projection.vocabularies.clone(),
+    })
+}
+
+fn compiled_resource_iri(
+    canonical_base_iri: &str,
+    collection: &str,
+    id: &str,
+    explicit: Option<&str>,
+) -> String {
+    explicit.map(str::to_owned).unwrap_or_else(|| {
+        format!(
+            "{}/{collection}/{id}",
+            canonical_base_iri.trim_end_matches('/')
+        )
+    })
 }
 
 fn order_modules(
@@ -1339,6 +1690,12 @@ fn validate_entities(
     let mut event_ids = BTreeSet::new();
     for entity in entities.values() {
         validate_id(&entity.id, "entities[].id", errors);
+        nonempty(
+            &entity.primary_dataset,
+            "entities[].primaryDataset",
+            "manifest_projection.entity.primary_dataset_required",
+            errors,
+        );
         validate_id(&entity.route, "entities[].route", errors);
         if !routes.insert(entity.route.as_str()) {
             errors.push(Diagnostic::error(
@@ -3719,6 +4076,7 @@ fn compile_entities(
             source.id.clone(),
             CompiledEntity {
                 id: source.id.clone(),
+                primary_dataset: Some(source.primary_dataset.clone()),
                 route: source.route.clone(),
                 mutation_mode: source.mutation_mode.clone(),
                 tombstone: source.tombstone,

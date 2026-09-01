@@ -1,3 +1,15 @@
+# Breaking authoring change: plural catalogue resources
+
+`manifestProjection.dataset` and `manifestProjection.dataService` were removed.
+Projects now declare `registry.canonicalBaseIri`, publisher `id`, one
+`publicService`, plural `datasets`, plural `dataServices` with nonempty
+`servesDatasets`, optional `distributions`, and one `primaryDataset` on every
+entity. Run `registry-serverctl project migrate PROJECT` to review the exact
+rewrite, then repeat it with `--write` only after approving the proposed
+`<registry-id>-authority` and `<registry-id>-service` identifiers. The migration
+preserves an explicit legacy dataset id and otherwise preserves the old
+effective fallback to `registry.id`.
+
 # Corrections and historical queries
 
 Registry Server retains complete stored-record revisions. A successful mutation

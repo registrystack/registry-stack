@@ -2552,9 +2552,9 @@ mod tests {
                 br#"{
                   "apiVersion":"registry.registrystack.org/v1alpha1",
                   "kind":"RegistryProject",
-                  "registry":{"id":"geojson-guard","version":"1","defaultLanguage":"en"},
+                  "registry":{"id":"geojson-guard","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
                   "entities":[{
-                    "id":"site","route":"sites","mutationMode":"mutable","classification":"public",
+                    "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"public",
                     "fields":[
                       {"id":"code","type":"string","required":true,"maxLength":32,"classification":"public"},
                       {"id":"location","type":"crs84-point","precision":6,"required":false,"classification":"public"}
@@ -2602,9 +2602,9 @@ mod tests {
                 br#"{
                   "apiVersion":"registry.registrystack.org/v1alpha1",
                   "kind":"RegistryProject",
-                  "registry":{"id":"spatial-span-guard","version":"1","defaultLanguage":"en"},
+                  "registry":{"id":"spatial-span-guard","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
                   "entities":[{
-                    "id":"site","route":"sites","mutationMode":"mutable","classification":"public",
+                    "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"public",
                     "fields":[
                       {"id":"code","type":"string","required":true,"maxLength":32,"classification":"public"},
                       {"id":"location","type":"crs84-point","precision":6,"required":false,"classification":"public"}
@@ -2685,9 +2685,9 @@ mod tests {
                 br#"{
                   "apiVersion":"registry.registrystack.org/v1alpha1",
                   "kind":"RegistryProject",
-                  "registry":{"id":"plan-guard","version":"1","defaultLanguage":"en"},
+                  "registry":{"id":"plan-guard","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
                   "entities":[{
-                    "id":"case","route":"cases","mutationMode":"mutable","classification":"public",
+                    "id":"case","primaryDataset":"test-dataset","route":"cases","mutationMode":"mutable","classification":"public",
                     "fields":[
                       {"id":"label","type":"string","required":true,"maxLength":32,"classification":"public"},
                       {"id":"secret","type":"string","required":true,"maxLength":32,"classification":"restricted"}
@@ -2951,9 +2951,9 @@ mod tests {
                 br#"{
                   "apiVersion":"registry.registrystack.org/v1alpha1",
                   "kind":"RegistryProject",
-                  "registry":{"id":"spatial-relation-guard","version":"1","defaultLanguage":"en"},
+                  "registry":{"id":"spatial-relation-guard","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
                   "entities":[{
-                    "id":"site","route":"sites","mutationMode":"mutable","classification":"public",
+                    "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"public",
                     "fields":[
                       {"id":"code","type":"string","required":true,"maxLength":32,"classification":"public"},
                       {"id":"location","type":"crs84-point","precision":6,"required":false,"classification":"public"}

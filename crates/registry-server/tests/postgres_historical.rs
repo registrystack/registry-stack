@@ -793,9 +793,9 @@ fn compiled_registry_for_temporal_type(temporal_type: &str) -> registry_server::
     let project = r#"{
       "apiVersion":"registry.registrystack.org/v1alpha1",
       "kind":"RegistryProject",
-      "registry":{"id":"history-demo","version":"1","defaultLanguage":"en"},
+      "registry":{"id":"history-demo","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
       "entities":[{
-        "id":"membership","route":"memberships","mutationMode":"mutable","classification":"internal",
+        "id":"membership","primaryDataset":"test-dataset","route":"memberships","mutationMode":"mutable","classification":"internal",
         "fields":[
           {"id":"household-code","type":"string","maxLength":32,"required":true,"classification":"internal"},
           {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"internal"},

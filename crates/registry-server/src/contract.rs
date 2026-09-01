@@ -42,6 +42,12 @@ pub struct RegistryIdentitySource {
     pub id: String,
     pub version: String,
     pub default_language: String,
+    // Keep omissions in the compiler's field-specific diagnostic domain while
+    // telling schemars not to inherit serde's compatibility default. Published
+    // schemas therefore structurally require a non-null string member.
+    #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(!default))]
+    pub canonical_base_iri: String,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -61,9 +67,11 @@ pub struct ManifestProjectionSource {
     pub access_profile: String,
     pub classification_ceiling: Classification,
     pub catalog: ManifestProjectionCatalogSource,
-    pub dataset: ManifestProjectionDatasetSource,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub data_service: Option<ManifestProjectionDataServiceSource>,
+    pub public_service: ManifestProjectionPublicServiceSource,
+    pub datasets: Vec<ManifestProjectionDatasetSource>,
+    pub data_services: Vec<ManifestProjectionDataServiceSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub distributions: Vec<ManifestProjectionDistributionSource>,
     #[serde(default)]
     pub entities: Vec<ManifestProjectionEntitySource>,
     #[serde(default)]
@@ -121,6 +129,7 @@ pub struct ManifestProjectionApplicationProfileSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ManifestProjectionPublisherSource {
+    pub id: String,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub iri: Option<String>,
@@ -132,8 +141,11 @@ pub struct ManifestProjectionPublisherSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ManifestProjectionDatasetSource {
+    pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
+    pub iri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
     pub title: ManifestProjectionTextSource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<ManifestProjectionTextSource>,
@@ -147,6 +159,18 @@ pub struct ManifestProjectionDatasetSource {
     pub applicable_legislation: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spatial_coverage: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub classification_ceiling: Option<Classification>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ManifestProjectionPublicServiceSource {
+    pub id: String,
+    pub title: ManifestProjectionTextSource,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -164,6 +188,31 @@ pub struct ManifestProjectionDataServiceSource {
     pub endpoint_description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conforms_to: Option<String>,
+    pub serves_datasets: Vec<String>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ManifestProjectionDistributionSource {
+    pub id: String,
+    pub dataset: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_service: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<ManifestProjectionTextSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<ManifestProjectionTextSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub iri: Option<String>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -288,6 +337,12 @@ pub struct ModuleAssetSource {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct EntitySource {
     pub id: String,
+    // See RegistryIdentitySource::canonical_base_iri. New authoring schemas
+    // require this member; serde's empty compatibility value only exists so
+    // compilation can report the stable membership diagnostic.
+    #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(!default))]
+    pub primary_dataset: String,
     pub route: String,
     pub mutation_mode: MutationMode,
     #[serde(default)]
@@ -2165,7 +2220,13 @@ pub enum EventTrigger {
 }
 
 pub fn parse_project_json(bytes: &[u8]) -> Result<RegistryProject, CompileFailure> {
-    parse_json(bytes, "project")
+    match parse_json(bytes, "project") {
+        Ok(project) => Ok(project),
+        Err(failure) => Err(removed_singular_projection_diagnostics(
+            parse_json_strict(bytes).ok().as_ref(),
+        )
+        .unwrap_or(failure)),
+    }
 }
 
 pub fn parse_module_json(bytes: &[u8]) -> Result<RegistryModule, CompileFailure> {
@@ -2173,7 +2234,33 @@ pub fn parse_module_json(bytes: &[u8]) -> Result<RegistryModule, CompileFailure>
 }
 
 pub fn parse_project_yaml(bytes: &[u8]) -> Result<RegistryProject, CompileFailure> {
-    parse_yaml(bytes, "project")
+    match parse_yaml(bytes, "project") {
+        Ok(project) => Ok(project),
+        Err(failure) => {
+            let value = serde_norway::from_slice::<Value>(bytes).ok();
+            Err(removed_singular_projection_diagnostics(value.as_ref()).unwrap_or(failure))
+        }
+    }
+}
+
+fn removed_singular_projection_diagnostics(value: Option<&Value>) -> Option<CompileFailure> {
+    let projection = value?.as_object()?.get("manifestProjection")?.as_object()?;
+    let mut diagnostics = Vec::new();
+    if projection.contains_key("dataset") {
+        diagnostics.push(Diagnostic::error(
+            "manifest_projection.dataset.removed",
+            "project.manifestProjection.dataset",
+            "manifestProjection.dataset was removed; use manifestProjection.datasets[] or run `registry-serverctl project migrate <PROJECT>`",
+        ));
+    }
+    if projection.contains_key("dataService") {
+        diagnostics.push(Diagnostic::error(
+            "manifest_projection.data_service.removed",
+            "project.manifestProjection.dataService",
+            "manifestProjection.dataService was removed; use manifestProjection.dataServices[] or run `registry-serverctl project migrate <PROJECT>`",
+        ));
+    }
+    (!diagnostics.is_empty()).then(|| CompileFailure::from_errors(diagnostics))
 }
 
 pub fn parse_module_yaml(bytes: &[u8]) -> Result<RegistryModule, CompileFailure> {

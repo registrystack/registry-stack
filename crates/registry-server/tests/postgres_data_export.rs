@@ -351,7 +351,7 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
     let source = json!({
         "apiVersion":"registry.registrystack.org/v1alpha1",
         "kind":"RegistryProject",
-        "registry":{"id":"data-export-registry","version":"1","defaultLanguage":"en"},
+        "registry":{"id":"data-export-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
         "entities":[{
             "id":"entry", "route":"entries", "mutationMode":"create_only",
             "batch":{"maximumItems":60,"maximumBytes":131072},

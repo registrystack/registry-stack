@@ -36,8 +36,10 @@ registry:
   id: read-surface
   version: 0.1.0
   defaultLanguage: en
+  canonicalBaseIri: https://authoring.example.test
 entities:
   - id: case
+    primaryDataset: test-dataset
     route: cases
     mutationMode: mutable
     tombstone: true
@@ -48,6 +50,7 @@ entities:
       - {id: secret, type: string, required: true, maxLength: 100, classification: restricted}
       - {id: jurisdiction, type: string, required: true, maxLength: 32, classification: internal}
   - id: protected-note
+    primaryDataset: test-dataset
     route: notes
     mutationMode: create_only
     classification: restricted
@@ -90,8 +93,10 @@ registry:
   id: lookup-path-surface
   version: 0.1.0
   defaultLanguage: en
+  canonicalBaseIri: https://authoring.example.test
 entities:
   - id: household
+    primaryDataset: test-dataset
     route: households
     mutationMode: mutable
     tombstone: true
@@ -108,6 +113,7 @@ entities:
     readPaths:
       - {id: people, through: membership, to: person, route: people}
   - id: membership
+    primaryDataset: test-dataset
     route: memberships
     mutationMode: mutable
     classification: restricted
@@ -115,6 +121,7 @@ entities:
       - {id: household, type: reference, target: household, required: true, classification: restricted}
       - {id: person, type: reference, target: person, required: true, classification: restricted}
   - id: person
+    primaryDataset: test-dataset
     route: people
     mutationMode: mutable
     classification: restricted
@@ -170,8 +177,10 @@ registry:
   id: derived-discovery
   version: 0.1.0
   defaultLanguage: en
+  canonicalBaseIri: https://authoring.example.test
 entities:
   - id: benefit-record
+    primaryDataset: test-dataset
     route: benefit-records
     mutationMode: mutable
     classification: restricted
@@ -203,8 +212,10 @@ registry:
   id: discovery-matrix
   version: 1
   defaultLanguage: en
+  canonicalBaseIri: https://authoring.example.test
 entities:
   - id: public-record
+    primaryDataset: test-dataset
     route: public-records
     mutationMode: mutable
     classification: public
@@ -212,6 +223,7 @@ entities:
       - {id: label, type: string, required: true, maxLength: 100, classification: public}
       - {id: restricted-canary-field, type: string, maxLength: 100, classification: restricted}
   - id: protected-ledger
+    primaryDataset: test-dataset
     route: classified-records
     mutationMode: mutable
     classification: restricted
@@ -268,8 +280,10 @@ registry:
   id: logical-schema-surface
   version: 1
   defaultLanguage: en
+  canonicalBaseIri: https://authoring.example.test
 entities:
   - id: logical-record
+    primaryDataset: test-dataset
     route: logical-records
     mutationMode: mutable
     classification: public
@@ -297,6 +311,7 @@ registry:
   id: metadata-labels
   version: 1
   defaultLanguage: en
+  canonicalBaseIri: https://authoring.example.test
 manifestProjection:
   accessProfile: operator
   classificationCeiling: public
@@ -311,6 +326,7 @@ manifestProjection:
         - {field: display-token, kind: display}
 entities:
   - id: permit
+    primaryDataset: test-dataset
     route: permits
     mutationMode: mutable
     classification: public
@@ -332,6 +348,7 @@ entities:
       - {kind: unique, fields: [import-source, source-record-id]}
       - {kind: temporal-non-overlap, scopeFields: [permit-number], startField: valid-from, endField: valid-to}
   - id: inspection
+    primaryDataset: test-dataset
     route: inspections
     mutationMode: mutable
     classification: public
@@ -352,12 +369,14 @@ entities:
       - {kind: unique, fields: [import-source, source-record-id]}
       - {kind: temporal-non-overlap, scopeFields: [inspection-code], startField: valid-from, endField: valid-to}
   - id: finding
+    primaryDataset: test-dataset
     route: findings
     mutationMode: mutable
     classification: public
     fields:
       - {id: inspection, type: reference, target: inspection, required: true, classification: public}
   - id: certificate
+    primaryDataset: test-dataset
     route: certificates
     mutationMode: mutable
     classification: public
@@ -405,8 +424,10 @@ registry:
   id: spatial-read-surface
   version: 0.1.0
   defaultLanguage: en
+  canonicalBaseIri: https://authoring.example.test
 entities:
   - id: site
+    primaryDataset: test-dataset
     route: sites
     mutationMode: mutable
     classification: public
@@ -490,6 +511,7 @@ kind: RegistryProject
 registry: {id: snapshot-surface, version: 1, defaultLanguage: en}
 entities:
   - id: assignment
+    primaryDataset: test-dataset
     route: assignments
     mutationMode: mutable
     tombstone: true

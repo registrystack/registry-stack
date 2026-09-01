@@ -1030,18 +1030,18 @@ fn project_bytes_for_variant(variant: Variant, sequence: u64) -> Vec<u8> {
         r#"{{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{{"id":"{PACKAGE_ID}","version":"1","defaultLanguage":"en"}},
+          "registry":{{"id":"{PACKAGE_ID}","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
           "package":{{"environment":"local","instanceId":"{INSTANCE_ID}","sequence":{sequence},"sourceRevision":"{SOURCE_REVISION}"}},
           "entities":[
             {{
-              "id":"asset-site","route":"sites","mutationMode":"create_only","classification":"internal",
+              "id":"asset-site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create_only","classification":"internal",
               "fields":[
                 {{"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}},
                 {{"id":"name","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}}{site_extra_field}
               ]
             }},
             {{
-              "id":"asset-placement","route":"placements","mutationMode":"mutable","classification":"internal",
+              "id":"asset-placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable","classification":"internal",
               "changeControl":{{"requiredFor":["patch"]}},
               "fields":[
                 {{"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}},
@@ -1049,7 +1049,7 @@ fn project_bytes_for_variant(variant: Variant, sequence: u64) -> Vec<u8> {
               ]
             }},
             {{
-              "id":"correction-request","route":"correction-requests","mutationMode":"mutable","classification":"internal",
+              "id":"correction-request","primaryDataset":"test-dataset","route":"correction-requests","mutationMode":"mutable","classification":"internal",
               "fields":[
                 {{"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}},
                 {{"id":"placement","type":"reference","target":"asset-placement","required":true,"classification":"internal"}},

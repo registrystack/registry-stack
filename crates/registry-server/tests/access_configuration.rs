@@ -6,8 +6,8 @@ use serde_json::{json, Value};
 fn source() -> Value {
     json!({
         "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
-        "registry":{"id":"access-example","version":"1","defaultLanguage":"en"},
-        "entities":[{"id":"entry","route":"entries","mutationMode":"mutable","classification":"internal",
+        "registry":{"id":"access-example","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://access-example.example.test"},
+        "entities":[{"id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","classification":"internal",
           "fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"},
                     {"id":"district","type":"string","maxLength":32,"classification":"internal"}],
           "accessRequirements":{"requiredScopes":["entry:read"],"allowedPurposes":["administration"],
@@ -181,8 +181,8 @@ fn relationship_grants_cannot_bypass_target_or_join_requirements() {
     value["accessProfiles"][0]["grants"][0]["readPaths"] =
         json!([{"path":"children","readableFields":["code"]}]);
     value["entities"].as_array_mut().unwrap().extend([
-        json!({"id":"child","route":"children","mutationMode":"mutable","fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"}]}),
-        json!({"id":"link","route":"links","mutationMode":"mutable","fields":[{"id":"entry","type":"reference","target":"entry","classification":"internal"},{"id":"child","type":"reference","target":"child","classification":"internal"}]})
+        json!({"id":"child","primaryDataset":"test-dataset","route":"children","mutationMode":"mutable","fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"}]}),
+        json!({"id":"link","primaryDataset":"test-dataset","route":"links","mutationMode":"mutable","fields":[{"id":"entry","type":"reference","target":"entry","classification":"internal"},{"id":"child","type":"reference","target":"child","classification":"internal"}]})
     ]);
     let baseline = compile(&value).unwrap();
     assert!(baseline

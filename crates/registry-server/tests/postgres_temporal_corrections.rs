@@ -268,9 +268,9 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
-          "registry":{"id":"temporal-corrections","version":"1","defaultLanguage":"en"},
+          "registry":{"id":"temporal-corrections","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"membership","route":"memberships","mutationMode":"mutable","classification":"internal",
+            "id":"membership","primaryDataset":"test-dataset","route":"memberships","mutationMode":"mutable","classification":"internal",
             "batch":{"maximumItems":4,"maximumBytes":16384},
             "fields":[
               {"id":"subject","type":"string","maxLength":96,"required":true,"classification":"internal"},
