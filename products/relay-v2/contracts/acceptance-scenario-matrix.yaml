@@ -37,6 +37,7 @@ scenarios:
   - {id: social-quota, project: social-assistance, journeyStep: quota-exhausted, assertion: The named lookup fails closed after its compiled-operation quota is exhausted.}
   - {id: business-discovery, project: business-registry, journeyStep: registry-discovery, assertion: Discovery derives only the public Consultation capabilities.}
   - {id: business-first-page, project: business-registry, journeyStep: first-page, assertion: The snapshot list is paginated and has a cursor.}
+  - {id: business-first-page-jsonld, project: business-registry, journeyStep: first-page-jsonld, assertion: The list's JSON-LD encoding conforms to the shared Registry Record base schema and carries the exact shared-then-governed context composition.}
   - {id: business-second-page, project: business-registry, journeyStep: second-page, assertion: The emitted cursor retrieves a distinct second page.}
   - {id: business-terminal-page, project: business-registry, journeyStep: terminal-page, assertion: A terminal page carries an explicit null next cursor.}
   - {id: business-status-filter, project: business-registry, journeyStep: status-filter, assertion: The declared status equality filter is executable by itself.}

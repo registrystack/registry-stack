@@ -57,6 +57,18 @@ enum Mode {
     RecordJsonLdMissingContext,
     RecordJsonLdMismatchedContext,
     RecordJsonLegacyContextPlacement,
+    RecordJsonWithId,
+    RecordJsonWithType,
+    RecordJsonLdMissingId,
+    RecordJsonLdMissingType,
+}
+
+#[derive(Clone, Copy)]
+enum RecordIdentity {
+    None,
+    Complete,
+    IdOnly,
+    TypeOnly,
 }
 
 async fn handler(State(state): State<TestState>, request: Request<Body>) -> Response<Body> {
@@ -249,7 +261,13 @@ async fn handler(State(state): State<TestState>, request: Request<Body>) -> Resp
             br#"{"status":"ok"}"#,
             Some(TRACEPARENT),
         ),
-        Mode::RecordJson => record_response(request.uri().path(), "application/json", None, false),
+        Mode::RecordJson => record_response(
+            request.uri().path(),
+            "application/json",
+            None,
+            false,
+            RecordIdentity::None,
+        ),
         Mode::RecordJsonLd => record_response(
             request.uri().path(),
             "application/ld+json",
@@ -258,10 +276,15 @@ async fn handler(State(state): State<TestState>, request: Request<Body>) -> Resp
                 "https://relay.example.invalid/contexts/record.jsonld"
             ])),
             false,
+            RecordIdentity::Complete,
         ),
-        Mode::RecordJsonLdMissingContext => {
-            record_response(request.uri().path(), "application/ld+json", None, false)
-        }
+        Mode::RecordJsonLdMissingContext => record_response(
+            request.uri().path(),
+            "application/ld+json",
+            None,
+            false,
+            RecordIdentity::Complete,
+        ),
         Mode::RecordJsonLdMismatchedContext => record_response(
             request.uri().path(),
             "application/ld+json",
@@ -270,10 +293,49 @@ async fn handler(State(state): State<TestState>, request: Request<Body>) -> Resp
                 "https://relay.example.invalid/contexts/not-the-metadata-context.jsonld"
             ])),
             false,
+            RecordIdentity::Complete,
         ),
-        Mode::RecordJsonLegacyContextPlacement => {
-            record_response(request.uri().path(), "application/json", None, true)
-        }
+        Mode::RecordJsonLegacyContextPlacement => record_response(
+            request.uri().path(),
+            "application/json",
+            None,
+            true,
+            RecordIdentity::None,
+        ),
+        Mode::RecordJsonWithId => record_response(
+            request.uri().path(),
+            "application/json",
+            None,
+            false,
+            RecordIdentity::IdOnly,
+        ),
+        Mode::RecordJsonWithType => record_response(
+            request.uri().path(),
+            "application/json",
+            None,
+            false,
+            RecordIdentity::TypeOnly,
+        ),
+        Mode::RecordJsonLdMissingId => record_response(
+            request.uri().path(),
+            "application/ld+json",
+            Some(json!([
+                "https://id.registrystack.org/contexts/registry-record/v1",
+                "https://relay.example.invalid/contexts/record.jsonld"
+            ])),
+            false,
+            RecordIdentity::TypeOnly,
+        ),
+        Mode::RecordJsonLdMissingType => record_response(
+            request.uri().path(),
+            "application/ld+json",
+            Some(json!([
+                "https://id.registrystack.org/contexts/registry-record/v1",
+                "https://relay.example.invalid/contexts/record.jsonld"
+            ])),
+            false,
+            RecordIdentity::IdOnly,
+        ),
         Mode::Routes => route_response(request.uri().path()),
     }
 }
@@ -283,6 +345,7 @@ fn record_response(
     media_type: &str,
     json_ld_context: Option<serde_json::Value>,
     legacy_context_placement: bool,
+    identity: RecordIdentity,
 ) -> Response<Body> {
     let mut record = json!({
         "recordIdentifier": "record-1",
@@ -296,6 +359,15 @@ fn record_response(
     });
     if legacy_context_placement {
         record["registryIdentifier"] = json!("legacy-registry");
+    }
+    if matches!(identity, RecordIdentity::Complete | RecordIdentity::IdOnly) {
+        record["@id"] = json!("https://relay.example.invalid/v2/resources/people/records/record-1");
+    }
+    if matches!(
+        identity,
+        RecordIdentity::Complete | RecordIdentity::TypeOnly
+    ) {
+        record["@type"] = json!("https://relay.example.invalid/vocabulary/Person");
     }
     let meta = json!({
         "registryIdentifier": "registry",
@@ -749,6 +821,10 @@ async fn registry_record_context_is_response_metadata_and_json_ld_context_is_gov
     assert_eq!(record.meta.dataset_identifier, "dataset");
     assert_eq!(record.meta.entity_type_identifier, "entity-type");
     assert!(record.json_ld_context.is_none());
+    client
+        .list_records("people", &ListRequest::default(), None)
+        .await
+        .expect("JSON Registry Record collection response");
 
     let (client, _) = test_client(Mode::RecordJsonLd, None).await;
     let json_ld = client
@@ -774,6 +850,14 @@ async fn registry_record_context_is_response_metadata_and_json_ld_context_is_gov
             .relay_context(),
         record.meta.links.context
     );
+    assert!(record.data.json_ld_id.is_some());
+    assert!(record.data.json_ld_type.is_some());
+    let json_ld_list =
+        ListRequest::default().options(RecordOptions::default().format(RecordFormat::JsonLd));
+    client
+        .list_records("people", &json_ld_list, None)
+        .await
+        .expect("JSON-LD Registry Record collection response");
 
     for mode in [
         Mode::RecordJsonLdMissingContext,
@@ -796,6 +880,57 @@ async fn registry_record_context_is_response_metadata_and_json_ld_context_is_gov
                 ..
             }
         ));
+    }
+}
+
+#[tokio::test]
+async fn registry_record_identity_is_media_specific_for_single_and_collection_responses() {
+    for (mode, format, malformed_member) in [
+        (Mode::RecordJsonWithId, RecordFormat::Json, "JSON @id"),
+        (Mode::RecordJsonWithType, RecordFormat::Json, "JSON @type"),
+        (
+            Mode::RecordJsonLdMissingId,
+            RecordFormat::JsonLd,
+            "JSON-LD missing @id",
+        ),
+        (
+            Mode::RecordJsonLdMissingType,
+            RecordFormat::JsonLd,
+            "JSON-LD missing @type",
+        ),
+    ] {
+        let (client, _) = test_client(mode, None).await;
+        let options = RecordOptions::default().format(format);
+        let error = client
+            .read_record("people", "record-1", &options, None)
+            .await
+            .expect_err("media-specific record identity violation refused");
+        assert!(
+            matches!(
+                error,
+                RelayClientError::Protocol {
+                    failure: ProtocolFailure::Body,
+                    ..
+                }
+            ),
+            "single response with {malformed_member} must fail at the protocol boundary"
+        );
+
+        let request = ListRequest::default().options(options);
+        let error = client
+            .list_records("people", &request, None)
+            .await
+            .expect_err("media-specific collection item identity violation refused");
+        assert!(
+            matches!(
+                error,
+                RelayClientError::Protocol {
+                    failure: ProtocolFailure::Body,
+                    ..
+                }
+            ),
+            "collection item with {malformed_member} must fail at the protocol boundary"
+        );
     }
 }
 

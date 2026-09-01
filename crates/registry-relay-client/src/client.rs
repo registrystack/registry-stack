@@ -603,11 +603,11 @@ fn decode_record_conditional(
 ) -> Result<Conditional<RecordResponse>, RelayClientError> {
     match format {
         RecordFormat::Json => {
-            decode_registry_record_conditional(wire, RecordEnvelope::has_no_json_ld_context)
+            decode_registry_record_conditional(wire, RecordEnvelope::matches_json_representation)
                 .map(|value| map_conditional(value, RecordResponse::Json))
         }
         RecordFormat::JsonLd => {
-            decode_registry_record_conditional(wire, RecordEnvelope::has_matching_json_ld_context)
+            decode_registry_record_conditional(wire, RecordEnvelope::matches_json_ld_representation)
                 .map(|value| map_conditional(value, RecordResponse::Json))
         }
         RecordFormat::GeoJsonRfc7946 | RecordFormat::JsonFg => {
@@ -624,12 +624,12 @@ fn decode_collection_conditional(
     match format {
         RecordFormat::Json => decode_registry_record_collection_conditional(
             wire,
-            RecordCollection::has_no_json_ld_context,
+            RecordCollection::matches_json_representation,
         )
         .map(|value| map_conditional(value, RecordCollectionResponse::Json)),
         RecordFormat::JsonLd => decode_registry_record_collection_conditional(
             wire,
-            RecordCollection::has_matching_json_ld_context,
+            RecordCollection::matches_json_ld_representation,
         )
         .map(|value| map_conditional(value, RecordCollectionResponse::Json)),
         RecordFormat::GeoJsonRfc7946 | RecordFormat::JsonFg => {

@@ -242,6 +242,16 @@ pub struct Record {
     pub json_ld_type: Option<String>,
 }
 
+impl Record {
+    fn has_json_ld_identity(&self) -> bool {
+        self.json_ld_id.is_some() && self.json_ld_type.is_some()
+    }
+
+    fn has_no_json_ld_identity(&self) -> bool {
+        self.json_ld_id.is_none() && self.json_ld_type.is_none()
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RecordResponseMetadata {
@@ -354,14 +364,15 @@ pub struct RecordEnvelope {
 }
 
 impl RecordEnvelope {
-    pub(crate) fn has_matching_json_ld_context(&self) -> bool {
+    pub(crate) fn matches_json_ld_representation(&self) -> bool {
         self.json_ld_context
             .as_ref()
             .is_some_and(|context| context.relay_context() == self.meta.links.context)
+            && self.data.has_json_ld_identity()
     }
 
-    pub(crate) fn has_no_json_ld_context(&self) -> bool {
-        self.json_ld_context.is_none()
+    pub(crate) fn matches_json_representation(&self) -> bool {
+        self.json_ld_context.is_none() && self.data.has_no_json_ld_identity()
     }
 }
 
@@ -377,14 +388,15 @@ pub struct RecordCollection {
 }
 
 impl RecordCollection {
-    pub(crate) fn has_matching_json_ld_context(&self) -> bool {
+    pub(crate) fn matches_json_ld_representation(&self) -> bool {
         self.json_ld_context
             .as_ref()
             .is_some_and(|context| context.relay_context() == self.meta.links.context)
+            && self.items.iter().all(Record::has_json_ld_identity)
     }
 
-    pub(crate) fn has_no_json_ld_context(&self) -> bool {
-        self.json_ld_context.is_none()
+    pub(crate) fn matches_json_representation(&self) -> bool {
+        self.json_ld_context.is_none() && self.items.iter().all(Record::has_no_json_ld_identity)
     }
 }
 

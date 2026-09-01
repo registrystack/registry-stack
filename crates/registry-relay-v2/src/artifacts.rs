@@ -1501,12 +1501,32 @@ fn operation_response_schema(
             }
         }
     });
+    let exact_record_schema = |access_profile: &crate::model::CompiledAccessProfile| {
+        let representation_constraint = if json_ld {
+            json!({"required": ["@id", "@type"]})
+        } else {
+            json!({
+                "not": {
+                    "anyOf": [
+                        {"required": ["@id"]},
+                        {"required": ["@type"]}
+                    ]
+                }
+            })
+        };
+        json!({
+            "allOf": [
+                {"$ref": access_profile.schema_reference},
+                representation_constraint
+            ]
+        })
+    };
     let record = if access_profiles.len() == 1 {
-        json!({"$ref": access_profiles[0].schema_reference})
+        exact_record_schema(access_profiles[0])
     } else {
         json!({
             "oneOf": access_profiles.iter().map(|access_profile| {
-                json!({"$ref": access_profile.schema_reference})
+                exact_record_schema(access_profile)
             }).collect::<Vec<_>>()
         })
     };
@@ -2899,29 +2919,70 @@ mod tests {
         });
         assert!(validator.is_valid(&intended));
         let mut intended_json_ld = intended.clone();
+        intended_json_ld["data"]["@id"] =
+            json!("https://registry.example.invalid/registry/v2/resources/record/records/record-1");
+        intended_json_ld["data"]["@type"] = json!(registry.resources[0].semantic_class);
         intended_json_ld["@context"] =
             json!([REGISTRY_RECORD_CONTEXT_ID, access_profile.context_reference]);
         assert!(json_ld_validator.is_valid(&intended_json_ld));
 
-        for invalid_context in [
-            json!([access_profile.context_reference, REGISTRY_RECORD_CONTEXT_ID]),
-            json!([
-                REGISTRY_RECORD_CONTEXT_ID,
-                access_profile.context_reference,
-                "https://example.invalid/extra-context"
-            ]),
-            json!([
-                {"registryIdentifier": "https://example.invalid/hostile"},
-                access_profile.context_reference
-            ]),
+        for (label, invalid_context) in [
+            (
+                "reordered",
+                json!([access_profile.context_reference, REGISTRY_RECORD_CONTEXT_ID]),
+            ),
+            (
+                "extra",
+                json!([
+                    REGISTRY_RECORD_CONTEXT_ID,
+                    access_profile.context_reference,
+                    "https://example.invalid/extra-context"
+                ]),
+            ),
+            (
+                "inline",
+                json!([
+                    REGISTRY_RECORD_CONTEXT_ID,
+                    {"registryIdentifier": "https://example.invalid/hostile"}
+                ]),
+            ),
+            (
+                "wrong shared value",
+                json!([
+                    "https://example.invalid/wrong-shared-context",
+                    access_profile.context_reference
+                ]),
+            ),
+            (
+                "wrong governed value",
+                json!([
+                    REGISTRY_RECORD_CONTEXT_ID,
+                    "https://example.invalid/wrong-operation-context"
+                ]),
+            ),
+            ("scalar", json!(REGISTRY_RECORD_CONTEXT_ID)),
         ] {
             let mut invalid = intended_json_ld.clone();
             invalid["@context"] = invalid_context;
             assert!(
                 !json_ld_validator.is_valid(&invalid),
-                "the exact JSON-LD operation schema must reject extra, reordered, or inline contexts"
+                "the exact JSON-LD operation schema must reject a {label} context"
             );
         }
+        let mut missing_context = intended_json_ld.clone();
+        missing_context
+            .as_object_mut()
+            .expect("response is an object")
+            .remove("@context");
+        assert!(!json_ld_validator.is_valid(&missing_context));
+
+        let mut context_in_json = intended.clone();
+        context_in_json["@context"] =
+            json!([REGISTRY_RECORD_CONTEXT_ID, access_profile.context_reference]);
+        assert!(
+            !validator.is_valid(&context_in_json),
+            "the exact JSON operation schema must reject every @context value"
+        );
 
         for (field, wrong) in [
             ("registryIdentifier", "urn:example:registry:wrong"),
@@ -2934,6 +2995,161 @@ mod tests {
                 !validator.is_valid(&invalid),
                 "the exact operation schema must reject the wrong {field} constant"
             );
+        }
+    }
+
+    #[test]
+    fn exact_operation_schemas_pin_media_specific_record_identity() {
+        let contract = RegistryContract::parse_yaml(compiler_tests::valid_contract())
+            .expect("contract parses");
+        let registry = compile_contract_with_governed_files(
+            &contract,
+            &[compiler_tests::observed_schema()],
+            CompileProfile::Production,
+            &compiler_tests::governed_files(),
+        )
+        .expect("contract compiles");
+        let generated = generate_artifacts(&registry).expect("artifacts generate");
+        let resource = &registry.resources[0];
+        let read_operation = &resource.operations[0];
+        let mut list_operation = read_operation.clone();
+        list_operation.identifier = "record.list".into();
+        list_operation.kind = OperationKind::List;
+
+        let mut options = jsonschema::JSONSchema::options();
+        options.with_draft(jsonschema::Draft::Draft202012);
+        for artifact in generated
+            .artifacts
+            .iter()
+            .filter(|artifact| artifact.media_type == "application/schema+json")
+        {
+            let schema: Value =
+                serde_json::from_slice(&artifact.content).expect("generated schema parses");
+            if let Some(identifier) = schema.get("$id").and_then(Value::as_str) {
+                options.with_document(identifier.to_owned(), schema);
+            }
+        }
+
+        for (shape, operation) in [("single", read_operation), ("collection", &list_operation)] {
+            let access_profile = &operation.access_profiles[0];
+            let access_profiles = [access_profile];
+            let json_schema =
+                operation_response_schema(&registry, resource, operation, &access_profiles, false);
+            let json_ld_schema =
+                operation_response_schema(&registry, resource, operation, &access_profiles, true);
+            let validator = options
+                .compile(&json_schema)
+                .expect("the exact JSON operation schema compiles");
+            let json_ld_validator = options
+                .compile(&json_ld_schema)
+                .expect("the exact JSON-LD operation schema compiles");
+            let record = json!({
+                "recordIdentifier": "record-1",
+                "revisionIdentifier": "revision-1",
+                "lifecycleState": "ACTIVE",
+                "schemaReference": access_profile.schema_reference,
+                "semanticModelReference": access_profile.semantic_model_reference,
+                "authorityIdentifier": registry.authority_identifier,
+                "recordedAt": "2026-08-10T00:00:00Z",
+                "domainData": {"name": "Example"}
+            });
+            let meta = json!({
+                "registryIdentifier": registry.registry_identifier,
+                "datasetIdentifier": resource.dataset_identifier,
+                "entityTypeIdentifier": resource.entity_type_identifier,
+                "operationIdentifier": operation.identifier,
+                "accessProfile": access_profile.id,
+                "family": "consultation",
+                "pattern": if matches!(&operation.kind, OperationKind::List) {
+                    "list"
+                } else {
+                    "retrieve"
+                },
+                "disclosureProfile": access_profile.disclosure_profile,
+                "contractRevision": registry.contract_revision,
+                "sourceRevision": {
+                    "profile": "snapshot",
+                    "status": "versioned",
+                    "value": "sha256:source"
+                },
+                "selectedFields": ["name"],
+                "links": {
+                    "self": "https://registry.example.invalid/registry/v2/resources/record/records/record-1",
+                    "context": access_profile.context_reference,
+                    "schema": access_profile.schema_reference,
+                    "semanticModel": access_profile.semantic_model_reference
+                }
+            });
+            let intended_json = if matches!(&operation.kind, OperationKind::List) {
+                json!({
+                    "items": [record.clone(), record],
+                    "pageInfo": {"nextCursor": null},
+                    "meta": meta
+                })
+            } else {
+                json!({"data": record, "meta": meta})
+            };
+            assert!(
+                validator.is_valid(&intended_json),
+                "the exact {shape} JSON schema accepts a Registry Record"
+            );
+
+            for identity_member in ["@id", "@type"] {
+                let mut invalid = intended_json.clone();
+                let target = if shape == "collection" {
+                    &mut invalid["items"][1]
+                } else {
+                    &mut invalid["data"]
+                };
+                target[identity_member] = if identity_member == "@id" {
+                    json!("https://registry.example.invalid/records/record-1")
+                } else {
+                    json!(resource.semantic_class)
+                };
+                assert!(
+                    !validator.is_valid(&invalid),
+                    "the exact {shape} JSON schema must reject {identity_member}"
+                );
+            }
+
+            let mut intended_json_ld = intended_json;
+            if shape == "collection" {
+                for item in intended_json_ld["items"]
+                    .as_array_mut()
+                    .expect("collection items")
+                {
+                    item["@id"] =
+                        json!("https://registry.example.invalid/registry/v2/resources/record/records/record-1");
+                    item["@type"] = json!(resource.semantic_class);
+                }
+            } else {
+                intended_json_ld["data"]["@id"] =
+                    json!("https://registry.example.invalid/registry/v2/resources/record/records/record-1");
+                intended_json_ld["data"]["@type"] = json!(resource.semantic_class);
+            }
+            intended_json_ld["@context"] =
+                json!([REGISTRY_RECORD_CONTEXT_ID, access_profile.context_reference]);
+            assert!(
+                json_ld_validator.is_valid(&intended_json_ld),
+                "the exact {shape} JSON-LD schema accepts complete record identities"
+            );
+
+            for identity_member in ["@id", "@type"] {
+                let mut invalid = intended_json_ld.clone();
+                let target = if shape == "collection" {
+                    &mut invalid["items"][1]
+                } else {
+                    &mut invalid["data"]
+                };
+                target
+                    .as_object_mut()
+                    .expect("record is an object")
+                    .remove(identity_member);
+                assert!(
+                    !json_ld_validator.is_valid(&invalid),
+                    "the exact {shape} JSON-LD schema must reject a missing {identity_member}"
+                );
+            }
         }
     }
 

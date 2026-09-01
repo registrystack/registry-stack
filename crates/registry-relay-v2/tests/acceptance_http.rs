@@ -79,6 +79,10 @@ const ACCEPTANCE_ROOT: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../products/relay-v2/acceptance"
 );
+const REGISTRY_RECORD_ROOT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../products/registry-record"
+);
 const PROJECTS: [&str; 4] = [
     "social-assistance",
     "business-registry",
@@ -90,6 +94,7 @@ const PROJECTS: [&str; 4] = [
 struct ResponseContractCoverage {
     json_records: usize,
     json_ld_records: usize,
+    operation_representations: BTreeSet<(String, bool)>,
 }
 
 struct ProjectHarness {
@@ -467,12 +472,15 @@ async fn all_four_registry_http_journeys_use_the_real_router() {
             "selected acceptance project is unknown"
         );
     }
+    let shared_context_terms = shared_registry_record_context_terms();
+    let mut registry_record_operation_coverage = BTreeSet::new();
     for project in PROJECTS.into_iter().filter(|project| {
         selected
             .as_deref()
             .is_none_or(|selected| selected == *project)
     }) {
         let mut harness = ProjectHarness::open(project).await;
+        assert_all_generated_operation_contexts_are_disjoint(&harness, &shared_context_terms);
         let journey = project_journey(project);
         assert_eq!(
             journey.schema_version,
@@ -569,6 +577,7 @@ async fn all_four_registry_http_journeys_use_the_real_router() {
                 "{project} must validate a JSON-LD Record against its generated schema"
             );
         }
+        registry_record_operation_coverage.extend(contract_coverage.operation_representations);
         shutdown_tx.send(()).expect("loopback server is running");
         tokio::time::timeout(Duration::from_secs(5), server)
             .await
@@ -578,6 +587,52 @@ async fn all_four_registry_http_journeys_use_the_real_router() {
         if let Some(idp) = harness.idp.take() {
             idp.stop().await;
         }
+    }
+    if selected.is_none() {
+        for operation in ["list", "read", "lookup", "search"] {
+            for json_ld in [false, true] {
+                assert!(
+                    registry_record_operation_coverage.contains(&(operation.into(), json_ld)),
+                    "the real HTTP journeys must validate a representative {operation} {} response against the local shared Registry Record schema",
+                    if json_ld { "JSON-LD" } else { "JSON" }
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn shared_registry_record_artifacts_pin_opaque_string_identifiers() {
+    let schema = load_registry_record_artifact("schema/registry-record-v1.schema.json");
+    assert_eq!(
+        schema["$id"],
+        "https://id.registrystack.org/schemas/registry-record/v1"
+    );
+    assert_eq!(
+        schema["$defs"]["opaqueIdentifier"],
+        json!({"type": "string", "minLength": 1})
+    );
+
+    let shared_context = load_registry_record_artifact("context/registry-record-v1.jsonld");
+    let terms = shared_context["@context"]
+        .as_object()
+        .expect("the local Registry Record context is an inline context document");
+    for identifier in [
+        "registryIdentifier",
+        "datasetIdentifier",
+        "entityTypeIdentifier",
+        "recordIdentifier",
+        "revisionIdentifier",
+    ] {
+        assert_eq!(
+            terms[identifier]["@id"],
+            format!("https://id.registrystack.org/vocab/registry-record/{identifier}")
+        );
+        assert_eq!(
+            terms[identifier]["@type"],
+            "http://www.w3.org/2001/XMLSchema#string"
+        );
+        assert_ne!(terms[identifier]["@type"], "@id");
     }
 }
 
@@ -3250,6 +3305,11 @@ fn validate_response_contracts(
                 .any(|operation| operation.identifier == binding.operation_identifier)
         })
         .expect("compiled operation belongs to one resource");
+    let operation = resource
+        .operations
+        .iter()
+        .find(|operation| operation.identifier == binding.operation_identifier)
+        .expect("compiled operation belongs to the resolved resource");
     assert_eq!(
         document
             .pointer("/meta/registryIdentifier")
@@ -3275,6 +3335,55 @@ fn validate_response_contracts(
         headers.get(LINK).and_then(|value| value.to_str().ok()),
         Some(expected_link.as_str())
     );
+
+    let shared_schema = load_registry_record_artifact("schema/registry-record-v1.schema.json");
+    let shared_validator = JSONSchema::options()
+        .with_draft(Draft::Draft202012)
+        .should_validate_formats(true)
+        .compile(&shared_schema)
+        .expect("the exact local Registry Record base schema compiles without resolution");
+    assert!(
+        shared_validator.is_valid(document),
+        "{project}/{} response must conform to the exact local Registry Record base schema",
+        step.id
+    );
+
+    let exact_schema = exact_generated_response_schema(harness, operation_identifier, media_type);
+    let mut exact_options = JSONSchema::options();
+    exact_options
+        .with_draft(Draft::Draft202012)
+        .should_validate_formats(true);
+    for artifact in harness
+        .service
+        .artifacts
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.media_type == "application/schema+json")
+    {
+        let schema: Value =
+            serde_json::from_slice(&artifact.content).expect("generated schema parses");
+        if let Some(identifier) = schema.get("$id").and_then(Value::as_str) {
+            exact_options.with_document(identifier.to_owned(), schema);
+        }
+    }
+    let exact_validator = exact_options
+        .compile(&exact_schema)
+        .expect("the exact generated operation response schema compiles locally");
+    assert!(
+        exact_validator.is_valid(document),
+        "{project}/{} runtime response must conform to its exact generated operation schema",
+        step.id
+    );
+
+    let operation_kind = match operation.kind {
+        OperationKind::List => "list",
+        OperationKind::Read => "read",
+        OperationKind::Lookup { .. } => "lookup",
+        OperationKind::Search { .. } => "search",
+    };
+    coverage
+        .operation_representations
+        .insert((operation_kind.into(), json_ld));
 
     for record in records {
         let schema_reference = record
@@ -3353,6 +3462,107 @@ fn validate_response_contracts(
     if json_ld {
         validate_json_ld_graph(harness, project, step, document, binding);
     }
+}
+
+fn load_registry_record_artifact(relative_path: &str) -> Value {
+    let path = Path::new(REGISTRY_RECORD_ROOT).join(relative_path);
+    let bytes = fs::read(&path)
+        .unwrap_or_else(|error| panic!("exact local artifact {} reads: {error}", path.display()));
+    serde_json::from_slice(&bytes)
+        .unwrap_or_else(|error| panic!("exact local artifact {} parses: {error}", path.display()))
+}
+
+fn shared_registry_record_context_terms() -> BTreeSet<String> {
+    load_registry_record_artifact("context/registry-record-v1.jsonld")["@context"]
+        .as_object()
+        .expect("the exact local Registry Record context owns an object of terms")
+        .keys()
+        .cloned()
+        .collect()
+}
+
+fn assert_all_generated_operation_contexts_are_disjoint(
+    harness: &ProjectHarness,
+    shared_terms: &BTreeSet<String>,
+) {
+    let bound_context_paths = harness
+        .service
+        .artifacts
+        .operation_bindings
+        .iter()
+        .map(|binding| binding.context_path.as_str())
+        .collect::<BTreeSet<_>>();
+    let generated_context_paths = harness
+        .service
+        .artifacts
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.path.ends_with(".context.jsonld"))
+        .map(|artifact| artifact.path.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        generated_context_paths, bound_context_paths,
+        "every generated Relay operation context belongs to an exact operation binding"
+    );
+    assert!(
+        !generated_context_paths.is_empty() || harness.service.registry.resources.is_empty(),
+        "every Registry with Record operations generates operation contexts"
+    );
+    for path in generated_context_paths {
+        let artifact = harness
+            .service
+            .artifacts
+            .get(path)
+            .unwrap_or_else(|| panic!("generated operation context {path} exists"));
+        let document: Value = serde_json::from_slice(&artifact.content)
+            .unwrap_or_else(|error| panic!("generated operation context {path} parses: {error}"));
+        let operation_terms = document["@context"]
+            .as_object()
+            .unwrap_or_else(|| panic!("generated operation context {path} owns an object"));
+        let overlap = operation_terms
+            .keys()
+            .filter(|term| shared_terms.contains(*term))
+            .cloned()
+            .collect::<Vec<_>>();
+        assert!(
+            overlap.is_empty(),
+            "generated operation context {path} redefines exact local shared terms {overlap:?}"
+        );
+    }
+}
+
+fn exact_generated_response_schema(
+    harness: &ProjectHarness,
+    operation_identifier: &str,
+    media_type: &str,
+) -> Value {
+    let openapi: Value = serde_json::from_slice(
+        &harness
+            .service
+            .artifacts
+            .get("openapi.full.yaml")
+            .expect("the generated full OpenAPI artifact exists")
+            .content,
+    )
+    .expect("the generated full OpenAPI artifact parses as JSON-compatible YAML");
+    let matches = openapi["paths"]
+        .as_object()
+        .expect("generated OpenAPI paths are an object")
+        .values()
+        .flat_map(|path| {
+            path.as_object()
+                .into_iter()
+                .flat_map(|methods| methods.values())
+        })
+        .filter(|operation| operation["operationId"] == operation_identifier)
+        .map(|operation| operation["responses"]["200"]["content"][media_type]["schema"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        matches.len(),
+        1,
+        "operation {operation_identifier} has one exact generated {media_type} response schema"
+    );
+    matches.into_iter().next().expect("one schema")
 }
 
 fn validate_json_ld_graph(
