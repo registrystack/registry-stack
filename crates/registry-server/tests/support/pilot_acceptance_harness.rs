@@ -32,6 +32,8 @@ use registry_server::startup::{prepare_with_connection_and_key_source_for_test, 
 use registry_server::CompiledRegistry;
 use serde::Serialize;
 use serde_json::{json, Value};
+use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use tower::ServiceExt as _;
 
 use super::postgres_harness::TestDatabase;
@@ -45,6 +47,40 @@ pub struct PilotHarness {
     prepared: PreparedServer,
     idp: MockIdp,
     scratch: ScratchDirectory,
+}
+
+/// A real loopback listener serving the exact Router assembled by startup.
+///
+/// This test-only seam lets client journeys exercise the deployed HTTP
+/// boundary without introducing another way to construct server state.
+pub struct PilotHttpServer {
+    base_url: String,
+    shutdown: Option<oneshot::Sender<()>>,
+    task: Option<JoinHandle<()>>,
+}
+
+impl PilotHttpServer {
+    #[must_use]
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
+    pub async fn finish(mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+        if let Some(task) = self.task.take() {
+            task.await.expect("pilot HTTP listener task joins");
+        }
+    }
+}
+
+impl Drop for PilotHttpServer {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+    }
 }
 
 impl PilotHarness {
@@ -270,6 +306,31 @@ impl PilotHarness {
             serde_json::to_vec(&body).expect("pilot request JSON serializes"),
         )
         .await
+    }
+
+    /// Serve the verified startup Router on an ephemeral loopback listener.
+    pub async fn serve_http(&self) -> PilotHttpServer {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("pilot HTTP listener binds on loopback");
+        let address = listener
+            .local_addr()
+            .expect("pilot listener has an address");
+        let app = self.prepared.app();
+        let (shutdown, shutdown_receiver) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async {
+                    let _ = shutdown_receiver.await;
+                })
+                .await
+                .expect("pilot HTTP listener serves the verified Router");
+        });
+        PilotHttpServer {
+            base_url: format!("http://{address}"),
+            shutdown: Some(shutdown),
+            task: Some(task),
+        }
     }
 
     pub async fn finish(self) {

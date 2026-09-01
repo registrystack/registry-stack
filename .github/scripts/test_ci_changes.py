@@ -724,22 +724,25 @@ class CiChangesTest(unittest.TestCase):
             {"evidence"},
         )
 
-    def test_relay_client_change_runs_its_contract_and_native_binding_gates(self) -> None:
+    def test_shared_rust_client_change_runs_both_product_contract_gates(self) -> None:
         outputs = classify(
             self.workspace,
             ("crates/registry-relay-client/src/lib.rs",),
         )
         self.assertTrue(outputs["relay_client_contracts"])
         self.assertTrue(outputs["client_bindings"])
-        # Relay V2 owns the real-router acceptance test and therefore
-        # dev-depends on the SDK. Its test suite must still run, but the
-        # dev-only edge cannot cascade into Relay V2's normal dependents.
+        # Relay V2 and Registry Server own real-router client journeys and
+        # therefore dev-depend on the SDK. Their test suites must still run,
+        # but the dev-only edges cannot cascade into product dependents.
         self.assertIn("registry-relay-v2", outputs["rust_packages"])
         self.assertNotIn("registry-relayctl", outputs["rust_packages"])
+        self.assertIn("registry-server", outputs["rust_packages"])
+        self.assertNotIn("registry-serverctl", outputs["rust_packages"])
         self.assertFalse(outputs["evidence_contracts"])
+        self.assertTrue(outputs["registry_server_contracts"])
         self.assertEqual(
             {entry["name"] for entry in outputs["rust_matrix"]["include"]},
-            {"discovery", "relay-client", "relay-v2"},
+            {"discovery", "registry-server", "relay-client", "relay-v2"},
         )
         relay_client_matrix = next(
             entry

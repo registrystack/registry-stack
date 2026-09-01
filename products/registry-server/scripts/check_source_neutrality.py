@@ -121,7 +121,11 @@ FORBIDDEN_DOMAIN_COMPONENTS = (
     "appointment",
     "appointments",
 )
-SOURCE_ROOTS = ("crates/registry-server", "crates/registry-serverctl")
+SOURCE_ROOTS = (
+    "crates/registry-relay-client",
+    "crates/registry-server",
+    "crates/registry-serverctl",
+)
 SOURCE_SUFFIXES = {".rs"}
 PRODUCTION_INPUT_DIRECTORIES = ("resources", "schemas", "migrations", "templates")
 EXCLUDED_SOURCE_DIRECTORIES = {"tests", "fixtures", "examples", "benches"}

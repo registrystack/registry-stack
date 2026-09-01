@@ -54,6 +54,7 @@ enum Mode {
     WrongMedia,
     RecordJson,
     RecordJsonLd,
+    RecordJsonLdNonHttpsContext,
     RecordJsonLdMissingContext,
     RecordJsonLdMismatchedContext,
     RecordJsonLegacyContextPlacement,
@@ -278,6 +279,17 @@ async fn handler(State(state): State<TestState>, request: Request<Body>) -> Resp
             false,
             RecordIdentity::Complete,
         ),
+        Mode::RecordJsonLdNonHttpsContext => record_response_with_meta_context(
+            request.uri().path(),
+            "application/ld+json",
+            Some(json!([
+                "https://id.registrystack.org/contexts/registry-record/v1",
+                "file:///private/relay-context.jsonld"
+            ])),
+            false,
+            RecordIdentity::Complete,
+            "file:///private/relay-context.jsonld",
+        ),
         Mode::RecordJsonLdMissingContext => record_response(
             request.uri().path(),
             "application/ld+json",
@@ -347,6 +359,24 @@ fn record_response(
     legacy_context_placement: bool,
     identity: RecordIdentity,
 ) -> Response<Body> {
+    record_response_with_meta_context(
+        path,
+        media_type,
+        json_ld_context,
+        legacy_context_placement,
+        identity,
+        "https://relay.example.invalid/contexts/record.jsonld",
+    )
+}
+
+fn record_response_with_meta_context(
+    path: &str,
+    media_type: &str,
+    json_ld_context: Option<serde_json::Value>,
+    legacy_context_placement: bool,
+    identity: RecordIdentity,
+    meta_context: &str,
+) -> Response<Body> {
     let mut record = json!({
         "recordIdentifier": "record-1",
         "revisionIdentifier": "revision-1",
@@ -383,7 +413,7 @@ fn record_response(
         "selectedFields": ["name"],
         "links": {
             "self": "https://relay.example.invalid/v2/resources/records/record-1",
-            "context": "https://relay.example.invalid/contexts/record.jsonld",
+            "context": meta_context,
             "schema": "https://relay.example.invalid/schemas/record",
             "semanticModel": "https://relay.example.invalid/models/record"
         }
@@ -862,6 +892,7 @@ async fn registry_record_context_is_response_metadata_and_json_ld_context_is_gov
     for mode in [
         Mode::RecordJsonLdMissingContext,
         Mode::RecordJsonLdMismatchedContext,
+        Mode::RecordJsonLdNonHttpsContext,
         Mode::RecordJsonLegacyContextPlacement,
     ] {
         let (client, _) = test_client(mode, None).await;

@@ -1,14 +1,18 @@
-# Registry Relay Rust client
+# Registry Relay and Server Rust client
 
 `registry-relay-client` is the canonical Rust SDK for the fixed Registry Relay
-V2 HTTP API. It covers process probes, discovery, consultation operations,
-artifacts, and the bounded SDMX data and structure profiles without depending
-on the Relay runtime.
+V2 HTTP API and the Registry Server discovery and record-read surface. The
+crate name is retained for source compatibility. Relay and Server share the
+Registry Record v1 response model, while product-specific routes, queries,
+Problems, entity tags, and credential policies remain separate.
 
 One method call performs at most one HTTP exchange. The client does not follow
 redirects, use ambient proxies, retry, advance pagination, or fetch referenced
 schemas. Callers remain responsible for deciding whether and when to repeat a
 request.
+
+The Rust crate supports both products. The Node and Python packages remain
+Relay-only in this slice.
 
 ## Configure a client
 
@@ -104,6 +108,60 @@ values are bounded before a request is built. List filters cannot collide
 with Relay's reserved query names. Field lists reject empty or duplicate names,
 and bounding boxes reject non-finite coordinates, invalid latitude/longitude,
 south-to-north inversion, and antimeridian crossing.
+
+## Registry Server discovery and reads
+
+Use `RegistryServerClient` for Server routes. Its API is additive and does not
+change `RelayClient` behavior:
+
+```rust,no_run
+use std::sync::Arc;
+use registry_relay_client::{
+    RegistryServerClient, RegistryServerClientConfig, ServerListRequest,
+    ServerRecordFormat, ServerRecordOptions, StaticToken,
+};
+use url::Url;
+
+# async fn run() -> Result<(), Box<dyn std::error::Error>> {
+let token = Arc::new(StaticToken::new("short-lived-access-token")?);
+let config = RegistryServerClientConfig::new(
+    Url::parse("https://server.example/institution-a")?,
+)
+.with_token_provider(token);
+let client = RegistryServerClient::new(config)?;
+
+let options = ServerRecordOptions::default()
+    .access_profile("caseworker.v1")?
+    .select(["legalName", "status"])?
+    .format(ServerRecordFormat::JsonLd);
+let request = ServerListRequest::default().options(options).top(25)?;
+let first = client.list_records("companies", &request).await?;
+if let Some(next) = first.value.continuation {
+    // The opaque continuation carries only route, representation, profile,
+    // and $skiptoken facts. It cannot admit first-page query parameters.
+    let _next_page = client.continue_list(&next).await?;
+}
+# Ok(())
+# }
+```
+
+The Server slice covers credential-free health and readiness, caller-filtered
+OpenAPI, registry metadata, entity schemas, canonical UUID record reads, list,
+explicit continuation, and lookup. Mutations, actions, revisions, snapshots,
+relationships, GIS/GeoJSON, batch operations, webhooks, and administrative
+routes are deliberately outside this first slice.
+
+Server OpenAPI, metadata, schemas, and record operations may use one configured
+bearer token. Health and readiness never acquire one. An `accessProfile` is a
+disclosure selector, not authority, and the client never retries or falls back
+after a concealed response.
+
+Server record responses use the shared `RegistryRecordSingleResponse` and
+`RegistryRecordCollectionResponse` DTOs. Ordinary JSON must omit `@context`;
+Server JSON-LD must use the exact scalar Registry Record context. The client
+validates canonical UUIDs and revisions, the exact Registry Record profile and
+relative `describedby` Link, and Server `"rs-..."` ETags. It treats context,
+schema, and Link targets as inert identifiers and never fetches them.
 
 ## Conditional responses
 

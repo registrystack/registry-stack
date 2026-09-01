@@ -2,6 +2,9 @@
 
 #![cfg(feature = "postgres-test")]
 
+use std::collections::BTreeSet;
+use std::sync::Arc;
+
 #[path = "support/pilot_acceptance_harness.rs"]
 #[allow(dead_code)]
 mod pilot_acceptance_harness;
@@ -13,6 +16,10 @@ use axum::body::Body;
 use axum::http::{Method, Response, StatusCode};
 use jsonschema::{Draft, JSONSchema};
 use pilot_acceptance_harness::{response_bytes, response_json, PilotHarness};
+use registry_relay_client::{
+    RegistryServerClient, RegistryServerClientConfig, RegistryServerProblemCode, ServerListRequest,
+    ServerRecordFormat, ServerRecordOptions, StaticToken,
+};
 use serde_json::{json, Value};
 
 const PROFILE_IDENTIFIER: &str = "https://id.registrystack.org/profiles/registry-record/v1";
@@ -157,6 +164,27 @@ async fn real_postgres_registry_record_profile_matches_the_cross_product_semanti
         "the exact generated entity schema closes the emitted domainData shape"
     );
 
+    let second_public_identifier = create_additional_record(
+        &harness,
+        "public-units",
+        &writer,
+        "seed-public-units-client-continuation",
+        json!({"label": "PUBLIC-CLIENT-CONTINUATION-CANARY"}),
+    )
+    .await;
+    let http_server = harness.serve_http().await;
+    exercise_registry_server_client(
+        http_server.base_url(),
+        &public_identifier,
+        &second_public_identifier,
+        &protected_identifier,
+        &protected_reader,
+        public,
+        protected,
+    )
+    .await;
+    http_server.finish().await;
+
     let dcat = artifact_json(&harness, "generated/manifest/dcat.jsonld");
     let dcat_text = dcat.to_string();
     assert!(dcat_text.contains("public-units"));
@@ -209,6 +237,177 @@ async fn create_record(
         .as_str()
         .expect("Server assigns an opaque non-empty record identifier")
         .to_owned()
+}
+
+async fn create_additional_record(
+    harness: &PilotHarness,
+    route: &str,
+    token: &str,
+    idempotency_key: &str,
+    domain_data: Value,
+) -> String {
+    let response = harness
+        .send_json(
+            Method::POST,
+            &format!("/v1/records/{route}?accessProfile=fixture-writer"),
+            Some(token),
+            Some(idempotency_key),
+            json!({"data": domain_data}),
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::CREATED, "seed {route}");
+    response_json(response).await["data"]["recordIdentifier"]
+        .as_str()
+        .expect("Server assigns an opaque non-empty record identifier")
+        .to_owned()
+}
+
+async fn exercise_registry_server_client(
+    base_url: &str,
+    first_public_identifier: &str,
+    second_public_identifier: &str,
+    protected_identifier: &str,
+    protected_reader_token: &str,
+    public: &Value,
+    protected: &Value,
+) {
+    let anonymous_client = RegistryServerClient::new(RegistryServerClientConfig::new(
+        base_url.parse().expect("pilot loopback URL parses"),
+    ))
+    .expect("anonymous Registry Server client config is valid");
+    let protected_client = RegistryServerClient::new(
+        RegistryServerClientConfig::new(base_url.parse().expect("pilot loopback URL parses"))
+            .with_token_provider(Arc::new(
+                StaticToken::new(protected_reader_token)
+                    .expect("MockIdp token is an outbound bearer value"),
+            )),
+    )
+    .expect("protected Registry Server client config is valid");
+
+    let public_openapi = anonymous_client
+        .openapi(Some("public-reader"))
+        .await
+        .expect("anonymous caller receives its filtered OpenAPI");
+    let public_openapi: Value = serde_json::from_slice(public_openapi.value.as_bytes())
+        .expect("client preserves strict OpenAPI bytes");
+    assert!(public_openapi["paths"]
+        .get("/v1/records/public-units/{record_id}")
+        .is_some());
+    assert!(public_openapi.to_string().find("protected-units").is_none());
+
+    let protected_openapi = protected_client
+        .openapi(Some("protected-reader"))
+        .await
+        .expect("authorized caller receives its filtered OpenAPI");
+    let protected_openapi: Value = serde_json::from_slice(protected_openapi.value.as_bytes())
+        .expect("client preserves strict protected OpenAPI bytes");
+    assert!(protected_openapi["paths"]
+        .get("/v1/records/protected-units/{record_id}")
+        .is_some());
+    assert!(protected_openapi["paths"]
+        .get("/v1/records/public-units/{record_id}")
+        .is_none());
+
+    let public_options = ServerRecordOptions::default()
+        .access_profile("public-reader")
+        .expect("compiled public profile is a valid client identifier");
+    let public_json = anonymous_client
+        .get_record("public-units", first_public_identifier, &public_options)
+        .await
+        .expect("anonymous client decodes one JSON Registry Record");
+    assert_eq!(
+        public_json.value.data.record_identifier,
+        first_public_identifier
+    );
+    assert_eq!(
+        public_json.value.data.domain_data.get("label"),
+        public["records"][0]["domainData"].get("label")
+    );
+    assert!(public_json.metadata.etag().is_some());
+
+    let public_json_ld_options = ServerRecordOptions::default()
+        .access_profile("public-reader")
+        .expect("compiled public profile is a valid client identifier")
+        .format(ServerRecordFormat::JsonLd);
+    let public_json_ld = anonymous_client
+        .get_record(
+            "public-units",
+            first_public_identifier,
+            &public_json_ld_options,
+        )
+        .await
+        .expect("anonymous client decodes one JSON-LD Registry Record");
+    assert!(public_json_ld
+        .value
+        .json_ld_context
+        .as_ref()
+        .is_some_and(|context| context.is_shared_only()));
+
+    let first_page = anonymous_client
+        .list_records(
+            "public-units",
+            &ServerListRequest::default()
+                .options(public_options)
+                .top(1)
+                .expect("one is a valid Server page size"),
+        )
+        .await
+        .expect("anonymous client decodes the first bounded collection page");
+    assert_eq!(first_page.value.value.items.len(), 1);
+    assert!(first_page.metadata.etag().is_none());
+    let continuation = first_page
+        .value
+        .continuation
+        .as_ref()
+        .expect("two records with top=1 produce an explicit continuation");
+    let second_page = anonymous_client
+        .continue_list(continuation)
+        .await
+        .expect("client advances exactly one opaque Server continuation");
+    assert_eq!(second_page.value.value.items.len(), 1);
+    assert!(second_page.value.continuation.is_none());
+    let returned_identifiers = first_page
+        .value
+        .value
+        .items
+        .iter()
+        .chain(second_page.value.value.items.iter())
+        .map(|record| record.record_identifier.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        returned_identifiers,
+        BTreeSet::from([first_public_identifier, second_public_identifier])
+    );
+
+    let protected_options = ServerRecordOptions::default()
+        .access_profile("protected-reader")
+        .expect("compiled protected profile is a valid client identifier");
+    let protected_json = protected_client
+        .get_record("protected-units", protected_identifier, &protected_options)
+        .await
+        .expect("authorized client decodes one protected Registry Record");
+    assert_eq!(
+        protected_json.value.data.domain_data.get("label"),
+        protected["records"][0]["domainData"].get("label")
+    );
+    let protected_list = protected_client
+        .list_records(
+            "protected-units",
+            &ServerListRequest::default().options(protected_options.clone()),
+        )
+        .await
+        .expect("authorized client decodes the protected collection");
+    assert_eq!(protected_list.value.value.items.len(), 1);
+
+    let concealed = anonymous_client
+        .get_record("protected-units", protected_identifier, &protected_options)
+        .await
+        .expect_err("anonymous access to the protected route stays concealed");
+    assert_eq!(concealed.status(), Some(StatusCode::NOT_FOUND.as_u16()));
+    assert_eq!(
+        concealed.problem_code(),
+        Some(RegistryServerProblemCode::ResourceNotFound)
+    );
 }
 
 async fn get_success(

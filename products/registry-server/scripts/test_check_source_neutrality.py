@@ -19,6 +19,19 @@ SPEC.loader.exec_module(CHECKER)
 
 
 class SourceNeutralityTests(unittest.TestCase):
+    def test_fixture_identifier_in_registry_server_client_source_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "crates/registry-relay-client/src/server.rs"
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                'const ROUTE: &str = "/v1/records/legal-entities";\n',
+                encoding="utf-8",
+            )
+            violations = CHECKER.find_violations(root)
+        self.assertTrue(violations, violations)
+        self.assertIn("/v1/records/legal-entities", violations[0])
+
     def test_fixture_identifier_in_production_source_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
