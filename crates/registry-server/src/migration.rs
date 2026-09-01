@@ -13,10 +13,14 @@ use thiserror::Error;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 use crate::event_destination::EventDestinationCompatibilityInventory;
+use crate::history_schema::HistorySchemaDescriptor;
 use crate::migration_plan::{
     ExternalBackupBinding, ReviewedMigrationStepDescriptor, ValidatedReviewedMigrationPlan,
 };
-use crate::package::{PackageFileRole, VerifiedPackage};
+use crate::package::{
+    CompiledRegistryChangeClass, CompiledRegistryMigrationBaseline, MigrationPlan, PackageFileRole,
+    VerifiedPackage,
+};
 use crate::postgres::{
     statement_checksum, ConnectionConfig, ExpectedManagedCatalog, ExpectedRegistryIdentity,
     MigrationArtifactBinding, MigrationLedgerEntry, MigrationLedgerStep, MigrationLedgerStepKind,
@@ -44,6 +48,16 @@ pub enum MigrationError {
 }
 
 pub type Result<T> = std::result::Result<T, MigrationError>;
+
+fn verified_metadata_only_plan(plan: &MigrationPlan) -> bool {
+    !plan.changes.is_empty()
+        && plan.statements.is_empty()
+        && plan.reviewed_descriptors.is_empty()
+        && plan
+            .changes
+            .iter()
+            .all(|change| change.class == CompiledRegistryChangeClass::AccessOrDisclosureChange)
+}
 
 /// Exact durable precondition under which a verified package may be applied.
 pub enum ApplyPrecondition<'a> {
@@ -123,6 +137,8 @@ pub struct ApplyVerifiedPackageRequest<'a> {
     roles: ApplyRoles<'a>,
     timeouts: ApplyTimeouts,
     backup_evidence: &'a [DestructiveBackupEvidence<'a>],
+    predecessor_history_descriptor: Option<&'a HistorySchemaDescriptor>,
+    predecessor_migration_baseline: Option<&'a CompiledRegistryMigrationBaseline>,
     event_destination_compatibility_inventory: Option<&'a EventDestinationCompatibilityInventory>,
     fault_after_committed_chunks: Option<u64>,
 }
@@ -143,6 +159,8 @@ impl<'a> ApplyVerifiedPackageRequest<'a> {
             roles,
             timeouts,
             backup_evidence: &[],
+            predecessor_history_descriptor: None,
+            predecessor_migration_baseline: None,
             event_destination_compatibility_inventory: None,
             fault_after_committed_chunks: None,
         }
@@ -154,6 +172,32 @@ impl<'a> ApplyVerifiedPackageRequest<'a> {
         evidence: &'a [DestructiveBackupEvidence<'a>],
     ) -> Self {
         self.backup_evidence = evidence;
+        self
+    }
+
+    /// Bind successor history readiness to the already verified, read-only
+    /// predecessor schema descriptor. This descriptor can be retained and used
+    /// to decode historical snapshots, but it never grants runtime authority or
+    /// permission to execute predecessor SQL.
+    #[must_use]
+    pub fn with_predecessor_history_descriptor(
+        mut self,
+        descriptor: &'a HistorySchemaDescriptor,
+    ) -> Self {
+        self.predecessor_history_descriptor = Some(descriptor);
+        self
+    }
+
+    /// Bind successor history readiness to the verified predecessor baseline
+    /// when the target manifest cannot carry one. The baseline only describes
+    /// historical storage shape; it does not grant startup, runtime, or SQL
+    /// execution authority.
+    #[must_use]
+    pub fn with_predecessor_migration_baseline(
+        mut self,
+        baseline: &'a CompiledRegistryMigrationBaseline,
+    ) -> Self {
+        self.predecessor_migration_baseline = Some(baseline);
         self
     }
 
@@ -246,10 +290,33 @@ pub async fn apply_verified_package(
     {
         return Err(MigrationError::PackageBinding);
     }
-    if manifest.migration_plan.statements.is_empty() && reviewed_plan.is_none() {
+    let successor_history = if let Some(plan_current) = current {
+        let predecessor_baseline = bind_predecessor_baseline(
+            manifest.migration_plan.prior_baseline.as_ref(),
+            request.predecessor_migration_baseline,
+        )?;
+        if predecessor_baseline
+            .is_some_and(|baseline| baseline.package_revision != plan_current.package_revision)
+            || request
+                .predecessor_history_descriptor
+                .is_some_and(|descriptor| {
+                    descriptor.package_revision != plan_current.package_revision
+                })
+        {
+            return Err(MigrationError::PackageBinding);
+        }
+        Some((predecessor_baseline, request.predecessor_history_descriptor))
+    } else {
+        None
+    };
+    if manifest.migration_plan.statements.is_empty()
+        && reviewed_plan.is_none()
+        && !verified_metadata_only_plan(&manifest.migration_plan)
+    {
         return Err(MigrationError::EmptyPlan);
     }
 
+    let metadata_only_plan = verified_metadata_only_plan(&manifest.migration_plan);
     let compiler_checksums = manifest
         .migration_plan
         .statements
@@ -267,7 +334,11 @@ pub async fn apply_verified_package(
             source_revision: current.map(|identity| identity.package_revision.clone()),
             target_revision: target.package_revision.clone(),
             package_sequence: target.package_sequence,
-            plan_kind: MigrationPlanKind::CompiledAdditive,
+            plan_kind: if metadata_only_plan {
+                MigrationPlanKind::MetadataOnly
+            } else {
+                MigrationPlanKind::CompiledAdditive
+            },
             statement_checksums: compiler_checksums.clone(),
             artifact_bindings: Vec::new(),
             steps: Vec::new(),
@@ -348,12 +419,32 @@ pub async fn apply_verified_package(
         return Err(MigrationError::ApplyFailed);
     }
 
+    if let Some((predecessor_baseline, predecessor_descriptor)) = successor_history {
+        if connection
+            .ensure_successor_history_ready(
+                current.ok_or(MigrationError::PackageBinding)?,
+                predecessor_baseline,
+                predecessor_descriptor,
+                request.roles.runtime,
+            )
+            .await
+            .is_err()
+        {
+            return fail_and_release(connection, &target, &ledger).await;
+        }
+        if connection
+            .retain_target_history_descriptor(request.package.registry(), &target.package_revision)
+            .await
+            .is_err()
+        {
+            return fail_and_release(connection, &target, &ledger).await;
+        }
+    }
+
     let expected_catalog = ExpectedManagedCatalog::compiled(request.package.registry());
     if let Some(plan) = reviewed_plan {
-        let prior_tables = manifest
-            .migration_plan
-            .prior_baseline
-            .as_ref()
+        let prior_tables = successor_history
+            .and_then(|(baseline, _)| baseline)
             .ok_or(MigrationError::PackageBinding)?
             .entities
             .values()
@@ -369,7 +460,13 @@ pub async fn apply_verified_package(
         let execution = connection
             .execute_reviewed_package_plan(ReviewedPackageExecutionRequest {
                 registry: request.package.registry(),
+                current: current.ok_or(MigrationError::PackageBinding)?,
+                target_package_revision: &target.package_revision,
                 plan,
+                predecessor_baseline: successor_history.and_then(|(baseline, _)| baseline),
+                predecessor_history_descriptor: successor_history
+                    .and_then(|(_, descriptor)| descriptor),
+                runtime_role: request.roles.runtime,
                 compiler_statements: &statements,
                 ledger: &ledger,
                 prior_tables: &prior_tables,
@@ -446,6 +543,7 @@ pub async fn apply_verified_package(
         connection
             .execute_initial_package_ddl(
                 request.package.registry(),
+                &target.package_revision,
                 &statements,
                 request.roles.runtime,
                 request.timeouts.statement,
@@ -611,6 +709,37 @@ fn reviewed_ledger(
     Ok(ledger)
 }
 
+fn bind_predecessor_baseline<'a>(
+    target_baseline: Option<&'a CompiledRegistryMigrationBaseline>,
+    verified_baseline: Option<&'a CompiledRegistryMigrationBaseline>,
+) -> Result<Option<&'a CompiledRegistryMigrationBaseline>> {
+    match (target_baseline, verified_baseline) {
+        (Some(target), Some(verified)) => {
+            if !predecessor_baselines_match(target, verified) {
+                return Err(MigrationError::PackageBinding);
+            }
+            Ok(Some(verified))
+        }
+        (Some(target), None) => Ok(Some(target)),
+        (None, Some(verified)) => Ok(Some(verified)),
+        (None, None) => Ok(None),
+    }
+}
+
+fn predecessor_baselines_match(
+    target: &CompiledRegistryMigrationBaseline,
+    verified: &CompiledRegistryMigrationBaseline,
+) -> bool {
+    target.package_revision == verified.package_revision
+        && target.registry_id == verified.registry_id
+        && target.registry_version == verified.registry_version
+        && target.entities == verified.entities
+        && target.physical_names == verified.physical_names
+        && target.routes == verified.routes
+        && target.access == verified.access
+        && target.queries == verified.queries
+}
+
 async fn verify_destructive_backup_evidence(
     plan: Option<&ValidatedReviewedMigrationPlan>,
     current: Option<&ExpectedRegistryIdentity>,
@@ -752,4 +881,58 @@ fn verify_backup_digest(mut file: File, binding: &ExternalBackupBinding) -> Resu
         return Err(MigrationError::BackupEvidence);
     }
     Ok(file)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use crate::model::{
+        CompiledAccessInventory, CompiledActionInventory, CompiledQueryInventory,
+        CompiledRouteInventory,
+    };
+    use crate::package::CompiledRegistryMigrationBaseline;
+    use crate::physical_names::PhysicalNameInventory;
+
+    use super::*;
+
+    fn baseline(package_revision: &str, registry_id: &str) -> CompiledRegistryMigrationBaseline {
+        CompiledRegistryMigrationBaseline {
+            package_revision: package_revision.to_owned(),
+            registry_id: registry_id.to_owned(),
+            registry_version: "1".to_owned(),
+            registry_revision: "ignored-descriptor-revision".to_owned(),
+            entities: BTreeMap::new(),
+            physical_names: PhysicalNameInventory {
+                entities: BTreeMap::new(),
+            },
+            routes: CompiledRouteInventory { routes: Vec::new() },
+            access: CompiledAccessInventory {
+                entries: Vec::new(),
+            },
+            queries: CompiledQueryInventory {
+                operations: Vec::new(),
+            },
+            actions: CompiledActionInventory::default(),
+        }
+    }
+
+    #[test]
+    fn verified_predecessor_baseline_overrides_only_matching_target_baseline() {
+        let target = baseline("package-a", "registry-a");
+        let mut verified = baseline("package-a", "registry-a");
+        verified.registry_revision = "verified-effective-model-digest".to_owned();
+        assert!(std::ptr::eq(
+            bind_predecessor_baseline(Some(&target), Some(&verified))
+                .expect("matching baselines bind")
+                .expect("baseline is retained"),
+            &verified
+        ));
+
+        let forged = baseline("package-a", "registry-b");
+        assert_eq!(
+            bind_predecessor_baseline(Some(&forged), Some(&verified)),
+            Err(MigrationError::PackageBinding)
+        );
+    }
 }

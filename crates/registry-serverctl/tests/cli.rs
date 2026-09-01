@@ -15,9 +15,10 @@ use registry_server::fixtures::{
     validate_fixture_journeys, validate_schema_test_receipt_for_package,
 };
 use registry_server::package::{
-    prepare_package, PackageBuildRequest, PackageMigrationPlanInput, PackageModuleSource,
-    PackageSignature, PackageSourceFile, PackageTrustAnchor, PreparedPackage, SignaturePolicy,
-    TrustAnchorKey, FIXTURE_JOURNEYS_PATH, MAX_PACKAGE_SOURCE_FILE_BYTES, TRUST_ANCHOR_API_VERSION,
+    load_predecessor_package, prepare_package, PackageBuildRequest, PackageMigrationPlanInput,
+    PackageModuleSource, PackageSignature, PackageSourceFile, PackageTrustAnchor,
+    PredecessorPackageContext, PreparedPackage, SignaturePolicy, TrustAnchorKey,
+    FIXTURE_JOURNEYS_PATH, MAX_PACKAGE_SOURCE_FILE_BYTES, TRUST_ANCHOR_API_VERSION,
 };
 use serde::Serialize;
 use serde_json::{json, Value};

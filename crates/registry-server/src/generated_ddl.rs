@@ -514,6 +514,7 @@ fn runtime_privileges(
                 | Operation::List
                 | Operation::Batch
                 | Operation::Revisions
+                | Operation::Snapshot
         )
     }) || path_select_entities(entities).contains(&entity.id)
     {
@@ -712,6 +713,7 @@ fn profile_supports_command(operations: &BTreeSet<Operation>, command: PolicyCom
                     | Operation::List
                     | Operation::Batch
                     | Operation::Revisions
+                    | Operation::Snapshot
             )
         }),
         PolicyCommand::Insert => operations.contains(&Operation::Create),
@@ -2646,7 +2648,7 @@ fn constraint_sql(
                 quote_identifier(&valid_to.physical_name)
             ));
             return format!(
-                "ALTER TABLE registry_data.{table} ADD CONSTRAINT {name} EXCLUDE USING gist ({})",
+                "ALTER TABLE registry_data.{table} ADD CONSTRAINT {name} EXCLUDE USING gist ({}) DEFERRABLE INITIALLY IMMEDIATE",
                 elements.join(", ")
             );
         }

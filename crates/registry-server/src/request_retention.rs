@@ -13,6 +13,10 @@ use uuid::Uuid;
 
 use crate::audit::{append_terminal_audit, TerminalAudit, TerminalAuditOutcome};
 use crate::correlation::RequestCorrelation;
+use crate::history_commit::{
+    allocate_revision_commit, CommitAllocation, HistoryCommitError, RevisionCommitMember,
+};
+use crate::history_context::CommitOrigin;
 use crate::model::{
     CompiledChangeRequestRetentionMode, CompiledEntity, CompiledRegistry, HttpMethod,
 };
@@ -215,6 +219,7 @@ impl RequestRetentionOperatorService {
 
     #[cfg(feature = "postgres-test")]
     #[doc(hidden)]
+    #[allow(clippy::too_many_arguments)] // Keep distinct migration and runtime identities explicit.
     pub fn new_for_test(
         registry: CompiledRegistry,
         expected: ExpectedRegistryIdentity,
@@ -392,9 +397,30 @@ impl RequestRetentionOperatorService {
             .map_err(|_| RequestRetentionError::Unavailable)?;
         let transaction = self.begin_verified_transaction(&mut client).await?;
         let plan = load_erasure_plan(&transaction, &self.registry, scope.clone(), true).await?;
-        let erasure =
+        let (erasure, current_revision) =
             erase_request_detail_in_transaction(&transaction, &self.registry, scope.clone(), &plan)
                 .await?;
+        if let Some(current_revision) = &current_revision {
+            let members = [RevisionCommitMember {
+                entity_id: current_revision.entity_id.as_str(),
+                record_id: current_revision.record_id,
+                record_revision: current_revision.record_revision,
+            }];
+            allocate_revision_commit(
+                &transaction,
+                CommitAllocation {
+                    package_revision: &self.expected.package_revision,
+                    origin: CommitOrigin::Migration {
+                        system_origin: "registry-server-request-retention-erasure-v1",
+                        migration_reference: Some(RETENTION_OPERATION_ID),
+                    },
+                    change_context: None,
+                    members: &members,
+                },
+            )
+            .await
+            .map_err(map_history_commit_error)?;
+        }
         append_retention_audit(
             &transaction,
             &self.audit_profile,
@@ -533,7 +559,8 @@ pub async fn erase_request_detail(
         .await
         .map_err(|_| RequestRetentionError::Unavailable)?;
     let plan = load_erasure_plan(&transaction, registry, scope.clone(), true).await?;
-    let erasure = erase_request_detail_in_transaction(&transaction, registry, scope, &plan).await?;
+    let (erasure, _) =
+        erase_request_detail_in_transaction(&transaction, registry, scope, &plan).await?;
     transaction
         .commit()
         .await
@@ -792,7 +819,7 @@ async fn erase_request_detail_in_transaction(
     registry: &CompiledRegistry,
     scope: RequestDetailErasureScope<'_>,
     plan: &RequestErasurePlan,
-) -> Result<RequestDetailErasure> {
+) -> Result<(RequestDetailErasure, Option<ErasedCurrentRevision>)> {
     let request_entity = registry
         .entities()
         .get(scope.request_entity_id)
@@ -907,14 +934,16 @@ async fn erase_request_detail_in_transaction(
         )
         .await
         .map_err(map_retention_error)?;
-    let current_intake_rows = if plan.erase_current_intake {
+    let current_revision = if plan.erase_current_intake {
         set_request_table_force_row_security(transaction, request_entity, false).await?;
-        let rows = erase_current_intake_row(transaction, request_entity, scope.request_id).await?;
+        let revision =
+            erase_current_intake_row(transaction, request_entity, scope.request_id).await?;
         set_request_table_force_row_security(transaction, request_entity, true).await?;
-        rows
+        revision
     } else {
-        0
+        None
     };
+    let current_intake_rows = u64::from(current_revision.is_some());
     let erasure = RequestDetailErasure {
         proposal_snapshots,
         target_snapshots,
@@ -926,7 +955,7 @@ async fn erase_request_detail_in_transaction(
     if erasure != plan.erasure {
         return Err(RequestRetentionError::Unavailable);
     }
-    Ok(erasure)
+    Ok((erasure, current_revision))
 }
 
 async fn set_request_table_force_row_security(
@@ -1057,7 +1086,7 @@ async fn erase_current_intake_row(
     transaction: &tokio_postgres::Transaction<'_>,
     entity: &CompiledEntity,
     request_id: Uuid,
-) -> Result<u64> {
+) -> Result<Option<ErasedCurrentRevision>> {
     let table = SqlIdentifier::parse(&entity.physical_table)
         .map_err(|_| RequestRetentionError::Unavailable)?;
     let retained_fields = request_row_boundary_fields(entity);
@@ -1148,7 +1177,17 @@ async fn erase_current_intake_row(
         )
         .await
         .map_err(map_retention_error)?;
-    Ok(changed)
+    Ok(Some(ErasedCurrentRevision {
+        entity_id: entity.id.clone(),
+        record_id: request_id,
+        record_revision: next_revision,
+    }))
+}
+
+struct ErasedCurrentRevision {
+    entity_id: String,
+    record_id: Uuid,
+    record_revision: i64,
 }
 
 fn request_row_boundary_fields(entity: &CompiledEntity) -> BTreeSet<String> {
@@ -1188,5 +1227,9 @@ async fn request_tables_exist(client: &impl GenericClient) -> Result<bool> {
 }
 
 fn map_retention_error(_error: tokio_postgres::Error) -> RequestRetentionError {
+    RequestRetentionError::Unavailable
+}
+
+fn map_history_commit_error(_error: HistoryCommitError) -> RequestRetentionError {
     RequestRetentionError::Unavailable
 }

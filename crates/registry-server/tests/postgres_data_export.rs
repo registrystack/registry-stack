@@ -31,7 +31,7 @@ use registry_server::data::{
     DataImportPlan,
 };
 use registry_server::postgres::{
-    initialize_registry_state_for_catalog_test, install_compiled_schema, ExpectedManagedCatalog,
+    initialize_compiled_registry_state_for_test, install_compiled_schema,
     PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey,
     RegistryStateTestIdentity,
 };
@@ -53,10 +53,10 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
     install_compiled_schema(&migration, &registry, &database.runtime_role)
         .await
         .expect("data export schema installs");
-    let identity = initialize_registry_state_for_catalog_test(
+    let identity = initialize_compiled_registry_state_for_test(
         &migration,
         &database.runtime_role,
-        &ExpectedManagedCatalog::compiled(&registry),
+        &registry,
         RegistryStateTestIdentity {
             package_id: "data-export-registry",
             environment: "local",
@@ -129,6 +129,11 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
     let after_import = durable_counts(&database, &registry).await;
     assert_eq!(after_import.current - before_import.current, 101);
     assert_eq!(after_import.revisions - before_import.revisions, 101);
+    assert_eq!(after_import.commits - before_import.commits, 2);
+    assert_eq!(
+        after_import.commit_members - before_import.commit_members,
+        101
+    );
     assert_eq!(after_import.outbox - before_import.outbox, 101);
     assert_eq!(after_import.idempotency - before_import.idempotency, 2);
     assert!(after_import.audit > before_import.audit);
@@ -454,6 +459,8 @@ impl ReadinessProbe for AlwaysReady {
 struct Counts {
     current: i64,
     revisions: i64,
+    commits: i64,
+    commit_members: i64,
     outbox: i64,
     audit: i64,
     idempotency: i64,
@@ -473,7 +480,9 @@ async fn durable_counts(
                    (SELECT count(*) FROM registry_internal.registry_revisions),
                    (SELECT count(*) FROM registry_internal.registry_outbox),
                    (SELECT count(*) FROM registry_internal.registry_audit),
-                   (SELECT count(*) FROM registry_internal.registry_idempotency)"
+                   (SELECT count(*) FROM registry_internal.registry_idempotency),
+                   (SELECT count(*) FROM registry_internal.registry_revision_commits),
+                   (SELECT count(*) FROM registry_internal.registry_revision_commit_members)"
             ),
             &[],
         )
@@ -485,6 +494,8 @@ async fn durable_counts(
         outbox: row.get(2),
         audit: row.get(3),
         idempotency: row.get(4),
+        commits: row.get(5),
+        commit_members: row.get(6),
     }
 }
 

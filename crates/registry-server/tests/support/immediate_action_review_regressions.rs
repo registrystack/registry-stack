@@ -1021,8 +1021,7 @@ async fn seed_wide_record(
         .map(|index| q(&entity.fields[&wide_flag_id(index)].physical_name))
         .collect::<Vec<_>>()
         .join(", ");
-    let flag_values = std::iter::repeat("false")
-        .take(WIDE_EFFECT_COUNT)
+    let flag_values = std::iter::repeat_n("false", WIDE_EFFECT_COUNT)
         .collect::<Vec<_>>()
         .join(", ");
     database

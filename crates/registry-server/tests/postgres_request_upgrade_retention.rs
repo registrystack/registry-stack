@@ -14,7 +14,7 @@ use registry_platform_audit::AuditProfile;
 use registry_server::compiler::{compile_project, CompileProfile};
 use registry_server::contract::parse_project_json;
 use registry_server::postgres::{
-    initialize_registry_state_for_catalog_test, install_compiled_schema,
+    initialize_compiled_registry_state_for_test, install_compiled_schema,
     verify_catalog_identity_for_catalog, ExpectedManagedCatalog, RegistryLockKey,
     RegistryStateTestIdentity,
 };
@@ -190,10 +190,10 @@ async fn exact_request_retention_erases_all_bound_payload_copies_and_keeps_prove
         .await
         .expect("compiled schema installs");
     let catalog = ExpectedManagedCatalog::compiled(&registry);
-    let identity = initialize_registry_state_for_catalog_test(
+    let identity = initialize_compiled_registry_state_for_test(
         &migration,
         &database.runtime_role,
-        &catalog,
+        &registry,
         RegistryStateTestIdentity {
             package_id: "change-request-retention",
             environment: "local",
@@ -374,10 +374,10 @@ async fn operator_retention_service_counts_pages_erases_under_forced_rls_and_aud
         .await
         .expect("compiled schema installs");
     let catalog = ExpectedManagedCatalog::compiled(&registry);
-    let identity = initialize_registry_state_for_catalog_test(
+    let identity = initialize_compiled_registry_state_for_test(
         &migration,
         &database.runtime_role,
-        &catalog,
+        &registry,
         RegistryStateTestIdentity {
             package_id: "change-request-retention",
             environment: "local",
@@ -478,11 +478,36 @@ async fn operator_retention_service_counts_pages_erases_under_forced_rls_and_aud
     assert_eq!(planned.erasure.outbox_payloads, 4);
     assert_eq!(planned.erasure.current_intake_rows, 1);
 
+    let before_history = history_commit_counts(&migration).await;
     let erased = service
         .erase(scope)
         .await
         .expect("operator erasure succeeds");
     assert_eq!(erased.erasure, planned.erasure);
+    let after_history = history_commit_counts(&migration).await;
+    assert_eq!(
+        after_history.commits - before_history.commits,
+        1,
+        "operator erasure allocates one history commit for the current request tombstone"
+    );
+    assert_eq!(
+        after_history.members - before_history.members,
+        1,
+        "operator erasure commit includes only the current request tombstone revision"
+    );
+    let request_id = Uuid::parse_str(REQUEST_ID).expect("request id parses");
+    let current_request_revision =
+        current_request_revision(&database.admin, &registry, request_id).await;
+    let retention_members = retention_erasure_history_members(&migration, request_id).await;
+    assert_eq!(
+        retention_members,
+        vec![HistoryCommitMember {
+            entity_id: REQUEST_ENTITY.to_owned(),
+            record_id: request_id,
+            record_revision: current_request_revision,
+        }],
+        "operator erasure commit member points at the tombstoned request revision"
+    );
     assert_eq!(retained_payload_counts(&migration).await, (0, 0, 2, 2, 2));
     assert!(
         request_table_force_rls(&migration, &registry).await,
@@ -1069,6 +1094,85 @@ async fn retained_payload_counts(client: &Client) -> (i64, i64, i64, i64, i64) {
         .await
         .expect("payload count query succeeds");
     (row.get(0), row.get(1), row.get(2), row.get(3), row.get(4))
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct HistoryCommitCounts {
+    commits: i64,
+    members: i64,
+}
+
+async fn history_commit_counts(client: &Client) -> HistoryCommitCounts {
+    let row = client
+        .query_one(
+            "SELECT
+                 (SELECT count(*) FROM registry_internal.registry_revision_commits),
+                 (SELECT count(*) FROM registry_internal.registry_revision_commit_members)",
+            &[],
+        )
+        .await
+        .expect("administrator can inspect history commits");
+    HistoryCommitCounts {
+        commits: row.get(0),
+        members: row.get(1),
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct HistoryCommitMember {
+    entity_id: String,
+    record_id: Uuid,
+    record_revision: i64,
+}
+
+async fn retention_erasure_history_members(
+    client: &Client,
+    request_id: Uuid,
+) -> Vec<HistoryCommitMember> {
+    client
+        .query(
+            "SELECT member.entity_id, member.record_id, member.record_revision
+               FROM registry_internal.registry_revision_commits AS revision_commit
+               JOIN registry_internal.registry_revision_commit_members AS member
+                 ON member.commit_position = revision_commit.commit_position
+              WHERE revision_commit.origin_kind = 'migration'
+                AND revision_commit.system_origin = 'registry-server-request-retention-erasure-v1'
+                AND revision_commit.migration_reference = 'records.request.retention.erase'
+                AND member.entity_id = $1
+                AND member.record_id = $2
+              ORDER BY member.member_index",
+            &[&REQUEST_ENTITY, &request_id],
+        )
+        .await
+        .expect("administrator can inspect retention history commit members")
+        .into_iter()
+        .map(|row| HistoryCommitMember {
+            entity_id: row.get(0),
+            record_id: row.get(1),
+            record_revision: row.get(2),
+        })
+        .collect()
+}
+
+async fn current_request_revision(
+    client: &Client,
+    registry: &registry_server::CompiledRegistry,
+    request_id: Uuid,
+) -> i64 {
+    let request = &registry.entities()[REQUEST_ENTITY];
+    client
+        .query_one(
+            &format!(
+                "SELECT record_revision
+                   FROM registry_data.{}
+                  WHERE record_id = $1",
+                quote(&request.physical_table)
+            ),
+            &[&request_id],
+        )
+        .await
+        .expect("current request revision loads")
+        .get(0)
 }
 
 async fn request_current_detail(

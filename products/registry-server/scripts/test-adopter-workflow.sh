@@ -1142,4 +1142,6 @@ if [[ "$server_hash_before" != "$server_hash_after" ]]; then
   exit 1
 fi
 
+REGISTRY_SERVER_SKIP_BUILD=1 "$script_dir/test-historical-workflow.sh"
+
 printf '%s\n' 'Registry Server clean adopter workflow passed'

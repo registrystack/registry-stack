@@ -110,6 +110,19 @@ impl ReviewFixture {
         fs::create_dir_all(review.join(BASE)).unwrap();
         fs::write(review.join(BASE).join("descriptor.json"), &descriptor_bytes).unwrap();
         fs::write(review.join(BASE).join("rehearsal.json"), &receipt_bytes).unwrap();
+        let predecessor = load_predecessor_package(
+            &baseline.package,
+            &PredecessorPackageContext {
+                environment: "production",
+                instance_id: PACKAGE_INSTANCE,
+                database_id: PACKAGE_DATABASE,
+                database_initialization_environment: "production",
+                trust_anchor: Some(&baseline.anchor),
+                expected_package_revision: inspected.package_revision(),
+                expected_sequence: 1,
+            },
+        )
+        .unwrap();
         let prepared = prepare_package(PackageBuildRequest {
             environment: "production".into(),
             instance_id: PACKAGE_INSTANCE.into(),
@@ -136,8 +149,8 @@ impl ReviewFixture {
                 path: FIXTURE_JOURNEYS_PATH.into(),
                 bytes: PACKAGE_FIXTURE_JOURNEYS.to_vec(),
             },
-            migration_plan: PackageMigrationPlanInput::ReviewedSuccessor {
-                prior_registry: Box::new(inspected.registry().clone()),
+            migration_plan: PackageMigrationPlanInput::ReviewedSuccessorFromBaseline {
+                prior_baseline: Box::new(predecessor.migration_baseline().clone()),
                 prior_schema_fingerprint: inspected.schema_fingerprint().into(),
                 migrations: vec![ReviewedMigrationSource {
                     module_id: "core".into(),
@@ -322,6 +335,47 @@ fn reviewed_successor_cli_requires_a_verified_baseline_argument() {
         clap::error::ErrorKind::MissingRequiredArgument
     );
     assert!(error.to_string().contains("--baseline-runtime-config"));
+}
+
+#[test]
+fn reviewed_successor_refuses_mismatched_baseline_database_before_receipt_validation() {
+    let fixture = ReviewFixture::create();
+    let receipt = fixture.project.path().join("test-receipt.json");
+    fs::write(
+        &receipt,
+        schema_test_receipt_bytes(&fixture.prepared, &["package-record-list"]),
+    )
+    .unwrap();
+    let output = fixture.project.path().join("wrong-database-build");
+    let result = registry_serverctl(&[
+        "--format",
+        "json",
+        "package",
+        path(fixture.project.path()),
+        "--database-id",
+        "other-database",
+        "--baseline-runtime-config",
+        path(&fixture.baseline.runtime_config),
+        "--signature-threshold",
+        "1",
+        "--signature-key-id",
+        &fixture.key_id,
+        "--reviewed-migrations",
+        path(&fixture.review),
+        "--schema-fingerprint",
+        FINGERPRINT,
+        "--test-receipt",
+        path(&receipt),
+        "--output",
+        path(&output),
+    ]);
+
+    assert!(!result.status.success());
+    assert_eq!(
+        json_stdout(&result)["diagnostics"][0]["code"],
+        "package.baseline.identity"
+    );
+    assert!(!output.exists());
 }
 
 #[test]

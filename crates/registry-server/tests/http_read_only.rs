@@ -12,7 +12,8 @@ use registry_platform_canonical_json::parse_json_strict;
 use registry_server::api::{
     router, HeldReadResponse, HttpService, ReadRuntimeIdentity, ReadServiceError, ReadinessProbe,
     RecordReadKind, RecordReadRequest, RecordReadService, RevisionReadRefusal, RevisionReadRequest,
-    RevisionReadService, ServiceFuture, VerifiedClaimValue, VerifiedRequestClaims,
+    RevisionReadService, ServiceFuture, SnapshotReadRequest, SnapshotReadService,
+    VerifiedClaimValue, VerifiedRequestClaims,
 };
 use registry_server::artifacts::REGISTRY_METADATA_ARTIFACT_PATH;
 use registry_server::contract::{ModuleAssetSource, Operation};
@@ -302,6 +303,323 @@ struct RecordingRevisionReadService {
     refusals: AtomicUsize,
     refusal_fails: AtomicBool,
     requests: Mutex<Vec<RevisionReadRequest>>,
+}
+
+#[derive(Default)]
+struct RecordingSnapshotReadService {
+    requests: Mutex<Vec<SnapshotReadRequest>>,
+    refusals: AtomicUsize,
+    refusal_fails: AtomicBool,
+}
+
+impl SnapshotReadService for RecordingSnapshotReadService {
+    fn list(
+        &self,
+        request: SnapshotReadRequest,
+    ) -> ServiceFuture<'_, Result<HeldReadResponse, ReadServiceError>> {
+        self.requests.lock().unwrap().push(request);
+        Box::pin(async { Ok(held(json!({"items": [], "snapshot": "test-reference"}))) })
+    }
+
+    fn refusal(
+        &self,
+        _: registry_server::api::RecordReadRefusal,
+    ) -> ServiceFuture<'_, Result<(), ReadServiceError>> {
+        self.refusals.fetch_add(1, Ordering::SeqCst);
+        let fails = self.refusal_fails.load(Ordering::SeqCst);
+        Box::pin(async move {
+            if fails {
+                Err(ReadServiceError::Unavailable)
+            } else {
+                Ok(())
+            }
+        })
+    }
+}
+
+const SNAPSHOT_PROJECT: &str = r#"
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry: {id: snapshot-surface, version: 1, defaultLanguage: en}
+entities:
+  - id: assignment
+    route: assignments
+    mutationMode: mutable
+    tombstone: true
+    classification: restricted
+    temporal: {startField: starts, endField: ends}
+    fields:
+      - {id: label, type: string, required: true, maxLength: 100, classification: restricted}
+      - {id: jurisdiction, type: string, required: true, maxLength: 32, classification: restricted}
+      - {id: starts, type: date, required: true, classification: restricted}
+      - {id: ends, type: date, classification: restricted}
+accessProfiles:
+  - id: history
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: [registry.read]
+    requiredPurposes: [case-management]
+    grants:
+      - entity: assignment
+        operations: [snapshot]
+        readableFields: [label, starts, ends]
+        filterableFields: [label]
+        sortableFields: [label]
+        allowCount: true
+        rowBoundaries:
+          - {field: jurisdiction, claim: jurisdictions, operator: in}
+  - id: live-only
+    principalClaim: registry_principal
+    requiredScopes: [registry.read]
+    grants:
+      - entity: assignment
+        operations: [get, list]
+        readableFields: [label, starts, ends]
+  - id: revision-only
+    principalClaim: registry_principal
+    requiredScopes: [registry.read]
+    grants:
+      - entity: assignment
+        operations: [revisions]
+        revisionAccess: true
+        readableFields: [label]
+"#;
+
+fn snapshot_harness(
+    source: &str,
+    assets: &[ModuleAssetSource],
+) -> (
+    axum::Router,
+    Arc<RecordingReadService>,
+    Arc<RecordingSnapshotReadService>,
+) {
+    let project = parse_project_yaml(source.as_bytes()).unwrap();
+    let registry = Arc::new(
+        compile_project_with_assets(&project, &[], assets, CompileProfile::Authoring)
+            .expect("snapshot project compiles"),
+    );
+    let records = Arc::new(RecordingReadService::default());
+    let snapshots = Arc::new(RecordingSnapshotReadService::default());
+    let service = HttpService::new(
+        registry,
+        read_identity(),
+        records.clone(),
+        Arc::new(ControlledReadiness(AtomicBool::new(true))),
+        cursor_codec(),
+    )
+    .with_snapshots(snapshots.clone());
+    (router(Arc::new(service)), records, snapshots)
+}
+
+#[tokio::test]
+async fn snapshot_route_requires_its_own_current_authority_and_never_calls_live_reads() {
+    let (app, records, snapshots) = snapshot_harness(SNAPSHOT_PROJECT, &[]);
+    for (suffix, claims) in [
+        ("", None),
+        ("", Some(caseworker_claims("wrong-purpose"))),
+        (
+            "?accessProfile=live-only",
+            Some(caseworker_claims("case-management")),
+        ),
+        (
+            "?accessProfile=revision-only",
+            Some(caseworker_claims("case-management")),
+        ),
+        ("?snapshot=private-canary", None),
+    ] {
+        let response = send_to(
+            &app,
+            Method::GET,
+            &format!("/v1/records/assignments:snapshot{suffix}"),
+            claims,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert!(!String::from_utf8(body_bytes(response).await)
+            .unwrap()
+            .contains("canary"));
+    }
+    assert!(snapshots.requests.lock().unwrap().is_empty());
+    let response = send_to(&app, Method::GET,
+        "/v1/records/assignments:snapshot?validAt=2026-06-05&$select=label&$filter=label%20eq%20'A'&$top=3&$count=true",
+        Some(caseworker_claims("case-management"))).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    {
+        let requests = snapshots.requests.lock().unwrap();
+        let request = requests.last().unwrap();
+        assert_eq!(
+            request.plan.kind,
+            registry_server::model::CompiledQueryKind::Snapshot
+        );
+        assert_eq!(request.plan.temporal_instant.as_deref(), Some("2026-06-05"));
+        assert_eq!(
+            request.selected_fields,
+            BTreeSet::from(["label".to_owned()])
+        );
+        assert_eq!(request.maximum_records, 4);
+        assert!(request.plan.include_count);
+        assert_eq!(request.context.row_boundaries().len(), 1);
+    }
+    assert_eq!(records.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(records.refusals.load(Ordering::SeqCst), 0);
+    snapshots.refusal_fails.store(true, Ordering::SeqCst);
+    let response = send_to(&app, Method::GET, "/v1/records/assignments:snapshot", None).await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn snapshot_validity_is_typed_optional_and_has_no_clock_default() {
+    for (source, accepted, rejected) in [
+        (
+            SNAPSHOT_PROJECT.to_owned(),
+            "2026-06-05",
+            "2026-06-05T00:00:00Z",
+        ),
+        (
+            SNAPSHOT_PROJECT.replace("type: date", "type: timestamp"),
+            "2026-06-05T00:00:00Z",
+            "2026-06-05",
+        ),
+    ] {
+        let (app, _, snapshots) = snapshot_harness(&source, &[]);
+        for value in [Some(accepted), None] {
+            let uri = value.map_or_else(
+                || "/v1/records/assignments:snapshot".to_owned(),
+                |value| format!("/v1/records/assignments:snapshot?validAt={value}"),
+            );
+            let response = send_to(
+                &app,
+                Method::GET,
+                &uri,
+                Some(caseworker_claims("case-management")),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(
+                snapshots
+                    .requests
+                    .lock()
+                    .unwrap()
+                    .last()
+                    .unwrap()
+                    .plan
+                    .temporal_instant
+                    .as_deref(),
+                value
+            );
+        }
+        for invalid in [rejected, "2026-02-30", "2026-06-05T00:00:00%2B07:00"] {
+            let response = send_to(
+                &app,
+                Method::GET,
+                &format!("/v1/records/assignments:snapshot?validAt={invalid}"),
+                Some(caseworker_claims("case-management")),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+        assert_eq!(snapshots.requests.lock().unwrap().len(), 2);
+    }
+    let non_temporal =
+        SNAPSHOT_PROJECT.replace("    temporal: {startField: starts, endField: ends}\n", "");
+    let (app, _, snapshots) = snapshot_harness(&non_temporal, &[]);
+    let response = send_to(
+        &app,
+        Method::GET,
+        "/v1/records/assignments:snapshot?validAt=2026-06-05",
+        Some(caseworker_claims("case-management")),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(snapshots.requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn snapshot_rejects_ambiguous_time_and_cursor_overrides_before_history_io() {
+    let (app, records, snapshots) = snapshot_harness(SNAPSHOT_PROJECT, &[]);
+    for query in [
+        "recordedAsOf=2026-06-05",
+        "asOf=2026-06-05",
+        "snapshot=forged-canary",
+        "snapshot=a&snapshot=b",
+        "validAt=2026-06-05&validAt=2026-07-05",
+        "$skiptoken=canary&validAt=2026-06-05",
+        "$skiptoken=canary&snapshot=canary",
+        "$expand=household",
+        "$select=hidden",
+        "$top=101",
+    ] {
+        let response = send_to(
+            &app,
+            Method::GET,
+            &format!("/v1/records/assignments:snapshot?{query}"),
+            Some(caseworker_claims("case-management")),
+        )
+        .await;
+        assert!(response.status().is_client_error(), "{query}");
+        assert!(!String::from_utf8(body_bytes(response).await)
+            .unwrap()
+            .contains("canary"));
+    }
+    assert!(snapshots.requests.lock().unwrap().is_empty());
+    assert_eq!(records.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn snapshot_default_projection_excludes_live_derived_fields() {
+    let source = DERIVED_DISCOVERY_PROJECT.replace(
+        "operations: [get, list]",
+        "operations: [get, list, snapshot]",
+    );
+    let (app, records, snapshots) = snapshot_harness(&source, &[ModuleAssetSource {
+        module: None,
+        path: "sql/eligibility.sql".to_owned(),
+        bytes: b"SELECT benefit.id AS id, 0::bigint AS eligibility_score FROM registry_source.benefit_record benefit".to_vec(),
+    }]);
+    let metadata = send_to(
+        &app,
+        Method::GET,
+        "/v1/registry",
+        Some(caseworker_claims("case-management")),
+    )
+    .await;
+    assert_eq!(metadata.status(), StatusCode::OK);
+    let metadata = body_json(metadata).await;
+    assert!(metadata["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|entity| entity["operations"].as_array().unwrap())
+        .any(|operation| operation["operation"] == "snapshot"));
+    let response = send_to(
+        &app,
+        Method::GET,
+        "/v1/records/benefit-records:snapshot",
+        Some(caseworker_claims("case-management")),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        snapshots.requests.lock().unwrap()[0].selected_fields,
+        BTreeSet::from(["label".to_owned()])
+    );
+    for query in [
+        "$select=eligibilityScore",
+        "$filter=eligibilityScore%20eq%200",
+        "$orderby=eligibilityScore",
+    ] {
+        let response = send_to(
+            &app,
+            Method::GET,
+            &format!("/v1/records/benefit-records:snapshot?{query}"),
+            Some(caseworker_claims("case-management")),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+    assert_eq!(snapshots.requests.lock().unwrap().len(), 1);
+    assert_eq!(records.calls.load(Ordering::SeqCst), 0);
 }
 
 impl RevisionReadService for RecordingRevisionReadService {
@@ -2126,6 +2444,7 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::CancelRequest => "cancel_request",
         Operation::ApplyRequest => "apply_request",
         Operation::Invoke => "invoke",
+        Operation::Snapshot => "snapshot",
     }
 }
 

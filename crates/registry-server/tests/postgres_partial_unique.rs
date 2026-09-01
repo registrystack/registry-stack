@@ -10,7 +10,7 @@ use postgres_harness::TestDatabase;
 use registry_server::compiler::{compile_project, CompileProfile};
 use registry_server::contract::parse_project_json;
 use registry_server::postgres::{
-    initialize_registry_state_for_catalog_test, install_compiled_schema,
+    initialize_compiled_registry_state_for_test, install_compiled_schema,
     verify_catalog_identity_for_catalog, ExpectedManagedCatalog, RegistryStateTestIdentity,
 };
 
@@ -58,10 +58,10 @@ async fn real_postgres_partial_unique_index_enforces_only_the_closed_predicate()
         .await
         .expect("partial unique DDL installs");
     let catalog = ExpectedManagedCatalog::compiled(&registry);
-    let identity = initialize_registry_state_for_catalog_test(
+    let identity = initialize_compiled_registry_state_for_test(
         &migration,
         &database.runtime_role,
-        &catalog,
+        &registry,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
             environment: "local",

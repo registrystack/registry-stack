@@ -11,21 +11,30 @@ use uuid::Uuid;
 
 use crate::event_destination::EventDestinationCompatibilityInventory;
 use crate::generated_ddl::DdlStatementKind;
+use crate::history_commit::{install_empty_history_baseline, install_history_commit_schema};
+use crate::history_migration::{
+    ensure_successor_history_ready as ensure_successor_history_ready_state,
+    finish_bounded_history_update, prepare_bounded_history_update,
+};
+use crate::history_schema::HistorySchemaDescriptor;
+use crate::history_store::{install_history_schema_store, retain_descriptor};
 use crate::migration_plan::{
     AffectedRowBounds, ReviewedMigrationStepDescriptor, ValidatedReviewedMigrationAssertion,
     ValidatedReviewedMigrationPlan, ValidatedReviewedMigrationStep,
 };
 use crate::model::CompiledRegistry;
 use crate::mutation::install_mutation_schema;
+use crate::package::CompiledRegistryMigrationBaseline;
 
 use super::{
     catalog::{install_registry_state_schema, verify_managed_catalog, ExpectedManagedCatalog},
     config::ConnectionTls,
     migration_ledger::{
-        migration_phase_state, record_applied, record_chunk_progress, record_failed,
-        record_postconditions_complete, record_preconditions_complete, record_started,
-        record_step_complete, statement_checksum, step_progress, verify_resumable,
-        MigrationLedgerEntry, MigrationLedgerStep, MigrationLedgerStepKind,
+        migration_phase_state, reconcile_migration_ledger_metadata_only_constraints,
+        record_applied, record_chunk_progress, record_failed, record_postconditions_complete,
+        record_preconditions_complete, record_started, record_step_complete, statement_checksum,
+        step_progress, verify_resumable, MigrationLedgerEntry, MigrationLedgerStep,
+        MigrationLedgerStepKind,
     },
     schema::reconcile_compiled_runtime_acl,
     verify_btree_gist, verify_migration_role, ConnectionConfig, ExpectedRegistryIdentity,
@@ -53,7 +62,12 @@ pub(crate) enum ReviewedExecutionOutcome {
 
 pub(crate) struct ReviewedPackageExecutionRequest<'a> {
     pub registry: &'a CompiledRegistry,
+    pub current: &'a ExpectedRegistryIdentity,
+    pub target_package_revision: &'a str,
     pub plan: &'a ValidatedReviewedMigrationPlan,
+    pub predecessor_baseline: Option<&'a CompiledRegistryMigrationBaseline>,
+    pub predecessor_history_descriptor: Option<&'a HistorySchemaDescriptor>,
+    pub runtime_role: &'a SqlIdentifier,
     pub compiler_statements: &'a [PackageDdlStatement<'a>],
     pub ledger: &'a MigrationLedgerEntry,
     pub prior_tables: &'a [String],
@@ -250,7 +264,12 @@ impl DedicatedApplyConnection {
     ) -> Result<ReviewedExecutionOutcome> {
         let ReviewedPackageExecutionRequest {
             registry,
+            current,
+            target_package_revision,
             plan,
+            predecessor_baseline,
+            predecessor_history_descriptor,
+            runtime_role,
             compiler_statements,
             ledger,
             prior_tables,
@@ -264,6 +283,14 @@ impl DedicatedApplyConnection {
         if plan.migrations().is_empty() {
             return Err(PostgresKernelError::RegistryUnavailable);
         }
+
+        self.ensure_successor_history_ready(
+            current,
+            predecessor_baseline,
+            predecessor_history_descriptor,
+            runtime_role,
+        )
+        .await?;
 
         self.execute_reviewed_assertion_phase(plan, ledger, prior_tables, false)
             .await?;
@@ -297,6 +324,9 @@ impl DedicatedApplyConnection {
                             return Err(PostgresKernelError::RegistryUnavailable);
                         }
                         self.execute_reviewed_transactional_step(
+                            registry,
+                            target_package_revision,
+                            &migration.descriptor_path,
                             step,
                             affected_rows.as_ref(),
                             ledger,
@@ -518,8 +548,12 @@ impl DedicatedApplyConnection {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)] // The ledger and history use distinct verified bindings.
     async fn execute_reviewed_transactional_step(
         &mut self,
+        registry: &CompiledRegistry,
+        target_package_revision: &str,
+        descriptor_path: &str,
         step: &ValidatedReviewedMigrationStep,
         affected_bounds: Option<&AffectedRowBounds>,
         ledger: &MigrationLedgerEntry,
@@ -543,14 +577,26 @@ impl DedicatedApplyConnection {
         let affected = if let Some(bounds) = affected_bounds {
             let tables = step_tables(step)?;
             set_force_row_security(&transaction, &tables, false).await?;
+            let history_capture =
+                prepare_bounded_history_update(&transaction, registry, descriptor_path, step)
+                    .await
+                    .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
             let affected = transaction
                 .execute(&step.sql, &[])
                 .await
                 .map_err(|_| PostgresKernelError::Connection)?;
-            set_force_row_security(&transaction, &tables, true).await?;
             if affected < bounds.min || affected > bounds.max {
                 return Err(PostgresKernelError::RegistryUnavailable);
             }
+            finish_bounded_history_update(
+                &transaction,
+                registry,
+                target_package_revision,
+                history_capture,
+            )
+            .await
+            .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+            set_force_row_security(&transaction, &tables, true).await?;
             affected
         } else {
             transaction
@@ -653,6 +699,7 @@ impl DedicatedApplyConnection {
     pub(crate) async fn execute_initial_package_ddl(
         &mut self,
         registry: &CompiledRegistry,
+        package_revision: &str,
         statements: &[PackageDdlStatement<'_>],
         runtime_role: &SqlIdentifier,
         statement_timeout: Duration,
@@ -675,6 +722,12 @@ impl DedicatedApplyConnection {
         install_mutation_schema(&transaction, runtime_role)
             .await
             .map_err(|_| PostgresKernelError::Connection)?;
+        install_history_schema_store(&transaction, runtime_role)
+            .await
+            .map_err(|_| PostgresKernelError::Connection)?;
+        install_history_commit_schema(&transaction, runtime_role)
+            .await
+            .map_err(|_| PostgresKernelError::Connection)?;
         for (statement, compiled) in statements.iter().zip(&registry.ddl().statements) {
             validate_statement_checksum(statement)?;
             // The two managed schemas are administrator-provisioned and owned
@@ -689,6 +742,82 @@ impl DedicatedApplyConnection {
                 return Err(PostgresKernelError::Connection);
             }
         }
+        retain_descriptor(&transaction, registry, package_revision)
+            .await
+            .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+        for table in &registry.ddl().tables {
+            let table_name = SqlIdentifier::parse(&table.physical_name)?;
+            let row = transaction
+                .query_one(
+                    &format!(
+                        "SELECT count(*)::bigint FROM registry_data.{}",
+                        table_name.quoted()
+                    ),
+                    &[],
+                )
+                .await?;
+            if row.get::<_, i64>(0) != 0 {
+                return Err(PostgresKernelError::RegistryUnavailable);
+            }
+        }
+        install_empty_history_baseline(&transaction, package_revision)
+            .await
+            .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+        transaction.commit().await?;
+        Ok(())
+    }
+
+    /// Establishes or verifies successor history readiness while the durable
+    /// maintenance boundary and dedicated session-level apply lock are held.
+    pub(crate) async fn ensure_successor_history_ready(
+        &mut self,
+        current: &ExpectedRegistryIdentity,
+        predecessor_baseline: Option<&CompiledRegistryMigrationBaseline>,
+        predecessor_history_descriptor: Option<&HistorySchemaDescriptor>,
+        runtime_role: &SqlIdentifier,
+    ) -> Result<()> {
+        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
+        let transaction = self.client.transaction().await?;
+        let predecessor_tables = predecessor_baseline
+            .map(|baseline| {
+                baseline
+                    .entities
+                    .values()
+                    .map(|entity| entity.physical_table.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if !predecessor_tables.is_empty() {
+            set_force_row_security(&transaction, &predecessor_tables, false).await?;
+        }
+        let readiness = ensure_successor_history_ready_state(
+            &transaction,
+            current,
+            predecessor_baseline,
+            predecessor_history_descriptor,
+            runtime_role,
+        )
+        .await;
+        if !predecessor_tables.is_empty() {
+            set_force_row_security(&transaction, &predecessor_tables, true).await?;
+        }
+        readiness.map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+        transaction.commit().await?;
+        Ok(())
+    }
+
+    /// Retains the target package history descriptor before the target can be
+    /// made ready, including exact-target recovery paths where DDL already ran.
+    pub(crate) async fn retain_target_history_descriptor(
+        &mut self,
+        registry: &CompiledRegistry,
+        package_revision: &str,
+    ) -> Result<()> {
+        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
+        let transaction = self.client.transaction().await?;
+        retain_descriptor(&transaction, registry, package_revision)
+            .await
+            .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
         transaction.commit().await?;
         Ok(())
     }
@@ -814,6 +943,7 @@ impl DedicatedApplyConnection {
                 ],
             )
             .await?;
+        reconcile_migration_ledger_metadata_only_constraints(&transaction).await?;
         if changed == 1 {
             record_started(&transaction, ledger).await?;
         } else {

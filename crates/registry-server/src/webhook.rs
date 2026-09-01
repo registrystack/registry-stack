@@ -1337,7 +1337,7 @@ impl WebhookWorker {
     #[must_use]
     pub fn new(service: WebhookDeliveryService) -> Self {
         Self {
-            kind: WebhookWorkerKind::Delivery(service),
+            kind: WebhookWorkerKind::Delivery(Box::new(service)),
         }
     }
 
@@ -1373,7 +1373,7 @@ impl WebhookWorker {
 
 #[derive(Clone)]
 enum WebhookWorkerKind {
-    Delivery(WebhookDeliveryService),
+    Delivery(Box<WebhookDeliveryService>),
     #[cfg(feature = "postgres-test")]
     LifecycleProbe(WebhookWorkerLifecycleProbe),
 }

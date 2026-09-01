@@ -31,6 +31,18 @@ pub mod event_destination;
 pub mod fixtures;
 pub mod generated_ddl;
 #[cfg(feature = "runtime")]
+pub(crate) mod history_commit;
+#[cfg(feature = "runtime")]
+pub mod history_context;
+#[cfg(feature = "runtime")]
+pub mod history_erasure;
+#[cfg(feature = "runtime")]
+pub(crate) mod history_migration;
+pub(crate) mod history_reference;
+pub mod history_schema;
+#[cfg(feature = "runtime")]
+pub(crate) mod history_store;
+#[cfg(feature = "runtime")]
 pub mod idempotency;
 pub mod immediate_actions;
 pub mod logical_names;
@@ -50,6 +62,8 @@ pub mod physical_names;
 #[cfg(feature = "runtime")]
 pub mod postgres;
 pub mod query;
+#[cfg(feature = "runtime")]
+pub(crate) mod query_binding;
 #[cfg(feature = "runtime")]
 pub mod request_events;
 #[cfg(feature = "runtime")]

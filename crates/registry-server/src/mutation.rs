@@ -36,6 +36,11 @@ use crate::contract::{
 use crate::correlation::RequestCorrelation;
 use crate::data::{validate_field_value, FieldValue};
 use crate::event_destination::ActivatedEventDestinationRegistry;
+use crate::history_commit::{
+    allocate_revision_commit, install_history_commit_schema, CommitAllocation, HistoryCommitError,
+    RevisionCommitMember,
+};
+use crate::history_context::{ChangeContext, CommitOrigin};
 use crate::idempotency::{
     insert_result, lock_and_load, resolve_action_binding, resolve_binding,
     ActionIdempotencyBinding, HeldResponse, IdempotencyBinding, IdempotencyError,
@@ -81,7 +86,8 @@ pub async fn install_mutation_schema(
                  package_revision text NOT NULL CHECK (package_revision <> ''),
                  operation_id text NOT NULL CHECK (operation_id <> ''),
                  mutation_kind text NOT NULL
-                     CHECK (mutation_kind IN ('create', 'patch', 'tombstone')),
+                     CONSTRAINT registry_revisions_mutation_kind_check
+                     CHECK (mutation_kind IN ('create', 'patch', 'tombstone', 'migration')),
                  principal_reference text NOT NULL CHECK (principal_reference <> ''),
                  request_reference text NOT NULL CHECK (request_reference <> ''),
                  snapshot bytea,
@@ -90,12 +96,13 @@ pub async fn install_mutation_schema(
                  PRIMARY KEY (entity_id, record_id, record_revision),
                  CHECK (predecessor_revision IS NULL OR predecessor_revision < record_revision)
              );
-             ALTER TABLE registry_internal.registry_revisions
+            ALTER TABLE registry_internal.registry_revisions
                  ADD COLUMN IF NOT EXISTS erased_at timestamptz,
                  ALTER COLUMN snapshot DROP NOT NULL,
                  DROP CONSTRAINT IF EXISTS registry_revisions_snapshot_check,
                  DROP CONSTRAINT IF EXISTS registry_revisions_snapshot_bounds,
-                 DROP CONSTRAINT IF EXISTS registry_revisions_erasure_shape;
+                 DROP CONSTRAINT IF EXISTS registry_revisions_erasure_shape,
+                 DROP CONSTRAINT IF EXISTS registry_revisions_mutation_kind_check;
              ALTER TABLE registry_internal.registry_revisions
                  ADD CONSTRAINT registry_revisions_snapshot_bounds CHECK (
                      snapshot IS NULL OR
@@ -103,7 +110,9 @@ pub async fn install_mutation_schema(
                  ),
                  ADD CONSTRAINT registry_revisions_erasure_shape CHECK (
                      (snapshot IS NULL) = (erased_at IS NOT NULL)
-                 );
+                 ),
+                 ADD CONSTRAINT registry_revisions_mutation_kind_check
+                 CHECK (mutation_kind IN ('create', 'patch', 'tombstone', 'migration'));
              CREATE TABLE IF NOT EXISTS registry_internal.registry_outbox (
                  outbox_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
                  event_id uuid NOT NULL UNIQUE,
@@ -268,7 +277,9 @@ pub async fn install_mutation_schema(
              CREATE TABLE IF NOT EXISTS registry_internal.registry_idempotency (
                  key_reference text PRIMARY KEY CHECK (key_reference <> ''),
                  binding_reference text NOT NULL CHECK (binding_reference <> ''),
-                 result_kind text NOT NULL CHECK (result_kind IN ('record', 'batch', 'application', 'immediate_action')),
+                 result_kind text NOT NULL
+                     CONSTRAINT registry_idempotency_result_kind_values
+                     CHECK (result_kind IN ('record', 'batch', 'application', 'immediate_action', 'erased')),
                  record_reference text CHECK (record_reference <> ''),
                  record_revision bigint CHECK (record_revision > 0),
                  result_count smallint CHECK (result_count BETWEEN 1 AND 100 OR
@@ -279,7 +290,7 @@ pub async fn install_mutation_schema(
                      CHECK (octet_length(response_body) > 0 AND octet_length(response_body) <= 2097152),
                  response_headers bytea NOT NULL CHECK (octet_length(response_headers) <= 65536),
                  created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
-                 CHECK (
+                 CONSTRAINT registry_idempotency_result_shape CHECK (
                      (result_kind = 'record' AND record_reference IS NOT NULL
                          AND record_revision IS NOT NULL AND result_count IS NULL
                          AND proposal_version IS NULL)
@@ -296,6 +307,10 @@ pub async fn install_mutation_schema(
                      (result_kind = 'immediate_action' AND record_reference IS NULL
                          AND record_revision IS NULL AND result_count IS NOT NULL
                          AND result_count BETWEEN 0 AND {MAX_IMMEDIATE_ACTION_RESULTS}
+                         AND proposal_version IS NULL)
+                     OR
+                     (result_kind = 'erased' AND record_reference IS NULL
+                         AND record_revision IS NULL AND result_count IS NULL
                          AND proposal_version IS NULL)
                  )
              );
@@ -368,11 +383,12 @@ pub async fn install_mutation_schema(
                      CHECK ((response_body IS NULL) = (erased_at IS NOT NULL));
              ALTER TABLE registry_internal.registry_idempotency
                  DROP CONSTRAINT IF EXISTS registry_idempotency_result_kind_check,
+                 DROP CONSTRAINT IF EXISTS registry_idempotency_result_kind_values,
                  DROP CONSTRAINT IF EXISTS registry_idempotency_check,
                  DROP CONSTRAINT IF EXISTS registry_idempotency_result_shape;
              ALTER TABLE registry_internal.registry_idempotency
-                 ADD CONSTRAINT registry_idempotency_result_kind_check
-                     CHECK (result_kind IN ('record', 'batch', 'application', 'immediate_action')),
+                 ADD CONSTRAINT registry_idempotency_result_kind_values
+                     CHECK (result_kind IN ('record', 'batch', 'application', 'immediate_action', 'erased')),
                  ADD CONSTRAINT registry_idempotency_result_shape CHECK (
                      (result_kind = 'record' AND record_reference IS NOT NULL
                          AND record_revision IS NOT NULL AND result_count IS NULL
@@ -390,6 +406,10 @@ pub async fn install_mutation_schema(
                      (result_kind = 'immediate_action' AND record_reference IS NULL
                          AND record_revision IS NULL AND result_count IS NOT NULL
                          AND result_count BETWEEN 0 AND {MAX_IMMEDIATE_ACTION_RESULTS}
+                         AND proposal_version IS NULL)
+                     OR
+                     (result_kind = 'erased' AND record_reference IS NULL
+                         AND record_revision IS NULL AND result_count IS NULL
                          AND proposal_version IS NULL)
                  );",
         ))
@@ -418,6 +438,50 @@ pub async fn install_mutation_schema(
              UPDATE registry_internal.registry_outbox
                 SET payload_expires_at = created_at + interval '7 days'
               WHERE payload_expires_at IS NULL;
+             ALTER TABLE registry_internal.registry_idempotency
+                 DROP CONSTRAINT IF EXISTS registry_idempotency_result_kind_check;
+             ALTER TABLE registry_internal.registry_idempotency
+                 DROP CONSTRAINT IF EXISTS registry_idempotency_result_kind_values;
+             ALTER TABLE registry_internal.registry_idempotency
+                 DROP CONSTRAINT IF EXISTS registry_idempotency_check;
+             DO $registry_idempotency_upgrade$
+             BEGIN
+                 IF NOT EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_constraint
+                      WHERE conrelid = 'registry_internal.registry_idempotency'::regclass
+                        AND conname = 'registry_idempotency_result_kind_values'
+                 ) THEN
+                     ALTER TABLE registry_internal.registry_idempotency
+                         ADD CONSTRAINT registry_idempotency_result_kind_values
+                         CHECK (result_kind IN ('record', 'batch', 'application', 'erased'));
+                 END IF;
+                 IF NOT EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_constraint
+                      WHERE conrelid = 'registry_internal.registry_idempotency'::regclass
+                        AND conname = 'registry_idempotency_result_shape'
+                 ) THEN
+                     ALTER TABLE registry_internal.registry_idempotency
+                         ADD CONSTRAINT registry_idempotency_result_shape CHECK (
+                             (result_kind = 'record' AND record_reference IS NOT NULL
+                                 AND record_revision IS NOT NULL AND result_count IS NULL
+                                 AND proposal_version IS NULL)
+                             OR
+                             (result_kind = 'batch' AND record_reference IS NULL
+                                 AND record_revision IS NULL AND result_count IS NOT NULL
+                                 AND proposal_version IS NULL)
+                             OR
+                             (result_kind = 'application' AND record_reference IS NOT NULL
+                                 AND record_revision IS NOT NULL AND result_count IS NOT NULL
+                                 AND result_count BETWEEN 1 AND 16
+                                 AND proposal_version IS NOT NULL)
+                             OR
+                             (result_kind = 'erased' AND record_reference IS NULL
+                                 AND record_revision IS NULL AND result_count IS NULL
+                                 AND proposal_version IS NULL)
+                         );
+                 END IF;
+             END
+             $registry_idempotency_upgrade$;
              DO $registry_outbox_upgrade$
              BEGIN
                  IF EXISTS (
@@ -612,6 +676,9 @@ pub async fn install_mutation_schema(
         .await
         .map_err(|_| MutationError::Unavailable)?;
     crate::request_store::install(migration, runtime_role).await?;
+    install_history_commit_schema(migration, runtime_role)
+        .await
+        .map_err(MutationError::from)?;
     Ok(())
 }
 
@@ -620,6 +687,7 @@ pub struct MutationPlan {
     route: CompiledRoute,
     entity: CompiledEntity,
     event_deliveries: Vec<CompiledEventDelivery>,
+    temporal_exclusion_constraints: Vec<String>,
 }
 
 impl MutationPlan {
@@ -670,10 +738,13 @@ impl MutationPlan {
             return Err(MutationError::InvalidRequest);
         }
         let event_deliveries = exact_entity_event_deliveries(registry, entity)?;
+        let temporal_exclusion_constraints =
+            temporal_exclusion_constraints(registry, entity, inventory)?;
         Ok(Self {
             route: route.clone(),
             entity: entity.clone(),
             event_deliveries,
+            temporal_exclusion_constraints,
         })
     }
 
@@ -728,8 +799,43 @@ impl MutationPlan {
             },
             entity: self.entity.clone(),
             event_deliveries: self.event_deliveries.clone(),
+            temporal_exclusion_constraints: self.temporal_exclusion_constraints.clone(),
         })
     }
+}
+
+fn temporal_exclusion_constraints(
+    registry: &CompiledRegistry,
+    entity: &CompiledEntity,
+    inventory: &crate::physical_names::EntityPhysicalNames,
+) -> Result<Vec<String>, MutationError> {
+    let mut constraints = Vec::new();
+    let mut seen = BTreeSet::new();
+    for (constraint_id, constraint) in &entity.constraints {
+        if !matches!(
+            constraint,
+            crate::contract::ConstraintSource::TemporalNonOverlap { .. }
+        ) {
+            continue;
+        }
+        let name = inventory
+            .constraints
+            .get(constraint_id)
+            .ok_or(MutationError::InvalidRequest)?;
+        if !valid_physical_identifier(name) || !seen.insert(name.clone()) {
+            return Err(MutationError::InvalidRequest);
+        }
+        constraints.push(name.clone());
+    }
+    let expected = registry
+        .physical_names()
+        .entities
+        .get(&entity.id)
+        .ok_or(MutationError::InvalidRequest)?;
+    if expected.constraints != inventory.constraints {
+        return Err(MutationError::InvalidRequest);
+    }
+    Ok(constraints)
 }
 
 fn exact_entity_event_deliveries(
@@ -859,6 +965,7 @@ pub struct BatchMutationRequest<'a> {
     pub plan: &'a MutationPlan,
     pub idempotency_key: &'a str,
     pub claims: &'a ClaimContext,
+    pub change_context: Option<ChangeContext>,
     pub items: Vec<BatchMutationItem>,
     pub response_fields: BTreeSet<String>,
     pub body_bytes: usize,
@@ -1058,6 +1165,7 @@ impl MutationCoordinator {
             idempotency_key: request.idempotency_key,
             claims: request.claims,
             items: normalized_items,
+            change_context: request.change_context.clone(),
             response_fields: request.response_fields.clone(),
             body_bytes: request.body_bytes,
             correlation: request.correlation.clone(),
@@ -1228,7 +1336,6 @@ impl MutationCoordinator {
                 &current.record_id,
             )?,
         };
-        let held = self.held_response(request, &current)?;
         let snapshot = canonical_snapshot(&current.data)?;
         fault.fail_at(MutationFaultPoint::BeforeRevision)?;
         insert_revision(
@@ -1287,6 +1394,25 @@ impl MutationCoordinator {
             },
         )
         .await?;
+        let members = [RevisionCommitMember {
+            entity_id: &request.plan.entity.id,
+            record_id: current.record_uuid,
+            record_revision: current.record_revision,
+        }];
+        let committed = allocate_revision_commit(
+            transaction.transaction(),
+            CommitAllocation {
+                package_revision: &self.expected.package_revision,
+                origin: CommitOrigin::Mutation {
+                    actor_reference: &binding.principal_reference,
+                    request_reference: &binding.binding_reference,
+                },
+                change_context: None,
+                members: &members,
+            },
+        )
+        .await?;
+        let held = self.held_response(request, &current, committed.reference.to_string())?;
         fault.fail_at(MutationFaultPoint::BeforeTerminalAudit)?;
         append_terminal_audit(
             transaction.transaction(),
@@ -1407,8 +1533,16 @@ impl MutationCoordinator {
             });
         }
 
+        set_temporal_exclusion_constraints(
+            transaction.transaction(),
+            &request.plan.entity,
+            &request.plan.temporal_exclusion_constraints,
+            ConstraintTiming::Deferred,
+        )
+        .await?;
         let mut held_items = Vec::with_capacity(request.items.len());
         let mut request_receipt_links = Vec::new();
+        let mut commit_members = Vec::with_capacity(request.items.len());
         for (item_index, item) in request.items.iter().enumerate() {
             let item_plan = request
                 .plan
@@ -1495,6 +1629,11 @@ impl MutationCoordinator {
             )
             .await?;
             held_items.push(self.batch_item_response(request, item, &current)?);
+            commit_members.push(RevisionCommitMember {
+                entity_id: &request.plan.entity.id,
+                record_id: current.record_uuid,
+                record_revision: current.record_revision,
+            });
             #[cfg(feature = "postgres-test")]
             if item_index == 0 {
                 fault.fail_at(MutationFaultPoint::AfterFirstBatchItem)?;
@@ -1502,12 +1641,32 @@ impl MutationCoordinator {
             #[cfg(not(feature = "postgres-test"))]
             let _ = item_index;
         }
+        set_temporal_exclusion_constraints(
+            transaction.transaction(),
+            &request.plan.entity,
+            &request.plan.temporal_exclusion_constraints,
+            ConstraintTiming::Immediate,
+        )
+        .await?;
 
         let result_count =
             u16::try_from(held_items.len()).map_err(|_| MutationError::Unavailable)?;
+        let committed = allocate_revision_commit(
+            transaction.transaction(),
+            CommitAllocation {
+                package_revision: &self.expected.package_revision,
+                origin: CommitOrigin::Mutation {
+                    actor_reference: &binding.principal_reference,
+                    request_reference: &binding.binding_reference,
+                },
+                change_context: request.change_context.as_ref(),
+                members: &commit_members,
+            },
+        )
+        .await?;
         let held = HeldResponse::from_json(
             200,
-            &json!({"results": held_items}),
+            &json!({"snapshot": committed.reference.to_string(), "results": held_items}),
             BTreeMap::from([(
                 PermittedResponseHeader::ContentType,
                 b"application/json".to_vec(),
@@ -1600,6 +1759,7 @@ impl MutationCoordinator {
         &self,
         request: &MutationRequest<'_>,
         current: &CurrentRow,
+        snapshot_reference: String,
     ) -> Result<HeldResponse, MutationError> {
         let data = response_data(
             &request.plan.entity,
@@ -1609,6 +1769,7 @@ impl MutationCoordinator {
         let body = json!({
             "id": current.record_id,
             "revision": current.record_revision,
+            "snapshot": snapshot_reference,
             "data": data,
         });
         let etag = strong_record_etag(
@@ -2757,6 +2918,7 @@ fn canonical_batch_request_digest(
     let canonical = canonicalize_json(&json!({
         "method": method_name(request.plan.route.method),
         "route": request.plan.route.path,
+        "changeContextDigest": request.change_context.as_ref().map(|context| hex_bytes(&context.digest())),
         "items": request.items.iter().map(BatchMutationItem::canonical_json).collect::<Vec<_>>(),
     }))
     .map_err(|_| MutationError::InvalidRequest)?;
@@ -2904,6 +3066,86 @@ fn mutation_kind(operation: Operation) -> &'static str {
     }
 }
 
+#[derive(Clone, Copy)]
+enum ConstraintTiming {
+    Deferred,
+    Immediate,
+}
+
+impl ConstraintTiming {
+    fn as_sql(self) -> &'static str {
+        match self {
+            Self::Deferred => "DEFERRED",
+            Self::Immediate => "IMMEDIATE",
+        }
+    }
+}
+
+async fn set_temporal_exclusion_constraints(
+    transaction: &Transaction<'_>,
+    entity: &CompiledEntity,
+    constraint_names: &[String],
+    timing: ConstraintTiming,
+) -> Result<(), MutationError> {
+    if constraint_names.is_empty() {
+        return Ok(());
+    }
+    validate_temporal_exclusion_constraints(transaction, entity, constraint_names).await?;
+    let qualified = constraint_names
+        .iter()
+        .map(|name| format!("registry_data.{}", quote_identifier(name)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    transaction
+        .batch_execute(&format!("SET CONSTRAINTS {qualified} {}", timing.as_sql()))
+        .await
+        .map_err(map_database_error)?;
+    Ok(())
+}
+
+async fn validate_temporal_exclusion_constraints(
+    transaction: &Transaction<'_>,
+    entity: &CompiledEntity,
+    constraint_names: &[String],
+) -> Result<(), MutationError> {
+    if !valid_physical_identifier(&entity.physical_table)
+        || constraint_names
+            .iter()
+            .any(|name| !valid_physical_identifier(name))
+    {
+        return Err(MutationError::InvalidRequest);
+    }
+    let rows = transaction
+        .query(
+            "SELECT constraint_row.conname
+               FROM pg_catalog.pg_constraint AS constraint_row
+               JOIN pg_catalog.pg_class AS relation
+                 ON relation.oid = constraint_row.conrelid
+               JOIN pg_catalog.pg_namespace AS namespace
+                 ON namespace.oid = relation.relnamespace
+              WHERE namespace.nspname = 'registry_data'
+                AND relation.relname = $1
+                AND constraint_row.conname = ANY($2)
+                AND constraint_row.contype = 'x'
+                AND constraint_row.condeferrable",
+            &[&entity.physical_table, &constraint_names],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    let found = rows
+        .iter()
+        .map(|row| row.get::<_, String>(0))
+        .collect::<BTreeSet<_>>();
+    if found.len() != constraint_names.len()
+        || constraint_names
+            .iter()
+            .any(|name| !found.contains(name.as_str()))
+    {
+        return Err(MutationError::Unavailable);
+    }
+    Ok(())
+}
+
 fn method_name(method: HttpMethod) -> &'static str {
     match method {
         HttpMethod::Delete => "DELETE",
@@ -2957,6 +3199,16 @@ fn valid_uuid(value: &str) -> bool {
         && Uuid::parse_str(value).is_ok_and(|identifier| identifier.to_string() == value)
 }
 
+fn hex_bytes(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output
+}
+
 impl From<IdempotencyError> for MutationError {
     fn from(error: IdempotencyError) -> Self {
         match error {
@@ -2990,6 +3242,19 @@ impl From<RegistryAuditError> for MutationError {
         match error {
             RegistryAuditError::InvalidContext => Self::InvalidRequest,
             RegistryAuditError::Unavailable => Self::Unavailable,
+        }
+    }
+}
+
+impl From<HistoryCommitError> for MutationError {
+    fn from(error: HistoryCommitError) -> Self {
+        match error {
+            HistoryCommitError::InvalidInput => Self::InvalidRequest,
+            HistoryCommitError::NotReady
+            | HistoryCommitError::UnknownReference
+            | HistoryCommitError::WrongLineage
+            | HistoryCommitError::FutureReference
+            | HistoryCommitError::Unavailable => Self::Unavailable,
         }
     }
 }

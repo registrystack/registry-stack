@@ -25,7 +25,7 @@ use registry_server::package::{
     PackageTrustAnchor, SignaturePolicy, TrustAnchorKey, TRUST_ANCHOR_API_VERSION,
 };
 use registry_server::postgres::{
-    initialize_registry_state_for_catalog_test, install_compiled_schema,
+    initialize_compiled_registry_state_for_test, install_compiled_schema,
     managed_schema_fingerprint, ExpectedManagedCatalog, RegistryStateTestIdentity,
 };
 use registry_server::startup::{prepare_with_connection_and_key_source_for_test, PreparedServer};
@@ -134,10 +134,10 @@ impl PilotHarness {
         let verified = load_package(&package.root, &package_context)
             .expect("signed pilot package verifies with its exact committed sources");
         assert_eq!(verified.registry(), &sources.compiled);
-        initialize_registry_state_for_catalog_test(
+        initialize_compiled_registry_state_for_test(
             &migration,
             &database.runtime_role,
-            &ExpectedManagedCatalog::compiled(verified.registry()),
+            verified.registry(),
             RegistryStateTestIdentity {
                 package_id: &verified.manifest().package_id,
                 environment: &verified.manifest().environment,

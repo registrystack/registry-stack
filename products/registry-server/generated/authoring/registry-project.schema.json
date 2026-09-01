@@ -2464,6 +2464,7 @@
         "tombstone",
         "batch",
         "revisions",
+        "snapshot",
         "submit_request",
         "approve_request",
         "reject_request",
@@ -2926,6 +2927,7 @@
           "type": "string"
         },
         "scopeFields": {
+          "description": "Deprecated bounded predecessor bridge. New authoring should declare\nexclusivity only through `constraints[].scopeFields`.",
           "items": {
             "type": "string"
           },
@@ -2937,8 +2939,7 @@
       },
       "required": [
         "startField",
-        "endField",
-        "scopeFields"
+        "endField"
       ],
       "type": "object"
     },

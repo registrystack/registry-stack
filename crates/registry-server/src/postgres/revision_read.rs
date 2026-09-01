@@ -2,7 +2,7 @@
 
 //! Bounded PostgreSQL reads over the canonical internal revision journal.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -22,7 +22,13 @@ use crate::audit::{
     append_read_terminal_audit, profile_is_keyed, record_pre_io_audit, PreIoAudit, PreIoAuditKind,
     ReadTerminalAudit, TerminalAudit, TerminalAuditOutcome,
 };
-use crate::contract::{FieldTypeSource, Operation};
+use crate::contract::{FieldTypeSource, Operation, ProvenanceFieldSource};
+use crate::history_context::ChangeContext;
+use crate::history_migration::HISTORY_MIGRATION_SYSTEM_ORIGIN;
+use crate::history_schema::{
+    DecodedHistorySnapshot, HistorySchemaDescriptor, HistorySchemaError, MAX_HISTORY_SNAPSHOT_BYTES,
+};
+use crate::history_store::{self, HistoryStoreError};
 use crate::model::{
     CompiledEntity, CompiledRegistry, CompiledRevisionKind, HttpMethod,
     MAX_REVISION_HISTORY_RECORDS,
@@ -34,7 +40,6 @@ use super::{
 };
 
 const MAX_JOURNAL_TEXT_BYTES: usize = 512;
-const MAX_SNAPSHOT_BYTES: usize = 2 * 1024 * 1024;
 
 /// Runtime revision-history implementation. Every list is the newest 100
 /// authorized journal entries and detail reads exactly one positive revision.
@@ -194,7 +199,12 @@ impl PostgresRevisionReadService {
         if record_id.to_string() != request.record_id {
             return Err(ReadServiceError::Unavailable);
         }
-        let (sql, parameters) = revision_sql(request, &plan.entity, record_id)?;
+        let (sql, parameters) = revision_sql(
+            request,
+            &plan.entity,
+            record_id,
+            !plan.provenance_fields.is_empty(),
+        )?;
         let parameter_refs = parameters
             .iter()
             .map(|value| &**value as &(dyn ToSql + Sync))
@@ -204,17 +214,19 @@ impl PostgresRevisionReadService {
             .query(&sql, &parameter_refs)
             .await
             .map_err(|_| ReadServiceError::Unavailable)?;
-        let rows = rows
-            .iter()
-            .map(|row| {
-                revision_from_row(
-                    row,
-                    &plan.entity,
-                    &request.context,
-                    &request.selected_fields,
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut descriptors = BTreeMap::new();
+        let mut context_visibility = BTreeMap::new();
+        let rows = revision_rows_from_rows(
+            transaction.transaction(),
+            &rows,
+            &plan.entity,
+            &request.context,
+            &request.selected_fields,
+            plan.provenance_fields.as_slice(),
+            &mut descriptors,
+            &mut context_visibility,
+        )
+        .await?;
         transaction
             .commit()
             .await
@@ -352,6 +364,7 @@ impl RevisionReadService for PostgresRevisionReadService {
 struct RevisionReadPlan {
     kind: CompiledRevisionKind,
     entity: CompiledEntity,
+    provenance_fields: Vec<ProvenanceFieldSource>,
 }
 
 impl RevisionReadPlan {
@@ -400,6 +413,7 @@ impl RevisionReadPlan {
         Ok(Self {
             kind,
             entity: entity.clone(),
+            provenance_fields: profile.provenance_fields.clone(),
         })
     }
 }
@@ -408,6 +422,7 @@ fn revision_sql(
     request: &RevisionReadRequest,
     entity: &CompiledEntity,
     record_id: Uuid,
+    include_commit_context: bool,
 ) -> Result<(String, Vec<Box<dyn ToSql + Sync + Send>>), ReadServiceError> {
     let mut parameters: Vec<Box<dyn ToSql + Sync + Send>> =
         vec![Box::new(request.entity_id.clone()), Box::new(record_id)];
@@ -424,23 +439,31 @@ fn revision_sql(
         predicates.push(format!("record_revision = ${}::bigint", parameters.len()));
     }
     for boundary in request.context.row_boundaries() {
-        let field = entity
-            .fields
-            .get(boundary.field())
-            .ok_or(ReadServiceError::Unavailable)?;
-        parameters.push(Box::new(boundary.field().to_owned()));
-        let key_parameter = parameters.len();
+        let field_type = if boundary.field() == entity.canonical_id.id {
+            &entity.canonical_id.field_type
+        } else {
+            &entity
+                .fields
+                .get(boundary.field())
+                .ok_or(ReadServiceError::Unavailable)?
+                .field_type
+        };
+        let snapshot_value = if boundary.field() == entity.canonical_id.id {
+            "to_jsonb(record_id::text)".to_owned()
+        } else {
+            parameters.push(Box::new(boundary.field().to_owned()));
+            let key_parameter = parameters.len();
+            format!("(convert_from(snapshot, 'UTF8')::jsonb -> ${key_parameter}::text)")
+        };
         let mut values = Vec::new();
         for value in boundary.values() {
-            let canonical = canonical_boundary_value(value, &field.field_type)?;
+            let canonical = canonical_boundary_value(value, field_type)?;
             parameters.push(Box::new(canonical));
             values.push(format!("${}::text::jsonb", parameters.len()));
         }
         if values.is_empty() {
             return Err(ReadServiceError::Unavailable);
         }
-        let snapshot_value =
-            format!("(convert_from(snapshot, 'UTF8')::jsonb -> ${key_parameter}::text)");
         match boundary.operator() {
             ApiRowBoundaryOperator::Equals if values.len() == 1 => {
                 predicates.push(format!("{snapshot_value} = {}", values[0]));
@@ -455,29 +478,75 @@ fn revision_sql(
         i64::try_from(request.maximum_records).map_err(|_| ReadServiceError::Unavailable)?;
     parameters.push(Box::new(limit));
     let limit_parameter = parameters.len();
+    let context_select = if include_commit_context {
+        ", member.commit_position, commit.change_context"
+    } else {
+        ""
+    };
+    let context_join = if include_commit_context {
+        "LEFT JOIN registry_internal.registry_revision_commit_members AS member
+             USING (entity_id, record_id, record_revision)
+         LEFT JOIN registry_internal.registry_revision_commits AS commit
+             USING (commit_position)"
+    } else {
+        ""
+    };
     Ok((
         format!(
-            "SELECT record_id, record_revision, predecessor_revision, record_lifecycle,
-                    package_revision, operation_id, mutation_kind, principal_reference,
-                    request_reference, snapshot, created_at,
+            "SELECT revision.record_id, revision.record_revision, revision.predecessor_revision,
+                    revision.record_lifecycle, revision.package_revision, revision.operation_id,
+                    revision.mutation_kind, revision.principal_reference,
+                    revision.request_reference, revision.snapshot, revision.created_at,
                     EXISTS (
                         SELECT 1
                           FROM registry_internal.registry_request_revision_links l
-                         WHERE l.entity_id = r.entity_id
-                           AND l.record_id = r.record_id
-                           AND l.record_revision = r.record_revision
-                           AND l.request_entity_id = r.entity_id
-                           AND l.request_id = r.record_id
+                         WHERE l.entity_id = revision.entity_id
+                           AND l.record_id = revision.record_id
+                           AND l.record_revision = revision.record_revision
+                           AND l.request_entity_id = revision.entity_id
+                           AND l.request_id = revision.record_id
                            AND l.link_kind = 'request_lifecycle'
-                    ) AS request_lifecycle_revision
-             FROM registry_internal.registry_revisions r
-             WHERE {}
-             ORDER BY record_revision DESC
-             LIMIT ${limit_parameter}::bigint",
+                    ) AS request_lifecycle_revision{context_select}
+               FROM registry_internal.registry_revisions AS revision
+               {context_join}
+              WHERE {}
+              ORDER BY record_revision DESC
+              LIMIT ${limit_parameter}::bigint",
             predicates.join(" AND ")
         ),
         parameters,
     ))
+}
+
+async fn descriptor_for_package<'a>(
+    transaction: &tokio_postgres::Transaction<'_>,
+    descriptors: &'a mut BTreeMap<String, HistorySchemaDescriptor>,
+    package_revision: &str,
+) -> Result<&'a HistorySchemaDescriptor, ReadServiceError> {
+    if !descriptors.contains_key(package_revision) {
+        let descriptor = load_history_schema_descriptor(transaction, package_revision).await?;
+        descriptors.insert(package_revision.to_owned(), descriptor);
+    }
+    descriptors
+        .get(package_revision)
+        .ok_or(ReadServiceError::Unavailable)
+}
+
+async fn load_history_schema_descriptor(
+    transaction: &tokio_postgres::Transaction<'_>,
+    package_revision: &str,
+) -> Result<HistorySchemaDescriptor, ReadServiceError> {
+    history_store::load_descriptor(transaction, package_revision)
+        .await
+        .map_err(history_store_error)
+}
+
+fn history_store_error(_: HistoryStoreError) -> ReadServiceError {
+    ReadServiceError::Unavailable
+}
+
+fn history_schema_error(_: HistorySchemaError) -> ReadServiceError {
+    ReadServiceError::Unavailable
 }
 
 fn canonical_boundary_value(
@@ -520,14 +589,52 @@ struct RevisionEnvelope {
     actor_reference: String,
     request_reference: String,
     data: Map<String, Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    change_context: Option<Map<String, Value>>,
 }
 
-fn revision_from_row(
+#[allow(clippy::too_many_arguments)] // Authority, projection and retained-schema caches stay separate.
+async fn revision_rows_from_rows(
+    transaction: &tokio_postgres::Transaction<'_>,
+    rows: &[tokio_postgres::Row],
+    entity: &CompiledEntity,
+    context: &AuthorizedRequestContext,
+    selected_fields: &BTreeSet<String>,
+    provenance_fields: &[ProvenanceFieldSource],
+    descriptors: &mut BTreeMap<String, HistorySchemaDescriptor>,
+    context_visibility: &mut BTreeMap<i64, bool>,
+) -> Result<Vec<RevisionEnvelope>, ReadServiceError> {
+    let mut materialized = Vec::with_capacity(rows.len());
+    for row in rows {
+        if let Some(revision) = revision_from_row(
+            transaction,
+            row,
+            entity,
+            context,
+            selected_fields,
+            provenance_fields,
+            descriptors,
+            context_visibility,
+        )
+        .await?
+        {
+            materialized.push(revision);
+        }
+    }
+    Ok(materialized)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn revision_from_row(
+    transaction: &tokio_postgres::Transaction<'_>,
     row: &tokio_postgres::Row,
     entity: &CompiledEntity,
     context: &AuthorizedRequestContext,
     selected_fields: &BTreeSet<String>,
-) -> Result<RevisionEnvelope, ReadServiceError> {
+    provenance_fields: &[ProvenanceFieldSource],
+    descriptors: &mut BTreeMap<String, HistorySchemaDescriptor>,
+    context_visibility: &mut BTreeMap<i64, bool>,
+) -> Result<Option<RevisionEnvelope>, ReadServiceError> {
     let record_id = row
         .try_get::<_, Uuid>(0)
         .map_err(|_| ReadServiceError::Unavailable)?;
@@ -555,47 +662,63 @@ fn revision_from_row(
     if revision <= 0
         || predecessor.is_some_and(|value| value <= 0 || value >= revision)
         || !matches!(lifecycle.as_str(), "active" | "tombstoned")
-        || !matches!(mutation_kind.as_str(), "create" | "patch" | "tombstone")
-        || (operation_id != format!("records.{}.{}", entity.id, mutation_kind)
-            && !(request_lifecycle_revision
-                && entity.change_request.is_some()
-                && mutation_kind == "patch"
-                && valid_request_journal_operation(&entity.id, &operation_id)))
-        || !valid_hmac_reference(&actor_reference)
-        || !valid_hmac_reference(&request_reference)
         || snapshot.is_empty()
-        || snapshot.len() > MAX_SNAPSHOT_BYTES
+        || snapshot.len() > MAX_HISTORY_SNAPSHOT_BYTES
+        || !valid_revision_provenance(
+            entity,
+            &operation_id,
+            &mutation_kind,
+            &actor_reference,
+            &request_reference,
+            request_lifecycle_revision,
+        )
     {
         return Err(ReadServiceError::Unavailable);
     }
-    let parsed = parse_json_strict(&snapshot).map_err(|_| ReadServiceError::Unavailable)?;
-    let canonical = canonicalize_json(&parsed).map_err(|_| ReadServiceError::Unavailable)?;
-    if canonical != snapshot {
-        return Err(ReadServiceError::Unavailable);
+    let descriptor = descriptor_for_package(transaction, descriptors, &package_revision)
+        .await?
+        .clone();
+    let row_authorization_fields = context
+        .row_boundaries()
+        .iter()
+        .map(|boundary| boundary.field().to_owned())
+        .collect::<Vec<_>>();
+    let required_fields = HistorySchemaDescriptor::required_history_fields(
+        selected_fields,
+        row_authorization_fields.iter(),
+        std::iter::empty::<&String>(),
+    );
+    let compatibility = descriptor
+        .compatibility_for_fields(entity, &required_fields)
+        .map_err(history_schema_error)?;
+    let decoded = descriptor
+        .decode_snapshot_for_fields(&compatibility, &snapshot, Some(&record_id.to_string()))
+        .map_err(history_schema_error)?;
+    if !row_authorized(&decoded, context, entity)? {
+        return Ok(None);
     }
-    let snapshot = parsed.as_object().ok_or(ReadServiceError::Unavailable)?;
     let mut data = Map::new();
     for field_id in selected_fields {
-        let field = entity
+        let field = compatibility
             .fields
             .get(field_id)
             .ok_or(ReadServiceError::Unavailable)?;
-        let value = snapshot
+        let value = decoded
+            .by_field_id
             .get(field_id)
             .ok_or(ReadServiceError::Unavailable)?;
-        validate_snapshot_value(value, &field.field_type, field.required)?;
-        data.insert(field_id.clone(), value.clone());
+        data.insert(field.active_api_name.clone(), value.clone());
     }
-    for boundary in context.row_boundaries() {
-        let field = entity
-            .fields
-            .get(boundary.field())
-            .ok_or(ReadServiceError::Unavailable)?;
-        let value = snapshot
-            .get(boundary.field())
-            .ok_or(ReadServiceError::Unavailable)?;
-        validate_snapshot_value(value, &field.field_type, field.required)?;
-    }
+    let change_context = revision_change_context(
+        transaction,
+        row,
+        entity,
+        context,
+        provenance_fields,
+        descriptors,
+        context_visibility,
+    )
+    .await?;
     let revision = u64::try_from(revision).map_err(|_| ReadServiceError::Unavailable)?;
     let predecessor_revision = predecessor
         .map(u64::try_from)
@@ -604,7 +727,7 @@ fn revision_from_row(
     let created_at = OffsetDateTime::from(created_at)
         .format(&Rfc3339)
         .map_err(|_| ReadServiceError::Unavailable)?;
-    Ok(RevisionEnvelope {
+    Ok(Some(RevisionEnvelope {
         id: record_id.to_string(),
         revision,
         predecessor_revision,
@@ -616,7 +739,205 @@ fn revision_from_row(
         actor_reference,
         request_reference,
         data,
-    })
+        change_context,
+    }))
+}
+
+fn row_authorized(
+    decoded: &DecodedHistorySnapshot,
+    context: &AuthorizedRequestContext,
+    entity: &CompiledEntity,
+) -> Result<bool, ReadServiceError> {
+    for boundary in context.row_boundaries() {
+        let field_type = if boundary.field() == entity.canonical_id.id {
+            &entity.canonical_id.field_type
+        } else {
+            &entity
+                .fields
+                .get(boundary.field())
+                .ok_or(ReadServiceError::Unavailable)?
+                .field_type
+        };
+        let value = decoded
+            .by_field_id
+            .get(boundary.field())
+            .ok_or(ReadServiceError::Unavailable)?;
+        let actual = canonicalize_json(value).map_err(|_| ReadServiceError::Unavailable)?;
+        let actual = String::from_utf8(actual).map_err(|_| ReadServiceError::Unavailable)?;
+        let expected = boundary
+            .values()
+            .iter()
+            .map(|value| canonical_boundary_value(value, field_type))
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        if expected.is_empty() {
+            return Err(ReadServiceError::Unavailable);
+        }
+        let matched = match boundary.operator() {
+            ApiRowBoundaryOperator::Equals if expected.len() == 1 => expected.contains(&actual),
+            ApiRowBoundaryOperator::In => expected.contains(&actual),
+            ApiRowBoundaryOperator::Equals => return Err(ReadServiceError::Unavailable),
+        };
+        if !matched {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+async fn revision_change_context(
+    transaction: &tokio_postgres::Transaction<'_>,
+    row: &tokio_postgres::Row,
+    entity: &CompiledEntity,
+    context: &AuthorizedRequestContext,
+    provenance_fields: &[ProvenanceFieldSource],
+    descriptors: &mut BTreeMap<String, HistorySchemaDescriptor>,
+    context_visibility: &mut BTreeMap<i64, bool>,
+) -> Result<Option<Map<String, Value>>, ReadServiceError> {
+    if provenance_fields.is_empty() {
+        return Ok(None);
+    }
+    if row.len() < 14 {
+        return Err(ReadServiceError::Unavailable);
+    }
+    let Some(commit_position) = row
+        .try_get::<_, Option<i64>>(12)
+        .map_err(|_| ReadServiceError::Unavailable)?
+    else {
+        return Ok(None);
+    };
+    if commit_position < 0 {
+        return Err(ReadServiceError::Unavailable);
+    }
+    let Some(change_context) = row
+        .try_get::<_, Option<Vec<u8>>>(13)
+        .map_err(|_| ReadServiceError::Unavailable)?
+    else {
+        return Ok(None);
+    };
+    let visible = if let Some(visible) = context_visibility.get(&commit_position) {
+        *visible
+    } else {
+        let visible =
+            commit_context_visible(transaction, entity, context, commit_position, descriptors)
+                .await?;
+        context_visibility.insert(commit_position, visible);
+        visible
+    };
+    if !visible {
+        return Ok(None);
+    }
+    project_change_context(&change_context, provenance_fields)
+}
+
+async fn commit_context_visible(
+    transaction: &tokio_postgres::Transaction<'_>,
+    entity: &CompiledEntity,
+    context: &AuthorizedRequestContext,
+    commit_position: i64,
+    descriptors: &mut BTreeMap<String, HistorySchemaDescriptor>,
+) -> Result<bool, ReadServiceError> {
+    let rows = transaction
+        .query(
+            "SELECT revisions.entity_id, revisions.record_id, revisions.package_revision,
+                    revisions.snapshot
+               FROM registry_internal.registry_revision_commit_members AS member
+               JOIN registry_internal.registry_revisions AS revisions
+                 USING (entity_id, record_id, record_revision)
+              WHERE member.commit_position = $1::bigint
+              ORDER BY member.member_index ASC",
+            &[&commit_position],
+        )
+        .await
+        .map_err(|_| ReadServiceError::Unavailable)?;
+    if rows.is_empty() {
+        return Ok(false);
+    }
+    for row in rows {
+        let member_entity_id = row
+            .try_get::<_, String>(0)
+            .map_err(|_| ReadServiceError::Unavailable)?;
+        if member_entity_id != entity.id {
+            return Ok(false);
+        }
+        let member_record_id = row
+            .try_get::<_, Uuid>(1)
+            .map_err(|_| ReadServiceError::Unavailable)?;
+        let package_revision = row
+            .try_get::<_, String>(2)
+            .map_err(|_| ReadServiceError::Unavailable)?;
+        let snapshot = row
+            .try_get::<_, Vec<u8>>(3)
+            .map_err(|_| ReadServiceError::Unavailable)?;
+        let descriptor =
+            match descriptor_for_package(transaction, descriptors, &package_revision).await {
+                Ok(descriptor) => descriptor.clone(),
+                Err(_) => return Ok(false),
+            };
+        let row_authorization_fields = context
+            .row_boundaries()
+            .iter()
+            .map(|boundary| boundary.field().to_owned())
+            .collect::<Vec<_>>();
+        let required_fields = HistorySchemaDescriptor::required_history_fields(
+            std::iter::empty::<&String>(),
+            row_authorization_fields.iter(),
+            std::iter::empty::<&String>(),
+        );
+        let compatibility = match descriptor.compatibility_for_fields(entity, &required_fields) {
+            Ok(compatibility) => compatibility,
+            Err(_) => return Ok(false),
+        };
+        let decoded = match descriptor.decode_snapshot_for_fields(
+            &compatibility,
+            &snapshot,
+            Some(&member_record_id.to_string()),
+        ) {
+            Ok(decoded) => decoded,
+            Err(_) => return Ok(false),
+        };
+        if !row_authorized(&decoded, context, entity)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn project_change_context(
+    bytes: &[u8],
+    provenance_fields: &[ProvenanceFieldSource],
+) -> Result<Option<Map<String, Value>>, ReadServiceError> {
+    let value = parse_json_strict(bytes).map_err(|_| ReadServiceError::Unavailable)?;
+    let canonical = canonicalize_json(&value).map_err(|_| ReadServiceError::Unavailable)?;
+    if canonical != bytes {
+        return Err(ReadServiceError::Unavailable);
+    }
+    ChangeContext::parse_json(&value).map_err(|_| ReadServiceError::Unavailable)?;
+    let source = value.as_object().ok_or(ReadServiceError::Unavailable)?;
+    let mut projected = Map::new();
+    for field in provenance_fields {
+        let key = match field {
+            ProvenanceFieldSource::Kind => "kind",
+            ProvenanceFieldSource::ReasonCode => "reasonCode",
+            ProvenanceFieldSource::ReasonText => "reasonText",
+            ProvenanceFieldSource::SourceReferences => "sourceReferences",
+        };
+        let Some(value) = source.get(key) else {
+            continue;
+        };
+        match (field, value) {
+            (
+                ProvenanceFieldSource::Kind
+                | ProvenanceFieldSource::ReasonCode
+                | ProvenanceFieldSource::ReasonText,
+                Value::String(_),
+            )
+            | (ProvenanceFieldSource::SourceReferences, Value::Array(_)) => {
+                projected.insert(key.to_owned(), value.clone());
+            }
+            _ => return Err(ReadServiceError::Unavailable),
+        }
+    }
+    Ok((!projected.is_empty()).then_some(projected))
 }
 
 fn valid_request_journal_operation(entity_id: &str, operation_id: &str) -> bool {
@@ -644,47 +965,54 @@ fn bounded_text(row: &tokio_postgres::Row, index: usize) -> Result<String, ReadS
     Ok(value)
 }
 
+fn valid_revision_provenance(
+    entity: &CompiledEntity,
+    operation_id: &str,
+    mutation_kind: &str,
+    actor_reference: &str,
+    request_reference: &str,
+    request_lifecycle_revision: bool,
+) -> bool {
+    match mutation_kind {
+        "create" | "patch" | "tombstone" => {
+            (operation_id == format!("records.{}.{}", entity.id, mutation_kind)
+                || (request_lifecycle_revision
+                    && entity.change_request.is_some()
+                    && mutation_kind == "patch"
+                    && valid_request_journal_operation(&entity.id, operation_id)))
+                && valid_hmac_reference(actor_reference)
+                && valid_hmac_reference(request_reference)
+        }
+        "migration" => {
+            actor_reference == HISTORY_MIGRATION_SYSTEM_ORIGIN
+                && operation_id == request_reference
+                && valid_migration_reference(request_reference)
+        }
+        _ => false,
+    }
+}
+
+fn valid_migration_reference(value: &str) -> bool {
+    let Some((descriptor_path, step_id)) = value.split_once('#') else {
+        return false;
+    };
+    !descriptor_path.is_empty()
+        && !step_id.is_empty()
+        && descriptor_path.starts_with("modules/")
+        && descriptor_path.ends_with("/descriptor.json")
+        && !descriptor_path.contains("//")
+        && !descriptor_path.contains("/../")
+        && step_id.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+        })
+}
+
 fn valid_hmac_reference(value: &str) -> bool {
     value.len() == 76
         && value.starts_with("hmac-sha256:")
         && value[12..]
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-}
-
-fn validate_snapshot_value(
-    value: &Value,
-    field_type: &FieldTypeSource,
-    required: bool,
-) -> Result<(), ReadServiceError> {
-    if value.is_null() {
-        return (!required)
-            .then_some(())
-            .ok_or(ReadServiceError::Unavailable);
-    }
-    let text = match (field_type, value) {
-        (FieldTypeSource::Boolean, Value::Bool(value)) => value.to_string(),
-        (FieldTypeSource::Int64, Value::Number(value)) if value.as_i64().is_some() => {
-            value.to_string()
-        }
-        (
-            FieldTypeSource::String { .. }
-            | FieldTypeSource::Text { .. }
-            | FieldTypeSource::Decimal { .. }
-            | FieldTypeSource::Date
-            | FieldTypeSource::Timestamp
-            | FieldTypeSource::Uuid
-            | FieldTypeSource::Reference { .. }
-            | FieldTypeSource::VocabularyCode { .. },
-            Value::String(value),
-        ) => value.clone(),
-        (FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. }, value) => {
-            let bytes = canonicalize_json(value).map_err(|_| ReadServiceError::Unavailable)?;
-            String::from_utf8(bytes).map_err(|_| ReadServiceError::Unavailable)?
-        }
-        _ => return Err(ReadServiceError::Unavailable),
-    };
-    validate_field_value(&text, field_type).map_err(|_| ReadServiceError::Unavailable)
 }
 
 struct RevisionReadResult {

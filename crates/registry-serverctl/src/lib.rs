@@ -37,6 +37,7 @@ use serde_json::{json, Value};
 mod apply_lifecycle;
 mod data_lifecycle;
 mod doctor;
+mod history_erasure_lifecycle;
 mod package_inspection;
 mod package_lifecycle;
 mod request_retention;
@@ -48,7 +49,12 @@ use apply_lifecycle::{ApplyLifecycleError, ApplyLifecycleRequest};
 use data_lifecycle::{
     DataExportRequest, DataImportRequest, DataLifecycleError, DataValidateRequest,
 };
-use package_inspection::{inspect_runtime_package, RuntimePackageInspectionError};
+use history_erasure_lifecycle::{
+    HistoryErasureLifecycleError, HistoryErasureLifecycleOutcome, HistoryErasureLifecycleRequest,
+};
+use package_inspection::{
+    inspect_runtime_package, inspect_runtime_predecessor_package, RuntimePackageInspectionError,
+};
 use package_lifecycle::{PackageLifecycleError, PackageLifecycleState};
 use registry_server::data::DataError;
 use request_retention::{
@@ -112,6 +118,8 @@ enum Command {
     Verify(VerifyArgs),
     /// Inspect configured migration lifecycle metadata.
     Migration(MigrationArgs),
+    /// Run bounded, audited retained-history maintenance.
+    History(HistoryArgs),
     /// Validate, import, or export data through authenticated Registry HTTP APIs.
     Data(DataArgs),
     /// Inspect and operate configured webhook deliveries.
@@ -309,6 +317,12 @@ struct VerifyArgs {
 struct MigrationArgs {
     #[command(subcommand)]
     command: MigrationCommand,
+}
+
+#[derive(Debug, Args)]
+struct HistoryArgs {
+    #[command(subcommand)]
+    command: HistoryCommand,
 }
 
 #[derive(Debug, Args)]
@@ -561,11 +575,28 @@ enum MigrationCommand {
     Explain(MigrationExplainArgs),
 }
 
+#[derive(Debug, Subcommand)]
+enum HistoryCommand {
+    /// Erase retained history for one record using an owner-only JSON request file.
+    Erase(HistoryEraseArgs),
+}
+
 #[derive(Debug, Args)]
 struct MigrationExplainArgs {
     /// Absolute Registry Server runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct HistoryEraseArgs {
+    /// Absolute Registry Server runtime configuration file.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
+
+    /// Absolute owner-only JSON erasure request file.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    request_file: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -713,6 +744,7 @@ enum DiagnosticArtifact {
     WebhookSample,
     WebhookOperations,
     RequestRetentionOperation,
+    HistoryErasure,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -754,6 +786,7 @@ enum SuggestedAction {
     SelectWebhookEvent,
     VerifyWebhookOperation,
     VerifyRequestRetentionOperation,
+    PrepareHistoryErasureRequest,
 }
 
 #[derive(Serialize)]
@@ -781,6 +814,15 @@ struct MigrationExplainSuccessReport {
     assurance: BaselineAssurance,
     package_revision: String,
     plan: MigrationInspectionSummary,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HistoryEraseSuccessReport {
+    ok: bool,
+    command: &'static str,
+    #[serde(flatten)]
+    outcome: HistoryErasureLifecycleOutcome,
 }
 
 #[derive(Serialize)]
@@ -1240,6 +1282,14 @@ where
                 };
             }
         },
+        Command::History(args) => match args.command {
+            HistoryCommand::Erase(args) => {
+                return match history_erase(&args) {
+                    Ok(report) => write_history_erase_success(&report, format, stdout, stderr),
+                    Err(failure) => write_failure(&failure, format, stdout, stderr),
+                };
+            }
+        },
         Command::Data(args) => match args.command {
             DataCommand::Validate(args) => {
                 return match data_validate(&args) {
@@ -1382,6 +1432,117 @@ fn request_retention_failure(
             diagnostic(code, "requestRetention", message),
             DiagnosticArtifact::RequestRetentionOperation,
             SuggestedAction::VerifyRequestRetentionOperation,
+        )],
+    }
+}
+
+fn history_erase(args: &HistoryEraseArgs) -> Result<HistoryEraseSuccessReport, FailureReport> {
+    let outcome = history_erasure_lifecycle::run(HistoryErasureLifecycleRequest {
+        runtime_config: &args.runtime_config,
+        request_file: &args.request_file,
+    })
+    .map_err(history_erasure_lifecycle_failure)?;
+    Ok(HistoryEraseSuccessReport {
+        ok: true,
+        command: "history erase",
+        outcome,
+    })
+}
+
+fn history_erasure_lifecycle_failure(error: HistoryErasureLifecycleError) -> FailureReport {
+    let error = match error {
+        HistoryErasureLifecycleError::RuntimeConfig(error) => {
+            return runtime_config_failure("history erase", "history.erase", error);
+        }
+        error => error,
+    };
+    let (code, path, message, artifact, action) = match error {
+        HistoryErasureLifecycleError::RuntimeConfigPath => (
+            "history.erase.runtime_config.path_invalid",
+            "runtimeConfig",
+            "the runtime configuration path must be absolute",
+            DiagnosticArtifact::RuntimeConfiguration,
+            SuggestedAction::CorrectRuntimeConfiguration,
+        ),
+        HistoryErasureLifecycleError::RequestFile => (
+            "history.erase.request_file.refused",
+            "requestFile",
+            "the history erasure request file must be absolute, owner-only, and bounded",
+            DiagnosticArtifact::HistoryErasure,
+            SuggestedAction::PrepareHistoryErasureRequest,
+        ),
+        HistoryErasureLifecycleError::RequestDocument | HistoryErasureLifecycleError::Target => (
+            "history.erase.request.refused",
+            "requestFile",
+            "the history erasure request document was refused",
+            DiagnosticArtifact::HistoryErasure,
+            SuggestedAction::PrepareHistoryErasureRequest,
+        ),
+        HistoryErasureLifecycleError::RuntimeConfig(_) => unreachable!("handled before match"),
+        HistoryErasureLifecycleError::Package(error) => {
+            let action = match error {
+                PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
+                PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
+                PackageError::Signature => SuggestedAction::VerifyPackageTrust,
+                PackageError::Binding => SuggestedAction::VerifyPackageBinding,
+                _ => SuggestedAction::VerifyPackageIntegrity,
+            };
+            (
+                "history.erase.package.refused",
+                "package",
+                "the active runtime package was refused",
+                DiagnosticArtifact::VerifiedPackage,
+                action,
+            )
+        }
+        HistoryErasureLifecycleError::DatabaseConfiguration
+        | HistoryErasureLifecycleError::TimeoutConfiguration => (
+            "history.erase.database_configuration.refused",
+            "database",
+            "the migration database configuration was refused",
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::VerifyMigrationAuthority,
+        ),
+        HistoryErasureLifecycleError::Runtime => (
+            "history.erase.runtime.unavailable",
+            "runtime",
+            "the history erasure runtime is unavailable",
+            DiagnosticArtifact::HistoryErasure,
+            SuggestedAction::VerifyMigrationAuthority,
+        ),
+        HistoryErasureLifecycleError::Erasure(error) => match error {
+            registry_server::history_erasure::HistoryErasureError::InvalidInput
+            | registry_server::history_erasure::HistoryErasureError::TargetUnavailable => (
+                "history.erase.target.refused",
+                "requestFile",
+                "the requested history erasure target was refused",
+                DiagnosticArtifact::HistoryErasure,
+                SuggestedAction::PrepareHistoryErasureRequest,
+            ),
+            registry_server::history_erasure::HistoryErasureError::MigrationAuthority => (
+                "history.erase.migration_authority.refused",
+                "database",
+                "history erasure requires the configured migration authority",
+                DiagnosticArtifact::DatabaseMigration,
+                SuggestedAction::VerifyMigrationAuthority,
+            ),
+            registry_server::history_erasure::HistoryErasureError::HistoryNotReady
+            | registry_server::history_erasure::HistoryErasureError::Unavailable => (
+                "history.erase.unavailable",
+                "history",
+                "history erasure storage is unavailable",
+                DiagnosticArtifact::HistoryErasure,
+                SuggestedAction::VerifyMigrationAuthority,
+            ),
+        },
+    };
+    FailureReport {
+        ok: false,
+        command: "history erase",
+        diagnostics: vec![tool_diagnostic(
+            diagnostic(code, path, message),
+            artifact,
+            action,
         )],
     }
 }
@@ -1856,8 +2017,21 @@ fn capture_candidate(
     let mut prevalidation_schema_fingerprint = None;
     let (prior_revision, migration_plan) = match args.baseline_runtime_config.as_deref() {
         Some(runtime_config) => {
-            let baseline = inspect_runtime_package(runtime_config)
+            let baseline = inspect_runtime_predecessor_package(runtime_config)
                 .map_err(|error| inspection_failure(command, "package.baseline", error))?;
+            if baseline.environment() != environment
+                || baseline.instance_id() != instance_id
+                || baseline.database_id() != args.database_id
+            {
+                return Err(candidate_failure(
+                    command,
+                    "package.baseline.identity",
+                    "baselineRuntimeConfig",
+                    "the verified predecessor package identity does not match the candidate package and database binding",
+                    DiagnosticArtifact::RuntimeConfiguration,
+                    SuggestedAction::CorrectRuntimeConfiguration,
+                ));
+            }
             let plan = if let Some(directory) = &args.reviewed_migrations {
                 let review = reviewed_migrations::capture(directory).map_err(|diagnostic| {
                     source_failure(
@@ -1868,14 +2042,14 @@ fn capture_candidate(
                     )
                 })?;
                 prevalidation_schema_fingerprint = Some(review.declared_schema_fingerprint);
-                PackageMigrationPlanInput::ReviewedSuccessor {
-                    prior_registry: Box::new(baseline.registry().clone()),
+                PackageMigrationPlanInput::ReviewedSuccessorFromBaseline {
+                    prior_baseline: Box::new(baseline.migration_baseline().clone()),
                     prior_schema_fingerprint: baseline.schema_fingerprint().to_owned(),
                     migrations: review.sources,
                 }
             } else {
-                let changes = registry_server::package::compiled_registry_change_set(
-                    baseline.registry(),
+                let changes = registry_server::package::compiled_registry_change_set_from_baseline(
+                    baseline.migration_baseline(),
                     &compiled,
                     baseline.package_revision(),
                 );
@@ -1884,21 +2058,29 @@ fn capture_candidate(
                     .iter()
                     .any(|change| change.class == CompiledRegistryChangeClass::Unsupported)
                 {
-                    return Err(candidate_failure(command, "migration.change.unsupported", "candidate",
+                    return Err(candidate_failure(
+                        command,
+                        "migration.change.unsupported",
+                        "candidate",
                         "the successor contains a change the migration planner does not support; inspect diff and revise the candidate. Reviewed artifacts cannot authorize unsupported changes",
-                        DiagnosticArtifact::DatabaseMigration, SuggestedAction::CorrectPackageBuild));
+                        DiagnosticArtifact::DatabaseMigration,
+                        SuggestedAction::CorrectPackageBuild,
+                    ));
                 }
-                if changes
-                    .changes
-                    .iter()
-                    .any(|change| change.class != CompiledRegistryChangeClass::CompatibleAdditive)
+                if registry_server::package::change_set_to_applicable_migration_plan(&changes)
+                    .is_err()
                 {
-                    return Err(candidate_failure(command, "migration.review.required", "reviewedMigrations",
+                    return Err(candidate_failure(
+                        command,
+                        "migration.review.required",
+                        "reviewedMigrations",
                         "the successor contains changes that cannot be applied automatically; run diff, review the migration and its rehearsal evidence, then provide --reviewed-migrations to both test and package",
-                        DiagnosticArtifact::DatabaseMigration, SuggestedAction::CorrectPackageBuild));
+                        DiagnosticArtifact::DatabaseMigration,
+                        SuggestedAction::CorrectPackageBuild,
+                    ));
                 }
-                PackageMigrationPlanInput::Successor {
-                    prior_registry: Box::new(baseline.registry().clone()),
+                PackageMigrationPlanInput::SuccessorFromBaseline {
+                    prior_baseline: Box::new(baseline.migration_baseline().clone()),
                 }
             };
             (Some(baseline.package_revision().to_owned()), plan)
@@ -2050,10 +2232,10 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
                     DiagnosticArtifact::FixtureJourneys,
                     SuggestedAction::CorrectFixtureJourneys,
                 )],
-            }
+            };
         }
         TestLifecycleError::RuntimeConfig(error) => {
-            return runtime_config_failure("test", "test", error)
+            return runtime_config_failure("test", "test", error);
         }
         TestLifecycleError::JourneySyntax { path, message } => {
             return FailureReport {
@@ -2064,7 +2246,7 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
                     DiagnosticArtifact::FixtureJourneys,
                     SuggestedAction::CorrectFixtureJourneys,
                 )],
-            }
+            };
         }
         error => error,
     };
@@ -4095,6 +4277,7 @@ fn operation_wire_name(operation: registry_server::contract::Operation) -> &'sta
         registry_server::contract::Operation::CancelRequest => "cancel_request",
         registry_server::contract::Operation::ApplyRequest => "apply_request",
         registry_server::contract::Operation::Invoke => "invoke",
+        registry_server::contract::Operation::Snapshot => "snapshot",
     }
 }
 
@@ -4844,7 +5027,10 @@ fn write_access_explanation(explanation: &Value, stdout: &mut dyn Write) -> io::
             if admitted { "allowed" } else { "refused" },
             explanation["reason"].as_str().unwrap_or("unknown")
         )?;
-        writeln!(stdout, "No credentials verified, records checked, or authority issued. Claim values are not printed.")?;
+        writeln!(
+            stdout,
+            "No credentials verified, records checked, or authority issued. Claim values are not printed."
+        )?;
         if explanation["effectiveProfile"].is_object() {
             write_access_profile(&explanation["effectiveProfile"], stdout)?;
         }
@@ -5145,6 +5331,68 @@ fn write_migration_explain_success(
             ExitCode::from(OPERATIONAL_FAILURE_EXIT)
         }
     }
+}
+
+fn write_history_erase_success(
+    report: &HistoryEraseSuccessReport,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format == OutputFormat::Json {
+        serde_json::to_writer_pretty(&mut *stdout, report)
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout))
+    } else {
+        writeln!(stdout, "history erase succeeded").and_then(|()| {
+            writeln!(
+                stdout,
+                "package revision: {}",
+                report.outcome.package_revision
+            )?;
+            writeln!(stdout, "coverage ready: {}", report.outcome.coverage_ready)?;
+            match report.outcome.unavailable_after_position {
+                Some(position) => writeln!(stdout, "unavailable after position: {position}")?,
+                None => writeln!(stdout, "unavailable after position: none")?,
+            }
+            writeln!(
+                stdout,
+                "affected commits: {}",
+                report.outcome.affected_commit_count
+            )?;
+            writeln!(
+                stdout,
+                "erased revisions: {}",
+                report.outcome.erased_revision_count
+            )?;
+            writeln!(
+                stdout,
+                "erased commit members: {}",
+                report.outcome.erased_commit_member_count
+            )?;
+            writeln!(
+                stdout,
+                "scrubbed change contexts: {}",
+                report.outcome.scrubbed_change_context_count
+            )?;
+            writeln!(
+                stdout,
+                "scrubbed outbox payloads: {}",
+                report.outcome.scrubbed_outbox_payload_count
+            )?;
+            writeln!(
+                stdout,
+                "scrubbed cached responses: {}",
+                report.outcome.scrubbed_cached_response_count
+            )?;
+            writeln!(
+                stdout,
+                "removed descriptors: {}",
+                report.outcome.removed_descriptor_count
+            )
+        })
+    };
+    write_result(result, stderr)
 }
 
 fn write_data_validate_success(
@@ -5690,6 +5938,7 @@ mod tests {
                 "doctor",
                 "verify",
                 "migration",
+                "history",
                 "data",
                 "webhook",
                 "request-retention"
@@ -5705,6 +5954,69 @@ mod tests {
         ] {
             assert!(Cli::try_parse_from(arguments).is_ok());
         }
+    }
+
+    #[test]
+    fn history_erase_requires_request_file_not_inline_target_values() {
+        let parsed = Cli::try_parse_from([
+            "registry-serverctl",
+            "history",
+            "erase",
+            "--runtime-config",
+            "/tmp/runtime.yaml",
+            "--request-file",
+            "/tmp/request.json",
+        ])
+        .expect("history erase parses");
+        let Command::History(args) = parsed.command else {
+            panic!("history command parsed");
+        };
+        let HistoryCommand::Erase(args) = args.command;
+        assert_eq!(args.runtime_config, PathBuf::from("/tmp/runtime.yaml"));
+        assert_eq!(args.request_file, PathBuf::from("/tmp/request.json"));
+        assert!(Cli::try_parse_from([
+            "registry-serverctl",
+            "history",
+            "erase",
+            "--runtime-config",
+            "/tmp/runtime.yaml",
+            "--record-id",
+            "018feaa0-68f9-4a45-b9e3-58436df07af7",
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn history_erase_success_report_is_value_free() {
+        let report = HistoryEraseSuccessReport {
+            ok: true,
+            command: "history erase",
+            outcome: HistoryErasureLifecycleOutcome {
+                package_revision: "pkg-1".to_owned(),
+                coverage_ready: false,
+                unavailable_after_position: None,
+                affected_commit_count: 1,
+                erased_revision_count: 2,
+                erased_commit_member_count: 1,
+                scrubbed_change_context_count: 1,
+                scrubbed_outbox_payload_count: 1,
+                scrubbed_cached_response_count: 1,
+                removed_descriptor_count: 0,
+            },
+        };
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        assert_eq!(
+            write_history_erase_success(&report, OutputFormat::Json, &mut stdout, &mut stderr),
+            ExitCode::SUCCESS
+        );
+        let rendered = String::from_utf8(stdout).expect("json is utf8");
+        assert!(rendered.contains("\"command\": \"history erase\""));
+        assert!(rendered.contains("\"scrubbedCachedResponseCount\": 1"));
+        assert!(!rendered.contains("018feaa0-68f9-4a45-b9e3-58436df07af7"));
+        assert!(!rendered.contains("operator"));
+        assert!(!rendered.contains("reason"));
     }
 
     #[test]

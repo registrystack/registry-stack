@@ -23,12 +23,17 @@ cargo test --locked -p registry-server --features postgres-test --test postgres_
 cargo test --locked -p registry-server --features postgres-test --test postgres_constraint_races
 cargo test --locked -p registry-server --features postgres-test --test postgres_read
 cargo test --locked -p registry-server --features postgres-test --test postgres_revision_http
+cargo test --locked -p registry-server --features postgres-test --test postgres_history_commit
+cargo test --locked -p registry-server --features postgres-test --test postgres_historical
+cargo test --locked -p registry-server --features postgres-test,tooling --test postgres_history_migration
+cargo test --locked -p registry-server --features postgres-test --test postgres_history_erasure
 cargo test --locked -p registry-server --features postgres-test --test postgres_mutation
 cargo test --locked -p registry-server --features postgres-test --test postgres_immediate_actions
 cargo test --locked -p registry-server --features postgres-test,tooling --test postgres_immediate_action_examples
 cargo test --locked -p registry-server --features postgres-test,tooling --test postgres_immediate_action_activation
 cargo test --locked -p registry-server --features postgres-test --test postgres_webhook_outbox
 cargo test --locked -p registry-server --features postgres-test --test postgres_webhook_delivery
+cargo test --locked -p registry-server --features postgres-test --test postgres_temporal_corrections
 cargo test --locked -p registry-server --features postgres-test --test postgres_batch
 cargo test --locked -p registry-server --features postgres-test --test postgres_data_facility
 cargo test --locked -p registry-server --features postgres-test --test postgres_data_export
@@ -42,7 +47,7 @@ cargo test --locked -p registry-server --features postgres-test --test postgres_
 cargo test --locked -p registry-server --features postgres-test,tooling --test postgres_request_activation
 cargo test --locked -p registry-server --features postgres-test --test postgres_pilot_acceptance
 cargo test --locked -p registry-server --features postgres-test --test postgres_tombstone_revision
-cargo test --locked -p registry-server --features postgres-test --test postgres_package
+cargo test --locked -p registry-server --features postgres-test,tooling --test postgres_package
 cargo test --locked -p registry-server --features postgres-test,tooling --test postgres_migration
 cargo test --locked -p registry-server --features postgres-test,tooling --test postgres_fixture_journeys
 cargo test --locked -p registry-server --features postgres-test,tooling --test schema_fingerprint_rehearsal

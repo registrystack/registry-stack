@@ -318,6 +318,7 @@ impl PostgresRecordMutationService {
             plan: &plan,
             idempotency_key: input.idempotency_key,
             claims: &claims,
+            change_context: input.change_context,
             items: input.items,
             response_fields: input.response_fields,
             body_bytes: input.body_bytes,

@@ -5,7 +5,8 @@
 use std::path::Path;
 
 use registry_server::package::{
-    inspect_package_with_context, IntegrityInspectedPackage, PackageError, PackageInspectionContext,
+    inspect_package_with_context, load_predecessor_package, IntegrityInspectedPackage,
+    PackageError, PackageInspectionContext, PredecessorPackageContext, VerifiedPredecessorPackage,
 };
 use registry_server::runtime_config::{load_runtime_config, RuntimeConfigError};
 
@@ -39,5 +40,32 @@ pub(crate) fn inspect_runtime_package(
         expected_sequence: config.package().active_sequence(),
     };
     inspect_package_with_context(config.package().root(), &context)
+        .map_err(RuntimePackageInspectionError::Package)
+}
+
+/// Verify exactly the package selected by one runtime configuration as a
+/// database-active predecessor for successor planning. This preserves signed
+/// predecessor bytes without requiring the current compiler to rederive old
+/// generated artifacts.
+pub(crate) fn inspect_runtime_predecessor_package(
+    runtime_config: &Path,
+) -> Result<VerifiedPredecessorPackage, RuntimePackageInspectionError> {
+    if !runtime_config.is_absolute() {
+        return Err(RuntimePackageInspectionError::RuntimeConfigPath);
+    }
+    let config = load_runtime_config(runtime_config)
+        .map_err(RuntimePackageInspectionError::RuntimeConfig)?;
+    let context = PredecessorPackageContext {
+        environment: config.identity().environment(),
+        instance_id: config.identity().instance_id(),
+        database_id: config.identity().database_id(),
+        database_initialization_environment: config
+            .identity()
+            .database_initialization_environment(),
+        trust_anchor: config.package_trust_anchor(),
+        expected_package_revision: config.package().active_revision(),
+        expected_sequence: config.package().active_sequence(),
+    };
+    load_predecessor_package(config.package().root(), &context)
         .map_err(RuntimePackageInspectionError::Package)
 }

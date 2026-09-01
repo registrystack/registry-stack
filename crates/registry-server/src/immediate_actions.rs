@@ -1088,6 +1088,7 @@ fn validate_grant_access_requirements(
             request_presence: Vec::new(),
             allow_count: false,
             revision_access: false,
+            provenance_fields: Vec::new(),
             allow_data_export: false,
         };
         crate::access::check_profile(requirements, &grant_profile, path, errors);

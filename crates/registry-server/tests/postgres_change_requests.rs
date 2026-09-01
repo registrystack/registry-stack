@@ -23,7 +23,7 @@ use registry_server::contract::parse_project_json;
 use registry_server::cursor::CursorCodec;
 use registry_server::mutation::MutationFaultPoint;
 use registry_server::postgres::{
-    initialize_registry_state_for_catalog_test, install_compiled_schema, ExpectedManagedCatalog,
+    initialize_compiled_registry_state_for_test, install_compiled_schema,
     PostgresRecordMutationService, PostgresRecordReadService, PostgresRevisionReadService,
     RegistryLockKey, RegistryStateTestIdentity,
 };
@@ -56,10 +56,10 @@ async fn real_postgres_http_change_request_correction_uses_frozen_review_and_app
     install_compiled_schema(&migration, &registry, &database.runtime_role)
         .await
         .expect("change-request schema installs");
-    let identity = initialize_registry_state_for_catalog_test(
+    let identity = initialize_compiled_registry_state_for_test(
         &migration,
         &database.runtime_role,
-        &ExpectedManagedCatalog::compiled(&registry),
+        &registry,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
             environment: "local",
@@ -443,6 +443,7 @@ async fn real_postgres_http_change_request_apply_lost_response_replays_same_and_
         "proposalVersion": apply.proposal_version,
         "effectDigest": apply.effect_digest.clone()
     });
+    let before_apply_history = history_commit_counts(&database).await;
     let lost = send_action(
         &lost_response_app,
         &apply,
@@ -453,6 +454,17 @@ async fn real_postgres_http_change_request_apply_lost_response_replays_same_and_
     .await;
     assert_eq!(lost.status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(lost.body["code"], "service.unavailable");
+    let after_apply_history = history_commit_counts(&database).await;
+    assert_eq!(
+        after_apply_history.commits - before_apply_history.commits,
+        1,
+        "fresh apply must allocate exactly one history commit"
+    );
+    assert_eq!(
+        after_apply_history.members - before_apply_history.members,
+        2,
+        "apply commit must include the request lifecycle revision and target revision"
+    );
 
     let replayed = send_action(
         &app,
@@ -469,6 +481,33 @@ async fn real_postgres_http_change_request_apply_lost_response_replays_same_and_
         replayed.body
     );
     assert_eq!(replayed.body["request"]["serverState"], "applied");
+    assert_snapshot_reference(&replayed.body["snapshot"]);
+    let apply_members = history_members_for_snapshot(&database, &replayed.body["snapshot"]).await;
+    assert_eq!(apply_members.len(), 2);
+    assert!(
+        apply_members.iter().any(|member| {
+            member.entity_id == "correction-request"
+                && member.record_id.to_string() == request.id
+                && member.record_revision
+                    == replayed.body["revision"]
+                        .as_i64()
+                        .expect("apply response carries request revision")
+        }),
+        "apply commit includes the request lifecycle revision"
+    );
+    assert!(
+        apply_members.iter().any(|member| {
+            member.entity_id == "asset-placement"
+                && member.record_id == Uuid::parse_str(&placement.id).expect("placement id parses")
+                && member.record_revision == 2
+        }),
+        "apply commit includes the target record revision"
+    );
+    assert_eq!(
+        history_commit_counts(&database).await,
+        after_apply_history,
+        "same-key apply replay must not allocate another commit position"
+    );
 
     let application_receipt = replayed.body["request"]["application"].clone();
     let replayed_revision = replayed.body["revision"].clone();
@@ -492,6 +531,11 @@ async fn real_postgres_http_change_request_apply_lost_response_replays_same_and_
         application_receipt
     );
     assert_eq!(different_key.body["revision"], replayed_revision);
+    assert_eq!(
+        history_commit_counts(&database).await,
+        after_apply_history,
+        "different-key applied-state recovery must not allocate another commit position"
+    );
     assert_eq!(application_result_count(&database).await, 1);
     assert_eq!(
         target_revision(&database, "asset-placement", &placement.id).await,
@@ -568,6 +612,160 @@ async fn real_postgres_http_change_request_apply_lost_response_replays_same_and_
     assert_eq!(changed_placement.body["revision"], 2);
     assert_eq!(changed_placement.body["data"]["site"], new_site.id);
     assert_eq!(application_result_count(&database).await, 1);
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_http_change_request_approval_history_commit_replays_without_new_position() {
+    let database = TestDatabase::create(8).await;
+    let registry = Arc::new(compiled_registry());
+    let identity = install_registry(
+        &database,
+        &registry,
+        "approval-history-change-request",
+        true,
+    )
+    .await;
+    let app = change_request_router(
+        &database,
+        registry.clone(),
+        identity,
+        "approval-history-change-request",
+        None,
+    );
+    let steward = claims("steward", "approval-history-steward", None);
+    let submitter = claims("submitter", "approval-history-submitter", None);
+    let reviewer = claims("reviewer", "approval-history-reviewer", Some("review"));
+
+    let old_site = create_record(
+        &app,
+        "/v1/records/sites?accessProfile=steward",
+        steward.clone(),
+        "approval-history-create-old-site",
+        json!({"tenant": TENANT, "name": "approval-history-old"}),
+    )
+    .await;
+    let new_site = create_record(
+        &app,
+        "/v1/records/sites?accessProfile=steward",
+        steward.clone(),
+        "approval-history-create-new-site",
+        json!({"tenant": TENANT, "name": "approval-history-new"}),
+    )
+    .await;
+    let placement = create_record(
+        &app,
+        "/v1/records/placements?accessProfile=steward",
+        steward,
+        "approval-history-create-placement",
+        json!({
+            "tenant": TENANT,
+            "site": old_site.id,
+            "validFrom": "2026-08-31",
+            "validTo": Value::Null
+        }),
+    )
+    .await;
+    let request = create_record(
+        &app,
+        "/v1/records/correction-requests?accessProfile=submitter",
+        submitter.clone(),
+        "approval-history-create-correction-request",
+        json!({
+            "tenant": TENANT,
+            "placement": placement.id,
+            "proposedSite": new_site.id,
+            "reason": "approval history commit proof"
+        }),
+    )
+    .await;
+    let submitted = run_action(
+        &app,
+        &request.id,
+        "correction-requests",
+        "submitter",
+        submitter,
+        "approval-history-submit-correction-request",
+        "submit_request",
+        None,
+        |_| json!({}),
+    )
+    .await;
+    let effect_digest = submitted["request"]["effectDigest"]
+        .as_str()
+        .expect("submission freezes digest")
+        .to_owned();
+
+    let before_review = get_record(
+        &app,
+        &format!(
+            "/v1/records/correction-requests/{}?accessProfile=reviewer",
+            request.id
+        ),
+        reviewer.clone(),
+    )
+    .await;
+    let approve = action(&before_review.body, "approve_request", Some("review"));
+    let approve_body = json!({"proposalVersion": 1, "effectDigest": effect_digest});
+    let before_history = history_commit_counts(&database).await;
+    let approved = send_action(
+        &app,
+        &approve,
+        "approval-history-approve-correction-request",
+        reviewer.clone(),
+        approve_body.clone(),
+    )
+    .await;
+    assert_eq!(
+        approved.status,
+        StatusCode::OK,
+        "approval failed with body {}",
+        approved.body
+    );
+    assert_eq!(approved.body["request"]["serverState"], "approved");
+    assert_snapshot_reference(&approved.body["snapshot"]);
+    let after_approval_history = history_commit_counts(&database).await;
+    assert_eq!(
+        after_approval_history.commits - before_history.commits,
+        1,
+        "fresh approval must allocate exactly one history commit"
+    );
+    assert_eq!(
+        after_approval_history.members - before_history.members,
+        1,
+        "approval commits only the request row revision"
+    );
+    let members = history_members_for_snapshot(&database, &approved.body["snapshot"]).await;
+    assert_eq!(members.len(), 1);
+    assert_eq!(members[0].entity_id, "correction-request");
+    assert_eq!(members[0].record_id.to_string(), request.id);
+    assert_eq!(
+        members[0].record_revision,
+        approved.body["revision"]
+            .as_i64()
+            .expect("approval response carries request revision")
+    );
+
+    let replayed = send_action(
+        &app,
+        &approve,
+        "approval-history-approve-correction-request",
+        reviewer,
+        approve_body,
+    )
+    .await;
+    assert_eq!(
+        replayed.status,
+        StatusCode::OK,
+        "approval replay failed with body {}",
+        replayed.body
+    );
+    assert_eq!(replayed.body, approved.body);
+    assert_eq!(
+        history_commit_counts(&database).await,
+        after_approval_history,
+        "idempotent approval replay must not allocate another commit position"
+    );
     database.cleanup().await;
 }
 
@@ -894,10 +1092,10 @@ async fn long_logical_request_entity_id_matches_installed_physical_catalog() {
     install_compiled_schema(&migration, &registry, &database.runtime_role)
         .await
         .expect("long logical request entity schema installs");
-    initialize_registry_state_for_catalog_test(
+    initialize_compiled_registry_state_for_test(
         &migration,
         &database.runtime_role,
-        &ExpectedManagedCatalog::compiled(&registry),
+        &registry,
         RegistryStateTestIdentity {
             package_id: "long-logical-change-request",
             environment: "local",
@@ -1679,7 +1877,7 @@ async fn real_postgres_http_change_request_two_stage_stale_rebase_and_cancel_are
     assert!(
         no_apply_yet.body["request"]["actions"]
             .as_array()
-            .map_or(true, |actions| actions
+            .is_none_or(|actions| actions
                 .iter()
                 .all(|action| action["operation"] != "apply_request")),
         "apply must not be advertised before the final stage approval"
@@ -2367,6 +2565,76 @@ async fn idempotency_result_count(database: &TestDatabase) -> i64 {
         .get(0)
 }
 
+#[derive(Debug, Eq, PartialEq)]
+struct HistoryCommitCounts {
+    commits: i64,
+    members: i64,
+}
+
+async fn history_commit_counts(database: &TestDatabase) -> HistoryCommitCounts {
+    let row = database
+        .admin
+        .query_one(
+            "SELECT
+                 (SELECT count(*) FROM registry_internal.registry_revision_commits),
+                 (SELECT count(*) FROM registry_internal.registry_revision_commit_members)",
+            &[],
+        )
+        .await
+        .expect("administrator can inspect history commits");
+    HistoryCommitCounts {
+        commits: row.get(0),
+        members: row.get(1),
+    }
+}
+
+struct HistoryCommitMember {
+    entity_id: String,
+    record_id: Uuid,
+    record_revision: i64,
+}
+
+async fn history_members_for_snapshot(
+    database: &TestDatabase,
+    snapshot: &Value,
+) -> Vec<HistoryCommitMember> {
+    let snapshot_id = snapshot_uuid(snapshot);
+    database
+        .admin
+        .query(
+            "SELECT member.entity_id, member.record_id, member.record_revision
+               FROM registry_internal.registry_revision_commits AS revision_commit
+               JOIN registry_internal.registry_revision_commit_members AS member
+                 ON member.commit_position = revision_commit.commit_position
+              WHERE revision_commit.snapshot_reference = $1
+              ORDER BY member.member_index",
+            &[&snapshot_id],
+        )
+        .await
+        .expect("administrator can inspect history commit members")
+        .into_iter()
+        .map(|row| HistoryCommitMember {
+            entity_id: row.get(0),
+            record_id: row.get(1),
+            record_revision: row.get(2),
+        })
+        .collect()
+}
+
+fn assert_snapshot_reference(value: &Value) {
+    let snapshot = value.as_str().expect("response carries snapshot reference");
+    assert_eq!(snapshot.len(), 40);
+    assert!(snapshot.starts_with("rs1_"));
+    Uuid::parse_str(&snapshot[4..]).expect("snapshot suffix is a UUID");
+}
+
+fn snapshot_uuid(value: &Value) -> Uuid {
+    let snapshot = value.as_str().expect("response carries snapshot reference");
+    assert_eq!(snapshot.len(), 40);
+    assert!(snapshot.starts_with("rs1_"));
+    Uuid::parse_str(&snapshot[4..]).expect("snapshot suffix is a UUID")
+}
+
 fn tampered_if_match(value: &str) -> String {
     let mut bytes = value.as_bytes().to_vec();
     let index = bytes
@@ -2413,10 +2681,10 @@ async fn install_registry(
     install_compiled_schema(&migration, registry, &database.runtime_role)
         .await
         .expect("compiled change-request schema installs");
-    let identity = initialize_registry_state_for_catalog_test(
+    let identity = initialize_compiled_registry_state_for_test(
         &migration,
         &database.runtime_role,
-        &ExpectedManagedCatalog::compiled(registry),
+        registry,
         RegistryStateTestIdentity {
             package_id,
             environment: "local",
@@ -2636,6 +2904,8 @@ fn quote_sql_identifier(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
 }
 
+// Test helper keeps the complete HTTP action tuple visible at each call site.
+#[allow(clippy::too_many_arguments)]
 async fn run_action(
     app: &axum::Router,
     record_id: &str,

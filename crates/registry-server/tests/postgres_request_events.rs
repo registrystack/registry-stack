@@ -32,9 +32,9 @@ use registry_server::cursor::CursorCodec;
 use registry_server::event_destination::ActivatedEventDestinationRegistry;
 use registry_server::mutation::install_mutation_schema;
 use registry_server::postgres::{
-    initialize_registry_state_for_catalog_test, install_compiled_schema, ExpectedManagedCatalog,
-    ExpectedRegistryIdentity, PostgresRecordMutationService, PostgresRecordReadService,
-    RegistryLockKey, RegistryStateTestIdentity,
+    initialize_compiled_registry_state_for_test, install_compiled_schema, ExpectedRegistryIdentity,
+    PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey,
+    RegistryStateTestIdentity,
 };
 use registry_server::request_events::{insert_request_lifecycle_events, RequestLifecycleEvent};
 use registry_server::runtime_config::parse_runtime_config;
@@ -225,10 +225,10 @@ async fn real_postgres_request_lifecycle_webhook_retries_and_operator_replay_kee
     install_compiled_schema(&migration, &compiled, &database.runtime_role)
         .await
         .expect("compiled lifecycle event schema installs");
-    let identity = initialize_registry_state_for_catalog_test(
+    let identity = initialize_compiled_registry_state_for_test(
         &migration,
         &database.runtime_role,
-        &ExpectedManagedCatalog::compiled(&compiled),
+        &compiled,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
             environment: "local",
@@ -372,10 +372,10 @@ async fn authenticated_webhook_service_event_material_does_not_grant_request_act
     install_compiled_schema(&migration, &registry, &database.runtime_role)
         .await
         .expect("compiled lifecycle authority schema installs");
-    let identity = initialize_registry_state_for_catalog_test(
+    let identity = initialize_compiled_registry_state_for_test(
         &migration,
         &database.runtime_role,
-        &ExpectedManagedCatalog::compiled(&registry),
+        &registry,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
             environment: "local",
@@ -685,6 +685,7 @@ fn header<'a>(request: &'a ReceivedRequest, name: &str) -> &'a str {
         .expect("closed webhook header exists")
 }
 
+#[allow(clippy::too_many_arguments)] // Keep lifecycle identity, state, and captured values explicit.
 fn lifecycle_event<'a>(
     request_id: Uuid,
     request_record_revision: i64,
@@ -1115,14 +1116,11 @@ impl HttpsReceiver {
                     };
                     requests.lock().await.push(request);
                     notify.notify_waiters();
-                    let status = match plans
+                    let ResponsePlan::Status(status) = plans
                         .lock()
                         .await
                         .pop_front()
-                        .unwrap_or(ResponsePlan::Status(204))
-                    {
-                        ResponsePlan::Status(status) => status,
-                    };
+                        .unwrap_or(ResponsePlan::Status(204));
                     let reason = if status == 204 {
                         "No Content"
                     } else {

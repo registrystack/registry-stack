@@ -906,6 +906,7 @@ async fn get_record(app: &axum::Router, uri: &str, claims: VerifiedRequestClaims
     response
 }
 
+#[allow(clippy::too_many_arguments)] // The route, actor, state, and expected transition are independent test inputs.
 async fn run_action(
     app: &axum::Router,
     record_id: &str,

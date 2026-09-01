@@ -85,8 +85,33 @@ path = "tests/postgres_revision_http.rs"
 required-features = ["postgres-test"]
 
 [[test]]
+name = "postgres_history_commit"
+path = "tests/postgres_history_commit.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_historical"
+path = "tests/postgres_historical.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_history_migration"
+path = "tests/postgres_history_migration.rs"
+required-features = ["postgres-test", "tooling"]
+
+[[test]]
+name = "postgres_history_erasure"
+path = "tests/postgres_history_erasure.rs"
+required-features = ["postgres-test"]
+
+[[test]]
 name = "postgres_batch"
 path = "tests/postgres_batch.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_temporal_corrections"
+path = "tests/postgres_temporal_corrections.rs"
 required-features = ["postgres-test"]
 
 [[test]]

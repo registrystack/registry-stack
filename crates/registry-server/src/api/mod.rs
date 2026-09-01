@@ -39,6 +39,7 @@ pub use service::{
     ReadServiceError, ReadinessProbe, RecordReadKind, RecordReadRefusal, RecordReadRequest,
     RecordReadService, RequestActionBody, RequestActionInput, RequestActionTargetAuthority,
     RevisionReadRefusal, RevisionReadRequest, RevisionReadService, ServiceFuture,
+    SnapshotReadRequest, SnapshotReadService,
 };
 
 use crate::auth::{authenticate_request, RegistryAuthenticator};
@@ -61,6 +62,7 @@ use crate::model::{
 };
 use crate::mutation::{parse_json_patch_document, BatchMutationItem, MutationError};
 use crate::query as strict_query;
+use crate::query_binding::CursorBindingQuery;
 use uuid::Uuid;
 
 use crate::artifacts::{
@@ -108,6 +110,10 @@ fn route_set(service: Arc<HttpService>) -> Router {
             Operation::Revisions if service.revisions.is_some() => app.route(
                 &route.path,
                 get(revision_dispatch).layer(Extension(route.clone())),
+            ),
+            Operation::Snapshot if service.snapshots.is_some() => app.route(
+                &route.path,
+                get(snapshot_dispatch).layer(Extension(route.clone())),
             ),
             Operation::Create if service.mutations.is_some() => app.route(
                 &route.path,
@@ -952,6 +958,71 @@ async fn revision_dispatch(
     }
 }
 
+async fn snapshot_dispatch(
+    State(service): State<Arc<HttpService>>,
+    Extension(route): Extension<CompiledRoute>,
+    Extension(correlation): Extension<RequestCorrelation>,
+    claims: Option<Extension<VerifiedRequestClaims>>,
+    RawQuery(raw_query): RawQuery,
+) -> Response {
+    let Some(snapshots) = &service.snapshots else {
+        return concealed();
+    };
+    let claims = claims
+        .map(|Extension(value)| value)
+        .unwrap_or_else(VerifiedRequestClaims::anonymous);
+    let options = match QueryOptions::parse_snapshot(raw_query.as_deref()) {
+        Ok(options) => options,
+        Err(_) => {
+            return audited_known_read_refusal(
+                &service,
+                &route,
+                &claims,
+                None,
+                concealed(),
+                &correlation,
+            )
+            .await;
+        }
+    };
+    let Some(surface) = authorize_route(&service, &route, &claims, &options) else {
+        return audited_read_concealment(&service, &route, &options, &claims, None, &correlation)
+            .await;
+    };
+    let query = match read_query(&service, &route, &surface, &options, None).await {
+        Ok(Some(query)) if surface.read_path.is_none() => query,
+        Ok(_) => return unavailable(),
+        Err(error) => {
+            let response = match error {
+                ReadQueryError::Invalid => invalid_query(),
+                ReadQueryError::CursorInvalid => cursor_invalid(),
+            };
+            return audited_read_refusal(&service, &route, &surface, None, response, &correlation)
+                .await;
+        }
+    };
+    let request = SnapshotReadRequest {
+        entity_id: route.entity_id.clone(),
+        operation_id: route.id.clone(),
+        method: route.method,
+        context: surface.context,
+        selected_fields: query
+            .cursor_binding
+            .selected_fields
+            .iter()
+            .cloned()
+            .collect(),
+        maximum_records: usize::from(query.page_size) + 1,
+        plan: query,
+        correlation,
+    };
+    match snapshots.list(request).await {
+        Ok(response) => exact_json_no_store(response),
+        Err(ReadServiceError::Unavailable) => unavailable(),
+        Err(ReadServiceError::CursorInvalid) => cursor_invalid(),
+    }
+}
+
 async fn audited_known_revision_refusal(
     revisions: &dyn RevisionReadService,
     route: &CompiledRoute,
@@ -1043,16 +1114,18 @@ async fn audited_known_read_refusal(
     correlation: &RequestCorrelation,
 ) -> Response {
     match service
-        .records
-        .refusal(RecordReadRefusal {
-            method: route.method,
-            operation_id: route.id.clone(),
-            target_record: target_record.cloned(),
-            principal: claims.principal().map(str::to_owned),
-            selected_access_profile: None,
-            purpose_present: claims.purpose().is_some(),
-            correlation: correlation.clone(),
-        })
+        .read_refusal(
+            route.operation,
+            RecordReadRefusal {
+                method: route.method,
+                operation_id: route.id.clone(),
+                target_record: target_record.cloned(),
+                principal: claims.principal().map(str::to_owned),
+                selected_access_profile: None,
+                purpose_present: claims.purpose().is_some(),
+                correlation: correlation.clone(),
+            },
+        )
         .await
     {
         Ok(()) => response,
@@ -1069,16 +1142,18 @@ async fn audited_read_refusal(
     correlation: &RequestCorrelation,
 ) -> Response {
     match service
-        .records
-        .refusal(RecordReadRefusal {
-            method: route.method,
-            operation_id: route.id.clone(),
-            target_record: target_record.cloned(),
-            principal: surface.context.principal().map(str::to_owned),
-            selected_access_profile: Some(surface.context.selected_profile().to_owned()),
-            purpose_present: surface.context.purpose().is_some(),
-            correlation: correlation.clone(),
-        })
+        .read_refusal(
+            route.operation,
+            RecordReadRefusal {
+                method: route.method,
+                operation_id: route.id.clone(),
+                target_record: target_record.cloned(),
+                principal: surface.context.principal().map(str::to_owned),
+                selected_access_profile: Some(surface.context.selected_profile().to_owned()),
+                purpose_present: surface.context.purpose().is_some(),
+                correlation: correlation.clone(),
+            },
+        )
         .await
     {
         Ok(()) => response,
@@ -1102,16 +1177,18 @@ async fn audited_read_concealment(
             .then_some(profile.clone())
     });
     match service
-        .records
-        .refusal(RecordReadRefusal {
-            method: route.method,
-            operation_id: route.id.clone(),
-            target_record: target_record.cloned(),
-            principal: claims.principal().map(str::to_owned),
-            selected_access_profile,
-            purpose_present: claims.purpose().is_some(),
-            correlation: correlation.clone(),
-        })
+        .read_refusal(
+            route.operation,
+            RecordReadRefusal {
+                method: route.method,
+                operation_id: route.id.clone(),
+                target_record: target_record.cloned(),
+                principal: claims.principal().map(str::to_owned),
+                selected_access_profile,
+                purpose_present: claims.purpose().is_some(),
+                correlation: correlation.clone(),
+            },
+        )
         .await
     {
         Ok(()) => concealed(),
@@ -1471,7 +1548,7 @@ async fn batch_dispatch(
         )
         .await;
     };
-    let Ok(items) = parse_batch_body(&body, usize::from(batch.maximum_items)) else {
+    let Ok(parsed) = parse_batch_body(&body, usize::from(batch.maximum_items)) else {
         return audited_mutation_refusal(
             mutations,
             &route,
@@ -1488,7 +1565,8 @@ async fn batch_dispatch(
             idempotency_key,
             context: &surface.context,
             entity_id: &route.entity_id,
-            items,
+            items: parsed.items,
+            change_context: parsed.change_context,
             response_fields: surface.readable_fields,
             body_bytes: body.len(),
             correlation: &correlation,
@@ -2144,6 +2222,9 @@ fn authorize_direct_route_base<'a>(
     if route.operation == Operation::Revisions && (profile.anonymous || !profile.revision_access) {
         return None;
     }
+    if route.operation == Operation::Snapshot && profile.anonymous {
+        return None;
+    }
     if matches!(
         route.operation,
         Operation::Create | Operation::Patch | Operation::Tombstone | Operation::Batch
@@ -2158,6 +2239,13 @@ fn authorize_direct_route_base<'a>(
     let readable_fields = profile
         .readable_fields
         .iter()
+        .filter(|field| {
+            route.operation != Operation::Snapshot
+                || entity
+                    .stored_fields
+                    .iter()
+                    .any(|stored| stored.logical.id == **field)
+        })
         .filter(|field| {
             !profile.anonymous
                 || entity
@@ -2354,6 +2442,7 @@ fn served_operation(service: &HttpService, route: &CompiledRoute) -> bool {
                         })
                     })
         }
+        Operation::Snapshot => service.snapshots.is_some(),
     }
 }
 
@@ -2428,11 +2517,41 @@ async fn read_query(
     let Some(operation) = query_operation_for_route(service, route, surface, kind) else {
         return Err(ReadQueryError::Invalid);
     };
-    let scope = cursor_scope(surface, root_id)?;
+    if (kind == CompiledQueryKind::Snapshot) != options.historical.is_some() {
+        return Err(ReadQueryError::Invalid);
+    }
+    let scope = if let Some(historical) = &options.historical {
+        if surface.read_path.is_some() || root_id.is_some() {
+            return Err(ReadQueryError::Invalid);
+        }
+        if let Some(reference) = &historical.snapshot {
+            crate::history_reference::SnapshotReference::parse(reference)
+                .map_err(|_| ReadQueryError::Invalid)?;
+        }
+        CursorQueryScope::Snapshot {
+            reference: historical.snapshot.clone(),
+        }
+    } else {
+        cursor_scope(surface, root_id)?
+    };
     if let Some(token) = options.skiptoken() {
         let payload = service
             .cursors
             .open_after_authorization(token, now_unix_seconds(), |payload| {
+                let bound_scope = if kind == CompiledQueryKind::Snapshot {
+                    match &payload.query.scope {
+                        CursorQueryScope::Snapshot {
+                            reference: Some(reference),
+                        } => {
+                            crate::history_reference::SnapshotReference::parse(reference)
+                                .map_err(|_| CursorError::Mismatch)?;
+                            &payload.query.scope
+                        }
+                        _ => return Err(CursorError::Mismatch),
+                    }
+                } else {
+                    &scope
+                };
                 if payload.binding.route_id != route.id
                     || payload.binding.query_operation_id != operation.id
                     || payload.binding.query_kind != kind
@@ -2440,7 +2559,7 @@ async fn read_query(
                     || payload.binding.include_count != payload.query.include_count
                     || payload.binding.page_size != payload.query.page_size
                     || payload.binding.temporal_instant != payload.query.temporal_instant
-                    || payload.query.scope != scope
+                    || &payload.query.scope != bound_scope
                 {
                     return Err(CursorError::Mismatch);
                 }
@@ -2496,7 +2615,7 @@ async fn read_query(
                         include_count: payload.binding.include_count,
                         page_size: payload.binding.page_size,
                         temporal_instant: payload.binding.temporal_instant.as_deref(),
-                        scope: &scope,
+                        scope: bound_scope,
                     },
                 )
             })
@@ -2598,7 +2717,7 @@ async fn read_query(
         order.as_ref(),
         page_size,
     )?;
-    let temporal_instant = temporal_instant_for(kind, options)?;
+    let temporal_instant = temporal_instant_for(kind, options, surface.response_entity)?;
     let binding = cursor_binding(
         service,
         route,
@@ -3131,6 +3250,7 @@ fn validate_filter_shape(
 fn temporal_instant_for(
     kind: CompiledQueryKind,
     options: &QueryOptions,
+    entity: &CompiledEntity,
 ) -> Result<Option<String>, ReadQueryError> {
     match kind {
         CompiledQueryKind::List => {
@@ -3157,6 +3277,49 @@ fn temporal_instant_for(
             parse_strict_rfc3339_utc(value).map_err(|_| ReadQueryError::Invalid)?;
             Ok(Some(value.to_owned()))
         }
+        CompiledQueryKind::Snapshot => options
+            .historical
+            .as_ref()
+            .ok_or(ReadQueryError::Invalid)?
+            .valid_at
+            .as_deref()
+            .map(|value| {
+                normalize_history_valid_at(entity, value).map_err(|_| ReadQueryError::Invalid)
+            })
+            .transpose(),
+    }
+}
+
+/// Date and timestamp histories have distinct input types. There is no clock
+/// default, date truncation, local-time inference, or offset conversion.
+pub(crate) fn normalize_history_valid_at(
+    entity: &CompiledEntity,
+    value: &str,
+) -> Result<String, ()> {
+    let temporal = entity.temporal.as_ref().ok_or(())?;
+    let field = entity.fields.get(&temporal.start_field).ok_or(())?;
+    match &field.field_type {
+        FieldTypeSource::Date => {
+            if value.len() != 10 {
+                return Err(());
+            }
+            let format = time::format_description::parse_borrowed::<2>("[year]-[month]-[day]")
+                .map_err(|_| ())?;
+            let parsed = time::Date::parse(value, &format).map_err(|_| ())?;
+            let normalized = parsed.format(&format).map_err(|_| ())?;
+            if normalized != value {
+                return Err(());
+            }
+            Ok(normalized)
+        }
+        FieldTypeSource::Timestamp => {
+            let parsed = OffsetDateTime::parse(value, &Rfc3339).map_err(|_| ())?;
+            if parsed.offset() != time::UtcOffset::UTC {
+                return Err(());
+            }
+            parsed.format(&Rfc3339).map_err(|_| ())
+        }
+        _ => Err(()),
     }
 }
 
@@ -3177,69 +3340,12 @@ fn cursor_binding(
     query: CursorBindingQuery<'_>,
 ) -> Result<CursorBinding, CursorError> {
     let selected_fields_vec = query.selected_fields.iter().cloned().collect::<Vec<_>>();
-    let principal_reference = surface
-        .context
-        .principal()
-        .map(|principal| {
-            service
-                .cursors
-                .binding_digest_bytes(b"registry-server-cursor-principal-v3", principal.as_bytes())
-        })
-        .transpose()?;
-    let purpose_reference = surface
-        .context
-        .purpose()
-        .map(|purpose| {
-            service
-                .cursors
-                .binding_digest_bytes(b"registry-server-cursor-purpose-v3", purpose.as_bytes())
-        })
-        .transpose()?;
-    let row_boundary_reference = service.cursors.binding_digest(
-        b"registry-server-cursor-row-boundary-v3",
-        &json!(surface
-            .context
-            .row_boundaries()
-            .iter()
-            .map(|boundary| {
-                json!({
-                    "field": boundary.field(),
-                    "operator": match boundary.operator() {
-                        RowBoundaryOperator::Equals => "equals",
-                        RowBoundaryOperator::In => "in",
-                    },
-                    "values": boundary.values(),
-                })
-            })
-            .collect::<Vec<_>>()),
-    )?;
-    let projection_reference = service.cursors.binding_digest(
-        b"registry-server-cursor-projection-v3",
-        &json!({"projection": query.projection.iter().map(projection_field_value).collect::<Vec<_>>()}),
-    )?;
-    let query_reference = service.cursors.binding_digest(
-        b"registry-server-cursor-query-v3",
-        &json!({
-            "routeId": route.id,
-            "queryOperationId": operation.id,
-            "queryKind": operation.kind,
-            "selectedProfile": surface.context.selected_profile(),
-            "projection": query.projection.iter().map(projection_field_value).collect::<Vec<_>>(),
-            "filter": query.filter.map(read_filter_expr_value),
-            "order": query.order.map(read_order_clause_value),
-            "pageSize": query.page_size,
-            "includeCount": query.include_count,
-            "temporalInstant": query.temporal_instant,
-            "scope": cursor_scope_value(query.scope),
-        }),
-    )?;
-    let sort_reference = service.cursors.binding_digest(
-        b"registry-server-cursor-sort-v3",
-        &json!({"order": query.order.map(read_order_clause_value), "tieBreaker": operation.stable_tie_breaker}),
-    )?;
-    let scope_reference = service.cursors.binding_digest(
-        b"registry-server-cursor-scope-v3",
-        &cursor_scope_value(query.scope),
+    let references = crate::query_binding::references(
+        &service.cursors,
+        &route.id,
+        operation,
+        &surface.context,
+        query,
     )?;
     Ok(CursorBinding {
         package_revision: service.identity.package_revision.clone(),
@@ -3249,102 +3355,18 @@ fn cursor_binding(
         query_operation_id: operation.id.clone(),
         query_kind: operation.kind,
         selected_profile: surface.context.selected_profile().to_owned(),
-        principal_reference,
-        purpose_reference,
-        row_boundary_reference,
-        projection_reference,
-        query_reference,
-        sort_reference,
-        scope_reference,
+        principal_reference: references.principal,
+        purpose_reference: references.purpose,
+        row_boundary_reference: references.row_boundary,
+        projection_reference: references.projection,
+        query_reference: references.query,
+        sort_reference: references.sort,
+        scope_reference: references.scope,
         page_size: query.page_size,
         include_count: query.include_count,
         temporal_instant: query.temporal_instant.map(str::to_owned),
         selected_fields: selected_fields_vec,
     })
-}
-
-struct CursorBindingQuery<'a> {
-    selected_fields: &'a BTreeSet<String>,
-    projection: &'a [ReadProjectionField],
-    filter: Option<&'a ReadFilterExpr>,
-    order: Option<&'a ReadOrderClause>,
-    include_count: bool,
-    page_size: u16,
-    temporal_instant: Option<&'a str>,
-    scope: &'a CursorQueryScope,
-}
-
-fn projection_field_value(field: &ReadProjectionField) -> Value {
-    json!({
-        "fieldId": field.field_id,
-        "fieldType": field.field_type,
-    })
-}
-
-fn read_order_clause_value(order: &ReadOrderClause) -> Value {
-    json!({
-        "fieldId": order.field_id,
-        "fieldType": order.field_type,
-        "direction": order.direction,
-    })
-}
-
-fn cursor_scope_value(scope: &CursorQueryScope) -> Value {
-    match scope {
-        CursorQueryScope::Collection {} => json!({"kind": "collection"}),
-        CursorQueryScope::Relationship { path_id, root_id } => json!({
-            "kind": "relationship",
-            "pathId": path_id,
-            "rootId": root_id,
-        }),
-    }
-}
-
-fn read_filter_expr_value(filter: &ReadFilterExpr) -> Value {
-    match filter {
-        ReadFilterExpr::Binary { op, left, right } => json!({
-            "kind": "binary",
-            "op": match op {
-                ReadLogicalOp::And => "and",
-                ReadLogicalOp::Or => "or",
-            },
-            "left": read_filter_expr_value(left),
-            "right": read_filter_expr_value(right),
-        }),
-        ReadFilterExpr::Not(expr) => json!({
-            "kind": "not",
-            "op": "not",
-            "expr": read_filter_expr_value(expr),
-        }),
-        ReadFilterExpr::Group(expr) => json!({
-            "kind": "group",
-            "op": "group",
-            "expr": read_filter_expr_value(expr),
-        }),
-        ReadFilterExpr::Predicate(predicate) => json!({
-            "kind": "predicate",
-            "fieldId": predicate.field_id,
-            "fieldType": predicate.field_type,
-            "operator": read_filter_operator_name(predicate.operator),
-            "values": predicate.values,
-        }),
-    }
-}
-
-fn read_filter_operator_name(operator: ReadFilterOperator) -> &'static str {
-    match operator {
-        ReadFilterOperator::Eq => "eq",
-        ReadFilterOperator::Ne => "ne",
-        ReadFilterOperator::Lt => "lt",
-        ReadFilterOperator::Le => "le",
-        ReadFilterOperator::Gt => "gt",
-        ReadFilterOperator::Ge => "ge",
-        ReadFilterOperator::In => "in",
-        ReadFilterOperator::IsNull => "is_null",
-        ReadFilterOperator::IsNotNull => "is_not_null",
-        ReadFilterOperator::StartsWith => "startswith",
-        ReadFilterOperator::Contains => "contains",
-    }
 }
 
 fn cursor_query_from_plan(
@@ -3805,6 +3827,13 @@ struct MetadataEntity {
 struct QueryOptions {
     parsed: strict_query::ParsedReadQuery,
     request_history_after_proposal_version: Option<i64>,
+    historical: Option<HistoricalQueryOptions>,
+}
+
+#[derive(Default)]
+struct HistoricalQueryOptions {
+    snapshot: Option<String>,
+    valid_at: Option<String>,
 }
 
 impl QueryOptions {
@@ -3839,6 +3868,7 @@ impl QueryOptions {
         let result = Self {
             parsed,
             request_history_after_proposal_version,
+            historical: None,
         };
         if result.request_history_after_proposal_version.is_some() && result.skiptoken().is_some() {
             return Err(QueryParseError::Invalid);
@@ -3847,6 +3877,33 @@ impl QueryOptions {
             return Err(QueryParseError::Invalid);
         }
         Ok(result)
+    }
+
+    fn parse_snapshot(raw: Option<&str>) -> Result<Self, QueryParseError> {
+        let mut pairs = Vec::new();
+        if let Some(raw) = raw {
+            if raw.is_empty() || raw.len() > MAX_RAW_QUERY_BYTES {
+                return Err(QueryParseError::Invalid);
+            }
+            for pair in raw.split('&') {
+                let (name, value) = pair.split_once('=').ok_or(QueryParseError::Invalid)?;
+                pairs.push((percent_decode(name)?, percent_decode(value)?));
+            }
+        }
+        let parsed =
+            strict_query::parse_snapshot_query(pairs).map_err(|_| QueryParseError::Invalid)?;
+        Ok(Self {
+            parsed: strict_query::ParsedReadQuery {
+                access_profile: parsed.access_profile,
+                as_of: None,
+                mode: parsed.mode,
+            },
+            request_history_after_proposal_version: None,
+            historical: Some(HistoricalQueryOptions {
+                snapshot: parsed.snapshot,
+                valid_at: parsed.valid_at,
+            }),
+        })
     }
 
     fn access_profile(&self) -> Option<&String> {
@@ -3915,6 +3972,7 @@ impl Default for QueryOptions {
                     strict_query::ReadQueryOptions::default(),
                 ),
             },
+            historical: None,
         }
     }
 }
@@ -3983,6 +4041,7 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::ReviseRequest => "revise_request",
         Operation::CancelRequest => "cancel_request",
         Operation::ApplyRequest => "apply_request",
+        Operation::Snapshot => "snapshot",
     }
 }
 
@@ -4101,17 +4160,30 @@ async fn bounded_body_to(body: Body, maximum_bytes: usize) -> Result<Vec<u8>, ()
     Ok(bytes.to_vec())
 }
 
-fn parse_batch_body(body: &[u8], maximum_items: usize) -> Result<Vec<BatchMutationItem>, ()> {
+struct ParsedBatchBody {
+    items: Vec<BatchMutationItem>,
+    change_context: Option<crate::history_context::ChangeContext>,
+}
+
+fn parse_batch_body(body: &[u8], maximum_items: usize) -> Result<ParsedBatchBody, ()> {
     let value = parse_json_strict(body).map_err(|_| ())?;
     let object = value.as_object().ok_or(())?;
-    if object.len() != 1 {
+    if object
+        .keys()
+        .any(|key| !matches!(key.as_str(), "items" | "changeContext"))
+    {
         return Err(());
     }
+    let change_context = object
+        .get("changeContext")
+        .map(crate::history_context::ChangeContext::parse_json)
+        .transpose()
+        .map_err(|_| ())?;
     let items = object.get("items").and_then(Value::as_array).ok_or(())?;
     if items.is_empty() || items.len() > maximum_items {
         return Err(());
     }
-    items
+    let items = items
         .iter()
         .map(|item| {
             let object = item.as_object().ok_or(())?;
@@ -4148,7 +4220,11 @@ fn parse_batch_body(body: &[u8], maximum_items: usize) -> Result<Vec<BatchMutati
                 _ => Err(()),
             }
         })
-        .collect()
+        .collect::<Result<Vec<_>, ()>>()?;
+    Ok(ParsedBatchBody {
+        items,
+        change_context,
+    })
 }
 
 async fn body_is_empty(body: Body) -> bool {
@@ -4351,4 +4427,34 @@ fn fixed_problem(status: StatusCode, code: &'static str, detail: &'static str) -
         detail,
         code,
     )
+}
+
+#[cfg(test)]
+mod batch_admission_tests {
+    use super::parse_batch_body;
+    use serde_json::json;
+
+    #[test]
+    fn correction_context_is_shared_and_validated_before_items_execute() {
+        let item = json!({"operation": "create", "data": {"label": "fixture"}});
+        let accepted = json!({
+            "items": [item.clone()],
+            "changeContext": {"kind": "correction", "reasonCode": "verified-source"}
+        });
+        let parsed = parse_batch_body(&serde_json::to_vec(&accepted).unwrap(), 1).unwrap();
+        assert_eq!(parsed.items.len(), 1);
+        assert!(parsed.change_context.is_some());
+        for refused in [
+            json!({"items": [item.clone()], "changeContext": null}),
+            json!({"items": [item.clone()], "changeContext": {"kind": "correction"}}),
+            json!({"items": [item.clone()], "changeContext": {"reasonCode": "x".repeat(65)}}),
+            json!({"items": [item.clone()], "changeContext": {"actor": "untrusted"}}),
+            json!({"items": [item.clone()], "reasonCode": "unscoped"}),
+            json!({"items": [{"operation": "create", "data": {}, "changeContext": {}}]}),
+            json!({"items": [item.clone(), item], "changeContext": {}}),
+        ] {
+            assert!(parse_batch_body(&serde_json::to_vec(&refused).unwrap(), 1).is_err());
+        }
+        assert!(parse_batch_body(br#"{"items":[],"items":[]}"#, 1).is_err());
+    }
 }

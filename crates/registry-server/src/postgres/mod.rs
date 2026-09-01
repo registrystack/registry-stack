@@ -5,6 +5,7 @@
 mod catalog;
 mod config;
 mod context;
+mod history_read;
 mod interlock;
 mod migration_ledger;
 mod mutation;
@@ -16,8 +17,9 @@ mod schema;
 #[cfg(feature = "postgres-test")]
 #[doc(hidden)]
 pub use catalog::{
-    initialize_kernel_registry_state_for_test, initialize_registry_state_for_catalog_test,
-    legacy_schema_fingerprint_for_test, RegistryStateTestIdentity,
+    initialize_compiled_registry_state_for_test, initialize_kernel_registry_state_for_test,
+    initialize_registry_state_for_catalog_test, legacy_schema_fingerprint_for_test,
+    RegistryStateTestIdentity,
 };
 pub use catalog::{
     install_kernel_schema, kernel_schema_fingerprint, managed_schema_fingerprint,
@@ -35,6 +37,9 @@ pub use context::{
     begin_record_transaction, ClaimContext, GuardedTransaction, RowBoundaryContext,
     RowBoundaryOperator,
 };
+pub use history_read::PostgresSnapshotReadService;
+#[cfg(feature = "postgres-test")]
+pub use history_read::SnapshotReadFaultPoint;
 #[cfg(feature = "postgres-test")]
 pub use interlock::DedicatedApplyConnection;
 pub use interlock::RegistryLockKey;

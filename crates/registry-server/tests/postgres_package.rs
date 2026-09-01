@@ -26,11 +26,18 @@ use registry_server::migration::{
     apply_verified_package, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
     ApplyVerifiedPackageRequest, MigrationError,
 };
+#[cfg(feature = "tooling")]
+use registry_server::migration_plan::{
+    MigrationRehearsalReceipt, RehearsalProofs, ReviewedChangeCover, ReviewedMigrationDescriptor,
+    ReviewedMigrationFile, ReviewedMigrationRecovery, ReviewedMigrationSource,
+};
 use registry_server::package::{
-    derive_package_revision, load_package, prepare_package, PackageBuildRequest, PackageEnvelope,
-    PackageError, PackageFile, PackageFileRole, PackageIntent, PackageLoadContext, PackageManifest,
-    PackageMigrationPlanInput, PackageModuleSource, PackageSignature, PackageSourceFile,
-    PackageTrustAnchor, SignaturePolicy, TrustAnchorKey, MAX_PACKAGE_SOURCE_FILE_BYTES,
+    change_set_to_applicable_migration_plan, compiled_registry_change_set, derive_package_revision,
+    load_package, load_predecessor_package, prepare_package, CompiledRegistryChangeClass,
+    CompiledRegistryChangeCode, PackageBuildRequest, PackageEnvelope, PackageError, PackageFile,
+    PackageFileRole, PackageIntent, PackageLoadContext, PackageManifest, PackageMigrationPlanInput,
+    PackageModuleSource, PackageSignature, PackageSourceFile, PackageTrustAnchor,
+    PredecessorPackageContext, SignaturePolicy, TrustAnchorKey, MAX_PACKAGE_SOURCE_FILE_BYTES,
     TRUST_ANCHOR_API_VERSION,
 };
 use registry_server::postgres::{
@@ -40,6 +47,7 @@ use registry_server::postgres::{
 use registry_server::runtime_config::parse_runtime_config;
 use registry_server::startup::{prepare_startup, StartupError};
 use serde::Serialize;
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio_postgres::GenericClient;
 use uuid::Uuid;
@@ -1072,6 +1080,682 @@ fn package_binding_refuses_wrong_environment_instance_database_sequence_and_prio
     assert_eq!(
         load_error(successor.root.path(), &stale),
         PackageError::Binding
+    );
+}
+
+#[test]
+fn predecessor_package_binds_to_exact_active_database_identity() {
+    let fixture = PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
+    let revision = read_envelope(fixture.root.path()).signed.package_revision;
+    let predecessor = load_predecessor_package(
+        fixture.root.path(),
+        &local_predecessor_context(&revision, 1),
+    )
+    .expect("active predecessor package verifies");
+
+    assert_eq!(predecessor.package_id(), "neutral-registry");
+    assert_eq!(predecessor.package_revision(), revision);
+    assert_eq!(predecessor.schema_fingerprint(), fingerprint(1));
+    assert_eq!(predecessor.sequence(), 1);
+    assert_eq!(predecessor.migration_baseline().package_revision, revision);
+    assert_eq!(
+        predecessor.migration_baseline().registry_id,
+        "neutral-registry"
+    );
+
+    let wrong_revision = PredecessorPackageContext {
+        expected_package_revision:
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ..local_predecessor_context(&revision, 1)
+    };
+    assert_eq!(
+        predecessor_load_error(fixture.root.path(), &wrong_revision),
+        PackageError::Binding
+    );
+
+    let wrong_sequence = PredecessorPackageContext {
+        expected_sequence: 2,
+        ..local_predecessor_context(&revision, 1)
+    };
+    assert_eq!(
+        predecessor_load_error(fixture.root.path(), &wrong_sequence),
+        PackageError::Binding
+    );
+
+    let wrong_database = PredecessorPackageContext {
+        database_id: "another-database",
+        ..local_predecessor_context(&revision, 1)
+    };
+    assert_eq!(
+        predecessor_load_error(fixture.root.path(), &wrong_database),
+        PackageError::Binding
+    );
+}
+
+#[test]
+fn predecessor_package_refuses_altered_or_forged_closure_bytes() {
+    let signing = generate_private_jwk(GeneratedKeyAlgorithm::Es384).expect("test key generates");
+    let signed = PackageFixture::build(
+        "production",
+        1,
+        None,
+        fingerprint(1),
+        PlanChoice::Schema,
+        Some(&signing),
+    );
+    let signed_revision = read_envelope(signed.root.path()).signed.package_revision;
+    load_predecessor_package(
+        signed.root.path(),
+        &signed.predecessor_context(&signed_revision, 1),
+    )
+    .expect("signed predecessor verifies");
+    rewrite_envelope(signed.root.path(), |envelope| {
+        let byte_length = envelope.signatures[0].signature_hex.len() / 2;
+        envelope.signatures[0].signature_hex = "00".repeat(byte_length);
+    });
+    assert_eq!(
+        predecessor_load_error(
+            signed.root.path(),
+            &signed.predecessor_context(&signed_revision, 1),
+        ),
+        PackageError::Signature
+    );
+
+    let altered = PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
+    let revision = read_envelope(altered.root.path()).signed.package_revision;
+    let context = local_predecessor_context(&revision, 1);
+    let model_path = governed_model_path(altered.root.path());
+    let original = fs::read(&model_path).expect("governed model reads");
+
+    fs::write(&model_path, b"tampered governed model").expect("governed model tamper writes");
+    assert_eq!(
+        predecessor_load_error(altered.root.path(), &context),
+        PackageError::Integrity
+    );
+    fs::write(&model_path, original).expect("governed model restores");
+
+    let forged = PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
+    let active_revision = read_envelope(forged.root.path()).signed.package_revision;
+    let model_path = governed_model_path(forged.root.path());
+    let forged_bytes = fs::read(&model_path)
+        .expect("governed model reads")
+        .into_iter()
+        .map(|byte| if byte == b'1' { b'2' } else { byte })
+        .collect::<Vec<_>>();
+    fs::write(&model_path, &forged_bytes).expect("forged governed model writes");
+    rewrite_unsigned(forged.root.path(), |manifest| {
+        let entry = manifest
+            .files
+            .iter_mut()
+            .find(|entry| entry.role == PackageFileRole::GovernedModel)
+            .expect("governed model entry exists");
+        entry.size = forged_bytes.len() as u64;
+        entry.sha256 = format!("sha256:{}", hex(&Sha256::digest(&forged_bytes)));
+    });
+    assert_eq!(
+        predecessor_load_error(
+            forged.root.path(),
+            &local_predecessor_context(&active_revision, 1),
+        ),
+        PackageError::Binding
+    );
+}
+
+#[test]
+fn predecessor_verification_does_not_authorize_runtime_or_weaken_successor() {
+    let legacy_revision = "legacy-compiler-source-revision";
+    let legacy = legacy_compiler_fixture(legacy_revision);
+    let active_revision = read_envelope(legacy.root.path()).signed.package_revision;
+    load_predecessor_package(
+        legacy.root.path(),
+        &local_predecessor_context(&active_revision, 1),
+    )
+    .expect("legacy active predecessor verifies for planning");
+
+    let startup_context = PackageLoadContext {
+        compiler_source_revision: SOURCE_REVISION,
+        ..local_context(PackageIntent::Startup {
+            active_revision: &active_revision,
+            active_sequence: 1,
+        })
+    };
+    assert_eq!(
+        load_error(legacy.root.path(), &startup_context),
+        PackageError::Binding
+    );
+
+    let successor = PackageFixture::build(
+        "local",
+        2,
+        Some(&active_revision),
+        fingerprint(2),
+        PlanChoice::SecondTable,
+        None,
+    );
+    rewrite_unsigned(successor.root.path(), |manifest| {
+        manifest.migration_plan.changes.clear();
+    });
+    let activation_context = local_context(PackageIntent::Activation {
+        active_revision: &active_revision,
+        active_sequence: 1,
+    });
+    assert_eq!(
+        load_error(successor.root.path(), &activation_context),
+        PackageError::MigrationPlan
+    );
+}
+
+#[test]
+fn policy_only_snapshot_grant_addition_prepares_and_loads_successor_without_reviewed_migration() {
+    assert_policy_only_snapshot_grant_delta_prepares_and_loads(false, true);
+}
+
+#[test]
+fn policy_only_snapshot_grant_removal_prepares_and_loads_successor_without_reviewed_migration() {
+    assert_policy_only_snapshot_grant_delta_prepares_and_loads(true, false);
+}
+
+#[test]
+fn query_shape_rewrite_with_additive_field_requires_reviewed_migration() {
+    let baseline_module_bytes = temporal_policy_module_bytes(true);
+    let baseline_module =
+        parse_module_yaml(&baseline_module_bytes).expect("baseline module parses");
+    let baseline = prepare_package(build_request(BuildRequestParts {
+        environment: "local",
+        sequence: 1,
+        prior_revision: None,
+        schema_fingerprint: fingerprint(1),
+        project_bytes: project_bytes("local", 1, &module_digest(&baseline_module)),
+        module_bytes: baseline_module_bytes,
+        migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
+        signature_policy: SignaturePolicy {
+            threshold: 0,
+            key_ids: Vec::new(),
+        },
+    }))
+    .expect("baseline package prepares");
+    let active_revision = baseline.package_revision().to_owned();
+
+    let successor_module_bytes = temporal_policy_module_bytes_with(
+        true,
+        r#",{"id":"review-note","type":"string","maxLength":120,"classification":"internal"}"#,
+        r#", "allowCount": true"#,
+    );
+    let successor_module =
+        parse_module_yaml(&successor_module_bytes).expect("successor module parses");
+    let successor_project_bytes = project_bytes("local", 2, &module_digest(&successor_module));
+    let successor_registry = compile_project(
+        &parse_project_yaml(&successor_project_bytes).expect("successor project parses"),
+        std::slice::from_ref(&successor_module),
+        CompileProfile::Production,
+    )
+    .expect("successor compiles");
+    let change_set =
+        compiled_registry_change_set(baseline.registry(), &successor_registry, &active_revision);
+    assert!(change_set.changes.iter().any(|change| {
+        change.code == CompiledRegistryChangeCode::QueryInventoryChanged
+            && change.class == CompiledRegistryChangeClass::AccessOrDisclosureChange
+    }));
+    assert!(change_set_to_applicable_migration_plan(&change_set).is_err());
+    let refused = prepare_package(build_request(BuildRequestParts {
+        environment: "local",
+        sequence: 2,
+        prior_revision: Some(&active_revision),
+        schema_fingerprint: fingerprint(2),
+        project_bytes: successor_project_bytes,
+        module_bytes: successor_module_bytes,
+        migration_plan: PackageMigrationPlanInput::Successor {
+            prior_registry: Box::new(baseline.registry().clone()),
+        },
+        signature_policy: SignaturePolicy {
+            threshold: 0,
+            key_ids: Vec::new(),
+        },
+    }));
+
+    assert_eq!(refused.err(), Some(PackageError::MigrationPlan));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn policy_only_snapshot_grant_add_and_remove_apply_without_ddl() {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs prerequisite");
+    let (mut migration, migration_task) = database.connect_migration().await;
+
+    let first = publish_temporal_policy_package(
+        1,
+        None,
+        fingerprint(1),
+        temporal_policy_module_bytes(false),
+        PackageMigrationPlanInput::InitialCompiledDdl,
+    );
+    let provisional_first = load_package(
+        first.path(),
+        &local_context(PackageIntent::InitialActivation),
+    )
+    .expect("initial temporal policy package verifies before fingerprinting");
+    let transaction = migration
+        .transaction()
+        .await
+        .expect("initial temporal policy fingerprint transaction starts");
+    install_compiled_schema(
+        &transaction,
+        provisional_first.registry(),
+        &database.runtime_role,
+    )
+    .await
+    .expect("initial temporal policy schema installs for fingerprinting");
+    let first_catalog = ExpectedManagedCatalog::compiled(provisional_first.registry());
+    let first_fingerprint =
+        managed_schema_fingerprint(&transaction, &database.runtime_role, &first_catalog)
+            .await
+            .expect("initial temporal policy fingerprint derives");
+    transaction
+        .rollback()
+        .await
+        .expect("initial temporal policy fingerprint transaction rolls back");
+    rewrite_unsigned(first.path(), |manifest| {
+        manifest.schema_fingerprint.clone_from(&first_fingerprint);
+    });
+    let verified_first = load_package(
+        first.path(),
+        &local_context(PackageIntent::InitialActivation),
+    )
+    .expect("initial temporal policy package reloads with exact fingerprint");
+    let active_first = apply_package(
+        &database,
+        &verified_first,
+        ApplyPrecondition::InitialActivation,
+        Duration::from_secs(1),
+        Duration::from_secs(1),
+    )
+    .await
+    .expect("initial temporal policy package applies");
+    restore_legacy_migration_ledger_metadata_constraints(&database).await;
+
+    let add_snapshot = publish_temporal_policy_package(
+        2,
+        Some(&active_first.package_revision),
+        active_first.schema_fingerprint.clone(),
+        temporal_policy_module_bytes(true),
+        PackageMigrationPlanInput::Successor {
+            prior_registry: Box::new(verified_first.registry().clone()),
+        },
+    );
+    let add_context = local_context(PackageIntent::Activation {
+        active_revision: &active_first.package_revision,
+        active_sequence: 1,
+    });
+    let verified_add =
+        load_package(add_snapshot.path(), &add_context).expect("snapshot grant successor verifies");
+    assert!(verified_add.manifest().migration_plan.statements.is_empty());
+    let active_add = apply_package(
+        &database,
+        &verified_add,
+        ApplyPrecondition::Successor {
+            current: &active_first,
+        },
+        Duration::from_secs(1),
+        Duration::from_secs(1),
+    )
+    .await
+    .expect("metadata-only snapshot grant applies");
+
+    let remove_snapshot = publish_temporal_policy_package(
+        3,
+        Some(&active_add.package_revision),
+        active_add.schema_fingerprint.clone(),
+        temporal_policy_module_bytes(false),
+        PackageMigrationPlanInput::Successor {
+            prior_registry: Box::new(verified_add.registry().clone()),
+        },
+    );
+    let remove_context = local_context(PackageIntent::Activation {
+        active_revision: &active_add.package_revision,
+        active_sequence: 2,
+    });
+    let verified_remove = load_package(remove_snapshot.path(), &remove_context)
+        .expect("snapshot revocation successor verifies");
+    assert!(verified_remove
+        .manifest()
+        .migration_plan
+        .statements
+        .is_empty());
+    let active_remove = apply_package(
+        &database,
+        &verified_remove,
+        ApplyPrecondition::Successor {
+            current: &active_add,
+        },
+        Duration::from_secs(1),
+        Duration::from_secs(1),
+    )
+    .await
+    .expect("metadata-only snapshot revocation applies");
+    assert_eq!(active_remove.package_sequence, 3);
+    assert_eq!(
+        active_remove.schema_fingerprint,
+        active_first.schema_fingerprint
+    );
+
+    migration_task.abort();
+    database.cleanup().await;
+}
+
+#[cfg(feature = "tooling")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reviewed_metadata_only_query_access_change_applies_without_dummy_sql() {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs prerequisite");
+    let (mut migration, migration_task) = database.connect_migration().await;
+
+    let hidden_note_field =
+        r#",{"id":"review-note","type":"string","maxLength":120,"classification":"internal"}"#;
+    let first = publish_temporal_policy_package(
+        1,
+        None,
+        fingerprint(1),
+        temporal_policy_module_bytes_with(true, hidden_note_field, ""),
+        PackageMigrationPlanInput::InitialCompiledDdl,
+    );
+    let provisional_first = load_package(
+        first.path(),
+        &local_context(PackageIntent::InitialActivation),
+    )
+    .expect("initial package verifies before fingerprinting");
+    let transaction = migration
+        .transaction()
+        .await
+        .expect("initial fingerprint transaction starts");
+    install_compiled_schema(
+        &transaction,
+        provisional_first.registry(),
+        &database.runtime_role,
+    )
+    .await
+    .expect("initial schema installs for fingerprinting");
+    let first_catalog = ExpectedManagedCatalog::compiled(provisional_first.registry());
+    let first_fingerprint =
+        managed_schema_fingerprint(&transaction, &database.runtime_role, &first_catalog)
+            .await
+            .expect("initial fingerprint derives");
+    transaction
+        .rollback()
+        .await
+        .expect("initial fingerprint transaction rolls back");
+    rewrite_unsigned(first.path(), |manifest| {
+        manifest.schema_fingerprint.clone_from(&first_fingerprint);
+    });
+    let verified_first = load_package(
+        first.path(),
+        &local_context(PackageIntent::InitialActivation),
+    )
+    .expect("initial package reloads with exact fingerprint");
+    let active_first = apply_package(
+        &database,
+        &verified_first,
+        ApplyPrecondition::InitialActivation,
+        Duration::from_secs(1),
+        Duration::from_secs(1),
+    )
+    .await
+    .expect("initial package applies");
+
+    let successor_module_bytes =
+        String::from_utf8(temporal_policy_module_bytes_with(true, hidden_note_field, ""))
+            .expect("module fixture is UTF-8")
+            .replace(
+                r#""readableFields":["person","valid-from","valid-to"],"filterableFields":["person","valid-from"]"#,
+                r#""readableFields":["person","valid-from","valid-to","review-note"],"filterableFields":["person","valid-from","review-note"]"#,
+            )
+            .into_bytes();
+    let successor_module =
+        parse_module_yaml(&successor_module_bytes).expect("successor module parses");
+    let successor_project_bytes = project_bytes("local", 2, &module_digest(&successor_module));
+    let successor_registry = compile_project(
+        &parse_project_yaml(&successor_project_bytes).expect("successor project parses"),
+        std::slice::from_ref(&successor_module),
+        CompileProfile::Production,
+    )
+    .expect("successor compiles");
+    let change_set = compiled_registry_change_set(
+        verified_first.registry(),
+        &successor_registry,
+        &active_first.package_revision,
+    );
+    assert!(change_set_to_applicable_migration_plan(&change_set).is_err());
+    assert!(change_set.changes.iter().any(|change| {
+        change.code == CompiledRegistryChangeCode::QueryInventoryChanged
+            && change.class == CompiledRegistryChangeClass::AccessOrDisclosureChange
+    }));
+    let review = metadata_only_review_source(
+        &change_set.changes,
+        &active_first.package_revision,
+        &active_first.schema_fingerprint,
+        &active_first.schema_fingerprint,
+    );
+    let successor = publish_temporal_policy_package(
+        2,
+        Some(&active_first.package_revision),
+        active_first.schema_fingerprint.clone(),
+        successor_module_bytes,
+        PackageMigrationPlanInput::ReviewedSuccessor {
+            prior_registry: Box::new(verified_first.registry().clone()),
+            prior_schema_fingerprint: active_first.schema_fingerprint.clone(),
+            migrations: vec![review],
+        },
+    );
+    let successor_context = local_context(PackageIntent::Activation {
+        active_revision: &active_first.package_revision,
+        active_sequence: 1,
+    });
+    let verified_successor = load_package(successor.path(), &successor_context)
+        .expect("reviewed metadata-only successor verifies");
+    assert!(verified_successor
+        .manifest()
+        .migration_plan
+        .statements
+        .is_empty());
+    let active_successor = apply_package(
+        &database,
+        &verified_successor,
+        ApplyPrecondition::Successor {
+            current: &active_first,
+        },
+        Duration::from_secs(1),
+        Duration::from_secs(1),
+    )
+    .await
+    .expect("reviewed metadata-only successor applies without dummy SQL");
+    assert_eq!(active_successor.package_sequence, 2);
+    assert_eq!(
+        active_successor.schema_fingerprint,
+        active_first.schema_fingerprint
+    );
+
+    migration_task.abort();
+    database.cleanup().await;
+}
+
+fn assert_policy_only_snapshot_grant_delta_prepares_and_loads(
+    baseline_snapshot: bool,
+    successor_snapshot: bool,
+) {
+    let baseline_module_bytes = temporal_policy_module_bytes(baseline_snapshot);
+    let baseline_module =
+        parse_module_yaml(&baseline_module_bytes).expect("baseline module parses");
+    let baseline = prepare_package(build_request(BuildRequestParts {
+        environment: "local",
+        sequence: 1,
+        prior_revision: None,
+        schema_fingerprint: fingerprint(1),
+        project_bytes: project_bytes("local", 1, &module_digest(&baseline_module)),
+        module_bytes: baseline_module_bytes,
+        migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
+        signature_policy: SignaturePolicy {
+            threshold: 0,
+            key_ids: Vec::new(),
+        },
+    }))
+    .expect("baseline package prepares");
+    let active_revision = baseline.package_revision().to_owned();
+
+    let successor_module_bytes = temporal_policy_module_bytes(successor_snapshot);
+    let successor_module =
+        parse_module_yaml(&successor_module_bytes).expect("successor module parses");
+    let successor = prepare_package(build_request(BuildRequestParts {
+        environment: "local",
+        sequence: 2,
+        prior_revision: Some(&active_revision),
+        schema_fingerprint: fingerprint(2),
+        project_bytes: project_bytes("local", 2, &module_digest(&successor_module)),
+        module_bytes: successor_module_bytes,
+        migration_plan: PackageMigrationPlanInput::Successor {
+            prior_registry: Box::new(baseline.registry().clone()),
+        },
+        signature_policy: SignaturePolicy {
+            threshold: 0,
+            key_ids: Vec::new(),
+        },
+    }))
+    .expect("snapshot policy delta prepares without reviewed migration");
+
+    assert!(successor
+        .manifest()
+        .migration_plan
+        .changes
+        .iter()
+        .any(|change| change.code == CompiledRegistryChangeCode::QueryInventoryChanged));
+    assert!(successor
+        .manifest()
+        .migration_plan
+        .changes
+        .iter()
+        .all(|change| {
+            matches!(
+                change.class,
+                CompiledRegistryChangeClass::CompatibleAdditive
+                    | CompiledRegistryChangeClass::AccessOrDisclosureChange
+            )
+        }));
+    assert!(successor.manifest().migration_plan.statements.is_empty());
+
+    let root = TempRoot::create();
+    successor
+        .publish_to_directory(root.path(), Vec::new())
+        .expect("successor package publishes");
+    load_package(
+        root.path(),
+        &local_context(PackageIntent::Activation {
+            active_revision: &active_revision,
+            active_sequence: 1,
+        }),
+    )
+    .expect("policy-only successor strict-loads");
+}
+
+#[test]
+fn predecessor_package_derives_legacy_temporal_value_kind_from_signed_fields() {
+    let legacy = PackageFixture::build(
+        "local",
+        1,
+        None,
+        fingerprint(1),
+        PlanChoice::TemporalSchema,
+        None,
+    );
+    rewrite_legacy_temporal_metadata(legacy.root.path(), true, |temporal| {
+        temporal
+            .as_object_mut()
+            .expect("temporal binding is an object")
+            .remove("valueKind");
+    });
+    let active_revision = read_envelope(legacy.root.path()).signed.package_revision;
+    let predecessor = load_predecessor_package(
+        legacy.root.path(),
+        &local_predecessor_context(&active_revision, 1),
+    )
+    .expect("legacy temporal predecessor verifies for planning");
+    let temporal = predecessor
+        .migration_baseline()
+        .queries
+        .operations
+        .iter()
+        .find_map(|operation| operation.temporal.as_ref())
+        .expect("temporal query is retained in predecessor baseline");
+    assert_eq!(serde_json::to_value(temporal.value_kind).unwrap(), "date");
+    assert!(
+        temporal.scope_fields.is_empty(),
+        "deprecated predecessor query scopes are planning-normalized"
+    );
+    let successor_module = module_bytes(PlanChoice::TemporalSchema);
+    let successor_module = parse_module_yaml(&successor_module).expect("successor module parses");
+    let successor = prepare_package(build_request(BuildRequestParts {
+        environment: "local",
+        sequence: 2,
+        prior_revision: Some(&active_revision),
+        schema_fingerprint: fingerprint(2),
+        project_bytes: project_bytes("local", 2, &module_digest(&successor_module)),
+        module_bytes: module_bytes(PlanChoice::TemporalSchema),
+        migration_plan: PackageMigrationPlanInput::SuccessorFromBaseline {
+            prior_baseline: Box::new(predecessor.migration_baseline().clone()),
+        },
+        signature_policy: SignaturePolicy {
+            threshold: 0,
+            key_ids: Vec::new(),
+        },
+    }))
+    .expect("normalized predecessor baseline prepares a successor package");
+    assert!(successor
+        .manifest()
+        .migration_plan
+        .changes
+        .iter()
+        .all(|change| change.code != CompiledRegistryChangeCode::EntityTemporalChanged));
+    assert_eq!(
+        load_error(
+            legacy.root.path(),
+            &local_context(PackageIntent::Startup {
+                active_revision: &active_revision,
+                active_sequence: 1,
+            }),
+        ),
+        PackageError::Derivation
+    );
+}
+
+#[test]
+fn predecessor_package_rejects_legacy_temporal_value_kind_mismatch() {
+    let legacy = PackageFixture::build(
+        "local",
+        1,
+        None,
+        fingerprint(1),
+        PlanChoice::TemporalSchema,
+        None,
+    );
+    rewrite_legacy_temporal_metadata(legacy.root.path(), true, |temporal| {
+        let temporal = temporal
+            .as_object_mut()
+            .expect("temporal binding is an object");
+        temporal.remove("valueKind");
+        temporal.insert("endField".to_owned(), Value::String("person".to_owned()));
+    });
+    let active_revision = read_envelope(legacy.root.path()).signed.package_revision;
+    assert_eq!(
+        predecessor_load_error(
+            legacy.root.path(),
+            &local_predecessor_context(&active_revision, 1),
+        ),
+        PackageError::Derivation
     );
 }
 
@@ -2531,6 +3215,7 @@ enum PlanChoice {
     ThirdTable,
     WebhookSchema,
     WebhookSecondTable,
+    TemporalSchema,
 }
 
 fn predecessor_plan_choice(plan: PlanChoice) -> PlanChoice {
@@ -2539,6 +3224,7 @@ fn predecessor_plan_choice(plan: PlanChoice) -> PlanChoice {
         PlanChoice::ThirdTable => PlanChoice::SecondTable,
         PlanChoice::WebhookSchema => PlanChoice::WebhookSchema,
         PlanChoice::WebhookSecondTable => PlanChoice::WebhookSchema,
+        PlanChoice::TemporalSchema => PlanChoice::TemporalSchema,
     }
 }
 
@@ -2549,6 +3235,7 @@ fn canonical_sequence_for_plan(plan: PlanChoice) -> u64 {
         PlanChoice::ThirdTable => 3,
         PlanChoice::WebhookSchema => 1,
         PlanChoice::WebhookSecondTable => 2,
+        PlanChoice::TemporalSchema => 1,
     }
 }
 
@@ -2675,6 +3362,22 @@ impl PackageFixture {
             intent,
         }
     }
+
+    fn predecessor_context<'a>(
+        &'a self,
+        expected_package_revision: &'a str,
+        expected_sequence: u64,
+    ) -> PredecessorPackageContext<'a> {
+        PredecessorPackageContext {
+            environment: "production",
+            instance_id: INSTANCE,
+            database_id: DATABASE,
+            database_initialization_environment: "production",
+            trust_anchor: self.anchor.as_deref(),
+            expected_package_revision,
+            expected_sequence,
+        }
+    }
 }
 
 impl Drop for PackageFixture {
@@ -2740,7 +3443,133 @@ fn project_bytes_without_manifest(
     .into_bytes()
 }
 
+fn project_bytes_with_source_revision(
+    environment: &str,
+    sequence: u64,
+    module_digest: &str,
+    source_revision: &str,
+) -> Vec<u8> {
+    String::from_utf8(project_bytes(environment, sequence, module_digest))
+        .expect("fixture project is UTF-8")
+        .replace(SOURCE_REVISION, source_revision)
+        .into_bytes()
+}
+
+#[cfg(feature = "tooling")]
+fn metadata_only_review_source(
+    changes: &[registry_server::package::CompiledRegistryChange],
+    prior_revision: &str,
+    prior_schema_fingerprint: &str,
+    final_schema_fingerprint: &str,
+) -> ReviewedMigrationSource {
+    let mut covers = changes
+        .iter()
+        .filter(|change| change.class != CompiledRegistryChangeClass::CompatibleAdditive)
+        .map(ReviewedChangeCover::from)
+        .collect::<Vec<_>>();
+    covers.sort();
+    assert!(!covers.is_empty());
+    let base = "modules/core/migrations/metadata-access";
+    let descriptor = ReviewedMigrationDescriptor {
+        id: "metadata-access".to_owned(),
+        change_class: CompiledRegistryChangeClass::AccessOrDisclosureChange,
+        covers,
+        recovery: ReviewedMigrationRecovery::ExactTargetResume,
+        lock_timeout_ms: 1000,
+        statement_timeout_ms: 5000,
+        steps: Vec::new(),
+        pre_assertions: Vec::new(),
+        post_assertions: Vec::new(),
+        rehearsal_receipt_path: format!("{base}/rehearsal.json"),
+        backup_binding_path: None,
+    };
+    let descriptor_bytes =
+        canonicalize_json(&serde_json::to_value(descriptor).expect("descriptor serializes"))
+            .expect("descriptor canonicalizes");
+    let receipt = MigrationRehearsalReceipt {
+        prior_revision: prior_revision.to_owned(),
+        prior_schema_fingerprint: prior_schema_fingerprint.to_owned(),
+        plan_sha256: format!("sha256:{}", hex(&Sha256::digest(&descriptor_bytes))),
+        sql_sha256: Vec::new(),
+        assertion_sha256: Vec::new(),
+        fixture_inventory: Vec::new(),
+        postgres_major: 16,
+        row_assertions: Vec::new(),
+        final_schema_fingerprint: final_schema_fingerprint.to_owned(),
+        proofs: RehearsalProofs {
+            lock_timeout: true,
+            chunk_resume: false,
+            destructive_resume: false,
+        },
+    };
+    ReviewedMigrationSource {
+        module_id: "core".to_owned(),
+        descriptor: ReviewedMigrationFile {
+            path: format!("{base}/descriptor.json"),
+            bytes: descriptor_bytes,
+        },
+        files: vec![ReviewedMigrationFile {
+            path: format!("{base}/rehearsal.json"),
+            bytes: canonicalize_json(&serde_json::to_value(receipt).expect("receipt serializes"))
+                .expect("receipt canonicalizes"),
+        }],
+    }
+}
+
+fn temporal_policy_module_bytes(snapshot: bool) -> Vec<u8> {
+    temporal_policy_module_bytes_with(snapshot, "", "")
+}
+
+fn temporal_policy_module_bytes_with(
+    snapshot: bool,
+    extra_membership_fields: &str,
+    reader_profile_extra: &str,
+) -> Vec<u8> {
+    let operations = if snapshot {
+        r#""get","list","snapshot""#
+    } else {
+        r#""get","list""#
+    };
+    format!(
+        r#"{{"id":"core","version":"1","entities":[{{"id":"neutral-record","route":"neutral-records","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}}],"accessProfiles":[{{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]}},{{"id":"membership","route":"memberships","mutationMode":"mutable","fields":[{{"id":"person","type":"string","maxLength":32,"required":true,"classification":"internal"}},{{"id":"valid-from","type":"date","required":true,"classification":"internal"}},{{"id":"valid-to","type":"date","classification":"internal"}}{extra_membership_fields}],"temporal":{{"startField":"valid-from","endField":"valid-to"}},"constraints":[{{"id":"membership-window","kind":"temporal-non-overlap","scopeFields":["person"],"startField":"valid-from","endField":"valid-to"}}],"accessProfiles":[{{"id":"reader","principalClaim":"principal","operations":[{operations}],"readableFields":["person","valid-from","valid-to"],"filterableFields":["person","valid-from"]{reader_profile_extra}}}]}}]}}"#
+    )
+    .into_bytes()
+}
+
+fn publish_temporal_policy_package(
+    sequence: u64,
+    prior_revision: Option<&str>,
+    schema_fingerprint: String,
+    module_bytes: Vec<u8>,
+    migration_plan: PackageMigrationPlanInput,
+) -> TempRoot {
+    let root = TempRoot::create();
+    let module = parse_module_yaml(&module_bytes).expect("temporal policy module parses");
+    let prepared = prepare_package(build_request(BuildRequestParts {
+        environment: "local",
+        sequence,
+        prior_revision,
+        schema_fingerprint,
+        project_bytes: project_bytes("local", sequence, &module_digest(&module)),
+        module_bytes,
+        migration_plan,
+        signature_policy: SignaturePolicy {
+            threshold: 0,
+            key_ids: Vec::new(),
+        },
+    }))
+    .expect("temporal policy package prepares");
+    prepared
+        .publish_to_directory(root.path(), Vec::new())
+        .expect("temporal policy package publishes");
+    root
+}
+
 fn module_bytes(plan: PlanChoice) -> Vec<u8> {
+    if matches!(plan, PlanChoice::TemporalSchema) {
+        return br#"{"id":"core","version":"1","entities":[{"id":"neutral-record","route":"neutral-records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}]},{"id":"membership","route":"memberships","mutationMode":"mutable","fields":[{"id":"person","type":"string","maxLength":32,"required":true,"classification":"internal"},{"id":"valid-from","type":"date","required":true,"classification":"internal"},{"id":"valid-to","type":"date","classification":"internal"}],"temporal":{"startField":"valid-from","endField":"valid-to"},"constraints":[{"id":"membership-window","kind":"temporal-non-overlap","scopeFields":["person"],"startField":"valid-from","endField":"valid-to"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["person","valid-from","valid-to"]}]}]}"#
+            .to_vec();
+    }
     let second = if matches!(
         plan,
         PlanChoice::SecondTable | PlanChoice::ThirdTable | PlanChoice::WebhookSecondTable
@@ -2846,6 +3675,33 @@ fn quote_identifier(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
 }
 
+fn legacy_compiler_fixture(source_revision: &str) -> PackageFixture {
+    let root = TempRoot::create();
+    let module_bytes = module_bytes(PlanChoice::Schema);
+    let module = parse_module_yaml(&module_bytes).expect("fixture module parses");
+    let project_bytes =
+        project_bytes_with_source_revision("local", 1, &module_digest(&module), source_revision);
+    let mut request = build_request(BuildRequestParts {
+        environment: "local",
+        sequence: 1,
+        prior_revision: None,
+        schema_fingerprint: fingerprint(1),
+        project_bytes,
+        module_bytes,
+        migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
+        signature_policy: SignaturePolicy {
+            threshold: 0,
+            key_ids: Vec::new(),
+        },
+    });
+    request.compiler_source_revision = source_revision.to_owned();
+    let prepared = prepare_package(request).expect("legacy compiler fixture prepares");
+    prepared
+        .publish_to_directory(root.path(), Vec::new())
+        .expect("legacy compiler fixture publishes");
+    PackageFixture { root, anchor: None }
+}
+
 fn local_context(intent: PackageIntent<'_>) -> PackageLoadContext<'_> {
     PackageLoadContext {
         environment: "local",
@@ -2856,6 +3712,56 @@ fn local_context(intent: PackageIntent<'_>) -> PackageLoadContext<'_> {
         trust_anchor: None,
         intent,
     }
+}
+
+fn local_predecessor_context(
+    expected_package_revision: &str,
+    expected_sequence: u64,
+) -> PredecessorPackageContext<'_> {
+    PredecessorPackageContext {
+        environment: "local",
+        instance_id: INSTANCE,
+        database_id: DATABASE,
+        database_initialization_environment: "local",
+        trust_anchor: None,
+        expected_package_revision,
+        expected_sequence,
+    }
+}
+
+async fn restore_legacy_migration_ledger_metadata_constraints(database: &TestDatabase) {
+    database
+        .admin
+        .batch_execute(
+            "ALTER TABLE registry_internal.registry_migrations
+                 DROP CONSTRAINT IF EXISTS registry_migrations_plan_kind_closed,
+                 ADD CONSTRAINT registry_migrations_plan_kind_closed
+                     CHECK (plan_kind IN ('compiled_additive', 'reviewed'));
+             ALTER TABLE registry_internal.registry_migrations
+                 DROP CONSTRAINT IF EXISTS registry_migrations_checksums_nonempty,
+                 ADD CONSTRAINT registry_migrations_checksums_nonempty
+                     CHECK (
+                         array_ndims(statement_checksums) = 1
+                         AND cardinality(statement_checksums) BETWEEN 1 AND 1024
+                         AND array_position(statement_checksums, '') IS NULL
+                     );
+             ALTER TABLE registry_internal.registry_migrations
+                 DROP CONSTRAINT IF EXISTS registry_migrations_artifacts_consistent,
+                 ADD CONSTRAINT registry_migrations_artifacts_consistent CHECK (
+                     COALESCE(array_ndims(artifact_paths), 1) = 1
+                     AND COALESCE(array_ndims(artifact_checksums), 1) = 1
+                     AND cardinality(artifact_paths) = cardinality(artifact_checksums)
+                     AND cardinality(artifact_paths) BETWEEN 0 AND 1024
+                     AND array_position(artifact_paths, '') IS NULL
+                     AND array_position(artifact_checksums, '') IS NULL
+                     AND (
+                         (plan_kind = 'compiled_additive' AND cardinality(artifact_paths) = 0)
+                         OR (plan_kind = 'reviewed' AND cardinality(artifact_paths) > 0)
+                     )
+                 );",
+        )
+        .await
+        .expect("test restores the previous closed migration-ledger constraints");
 }
 
 async fn apply_package(
@@ -3274,6 +4180,95 @@ async fn wait_for_blocked_apply_backend(
     .expect("the dedicated apply backend reaches its deterministic DDL wait")
 }
 
+fn rewrite_legacy_temporal_metadata(
+    root: &Path,
+    add_deprecated_scope_fields: bool,
+    mutate: impl Fn(&mut Value),
+) {
+    let mut effective_model: Value =
+        serde_json::from_slice(&fs::read(governed_model_path(root)).expect("governed model reads"))
+            .expect("governed model parses");
+    if add_deprecated_scope_fields {
+        let membership = effective_model["entities"]["membership"]
+            .as_object_mut()
+            .expect("membership entity exists");
+        membership["temporal"]
+            .as_object_mut()
+            .expect("membership temporal exists")
+            .insert("scopeFields".to_owned(), json!(["person"]));
+    }
+    mutate_temporal_query_bindings(
+        effective_model
+            .get_mut("queryInventory")
+            .expect("effective model query inventory exists"),
+        add_deprecated_scope_fields,
+        &mutate,
+    );
+    let effective_model_bytes = canonicalize_json(&effective_model).expect("model canonicalizes");
+
+    let query_inventory_path = manifest_file_path(root, PackageFileRole::QueryInventory);
+    let mut query_inventory: Value =
+        serde_json::from_slice(&fs::read(&query_inventory_path).expect("query inventory reads"))
+            .expect("query inventory parses");
+    mutate_temporal_query_bindings(&mut query_inventory, add_deprecated_scope_fields, &mutate);
+    let query_inventory_bytes =
+        canonicalize_json(&query_inventory).expect("query inventory canonicalizes");
+
+    write_signed_files(
+        root,
+        [
+            ("effective-model.json", effective_model_bytes),
+            ("inventories/queries.json", query_inventory_bytes),
+        ],
+    );
+}
+
+fn mutate_temporal_query_bindings(
+    query_inventory: &mut Value,
+    add_deprecated_scope_fields: bool,
+    mutate: &impl Fn(&mut Value),
+) {
+    for operation in query_inventory
+        .get_mut("operations")
+        .and_then(Value::as_array_mut)
+        .expect("query operations exist")
+    {
+        if let Some(temporal) = operation
+            .as_object_mut()
+            .expect("query operation is an object")
+            .get_mut("temporal")
+        {
+            if add_deprecated_scope_fields {
+                temporal
+                    .as_object_mut()
+                    .expect("temporal binding is an object")
+                    .insert("scopeFields".to_owned(), json!(["person"]));
+            }
+            mutate(temporal);
+        }
+    }
+}
+
+fn write_signed_files<const N: usize>(root: &Path, files: [(&str, Vec<u8>); N]) {
+    let mut envelope = read_envelope(root);
+    for (relative, bytes) in files {
+        fs::write(root.join(relative), &bytes).expect("signed file writes");
+        let entry = envelope
+            .signed
+            .files
+            .iter_mut()
+            .find(|entry| entry.path == relative)
+            .expect("signed file entry exists");
+        entry.size = bytes.len() as u64;
+        entry.sha256 = format!("sha256:{}", hex(&Sha256::digest(&bytes)));
+    }
+    envelope.signed.package_revision.clear();
+    envelope.signed.package_revision =
+        derive_package_revision(&envelope.signed).expect("mutated revision derives");
+    envelope.signatures.clear();
+    write_json(&root.join("package.json"), &envelope);
+}
+
 fn rewrite_unsigned(root: &Path, mutate: impl FnOnce(&mut PackageManifest)) {
     let mut envelope = read_envelope(root);
     mutate(&mut envelope.signed);
@@ -3351,10 +4346,42 @@ fn manifest_projection_path(root: &Path) -> PathBuf {
     )
 }
 
+fn governed_model_path(root: &Path) -> PathBuf {
+    let envelope = read_envelope(root);
+    root.join(
+        &envelope
+            .signed
+            .files
+            .iter()
+            .find(|entry| entry.role == PackageFileRole::GovernedModel)
+            .expect("governed model entry exists")
+            .path,
+    )
+}
+
+fn manifest_file_path(root: &Path, role: PackageFileRole) -> PathBuf {
+    let envelope = read_envelope(root);
+    root.join(
+        &envelope
+            .signed
+            .files
+            .iter()
+            .find(|entry| entry.role == role)
+            .expect("manifest file entry exists")
+            .path,
+    )
+}
+
 fn load_error(root: &Path, context: &PackageLoadContext<'_>) -> PackageError {
     load_package(root, context)
         .err()
         .expect("package is refused")
+}
+
+fn predecessor_load_error(root: &Path, context: &PredecessorPackageContext<'_>) -> PackageError {
+    load_predecessor_package(root, context)
+        .err()
+        .expect("predecessor package is refused")
 }
 
 fn fingerprint(byte: u8) -> String {

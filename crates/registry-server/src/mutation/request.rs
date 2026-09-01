@@ -433,8 +433,19 @@ impl MutationCoordinator {
                     &targets,
                     &actor_reference,
                 )?;
-                let held =
-                    request_action_response(input.record_id, current.record_revision, &workflow)?;
+                let snapshot_reference = request_revision_snapshot_reference(
+                    transaction.transaction(),
+                    &entity.id,
+                    record_uuid,
+                    current.record_revision,
+                )
+                .await?;
+                let held = request_action_response(
+                    input.record_id,
+                    current.record_revision,
+                    snapshot_reference,
+                    &workflow,
+                )?;
                 let metadata = StoredResultMetadata::Application {
                     record_reference: record_reference(
                         &self.audit_profile,
@@ -509,6 +520,7 @@ impl MutationCoordinator {
         );
         let mut prepared_targets = None;
         let mut application_count = None;
+        let mut application_result_revisions = Vec::new();
         let next = match &input.action {
             RequestActionBody::Submit => {
                 let (record_revision, workflow_revision, prepared) = prepared_submission
@@ -705,6 +717,11 @@ impl MutationCoordinator {
                             fault,
                         )
                         .await?;
+                    application_result_revisions.push((
+                        target.entity_id.clone(),
+                        result.record_uuid,
+                        result.record_revision,
+                    ));
                     links.push(ApplicationResultLink::new(
                         EntityId::new(&target.entity_id).map_err(workflow_error)?,
                         RecordId::new(target.record_id.to_string()).map_err(workflow_error)?,
@@ -830,7 +847,38 @@ impl MutationCoordinator {
             },
         )
         .await?;
-        let held = request_action_response(input.record_id, current.record_revision, &next)?;
+        let mut commit_member_records = Vec::with_capacity(application_result_revisions.len() + 1);
+        commit_member_records.push((entity.id.clone(), record_uuid, current.record_revision));
+        commit_member_records.extend(application_result_revisions);
+        let commit_members = commit_member_records
+            .iter()
+            .map(
+                |(entity_id, record_id, record_revision)| RevisionCommitMember {
+                    entity_id: entity_id.as_str(),
+                    record_id: *record_id,
+                    record_revision: *record_revision,
+                },
+            )
+            .collect::<Vec<_>>();
+        let committed = allocate_revision_commit(
+            transaction.transaction(),
+            CommitAllocation {
+                package_revision: &self.expected.package_revision,
+                origin: CommitOrigin::Mutation {
+                    actor_reference: &binding.principal_reference,
+                    request_reference: &binding.binding_reference,
+                },
+                change_context: None,
+                members: &commit_members,
+            },
+        )
+        .await?;
+        let held = request_action_response(
+            input.record_id,
+            current.record_revision,
+            committed.reference.to_string(),
+            &next,
+        )?;
         fault.fail_at(MutationFaultPoint::BeforeTerminalAudit)?;
         append_terminal_audit(
             transaction.transaction(),
@@ -1095,10 +1143,18 @@ impl MutationCoordinator {
         let mut target_route = route.clone();
         target_route.entity_id = entity.id.clone();
         target_route.operation = target.operation;
+        let inventory = registry
+            .physical_names()
+            .entities
+            .get(&entity.id)
+            .ok_or(MutationError::InvalidRequest)?;
         let plan = MutationPlan {
             route: target_route,
             entity: entity.clone(),
             event_deliveries: exact_entity_event_deliveries(registry, entity)?,
+            temporal_exclusion_constraints: temporal_exclusion_constraints(
+                registry, entity, inventory,
+            )?,
         };
         let id = target.record_id.to_string();
         let request = MutationRequest {
@@ -1423,10 +1479,11 @@ fn action_operation(action: &RequestActionBody) -> Operation {
 fn request_action_response(
     record_id: &str,
     record_revision: i64,
+    snapshot_reference: String,
     workflow: &RequestWorkflow,
 ) -> Result<HeldResponse, MutationError> {
     HeldResponse::from_json(200, &json!({
-        "id": record_id, "revision": record_revision,
+        "id": record_id, "revision": record_revision, "snapshot": snapshot_reference,
         "request": {"serverState": workflow.state(), "proposalVersion": workflow.current_version().get(),
             "effectDigest": workflow.current_proposal().map(|proposal| proposal.effect_digest().as_str()),
             "application": workflow.application().map(|receipt| json!({
@@ -1437,6 +1494,29 @@ fn request_action_response(
             }))},
     }), BTreeMap::from([(PermittedResponseHeader::ContentType, b"application/json".to_vec())]))
         .map_err(MutationError::from)
+}
+
+async fn request_revision_snapshot_reference(
+    transaction: &Transaction<'_>,
+    entity_id: &str,
+    record_id: Uuid,
+    record_revision: i64,
+) -> Result<String, MutationError> {
+    let row = transaction
+        .query_opt(
+            "SELECT revision_commit.snapshot_reference
+               FROM registry_internal.registry_revision_commit_members AS member
+               JOIN registry_internal.registry_revision_commits AS revision_commit
+                 ON revision_commit.commit_position = member.commit_position
+              WHERE member.entity_id = $1
+                AND member.record_id = $2
+                AND member.record_revision = $3",
+            &[&entity_id, &record_id, &record_revision],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?
+        .ok_or(MutationError::Unavailable)?;
+    Ok(crate::history_reference::SnapshotReference::for_uuid(row.get::<_, Uuid>(0)).to_string())
 }
 
 fn workflow_error(_: crate::request_workflow::WorkflowError) -> MutationError {

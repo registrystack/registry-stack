@@ -8,7 +8,9 @@ use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use serde_json::{json, Value};
 use tokio_postgres::Transaction;
+use uuid::Uuid;
 
+use crate::history_reference::SnapshotReference;
 use crate::model::HttpMethod;
 use crate::postgres::{ActionClaimContext, ClaimContext, RowBoundaryContext};
 
@@ -20,6 +22,7 @@ pub(crate) const MAX_IMMEDIATE_ACTION_RESULTS: u16 =
 const MAX_IDEMPOTENCY_KEY_BYTES: usize = 256;
 const MAX_HEADER_VALUE_BYTES: usize = 8 * 1024;
 const MAX_HELD_BODY_BYTES: usize = 2 * 1024 * 1024;
+const ERASED_RESPONSE_BODY: &[u8] = br#"{"kind":"erased"}"#;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum PermittedResponseHeader {
@@ -448,6 +451,7 @@ pub(crate) async fn lock_and_load(
         return Err(IdempotencyError::Conflict);
     }
     let metadata = match row.get::<_, String>(1).as_str() {
+        "erased" => return Err(IdempotencyError::Unavailable),
         "record" => {
             let record_revision = row
                 .get::<_, Option<i64>>(2)
@@ -626,6 +630,115 @@ pub(crate) async fn insert_result(
         return Err(IdempotencyError::Unavailable);
     }
     Ok(())
+}
+
+/// Replace exact cached mutation responses that could replay erased historical
+/// bytes with a minimal tombstone row. The idempotency key and binding remain
+/// durable so an old retry cannot re-execute the mutation.
+pub(crate) async fn tombstone_erased_cached_responses(
+    transaction: &Transaction<'_>,
+    entity_id: &str,
+    record_id: Uuid,
+    erase_through_revision: i64,
+    affected_positions: &[i64],
+) -> Result<u64, IdempotencyError> {
+    if entity_id.is_empty() || erase_through_revision <= 0 {
+        return Err(IdempotencyError::InvalidInput);
+    }
+    let snapshot_references = affected_snapshot_references(transaction, affected_positions).await?;
+    let record_id_text = record_id.hyphenated().to_string();
+    let headers = encode_headers(&BTreeMap::new())?;
+    transaction
+        .execute(
+            "WITH target_revision_refs AS (
+                 SELECT record_reference, record_revision
+                   FROM registry_internal.registry_revisions
+                  WHERE entity_id = $1
+                    AND record_id = $2
+                    AND record_revision <= $3
+             ),
+             batch_candidates AS (
+                 SELECT idempotency.key_reference
+                   FROM registry_internal.registry_idempotency AS idempotency
+                   CROSS JOIN LATERAL (
+                       SELECT pg_catalog.convert_from(idempotency.response_body, 'UTF8')::jsonb
+                           AS body
+                   ) AS decoded
+                  WHERE idempotency.result_kind = 'batch'
+                    AND (
+                        decoded.body->>'snapshot' = ANY($4::text[])
+                        OR EXISTS (
+                            SELECT 1
+                              FROM jsonb_array_elements(
+                                       CASE
+                                           WHEN jsonb_typeof(decoded.body->'results') = 'array'
+                                           THEN decoded.body->'results'
+                                           ELSE '[]'::jsonb
+                                       END
+                                   ) AS item
+                             WHERE item->>'id' = $5
+                               AND item->>'revision' ~ '^[1-9][0-9]*$'
+                               AND (item->>'revision')::bigint <= $3
+                        )
+                    )
+             ),
+             record_candidates AS (
+                 SELECT idempotency.key_reference
+                   FROM registry_internal.registry_idempotency AS idempotency
+                  WHERE idempotency.result_kind = 'record'
+                    AND EXISTS (
+                        SELECT 1
+                          FROM target_revision_refs AS target
+                         WHERE target.record_reference = idempotency.record_reference
+                           AND target.record_revision = idempotency.record_revision
+                    )
+             )
+             UPDATE registry_internal.registry_idempotency AS idempotency
+                SET result_kind = 'erased',
+                    record_reference = NULL,
+                    record_revision = NULL,
+                    result_count = NULL,
+                    response_status = 200,
+                    response_body = $6,
+                    response_headers = $7
+              WHERE idempotency.result_kind IN ('record', 'batch')
+                AND idempotency.key_reference IN (
+                    SELECT key_reference FROM record_candidates
+                    UNION
+                    SELECT key_reference FROM batch_candidates
+                )",
+            &[
+                &entity_id,
+                &record_id,
+                &erase_through_revision,
+                &snapshot_references,
+                &record_id_text,
+                &ERASED_RESPONSE_BODY,
+                &headers,
+            ],
+        )
+        .await
+        .map_err(|_| IdempotencyError::Unavailable)
+}
+
+async fn affected_snapshot_references(
+    transaction: &Transaction<'_>,
+    affected_positions: &[i64],
+) -> Result<Vec<String>, IdempotencyError> {
+    let rows = transaction
+        .query(
+            "SELECT snapshot_reference
+               FROM registry_internal.registry_revision_commits
+              WHERE commit_position = ANY($1::bigint[])
+              ORDER BY commit_position",
+            &[&affected_positions],
+        )
+        .await
+        .map_err(|_| IdempotencyError::Unavailable)?;
+    Ok(rows
+        .into_iter()
+        .map(|row| SnapshotReference::for_uuid(row.get::<_, Uuid>(0)).to_string())
+        .collect())
 }
 
 fn encode_headers(

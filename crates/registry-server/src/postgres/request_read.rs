@@ -1012,6 +1012,7 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::CancelRequest => "cancel_request",
         Operation::ApplyRequest => "apply_request",
         Operation::Invoke => "invoke",
+        Operation::Snapshot => "snapshot",
     }
 }
 

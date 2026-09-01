@@ -10,6 +10,9 @@ use tokio_postgres::NoTls;
 use tokio_postgres::{Client, GenericClient};
 
 use crate::generated_ddl::DdlStatementKind;
+#[cfg(any(feature = "tooling", feature = "postgres-test"))]
+use crate::history_commit::install_empty_history_baseline;
+use crate::history_store::install_history_schema_store;
 use crate::model::CompiledRegistry;
 use crate::mutation::install_mutation_schema;
 
@@ -27,6 +30,8 @@ use super::{
     },
     verify_migration_role, ConnectionConfig, RegistryLockKey, RuntimePool,
 };
+#[cfg(any(feature = "tooling", feature = "postgres-test"))]
+use crate::history_store::retain_descriptor;
 
 /// Installs one exact compiled Registry data inventory and its closed runtime
 /// privilege set. The caller must already be the verified migration role and
@@ -43,6 +48,9 @@ pub async fn install_compiled_schema(
 
     install_registry_state_schema(migration, runtime_role).await?;
     install_mutation_schema(migration, runtime_role)
+        .await
+        .map_err(|_| PostgresKernelError::Connection)?;
+    install_history_schema_store(migration, runtime_role)
         .await
         .map_err(|_| PostgresKernelError::Connection)?;
 
@@ -137,6 +145,58 @@ pub(crate) async fn reconcile_compiled_runtime_acl(
                 .await?;
         }
     }
+    Ok(())
+}
+
+#[cfg(any(feature = "tooling", feature = "postgres-test"))]
+pub(crate) async fn install_empty_history_baseline_for_compiled_registry(
+    client: &impl GenericClient,
+    registry: &CompiledRegistry,
+    package_revision: &str,
+) -> Result<()> {
+    for table in &registry.ddl().tables {
+        let table_name = quote_compiled_identifier(&table.physical_name);
+        let row = client
+            .query_one(
+                &format!("SELECT count(*)::bigint FROM registry_data.{table_name}"),
+                &[],
+            )
+            .await?;
+        if row.get::<_, i64>(0) != 0 {
+            return Err(PostgresKernelError::CatalogInvariant(
+                "empty history baseline requires empty live data tables",
+            ));
+        }
+    }
+    let revision_count: i64 = client
+        .query_one(
+            "SELECT count(*)::bigint FROM registry_internal.registry_revisions",
+            &[],
+        )
+        .await?
+        .get(0);
+    if revision_count != 0 {
+        return Err(PostgresKernelError::CatalogInvariant(
+            "empty history baseline requires empty revision journal",
+        ));
+    }
+    let existing_head = client
+        .query_opt(
+            "SELECT 1 FROM registry_internal.registry_commit_head WHERE singleton",
+            &[],
+        )
+        .await?;
+    if existing_head.is_some() {
+        return Err(PostgresKernelError::CatalogInvariant(
+            "empty history baseline requires absent history head",
+        ));
+    }
+    retain_descriptor(client, registry, package_revision)
+        .await
+        .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+    install_empty_history_baseline(client, package_revision)
+        .await
+        .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
     Ok(())
 }
 
@@ -266,6 +326,15 @@ pub async fn prepare_schema_test_database_with_connections(
     let transaction = migration.transaction().await?;
     refuse_existing_managed_objects(&transaction).await?;
     install_compiled_schema(&transaction, registry, runtime_role).await?;
+    retain_descriptor(&transaction, registry, identity.active_package_revision)
+        .await
+        .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+    install_empty_history_baseline_for_compiled_registry(
+        &transaction,
+        registry,
+        identity.active_package_revision,
+    )
+    .await?;
 
     let expected_catalog = ExpectedManagedCatalog::compiled(registry);
     let schema_fingerprint =
