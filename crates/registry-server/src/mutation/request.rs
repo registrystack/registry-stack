@@ -293,6 +293,25 @@ impl MutationCoordinator {
                     false,
                 )
                 .await?;
+                let preview_etag = request_action_etag(
+                    &self.audit_profile,
+                    claims,
+                    &self.expected.package_revision,
+                    route,
+                    input.record_id,
+                    preview.record_revision,
+                    &preview_workflow,
+                    &input.response_fields,
+                    &input.target_authority,
+                )?;
+                if preview_etag
+                    .as_bytes()
+                    .ct_eq(input.if_match.as_bytes())
+                    .unwrap_u8()
+                    != 1
+                {
+                    return Err(MutationError::PreconditionFailed);
+                }
                 if preview_workflow.owner().as_str() != actor_reference {
                     return Err(MutationError::PreconditionFailed);
                 }

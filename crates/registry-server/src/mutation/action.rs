@@ -1438,7 +1438,7 @@ fn action_held_response(
                 result.effect_id.clone(),
                 json!({
                     "entity": result.entity_id,
-                    "id": result.record_id,
+                    "recordId": result.record_id,
                     "revision": result.record_revision,
                 }),
             )

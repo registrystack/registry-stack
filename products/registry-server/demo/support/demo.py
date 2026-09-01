@@ -1481,9 +1481,7 @@ def _create(
         f"demo-{logical_key}",
         201,
     )
-    identifier = response.get("id")
-    if not isinstance(identifier, str):
-        raise DemoError(f"created {logical_key} has no record id")
+    identifier, _, _, _ = _profiled_record(response)
     return identifier
 
 
@@ -2082,23 +2080,59 @@ def _print_query(label: str, response: dict[str, Any]) -> None:
     print(json.dumps(response, indent=2, sort_keys=True))
 
 
-def _assert_bound_household(response: dict[str, Any], household_id: str, household_code: str) -> None:
-    data = response.get("data")
+def _profiled_record_member(record: object) -> tuple[str, str, dict[str, Any]]:
     if (
-        response.get("id") != household_id
-        or not isinstance(data, dict)
-        or data.get("householdCode") != household_code
+        not isinstance(record, dict)
+        or not isinstance(record.get("recordIdentifier"), str)
+        or not record["recordIdentifier"]
+        or not isinstance(record.get("revisionIdentifier"), str)
+        or not record["revisionIdentifier"]
+        or not isinstance(record.get("domainData"), dict)
     ):
+        raise DemoError("response does not contain a valid Registry Record member")
+    return record["recordIdentifier"], record["revisionIdentifier"], record["domainData"]
+
+
+def _profiled_meta(meta: object) -> dict[str, Any]:
+    if not isinstance(meta, dict) or any(
+        not isinstance(meta.get(member), str) or not meta[member]
+        for member in ("registryIdentifier", "datasetIdentifier", "entityTypeIdentifier")
+    ):
+        raise DemoError("response does not contain valid Registry Record metadata")
+    return meta
+
+
+def _profiled_record(response: dict[str, Any]) -> tuple[str, str, dict[str, Any], dict[str, Any]]:
+    record_identifier, revision_identifier, domain_data = _profiled_record_member(
+        response.get("data")
+    )
+    meta = _profiled_meta(response.get("meta"))
+    return record_identifier, revision_identifier, domain_data, meta
+
+
+def _profiled_collection_domain_data(response: dict[str, Any]) -> list[dict[str, Any]]:
+    items = response.get("items")
+    page_info = response.get("pageInfo")
+    _profiled_meta(response.get("meta"))
+    if (
+        not isinstance(items, list)
+        or not isinstance(page_info, dict)
+        or set(page_info) != {"nextCursor"}
+        or (page_info["nextCursor"] is not None and not isinstance(page_info["nextCursor"], str))
+    ):
+        raise DemoError("response does not use the Registry Record collection envelope")
+    return [_profiled_record_member(item)[2] for item in items]
+
+
+def _assert_bound_household(response: dict[str, Any], household_id: str, household_code: str) -> None:
+    record_identifier, _, domain_data, _ = _profiled_record(response)
+    if record_identifier != household_id or domain_data.get("householdCode") != household_code:
         raise DemoError("viewer read did not return its one bound household")
 
 
 def _assert_bound_business(response: dict[str, Any], business_id: str, business_code: str) -> None:
-    data = response.get("data")
-    if (
-        response.get("id") != business_id
-        or not isinstance(data, dict)
-        or data.get("businessCode") != business_code
-    ):
+    record_identifier, _, domain_data, _ = _profiled_record(response)
+    if record_identifier != business_id or domain_data.get("businessCode") != business_code:
         raise DemoError("viewer read did not return its one bound business")
 
 
@@ -2126,11 +2160,9 @@ def query_business(root: Path, suite: str = "all") -> None:
         ]
         for (label, path), expected in zip(queries, expected_rows, strict=True):
             response, _ = _request(root, "GET", path, "operator-token")
-            rows = response.get("items")
+            rows = _profiled_collection_domain_data(response)
             if (
-                not isinstance(rows, list)
-                or any(not isinstance(row, dict) for row in rows)
-                or [row.get("data") for row in rows] != expected
+                rows != expected
                 or response.get("count") != len(expected)
             ):
                 raise DemoError(f"{label} returned unexpected records, fields, or derived counts")
@@ -2206,6 +2238,7 @@ def query(root: Path, suite: str = "all") -> None:
         ]
         for label, path in queries:
             response, _ = _request(root, "GET", path, "operator-token")
+            _profiled_collection_domain_data(response)
             _print_query(label, response)
         operator_lookup, _ = _request(
             root,
@@ -2331,7 +2364,7 @@ def query_facility(root: Path, suite: str = "all") -> None:
         ),
     ):
         response, _ = _request(root, "GET", path, "operator-token")
-        if len(response.get("items", [])) != 1:
+        if len(_profiled_collection_domain_data(response)) != 1:
             raise DemoError(f"{label} did not return one seeded north-district record")
         _print_query(label, response)
     response, _ = _request(
@@ -2340,8 +2373,8 @@ def query_facility(root: Path, suite: str = "all") -> None:
         f"/v1/records/facilities/{urllib.parse.quote(facility_id, safe='')}?accessProfile=facility-operator",
         "operator-token",
     )
-    data = response.get("data")
-    if not isinstance(data, dict) or data.get("displayName") != "North District Water Treatment Facility":
+    _, _, domain_data, _ = _profiled_record(response)
+    if domain_data.get("displayName") != "North District Water Treatment Facility":
         raise DemoError("facility get did not return the seeded north-district facility")
     _print_query("North-district facility by UUID", response)
 
@@ -2377,7 +2410,7 @@ def query_inspection(root: Path, suite: str = "all") -> None:
         ),
     ):
         response, _ = _request(root, "GET", path, "operator-token")
-        if len(response.get("items", [])) != expected_count:
+        if len(_profiled_collection_domain_data(response)) != expected_count:
             raise DemoError(f"{label} did not return the expected seeded records")
         _print_query(label, response)
     response, _ = _request(
@@ -2386,8 +2419,8 @@ def query_inspection(root: Path, suite: str = "all") -> None:
         f"/v1/records/inspections/{urllib.parse.quote(inspection_id, safe='')}?accessProfile=inspection-inspector",
         "operator-token",
     )
-    data = response.get("data")
-    if not isinstance(data, dict) or data.get("inspectionCode") != "INSPECTION-SYNTH-001":
+    _, _, domain_data, _ = _profiled_record(response)
+    if domain_data.get("inspectionCode") != "INSPECTION-SYNTH-001":
         raise DemoError("inspection get did not return the seeded inspection")
     _print_query("Inspection by UUID", response)
 

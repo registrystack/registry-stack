@@ -3032,6 +3032,11 @@ fn metadata_response_from_inventory(
         .iter()
         .find(|entity| entity.id == entity_id)
         .expect("compiled metadata entity exists");
+    let dataset_identifier = registry
+        .entities()
+        .get(entity_id)
+        .and_then(|entity| entity.primary_dataset.as_deref())
+        .expect("compiled metadata entity has one primary dataset");
     let mut operations = BTreeMap::new();
     let mut readable_fields: Option<BTreeSet<String>> = None;
     for entry in metadata_entity
@@ -3050,6 +3055,7 @@ fn metadata_response_from_inventory(
     }
     json!({
         "id": metadata_entity.id,
+        "datasetIdentifier": dataset_identifier,
         "route": metadata_entity.route,
         "operations": operations.into_iter().map(|(operation, access_profile)| json!({
             "operation": operation_name(operation),

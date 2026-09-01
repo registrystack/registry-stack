@@ -275,21 +275,29 @@ fn registered_problem(code: RegistryServerProblemCode) -> Response<Body> {
         "traceId": TRACE_ID,
     }))
     .expect("problem serializes");
-    response(
+    let mut response = response(
         StatusCode::from_u16(code.status()).expect("status"),
         "application/problem+json",
         &body,
         Some(TRACEPARENT),
-    )
+    );
+    response
+        .headers_mut()
+        .insert("cache-control", "no-store".parse().expect("cache policy"));
+    response
 }
 
 fn malformed_problem() -> Response<Body> {
-    response(
+    let mut response = response(
         StatusCode::NOT_FOUND,
         "application/problem+json",
         br#"{"type":"urn:registry-server:problem:resource.not_found","title":"Not Found","status":404,"detail":"The requested resource was not found.","code":"resource.not_found","traceId":"4bf92f3577b34da6a3ce929d0e0e4736","extra":true}"#,
         Some(TRACEPARENT),
-    )
+    );
+    response
+        .headers_mut()
+        .insert("cache-control", "no-store".parse().expect("cache policy"));
+    response
 }
 
 fn redirect_response() -> Response<Body> {

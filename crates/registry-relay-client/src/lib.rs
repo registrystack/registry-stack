@@ -1,4 +1,5 @@
-//! Canonical, bounded clients for Registry Relay V2 and Registry Server reads.
+//! Canonical, bounded clients for Registry Relay V2 and Registry Server reads
+//! and capability-driven writes.
 //!
 //! One method performs one exchange. The crate never follows redirects, uses an
 //! ambient proxy, retries, fetches linked resources, or advances a collection
@@ -15,8 +16,12 @@ mod response;
 mod server;
 mod server_config;
 mod server_error;
+mod server_lifecycle;
+mod server_metadata;
+mod server_mutation;
 mod server_query;
 mod server_response;
+mod strict_json;
 mod transport;
 
 pub use client::RelayClient;
@@ -38,5 +43,8 @@ pub use server_config::RegistryServerClientConfig;
 pub use server_error::{
     RegistryServerClientError, RegistryServerProblemCode, RegistryServerProtocolFailure,
 };
+pub use server_lifecycle::*;
+pub use server_metadata::*;
+pub use server_mutation::*;
 pub use server_query::*;
 pub use server_response::*;

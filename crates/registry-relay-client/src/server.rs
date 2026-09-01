@@ -8,7 +8,9 @@
 use std::fmt;
 
 use registry_platform_httpsec::{response_trace_id, ProblemDocument, TraceId};
-use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, ETAG, LINK};
+use reqwest::header::{
+    ACCEPT, AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_MATCH, LINK, LOCATION, VARY,
+};
 use reqwest::{Method, Response, StatusCode};
 use uuid::Uuid;
 
@@ -19,6 +21,7 @@ use crate::*;
 const APPLICATION_JSON: &str = "application/json";
 const PROBLEM_MEDIA_TYPE: &str = "application/problem+json";
 const MAXIMUM_PROBLEM_BYTES: usize = 4 * 1024;
+const MAXIMUM_LOCATION_BYTES: usize = 2_048;
 
 /// One explicitly initiated exchange with one Registry Server deployment.
 pub struct RegistryServerClient {
@@ -63,6 +66,31 @@ impl RegistryServerClient {
         access_profile: Option<&str>,
     ) -> Result<RegistryServerComplete<RawDocument>, RegistryServerClientError> {
         self.raw_document(&["v1", "registry"], access_profile).await
+    }
+
+    /// Retrieve and strictly validate caller-filtered Registry Metadata v1.
+    ///
+    /// The returned metadata is bound to this client's exact service base.
+    /// Parsing metadata bytes directly remains inert and cannot authorize a
+    /// write through this client.
+    pub async fn registry_contract(
+        &self,
+        access_profile: Option<&str>,
+    ) -> Result<RegistryServerComplete<RegistryServerMetadata>, RegistryServerClientError> {
+        let raw = self.registry_metadata(access_profile).await?;
+        let value = RegistryServerMetadata::from_slice(raw.value.as_bytes())
+            .map_err(|_| {
+                RegistryServerClientError::protocol(
+                    StatusCode::OK.as_u16(),
+                    RegistryServerProtocolFailure::Body,
+                    Some(raw.metadata.trace_id().clone()),
+                )
+            })?
+            .bind_source(self.source_binding());
+        Ok(RegistryServerComplete {
+            value,
+            metadata: raw.metadata,
+        })
     }
 
     /// Retrieve one caller-filtered entity schema as inert bounded bytes.
@@ -181,6 +209,253 @@ impl RegistryServerClient {
             )
             .await?;
         decode_server_single(wire, format)
+    }
+
+    /// Execute one metadata-bound direct Create without automatic retry.
+    pub async fn create_record(
+        &self,
+        operation: &RegistryServerCreateBinding,
+        request: &ServerCreateRequest,
+        idempotency_key: &RegistryServerIdempotencyKey,
+        format: ServerRecordFormat,
+    ) -> Result<RegistryServerComplete<RegistryRecordSingleResponse>, RegistryServerClientError>
+    {
+        self.validate_create_binding(operation, request)?;
+        let segments = fixed_operation_segments(operation.path())?;
+        let pairs = access_profile_query(Some(operation.access_profile()))?;
+        let url = self.url_with_query(&segments, &pairs)?;
+        let mut builder = self
+            .transport
+            .http
+            .request(Method::POST, url)
+            .header(ACCEPT, format.media_type())
+            .header(CONTENT_TYPE, APPLICATION_JSON)
+            .header("idempotency-key", idempotency_key.as_str())
+            .body(request.body().to_vec());
+        builder = self.authorize(builder, Credential::Optional).await?;
+        let response = self.transport.send_server(builder).await?;
+        let wire = self
+            .mutation_wire(
+                response,
+                StatusCode::CREATED,
+                format.media_type(),
+                LocationExpectation::Required,
+            )
+            .await?;
+        let complete = decode_server_single(wire, format)?;
+        validate_mutation_record(
+            &complete,
+            StatusCode::CREATED,
+            operation.registry_identifier(),
+            operation.dataset_identifier(),
+            operation.entity_identifier(),
+        )?;
+        let expected_location = format!(
+            "{}/{}",
+            operation.path(),
+            complete.value.data.record_identifier
+        );
+        if complete.metadata.location() != Some(expected_location.as_str()) {
+            return Err(RegistryServerClientError::protocol(
+                StatusCode::CREATED.as_u16(),
+                RegistryServerProtocolFailure::Location,
+                Some(complete.metadata.trace_id().clone()),
+            ));
+        }
+        Ok(complete)
+    }
+
+    /// Execute one metadata-bound direct PATCH without automatic retry.
+    pub async fn patch_record(
+        &self,
+        operation: &RegistryServerPatchBinding,
+        record_identifier: Uuid,
+        etag: &RegistryServerEtag,
+        request: &ServerPatchRequest,
+        idempotency_key: &RegistryServerIdempotencyKey,
+        format: ServerRecordFormat,
+    ) -> Result<RegistryServerComplete<RegistryRecordSingleResponse>, RegistryServerClientError>
+    {
+        self.validate_patch_binding(operation, request)?;
+        let path = operation.path_for_record(record_identifier);
+        let segments = fixed_operation_segments(&path)?;
+        let pairs = access_profile_query(Some(operation.access_profile()))?;
+        let url = self.url_with_query(&segments, &pairs)?;
+        let mut builder = self
+            .transport
+            .http
+            .request(Method::PATCH, url)
+            .header(ACCEPT, format.media_type())
+            .header(CONTENT_TYPE, "application/json-patch+json")
+            .header("idempotency-key", idempotency_key.as_str())
+            .header(IF_MATCH, etag.as_str())
+            .body(request.body().to_vec());
+        builder = self.authorize(builder, Credential::Optional).await?;
+        let response = self.transport.send_server(builder).await?;
+        let wire = self
+            .mutation_wire(
+                response,
+                StatusCode::OK,
+                format.media_type(),
+                LocationExpectation::Forbidden,
+            )
+            .await?;
+        let complete = decode_server_single(wire, format)?;
+        validate_mutation_record(
+            &complete,
+            StatusCode::OK,
+            operation.registry_identifier(),
+            operation.dataset_identifier(),
+            operation.entity_identifier(),
+        )?;
+        if complete.value.data.record_identifier != record_identifier.to_string() {
+            return Err(body_failure(
+                StatusCode::OK.as_u16(),
+                complete.metadata.trace_id().clone(),
+            ));
+        }
+        Ok(complete)
+    }
+
+    /// Promote the actor actions advertised on one Registry Record against a
+    /// caller-filtered lifecycle authority fetched by this client.
+    pub fn lifecycle_actions(
+        &self,
+        authority: &RegistryServerLifecycleAuthority,
+        record: &RegistryRecordSingleResponse,
+    ) -> Result<Vec<RegistryServerLifecycleAction>, RegistryServerLifecyclePromotionError> {
+        if !authority.matches_source(&self.source_binding()) {
+            return Err(RegistryServerLifecyclePromotionError::Authority);
+        }
+        let request = RegistryServerRequestMetadata::from_record(&record.data)
+            .map_err(|_| RegistryServerLifecyclePromotionError::Binding)?
+            .ok_or(RegistryServerLifecyclePromotionError::Binding)?;
+        let record_binding =
+            RegistryServerLifecycleRecordBinding::from_record(&record.meta, &record.data)?;
+        request.promote_actions(authority, &record_binding)
+    }
+
+    /// Execute one promoted change-request lifecycle action without automatic
+    /// retry. A caller retry must reuse the same action and idempotency key.
+    pub async fn execute_lifecycle_action(
+        &self,
+        action: &RegistryServerLifecycleAction,
+        idempotency_key: &RegistryServerIdempotencyKey,
+    ) -> Result<
+        RegistryServerComplete<RegistryServerLifecycleActionReceipt>,
+        RegistryServerClientError,
+    > {
+        if !action.matches_source(&self.source_binding()) {
+            return Err(RegistryServerClientError::invalid_request(
+                "the Registry Server lifecycle action belongs to another client source",
+            ));
+        }
+        let url = self.url_for_lifecycle_action(action.href())?;
+        let body = serde_json::to_vec(action.body()).map_err(|_| {
+            RegistryServerClientError::invalid_request(
+                "the Registry Server lifecycle action body is invalid",
+            )
+        })?;
+        let mut builder = self
+            .transport
+            .http
+            .request(Method::POST, url)
+            .header(ACCEPT, APPLICATION_JSON)
+            .header(CONTENT_TYPE, APPLICATION_JSON)
+            .header("idempotency-key", idempotency_key.as_str())
+            .header(IF_MATCH, action.if_match().as_str())
+            .body(body);
+        builder = self.authorize(builder, Credential::Optional).await?;
+        let response = self.transport.send_server(builder).await?;
+        let wire = self.lifecycle_wire(response).await?;
+        let receipt = RegistryServerLifecycleActionReceipt::from_slice(&wire.body)
+            .map_err(|_| body_failure(wire.status, wire.metadata.trace_id().clone()))?;
+        if !action.accepts_receipt(&receipt) {
+            return Err(body_failure(wire.status, wire.metadata.trace_id().clone()));
+        }
+        Ok(RegistryServerComplete {
+            value: receipt,
+            metadata: wire.metadata,
+        })
+    }
+
+    fn validate_create_binding(
+        &self,
+        operation: &RegistryServerCreateBinding,
+        request: &ServerCreateRequest,
+    ) -> Result<(), RegistryServerClientError> {
+        if !operation.matches_source(&self.source_binding()) {
+            return Err(RegistryServerClientError::invalid_request(
+                "the Registry Server Create operation belongs to another client source",
+            ));
+        }
+        request
+            .validate_fields(
+                operation.writable_api_names(),
+                operation.required_api_names(),
+            )
+            .map_err(|_| {
+                RegistryServerClientError::invalid_request(
+                    "the Registry Server Create request does not match the selected operation",
+                )
+            })
+    }
+
+    fn validate_patch_binding(
+        &self,
+        operation: &RegistryServerPatchBinding,
+        request: &ServerPatchRequest,
+    ) -> Result<(), RegistryServerClientError> {
+        if !operation.matches_source(&self.source_binding()) {
+            return Err(RegistryServerClientError::invalid_request(
+                "the Registry Server PATCH operation belongs to another client source",
+            ));
+        }
+        request
+            .validate_fields(
+                operation.readable_api_names(),
+                operation.writable_api_names(),
+                operation.removable_api_names(),
+            )
+            .map_err(|_| {
+                RegistryServerClientError::invalid_request(
+                    "the Registry Server PATCH request does not match the selected operation",
+                )
+            })
+    }
+
+    fn source_binding(&self) -> String {
+        self.transport.base_url.as_url().as_str().to_owned()
+    }
+
+    fn url_for_lifecycle_action(
+        &self,
+        href: &str,
+    ) -> Result<reqwest::Url, RegistryServerClientError> {
+        let (path, query) = href.split_once('?').ok_or_else(|| {
+            RegistryServerClientError::invalid_request(
+                "the Registry Server lifecycle action href is invalid",
+            )
+        })?;
+        let profile = query.strip_prefix("accessProfile=").ok_or_else(|| {
+            RegistryServerClientError::invalid_request(
+                "the Registry Server lifecycle action href is invalid",
+            )
+        })?;
+        if !valid_access_profile_identifier(profile) || query.contains(['&', ';', '#']) {
+            return Err(RegistryServerClientError::invalid_request(
+                "the Registry Server lifecycle action href is invalid",
+            ));
+        }
+        let segments = fixed_operation_segments(path)?;
+        let mut url = self.transport.server_url(&segments)?;
+        url.set_query(Some(query));
+        if url.as_str().len() > MAX_SERVER_REQUEST_URI_BYTES {
+            return Err(RegistryServerClientError::invalid_request(
+                "the Registry Server request URI exceeds the client bound",
+            ));
+        }
+        Ok(url)
     }
 
     async fn probe(
@@ -363,6 +638,123 @@ impl RegistryServerClient {
             metadata: RegistryServerResponseMetadata::new(trace_id, etag),
             media_type: expected_media.to_owned(),
             link,
+            status: status.as_u16(),
+        })
+    }
+
+    async fn mutation_wire(
+        &self,
+        response: Response,
+        expected_status: StatusCode,
+        expected_media: &str,
+        location_expectation: LocationExpectation,
+    ) -> Result<ServerWire, RegistryServerClientError> {
+        let status = response.status();
+        if status != expected_status {
+            if status.is_success() {
+                return Err(RegistryServerClientError::protocol(
+                    status.as_u16(),
+                    RegistryServerProtocolFailure::Status,
+                    server_trace_id(status, response.headers()).ok(),
+                ));
+            }
+            return Err(server_problem(response, &self.transport).await);
+        }
+        let headers = response.headers().clone();
+        let trace_id = server_trace_id(status, &headers)?;
+        validate_mutation_cache_headers(status, &headers, &trace_id)?;
+        if !exact_media_type(&headers, expected_media) {
+            return Err(RegistryServerClientError::protocol(
+                status.as_u16(),
+                RegistryServerProtocolFailure::MediaType,
+                Some(trace_id),
+            ));
+        }
+        let etag = server_response_etag(status, &headers, &trace_id)?.ok_or_else(|| {
+            RegistryServerClientError::protocol(
+                status.as_u16(),
+                RegistryServerProtocolFailure::EntityTag,
+                Some(trace_id.clone()),
+            )
+        })?;
+        let link = server_response_link(status, &headers, &trace_id)?;
+        let location = server_response_location(status, &headers, &trace_id)?;
+        if matches!(location_expectation, LocationExpectation::Required) != location.is_some() {
+            return Err(RegistryServerClientError::protocol(
+                status.as_u16(),
+                RegistryServerProtocolFailure::Location,
+                Some(trace_id),
+            ));
+        }
+        let body = self
+            .transport
+            .read_server(response, self.config.max_response_bytes)
+            .await?;
+        let mut metadata = RegistryServerResponseMetadata::new(trace_id, Some(etag));
+        if let Some(location) = location {
+            metadata = metadata.with_location(location);
+        }
+        Ok(ServerWire {
+            body,
+            metadata,
+            media_type: expected_media.to_owned(),
+            link,
+            status: status.as_u16(),
+        })
+    }
+
+    async fn lifecycle_wire(
+        &self,
+        response: Response,
+    ) -> Result<ServerWire, RegistryServerClientError> {
+        let status = response.status();
+        if status != StatusCode::OK {
+            if status.is_success() {
+                return Err(RegistryServerClientError::protocol(
+                    status.as_u16(),
+                    RegistryServerProtocolFailure::Status,
+                    server_trace_id(status, response.headers()).ok(),
+                ));
+            }
+            return Err(server_problem(response, &self.transport).await);
+        }
+        let headers = response.headers().clone();
+        let trace_id = server_trace_id(status, &headers)?;
+        validate_mutation_cache_headers(status, &headers, &trace_id)?;
+        if !exact_media_type(&headers, APPLICATION_JSON) {
+            return Err(RegistryServerClientError::protocol(
+                status.as_u16(),
+                RegistryServerProtocolFailure::MediaType,
+                Some(trace_id),
+            ));
+        }
+        if server_response_etag(status, &headers, &trace_id)?.is_some() {
+            return Err(etag_failure(status, trace_id));
+        }
+        if server_response_link(status, &headers, &trace_id)?.is_some() {
+            return Err(RegistryServerClientError::protocol(
+                status.as_u16(),
+                RegistryServerProtocolFailure::ProfileLink,
+                Some(trace_id),
+            ));
+        }
+        if server_response_location(status, &headers, &trace_id)?.is_some() {
+            return Err(RegistryServerClientError::protocol(
+                status.as_u16(),
+                RegistryServerProtocolFailure::Location,
+                Some(trace_id),
+            ));
+        }
+        let body = self
+            .transport
+            .read_server(response, self.config.max_response_bytes)
+            .await?;
+        Ok(ServerWire {
+            body,
+            metadata: RegistryServerResponseMetadata::new(trace_id, None),
+            media_type: APPLICATION_JSON.to_owned(),
+            link: None,
+            status: status.as_u16(),
         })
     }
 }
@@ -388,19 +780,27 @@ enum EntityTagExpectation {
     Forbidden,
 }
 
+#[derive(Clone, Copy)]
+enum LocationExpectation {
+    Required,
+    Forbidden,
+}
+
 struct ServerWire {
     body: Vec<u8>,
     metadata: RegistryServerResponseMetadata,
     media_type: String,
     link: Option<String>,
+    status: u16,
 }
 
 fn decode_server_json<T: serde::de::DeserializeOwned>(
     wire: ServerWire,
 ) -> Result<RegistryServerComplete<T>, RegistryServerClientError> {
+    let status = wire.status;
     let value = serde_json::from_slice(&wire.body).map_err(|_| {
         RegistryServerClientError::protocol(
-            StatusCode::OK.as_u16(),
+            status,
             RegistryServerProtocolFailure::Body,
             Some(wire.metadata.trace_id().clone()),
         )
@@ -415,16 +815,18 @@ fn decode_server_single(
     wire: ServerWire,
     format: ServerRecordFormat,
 ) -> Result<RegistryServerComplete<RegistryRecordSingleResponse>, RegistryServerClientError> {
+    let status = wire.status;
     let trace_id = wire.metadata.trace_id().clone();
     let link = wire.link.clone();
-    let value = decode_registry_record(&wire.body, format, &trace_id)?;
+    let value = decode_registry_record(&wire.body, format, status, &trace_id)?;
     let RegistryRecordResponse::Single(value) = value else {
-        return Err(body_failure(trace_id));
+        return Err(body_failure(status, trace_id));
     };
-    validate_server_records(std::slice::from_ref(&value.data), &trace_id)?;
+    validate_server_records(std::slice::from_ref(&value.data), status, &trace_id)?;
     validate_profile_link(
         link.as_deref(),
         &value.meta.entity_type_identifier,
+        status,
         &trace_id,
     )?;
     Ok(RegistryServerComplete {
@@ -437,16 +839,18 @@ fn decode_server_collection(
     wire: ServerWire,
     format: ServerRecordFormat,
 ) -> Result<RegistryServerComplete<RegistryRecordCollectionResponse>, RegistryServerClientError> {
+    let status = wire.status;
     let trace_id = wire.metadata.trace_id().clone();
     let link = wire.link.clone();
-    let value = decode_registry_record(&wire.body, format, &trace_id)?;
+    let value = decode_registry_record(&wire.body, format, status, &trace_id)?;
     let RegistryRecordResponse::Collection(value) = value else {
-        return Err(body_failure(trace_id));
+        return Err(body_failure(status, trace_id));
     };
-    validate_server_records(&value.items, &trace_id)?;
+    validate_server_records(&value.items, status, &trace_id)?;
     validate_profile_link(
         link.as_deref(),
         &value.meta.entity_type_identifier,
+        status,
         &trace_id,
     )?;
     Ok(RegistryServerComplete {
@@ -458,6 +862,7 @@ fn decode_server_collection(
 fn decode_registry_record(
     body: &[u8],
     format: ServerRecordFormat,
+    status: u16,
     trace_id: &TraceId,
 ) -> Result<RegistryRecordResponse, RegistryServerClientError> {
     let representation = match format {
@@ -466,7 +871,7 @@ fn decode_registry_record(
     };
     RegistryRecordResponse::from_slice(body, representation).map_err(|_| {
         RegistryServerClientError::protocol(
-            StatusCode::OK.as_u16(),
+            status,
             RegistryServerProtocolFailure::Body,
             Some(trace_id.clone()),
         )
@@ -475,13 +880,14 @@ fn decode_registry_record(
 
 fn validate_server_records(
     records: &[RegistryRecord],
+    status: u16,
     trace_id: &TraceId,
 ) -> Result<(), RegistryServerClientError> {
     if records.iter().any(|record| {
         !canonical_uuid(&record.record_identifier)
             || !canonical_positive_revision(&record.revision_identifier)
     }) {
-        return Err(body_failure(trace_id.clone()));
+        return Err(body_failure(status, trace_id.clone()));
     }
     Ok(())
 }
@@ -489,17 +895,18 @@ fn validate_server_records(
 fn validate_profile_link(
     actual: Option<&str>,
     entity_identifier: &str,
+    status: u16,
     trace_id: &TraceId,
 ) -> Result<(), RegistryServerClientError> {
     if !valid_server_identifier(entity_identifier) {
-        return Err(body_failure(trace_id.clone()));
+        return Err(body_failure(status, trace_id.clone()));
     }
     let expected = format!(
         "<{REGISTRY_RECORD_PROFILE_IDENTIFIER}>; rel=\"profile\", </v1/schemas/{entity_identifier}>; rel=\"describedby\""
     );
     if actual != Some(expected.as_str()) {
         return Err(RegistryServerClientError::protocol(
-            StatusCode::OK.as_u16(),
+            status,
             RegistryServerProtocolFailure::ProfileLink,
             Some(trace_id.clone()),
         ));
@@ -544,6 +951,18 @@ fn valid_server_identifier(value: &str) -> bool {
         && first.is_ascii_lowercase()
         && bytes.all(|byte| {
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+        })
+}
+
+fn valid_access_profile_identifier(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+    value.len() <= 128
+        && first.is_ascii_lowercase()
+        && bytes.all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_' | b'.')
         })
 }
 
@@ -626,6 +1045,155 @@ fn server_response_link(
     })
 }
 
+fn fixed_operation_segments(path: &str) -> Result<Vec<&str>, RegistryServerClientError> {
+    if path.len() > MAXIMUM_LOCATION_BYTES
+        || !path.starts_with('/')
+        || path.ends_with('/')
+        || path.contains(['%', '?', '#', '\\'])
+    {
+        return Err(RegistryServerClientError::invalid_request(
+            "the selected Registry Server operation path is invalid",
+        ));
+    }
+    let segments = path[1..].split('/').collect::<Vec<_>>();
+    if segments.is_empty()
+        || segments.iter().any(|segment| {
+            segment.is_empty()
+                || *segment == "."
+                || *segment == ".."
+                || segment.len() > 128
+                || !segment.bytes().all(|byte| {
+                    byte.is_ascii_lowercase()
+                        || byte.is_ascii_digit()
+                        || matches!(byte, b'-' | b'_')
+                })
+        })
+    {
+        return Err(RegistryServerClientError::invalid_request(
+            "the selected Registry Server operation path is invalid",
+        ));
+    }
+    Ok(segments)
+}
+
+fn validate_mutation_record(
+    complete: &RegistryServerComplete<RegistryRecordSingleResponse>,
+    status: StatusCode,
+    expected_registry: &str,
+    expected_dataset: &str,
+    expected_entity: &str,
+) -> Result<(), RegistryServerClientError> {
+    let value = &complete.value;
+    let record = &value.data;
+    let exact_snapshot = record.extensions.len() == 1
+        && record
+            .extensions
+            .get("snapshot")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(valid_snapshot_reference);
+    if value.meta.registry_identifier != expected_registry
+        || value.meta.dataset_identifier != expected_dataset
+        || value.meta.entity_type_identifier != expected_entity
+        || !value.extensions.is_empty()
+        || !value.meta.extensions.is_empty()
+        || !exact_snapshot
+    {
+        return Err(body_failure(
+            status.as_u16(),
+            complete.metadata.trace_id().clone(),
+        ));
+    }
+    Ok(())
+}
+
+fn valid_snapshot_reference(value: &str) -> bool {
+    value.strip_prefix("rs1_").is_some_and(canonical_uuid)
+}
+
+fn validate_mutation_cache_headers(
+    status: StatusCode,
+    headers: &reqwest::header::HeaderMap,
+    trace_id: &TraceId,
+) -> Result<(), RegistryServerClientError> {
+    validate_no_store(status, headers, trace_id)?;
+    validate_exact_header(
+        status,
+        headers,
+        &VARY,
+        "authorization, accept",
+        RegistryServerProtocolFailure::CachePolicy,
+        trace_id,
+    )
+}
+
+fn validate_no_store(
+    status: StatusCode,
+    headers: &reqwest::header::HeaderMap,
+    trace_id: &TraceId,
+) -> Result<(), RegistryServerClientError> {
+    validate_exact_header(
+        status,
+        headers,
+        &CACHE_CONTROL,
+        "no-store",
+        RegistryServerProtocolFailure::CachePolicy,
+        trace_id,
+    )
+}
+
+fn validate_exact_header(
+    status: StatusCode,
+    headers: &reqwest::header::HeaderMap,
+    name: &reqwest::header::HeaderName,
+    expected: &str,
+    failure: RegistryServerProtocolFailure,
+    trace_id: &TraceId,
+) -> Result<(), RegistryServerClientError> {
+    let mut values = headers.get_all(name).iter();
+    let actual = values.next().and_then(|value| value.to_str().ok());
+    if actual != Some(expected) || values.next().is_some() {
+        return Err(RegistryServerClientError::protocol(
+            status.as_u16(),
+            failure,
+            Some(trace_id.clone()),
+        ));
+    }
+    Ok(())
+}
+
+fn server_response_location(
+    status: StatusCode,
+    headers: &reqwest::header::HeaderMap,
+    trace_id: &TraceId,
+) -> Result<Option<String>, RegistryServerClientError> {
+    let mut values = headers.get_all(LOCATION).iter();
+    let Some(value) = values.next() else {
+        return Ok(None);
+    };
+    if values.next().is_some() {
+        return Err(RegistryServerClientError::protocol(
+            status.as_u16(),
+            RegistryServerProtocolFailure::Location,
+            Some(trace_id.clone()),
+        ));
+    }
+    let value = value.to_str().map_err(|_| {
+        RegistryServerClientError::protocol(
+            status.as_u16(),
+            RegistryServerProtocolFailure::Location,
+            Some(trace_id.clone()),
+        )
+    })?;
+    fixed_operation_segments(value).map_err(|_| {
+        RegistryServerClientError::protocol(
+            status.as_u16(),
+            RegistryServerProtocolFailure::Location,
+            Some(trace_id.clone()),
+        )
+    })?;
+    Ok(Some(value.to_owned()))
+}
+
 async fn server_problem(response: Response, transport: &Transport) -> RegistryServerClientError {
     let status = response.status();
     let headers = response.headers().clone();
@@ -633,6 +1201,9 @@ async fn server_problem(response: Response, transport: &Transport) -> RegistrySe
         Ok(value) => value,
         Err(error) => return error,
     };
+    if let Err(error) = validate_no_store(status, &headers, &trace_id) {
+        return error;
+    }
     if !exact_media_type(&headers, PROBLEM_MEDIA_TYPE) {
         return RegistryServerClientError::protocol(
             status.as_u16(),
@@ -673,12 +1244,8 @@ async fn server_problem(response: Response, transport: &Transport) -> RegistrySe
     }
 }
 
-fn body_failure(trace_id: TraceId) -> RegistryServerClientError {
-    RegistryServerClientError::protocol(
-        StatusCode::OK.as_u16(),
-        RegistryServerProtocolFailure::Body,
-        Some(trace_id),
-    )
+fn body_failure(status: u16, trace_id: TraceId) -> RegistryServerClientError {
+    RegistryServerClientError::protocol(status, RegistryServerProtocolFailure::Body, Some(trace_id))
 }
 
 fn etag_failure(status: StatusCode, trace_id: TraceId) -> RegistryServerClientError {

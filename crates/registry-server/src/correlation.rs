@@ -5,7 +5,7 @@
 use std::time::Instant;
 
 use axum::body::Body;
-use axum::http::header::{CONTENT_LENGTH, CONTENT_TYPE};
+use axum::http::header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE};
 use axum::http::{HeaderMap, Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::Response;
@@ -196,6 +196,12 @@ pub(crate) fn finish_response(
     } else {
         response
     };
+    if problem.is_some() {
+        response.headers_mut().insert(
+            CACHE_CONTROL,
+            "no-store".parse().expect("cache policy is valid"),
+        );
+    }
     correlation.apply_trace(response.headers_mut());
 
     let status = status_class(response.status());

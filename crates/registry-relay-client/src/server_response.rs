@@ -1,8 +1,9 @@
 use registry_platform_httpsec::TraceId;
 use serde::Serialize;
+use std::fmt;
 
 /// A validated strong Registry Server entity tag.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
 pub struct RegistryServerEtag(String);
 
@@ -28,21 +29,38 @@ impl RegistryServerEtag {
     }
 }
 
+impl fmt::Debug for RegistryServerEtag {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("RegistryServerEtag(<redacted>)")
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("entity tag is not a strong Registry Server tag")]
 pub struct RegistryServerEtagError;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RegistryServerResponseMetadata {
     trace_id: TraceId,
     #[serde(skip_serializing_if = "Option::is_none")]
     etag: Option<RegistryServerEtag>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    location: Option<String>,
 }
 
 impl RegistryServerResponseMetadata {
     pub(crate) fn new(trace_id: TraceId, etag: Option<RegistryServerEtag>) -> Self {
-        Self { trace_id, etag }
+        Self {
+            trace_id,
+            etag,
+            location: None,
+        }
+    }
+
+    pub(crate) fn with_location(mut self, location: String) -> Self {
+        self.location = Some(location);
+        self
     }
 
     #[must_use]
@@ -53,6 +71,25 @@ impl RegistryServerResponseMetadata {
     #[must_use]
     pub fn etag(&self) -> Option<&RegistryServerEtag> {
         self.etag.as_ref()
+    }
+
+    /// Root-relative, inert location returned by a successful create.
+    ///
+    /// The client validates this value but never follows or resolves it.
+    #[must_use]
+    pub fn location(&self) -> Option<&str> {
+        self.location.as_deref()
+    }
+}
+
+impl fmt::Debug for RegistryServerResponseMetadata {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RegistryServerResponseMetadata")
+            .field("trace_id", &self.trace_id)
+            .field("etag", &self.etag.is_some())
+            .field("location", &self.location.is_some())
+            .finish()
     }
 }
 
@@ -89,5 +126,11 @@ mod tests {
         ] {
             assert!(RegistryServerEtag::parse(invalid).is_err(), "{invalid}");
         }
+    }
+
+    #[test]
+    fn mutation_response_facts_are_redacted_from_debug() {
+        let etag = RegistryServerEtag::parse("\"rs-sensitive-precondition-canary\"").unwrap();
+        assert!(!format!("{etag:?}").contains("sensitive-precondition-canary"));
     }
 }

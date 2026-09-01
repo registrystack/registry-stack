@@ -971,9 +971,12 @@ fn change_request_openapi_exposes_finite_action_contract_and_request_metadata() 
     );
     assert_eq!(
         submit_request["responses"]["409"]["content"]["application/problem+json"]["examples"]
-            ["request.conflict"]["value"]["code"],
-        "request.conflict"
+            ["mutation.conflict"]["value"]["code"],
+        "mutation.conflict"
     );
+    assert!(submit_request["responses"]["200"]["headers"]
+        .get("ETag")
+        .is_none());
 
     let approve_request = &value["paths"]
         ["/v1/records/placement-correction-requests/{record_id}/actions/stages/review/approve"]
@@ -2393,18 +2396,20 @@ fn batch_route_requires_explicit_bounds_and_compiles_bounded_openapi() {
         patch_response_schema,
         tombstone_response_schema,
     ] {
-        assert!(schema["required"]
+        let record = &schema["properties"]["data"];
+        assert!(record["required"]
             .as_array()
-            .expect("mutation response required properties render")
+            .expect("mutation response record properties render")
             .contains(&json!("snapshot")));
-        assert!(schema["properties"].get("snapshot").is_some());
+        assert!(record["properties"].get("snapshot").is_some());
     }
-    assert!(get_response_schema["required"]
+    let get_record = &get_response_schema["properties"]["data"];
+    assert!(get_record["required"]
         .as_array()
-        .expect("read response required properties render")
+        .expect("read response record properties render")
         .iter()
         .all(|property| property.as_str() != Some("snapshot")));
-    assert!(get_response_schema["properties"].get("snapshot").is_none());
+    assert!(get_record["properties"].get("snapshot").is_none());
 
     let configured_but_ungranted = compile_json(
         source(
@@ -4895,7 +4900,6 @@ fn generated_openapi_routes_and_physical_names_share_one_compiled_inventory() {
             "precondition.required",
             "query.cursor_invalid",
             "query.invalid",
-            "request.conflict",
             "request.invalid",
             "request.timeout",
             "resource.not_found",
@@ -4947,7 +4951,13 @@ fn generated_openapi_routes_and_physical_names_share_one_compiled_inventory() {
     let detail = &value["paths"]["/v1/records/assets/{record_id}"]["get"];
     assert_eq!(
         query_parameter_names(&detail["parameters"]),
-        ["$select", "accessProfile", "record_id", "traceparent"]
+        [
+            "$select",
+            "Accept",
+            "accessProfile",
+            "record_id",
+            "traceparent"
+        ]
     );
     assert!(detail["responses"]["200"]["headers"].get("ETag").is_some());
     assert!(detail["responses"]["200"]["headers"]
@@ -4963,13 +4973,22 @@ fn generated_openapi_routes_and_physical_names_share_one_compiled_inventory() {
     );
     assert_eq!(
         detail["responses"]["200"]["content"]["application/json"]["schema"]["properties"]["data"],
-        json!({"$ref": "#/components/schemas/asset-item"})
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["recordIdentifier", "revisionIdentifier", "domainData"],
+            "properties": {
+                "recordIdentifier": {"type": "string", "format": "uuid"},
+                "revisionIdentifier": {"type": "string", "pattern": "^[1-9][0-9]*$"},
+                "domainData": {"$ref": "#/components/schemas/asset-item"}
+            }
+        })
     );
 
     let create = &value["paths"]["/v1/records/assets"]["post"];
     assert_eq!(
         query_parameter_names(&create["parameters"]),
-        ["Idempotency-Key", "accessProfile", "traceparent"]
+        ["Accept", "Idempotency-Key", "accessProfile", "traceparent"]
     );
     assert!(create["responses"]["201"]["headers"].get("ETag").is_some());
     assert!(create["responses"]["201"]["headers"]
@@ -4987,6 +5006,7 @@ fn generated_openapi_routes_and_physical_names_share_one_compiled_inventory() {
     assert_eq!(
         query_parameter_names(&patch["parameters"]),
         [
+            "Accept",
             "Idempotency-Key",
             "If-Match",
             "accessProfile",
@@ -5081,7 +5101,17 @@ fn generated_openapi_separates_security_and_mutation_input_from_read_schema() {
     assert_eq!(
         openapi["paths"]["/v1/records/business-records"]["post"]["responses"]["201"]["content"]
             ["application/json"]["schema"]["properties"]["data"],
-        json!({"$ref": "#/components/schemas/business-record"})
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["recordIdentifier", "revisionIdentifier", "domainData", "snapshot"],
+            "properties": {
+                "recordIdentifier": {"type": "string", "format": "uuid"},
+                "revisionIdentifier": {"type": "string", "pattern": "^[1-9][0-9]*$"},
+                "domainData": {"$ref": "#/components/schemas/business-record"},
+                "snapshot": {"type": "string", "maxLength": 4096}
+            }
+        })
     );
     assert_eq!(
         openapi["components"]["schemas"]["business-record-create-input"]["properties"],
@@ -5316,7 +5346,7 @@ fn compiler_produces_both_revision_routes_when_explicitly_configured() {
         query_parameter_names(
             &openapi["paths"]["/v1/records/entries/{record_id}/revisions"]["get"]["parameters"]
         ),
-        ["accessProfile", "record_id", "traceparent"]
+        ["Accept", "accessProfile", "record_id", "traceparent"]
     );
     let revision_list_schema = &openapi["paths"]["/v1/records/entries/{record_id}/revisions"]
         ["get"]["responses"]["200"]["content"]["application/json"]["schema"]["properties"]["items"]
@@ -5332,7 +5362,7 @@ fn compiler_produces_both_revision_routes_when_explicitly_configured() {
         .is_none());
     let revision_detail_schema = &openapi["paths"]
         ["/v1/records/entries/{record_id}/revisions/{revision}"]["get"]["responses"]["200"]
-        ["content"]["application/json"]["schema"];
+        ["content"]["application/json"]["schema"]["properties"]["data"];
     assert_eq!(
         revision_detail_schema["properties"]["mutationKind"]["enum"],
         json!(["create", "patch", "tombstone", "migration"])
@@ -5878,6 +5908,7 @@ fn compiled_query_inventory_is_profile_scoped_bounded_and_temporal() {
             "$select",
             "$skiptoken",
             "$top",
+            "Accept",
             "accessProfile",
             "traceparent",
         ]
@@ -5894,6 +5925,7 @@ fn compiled_query_inventory_is_profile_scoped_bounded_and_temporal() {
             "$select",
             "$skiptoken",
             "$top",
+            "Accept",
             "accessProfile",
             "asOf",
             "traceparent",
@@ -6201,6 +6233,7 @@ fn snapshot_operation_is_authenticated_stored_field_history_contract() {
             "$select",
             "$skiptoken",
             "$top",
+            "Accept",
             "accessProfile",
             "snapshot",
             "traceparent",
@@ -6225,9 +6258,10 @@ fn snapshot_operation_is_authenticated_stored_field_history_contract() {
         response_schema["properties"]["validAt"],
         json!({"type": "string", "format": "date"})
     );
-    assert!(serde_json::to_string(response_schema)
-        .expect("schema serializes")
-        .contains("\"revision\""));
+    assert!(response_schema["properties"]["items"]["items"]["required"]
+        .as_array()
+        .expect("snapshot record required properties render")
+        .contains(&json!("revisionIdentifier")));
     assert!(!serde_json::to_string(response_schema)
         .expect("schema serializes")
         .contains("reasonCode"));
@@ -6263,7 +6297,7 @@ fn snapshot_operation_is_authenticated_stored_field_history_contract() {
     );
     let revision_detail_schema = &openapi["paths"]
         ["/v1/records/households/{record_id}/revisions/{revision}"]["get"]["responses"]["200"]
-        ["content"]["application/json"]["schema"];
+        ["content"]["application/json"]["schema"]["properties"]["data"];
     assert!(revision_detail_schema["properties"]
         .as_object()
         .expect("revision detail properties render")

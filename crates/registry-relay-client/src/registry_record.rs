@@ -176,7 +176,8 @@ impl RegistryRecordResponse {
         bytes: &[u8],
         representation: RegistryRecordRepresentation,
     ) -> Result<Self, RegistryRecordDecodeError> {
-        let value = serde_json::from_slice(bytes).map_err(|_| RegistryRecordDecodeError::Json)?;
+        let value =
+            crate::strict_json::from_slice(bytes).map_err(|_| RegistryRecordDecodeError::Json)?;
         Self::from_value(value, representation)
     }
 

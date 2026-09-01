@@ -53,12 +53,14 @@ pub struct PilotHarness {
 ///
 /// This test-only seam lets client journeys exercise the deployed HTTP
 /// boundary without introducing another way to construct server state.
+#[allow(dead_code)]
 pub struct PilotHttpServer {
     base_url: String,
     shutdown: Option<oneshot::Sender<()>>,
     task: Option<JoinHandle<()>>,
 }
 
+#[allow(dead_code)]
 impl PilotHttpServer {
     #[must_use]
     pub fn base_url(&self) -> &str {
@@ -309,6 +311,7 @@ impl PilotHarness {
     }
 
     /// Serve the verified startup Router on an ephemeral loopback listener.
+    #[allow(dead_code)]
     pub async fn serve_http(&self) -> PilotHttpServer {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await

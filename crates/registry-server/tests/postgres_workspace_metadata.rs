@@ -98,10 +98,27 @@ async fn real_postgres_workspace_metadata_marks_request_lifecycle_without_direct
             operation["requiredCapabilities"],
             json!(["change_request_lifecycle"])
         );
-        assert!(
-            operation["request"].get("mutationSemantics").is_none(),
-            "{operation_id} must not look like a generic direct mutation"
+        assert_eq!(
+            operation["request"]["mutationSemantics"],
+            "change_request_lifecycle"
         );
+        assert_eq!(operation["request"]["body"], "change_request_action");
+        assert_eq!(operation["request"]["contentType"], "application/json");
+        assert_eq!(operation["request"]["idempotencyKeyRequired"], true);
+        assert_eq!(operation["request"]["ifMatchRequired"], true);
+        assert_eq!(
+            operation["request"]["schema"]["additionalProperties"],
+            false
+        );
+        if operation_id.ends_with(".revise") {
+            assert_eq!(
+                operation["request"]["schema"]["required"],
+                json!(["rebase"])
+            );
+        } else {
+            assert!(operation["request"]["schema"].get("required").is_none());
+            assert_eq!(operation["request"]["schema"]["properties"], json!({}));
+        }
     }
     harness.finish().await;
 }

@@ -5,6 +5,9 @@ contract. The existing `id`, `version`, `revision`, and `entities` members remai
 `metadataVersion: "1"` and `operations` add the route-specific contract. The
 legacy entity summaries and `/v1/schemas/{entity}` may aggregate several authorized
 routes; they do not establish an individual route's read or write authority.
+Each runtime entity summary includes its compiled `datasetIdentifier`. Together
+with the Registry and entity identifiers, this binds operation results to one
+primary dataset even when a project exposes several datasets.
 
 Every operation is selected by the same compiled route, served-operation check,
 and caller/profile authorization used for execution. Unknown and ungranted
@@ -159,3 +162,32 @@ All HTTP responses, including caller-filtered metadata, schemas, OpenAPI,
 protected reads, mutations, authentication refusals, and errors, use
 `Cache-Control: no-store`. The policy does not change exact held response bytes,
 ETags, preconditions, idempotency replay, or trace correlation.
+
+## Change-request lifecycle operations
+
+Each lifecycle operation uses `POST`, `request.body:
+"change_request_action"`, `contentType: "application/json"`,
+`ifMatchRequired: true`, `idempotencyKeyRequired: true`,
+`mutationSemantics: "change_request_lifecycle"`, and required capability
+`change_request_lifecycle`. Its schema is operation-specific. A client must
+bind the metadata route to an action currently advertised on the selected
+Registry Record, including the record UUID, selected access profile, stage,
+proposal version, effect digest, exact relative `href`, and action-specific
+strong `ifMatch` value. The receipt revision must be exactly the selected
+record revision plus one.
+
+Lifecycle responses are action receipts, not Registry Record envelopes. They
+do not return a record ETag, `Location`, or `Link`. A client must validate the
+receipt against the invoked operation and refetch the record before using any
+subsequent action. Direct-record ETags and action `ifMatch` values are distinct
+preconditions and must never be substituted for one another.
+
+## Immediate-action metadata
+
+The top-level `actions` member remains bounded descriptive metadata for the
+configured immediate-action surface. It is not an execution grant. In
+particular, the current target-condition and invoke protocol does not accept a
+server-checked metadata contract fingerprint, so a generic client cannot prove
+that an activation reviewed from one metadata revision is still the contract
+being invoked. Such a client should keep this member inert until the protocol
+provides that final binding instead of inferring a route from it.

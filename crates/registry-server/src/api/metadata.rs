@@ -298,6 +298,21 @@ fn request(surface: &AuthorizedSurface<'_>, query: Option<&CompiledQueryOperatio
             value["body"] = json!("selector_values");
             value["contentType"] = json!("application/json");
         }
+        Operation::SubmitRequest
+        | Operation::ApproveRequest
+        | Operation::RejectRequest
+        | Operation::RequestRevision
+        | Operation::ReviseRequest
+        | Operation::CancelRequest
+        | Operation::ApplyRequest => {
+            value["body"] = json!("change_request_action");
+            value["contentType"] = json!("application/json");
+            value["ifMatchRequired"] = json!(true);
+            value["idempotencyKeyRequired"] = json!(true);
+            value["mutationSemantics"] = json!("change_request_lifecycle");
+            value["schema"] =
+                crate::artifacts::openapi_request_action_input_schema(surface.route.operation);
+        }
         _ => {}
     }
     value
@@ -487,5 +502,28 @@ mod tests {
         }
         assert!(required_capabilities(Operation::Create).is_empty());
         assert!(required_capabilities(Operation::Patch).is_empty());
+    }
+
+    #[test]
+    fn lifecycle_request_schemas_are_operation_exact() {
+        let empty = crate::artifacts::openapi_request_action_input_schema(Operation::SubmitRequest);
+        assert_eq!(empty["additionalProperties"], false);
+        assert_eq!(empty["properties"], json!({}));
+
+        let decision =
+            crate::artifacts::openapi_request_action_input_schema(Operation::ApproveRequest);
+        assert_eq!(
+            decision["required"],
+            json!(["proposalVersion", "effectDigest"])
+        );
+        assert_eq!(
+            decision["properties"]["effectDigest"]["pattern"],
+            "^sha256:[0-9a-f]{64}$"
+        );
+
+        let revise =
+            crate::artifacts::openapi_request_action_input_schema(Operation::ReviseRequest);
+        assert_eq!(revise["required"], json!(["rebase"]));
+        assert_eq!(revise["properties"]["rebase"]["type"], "boolean");
     }
 }

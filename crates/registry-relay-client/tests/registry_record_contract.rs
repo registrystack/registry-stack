@@ -117,6 +117,26 @@ fn every_compatible_negative_fixture_is_rejected() {
 }
 
 #[test]
+fn duplicate_wire_members_are_rejected_before_profile_decoding() {
+    let duplicate = br#"{
+        "data": {
+            "recordIdentifier": "00000000-0000-4000-8000-000000000001",
+            "revisionIdentifier": "1",
+            "revisionIdentifier": "2",
+            "domainData": {}
+        },
+        "meta": {
+            "registryIdentifier": "registry",
+            "datasetIdentifier": "dataset",
+            "entityTypeIdentifier": "entity"
+        }
+    }"#;
+    assert!(
+        RegistryRecordResponse::from_slice(duplicate, RegistryRecordRepresentation::Json).is_err()
+    );
+}
+
+#[test]
 fn product_extensions_are_preserved_at_every_open_level() {
     let document = json!({
         "items": [{

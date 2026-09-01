@@ -362,6 +362,9 @@ async fn registry_metadata(
         else {
             return concealed();
         };
+        let Some(dataset_identifier) = response_entity.primary_dataset.as_ref() else {
+            return concealed();
+        };
         entities
             .entry(response_entity.id.clone())
             .and_modify(|metadata| {
@@ -374,6 +377,7 @@ async fn registry_metadata(
             })
             .or_insert_with(|| MetadataEntity {
                 id: response_entity.id.clone(),
+                dataset_identifier: dataset_identifier.clone(),
                 route: response_entity.route.clone(),
                 operations: BTreeMap::from([(entry.operation, entry.access_profile.clone())]),
                 readable_fields: entry.readable_fields.clone(),
@@ -388,6 +392,7 @@ async fn registry_metadata(
         .map(|entity| {
             let mut metadata = json!({
                 "id": entity.id,
+                "datasetIdentifier": entity.dataset_identifier,
                 "route": entity.route,
                 "operations": entity.operations.into_iter().map(|(operation, access_profile)| json!({
                     "operation": operation_name(operation),
@@ -4081,6 +4086,7 @@ fn filtered_schema(
 
 struct MetadataEntity {
     id: String,
+    dataset_identifier: String,
     route: String,
     operations: BTreeMap<Operation, String>,
     readable_fields: BTreeSet<String>,
@@ -4534,6 +4540,7 @@ fn geojson_available(surface: &AuthorizedSurface<'_>) -> bool {
 fn exact_mutation(response: &HeldResponse) -> Response {
     let mut builder = Response::builder()
         .status(response.status())
+        .header(CACHE_CONTROL, "no-store")
         .header(VARY, "authorization, accept");
     for (name, value) in response.headers() {
         let Ok(value) = HeaderValue::from_bytes(value) else {

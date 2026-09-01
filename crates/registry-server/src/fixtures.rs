@@ -3894,14 +3894,14 @@ fn parse_immediate_action_results(
         if !valid_stable_id(effect) {
             return Err(FixtureError::ResponseShapeRefused);
         }
-        let result = exact_object(result, &["entity", "id", "revision"])?;
+        let result = exact_object(result, &["entity", "recordId", "revision"])?;
         let entity = result
             .get("entity")
             .and_then(Value::as_str)
             .filter(|value| valid_stable_id(value))
             .ok_or(FixtureError::ResponseShapeRefused)?;
         let record_id = result
-            .get("id")
+            .get("recordId")
             .and_then(Value::as_str)
             .filter(|value| uuid::Uuid::parse_str(value).is_ok_and(|id| id.to_string() == *value))
             .ok_or(FixtureError::ResponseShapeRefused)?;
@@ -3923,7 +3923,7 @@ fn parse_immediate_action_results(
 }
 
 fn assert_request_action_shape(value: &Value) -> Result<(), FixtureError> {
-    let object = exact_object(value, &["id", "revision", "request"])?;
+    let object = exact_object(value, &["id", "revision", "snapshot", "request"])?;
     let identifier = object
         .get("id")
         .and_then(Value::as_str)
@@ -3936,6 +3936,7 @@ fn assert_request_action_shape(value: &Value) -> Result<(), FixtureError> {
     {
         return Err(FixtureError::ResponseShapeRefused);
     }
+    assert_snapshot_reference(object)?;
     let request = object
         .get("request")
         .and_then(Value::as_object)
@@ -4336,10 +4337,6 @@ fn problem_contract(status: u16, code: Option<&str>) -> Option<(&'static str, &'
         (409, "mutation.conflict") => {
             Some(("Conflict", "The mutation conflicts with current state."))
         }
-        (409, "request.conflict") => Some((
-            "Conflict",
-            "The request action conflicts with current request state.",
-        )),
         (409, "idempotency.conflict") => Some((
             "Conflict",
             "The idempotency key is bound to another request.",

@@ -17,10 +17,12 @@ use axum::http::{Method, Response, StatusCode};
 use jsonschema::{Draft, JSONSchema};
 use pilot_acceptance_harness::{response_bytes, response_json, PilotHarness};
 use registry_relay_client::{
-    RegistryServerClient, RegistryServerClientConfig, RegistryServerProblemCode, ServerListRequest,
-    ServerRecordFormat, ServerRecordOptions, StaticToken,
+    RegistryServerClient, RegistryServerClientConfig, RegistryServerDirectWrite,
+    RegistryServerIdempotencyKey, RegistryServerProblemCode, ServerCreateRequest,
+    ServerListRequest, ServerPatchRequest, ServerRecordFormat, ServerRecordOptions, StaticToken,
 };
 use serde_json::{json, Value};
+use uuid::Uuid;
 
 const PROFILE_IDENTIFIER: &str = "https://id.registrystack.org/profiles/registry-record/v1";
 const SERVER_REGISTRY_IDENTIFIER: &str = "cross-product-conformance";
@@ -200,6 +202,250 @@ async fn real_postgres_registry_record_profile_matches_the_cross_product_semanti
     }
 
     harness.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn registry_server_client_executes_metadata_bound_direct_writes_against_real_postgres() {
+    let harness = PilotHarness::start("asset-site-placement-change-requests").await;
+    let token = harness.token("asset-management", &[]);
+    let http_server = harness.serve_http().await;
+    let client = RegistryServerClient::new(
+        RegistryServerClientConfig::new(
+            http_server
+                .base_url()
+                .parse()
+                .expect("pilot loopback URL parses"),
+        )
+        .with_token_provider(Arc::new(
+            StaticToken::new(&token).expect("MockIdp token is an outbound bearer value"),
+        )),
+    )
+    .expect("authenticated Registry Server client config is valid");
+
+    let metadata = client
+        .registry_contract(Some("asset-operator"))
+        .await
+        .expect("authorized caller receives strict caller-filtered runtime metadata");
+    assert_eq!(
+        metadata.value.registry_identifier(),
+        "asset-site-placement-change-requests"
+    );
+    assert_eq!(
+        metadata.value.registry_revision(),
+        harness.registry.revision()
+    );
+    assert!(metadata
+        .value
+        .operations()
+        .iter()
+        .all(|operation| operation.access_profile() == "asset-operator"));
+
+    let RegistryServerDirectWrite::Create(create) = metadata
+        .value
+        .select_direct_write("records.asset-item.create", "asset-operator")
+        .expect("exact direct Create contract is executable")
+    else {
+        panic!("selected operation must be Create")
+    };
+    let RegistryServerDirectWrite::Patch(patch) = metadata
+        .value
+        .select_direct_write("records.asset-item.patch", "asset-operator")
+        .expect("exact direct PATCH contract is executable")
+    else {
+        panic!("selected operation must be PATCH")
+    };
+    assert_eq!(create.path(), "/v1/records/assets");
+    assert_eq!(create.entity_identifier(), "asset-item");
+    assert_eq!(patch.entity_identifier(), create.entity_identifier());
+    assert_eq!(patch.registry_revision(), create.registry_revision());
+
+    let create_request = ServerCreateRequest::new(
+        json!({
+            "assetCode": "CLIENT-PG-001",
+            "label": "Client PostgreSQL journey",
+            "assetClass": "equipment"
+        })
+        .as_object()
+        .expect("create data is an object")
+        .clone(),
+    )
+    .expect("create body follows the metadata-bound field contract");
+    let create_key = RegistryServerIdempotencyKey::parse("client-pg-create")
+        .expect("fixture Create idempotency key is valid");
+    let created = client
+        .create_record(
+            &create,
+            &create_request,
+            &create_key,
+            ServerRecordFormat::Json,
+        )
+        .await
+        .expect("metadata-bound Create succeeds against real PostgreSQL");
+    assert_registry_record(
+        &created.value,
+        "asset-item",
+        "1",
+        &json!({
+            "assetCode": "CLIENT-PG-001",
+            "label": "Client PostgreSQL journey",
+            "assetClass": "equipment"
+        }),
+    );
+    let record_identifier = Uuid::parse_str(&created.value.data.record_identifier)
+        .expect("Server returns a canonical UUID record identifier");
+    let create_etag = created
+        .metadata
+        .etag()
+        .expect("Create returns a strong Registry Server ETag")
+        .clone();
+    assert_eq!(
+        created.metadata.location(),
+        Some(format!("/v1/records/assets/{record_identifier}").as_str())
+    );
+
+    let create_replay = client
+        .create_record(
+            &create,
+            &create_request,
+            &create_key,
+            ServerRecordFormat::Json,
+        )
+        .await
+        .expect("the exact Create replay returns the cached result");
+    assert_eq!(create_replay.value, created.value);
+    assert_eq!(create_replay.metadata.etag(), Some(&create_etag));
+    assert_eq!(
+        create_replay.metadata.location(),
+        created.metadata.location()
+    );
+
+    let patch_request = ServerPatchRequest::builder()
+        .test("label", json!("Client PostgreSQL journey"))
+        .expect("label is readable under the selected PATCH contract")
+        .replace("label", json!("Client PostgreSQL journey revised"))
+        .expect("label is writable under the selected PATCH contract")
+        .build()
+        .expect("PATCH contains a bounded mutation");
+    let patch_key = RegistryServerIdempotencyKey::parse("client-pg-patch")
+        .expect("fixture PATCH idempotency key is valid");
+    let patched = client
+        .patch_record(
+            &patch,
+            record_identifier,
+            &create_etag,
+            &patch_request,
+            &patch_key,
+            ServerRecordFormat::Json,
+        )
+        .await
+        .expect("metadata-bound PATCH accepts the returned strong ETag");
+    assert_registry_record(
+        &patched.value,
+        "asset-item",
+        "2",
+        &json!({
+            "assetCode": "CLIENT-PG-001",
+            "label": "Client PostgreSQL journey revised",
+            "assetClass": "equipment"
+        }),
+    );
+    let patch_etag = patched
+        .metadata
+        .etag()
+        .expect("PATCH returns the next strong Registry Server ETag")
+        .clone();
+    assert_ne!(patch_etag, create_etag);
+    assert!(patched.metadata.location().is_none());
+
+    let patch_replay = client
+        .patch_record(
+            &patch,
+            record_identifier,
+            &create_etag,
+            &patch_request,
+            &patch_key,
+            ServerRecordFormat::Json,
+        )
+        .await
+        .expect("the exact PATCH replay returns the cached result despite the consumed ETag");
+    assert_eq!(patch_replay.value, patched.value);
+    assert_eq!(patch_replay.metadata.etag(), Some(&patch_etag));
+
+    let stale_key = RegistryServerIdempotencyKey::parse("client-pg-patch-stale")
+        .expect("fixture stale-write idempotency key is valid");
+    let stale = client
+        .patch_record(
+            &patch,
+            record_identifier,
+            &create_etag,
+            &patch_request,
+            &stale_key,
+            ServerRecordFormat::Json,
+        )
+        .await
+        .expect_err("a fresh request cannot reuse the stale pre-PATCH ETag");
+    assert_eq!(
+        stale.status(),
+        Some(StatusCode::PRECONDITION_FAILED.as_u16())
+    );
+    assert_eq!(
+        stale.problem_code(),
+        Some(RegistryServerProblemCode::PreconditionFailed)
+    );
+    assert!(stale.trace_id().is_some());
+
+    let stored = client
+        .get_record(
+            "assets",
+            &record_identifier.to_string(),
+            &ServerRecordOptions::default()
+                .access_profile("asset-operator")
+                .expect("compiled asset profile is a valid client identifier"),
+        )
+        .await
+        .expect("the client reads the final PostgreSQL record state");
+    assert_registry_record(
+        &stored.value,
+        "asset-item",
+        "2",
+        &json!({
+            "assetCode": "CLIENT-PG-001",
+            "label": "Client PostgreSQL journey revised",
+            "assetClass": "equipment"
+        }),
+    );
+    assert_eq!(
+        stored.value.data.record_identifier,
+        patched.value.data.record_identifier
+    );
+    assert_eq!(stored.metadata.etag(), Some(&patch_etag));
+
+    http_server.finish().await;
+    harness.finish().await;
+}
+
+fn assert_registry_record(
+    response: &registry_relay_client::RegistryRecordSingleResponse,
+    entity_identifier: &str,
+    revision_identifier: &str,
+    domain_data: &Value,
+) {
+    assert!(response.json_ld_context.is_none());
+    assert_eq!(
+        response.meta.registry_identifier,
+        "asset-site-placement-change-requests"
+    );
+    assert_eq!(
+        response.meta.dataset_identifier,
+        "asset-site-placement-change-requests"
+    );
+    assert_eq!(response.meta.entity_type_identifier, entity_identifier);
+    assert_eq!(response.data.revision_identifier, revision_identifier);
+    assert_eq!(
+        serde_json::to_value(&response.data.domain_data)
+            .expect("decoded Registry Record data serializes"),
+        *domain_data
+    );
 }
 
 struct SuccessResponse {

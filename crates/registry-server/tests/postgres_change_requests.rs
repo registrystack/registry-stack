@@ -11,9 +11,18 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::body::{to_bytes, Body};
+use axum::http::header::AUTHORIZATION;
 use axum::http::{HeaderName, HeaderValue, Method, Request, StatusCode};
+use axum::middleware::Next;
 use postgres_harness::TestDatabase;
 use registry_platform_audit::AuditProfile;
+use registry_relay_client::{
+    RegistryRecordSingleResponse, RegistryServerClient, RegistryServerClientConfig,
+    RegistryServerIdempotencyKey, RegistryServerLifecycleAction,
+    RegistryServerLifecycleActionReceipt, RegistryServerLifecycleAuthority,
+    RegistryServerLifecycleOperation, RegistryServerProblemCode, RegistryServerRequestMetadata,
+    RegistryServerRequestState, ServerRecordOptions, StaticToken,
+};
 use registry_server::api::{
     router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
     VerifiedRequestClaims,
@@ -29,6 +38,8 @@ use registry_server::postgres::{
 };
 use registry_server::startup::with_request_timeout_for_test;
 use serde_json::{json, Value};
+use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use tower::Service as _;
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -328,6 +339,347 @@ async fn real_postgres_http_change_request_correction_uses_frozen_review_and_app
         target_revision(&database, "asset-placement", &placement.id).await,
         2
     );
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn registry_server_client_drives_every_real_postgres_change_request_lifecycle_operation() {
+    let database = TestDatabase::create(8).await;
+    let registry = Arc::new(compiled_registry());
+    let identity = install_registry(
+        &database,
+        &registry,
+        "registry-server-client-lifecycle",
+        true,
+    )
+    .await;
+    let app = change_request_router(
+        &database,
+        registry,
+        identity,
+        "registry-server-client-lifecycle",
+        None,
+    );
+
+    // Direct mutations only prepare the records that the lifecycle journey
+    // consumes. Every change-request transition below crosses the real HTTP
+    // boundary through RegistryServerClient.
+    let steward = claims("steward", "client-lifecycle-steward", None);
+    let submitter = claims("submitter", SUBMITTER, None);
+    let old_site = create_record(
+        &app,
+        "/v1/records/sites?accessProfile=steward",
+        steward.clone(),
+        "client-lifecycle-create-old-site",
+        json!({"tenant": TENANT, "name": "client-lifecycle-old"}),
+    )
+    .await;
+    let new_site = create_record(
+        &app,
+        "/v1/records/sites?accessProfile=steward",
+        steward.clone(),
+        "client-lifecycle-create-new-site",
+        json!({"tenant": TENANT, "name": "client-lifecycle-new"}),
+    )
+    .await;
+    let placement = create_record(
+        &app,
+        "/v1/records/placements?accessProfile=steward",
+        steward,
+        "client-lifecycle-create-placement",
+        json!({
+            "tenant": TENANT,
+            "site": old_site.id,
+            "validFrom": "2026-09-01",
+            "validTo": Value::Null
+        }),
+    )
+    .await;
+    let applied_request = create_record(
+        &app,
+        "/v1/records/correction-requests?accessProfile=submitter",
+        submitter.clone(),
+        "client-lifecycle-create-applied-request",
+        json!({
+            "tenant": TENANT,
+            "placement": placement.id,
+            "proposedSite": new_site.id,
+            "reason": "exercise revision, approval, and application"
+        }),
+    )
+    .await;
+    let rejected_request = create_record(
+        &app,
+        "/v1/records/correction-requests?accessProfile=submitter",
+        submitter.clone(),
+        "client-lifecycle-create-rejected-request",
+        json!({
+            "tenant": TENANT,
+            "placement": placement.id,
+            "proposedSite": old_site.id,
+            "reason": "exercise rejection"
+        }),
+    )
+    .await;
+    let canceled_request = create_record(
+        &app,
+        "/v1/records/correction-requests?accessProfile=submitter",
+        submitter,
+        "client-lifecycle-create-canceled-request",
+        json!({
+            "tenant": TENANT,
+            "placement": placement.id,
+            "proposedSite": new_site.id,
+            "reason": "exercise cancellation"
+        }),
+    )
+    .await;
+
+    let server = serve_change_request_client_http(app).await;
+    let submitter_client = change_request_client(server.base_url(), "submitter-token");
+    let reviewer_client = change_request_client(server.base_url(), "reviewer-token");
+    let applier_client = change_request_client(server.base_url(), "applier-token");
+    let steward_client = change_request_client(server.base_url(), "steward-token");
+
+    // Runtime metadata is caller-filtered and remains the sole authority that
+    // can promote the actor-specific links carried by a request record.
+    let submitter_authority = lifecycle_authority(&submitter_client, "submitter").await;
+    let reviewer_authority = lifecycle_authority(&reviewer_client, "reviewer").await;
+    let applier_authority = lifecycle_authority(&applier_client, "applier").await;
+    let mut exercised = BTreeSet::new();
+
+    let before_submit =
+        client_request_record(&submitter_client, &applied_request.id, "submitter").await;
+    assert_eq!(
+        request_metadata(&before_submit).server_state(),
+        RegistryServerRequestState::Draft
+    );
+    let submit_action = promoted_client_action(
+        &submitter_client,
+        &submitter_authority,
+        &before_submit,
+        RegistryServerLifecycleOperation::SubmitRequest,
+    );
+    let submit_key = idempotency_key("client-lifecycle-submit-v1");
+    let submitted = submitter_client
+        .execute_lifecycle_action(&submit_action, &submit_key)
+        .await
+        .expect("the metadata- and record-bound submit action succeeds");
+    exercised.insert(RegistryServerLifecycleOperation::SubmitRequest);
+    let after_submit =
+        client_request_record(&submitter_client, &applied_request.id, "submitter").await;
+    assert_client_receipt_matches_refetch(&submitted.value, &after_submit);
+    assert_eq!(
+        request_metadata(&after_submit).server_state(),
+        RegistryServerRequestState::Submitted
+    );
+
+    let replayed_submit = submitter_client
+        .execute_lifecycle_action(&submit_action, &submit_key)
+        .await
+        .expect("a caller retry reuses the exact action and idempotency key");
+    assert_eq!(replayed_submit.value, submitted.value);
+    let stale_submit = submitter_client
+        .execute_lifecycle_action(
+            &submit_action,
+            &idempotency_key("client-lifecycle-stale-submit"),
+        )
+        .await
+        .expect_err("a stale action cannot be rebound under a different caller key");
+    assert_eq!(
+        stale_submit.problem_code(),
+        Some(RegistryServerProblemCode::PreconditionFailed)
+    );
+
+    let before_revision =
+        client_request_record(&reviewer_client, &applied_request.id, "reviewer").await;
+    let request_revision_action = promoted_client_action(
+        &reviewer_client,
+        &reviewer_authority,
+        &before_revision,
+        RegistryServerLifecycleOperation::RequestRevision,
+    );
+    let review = request_revision_action
+        .review()
+        .expect("a review decision carries frozen target snapshots");
+    assert_eq!(review.targets().len(), 1);
+    assert_eq!(review.targets()[0].entity_identifier(), "asset-placement");
+    assert_eq!(review.targets()[0].record_identifier(), placement.id);
+    let needs_changes = execute_client_action_and_refetch(
+        &reviewer_client,
+        &request_revision_action,
+        "client-lifecycle-request-revision",
+        &applied_request.id,
+        "reviewer",
+    )
+    .await;
+    exercised.insert(RegistryServerLifecycleOperation::RequestRevision);
+    assert_eq!(
+        request_metadata(&needs_changes).server_state(),
+        RegistryServerRequestState::NeedsChanges
+    );
+
+    let before_revise =
+        client_request_record(&submitter_client, &applied_request.id, "submitter").await;
+    let revise_action = promoted_client_action(
+        &submitter_client,
+        &submitter_authority,
+        &before_revise,
+        RegistryServerLifecycleOperation::ReviseRequest,
+    );
+    let revised = execute_client_action_and_refetch(
+        &submitter_client,
+        &revise_action,
+        "client-lifecycle-revise",
+        &applied_request.id,
+        "submitter",
+    )
+    .await;
+    exercised.insert(RegistryServerLifecycleOperation::ReviseRequest);
+    assert_eq!(
+        request_metadata(&revised).server_state(),
+        RegistryServerRequestState::Draft
+    );
+    assert_eq!(request_metadata(&revised).proposal_version().get(), 2);
+
+    let resubmit_action = promoted_client_action(
+        &submitter_client,
+        &submitter_authority,
+        &revised,
+        RegistryServerLifecycleOperation::SubmitRequest,
+    );
+    let resubmitted = execute_client_action_and_refetch(
+        &submitter_client,
+        &resubmit_action,
+        "client-lifecycle-submit-v2",
+        &applied_request.id,
+        "submitter",
+    )
+    .await;
+    assert_eq!(
+        request_metadata(&resubmitted).server_state(),
+        RegistryServerRequestState::Submitted
+    );
+
+    let before_approve =
+        client_request_record(&reviewer_client, &applied_request.id, "reviewer").await;
+    let approve_action = promoted_client_action(
+        &reviewer_client,
+        &reviewer_authority,
+        &before_approve,
+        RegistryServerLifecycleOperation::ApproveRequest,
+    );
+    assert_eq!(approve_action.stage(), Some("review"));
+    let approved = execute_client_action_and_refetch(
+        &reviewer_client,
+        &approve_action,
+        "client-lifecycle-approve",
+        &applied_request.id,
+        "reviewer",
+    )
+    .await;
+    exercised.insert(RegistryServerLifecycleOperation::ApproveRequest);
+    assert_eq!(
+        request_metadata(&approved).server_state(),
+        RegistryServerRequestState::Approved
+    );
+
+    let before_apply = client_request_record(&applier_client, &applied_request.id, "applier").await;
+    let apply_action = promoted_client_action(
+        &applier_client,
+        &applier_authority,
+        &before_apply,
+        RegistryServerLifecycleOperation::ApplyRequest,
+    );
+    let applied = execute_client_action_and_refetch(
+        &applier_client,
+        &apply_action,
+        "client-lifecycle-apply",
+        &applied_request.id,
+        "applier",
+    )
+    .await;
+    exercised.insert(RegistryServerLifecycleOperation::ApplyRequest);
+    let applied_metadata = request_metadata(&applied);
+    assert_eq!(
+        applied_metadata.server_state(),
+        RegistryServerRequestState::Applied
+    );
+    assert!(applied_metadata.application().is_some());
+    let changed_placement =
+        client_record(&steward_client, "placements", &placement.id, "steward").await;
+    assert_eq!(
+        changed_placement.data.domain_data.get("site"),
+        Some(&Value::String(new_site.id.clone()))
+    );
+
+    let rejected_draft =
+        client_request_record(&submitter_client, &rejected_request.id, "submitter").await;
+    let rejected_submit = promoted_client_action(
+        &submitter_client,
+        &submitter_authority,
+        &rejected_draft,
+        RegistryServerLifecycleOperation::SubmitRequest,
+    );
+    execute_client_action_and_refetch(
+        &submitter_client,
+        &rejected_submit,
+        "client-lifecycle-reject-submit",
+        &rejected_request.id,
+        "submitter",
+    )
+    .await;
+    let before_reject =
+        client_request_record(&reviewer_client, &rejected_request.id, "reviewer").await;
+    let reject_action = promoted_client_action(
+        &reviewer_client,
+        &reviewer_authority,
+        &before_reject,
+        RegistryServerLifecycleOperation::RejectRequest,
+    );
+    let rejected = execute_client_action_and_refetch(
+        &reviewer_client,
+        &reject_action,
+        "client-lifecycle-reject",
+        &rejected_request.id,
+        "reviewer",
+    )
+    .await;
+    exercised.insert(RegistryServerLifecycleOperation::RejectRequest);
+    assert_eq!(
+        request_metadata(&rejected).server_state(),
+        RegistryServerRequestState::Rejected
+    );
+
+    let canceled_draft =
+        client_request_record(&submitter_client, &canceled_request.id, "submitter").await;
+    let cancel_action = promoted_client_action(
+        &submitter_client,
+        &submitter_authority,
+        &canceled_draft,
+        RegistryServerLifecycleOperation::CancelRequest,
+    );
+    let canceled = execute_client_action_and_refetch(
+        &submitter_client,
+        &cancel_action,
+        "client-lifecycle-cancel",
+        &canceled_request.id,
+        "submitter",
+    )
+    .await;
+    exercised.insert(RegistryServerLifecycleOperation::CancelRequest);
+    assert_eq!(
+        request_metadata(&canceled).server_state(),
+        RegistryServerRequestState::Canceled
+    );
+
+    assert_eq!(
+        exercised,
+        RegistryServerLifecycleOperation::ALL.into_iter().collect(),
+        "the real PostgreSQL client journey covers the closed lifecycle operation set"
+    );
+
+    server.finish().await;
     database.cleanup().await;
 }
 
@@ -1964,6 +2316,197 @@ async fn real_postgres_http_change_request_two_stage_stale_rebase_and_cancel_are
     .await;
     assert_eq!(cancel["request"]["serverState"], "canceled");
     database.cleanup().await;
+}
+
+struct ChangeRequestClientHttpServer {
+    base_url: String,
+    shutdown: Option<oneshot::Sender<()>>,
+    task: Option<JoinHandle<()>>,
+}
+
+impl ChangeRequestClientHttpServer {
+    fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
+    async fn finish(mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+        if let Some(task) = self.task.take() {
+            task.await
+                .expect("change-request client HTTP listener task joins");
+        }
+    }
+}
+
+impl Drop for ChangeRequestClientHttpServer {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+    }
+}
+
+async fn serve_change_request_client_http(app: axum::Router) -> ChangeRequestClientHttpServer {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("change-request client listener binds on loopback");
+    let address = listener
+        .local_addr()
+        .expect("change-request client listener has an address");
+    let app = app.layer(axum::middleware::from_fn(
+        inject_change_request_client_claims,
+    ));
+    let (shutdown, shutdown_receiver) = oneshot::channel();
+    let task = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async {
+                let _ = shutdown_receiver.await;
+            })
+            .await
+            .expect("change-request client listener serves the real Router");
+    });
+    ChangeRequestClientHttpServer {
+        base_url: format!("http://{address}"),
+        shutdown: Some(shutdown),
+        task: Some(task),
+    }
+}
+
+async fn inject_change_request_client_claims(
+    mut request: Request<Body>,
+    next: Next,
+) -> axum::response::Response {
+    let claims = request
+        .headers()
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| match value {
+            "Bearer submitter-token" => Some(claims("submitter", SUBMITTER, None)),
+            "Bearer reviewer-token" => Some(claims("reviewer", REVIEWER, Some("review"))),
+            "Bearer applier-token" => Some(claims("applier", APPLIER, Some("apply"))),
+            "Bearer steward-token" => Some(claims("steward", "client-lifecycle-steward", None)),
+            _ => None,
+        });
+    if let Some(claims) = claims {
+        request.extensions_mut().insert(claims);
+    }
+    next.run(request).await
+}
+
+fn change_request_client(base_url: &str, token: &str) -> RegistryServerClient {
+    let config = RegistryServerClientConfig::new(
+        base_url
+            .parse()
+            .expect("change-request client loopback URL parses"),
+    )
+    .with_token_provider(Arc::new(
+        StaticToken::new(token).expect("change-request client token is an outbound bearer value"),
+    ));
+    RegistryServerClient::new(config).expect("change-request client config is valid")
+}
+
+async fn lifecycle_authority(
+    client: &RegistryServerClient,
+    access_profile: &str,
+) -> RegistryServerLifecycleAuthority {
+    client
+        .registry_contract(Some(access_profile))
+        .await
+        .expect("caller receives bounded runtime Registry Metadata")
+        .value
+        .select_lifecycle("correction-request", access_profile)
+        .expect("caller-filtered metadata selects lifecycle authority")
+}
+
+async fn client_record(
+    client: &RegistryServerClient,
+    entity_route: &str,
+    record_identifier: &str,
+    access_profile: &str,
+) -> RegistryRecordSingleResponse {
+    let options = ServerRecordOptions::default()
+        .access_profile(access_profile)
+        .expect("compiled access profile is a valid client identifier");
+    client
+        .get_record(entity_route, record_identifier, &options)
+        .await
+        .expect("RegistryServerClient reads one real PostgreSQL Registry Record")
+        .value
+}
+
+async fn client_request_record(
+    client: &RegistryServerClient,
+    record_identifier: &str,
+    access_profile: &str,
+) -> RegistryRecordSingleResponse {
+    client_record(
+        client,
+        "correction-requests",
+        record_identifier,
+        access_profile,
+    )
+    .await
+}
+
+fn request_metadata(record: &RegistryRecordSingleResponse) -> RegistryServerRequestMetadata {
+    RegistryServerRequestMetadata::from_record(&record.data)
+        .expect("request extension conforms to the client lifecycle profile")
+        .expect("correction-request record exposes request metadata")
+}
+
+fn promoted_client_action(
+    client: &RegistryServerClient,
+    authority: &RegistryServerLifecycleAuthority,
+    record: &RegistryRecordSingleResponse,
+    operation: RegistryServerLifecycleOperation,
+) -> RegistryServerLifecycleAction {
+    client
+        .lifecycle_actions(authority, record)
+        .expect("actor actions promote against metadata and the exact record")
+        .into_iter()
+        .find(|action| action.operation() == operation)
+        .unwrap_or_else(|| panic!("record advertises {}", operation.identifier()))
+}
+
+fn idempotency_key(value: &str) -> RegistryServerIdempotencyKey {
+    RegistryServerIdempotencyKey::parse(value)
+        .expect("journey provides a valid caller idempotency key")
+}
+
+async fn execute_client_action_and_refetch(
+    client: &RegistryServerClient,
+    action: &RegistryServerLifecycleAction,
+    key: &str,
+    record_identifier: &str,
+    access_profile: &str,
+) -> RegistryRecordSingleResponse {
+    let receipt = client
+        .execute_lifecycle_action(action, &idempotency_key(key))
+        .await
+        .expect("promoted lifecycle action succeeds with its action-specific If-Match");
+    let refetched = client_request_record(client, record_identifier, access_profile).await;
+    assert_client_receipt_matches_refetch(&receipt.value, &refetched);
+    refetched
+}
+
+fn assert_client_receipt_matches_refetch(
+    receipt: &RegistryServerLifecycleActionReceipt,
+    refetched: &RegistryRecordSingleResponse,
+) {
+    assert_eq!(
+        receipt.record_identifier(),
+        refetched.data.record_identifier
+    );
+    assert_eq!(
+        receipt.revision().to_string(),
+        refetched.data.revision_identifier
+    );
+    assert_eq!(
+        receipt.request().server_state(),
+        request_metadata(refetched).server_state()
+    );
 }
 
 fn change_request_router(

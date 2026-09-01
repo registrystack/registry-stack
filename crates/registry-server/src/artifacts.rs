@@ -1202,7 +1202,8 @@ fn action_operation_responses(route: &CompiledActionRoute, action: &CompiledActi
             json!({
                 "description": "Problem response",
                 "headers": {
-                    "traceparent": traceparent_header("Trace context for this problem response.")
+                    "traceparent": traceparent_header("Trace context for this problem response."),
+                    "Cache-Control": no_store_header()
                 },
                 "content": {
                     "application/problem+json": {
@@ -1222,7 +1223,7 @@ fn action_problem_responses(kind: ActionRouteKind) -> BTreeMap<&'static str, Vec
             "400",
             vec![ProblemExample {
                 code: "request.invalid",
-                detail: "The action request is invalid.",
+                detail: "The request is invalid.",
             }],
         ),
         (
@@ -1236,7 +1237,7 @@ fn action_problem_responses(kind: ActionRouteKind) -> BTreeMap<&'static str, Vec
             "404",
             vec![ProblemExample {
                 code: "resource.not_found",
-                detail: "The requested action or target was not found.",
+                detail: "The requested resource was not found.",
             }],
         ),
         (
@@ -1249,8 +1250,8 @@ fn action_problem_responses(kind: ActionRouteKind) -> BTreeMap<&'static str, Vec
         (
             "503",
             vec![ProblemExample {
-                code: "source.unavailable",
-                detail: "The Registry data service is unavailable.",
+                code: "service.unavailable",
+                detail: "The Registry mutation service is unavailable.",
             }],
         ),
         (
@@ -1267,7 +1268,7 @@ fn action_problem_responses(kind: ActionRouteKind) -> BTreeMap<&'static str, Vec
             vec![
                 ProblemExample {
                     code: "mutation.conflict",
-                    detail: "The action conflicts with current state.",
+                    detail: "The mutation conflicts with current state.",
                 },
                 ProblemExample {
                     code: "idempotency.conflict",
@@ -1279,7 +1280,7 @@ fn action_problem_responses(kind: ActionRouteKind) -> BTreeMap<&'static str, Vec
             "412",
             vec![ProblemExample {
                 code: "precondition.failed",
-                detail: "The action target precondition failed.",
+                detail: "The mutation precondition failed.",
             }],
         );
     }
@@ -2417,7 +2418,7 @@ fn operation_responses(spec: OpenApiOperationSpec<'_>) -> Value {
         | Operation::CancelRequest
         | Operation::ApplyRequest => success_response(
             "Request action accepted",
-            StatusResponseHeaders::Mutation,
+            StatusResponseHeaders::ActionMutation,
             json!({"$ref": "#/components/schemas/ChangeRequestActionResponse"}),
         ),
     };
@@ -3386,6 +3387,13 @@ fn problem_responses(operation: Operation) -> BTreeMap<&'static str, Vec<Problem
         Operation::Create | Operation::Patch | Operation::Tombstone | Operation::Batch
     ) {
         responses.insert(
+            "503",
+            vec![ProblemExample {
+                code: "service.unavailable",
+                detail: "The Registry mutation service is unavailable.",
+            }],
+        );
+        responses.insert(
             "409",
             vec![
                 ProblemExample {
@@ -3424,11 +3432,18 @@ fn problem_responses(operation: Operation) -> BTreeMap<&'static str, Vec<Problem
     }
     if is_request_action(operation) {
         responses.insert(
+            "503",
+            vec![ProblemExample {
+                code: "service.unavailable",
+                detail: "The Registry mutation service is unavailable.",
+            }],
+        );
+        responses.insert(
             "409",
             vec![
                 ProblemExample {
-                    code: "request.conflict",
-                    detail: "The request action conflicts with current request state.",
+                    code: "mutation.conflict",
+                    detail: "The mutation conflicts with current state.",
                 },
                 ProblemExample {
                     code: "idempotency.conflict",
@@ -3440,7 +3455,7 @@ fn problem_responses(operation: Operation) -> BTreeMap<&'static str, Vec<Problem
             "412",
             vec![ProblemExample {
                 code: "precondition.failed",
-                detail: "The request action precondition failed.",
+                detail: "The mutation precondition failed.",
             }],
         );
         responses.insert(
@@ -3454,7 +3469,7 @@ fn problem_responses(operation: Operation) -> BTreeMap<&'static str, Vec<Problem
             "428",
             vec![ProblemExample {
                 code: "precondition.required",
-                detail: "The request action precondition is required.",
+                detail: "The mutation precondition is required.",
             }],
         );
     }
@@ -3484,7 +3499,6 @@ fn problem_schema() -> Value {
                     "precondition.required",
                     "query.cursor_invalid",
                     "query.invalid",
-                    "request.conflict",
                     "request.invalid",
                     "request.timeout",
                     "resource.not_found",

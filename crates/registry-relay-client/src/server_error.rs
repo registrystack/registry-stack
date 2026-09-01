@@ -4,32 +4,42 @@ use thiserror::Error;
 
 pub use registry_platform_httputil::client::TransportKind;
 
-/// One closed Registry Server Problem code accepted by the read client.
+/// One closed Registry Server Problem code accepted by the client.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RegistryServerProblemCode {
     AuthenticationRefused,
+    IdempotencyConflict,
     LookupUnresolved,
+    MutationConflict,
+    PreconditionFailed,
+    PreconditionRequired,
     QueryCursorInvalid,
     QueryInvalid,
     RequestInvalid,
     RequestTimeout,
     ResourceNotFound,
     RuntimeNotReady,
+    ServiceUnavailable,
     SourceUnavailable,
     UnsupportedMediaType,
 }
 
 impl RegistryServerProblemCode {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 15] = [
         Self::AuthenticationRefused,
+        Self::IdempotencyConflict,
         Self::LookupUnresolved,
+        Self::MutationConflict,
+        Self::PreconditionFailed,
+        Self::PreconditionRequired,
         Self::QueryCursorInvalid,
         Self::QueryInvalid,
         Self::RequestInvalid,
         Self::RequestTimeout,
         Self::ResourceNotFound,
         Self::RuntimeNotReady,
+        Self::ServiceUnavailable,
         Self::SourceUnavailable,
         Self::UnsupportedMediaType,
     ];
@@ -38,13 +48,18 @@ impl RegistryServerProblemCode {
     pub const fn code(self) -> &'static str {
         match self {
             Self::AuthenticationRefused => "authentication.refused",
+            Self::IdempotencyConflict => "idempotency.conflict",
             Self::LookupUnresolved => "lookup.unresolved",
+            Self::MutationConflict => "mutation.conflict",
+            Self::PreconditionFailed => "precondition.failed",
+            Self::PreconditionRequired => "precondition.required",
             Self::QueryCursorInvalid => "query.cursor_invalid",
             Self::QueryInvalid => "query.invalid",
             Self::RequestInvalid => "request.invalid",
             Self::RequestTimeout => "request.timeout",
             Self::ResourceNotFound => "resource.not_found",
             Self::RuntimeNotReady => "runtime.not_ready",
+            Self::ServiceUnavailable => "service.unavailable",
             Self::SourceUnavailable => "source.unavailable",
             Self::UnsupportedMediaType => "unsupported.media_type",
         }
@@ -56,8 +71,11 @@ impl RegistryServerProblemCode {
             Self::QueryCursorInvalid | Self::QueryInvalid | Self::RequestInvalid => 400,
             Self::AuthenticationRefused => 401,
             Self::LookupUnresolved | Self::ResourceNotFound => 404,
+            Self::IdempotencyConflict | Self::MutationConflict => 409,
+            Self::PreconditionFailed => 412,
             Self::UnsupportedMediaType => 415,
-            Self::RuntimeNotReady | Self::SourceUnavailable => 503,
+            Self::PreconditionRequired => 428,
+            Self::RuntimeNotReady | Self::ServiceUnavailable | Self::SourceUnavailable => 503,
             Self::RequestTimeout => 504,
         }
     }
@@ -67,7 +85,10 @@ impl RegistryServerProblemCode {
             400 => "Bad Request",
             401 => "Unauthorized",
             404 => "Not Found",
+            409 => "Conflict",
+            412 => "Precondition Failed",
             415 => "Unsupported Media Type",
+            428 => "Precondition Required",
             503 => "Service Unavailable",
             504 => "Gateway Timeout",
             _ => "Request failed",
@@ -77,13 +98,18 @@ impl RegistryServerProblemCode {
     pub(crate) const fn detail(self) -> &'static str {
         match self {
             Self::AuthenticationRefused => "The bearer credential is missing or refused.",
+            Self::IdempotencyConflict => "The idempotency key is bound to another request.",
             Self::LookupUnresolved => "The lookup did not resolve exactly one record.",
+            Self::MutationConflict => "The mutation conflicts with current state.",
+            Self::PreconditionFailed => "The mutation precondition failed.",
+            Self::PreconditionRequired => "The mutation precondition is required.",
             Self::QueryCursorInvalid => "The query cursor is invalid.",
             Self::QueryInvalid => "The query request is invalid.",
             Self::RequestInvalid => "The request is invalid.",
             Self::RequestTimeout => "The request timed out.",
             Self::ResourceNotFound => "The requested resource was not found.",
             Self::RuntimeNotReady => "Registry runtime is not ready.",
+            Self::ServiceUnavailable => "The Registry mutation service is unavailable.",
             Self::SourceUnavailable => "The Registry data service is unavailable.",
             Self::UnsupportedMediaType => "The request media type is not supported.",
         }
@@ -111,6 +137,8 @@ pub enum RegistryServerProtocolFailure {
     Problem,
     EntityTag,
     ProfileLink,
+    Location,
+    CachePolicy,
     Status,
 }
 
@@ -126,6 +154,8 @@ impl std::fmt::Display for RegistryServerProtocolFailure {
             Self::ProfileLink => {
                 "response profile links did not match the Registry Record contract"
             }
+            Self::Location => "response location did not match the mutation result",
+            Self::CachePolicy => "response cache policy did not match the operation contract",
             Self::Status => "response status was not valid for this operation",
         })
     }

@@ -88,6 +88,25 @@ async fn immediate_action_acquires_conditions_applies_atomically_and_replays_by_
 
     let app = action_router(&database, registry.clone(), identity.clone());
     let claims = action_claims();
+    let openapi = response_parts(
+        send(
+            &app,
+            Method::GET,
+            "/openapi.json?accessProfile=contact-registrar",
+            Some(claims.clone()),
+            &[],
+            Vec::new(),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(openapi.status, StatusCode::OK, "{}", openapi.body);
+    let response_schema =
+        &openapi.body["components"]["schemas"]["action-register-household-contact-invoke-response"];
+    let response_validator = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(response_schema)
+        .expect("caller-filtered immediate-action receipt schema compiles");
     let condition = response_parts(
         send(
             &app,
@@ -140,17 +159,22 @@ async fn immediate_action_acquires_conditions_applies_atomically_and_replays_by_
     )
     .await;
     assert_eq!(first.status, StatusCode::OK, "{}", first.body);
+    assert!(
+        response_validator.is_valid(&first.body),
+        "runtime receipt must satisfy the caller-filtered OpenAPI schema: {}",
+        first.body
+    );
     assert_eq!(first.body["action"], "register-household-contact");
-    let person_id = first.body["results"]["person"]["id"]
+    let person_id = first.body["results"]["person"]["recordId"]
         .as_str()
         .expect("create result exposes only identifiers")
         .to_owned();
-    let membership_id = first.body["results"]["membership"]["id"]
+    let membership_id = first.body["results"]["membership"]["recordId"]
         .as_str()
         .expect("second create result exposes only identifiers")
         .to_owned();
     assert_eq!(
-        first.body["results"]["household"]["id"].as_str(),
+        first.body["results"]["household"]["recordId"].as_str(),
         Some(HOUSEHOLD_ID)
     );
     assert_eq!(household_contact(&database, &registry).await, person_id);
@@ -826,11 +850,11 @@ async fn aliased_patch_effects_share_one_revision_and_distinct_results() {
     assert_eq!(applied.status, StatusCode::OK, "{}", applied.body);
     assert_eq!(applied.body["results"].as_object().unwrap().len(), 2);
     assert_eq!(
-        applied.body["results"]["household-code-update"]["id"],
+        applied.body["results"]["household-code-update"]["recordId"],
         HOUSEHOLD_ID
     );
     assert_eq!(
-        applied.body["results"]["household-note-update"]["id"],
+        applied.body["results"]["household-note-update"]["recordId"],
         HOUSEHOLD_ID
     );
     assert_eq!(

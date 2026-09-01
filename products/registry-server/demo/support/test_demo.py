@@ -43,6 +43,40 @@ def compact_jwt(expires: int) -> str:
     return f"{encode({'alg': 'ES256', 'typ': 'JWT'})}.{encode({'exp': expires})}.signature"
 
 
+def profiled_record(identifier: str, domain_data: dict[str, object]) -> dict[str, object]:
+    return {
+        "data": {
+            "recordIdentifier": identifier,
+            "revisionIdentifier": "1",
+            "domainData": domain_data,
+        },
+        "meta": {
+            "registryIdentifier": "demo-registry",
+            "datasetIdentifier": "demo-dataset",
+            "entityTypeIdentifier": "demo-entity",
+        },
+    }
+
+
+def profiled_collection(domain_rows: list[dict[str, object]]) -> dict[str, object]:
+    return {
+        "items": [
+            {
+                "recordIdentifier": str(uuid.uuid4()),
+                "revisionIdentifier": "1",
+                "domainData": row,
+            }
+            for row in domain_rows
+        ],
+        "pageInfo": {"nextCursor": None},
+        "meta": {
+            "registryIdentifier": "demo-registry",
+            "datasetIdentifier": "demo-dataset",
+            "entityTypeIdentifier": "demo-entity",
+        },
+    }
+
+
 class DemoProvisioningTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -424,6 +458,34 @@ class DemoProvisioningTests(unittest.TestCase):
         with self.assertRaisesRegex(DEMO.DemoError, "not a UUID"):
             DEMO.configure_viewer(self.root)
 
+    def test_bound_reads_require_profiled_record_envelopes(self) -> None:
+        household_id = "0198f0f5-0877-7ae2-a853-09f2d47b6840"
+        business_id = "0198f0f5-0877-7ae2-a853-09f2d47b6841"
+        DEMO._assert_bound_household(
+            profiled_record(household_id, {"householdCode": "HOUSEHOLD-DEMO-001"}),
+            household_id,
+            "HOUSEHOLD-DEMO-001",
+        )
+        DEMO._assert_bound_business(
+            profiled_record(business_id, {"businessCode": "BUSINESS-DEMO-001"}),
+            business_id,
+            "BUSINESS-DEMO-001",
+        )
+
+        with self.assertRaisesRegex(DEMO.DemoError, "Registry Record metadata") as error:
+            DEMO._assert_bound_household(
+                {
+                    "data": {
+                        "recordIdentifier": "household-canary-must-not-appear",
+                        "revisionIdentifier": "1",
+                        "domainData": {"householdCode": "HOUSEHOLD-DEMO-001"},
+                    }
+                },
+                household_id,
+                "HOUSEHOLD-DEMO-001",
+            )
+        self.assertNotIn("household-canary-must-not-appear", str(error.exception))
+
     def test_viewer_queries_prove_bound_get_claim_lookup_and_concealed_denials(self) -> None:
         business_id = "0198f0f5-0877-7ae2-a853-09f2d47b6840"
         (self.root / "seed-record-ids.json").write_text(
@@ -445,11 +507,7 @@ class DemoProvisioningTests(unittest.TestCase):
             calls.append((method, path, token_name, body, expected))
             if expected == 404:
                 return {"code": "resource.not_found"}, {}
-            return {
-                "id": business_id,
-                "revision": 1,
-                "data": {"businessCode": "BUSINESS-DEMO-001"},
-            }, {}
+            return profiled_record(business_id, {"businessCode": "BUSINESS-DEMO-001"}), {}
 
         with mock.patch.object(DEMO, "_request", side_effect=request), mock.patch.object(
             DEMO, "_print_query"
@@ -491,16 +549,11 @@ class DemoProvisioningTests(unittest.TestCase):
         ) -> tuple[dict[str, object], dict[str, str]]:
             calls.append((method, path, body))
             if method == "POST":
-                return {
-                    "id": business_id,
-                    "revision": 1,
-                    "data": {"businessCode": "BUSINESS-DEMO-001"},
-                }, {}
+                return profiled_record(business_id, {"businessCode": "BUSINESS-DEMO-001"}), {}
             rows = expected_get_rows[len([call for call in calls if call[0] == "GET"]) - 1]
-            return {
-                "items": [{"id": str(uuid.uuid4()), "data": row} for row in rows],
-                "count": len(rows),
-            }, {}
+            response = profiled_collection(rows)
+            response["count"] = len(rows)
+            return response, {}
 
         with mock.patch.object(DEMO, "_request", side_effect=request), mock.patch.object(
             DEMO, "_print_query"
@@ -712,10 +765,14 @@ class DemoProvisioningTests(unittest.TestCase):
             calls.append((method, path, token_name, body))
             route = path.split("?", 1)[0]
             if method == "POST":
-                return {"id": created_ids[route], "data": body.get("data", {}) if body else {}}, {}
+                return profiled_record(
+                    created_ids[route], body.get("data", {}) if body else {}
+                ), {}
             if token_name == "planner-no-purpose-token":
                 return {"code": "resource.not_found"}, {}
-            return {"items": [{"id": "one", "data": {"assetCode": "ASSET-SYNTH-001", "label": "Synthetic water pump"}}]}, {}
+            return profiled_collection(
+                [{"assetCode": "ASSET-SYNTH-001", "label": "Synthetic water pump"}]
+            ), {}
 
         with mock.patch.object(DEMO, "_request", side_effect=request), mock.patch("builtins.print"):
             DEMO.seed_asset_site(self.root)
@@ -756,10 +813,12 @@ class DemoProvisioningTests(unittest.TestCase):
             calls.append((method, path, token_name, body))
             route = path.split("?", 1)[0]
             if method == "POST":
-                return {"id": created_ids[route].pop(0), "data": body.get("data", {}) if body else {}}, {}
+                return profiled_record(
+                    created_ids[route].pop(0), body.get("data", {}) if body else {}
+                ), {}
             if expected == 404:
                 return {"code": "resource.not_found"}, {}
-            return {"items": [{"id": "one", "data": {"facilityCode": "FACILITY-SYNTH-001"}}]}, {}
+            return profiled_collection([{"facilityCode": "FACILITY-SYNTH-001"}]), {}
 
         with mock.patch.object(DEMO, "_request", side_effect=request), mock.patch("builtins.print"):
             DEMO.seed_facility(self.root)
@@ -806,11 +865,13 @@ class DemoProvisioningTests(unittest.TestCase):
             calls.append((method, path, token_name, body))
             route = path.split("?", 1)[0]
             if method == "POST":
-                return {"id": created_ids[route].pop(0), "data": body.get("data", {}) if body else {}}, {}
+                return profiled_record(
+                    created_ids[route].pop(0), body.get("data", {}) if body else {}
+                ), {}
             if expected == 404:
                 return {"code": "resource.not_found"}, {}
             expected_count = 2 if route == "/v1/records/permits" else 1
-            return {"items": [{"id": str(uuid.uuid4()), "data": {}} for _ in range(expected_count)]}, {}
+            return profiled_collection([{} for _ in range(expected_count)]), {}
 
         with mock.patch.object(DEMO, "_request", side_effect=request), mock.patch("builtins.print"):
             DEMO.seed_inspection(self.root)
