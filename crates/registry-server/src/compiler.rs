@@ -14,10 +14,10 @@ use crate::contract::{
     parsed_bbox, valid_decimal_bounds, valid_structured_schema, AccessProfileSource, ActionSource,
     Classification, ConstraintSource, DerivedExecutionSource, DerivedFieldSource,
     EntityExtensionSource, EntitySource, EventConditionSource, EventScalarValue, EventTrigger,
-    FieldSource, FieldTypeSource, LookupValueOrigin, ManifestProjectionTextSource,
+    FieldSource, FieldTypeSource, GeoJsonSource, LookupValueOrigin, ManifestProjectionTextSource,
     ModuleAssetSource, MutationMode, Operation, ReadPathGrantSource, RegistryModule,
-    RegistryProject, UniqueWhenPredicate, ValidTimeRole, WebhookAuthenticationProfile,
-    WebhookDeadLetterMode, MAX_STRUCTURED_VALUE_BYTES,
+    RegistryProject, SpatialBboxGrantSource, SpatialQueryGrantSource, UniqueWhenPredicate,
+    ValidTimeRole, WebhookAuthenticationProfile, WebhookDeadLetterMode, MAX_STRUCTURED_VALUE_BYTES,
 };
 use crate::derived_sql::{validate_derived_sql, MAX_DERIVED_SQL_BYTES};
 use crate::diagnostics::{CompileFailure, Diagnostic};
@@ -31,17 +31,18 @@ use crate::model::{
     request_state_query_sort_fields,
 };
 use crate::model::{
-    ChangeRequestOperation, CompiledAccessEntry, CompiledAccessInventory, CompiledChangeControl,
-    CompiledDerivedField, CompiledDerivedRelation, CompiledEntity, CompiledEventDelivery,
-    CompiledEventDeliveryInventory, CompiledField, CompiledLogicalField, CompiledMetadataEntity,
+    ChangeRequestOperation, CompiledAccessEntry, CompiledAccessInventory,
+    CompiledBboxQueryCapability, CompiledChangeControl, CompiledDerivedField,
+    CompiledDerivedRelation, CompiledEntity, CompiledEventDelivery, CompiledEventDeliveryInventory,
+    CompiledField, CompiledGeoJsonBinding, CompiledLogicalField, CompiledMetadataEntity,
     CompiledMetadataEntry, CompiledMetadataInventory, CompiledModuleIdentity,
     CompiledQueryFilterField, CompiledQueryFilterOperator, CompiledQueryInventory,
     CompiledQueryKind, CompiledQueryOperation, CompiledQuerySortDirection, CompiledQuerySortField,
     CompiledQueryTemporalBinding, CompiledQueryTemporalSemantics, CompiledReadPath,
     CompiledRegistry, CompiledRevisionKind, CompiledRoute, CompiledRouteInventory,
-    CompiledSelectorProfile, CompiledSourceRelation, CompiledStoredField, CompiledTemporal,
-    CompiledWebhookDeliveryMode, CompiledWebhookRetryProfile, HttpMethod,
-    MAX_REVISION_HISTORY_RECORDS,
+    CompiledSelectorProfile, CompiledSourceRelation, CompiledSpatialQueryCapability,
+    CompiledStoredField, CompiledTemporal, CompiledWebhookDeliveryMode,
+    CompiledWebhookRetryProfile, HttpMethod, MAX_REVISION_HISTORY_RECORDS,
 };
 use crate::physical_names::{
     hex_prefix, EntityPhysicalNames, PhysicalNameBuilder, PhysicalNameInventory,
@@ -962,6 +963,19 @@ fn merge_extension(
     derived_origins: &mut BTreeMap<(String, String), Option<String>>,
     errors: &mut Vec<Diagnostic>,
 ) {
+    if let Some(geojson) = &extension.geojson {
+        if let Some(existing) = &entity.geojson {
+            if existing != geojson {
+                errors.push(Diagnostic::error(
+                    "extension.geojson.conflict",
+                    format!("entities[id={}].geojson.geometryField", entity.id),
+                    "an extension cannot change an entity GeoJSON geometry field",
+                ));
+            }
+        } else {
+            entity.geojson = Some(geojson.clone());
+        }
+    }
     if let Some(requirements) = &extension.access_requirements {
         if entity.access_requirements.is_some() {
             errors.push(Diagnostic::error(
@@ -1234,6 +1248,7 @@ fn expand_project_access(
                 writable_fields: grant.writable_fields.clone(),
                 filterable_fields: grant.filterable_fields.clone(),
                 sortable_fields: grant.sortable_fields.clone(),
+                spatial_queries: grant.spatial_queries.clone(),
                 row_boundaries: grant.row_boundaries.clone(),
                 lookups: grant.lookups.clone(),
                 read_paths: grant.read_paths.clone(),
@@ -1364,6 +1379,7 @@ fn validate_entities(
             _ => {}
         }
         validate_entity_fields(entity, entities, errors);
+        validate_geojson(entity, errors);
         validate_derived(entity, errors);
         validate_logical_names(entity, errors);
         validate_constraints(entity, errors);
@@ -1374,6 +1390,28 @@ fn validate_entities(
         validate_events(entity, profile, &mut event_ids, errors);
     }
     validate_read_path_cycles(entities, errors);
+}
+
+fn validate_geojson(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
+    let Some(GeoJsonSource { geometry_field }) = &entity.geojson else {
+        return;
+    };
+    let fields = stored_field_map(entity);
+    let Some(field) = fields.get(geometry_field.as_str()) else {
+        errors.push(Diagnostic::error(
+            "geojson.geometry_field.unknown",
+            "entities[].geojson.geometryField",
+            "a GeoJSON geometry field must name one stored CRS84 point field",
+        ));
+        return;
+    };
+    if !matches!(field.field_type, FieldTypeSource::Crs84Point { .. }) {
+        errors.push(Diagnostic::error(
+            "geojson.geometry_field.type_unsupported",
+            "entities[].geojson.geometryField",
+            "a GeoJSON geometry field must name one stored CRS84 point field",
+        ));
+    }
 }
 
 fn validate_entity_fields(
@@ -2187,6 +2225,16 @@ fn validate_selector_profiles(entity: &EntitySource, errors: &mut Vec<Diagnostic
         if selector.fields.iter().any(|field| {
             fields
                 .get(field.as_str())
+                .is_some_and(|field| matches!(field.field_type, FieldTypeSource::Crs84Point { .. }))
+        }) {
+            errors.push(Diagnostic::error(
+                "selector_profile.field_type_unsupported",
+                "entities[].selectorProfiles[].fields",
+                "CRS84 point fields cannot be selector fields; use spatialQueries.bbox for bounded spatial search",
+            ));
+        } else if selector.fields.iter().any(|field| {
+            fields
+                .get(field.as_str())
                 .is_some_and(|field| !selector_field_supported(&field.field_type))
         }) {
             errors.push(Diagnostic::error(
@@ -2420,6 +2468,7 @@ fn validate_profiles(
                 "bulk data export requires an authenticated list profile with a readable projection",
             ));
         }
+        validate_spatial_queries(access, entity, &fields, errors);
         let mut read_processed = access.readable_fields.clone();
         read_processed.extend(access.filterable_fields.iter().cloned());
         read_processed.extend(access.sortable_fields.iter().cloned());
@@ -2476,10 +2525,17 @@ fn validate_profiles(
         for boundary in &access.row_boundaries {
             if boundary.field != "id"
                 && fields.get(boundary.field.as_str()).is_some_and(|field| {
-                    matches!(
-                        field.field_type,
-                        FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. }
-                    )
+                    matches!(field.field_type, FieldTypeSource::Crs84Point { .. })
+                })
+            {
+                errors.push(Diagnostic::error(
+                    "access_profile.row_boundary.type_unsupported",
+                    "entities[].accessProfiles[].rowBoundaries",
+                    "CRS84 point fields cannot be row-boundary fields; use spatialQueries.bbox for bounded spatial search",
+                ));
+            } else if boundary.field != "id"
+                && fields.get(boundary.field.as_str()).is_some_and(|field| {
+                    matches!(field.field_type, FieldTypeSource::Structured { .. })
                 })
             {
                 errors.push(Diagnostic::error(
@@ -2554,6 +2610,93 @@ fn validate_profiles(
                 "each exposed read-path route requires exactly one default profile",
             ));
         }
+    }
+}
+
+fn validate_spatial_queries(
+    access: &AccessProfileSource,
+    entity: &EntitySource,
+    fields: &BTreeMap<&str, &FieldSource>,
+    errors: &mut Vec<Diagnostic>,
+) {
+    let Some(spatial) = &access.spatial_queries else {
+        return;
+    };
+    if spatial.bbox.is_none() {
+        errors.push(Diagnostic::error(
+            "access_profile.spatial_queries.empty",
+            "entities[].accessProfiles[].spatialQueries",
+            "spatial query grants must declare one supported query",
+        ));
+        return;
+    }
+    let Some(bbox) = &spatial.bbox else {
+        return;
+    };
+    validate_bbox_span(
+        &bbox.maximum_longitude_span_degrees,
+        360.0,
+        "access_profile.spatial_queries.bbox.maximum_longitude_span_degrees.invalid",
+        "entities[].accessProfiles[].spatialQueries.bbox.maximumLongitudeSpanDegrees",
+        "bbox maximumLongitudeSpanDegrees must be finite, positive, and no greater than 360",
+        errors,
+    );
+    validate_bbox_span(
+        &bbox.maximum_latitude_span_degrees,
+        180.0,
+        "access_profile.spatial_queries.bbox.maximum_latitude_span_degrees.invalid",
+        "entities[].accessProfiles[].spatialQueries.bbox.maximumLatitudeSpanDegrees",
+        "bbox maximumLatitudeSpanDegrees must be finite, positive, and no greater than 180",
+        errors,
+    );
+    if !access.operations.contains(&Operation::List) {
+        errors.push(Diagnostic::error(
+            "access_profile.spatial_queries.bbox.list_required",
+            "entities[].accessProfiles[].spatialQueries.bbox",
+            "bbox spatial queries require an explicit list grant",
+        ));
+    }
+    let Some(geojson) = &entity.geojson else {
+        errors.push(Diagnostic::error(
+            "access_profile.spatial_queries.bbox.geometry_required",
+            "entities[].geojson.geometryField",
+            "bbox spatial queries require an entity GeoJSON geometry field",
+        ));
+        return;
+    };
+    if !access.readable_fields.contains(&geojson.geometry_field) {
+        errors.push(Diagnostic::error(
+            "access_profile.spatial_queries.bbox.geometry_not_readable",
+            "entities[].accessProfiles[].readableFields",
+            "bbox spatial queries require readable access to the GeoJSON geometry field",
+        ));
+    }
+    if access.anonymous
+        && fields
+            .get(geojson.geometry_field.as_str())
+            .is_some_and(|field| field.classification != Classification::Public)
+    {
+        errors.push(Diagnostic::error(
+            "access_profile.public.processing_non_public",
+            "entities[].accessProfiles[].spatialQueries.bbox",
+            "an anonymous bbox query may process only a public GeoJSON geometry field",
+        ));
+    }
+}
+
+fn validate_bbox_span(
+    value: &serde_json::Number,
+    maximum: f64,
+    code: &str,
+    path: &str,
+    message: &str,
+    errors: &mut Vec<Diagnostic>,
+) {
+    if !value
+        .as_f64()
+        .is_some_and(|parsed| parsed.is_finite() && parsed > 0.0 && parsed <= maximum)
+    {
+        errors.push(Diagnostic::error(code, path, message));
     }
 }
 
@@ -3541,7 +3684,21 @@ fn compile_entities(
                 )
                 .map_err(CompileFailure::from_one)?;
             policy_names.insert(access.id.clone(), physical);
-            profiles.insert(access.id.clone(), access.clone());
+            let mut profile = access.clone();
+            if let Some(bbox) = profile
+                .spatial_queries
+                .as_mut()
+                .and_then(|spatial| spatial.bbox.as_mut())
+            {
+                // Signed package JSON normalizes 1.0 to 1. Normalize before
+                // equality and migration planning so reloading that package
+                // cannot turn equivalent limits into an access change.
+                bbox.maximum_longitude_span_degrees =
+                    canonical_spatial_span(&bbox.maximum_longitude_span_degrees);
+                bbox.maximum_latitude_span_degrees =
+                    canonical_spatial_span(&bbox.maximum_latitude_span_degrees);
+            }
+            profiles.insert(access.id.clone(), profile);
         }
         let events = source
             .events
@@ -3568,6 +3725,12 @@ fn compile_entities(
                 batch: source.batch.clone(),
                 classification: source.classification,
                 access_requirements: source.access_requirements.clone(),
+                geojson: source
+                    .geojson
+                    .as_ref()
+                    .map(|geojson| CompiledGeoJsonBinding {
+                        geometry_field: geojson.geometry_field.clone(),
+                    }),
                 physical_table: table,
                 temporal: source.temporal.clone().map(CompiledTemporal::from),
                 canonical_id,
@@ -4289,6 +4452,7 @@ fn read_path_query_operation(
         read_path: Some(grant.path.clone()),
         processing_fields: processing_fields.into_iter().collect(),
         stable_tie_breaker: "record_id".to_owned(),
+        spatial: None,
         temporal: None,
     })
 }
@@ -4419,6 +4583,19 @@ fn query_operation(
             .iter()
             .map(|boundary| boundary.field.clone()),
     );
+    let spatial =
+        if kind == CompiledQueryKind::List && temporal.is_none() && selector_fields.is_empty() {
+            compiled_spatial_capability(entity, profile)
+        } else {
+            None
+        };
+    if let Some(geometry_field) = spatial
+        .as_ref()
+        .and_then(|capability| capability.bbox.as_ref())
+        .map(|bbox| bbox.geometry_field.clone())
+    {
+        processing_fields.insert(geometry_field);
+    }
     let id = if !selector_fields.is_empty() {
         format!("records.{}.{}.lookup", entity.id, profile.id)
     } else {
@@ -4445,7 +4622,38 @@ fn query_operation(
         read_path,
         processing_fields: processing_fields.into_iter().collect(),
         stable_tie_breaker: "record_id".to_owned(),
+        spatial,
         temporal,
+    })
+}
+
+fn canonical_spatial_span(value: &serde_json::Number) -> serde_json::Number {
+    let bytes = canonicalize_json(&Value::Number(value.clone()))
+        .expect("validated spatial span canonicalizes");
+    serde_json::from_slice(&bytes).expect("canonical spatial span remains a JSON number")
+}
+
+fn compiled_spatial_capability(
+    entity: &CompiledEntity,
+    profile: &AccessProfileSource,
+) -> Option<CompiledSpatialQueryCapability> {
+    let SpatialQueryGrantSource {
+        bbox:
+            Some(SpatialBboxGrantSource {
+                maximum_longitude_span_degrees,
+                maximum_latitude_span_degrees,
+            }),
+    } = profile.spatial_queries.as_ref()?
+    else {
+        return None;
+    };
+    let geojson = entity.geojson.as_ref()?;
+    Some(CompiledSpatialQueryCapability {
+        bbox: Some(CompiledBboxQueryCapability {
+            geometry_field: geojson.geometry_field.clone(),
+            maximum_longitude_span_degrees: maximum_longitude_span_degrees.clone(),
+            maximum_latitude_span_degrees: maximum_latitude_span_degrees.clone(),
+        }),
     })
 }
 
@@ -4474,7 +4682,15 @@ fn query_filter_field(
         | FieldTypeSource::Timestamp => {
             operators.push(CompiledQueryFilterOperator::Range);
         }
-        FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. } => {
+        FieldTypeSource::Crs84Point { .. } => {
+            errors.push(Diagnostic::error(
+                "query.filter.field_type_unsupported",
+                "entities[].accessProfiles[].filterableFields",
+                "CRS84 point fields cannot be filterableFields; use spatialQueries.bbox for bounded spatial search",
+            ));
+            return None;
+        }
+        FieldTypeSource::Structured { .. } => {
             errors.push(Diagnostic::error(
                 "query.filter.field_type_unsupported",
                 "entities[].accessProfiles[].filterableFields",
@@ -4533,10 +4749,15 @@ fn query_sort_field(
     field: &str,
     errors: &mut Vec<Diagnostic>,
 ) -> Option<CompiledQuerySortField> {
-    if matches!(
-        field_type,
-        FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. }
-    ) {
+    if matches!(field_type, FieldTypeSource::Crs84Point { .. }) {
+        errors.push(Diagnostic::error(
+            "query.sort.field_type_unsupported",
+            "entities[].accessProfiles[].sortableFields",
+            "CRS84 point fields cannot be sortableFields; use spatialQueries.bbox for bounded spatial search",
+        ));
+        return None;
+    }
+    if matches!(field_type, FieldTypeSource::Structured { .. }) {
         errors.push(Diagnostic::error(
             "query.sort.field_type_unsupported",
             "entities[].accessProfiles[].sortableFields",

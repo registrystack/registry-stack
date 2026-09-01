@@ -27,7 +27,6 @@ pub use catalog::{
     ExpectedManagedCatalog, ExpectedRegistryIdentity,
 };
 pub use config::{ConnectionConfig, PoolBounds, RuntimePool, TlsPolicy};
-pub(crate) use context::validate_field_value;
 pub(crate) use context::{
     begin_action_transaction, ActionClaimContext, ChangeRequestActionContext,
     ChangeRequestTargetBinding, ChangeRequestTargetContext, ImmediateActionLinkBinding,
@@ -37,6 +36,7 @@ pub use context::{
     begin_record_transaction, ClaimContext, GuardedTransaction, RowBoundaryContext,
     RowBoundaryOperator,
 };
+pub(crate) use context::{install_spatial_bbox_context, validate_field_value, SpatialBboxContext};
 pub use history_read::PostgresSnapshotReadService;
 #[cfg(feature = "postgres-test")]
 pub use history_read::SnapshotReadFaultPoint;
@@ -59,10 +59,14 @@ pub use revision_read::PostgresRevisionReadService;
 #[cfg(feature = "postgres-test")]
 pub use revision_read::RevisionReadFaultPoint;
 pub use roles::{
-    provision_managed_schemas, verify_btree_gist, verify_migration_role, verify_runtime_role,
-    SqlIdentifier,
+    provision_managed_schemas, provision_postgis_prerequisites, provision_spatial_bbox_role,
+    spatial_bbox_role, verify_btree_gist, verify_migration_role, verify_postgis,
+    verify_runtime_role, SqlIdentifier,
 };
 pub use schema::install_compiled_schema;
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub use schema::reconcile_compiled_runtime_acl_for_test;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 pub(crate) use schema::rehearse_schema_fingerprint_with_connection;
 pub(crate) use schema::verify_postgres_15_or_newer;

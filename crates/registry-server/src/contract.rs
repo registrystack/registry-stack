@@ -298,6 +298,8 @@ pub struct EntitySource {
     pub classification: Classification,
     #[serde(default)]
     pub fields: Vec<FieldSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geojson: Option<GeoJsonSource>,
     /// Mandatory request-access requirements checked against every profile, including module contributions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub access_requirements: Option<AccessRequirementsSource>,
@@ -339,6 +341,8 @@ pub struct BatchSource {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct EntityExtensionSource {
     pub entity: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geojson: Option<GeoJsonSource>,
     /// Add mandatory requirements only when the entity has none; replacing them is refused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub access_requirements: Option<AccessRequirementsSource>,
@@ -365,6 +369,13 @@ pub struct EntityExtensionSource {
     pub change_control: Option<ChangeControlSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub change_request: Option<ChangeRequestSource>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct GeoJsonSource {
+    pub geometry_field: String,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1718,6 +1729,8 @@ pub struct AccessProfileSource {
     pub filterable_fields: BTreeSet<String>,
     #[serde(default)]
     pub sortable_fields: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spatial_queries: Option<SpatialQueryGrantSource>,
     #[serde(default)]
     pub row_boundaries: Vec<RowBoundarySource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1935,6 +1948,8 @@ pub struct AccessGrantSource {
     pub filterable_fields: BTreeSet<String>,
     #[serde(default)]
     pub sortable_fields: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spatial_queries: Option<SpatialQueryGrantSource>,
     #[serde(default)]
     pub row_boundaries: Vec<RowBoundarySource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1981,7 +1996,7 @@ impl schemars::JsonSchema for AccessGrantSource {
 #[derive(schemars::JsonSchema)]
 #[serde(untagged)]
 enum AccessGrantSourceSchema {
-    Entity(EntityAccessGrantSourceSchema),
+    Entity(Box<EntityAccessGrantSourceSchema>),
     Action(ActionAccessGrantSourceSchema),
 }
 
@@ -2000,6 +2015,8 @@ struct EntityAccessGrantSourceSchema {
     filterable_fields: BTreeSet<String>,
     #[serde(default)]
     sortable_fields: BTreeSet<String>,
+    #[serde(default)]
+    spatial_queries: Option<SpatialQueryGrantSource>,
     #[serde(default)]
     row_boundaries: Vec<RowBoundarySource>,
     #[serde(default)]
@@ -2031,6 +2048,22 @@ struct ActionAccessGrantSourceSchema {
     targets: Vec<ActionTargetGrantSource>,
     #[serde(default)]
     results: BTreeSet<String>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SpatialQueryGrantSource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bbox: Option<SpatialBboxGrantSource>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SpatialBboxGrantSource {
+    pub maximum_longitude_span_degrees: serde_json::Number,
+    pub maximum_latitude_span_degrees: serde_json::Number,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

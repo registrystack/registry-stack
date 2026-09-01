@@ -29,7 +29,7 @@ use registry_server::package::{
     FIXTURE_JOURNEYS_PATH, TRUST_ANCHOR_API_VERSION,
 };
 use registry_server::postgres::{
-    initialize_registry_state_for_catalog_test, install_compiled_schema,
+    initialize_compiled_registry_state_for_test, install_compiled_schema,
     managed_schema_fingerprint, ExpectedManagedCatalog, RegistryStateTestIdentity,
 };
 use registry_server::startup::{prepare_with_connection_config_for_test, PreparedServer};
@@ -184,10 +184,10 @@ impl RunningFixture {
                 .await
                 .expect("managed schema fingerprint computes for action example");
         let package = TestPackage::build(&sources, &schema_fingerprint);
-        initialize_registry_state_for_catalog_test(
+        initialize_compiled_registry_state_for_test(
             &migration,
             &database.runtime_role,
-            &expected_catalog,
+            &registry,
             RegistryStateTestIdentity {
                 package_id: &package.package.manifest().package_id,
                 environment: &package.package.manifest().environment,

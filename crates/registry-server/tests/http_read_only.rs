@@ -18,6 +18,7 @@ use registry_server::api::{
 use registry_server::artifacts::REGISTRY_METADATA_ARTIFACT_PATH;
 use registry_server::contract::{ModuleAssetSource, Operation};
 use registry_server::cursor::CursorCodec;
+use registry_server::cursor::{CursorAdapter, CursorRepresentation};
 use registry_server::{
     compile_project, compile_project_with_assets, parse_project_yaml, CompileProfile,
 };
@@ -395,6 +396,44 @@ accessProfiles:
       - entity: finding
         operations: [get]
         readableFields: [inspection]
+"#;
+
+const SPATIAL_PROJECT: &str = r#"
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: spatial-read-surface
+  version: 0.1.0
+  defaultLanguage: en
+entities:
+  - id: site
+    route: sites
+    mutationMode: mutable
+    classification: public
+    fields:
+      - {id: code, type: string, required: true, maxLength: 64, classification: public}
+      - {id: location, type: crs84-point, precision: 6, required: false, classification: public}
+    geojson:
+      geometryField: location
+accessProfiles:
+  - id: map-reader
+    default: true
+    anonymous: true
+    grants:
+      - entity: site
+        operations: [get, list]
+        readableFields: [code, location]
+        filterableFields: [code]
+        spatialQueries:
+          bbox:
+            maximumLongitudeSpanDegrees: 2
+            maximumLatitudeSpanDegrees: 2
+  - id: tabular
+    anonymous: true
+    grants:
+      - entity: site
+        operations: [get, list]
+        readableFields: [code]
 "#;
 
 #[derive(Default)]
@@ -852,6 +891,226 @@ async fn closed_query_grammar_reaches_record_service_as_compiled_query() {
     assert_eq!(bad_operator.status(), StatusCode::BAD_REQUEST);
     assert_eq!(body_json(bad_operator).await["code"], "query.invalid");
     assert_eq!(harness.records.calls(), before);
+}
+
+#[tokio::test]
+async fn bbox_reaches_record_service_only_with_declared_spatial_grant() {
+    let harness = Harness::from_project(SPATIAL_PROJECT, true);
+    let accepted = harness
+        .send_with_accept(
+            Method::GET,
+            "/v1/records/sites?bbox=100,10,101,11&$filter=code%20eq%20'SITE-A'&$top=25",
+            None,
+            Some("application/geo+json"),
+        )
+        .await;
+    assert_eq!(accepted.status(), StatusCode::OK);
+    assert_eq!(accepted.headers()["content-type"], "application/geo+json");
+    assert_eq!(accepted.headers()["cache-control"], "no-store");
+    assert_eq!(accepted.headers()["vary"], "authorization, accept");
+    let body = body_json(accepted).await;
+    assert_eq!(body["numberReturned"], 1);
+    assert_eq!(body["features"][0]["geometry"]["type"], "Point");
+    let request = harness.records.last_request();
+    assert_eq!(request.representation, CursorRepresentation::GeoJson);
+    assert_eq!(request.adapter, CursorAdapter::Native);
+    let query = request_query(&request);
+    assert_eq!(query.query_operation_id, "records.site.map-reader.list");
+    let spatial = query.spatial.as_ref().expect("bbox plan is present");
+    assert_eq!(spatial.bbox.geometry_field, "location");
+    assert_eq!(spatial.bbox.west, "100");
+    assert_eq!(spatial.bbox.south, "10");
+    assert_eq!(spatial.bbox.east, "101");
+    assert_eq!(spatial.bbox.north, "11");
+    assert!(query.filter.is_some(), "scalar filter composes with bbox");
+
+    let before = harness.records.calls();
+    let undeclared = harness
+        .send(
+            Method::GET,
+            "/v1/records/sites?accessProfile=tabular&bbox=100,10,101,11",
+            None,
+        )
+        .await;
+    assert_eq!(undeclared.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(undeclared).await["code"], "query.invalid");
+    assert_eq!(harness.records.calls(), before);
+
+    let malformed = harness
+        .send(Method::GET, "/v1/records/sites?bbox=100,10,99,11", None)
+        .await;
+    assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(malformed).await["code"], "query.invalid");
+    assert_eq!(harness.records.calls(), before);
+}
+
+#[tokio::test]
+async fn geojson_requires_readable_primary_point_but_select_can_omit_geometry() {
+    let harness = Harness::from_project(SPATIAL_PROJECT, true);
+    let without_geometry = harness
+        .send_with_accept(
+            Method::GET,
+            "/v1/records/sites?$select=code",
+            None,
+            Some("application/geo+json"),
+        )
+        .await;
+    assert_eq!(without_geometry.status(), StatusCode::OK);
+    let body = body_json(without_geometry).await;
+    assert_eq!(body["features"][0]["geometry"], Value::Null);
+    assert_eq!(body["features"][0]["properties"], json!({"code": "SITE-A"}));
+    let request = harness.records.last_request();
+    assert_eq!(request.selected_fields, BTreeSet::from(["code".to_owned()]));
+
+    let before = harness.records.calls();
+    let unreadable_geometry = harness
+        .send_with_accept(
+            Method::GET,
+            "/v1/records/sites?accessProfile=tabular",
+            None,
+            Some("application/geo+json"),
+        )
+        .await;
+    assert_eq!(unreadable_geometry.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        body_json(unreadable_geometry).await["code"],
+        "resource.not_found"
+    );
+    assert_eq!(harness.records.calls(), before);
+}
+
+#[tokio::test]
+async fn geojson_accept_negotiation_honors_quality_and_json_preference() {
+    let harness = Harness::from_project(SPATIAL_PROJECT, true);
+    let geojson_disabled = harness
+        .send_with_accept(
+            Method::GET,
+            "/v1/records/sites",
+            None,
+            Some("application/geo+json;q=0, application/json;q=0.5"),
+        )
+        .await;
+    assert_eq!(geojson_disabled.status(), StatusCode::OK);
+    assert_eq!(
+        geojson_disabled.headers()["content-type"],
+        "application/json"
+    );
+    assert_eq!(
+        harness.records.last_request().representation,
+        CursorRepresentation::Json
+    );
+
+    let json_preferred = harness
+        .send_with_accept(
+            Method::GET,
+            "/v1/records/sites",
+            None,
+            Some("application/geo+json;q=0.8, application/json;q=0.9"),
+        )
+        .await;
+    assert_eq!(json_preferred.status(), StatusCode::OK);
+    assert_eq!(json_preferred.headers()["content-type"], "application/json");
+    assert_eq!(
+        harness.records.last_request().representation,
+        CursorRepresentation::Json
+    );
+
+    let geojson_preferred = harness
+        .send_with_accept(
+            Method::GET,
+            "/v1/records/sites",
+            None,
+            Some("application/json;q=0.1, */*;q=0.2, application/geo+json;q=0.9"),
+        )
+        .await;
+    assert_eq!(geojson_preferred.status(), StatusCode::OK);
+    assert_eq!(
+        geojson_preferred.headers()["content-type"],
+        "application/geo+json"
+    );
+    assert_eq!(
+        harness.records.last_request().representation,
+        CursorRepresentation::GeoJson
+    );
+}
+
+#[tokio::test]
+async fn bbox_span_grants_use_decimal_semantics_for_fractional_limits() {
+    let project = SPATIAL_PROJECT
+        .replace(
+            "maximumLongitudeSpanDegrees: 2",
+            "maximumLongitudeSpanDegrees: 0.3",
+        )
+        .replace(
+            "maximumLatitudeSpanDegrees: 2",
+            "maximumLatitudeSpanDegrees: 0.2",
+        );
+    let harness = Harness::from_project(&project, true);
+    let exact_limit = harness
+        .send_with_accept(
+            Method::GET,
+            "/v1/records/sites?bbox=0,13.65,0.3,13.85",
+            None,
+            Some("application/geo+json"),
+        )
+        .await;
+    assert_eq!(exact_limit.status(), StatusCode::OK);
+    let request = harness.records.last_request();
+    let query = request_query(&request);
+    let spatial = query.spatial.as_ref().expect("bbox query reaches service");
+    assert_eq!(spatial.bbox.east, "0.3");
+    assert_eq!(spatial.bbox.maximum_longitude_span_degrees, "0.3");
+    assert_eq!(spatial.bbox.maximum_latitude_span_degrees, "0.2");
+
+    let before = harness.records.calls();
+    let just_over_rounds_down_as_f64 = harness
+        .send(
+            Method::GET,
+            "/v1/records/sites?bbox=0,13.65,0.30000000000000000000000000000000000001,13.85",
+            None,
+        )
+        .await;
+    assert_eq!(
+        just_over_rounds_down_as_f64.status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        body_json(just_over_rounds_down_as_f64).await["code"],
+        "query.invalid"
+    );
+    assert_eq!(harness.records.calls(), before);
+
+    let just_over = harness
+        .send(
+            Method::GET,
+            "/v1/records/sites?bbox=0,13.65,0.3,13.851",
+            None,
+        )
+        .await;
+    assert_eq!(just_over.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(just_over).await["code"], "query.invalid");
+    assert_eq!(harness.records.calls(), before);
+}
+
+#[test]
+fn strict_bbox_decimal_helpers_are_exact_and_bounded() {
+    assert_eq!(
+        strict_query::canonical_positive_decimal_within("3e-1", "360")
+            .expect("grant decimal canonicalizes"),
+        "0.3"
+    );
+    assert!(strict_query::decimal_difference_within("0.4", "0.1", "0.3")
+        .expect("span compares exactly"));
+    assert!(!strict_query::decimal_difference_within(
+        "0.30000000000000000000000000000000000001",
+        "0",
+        "0.3",
+    )
+    .expect("just-over span compares exactly"));
+    assert_eq!(
+        strict_query::parse_read_query([("bbox", "0,0,1e-1000,1")]),
+        Err(strict_query::QueryParseError::InvalidValue)
+    );
 }
 
 #[tokio::test]
@@ -1528,20 +1787,28 @@ impl RecordReadService for RecordingReadService {
         request: RecordReadRequest,
     ) -> ServiceFuture<'_, Result<Option<HeldReadResponse>, ReadServiceError>> {
         let selected_fields = request.selected_fields.clone();
+        let representation = request.representation;
         self.record(request);
         Box::pin(async move {
-            Ok(Some(held(project_fixture(
+            let record = project_fixture(
                 json!({
                     "id": "00000000-0000-4000-8000-000000000001",
                     "revision": 1,
                     "data": {
                             "label": "Visible label",
                             "secret": "DO-NOT-LEAK",
-                            "jurisdiction": "area-a"
+                            "jurisdiction": "area-a",
+                            "code": "SITE-A",
+                            "location": {"type":"Point","coordinates":[100.5,10.5]}
                     }
                 }),
                 &selected_fields,
-            ))))
+            );
+            if representation == CursorRepresentation::GeoJson {
+                Ok(Some(geojson_feature(record)))
+            } else {
+                Ok(Some(held(record)))
+            }
         })
     }
 
@@ -1551,6 +1818,7 @@ impl RecordReadService for RecordingReadService {
     ) -> ServiceFuture<'_, Result<HeldReadResponse, ReadServiceError>> {
         let selected_fields = request.selected_fields.clone();
         let maximum_records = request.maximum_records;
+        let representation = request.representation;
         let include_count = match &request.kind {
             RecordReadKind::List { plan } | RecordReadKind::Relationship { plan, .. } => {
                 plan.include_count
@@ -1566,17 +1834,44 @@ impl RecordReadService for RecordingReadService {
                     "data": {
                             "label": "Visible label",
                             "secret": "DO-NOT-LEAK",
-                            "jurisdiction": "area-a"
+                            "jurisdiction": "area-a",
+                            "code": "SITE-A",
+                            "location": {"type":"Point","coordinates":[100.5,10.5]}
                     }
                 }),
                 &selected_fields,
             )];
             records.truncate(maximum_records);
-            let mut response = json!({"items": records, "pageInfo": {"nextCursor": null}});
-            if include_count {
-                response["count"] = json!(1);
+            if representation == CursorRepresentation::GeoJson {
+                let features = records
+                    .into_iter()
+                    .map(|record| {
+                        let mut properties =
+                            record["data"].as_object().cloned().unwrap_or_default();
+                        let geometry = properties.remove("location").unwrap_or(Value::Null);
+                        json!({
+                            "type": "Feature",
+                            "id": record["id"],
+                            "geometry": geometry,
+                            "properties": properties,
+                            "registry": {"revision": record["revision"]},
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                Ok(HeldReadResponse::from_geojson(&json!({
+                    "type": "FeatureCollection",
+                    "features": features,
+                    "numberReturned": features.len(),
+                    "registry": {"pageInfo": {"nextCursor": null}},
+                }))
+                .expect("fake GeoJSON serializes"))
+            } else {
+                let mut response = json!({"items": records, "pageInfo": {"nextCursor": null}});
+                if include_count {
+                    response["count"] = json!(1);
+                }
+                Ok(held(response))
             }
-            Ok(held(response))
         })
     }
 
@@ -1665,11 +1960,21 @@ impl Harness {
         uri: &str,
         claims: Option<VerifiedRequestClaims>,
     ) -> axum::response::Response {
-        let mut request = Request::builder()
-            .method(method)
-            .uri(uri)
-            .body(Body::empty())
-            .expect("request");
+        self.send_with_accept(method, uri, claims, None).await
+    }
+
+    async fn send_with_accept(
+        &self,
+        method: Method,
+        uri: &str,
+        claims: Option<VerifiedRequestClaims>,
+        accept: Option<&str>,
+    ) -> axum::response::Response {
+        let mut request = Request::builder().method(method).uri(uri);
+        if let Some(accept) = accept {
+            request = request.header("accept", accept);
+        }
+        let mut request = request.body(Body::empty()).expect("request");
         if let Some(claims) = claims {
             request.extensions_mut().insert(claims);
         }
@@ -2789,6 +3094,19 @@ fn project_fixture(mut record: Value, selected_fields: &BTreeSet<String>) -> Val
 
 fn held(value: Value) -> HeldReadResponse {
     HeldReadResponse::from_json(&value).expect("fake read response serializes")
+}
+
+fn geojson_feature(record: Value) -> HeldReadResponse {
+    let mut properties = record["data"].as_object().cloned().unwrap_or_default();
+    let geometry = properties.remove("location").unwrap_or(Value::Null);
+    HeldReadResponse::from_geojson(&json!({
+        "type": "Feature",
+        "id": record["id"],
+        "geometry": geometry,
+        "properties": properties,
+        "registry": {"revision": record["revision"]},
+    }))
+    .expect("fake GeoJSON feature serializes")
 }
 
 async fn body_bytes(response: axum::response::Response) -> Vec<u8> {

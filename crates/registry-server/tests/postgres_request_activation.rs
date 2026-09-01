@@ -31,9 +31,9 @@ use registry_server::package::{
     PackageMigrationPlanInput, PackageSourceFile, SignaturePolicy, VerifiedPackage,
 };
 use registry_server::postgres::{
-    managed_schema_fingerprint, ExpectedManagedCatalog, ExpectedRegistryIdentity,
-    PostgresRecordMutationService, PostgresRecordReadService, PostgresRevisionReadService,
-    RegistryLockKey,
+    managed_schema_fingerprint, reconcile_compiled_runtime_acl_for_test, ExpectedManagedCatalog,
+    ExpectedRegistryIdentity, PostgresRecordMutationService, PostgresRecordReadService,
+    PostgresRevisionReadService, RegistryLockKey,
 };
 use registry_server::request_retention::{
     RequestDetailErasureScope, RequestRetentionOperatorService,
@@ -41,7 +41,6 @@ use registry_server::request_retention::{
 use registry_server::startup::prepare_startup;
 use serde_json::{json, Value};
 use tempfile::TempDir;
-use tokio_postgres::GenericClient;
 use tower::Service as _;
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -657,12 +656,13 @@ async fn successor_schema_fingerprint(
             .await
             .expect("successor additive DDL rehearses");
     }
-    reconcile_runtime_acl_for_fingerprint(
+    reconcile_compiled_runtime_acl_for_test(
         &transaction,
         package.registry(),
-        database.runtime_role.as_str(),
+        &database.runtime_role,
     )
-    .await;
+    .await
+    .expect("successor fingerprint reconciles the production runtime ACL");
     let fingerprint = managed_schema_fingerprint(
         &transaction,
         &database.runtime_role,
@@ -676,100 +676,6 @@ async fn successor_schema_fingerprint(
         .expect("successor fingerprint transaction rolls back");
     task.abort();
     fingerprint
-}
-
-async fn reconcile_runtime_acl_for_fingerprint(
-    client: &impl GenericClient,
-    registry: &registry_server::CompiledRegistry,
-    runtime_role: &str,
-) {
-    client
-        .batch_execute(&format!(
-            "REVOKE ALL ON SCHEMA registry_data, registry_source, registry_derived, registry_context FROM PUBLIC, {};
-             GRANT USAGE ON SCHEMA registry_data, registry_source, registry_derived, registry_context TO {};",
-            quote(runtime_role),
-            quote(runtime_role),
-        ))
-        .await
-        .expect("schema privileges rehearse");
-    for table in &registry.ddl().tables {
-        client
-            .batch_execute(&format!(
-                "REVOKE ALL ON TABLE registry_data.{} FROM PUBLIC, {};",
-                quote(&table.physical_name),
-                quote(runtime_role),
-            ))
-            .await
-            .expect("table privileges revoke");
-        if !table.runtime_privileges.is_empty() {
-            let privileges = table
-                .runtime_privileges
-                .iter()
-                .map(|privilege| privilege.as_sql())
-                .collect::<Vec<_>>()
-                .join(", ");
-            client
-                .batch_execute(&format!(
-                    "GRANT {privileges} ON TABLE registry_data.{} TO {};",
-                    quote(&table.physical_name),
-                    quote(runtime_role),
-                ))
-                .await
-                .expect("table privileges grant");
-        }
-    }
-    for view in &registry.ddl().views {
-        client
-            .batch_execute(&format!(
-                "REVOKE ALL ON TABLE {}.{} FROM PUBLIC, {};",
-                quote(&view.schema),
-                quote(&view.name),
-                quote(runtime_role),
-            ))
-            .await
-            .expect("view privileges revoke");
-        if !view.runtime_privileges.is_empty() {
-            let privileges = view
-                .runtime_privileges
-                .iter()
-                .map(|privilege| privilege.as_sql())
-                .collect::<Vec<_>>()
-                .join(", ");
-            client
-                .batch_execute(&format!(
-                    "GRANT {privileges} ON TABLE {}.{} TO {};",
-                    quote(&view.schema),
-                    quote(&view.name),
-                    quote(runtime_role),
-                ))
-                .await
-                .expect("view privileges grant");
-        }
-    }
-    for function in &registry.ddl().functions {
-        client
-            .batch_execute(&format!(
-                "REVOKE ALL ON FUNCTION {}.{}({}) FROM PUBLIC, {};",
-                quote(&function.schema),
-                quote(&function.name),
-                function.arguments,
-                quote(runtime_role),
-            ))
-            .await
-            .expect("function privileges revoke");
-        if function.runtime_execute {
-            client
-                .batch_execute(&format!(
-                    "GRANT EXECUTE ON FUNCTION {}.{}({}) TO {};",
-                    quote(&function.schema),
-                    quote(&function.name),
-                    function.arguments,
-                    quote(runtime_role),
-                ))
-                .await
-                .expect("function privileges grant");
-        }
-    }
 }
 
 async fn apply_package(
@@ -1211,10 +1117,6 @@ fn project_bytes_for_variant(variant: Variant, sequence: u64) -> Vec<u8> {
         }}"#
     )
     .into_bytes()
-}
-
-fn quote(value: &str) -> String {
-    format!("\"{}\"", value.replace('"', "\"\""))
 }
 
 fn load_postgres_env() {

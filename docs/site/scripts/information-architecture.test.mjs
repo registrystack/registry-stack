@@ -247,6 +247,7 @@ test('keeps the Server guide and references in one adoption path', () => {
     'explanation/registry-modeling-patterns',
     'tutorials/first-registry-server',
     'tutorials/review-registry-changes',
+    'tutorials/query-a-spatial-registry-from-qgis',
     'configure/registry-server',
     'configure/registry-server-webhooks',
     'reference/registry-server-configuration',

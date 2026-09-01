@@ -50,6 +50,7 @@ const MAX_RUNTIME_CONFIG_BYTES: u64 = 64 * 1024;
 const MAX_PATH_BYTES: usize = 512;
 const MAX_DEPLOYMENT_VALUE_BYTES: usize = 256;
 const MAX_OIDC_VALUE_BYTES: usize = 2048;
+const MAX_PUBLIC_ORIGIN_BYTES: usize = 2048;
 const MAX_LIST_ITEMS: usize = 128;
 const MAX_LIST_VALUE_BYTES: usize = 512;
 const MAX_JWKS_DOCUMENT_BYTES: u64 = 1024 * 1024;
@@ -546,6 +547,7 @@ impl fmt::Debug for RuntimeConfig {
 pub struct ListenerConfig {
     bind: SocketAddr,
     trusted_proxy: TrustedProxyPosture,
+    public_origin: Option<PublicOrigin>,
 }
 
 impl ListenerConfig {
@@ -557,6 +559,11 @@ impl ListenerConfig {
         Ok(Self {
             bind,
             trusted_proxy: raw.trusted_proxy,
+            public_origin: raw
+                .public_origin
+                .as_deref()
+                .map(PublicOrigin::parse)
+                .transpose()?,
         })
     }
 
@@ -567,6 +574,10 @@ impl ListenerConfig {
     pub fn trusted_proxy(&self) -> TrustedProxyPosture {
         self.trusted_proxy
     }
+
+    pub fn public_origin(&self) -> Option<&PublicOrigin> {
+        self.public_origin.as_ref()
+    }
 }
 
 impl fmt::Debug for ListenerConfig {
@@ -575,7 +586,58 @@ impl fmt::Debug for ListenerConfig {
             .debug_struct("ListenerConfig")
             .field("bind", &"<redacted>")
             .field("trusted_proxy", &self.trusted_proxy)
+            .field("public_origin", &self.public_origin)
             .finish()
+    }
+}
+
+/// Operator-configured origin for authenticated absolute discovery and paging
+/// links. It never derives authority from request Host or forwarded headers.
+#[derive(Clone, Eq, PartialEq)]
+pub struct PublicOrigin(String);
+
+impl PublicOrigin {
+    pub fn parse(value: &str) -> Result<Self> {
+        if value.len() > MAX_PUBLIC_ORIGIN_BYTES || value.contains(['?', '#', '@']) {
+            return Err(RuntimeConfigError::InvalidListener);
+        }
+        let uri: axum::http::Uri = value
+            .parse()
+            .map_err(|_| RuntimeConfigError::InvalidListener)?;
+        let authority = uri.authority().ok_or(RuntimeConfigError::InvalidListener)?;
+        let host = authority
+            .host()
+            .trim_start_matches('[')
+            .trim_end_matches(']');
+        let loopback = host.eq_ignore_ascii_case("localhost")
+            || host
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|address| address.is_loopback());
+        if authority.host().is_empty()
+            || (authority.as_str() != authority.host() && authority.port_u16().is_none())
+            || authority.port_u16() == Some(0)
+            || !matches!(uri.path(), "" | "/")
+            || uri.query().is_some()
+            || !matches!(uri.scheme_str(), Some("https"))
+                && !(uri.scheme_str() == Some("http") && loopback)
+        {
+            return Err(RuntimeConfigError::InvalidListener);
+        }
+        Ok(Self(format!(
+            "{}://{}",
+            uri.scheme_str().unwrap(),
+            authority
+        )))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for PublicOrigin {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("PublicOrigin(<redacted>)")
     }
 }
 
@@ -1531,6 +1593,10 @@ struct RawRuntimeConfig {
 struct RawListenerConfig {
     bind: String,
     trusted_proxy: TrustedProxyPosture,
+    /// Canonical HTTPS origin (loopback HTTP for local development) for QGIS
+    /// discovery and pagination. Required when the registry exposes GIS collections.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    public_origin: Option<String>,
 }
 
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
@@ -1976,6 +2042,12 @@ fn install_schema_constraints(schema: &mut Value) {
     }
 
     for (pointer, minimum, maximum, pattern) in [
+        (
+            "/$defs/RawListenerConfig/properties/publicOrigin",
+            1,
+            MAX_PUBLIC_ORIGIN_BYTES,
+            r"^https?://[^/@?#\s]+/?$",
+        ),
         (
             "/$defs/RawDeploymentIdentity/properties/environment",
             1,

@@ -128,6 +128,7 @@ EXCLUDED_EVIDENCE_TUTORIALS=(
 	connect-a-sqlite-extract                         # starter is covered by evidencectl scaffold and fixture tests; production half needs an operator-mounted extract
 	first-run-with-solmara-lab                       # historical; the Solmara Lab stack is replayed by check-tutorial.sh, not here
 	first-registry-server                            # Server source preview; product CI runs quickstart/run.sh --smoke, reader execution checks the documented steps
+	query-a-spatial-registry-from-qgis               # Server spatial source preview; product CI runs the spatial smoke, while QGIS needs a desktop reader run
 	integrate-evidence-candidate-with-docker-compose # drift-checked by evidence-production-build-docs.test.mjs; needs Docker Compose
 	issue-a-birth-certificate-vc-from-opencrvs       # needs the public OpenCRVS Farajaland demo; live and opt-in, not replayed in CI
 	issue-evidence-access-tokens-with-registry-mint  # drift-checked by evidence-production-build-docs.test.mjs; needs a Registry Mint deployment

@@ -8,6 +8,7 @@ artifacts:
   - {path: CHANGE_REQUEST_EXAMPLES.md, kind: change-request-example-guide, state: authored}
   - {path: EVENTS-AND-WEBHOOKS.md, kind: extension-direction-spec, state: authored}
   - {path: HISTORY.md, kind: historical-query-guide, state: authored}
+  - {path: SPATIAL-QUERIES.md, kind: spatial-query-guide, state: authored}
   - {path: contracts/definition-of-done.yaml, kind: machine-readable-dod, state: authored}
   - {path: contracts/implementation-schedule.yaml, kind: delivery-schedule, state: authored}
   - {path: contracts/acceptance-scenario-matrix.yaml, kind: acceptance-matrix, state: authored}
@@ -23,6 +24,7 @@ artifacts:
   - {path: acceptance/publicschema-household-change-requests, kind: authored-fixture, state: authored}
   - {path: acceptance/business, kind: authored-fixture, state: authored}
   - {path: acceptance/household-history, kind: authored-fixture, state: authored}
+  - {path: acceptance/spatial-service-sites, kind: authored-fixture, state: authored}
   - {path: demo, kind: local-mint-server-demo, state: authored}
   - {path: quickstart, kind: generic-first-hour-quickstart, state: authored}
   - {path: generated/authoring/registry-project.schema.json, kind: generated-authoring-schema, state: authored}

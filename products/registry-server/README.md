@@ -152,6 +152,11 @@ database, authority, role, and secret-reference fields explicit.
 For atomic interval corrections, saved historical queries and their access and
 retention boundaries, see [Corrections and historical queries](HISTORY.md).
 
+[Point queries and QGIS](SPATIAL-QUERIES.md) describes GeoJSON output and
+explicitly granted PostGIS-backed bbox queries. The spatial quickstart uses
+the same Server, Mint and package lifecycle; ordinary registries do not need
+PostGIS.
+
 Registry Server owns typed configured storage, generated REST contracts,
 authorization, record revisions, audit ordering, idempotency, outbox creation,
 and governed migrations. It does not provide a UI, GraphQL, workflow,
@@ -187,6 +192,8 @@ for the asset project. See [change-request examples](CHANGE_REQUEST_EXAMPLES.md)
 for the approval workflows.
 The separate `household-history` fixture proves correction batches and retained
 snapshot answers through the same compiler and runtime.
+The additional `spatial-service-sites` project covers governed Point queries
+and the QGIS installation-client path.
 
 Run the current deterministic contract checks with:
 

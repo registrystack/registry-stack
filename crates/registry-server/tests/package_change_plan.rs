@@ -62,6 +62,316 @@ const SUMMARY_CANARY: &str = "summary-canary";
 const SQL_CANARY: &str = "summary-sql-canary";
 
 #[test]
+fn geojson_binding_changes_are_classified_as_disclosure_even_for_get_only_profiles() {
+    for (previous_binding, candidate_binding) in [
+        (None, Some("location")),
+        (Some("location"), None),
+        (Some("location"), Some("alternate")),
+    ] {
+        let previous = compile_source(&geojson_source(1, previous_binding));
+        let candidate = compile_source(&geojson_source(2, candidate_binding));
+        let change_set = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
+        assert_change(
+            &change_set,
+            CompiledRegistryChangeClass::AccessOrDisclosureChange,
+            CompiledRegistryChangeCode::EntityGeoJsonChanged,
+        );
+        assert_eq!(change_set.changes.len(), 1);
+        let plan = change_set_to_applicable_migration_plan(&change_set)
+            .expect("metadata-only GeoJSON changes create an applicable plan");
+        assert!(plan.statements.is_empty());
+        assert!(plan.reviewed_descriptors.is_empty());
+        assert_eq!(previous.ddl().script(), candidate.ddl().script());
+    }
+}
+
+#[cfg(feature = "tooling")]
+#[test]
+fn geojson_only_successor_uses_existing_metadata_review_without_dummy_sql() {
+    let previous = compile_source(&geojson_source(1, None));
+    let source = geojson_source(2, Some("location"));
+    let candidate = compile_source(&source);
+    let migrations = vec![metadata_only_source_between(&previous, &candidate)];
+    let package = prepare_package(build_request(
+        2,
+        Some(PRIOR_REVISION),
+        source.project_bytes,
+        source.module_bytes,
+        PackageMigrationPlanInput::ReviewedSuccessor {
+            prior_registry: Box::new(previous),
+            prior_schema_fingerprint: PRIOR_FINGERPRINT.to_owned(),
+            migrations,
+        },
+    ))
+    .expect("GeoJSON representation can be reviewed without spatial storage SQL");
+    assert!(package.manifest().migration_plan.statements.is_empty());
+}
+
+#[test]
+fn legacy_nonspatial_successor_baseline_roundtrips_without_new_keys() {
+    let compiled = compile_variant(Variant::Base, 1);
+    let baseline = registry_server::package::CompiledRegistryMigrationBaseline::from_compiled(
+        PRIOR_REVISION,
+        &compiled,
+    );
+    let value = serde_json::to_value(&baseline).expect("baseline serializes");
+    let bytes = canonicalize_json(&value).expect("baseline canonicalizes");
+    let parsed: registry_server::package::CompiledRegistryMigrationBaseline =
+        serde_json::from_slice(&bytes).expect("baseline without optional spatial keys loads");
+    let encoded = canonicalize_json(&serde_json::to_value(parsed).unwrap()).unwrap();
+    assert_eq!(bytes, encoded);
+    let text = std::str::from_utf8(&bytes).unwrap();
+    for key in ["\"geojson\"", "\"spatial\"", "\"spatialQueries\""] {
+        assert!(
+            !text.contains(key),
+            "absent capability must not change signed baseline bytes"
+        );
+    }
+}
+
+#[cfg(feature = "tooling")]
+#[test]
+fn spatial_span_numbers_survive_canonical_package_reload_and_successor_rederive() {
+    let source_with_span = |sequence, span: serde_json::Value, add_field| {
+        let source = spatial_source(sequence, "location", true);
+        let mut module: serde_json::Value = serde_json::from_slice(&source.module_bytes).unwrap();
+        let entity = &mut module["entities"][0];
+        let bbox = &mut entity["accessProfiles"][0]["spatialQueries"]["bbox"];
+        bbox["maximumLongitudeSpanDegrees"] = span.clone();
+        bbox["maximumLatitudeSpanDegrees"] = span;
+        if add_field {
+            entity["fields"].as_array_mut().unwrap().push(json!({
+                "id": "color", "type": "string", "maxLength": 16,
+                "classification": "internal"
+            }));
+        }
+        let module_bytes = serde_json::to_vec(&module).unwrap();
+        let module = parse_module_yaml(&module_bytes).unwrap();
+        SourceFixture {
+            project_bytes: project_bytes(sequence, &module_digest(&module)),
+            module_bytes,
+        }
+    };
+    let previous = compile_source(&source_with_span(1, json!(1.0), false));
+    let equivalent = compile_source(&source_with_span(1, json!(1), false));
+    assert!(
+        compiled_registry_change_set(&previous, &equivalent, PRIOR_REVISION)
+            .changes
+            .is_empty()
+    );
+
+    let baseline = registry_server::package::CompiledRegistryMigrationBaseline::from_compiled(
+        PRIOR_REVISION,
+        &previous,
+    );
+    let reloaded: registry_server::package::CompiledRegistryMigrationBaseline =
+        serde_json::from_slice(&canonical(&baseline)).unwrap();
+    assert_eq!(
+        baseline, reloaded,
+        "signed numeric normalization preserves equality"
+    );
+
+    let source = source_with_span(2, json!(1.0), true);
+    let package = prepare_package(build_request(
+        2,
+        Some(PRIOR_REVISION),
+        source.project_bytes,
+        source.module_bytes,
+        PackageMigrationPlanInput::Successor {
+            prior_registry: Box::new(previous),
+        },
+    ))
+    .expect("a spatial successor does not invent an access change from 1.0 versus 1");
+    let inspected = inspect_prepared(&package);
+    assert_eq!(inspected.migration_summary().change_count(), 1);
+}
+
+#[cfg(feature = "tooling")]
+#[test]
+fn reviewed_bbox_enablement_compiles_storage_without_author_written_sql() {
+    let previous = compile_source(&spatial_source(1, "location", false));
+    let source = spatial_source(2, "location", true);
+    let candidate = compile_source(&source);
+    let package = prepare_spatial_successor(previous, source, &candidate);
+    let statements = &package.manifest().migration_plan.statements;
+    assert_eq!(statements.len(), 4);
+    assert!(statements[0]
+        .sql
+        .contains("CREATE OR REPLACE FUNCTION registry_context.spatial_bbox_geometry"));
+    assert!(statements[1].sql.contains("ADD COLUMN"));
+    assert!(statements[1].sql.contains("GENERATED ALWAYS AS"));
+    assert!(statements[1]
+        .sql
+        .contains("registry_spatial_ext.geometry(Point,4326)"));
+    assert!(statements[2].sql.contains("USING gist"));
+    assert_eq!(statements[3].id, "entity.asset.spatial-candidates-view");
+    assert!(statements[3]
+        .sql
+        .starts_with("CREATE VIEW registry_context."));
+    assert!(statements[3]
+        .sql
+        .contains("security_invoker=false, security_barrier=true"));
+    assert!(!statements
+        .iter()
+        .any(|statement| statement.sql.contains("CREATE EXTENSION")));
+}
+
+#[cfg(feature = "tooling")]
+#[test]
+fn reviewed_bbox_removal_drops_candidates_and_policy_before_internal_projection() {
+    let previous = compile_source(&spatial_source(1, "location", true));
+    let logical_point_column = previous.entities()["asset"].fields["location"]
+        .physical_name
+        .clone();
+    let source = spatial_source(2, "location", false);
+    let candidate = compile_source(&source);
+    let package = prepare_spatial_successor(previous, source, &candidate);
+    let statements = &package.manifest().migration_plan.statements;
+    assert_eq!(statements.len(), 5);
+    assert_eq!(
+        statements[0].id,
+        "entity.asset.spatial-candidates-view.drop"
+    );
+    assert!(statements[0]
+        .sql
+        .starts_with("DROP VIEW IF EXISTS registry_context."));
+    assert!(statements[1].sql.starts_with("DROP POLICY"));
+    assert!(statements[2].sql.starts_with("DROP INDEX"));
+    assert!(statements[3].sql.contains("DROP COLUMN"));
+    assert!(statements[4].sql.starts_with("DROP FUNCTION"));
+    assert!(!statements
+        .iter()
+        .any(|statement| statement.sql.contains(&logical_point_column)));
+    assert!(!statements
+        .iter()
+        .any(|statement| statement.sql.contains("DROP EXTENSION")
+            || statement.sql.contains("CASCADE")));
+}
+
+#[cfg(feature = "tooling")]
+#[test]
+fn changing_primary_bbox_point_replaces_projection_without_replacing_source_fields() {
+    let previous = compile_source(&spatial_source(1, "location", true));
+    let source = spatial_source(2, "alternate", true);
+    let candidate = compile_source(&source);
+    let package = prepare_spatial_successor(previous, source, &candidate);
+    let statements = &package.manifest().migration_plan.statements;
+    assert_eq!(statements.len(), 7);
+    assert_eq!(
+        statements[0].id,
+        "entity.asset.spatial-candidates-view.drop"
+    );
+    assert!(statements[1].sql.starts_with("DROP POLICY"));
+    assert!(statements[2].sql.starts_with("DROP INDEX"));
+    assert!(statements[3].sql.contains("DROP COLUMN"));
+    assert!(statements[4].sql.contains("ADD COLUMN"));
+    assert!(statements[5].sql.contains("CREATE INDEX"));
+    assert_eq!(statements[6].id, "entity.asset.spatial-candidates-view");
+    assert!(!statements
+        .iter()
+        .any(|statement| statement.sql.contains("DROP FUNCTION")));
+    for field in ["location", "alternate"] {
+        assert!(candidate.entities()["asset"].fields.contains_key(field));
+    }
+}
+
+#[cfg(feature = "tooling")]
+#[test]
+fn changing_bbox_grant_replaces_candidate_view_without_rewriting_point_storage() {
+    let previous = compile_source(&spatial_source(1, "location", true));
+    let source = spatial_source(2, "location", true);
+    let mut module: serde_json::Value = serde_json::from_slice(&source.module_bytes).unwrap();
+    module["entities"][0]["accessProfiles"][0]["spatialQueries"]["bbox"]
+        ["maximumLongitudeSpanDegrees"] = json!(0.25);
+    let module_bytes = serde_json::to_vec(&module).unwrap();
+    let parsed_module = parse_module_yaml(&module_bytes).unwrap();
+    let source = SourceFixture {
+        project_bytes: project_bytes(2, &module_digest(&parsed_module)),
+        module_bytes,
+    };
+    let candidate = compile_source(&source);
+    let package = prepare_spatial_successor(previous, source, &candidate);
+    let statements = &package.manifest().migration_plan.statements;
+    assert_eq!(statements.len(), 2);
+    assert_eq!(
+        statements[0].id,
+        "entity.asset.spatial-candidates-view.drop"
+    );
+    assert_eq!(statements[1].id, "entity.asset.spatial-candidates-view");
+    let candidate_definition = candidate
+        .ddl()
+        .statements
+        .iter()
+        .find(|statement| statement.id == "entity.asset.spatial-candidates-view")
+        .unwrap();
+    assert_eq!(statements[1], *candidate_definition);
+}
+
+#[cfg(feature = "tooling")]
+#[test]
+fn reviewed_source_view_refresh_preserves_candidate_drop_and_recreation() {
+    let previous = compile_source(&spatial_source(1, "location", true));
+    let source = spatial_source(2, "location", true);
+    let mut module: serde_json::Value = serde_json::from_slice(&source.module_bytes).unwrap();
+    module["entities"][0]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id": "color", "type": "string", "maxLength": 16,
+            "classification": "internal"
+        }));
+    module["entities"][0]["accessProfiles"][0]["allowCount"] = json!(true);
+    let module_bytes = serde_json::to_vec(&module).unwrap();
+    let parsed_module = parse_module_yaml(&module_bytes).unwrap();
+    let source = SourceFixture {
+        project_bytes: project_bytes(2, &module_digest(&parsed_module)),
+        module_bytes,
+    };
+    let candidate = compile_source(&source);
+    let view_id = "entity.asset.spatial-candidates-view";
+    assert_eq!(
+        previous.ddl().statements.iter().find(|s| s.id == view_id),
+        candidate.ddl().statements.iter().find(|s| s.id == view_id),
+        "the view lifecycle must also work when its predicate did not change"
+    );
+    let package = prepare_spatial_successor(previous, source, &candidate);
+    let statements = &package.manifest().migration_plan.statements;
+    assert_eq!(
+        statements[0].id,
+        "entity.asset.spatial-candidates-view.drop"
+    );
+    assert_eq!(statements[1].id, "entity.asset.field.color.column");
+    assert_eq!(statements.iter().filter(|s| s.id == view_id).count(), 1);
+    assert!(statements
+        .iter()
+        .any(|s| s.id == "entity.asset.source-view"));
+    assert!(!statements.iter().any(|s| s.sql.contains("DROP COLUMN")
+        || s.sql.contains("geometry(Point,4326)")
+        || s.sql.contains("USING gist")));
+}
+
+#[cfg(feature = "tooling")]
+fn prepare_spatial_successor(
+    previous: CompiledRegistry,
+    source: SourceFixture,
+    candidate: &CompiledRegistry,
+) -> PreparedPackage {
+    let migrations = vec![metadata_only_source_between(&previous, candidate)];
+    prepare_package(build_request(
+        2,
+        Some(PRIOR_REVISION),
+        source.project_bytes,
+        source.module_bytes,
+        PackageMigrationPlanInput::ReviewedSuccessor {
+            prior_registry: Box::new(previous),
+            prior_schema_fingerprint: PRIOR_FINGERPRINT.to_owned(),
+            migrations,
+        },
+    ))
+    .expect("reviewed spatial change derives its exact storage plan")
+}
+
+#[test]
 fn new_optional_scalar_field_emits_only_closed_add_column() {
     let previous = compile_variant(Variant::Base, 1);
     let candidate = compile_variant(Variant::OptionalField, 2);
@@ -842,6 +1152,57 @@ fn source_for_variant(variant: Variant, sequence: u64) -> SourceFixture {
     }
 }
 
+fn compile_source(source: &SourceFixture) -> CompiledRegistry {
+    let module = parse_module_yaml(&source.module_bytes).expect("fixture module parses");
+    let project = parse_project_yaml(&source.project_bytes).expect("fixture project parses");
+    compile_project(&project, &[module], CompileProfile::Production).expect("fixture compiles")
+}
+
+fn geojson_source(sequence: u64, binding: Option<&str>) -> SourceFixture {
+    let mut module: serde_json::Value =
+        serde_json::from_slice(&module_bytes(Variant::Base)).unwrap();
+    let entity = &mut module["entities"][0];
+    let fields = entity["fields"].as_array_mut().unwrap();
+    for id in ["location", "alternate"] {
+        fields.push(serde_json::json!({
+            "id": id, "type": "crs84-point", "precision": 9, "classification": "internal"
+        }));
+    }
+    entity["accessProfiles"][0]["operations"] = serde_json::json!(["get"]);
+    entity["accessProfiles"][0]["writableFields"] = serde_json::json!([]);
+    entity["accessProfiles"][0]["readableFields"] =
+        serde_json::json!(["code", "location", "alternate"]);
+    if let Some(binding) = binding {
+        entity["geojson"] = serde_json::json!({"geometryField": binding});
+    }
+    let module_bytes = serde_json::to_vec(&module).unwrap();
+    let module = parse_module_yaml(&module_bytes).expect("Point module parses");
+    SourceFixture {
+        project_bytes: project_bytes(sequence, &module_digest(&module)),
+        module_bytes,
+    }
+}
+
+#[cfg(feature = "tooling")]
+fn spatial_source(sequence: u64, binding: &str, bbox: bool) -> SourceFixture {
+    let source = geojson_source(sequence, Some(binding));
+    let mut module: serde_json::Value = serde_json::from_slice(&source.module_bytes).unwrap();
+    let profile = &mut module["entities"][0]["accessProfiles"][0];
+    profile["operations"] = json!(["get", "list"]);
+    if bbox {
+        profile["spatialQueries"] = json!({"bbox": {
+            "maximumLongitudeSpanDegrees": 0.5,
+            "maximumLatitudeSpanDegrees": 0.25
+        }});
+    }
+    let module_bytes = serde_json::to_vec(&module).unwrap();
+    let module = parse_module_yaml(&module_bytes).unwrap();
+    SourceFixture {
+        project_bytes: project_bytes(sequence, &module_digest(&module)),
+        module_bytes,
+    }
+}
+
 fn project_bytes(sequence: u64, module_digest: &str) -> Vec<u8> {
     format!(
         r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"1","defaultLanguage":"en"}},"package":{{"environment":"local","instanceId":"{INSTANCE}","sequence":{sequence},"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"name":"Package Test Publisher"}}}},"dataset":{{"title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
@@ -1191,7 +1552,15 @@ fn build_request(
 #[cfg(feature = "tooling")]
 fn metadata_only_source(candidate: &CompiledRegistry) -> ReviewedMigrationSource {
     let previous = compile_variant(Variant::MetadataOnlyBase, 1);
-    let change_set = compiled_registry_change_set(&previous, candidate, PRIOR_REVISION);
+    metadata_only_source_between(&previous, candidate)
+}
+
+#[cfg(feature = "tooling")]
+fn metadata_only_source_between(
+    previous: &CompiledRegistry,
+    candidate: &CompiledRegistry,
+) -> ReviewedMigrationSource {
+    let change_set = compiled_registry_change_set(previous, candidate, PRIOR_REVISION);
     let mut covers = change_set
         .changes
         .iter()

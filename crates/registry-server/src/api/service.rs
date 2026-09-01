@@ -6,7 +6,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use serde_json::Value;
+use serde_json::{json, Map, Value};
 
 use super::context::{
     AuthorizedActionContext, AuthorizedRequestContext, VerifiedRequestTargetAuthority,
@@ -14,7 +14,10 @@ use super::context::{
 };
 use crate::contract::FieldTypeSource;
 use crate::correlation::RequestCorrelation;
-use crate::cursor::{CursorBinding, CursorCodec, CursorContinuation, CursorQuery};
+use crate::cursor::{
+    CursorAdapter, CursorBinding, CursorCodec, CursorContinuation, CursorQuery,
+    CursorRepresentation,
+};
 use crate::model::{
     CompiledQueryFilterOperator, CompiledQueryKind, CompiledQuerySortDirection, CompiledRegistry,
     HttpMethod,
@@ -27,15 +30,28 @@ pub type ServiceFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HeldReadResponse {
     body: Vec<u8>,
+    content_type: ReadResponseContentType,
     strong_etag: Option<Vec<u8>>,
 }
 
 impl HeldReadResponse {
     pub fn from_json(value: &Value) -> Result<Self, ReadServiceError> {
+        Self::from_value(value, ReadResponseContentType::Json)
+    }
+
+    pub fn from_geojson(value: &Value) -> Result<Self, ReadServiceError> {
+        Self::from_value(value, ReadResponseContentType::GeoJson)
+    }
+
+    fn from_value(
+        value: &Value,
+        content_type: ReadResponseContentType,
+    ) -> Result<Self, ReadServiceError> {
         let body = registry_platform_canonical_json::canonicalize_json(value)
             .map_err(|_| ReadServiceError::Unavailable)?;
         Ok(Self {
             body,
+            content_type,
             strong_etag: None,
         })
     }
@@ -51,8 +67,28 @@ impl HeldReadResponse {
     }
 
     #[must_use]
+    pub fn content_type(&self) -> &'static str {
+        self.content_type.as_str()
+    }
+
+    #[must_use]
     pub fn strong_etag(&self) -> Option<&[u8]> {
         self.strong_etag.as_deref()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReadResponseContentType {
+    Json,
+    GeoJson,
+}
+
+impl ReadResponseContentType {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Json => "application/json",
+            Self::GeoJson => "application/geo+json",
+        }
     }
 }
 
@@ -184,6 +220,10 @@ pub struct RecordReadRequest {
     /// fields from `context`; they must never fetch the profile's wider field
     /// set and rely on response filtering.
     pub selected_fields: BTreeSet<String>,
+    pub representation: CursorRepresentation,
+    pub adapter: crate::cursor::CursorAdapter,
+    pub adapter_origin: Option<String>,
+    pub geojson_next_link_prefix: Option<String>,
     pub kind: RecordReadKind,
     /// Hard source-execution result bound. Implementations must apply it in
     /// the database plan before rows are materialized.
@@ -203,6 +243,16 @@ impl fmt::Debug for RecordReadRequest {
             .field("method", &self.method)
             .field("context", &"<redacted>")
             .field("selected_fields", &self.selected_fields)
+            .field("representation", &self.representation)
+            .field("adapter", &self.adapter)
+            .field(
+                "adapter_origin",
+                &self.adapter_origin.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "geojson_next_link_prefix",
+                &self.geojson_next_link_prefix.as_ref().map(|_| "<redacted>"),
+            )
             .field("kind", &self.kind)
             .field("maximum_records", &self.maximum_records)
             .finish()
@@ -305,11 +355,57 @@ pub struct CompiledReadQuery {
     pub cursor_query: CursorQuery,
     pub projection: Vec<ReadProjectionField>,
     pub filter: Option<ReadFilterExpr>,
+    pub spatial: Option<ReadSpatialQuery>,
     pub order: Option<ReadOrderClause>,
     pub include_count: bool,
     pub page_size: u16,
     pub temporal_instant: Option<String>,
+    pub adapter: crate::cursor::CursorAdapter,
+    pub adapter_origin: Option<String>,
     pub continuation: Option<CursorContinuation>,
+}
+
+pub(crate) struct CursorQueryReferenceInput<'a> {
+    pub route_id: &'a str,
+    pub query_operation_id: &'a str,
+    pub query_kind: CompiledQueryKind,
+    pub selected_profile: &'a str,
+    pub projection: Vec<Value>,
+    pub filter: Option<Value>,
+    pub spatial: Option<Value>,
+    pub order: Option<Value>,
+    pub page_size: u16,
+    pub include_count: bool,
+    pub temporal_instant: Option<&'a str>,
+    pub scope: Value,
+    pub representation: CursorRepresentation,
+    pub adapter: CursorAdapter,
+    pub adapter_origin: Option<&'a str>,
+}
+
+pub(crate) fn cursor_query_reference_value(input: CursorQueryReferenceInput<'_>) -> Value {
+    let mut value = Map::new();
+    value.insert("routeId".to_owned(), json!(input.route_id));
+    value.insert(
+        "queryOperationId".to_owned(),
+        json!(input.query_operation_id),
+    );
+    value.insert("queryKind".to_owned(), json!(input.query_kind));
+    value.insert("selectedProfile".to_owned(), json!(input.selected_profile));
+    value.insert("projection".to_owned(), json!(input.projection));
+    value.insert("filter".to_owned(), json!(input.filter));
+    value.insert("spatial".to_owned(), json!(input.spatial));
+    value.insert("order".to_owned(), json!(input.order));
+    value.insert("pageSize".to_owned(), json!(input.page_size));
+    value.insert("includeCount".to_owned(), json!(input.include_count));
+    value.insert("temporalInstant".to_owned(), json!(input.temporal_instant));
+    value.insert("scope".to_owned(), input.scope);
+    value.insert("representation".to_owned(), json!(input.representation));
+    value.insert("adapter".to_owned(), json!(input.adapter));
+    if let Some(origin) = input.adapter_origin {
+        value.insert("adapterOrigin".to_owned(), json!(origin));
+    }
+    Value::Object(value)
 }
 
 impl fmt::Debug for CompiledReadQuery {
@@ -323,6 +419,7 @@ impl fmt::Debug for CompiledReadQuery {
             .field("cursor_query", &"<redacted>")
             .field("projection", &self.projection)
             .field("filter", &self.filter)
+            .field("spatial", &self.spatial)
             .field("order", &self.order)
             .field("include_count", &self.include_count)
             .field("page_size", &self.page_size)
@@ -330,10 +427,45 @@ impl fmt::Debug for CompiledReadQuery {
                 "temporal_instant",
                 &self.temporal_instant.as_ref().map(|_| "<redacted>"),
             )
+            .field("adapter", &self.adapter)
             .field(
                 "continuation",
                 &self.continuation.as_ref().map(|_| "<redacted>"),
             )
+            .finish()
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct ReadSpatialQuery {
+    pub bbox: ReadBboxQuery,
+}
+
+impl fmt::Debug for ReadSpatialQuery {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ReadSpatialQuery(<redacted>)")
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct ReadBboxQuery {
+    pub geometry_field: String,
+    pub west: String,
+    pub south: String,
+    pub east: String,
+    pub north: String,
+    pub maximum_longitude_span_degrees: String,
+    pub maximum_latitude_span_degrees: String,
+}
+
+impl fmt::Debug for ReadBboxQuery {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ReadBboxQuery")
+            .field("geometry_field", &self.geometry_field)
+            .field("coordinates", &"<redacted>")
+            .field("maximum_longitude_span_degrees", &"<redacted>")
+            .field("maximum_latitude_span_degrees", &"<redacted>")
             .finish()
     }
 }
@@ -660,6 +792,7 @@ pub struct HttpService {
     pub(crate) cursors: Arc<CursorCodec>,
     pub(crate) mutations: Option<Arc<PostgresRecordMutationService>>,
     pub(crate) readiness: Arc<dyn ReadinessProbe>,
+    pub(crate) public_origin: Option<crate::runtime_config::PublicOrigin>,
 }
 
 impl HttpService {
@@ -695,7 +828,14 @@ impl HttpService {
             cursors,
             mutations: None,
             readiness,
+            public_origin: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_public_origin(mut self, origin: crate::runtime_config::PublicOrigin) -> Self {
+        self.public_origin = Some(origin);
+        self
     }
 
     #[must_use]

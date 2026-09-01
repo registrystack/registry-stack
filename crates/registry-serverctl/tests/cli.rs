@@ -1649,6 +1649,70 @@ accessProfiles:
 }
 
 #[test]
+fn explain_spatial_queries_maps_the_exact_profile_and_api_geometry() {
+    let project = TestProject::from_registry_source(
+        br#"apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry: {id: map-explanation, version: 1, defaultLanguage: en}
+entities:
+  - id: service-site
+    route: service-sites
+    mutationMode: create_only
+    geojson: {geometryField: location}
+    fields:
+      - {id: location, apiName: position, type: crs84-point, precision: 9, classification: internal}
+accessProfiles:
+  - id: map-reader
+    default: true
+    principalClaim: principal
+    grants:
+      - entity: service-site
+        operations: [get, list]
+        readableFields: [location]
+        spatialQueries:
+          bbox: {maximumLongitudeSpanDegrees: 0.5, maximumLatitudeSpanDegrees: 0.25}
+  - id: geometry-reader
+    principalClaim: principal
+    grants:
+      - {entity: service-site, operations: [get, list], readableFields: [location]}
+"#,
+    );
+    let output = registry_serverctl(&[
+        "--format",
+        "json",
+        "explain",
+        "queries",
+        path(project.path()),
+    ]);
+    assert!(output.status.success(), "{output:?}");
+    let report = json_stdout(&output);
+    let operations = report["explanation"]["operations"].as_array().unwrap();
+    let map = operations
+        .iter()
+        .find(|operation| operation["profile"] == "map-reader")
+        .unwrap();
+    assert_eq!(map["spatialQueries"]["bbox"]["apiName"], "position");
+    assert_eq!(
+        map["spatialQueries"]["bbox"]["maximumLatitudeSpanDegrees"],
+        0.25
+    );
+    assert_eq!(map["spatialQueries"]["bbox"]["requiresPostgis"], true);
+    assert_eq!(map["gis"]["collectionId"], "service-site.map-reader");
+    assert_eq!(map["gis"]["accessProfile"], "map-reader");
+    assert_eq!(
+        map["gis"]["itemsPath"],
+        "/v1/gis/collections/service-site.map-reader/items"
+    );
+    assert!(map["filterable"].as_array().unwrap().is_empty());
+    let plain = operations
+        .iter()
+        .find(|operation| operation["profile"] == "geometry-reader")
+        .unwrap();
+    assert!(plain.get("gis").is_none());
+    assert!(plain.get("spatialQueries").is_none());
+}
+
+#[test]
 fn check_reports_derived_sql_module_path_without_sql_values() {
     let project = TestProject::from_registry_source(
         br#"apiVersion: registry.registrystack.org/v1alpha1

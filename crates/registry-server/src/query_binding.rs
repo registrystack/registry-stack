@@ -2,10 +2,13 @@
 //! One canonical cursor binding contract for HTTP, live reads and history.
 
 use crate::api::{
-    AuthorizedRequestContext, ReadFilterExpr, ReadFilterOperator, ReadLogicalOp, ReadOrderClause,
-    ReadProjectionField, RowBoundaryOperator,
+    cursor_query_reference_value, AuthorizedRequestContext, CursorQueryReferenceInput,
+    ReadFilterExpr, ReadFilterOperator, ReadLogicalOp, ReadOrderClause, ReadProjectionField,
+    ReadSpatialQuery, RowBoundaryOperator,
 };
-use crate::cursor::{CursorCodec, CursorError, CursorQueryScope};
+use crate::cursor::{
+    CursorAdapter, CursorCodec, CursorError, CursorQueryScope, CursorRepresentation,
+};
 use crate::model::CompiledQueryOperation;
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
@@ -15,6 +18,7 @@ pub(crate) struct CursorBindingReferences {
     pub(crate) purpose: Option<String>,
     pub(crate) row_boundary: String,
     pub(crate) projection: String,
+    pub(crate) spatial: Option<String>,
     pub(crate) query: String,
     pub(crate) sort: String,
     pub(crate) scope: String,
@@ -25,11 +29,15 @@ pub(crate) struct CursorBindingQuery<'a> {
     pub(crate) selected_fields: &'a BTreeSet<String>,
     pub(crate) projection: &'a [ReadProjectionField],
     pub(crate) filter: Option<&'a ReadFilterExpr>,
+    pub(crate) spatial: Option<&'a ReadSpatialQuery>,
     pub(crate) order: Option<&'a ReadOrderClause>,
     pub(crate) include_count: bool,
     pub(crate) page_size: u16,
     pub(crate) temporal_instant: Option<&'a str>,
     pub(crate) scope: &'a CursorQueryScope,
+    pub(crate) representation: CursorRepresentation,
+    pub(crate) adapter: CursorAdapter,
+    pub(crate) adapter_origin: Option<&'a str>,
 }
 
 pub(crate) fn references(
@@ -73,20 +81,37 @@ pub(crate) fn references(
         b"registry-server-cursor-projection-v3",
         &json!({"projection": query.projection.iter().map(projection_field_value).collect::<Vec<_>>()}),
     )?;
+    let spatial_reference = query
+        .spatial
+        .map(|spatial| {
+            cursors.binding_digest(
+                b"registry-server-cursor-spatial-v3",
+                &read_spatial_query_value(spatial),
+            )
+        })
+        .transpose()?;
     let query_reference = cursors.binding_digest(
         b"registry-server-cursor-query-v3",
-        &json!({
-            "routeId": route_id,
-            "queryOperationId": operation.id,
-            "queryKind": operation.kind,
-            "selectedProfile": context.selected_profile(),
-            "projection": query.projection.iter().map(projection_field_value).collect::<Vec<_>>(),
-            "filter": query.filter.map(read_filter_expr_value),
-            "order": query.order.map(read_order_clause_value),
-            "pageSize": query.page_size,
-            "includeCount": query.include_count,
-            "temporalInstant": query.temporal_instant,
-            "scope": cursor_scope_value(query.scope),
+        &cursor_query_reference_value(CursorQueryReferenceInput {
+            route_id,
+            query_operation_id: &operation.id,
+            query_kind: operation.kind,
+            selected_profile: context.selected_profile(),
+            projection: query
+                .projection
+                .iter()
+                .map(projection_field_value)
+                .collect::<Vec<_>>(),
+            filter: query.filter.map(read_filter_expr_value),
+            spatial: query.spatial.map(read_spatial_query_value),
+            order: query.order.map(read_order_clause_value),
+            page_size: query.page_size,
+            include_count: query.include_count,
+            temporal_instant: query.temporal_instant,
+            scope: cursor_scope_value(query.scope),
+            representation: query.representation,
+            adapter: query.adapter,
+            adapter_origin: query.adapter_origin,
         }),
     )?;
     let sort_reference = cursors.binding_digest(
@@ -102,9 +127,24 @@ pub(crate) fn references(
         purpose: purpose_reference,
         row_boundary: row_boundary_reference,
         projection: projection_reference,
+        spatial: spatial_reference,
         query: query_reference,
         sort: sort_reference,
         scope: scope_reference,
+    })
+}
+
+fn read_spatial_query_value(spatial: &ReadSpatialQuery) -> Value {
+    json!({
+        "bbox": {
+            "geometryField": spatial.bbox.geometry_field,
+            "west": spatial.bbox.west,
+            "south": spatial.bbox.south,
+            "east": spatial.bbox.east,
+            "north": spatial.bbox.north,
+            "maximumLongitudeSpanDegrees": spatial.bbox.maximum_longitude_span_degrees,
+            "maximumLatitudeSpanDegrees": spatial.bbox.maximum_latitude_span_degrees,
+        }
     })
 }
 

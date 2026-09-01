@@ -15,9 +15,14 @@ use crate::model::{
     CompiledActionTargetUse, CompiledActionTargetUseSource, CompiledChangeRequestEffect,
     CompiledChangeRequestMutation, CompiledEntity,
 };
-use crate::physical_names::{hex_prefix, PhysicalNameInventory};
+use crate::physical_names::{
+    hex_prefix, spatial_candidate_view_name, spatial_geometry_column_name,
+    spatial_geometry_index_name, PhysicalNameInventory,
+};
 
 const RECORD_ID_COLUMN: &str = "record_id";
+pub(crate) const POSTGIS_EXTENSION_SCHEMA: &str = "registry_spatial_ext";
+pub(crate) const SPATIAL_BBOX_FUNCTION_NAME: &str = "spatial_bbox_geometry";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -71,16 +76,47 @@ impl PolicyCommand {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DdlPolicyRole {
+    #[default]
+    Public,
+    Runtime,
+    SpatialBbox,
+}
+
+impl DdlPolicyRole {
+    pub(crate) fn is_public(value: &Self) -> bool {
+        *value == Self::Public
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DdlPolicy {
     pub name: String,
     pub command: PolicyCommand,
     pub access_profile: String,
+    #[serde(default, skip_serializing_if = "DdlPolicyRole::is_public")]
+    pub applies_to: DdlPolicyRole,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub using_expression: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub check_expression: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DdlObjectOwner {
+    #[default]
+    Migration,
+    SpatialBbox,
+}
+
+impl DdlObjectOwner {
+    pub(crate) fn is_migration(value: &Self) -> bool {
+        *value == Self::Migration
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -89,6 +125,8 @@ pub struct DdlTable {
     pub entity_id: String,
     pub physical_name: String,
     pub runtime_privileges: BTreeSet<TablePrivilege>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub spatial_bbox_privileges: BTreeSet<TablePrivilege>,
     pub policies: Vec<DdlPolicy>,
 }
 
@@ -98,6 +136,8 @@ pub struct DdlView {
     pub id: String,
     pub schema: String,
     pub name: String,
+    #[serde(default, skip_serializing_if = "DdlObjectOwner::is_migration")]
+    pub owner: DdlObjectOwner,
     pub runtime_privileges: BTreeSet<TablePrivilege>,
 }
 
@@ -109,6 +149,8 @@ pub struct DdlFunction {
     pub name: String,
     pub arguments: String,
     pub runtime_execute: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub spatial_bbox_execute: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -123,12 +165,18 @@ pub struct DdlStatement {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DdlInventory {
     pub requires_btree_gist: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub requires_postgis: bool,
     pub statements: Vec<DdlStatement>,
     pub tables: Vec<DdlTable>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub views: Vec<DdlView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub functions: Vec<DdlFunction>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl DdlInventory {
@@ -172,6 +220,10 @@ pub(crate) fn generate_ddl_with_actions(
               $registry_server_function$"
             .to_owned(),
     });
+    let requires_postgis = requires_postgis(entities);
+    if requires_postgis {
+        statements.push(spatial_bbox_function_statement());
+    }
 
     for entity in entities.values() {
         let mut columns = vec![
@@ -185,6 +237,9 @@ pub(crate) fn generate_ddl_with_actions(
         ];
         for field in entity.fields.values() {
             columns.push(column_definition_for_entity(entity, field));
+        }
+        for field_id in spatial_projection_fields(entity) {
+            columns.push(spatial_projection_column_definition(entity, &field_id));
         }
         statements.push(DdlStatement {
             id: format!("entity.{}.table", entity.id),
@@ -252,17 +307,31 @@ pub(crate) fn generate_ddl_with_actions(
                 ),
             });
         }
+        for field_id in spatial_projection_fields(entity) {
+            statements.push(spatial_projection_statements(entity, &field_id).create_index);
+        }
     }
 
     let mut tables = Vec::new();
     let mut views = Vec::new();
-    let functions = vec![DdlFunction {
+    let mut functions = vec![DdlFunction {
         id: "registry_context.evaluation_date".to_owned(),
         schema: "registry_context".to_owned(),
         name: "evaluation_date".to_owned(),
         arguments: String::new(),
         runtime_execute: true,
+        spatial_bbox_execute: false,
     }];
+    if requires_postgis {
+        functions.push(DdlFunction {
+            id: format!("registry_context.{SPATIAL_BBOX_FUNCTION_NAME}"),
+            schema: "registry_context".to_owned(),
+            name: SPATIAL_BBOX_FUNCTION_NAME.to_owned(),
+            arguments: String::new(),
+            runtime_execute: true,
+            spatial_bbox_execute: true,
+        });
+    }
     for entity in entities.values() {
         let runtime_privileges = runtime_privileges(entity, entities, actions);
         let policies = policies(entity, entities, actions);
@@ -278,18 +347,31 @@ pub(crate) fn generate_ddl_with_actions(
             sql: format!("ALTER TABLE registry_data.{table} FORCE ROW LEVEL SECURITY"),
         });
         for policy in &policies {
-            statements.push(DdlStatement {
-                id: format!("entity.{}.policy.{}", entity.id, policy.name),
-                kind: DdlStatementKind::Policy,
-                sql: policy_sql(&table, policy),
-            });
+            if policy.applies_to == DdlPolicyRole::Public {
+                statements.push(DdlStatement {
+                    id: format!("entity.{}.policy.{}", entity.id, policy.name),
+                    kind: DdlStatementKind::Policy,
+                    sql: policy_sql(&table, policy, None),
+                });
+            }
         }
         tables.push(DdlTable {
             entity_id: entity.id.clone(),
             physical_name: entity.physical_table.clone(),
             runtime_privileges,
+            spatial_bbox_privileges: spatial_bbox_table_privileges(entity),
             policies,
         });
+        if let Some(candidate_view) = spatial_candidate_view_statement(entity) {
+            statements.push(candidate_view);
+            views.push(DdlView {
+                id: format!("entity.{}.spatial-candidates", entity.id),
+                schema: "registry_context".to_owned(),
+                name: spatial_candidate_view_name(&entity.id),
+                owner: DdlObjectOwner::SpatialBbox,
+                runtime_privileges: BTreeSet::from([TablePrivilege::Select]),
+            });
+        }
     }
 
     // Derived SQL may read any compiled registry_source relation. Install the
@@ -329,6 +411,7 @@ pub(crate) fn generate_ddl_with_actions(
             id: format!("entity.{}.source", entity.id),
             schema: "registry_source".to_owned(),
             name: entity.source_relation.sql_name.clone(),
+            owner: DdlObjectOwner::Migration,
             runtime_privileges: BTreeSet::from([TablePrivilege::Select]),
         });
     }
@@ -395,6 +478,7 @@ pub(crate) fn generate_ddl_with_actions(
                 id: format!("entity.{}.derived.{}", entity.id, relation.id),
                 schema: "registry_derived".to_owned(),
                 name: derived_view_name,
+                owner: DdlObjectOwner::Migration,
                 runtime_privileges: BTreeSet::from([TablePrivilege::Select]),
             });
         }
@@ -407,11 +491,179 @@ pub(crate) fn generate_ddl_with_actions(
                 .values()
                 .any(|value| matches!(value, ConstraintSource::TemporalNonOverlap { .. }))
         }),
+        requires_postgis,
         statements,
         tables,
         views,
         functions,
     }
+}
+
+fn requires_postgis(entities: &BTreeMap<String, CompiledEntity>) -> bool {
+    entities
+        .values()
+        .any(|entity| !spatial_projection_fields(entity).is_empty())
+}
+
+pub(crate) fn spatial_projection_fields(entity: &CompiledEntity) -> BTreeSet<String> {
+    let Some(geojson) = entity.geojson.as_ref() else {
+        return BTreeSet::new();
+    };
+    entity
+        .access_profiles
+        .values()
+        .filter(|profile| profile.operations.contains(&Operation::List))
+        .filter(|profile| {
+            profile
+                .spatial_queries
+                .as_ref()
+                .and_then(|spatial| spatial.bbox.as_ref())
+                .is_some()
+        })
+        .map(|_| geojson.geometry_field.clone())
+        .collect()
+}
+
+fn ordinary_policy_role(entity: &CompiledEntity) -> DdlPolicyRole {
+    if spatial_projection_fields(entity).is_empty() {
+        DdlPolicyRole::Public
+    } else {
+        DdlPolicyRole::Runtime
+    }
+}
+
+#[cfg_attr(
+    not(feature = "runtime"),
+    allow(dead_code, reason = "runtime package planning consumes this helper")
+)]
+pub(crate) fn drop_spatial_bbox_function_statement() -> DdlStatement {
+    DdlStatement {
+        id: format!("function.registry_context.{SPATIAL_BBOX_FUNCTION_NAME}.drop"),
+        kind: DdlStatementKind::Function,
+        sql: format!("DROP FUNCTION IF EXISTS registry_context.{SPATIAL_BBOX_FUNCTION_NAME}()"),
+    }
+}
+
+pub(crate) fn spatial_bbox_function_statement() -> DdlStatement {
+    DdlStatement {
+        id: format!("function.registry_context.{SPATIAL_BBOX_FUNCTION_NAME}"),
+        kind: DdlStatementKind::Function,
+        sql: format!(
+            "CREATE OR REPLACE FUNCTION registry_context.{SPATIAL_BBOX_FUNCTION_NAME}()
+             RETURNS {POSTGIS_EXTENSION_SCHEMA}.geometry
+             LANGUAGE sql
+             STABLE
+             SECURITY INVOKER
+             AS $registry_server_function$
+                 SELECT CASE
+                     WHEN west = east AND south = north THEN
+                         {POSTGIS_EXTENSION_SCHEMA}.ST_SetSRID(
+                             {POSTGIS_EXTENSION_SCHEMA}.ST_MakePoint(west, south),
+                             4326
+                         )::{POSTGIS_EXTENSION_SCHEMA}.geometry
+                     WHEN west = east OR south = north THEN
+                         {POSTGIS_EXTENSION_SCHEMA}.ST_MakeLine(
+                             {POSTGIS_EXTENSION_SCHEMA}.ST_SetSRID(
+                                 {POSTGIS_EXTENSION_SCHEMA}.ST_MakePoint(west, south),
+                                 4326
+                             ),
+                             {POSTGIS_EXTENSION_SCHEMA}.ST_SetSRID(
+                                 {POSTGIS_EXTENSION_SCHEMA}.ST_MakePoint(east, north),
+                                 4326
+                             )
+                         )::{POSTGIS_EXTENSION_SCHEMA}.geometry
+                     ELSE
+                         {POSTGIS_EXTENSION_SCHEMA}.ST_MakeEnvelope(west, south, east, north, 4326)
+                 END
+                   FROM (
+                     SELECT NULLIF(current_setting('registry.bbox_west', true), '')::double precision AS west,
+                            NULLIF(current_setting('registry.bbox_south', true), '')::double precision AS south,
+                            NULLIF(current_setting('registry.bbox_east', true), '')::double precision AS east,
+                            NULLIF(current_setting('registry.bbox_north', true), '')::double precision AS north
+                   ) AS registry_bbox
+             $registry_server_function$"
+        ),
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SpatialProjectionStatements {
+    pub add_column: DdlStatement,
+    pub create_index: DdlStatement,
+    pub drop_index: DdlStatement,
+    pub drop_column: DdlStatement,
+}
+
+pub(crate) fn spatial_projection_statements(
+    entity: &CompiledEntity,
+    field_id: &str,
+) -> SpatialProjectionStatements {
+    assert!(
+        matches!(
+            entity.fields[field_id].field_type,
+            FieldTypeSource::Crs84Point { .. }
+        ),
+        "spatial projections are generated only for CRS84 point fields"
+    );
+    let column_name = spatial_geometry_column_name(&entity.id, field_id);
+    let index_name = spatial_geometry_index_name(&entity.id, field_id);
+    let table = quote_identifier(&entity.physical_table);
+    let column = quote_identifier(&column_name);
+    let index = quote_identifier(&index_name);
+    SpatialProjectionStatements {
+        add_column: DdlStatement {
+            id: format!("entity.{}.field.{field_id}.spatial-column.add", entity.id),
+            kind: DdlStatementKind::Column,
+            sql: format!(
+                "ALTER TABLE registry_data.{table} ADD COLUMN {}",
+                spatial_projection_column_definition(entity, field_id)
+            ),
+        },
+        create_index: DdlStatement {
+            id: format!("entity.{}.field.{field_id}.spatial-index.create", entity.id),
+            kind: DdlStatementKind::Index,
+            sql: spatial_projection_index_sql(entity, field_id),
+        },
+        drop_index: DdlStatement {
+            id: format!("entity.{}.field.{field_id}.spatial-index.drop", entity.id),
+            kind: DdlStatementKind::Index,
+            sql: format!("DROP INDEX IF EXISTS registry_data.{index}"),
+        },
+        drop_column: DdlStatement {
+            id: format!("entity.{}.field.{field_id}.spatial-column.drop", entity.id),
+            kind: DdlStatementKind::Column,
+            sql: format!("ALTER TABLE registry_data.{table} DROP COLUMN IF EXISTS {column}"),
+        },
+    }
+}
+
+fn spatial_projection_column_definition(entity: &CompiledEntity, field_id: &str) -> String {
+    let source = quote_identifier(&entity.fields[field_id].physical_name);
+    let column = quote_identifier(&spatial_geometry_column_name(&entity.id, field_id));
+    format!(
+        "{column} {POSTGIS_EXTENSION_SCHEMA}.geometry(Point,4326)
+         GENERATED ALWAYS AS (
+             CASE
+                 WHEN {source} IS NULL THEN NULL
+                 ELSE {POSTGIS_EXTENSION_SCHEMA}.ST_SetSRID(
+                     {POSTGIS_EXTENSION_SCHEMA}.ST_MakePoint(
+                         ({source} -> 'coordinates' ->> 0)::double precision,
+                         ({source} -> 'coordinates' ->> 1)::double precision
+                     ),
+                     4326
+                 )::{POSTGIS_EXTENSION_SCHEMA}.geometry(Point,4326)
+             END
+         ) STORED"
+    )
+}
+
+fn spatial_projection_index_sql(entity: &CompiledEntity, field_id: &str) -> String {
+    let table = quote_identifier(&entity.physical_table);
+    let column = quote_identifier(&spatial_geometry_column_name(&entity.id, field_id));
+    let index = quote_identifier(&spatial_geometry_index_name(&entity.id, field_id));
+    format!(
+        "CREATE INDEX {index} ON registry_data.{table} USING gist ({column}) WHERE {column} IS NOT NULL"
+    )
 }
 
 pub(crate) fn derived_view_name(source_relation: &str, derived_relation: &str) -> String {
@@ -493,6 +745,14 @@ fn column_definition(
         column.push(')');
     }
     column
+}
+
+fn spatial_bbox_table_privileges(entity: &CompiledEntity) -> BTreeSet<TablePrivilege> {
+    if spatial_projection_fields(entity).is_empty() {
+        BTreeSet::new()
+    } else {
+        BTreeSet::from([TablePrivilege::Select])
+    }
 }
 
 fn runtime_privileges(
@@ -651,6 +911,7 @@ fn policies(
                 name: policy_name(&entity.id, &profile.id, command),
                 command,
                 access_profile: profile.id.clone(),
+                applies_to: ordinary_policy_role(entity),
                 using_expression,
                 check_expression,
             });
@@ -663,6 +924,7 @@ fn policies(
                 name: create_returning_policy_name(&entity.id, &profile.id),
                 command: PolicyCommand::Select,
                 access_profile: profile.id.clone(),
+                applies_to: ordinary_policy_role(entity),
                 using_expression: Some(format!(
                     "({authority}) AND record_lifecycle = 'active' AND {} = NULLIF(current_setting('registry.created_entity_id', true), '') AND record_id = NULLIF(current_setting('registry.created_record_id', true), '')::uuid",
                     quote_literal(&entity.id)
@@ -676,6 +938,7 @@ fn policies(
     policies.extend(read_path_policies_for_table(entity, entities));
     policies.extend(change_request_target_policies_for_table(entity, entities));
     policies.extend(immediate_action_target_policies_for_table(entity, actions));
+    policies.extend(spatial_bbox_select_policies(entity));
     policies
 }
 
@@ -701,6 +964,125 @@ fn request_get_lifecycle_expression(
     } else {
         "record_lifecycle = 'active'".to_owned()
     }
+}
+
+fn spatial_bbox_select_policies(entity: &CompiledEntity) -> Vec<DdlPolicy> {
+    let mut policies = Vec::new();
+    let Some(geojson) = entity.geojson.as_ref() else {
+        return policies;
+    };
+    for profile in entity.access_profiles.values() {
+        if !profile.operations.contains(&Operation::List) {
+            continue;
+        }
+        let Some(bbox) = profile
+            .spatial_queries
+            .as_ref()
+            .and_then(|spatial| spatial.bbox.as_ref())
+        else {
+            continue;
+        };
+        let geometry_field = &geojson.geometry_field;
+        let spatial = spatial_bbox_predicate(entity, geometry_field, bbox);
+        policies.push(DdlPolicy {
+            name: spatial_bbox_policy_name(&entity.id, &profile.id),
+            command: PolicyCommand::Select,
+            access_profile: profile.id.clone(),
+            applies_to: DdlPolicyRole::SpatialBbox,
+            using_expression: Some(format!(
+                "({}) AND record_lifecycle = 'active' AND ({spatial})",
+                policy_authority_expression(entity, profile),
+            )),
+            check_expression: None,
+        });
+    }
+    policies
+}
+
+pub(crate) fn spatial_candidate_view_statement(entity: &CompiledEntity) -> Option<DdlStatement> {
+    let predicates = spatial_candidate_predicates(entity);
+    if predicates.is_empty() {
+        return None;
+    }
+    Some(DdlStatement {
+        id: format!("entity.{}.spatial-candidates-view", entity.id),
+        kind: DdlStatementKind::View,
+        sql: format!(
+            "CREATE VIEW registry_context.{}
+             WITH (security_invoker=false, security_barrier=true)
+             AS SELECT record_id AS id
+                  FROM registry_data.{}
+                 WHERE {}",
+            quote_identifier(&spatial_candidate_view_name(&entity.id)),
+            quote_identifier(&entity.physical_table),
+            predicates.join(" OR "),
+        ),
+    })
+}
+
+#[cfg(feature = "runtime")]
+pub(crate) fn drop_spatial_candidate_view_statement(
+    entity: &CompiledEntity,
+) -> Option<DdlStatement> {
+    spatial_candidate_view_statement(entity).map(|_| DdlStatement {
+        id: format!("entity.{}.spatial-candidates-view.drop", entity.id),
+        kind: DdlStatementKind::View,
+        sql: format!(
+            "DROP VIEW IF EXISTS registry_context.{}",
+            quote_identifier(&spatial_candidate_view_name(&entity.id)),
+        ),
+    })
+}
+
+fn spatial_candidate_predicates(entity: &CompiledEntity) -> Vec<String> {
+    let Some(geojson) = entity.geojson.as_ref() else {
+        return Vec::new();
+    };
+    let geometry_field = &geojson.geometry_field;
+    entity
+        .access_profiles
+        .values()
+        .filter_map(|profile| {
+            let bbox = profile
+                .spatial_queries
+                .as_ref()
+                .and_then(|spatial| spatial.bbox.as_ref())?;
+            if !profile.operations.contains(&Operation::List) {
+                return None;
+            }
+            Some(format!(
+                "(({}) AND record_lifecycle = 'active' AND ({}))",
+                policy_authority_expression(entity, profile),
+                spatial_bbox_predicate(entity, geometry_field, bbox),
+            ))
+        })
+        .collect()
+}
+
+fn spatial_bbox_predicate(
+    entity: &CompiledEntity,
+    geometry_field: &str,
+    bbox: &crate::contract::SpatialBboxGrantSource,
+) -> String {
+    let geometry = quote_identifier(&spatial_geometry_column_name(&entity.id, geometry_field));
+    let source = quote_identifier(&entity.fields[geometry_field].physical_name);
+    let west = "NULLIF(current_setting('registry.bbox_west', true), '')::numeric";
+    let south = "NULLIF(current_setting('registry.bbox_south', true), '')::numeric";
+    let east = "NULLIF(current_setting('registry.bbox_east', true), '')::numeric";
+    let north = "NULLIF(current_setting('registry.bbox_north', true), '')::numeric";
+    format!(
+        "{geometry} IS NOT NULL
+         AND ({east} - {west}) BETWEEN 0 AND {}
+         AND ({north} - {south}) BETWEEN 0 AND {}
+         AND {geometry} OPERATOR({POSTGIS_EXTENSION_SCHEMA}.&&) registry_context.{SPATIAL_BBOX_FUNCTION_NAME}()
+         AND {POSTGIS_EXTENSION_SCHEMA}.ST_Intersects({geometry}, registry_context.{SPATIAL_BBOX_FUNCTION_NAME}())
+         AND ({source} -> 'coordinates' ->> 0)::numeric >= {west}
+         AND ({source} -> 'coordinates' ->> 0)::numeric <= {east}
+         AND ({source} -> 'coordinates' ->> 1)::numeric >= {south}
+         AND ({source} -> 'coordinates' ->> 1)::numeric <= {north}",
+        bbox.maximum_longitude_span_degrees,
+        bbox.maximum_latitude_span_degrees,
+    )
 }
 
 fn profile_supports_command(operations: &BTreeSet<Operation>, command: PolicyCommand) -> bool {
@@ -788,6 +1170,7 @@ fn read_path_source_policy(
         name: read_path_policy_name(&source.id, &source.id, &profile.id, &path.id, "source"),
         command: PolicyCommand::Select,
         access_profile: profile.id.clone(),
+        applies_to: DdlPolicyRole::Public,
         using_expression: Some(format!(
             "({}) AND {} AND record_id = {root_id} AND record_lifecycle = 'active'",
             policy_authority_expression(source, profile),
@@ -811,6 +1194,7 @@ fn read_path_through_policy(
         name: read_path_policy_name(&through.id, &source.id, &profile.id, &path.id, "through"),
         command: PolicyCommand::Select,
         access_profile: profile.id.clone(),
+        applies_to: DdlPolicyRole::Public,
         using_expression: Some(format!(
             "({}) AND {} AND record_lifecycle = 'active' AND {source_ref} = {root_id}
              AND EXISTS (
@@ -847,6 +1231,7 @@ fn read_path_target_policy(
         name: read_path_policy_name(&target.id, &source.id, &profile.id, &path.id, "target"),
         command: PolicyCommand::Select,
         access_profile: profile.id.clone(),
+        applies_to: DdlPolicyRole::Public,
         using_expression: Some(format!(
             "({}) AND {} AND record_lifecycle = 'active'
              AND EXISTS (
@@ -934,6 +1319,7 @@ fn change_request_action_policies_for_table(entity: &CompiledEntity) -> Vec<DdlP
                     ),
                     command: PolicyCommand::Select,
                     access_profile: profile.id.clone(),
+                    applies_to: ordinary_policy_role(entity),
                     using_expression: Some(format!(
                         "{select_expression} AND record_lifecycle = 'active'"
                     )),
@@ -949,6 +1335,7 @@ fn change_request_action_policies_for_table(entity: &CompiledEntity) -> Vec<DdlP
                     ),
                     command: PolicyCommand::Update,
                     access_profile: profile.id.clone(),
+                    applies_to: ordinary_policy_role(entity),
                     using_expression: Some(format!(
                         "{update_expression} AND record_lifecycle = 'active'"
                     )),
@@ -1137,6 +1524,7 @@ fn change_request_presence_policies_for_table(
             ),
             command: PolicyCommand::Select,
             access_profile: grant.profile_id.clone(),
+            applies_to: ordinary_policy_role(request_entity),
             using_expression: Some(format!(
                 "{} AND record_lifecycle = 'active'",
                 change_request_presence_expression(request_entity, target_profile, request, grant)
@@ -1303,6 +1691,7 @@ fn change_request_target_policies_for_table(
                         ),
                         command: PolicyCommand::Select,
                         access_profile: profile.id.clone(),
+                        applies_to: ordinary_policy_role(target_entity),
                         using_expression: Some(format!(
                             "{} AND record_lifecycle = 'active'",
                             change_request_preparation_expression(
@@ -1335,6 +1724,7 @@ fn change_request_target_policies_for_table(
                     ),
                     command: PolicyCommand::Select,
                     access_profile: grant.profile_id.clone(),
+                    applies_to: ordinary_policy_role(target_entity),
                     using_expression: Some(format!(
                         "{} AND record_lifecycle = 'active'",
                         change_request_review_expression(
@@ -1375,6 +1765,7 @@ fn change_request_target_policies_for_table(
                             ),
                             command: PolicyCommand::Select,
                             access_profile: grant.profile_id.clone(),
+                            applies_to: ordinary_policy_role(target_entity),
                             using_expression: Some(bounded_return_row.clone()),
                             check_expression: None,
                         });
@@ -1389,6 +1780,7 @@ fn change_request_target_policies_for_table(
                             ),
                             command: PolicyCommand::Insert,
                             access_profile: grant.profile_id.clone(),
+                            applies_to: ordinary_policy_role(target_entity),
                             using_expression: None,
                             check_expression: Some(bounded_return_row),
                         });
@@ -1411,6 +1803,7 @@ fn change_request_target_policies_for_table(
                             ),
                             command: PolicyCommand::Select,
                             access_profile: grant.profile_id.clone(),
+                            applies_to: ordinary_policy_role(target_entity),
                             using_expression: Some(bounded_return_row.clone()),
                             check_expression: None,
                         });
@@ -1425,6 +1818,7 @@ fn change_request_target_policies_for_table(
                             ),
                             command: PolicyCommand::Update,
                             access_profile: grant.profile_id.clone(),
+                            applies_to: ordinary_policy_role(target_entity),
                             using_expression: Some(bounded_current_row),
                             check_expression: Some(bounded_return_row),
                         });
@@ -1717,6 +2111,7 @@ fn immediate_action_target_policies_for_table(
                     ),
                     command: PolicyCommand::Select,
                     access_profile: grant.profile_id.clone(),
+                    applies_to: ordinary_policy_role(target_entity),
                     using_expression: Some(bounded_return_row.clone()),
                     check_expression: None,
                 });
@@ -1732,6 +2127,7 @@ fn immediate_action_target_policies_for_table(
                             ),
                             command: PolicyCommand::Insert,
                             access_profile: grant.profile_id.clone(),
+                            applies_to: ordinary_policy_role(target_entity),
                             using_expression: None,
                             check_expression: Some(format!(
                                 "{bounded_return_row} AND {write_context}"
@@ -1753,6 +2149,7 @@ fn immediate_action_target_policies_for_table(
                             ),
                             command: PolicyCommand::Update,
                             access_profile: grant.profile_id.clone(),
+                            applies_to: ordinary_policy_role(target_entity),
                             using_expression: Some(bounded_current_row),
                             check_expression: Some(format!(
                                 "{bounded_return_row} AND {write_context}"
@@ -1767,6 +2164,7 @@ fn immediate_action_target_policies_for_table(
                             ),
                             command: PolicyCommand::Update,
                             access_profile: grant.profile_id.clone(),
+                            applies_to: ordinary_policy_role(target_entity),
                             using_expression: Some(format!(
                                 "{bounded_return_row} AND {lock_context}"
                             )),
@@ -1814,6 +2212,7 @@ fn immediate_action_target_policies_for_table(
                     ),
                     command: PolicyCommand::Select,
                     access_profile: grant.profile_id.clone(),
+                    applies_to: ordinary_policy_role(target_entity),
                     using_expression: Some(format!("{expression} AND record_lifecycle = 'active'")),
                     check_expression: None,
                 });
@@ -1826,6 +2225,7 @@ fn immediate_action_target_policies_for_table(
                     ),
                     command: PolicyCommand::Update,
                     access_profile: grant.profile_id.clone(),
+                    applies_to: ordinary_policy_role(target_entity),
                     using_expression: Some(format!("{expression} AND record_lifecycle = 'active'")),
                     check_expression: Some("false".to_owned()),
                 });
@@ -2521,6 +2921,17 @@ fn create_returning_policy_name(entity_id: &str, profile_id: &str) -> String {
     format!("registry_create_returning_rls_{suffix}")
 }
 
+fn spatial_bbox_policy_name(entity_id: &str, profile_id: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"registry-server/spatial-bbox-rls-policy/v1");
+    hasher.update((entity_id.len() as u64).to_be_bytes());
+    hasher.update(entity_id.as_bytes());
+    hasher.update((profile_id.len() as u64).to_be_bytes());
+    hasher.update(profile_id.as_bytes());
+    let digest = hasher.finalize();
+    format!("registry_spatial_bbox_rls_{}", hex_prefix(&digest, 12))
+}
+
 fn read_path_policy_name(
     table_entity_id: &str,
     source_entity_id: &str,
@@ -2542,12 +2953,16 @@ fn read_path_policy_name(
     format!("registry_path_rls_select_{suffix}")
 }
 
-fn policy_sql(table: &str, policy: &DdlPolicy) -> String {
+pub(crate) fn policy_sql(table: &str, policy: &DdlPolicy, role: Option<&str>) -> String {
     let mut sql = format!(
         "CREATE POLICY {} ON registry_data.{table} FOR {}",
         quote_identifier(&policy.name),
         policy.command.as_sql()
     );
+    if let Some(role) = role {
+        sql.push_str(" TO ");
+        sql.push_str(&quote_identifier(role));
+    }
     if let Some(expression) = &policy.using_expression {
         sql.push_str(" USING (");
         sql.push_str(expression);
@@ -2929,4 +3344,91 @@ pub(crate) fn quote_identifier(value: &str) -> String {
 
 fn quote_literal(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::compiler::{compile_project, CompileProfile};
+    use crate::contract::parse_project_json;
+    use crate::generated_ddl::{
+        drop_spatial_bbox_function_statement, spatial_bbox_function_statement,
+        spatial_projection_fields, spatial_projection_statements, DdlStatementKind,
+        SPATIAL_BBOX_FUNCTION_NAME,
+    };
+
+    #[test]
+    fn spatial_projection_helpers_are_deterministic_and_reversible() {
+        let registry = compile_spatial_registry();
+        let entity = &registry.entities()["site"];
+        assert_eq!(
+            spatial_projection_fields(entity)
+                .into_iter()
+                .collect::<Vec<_>>(),
+            vec!["location"]
+        );
+
+        let statements = spatial_projection_statements(entity, "location");
+        assert_eq!(statements.add_column.kind, DdlStatementKind::Column);
+        assert!(statements
+            .add_column
+            .sql
+            .contains("registry_spatial_ext.geometry(Point,4326)"));
+        assert!(statements.add_column.sql.contains("GENERATED ALWAYS AS"));
+        assert!(statements
+            .add_column
+            .sql
+            .contains("registry_spatial_ext.ST_SetSRID"));
+        assert!(statements
+            .add_column
+            .sql
+            .contains("registry_spatial_ext.ST_MakePoint"));
+        assert!(statements.create_index.sql.contains("USING gist"));
+        assert!(statements.create_index.sql.contains("WHERE \"rs_spgeom_"));
+        assert!(statements
+            .drop_index
+            .sql
+            .starts_with("DROP INDEX IF EXISTS registry_data."));
+        assert!(statements.drop_column.sql.contains("DROP COLUMN IF EXISTS"));
+
+        let create_function = spatial_bbox_function_statement();
+        assert_eq!(create_function.kind, DdlStatementKind::Function);
+        assert!(create_function
+            .sql
+            .contains("RETURNS registry_spatial_ext.geometry"));
+        assert!(create_function.sql.contains("SECURITY INVOKER"));
+        assert!(create_function
+            .sql
+            .contains("registry_spatial_ext.ST_MakeEnvelope"));
+        assert!(drop_spatial_bbox_function_statement()
+            .sql
+            .contains(&format!(
+                "DROP FUNCTION IF EXISTS registry_context.{SPATIAL_BBOX_FUNCTION_NAME}()"
+            )));
+    }
+
+    fn compile_spatial_registry() -> crate::CompiledRegistry {
+        let project = parse_project_json(
+            br#"{
+              "apiVersion":"registry.registrystack.org/v1alpha1",
+              "kind":"RegistryProject",
+              "registry":{"id":"spatial-ddl","version":"1","defaultLanguage":"en"},
+              "entities":[{
+                "id":"site","route":"sites","mutationMode":"mutable","classification":"internal",
+                "fields":[
+                  {"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"},
+                  {"id":"location","type":"crs84-point","precision":6,"required":true,"classification":"internal"}
+                ],
+                "geojson":{"geometryField":"location"}
+              }],
+              "accessProfiles":[{
+                "id":"map-reader","default":true,"principalClaim":"principal","grants":[{
+                  "entity":"site","operations":["get","list"],"readableFields":["code","location"],
+                  "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.25,"maximumLatitudeSpanDegrees":1.5}}
+                }]
+              }]
+            }"#,
+        )
+        .expect("spatial source parses");
+        compile_project(&project, &[], CompileProfile::Authoring).expect("spatial project compiles")
+    }
 }

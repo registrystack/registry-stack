@@ -415,6 +415,8 @@ pub struct CompiledEntity {
     pub classification: Classification,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub access_requirements: Option<crate::contract::AccessRequirementsSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geojson: Option<CompiledGeoJsonBinding>,
     pub physical_table: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temporal: Option<CompiledTemporal>,
@@ -434,6 +436,12 @@ pub struct CompiledEntity {
     pub indexes: BTreeMap<String, Vec<String>>,
     pub access_profiles: BTreeMap<String, AccessProfileSource>,
     pub events: BTreeMap<String, EventSource>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledGeoJsonBinding {
+    pub geometry_field: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -686,8 +694,40 @@ pub struct CompiledQueryOperation {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub processing_fields: Vec<String>,
     pub stable_tie_breaker: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spatial: Option<CompiledSpatialQueryCapability>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temporal: Option<CompiledQueryTemporalBinding>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledSpatialQueryCapability {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bbox: Option<CompiledBboxQueryCapability>,
+}
+
+impl CompiledQueryOperation {
+    /// Stable QGIS collection identity for one direct spatial grant. Logical
+    /// identifiers cannot contain dots, so the entity/profile pair is unambiguous.
+    pub fn gis_collection_id(&self) -> Option<String> {
+        (self.kind == CompiledQueryKind::List
+            && self.read_path.is_none()
+            && self
+                .spatial
+                .as_ref()
+                .and_then(|spatial| spatial.bbox.as_ref())
+                .is_some())
+        .then(|| format!("{}.{}", self.entity_id, self.profile_id))
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledBboxQueryCapability {
+    pub geometry_field: String,
+    pub maximum_longitude_span_degrees: serde_json::Number,
+    pub maximum_latitude_span_degrees: serde_json::Number,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

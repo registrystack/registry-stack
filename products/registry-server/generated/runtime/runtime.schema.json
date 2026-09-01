@@ -446,6 +446,16 @@
         "bind": {
           "type": "string"
         },
+        "publicOrigin": {
+          "description": "Canonical HTTPS origin (loopback HTTP for local development) for QGIS\ndiscovery and pagination. Required when the registry exposes GIS collections.",
+          "maxLength": 2048,
+          "minLength": 1,
+          "pattern": "^https?://[^/@?#\\s]+/?$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "trustedProxy": {
           "$ref": "#/$defs/TrustedProxyPosture"
         }

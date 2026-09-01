@@ -34,6 +34,48 @@ const AUDIT_KEY_CANARY: &str = "audit-key-canary-012345678901234567890123456789"
 const EXPANDED_CANARY: &str = "runtime-expanded-canary";
 const STATIC_JWKS_ENV: &str = "REGISTRY_SERVER_RUNTIME_CONFIG_STATIC_JWKS";
 
+#[test]
+fn public_origin_accepts_only_explicit_web_origins_and_redacts_debug() {
+    use registry_server::runtime_config::PublicOrigin;
+    for (input, expected) in [
+        ("https://registry.example/", "https://registry.example"),
+        (
+            "https://registry.example:8443",
+            "https://registry.example:8443",
+        ),
+        ("http://127.0.0.1:8080", "http://127.0.0.1:8080"),
+        ("http://[::1]:8080/", "http://[::1]:8080"),
+        ("http://localhost:8080", "http://localhost:8080"),
+    ] {
+        let origin = PublicOrigin::parse(input).expect("explicit HTTPS or loopback origin");
+        assert_eq!(origin.as_str(), expected);
+        assert!(!format!("{origin:?}").contains(input));
+    }
+    for input in [
+        "",
+        "/relative",
+        "//registry.example",
+        "ftp://registry.example",
+        "http://registry.example",
+        "http://127.0.0.1.attacker.example",
+        "https://user:secret@registry.example",
+        "https://registry.example/path",
+        "https://registry.example?token=secret",
+        "https://registry.example#fragment",
+        "https://registry.example:0",
+        "https://registry.example:invalid",
+        "https://registry.example:",
+        "https://registry.example:65536",
+        " https://registry.example",
+        "https://registry.example\n",
+    ] {
+        assert!(
+            PublicOrigin::parse(input).is_err(),
+            "origin accepted {input:?}"
+        );
+    }
+}
+
 fn valid_runtime(secret_root: &Path, package_root: &Path, trust_anchor: &Path) -> String {
     format!(
         r#"

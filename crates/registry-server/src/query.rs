@@ -19,6 +19,7 @@ pub const MAX_IDENTIFIER_BYTES: usize = 128;
 pub const MAX_LITERAL_BYTES: usize = 1024;
 pub const MAX_OPAQUE_VALUE_BYTES: usize = 4096;
 pub const MAX_TOP: u32 = 100;
+pub const MAX_BBOX_PARAMETER_BYTES: usize = 256;
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct ParsedReadQuery {
@@ -51,6 +52,7 @@ pub struct ReadQueryOptions {
     pub orderby: Option<OrderByClause>,
     pub top: Option<u32>,
     pub count: Option<bool>,
+    pub bbox: Option<BboxClause>,
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -62,6 +64,11 @@ pub struct SelectClause {
 pub struct OrderByClause {
     pub field: ApiIdentifier,
     pub direction: OrderDirection,
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct BboxClause {
+    coordinates: Box<[String; 4]>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -216,6 +223,7 @@ impl fmt::Debug for ReadQueryOptions {
             .field("orderby", &self.orderby)
             .field("top", &self.top)
             .field("count", &self.count)
+            .field("bbox", &self.bbox)
             .finish()
     }
 }
@@ -235,6 +243,15 @@ impl fmt::Debug for OrderByClause {
             .debug_struct("OrderByClause")
             .field("field", &"<redacted>")
             .field("direction", &self.direction)
+            .finish()
+    }
+}
+
+impl fmt::Debug for BboxClause {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BboxClause")
+            .field("coordinates", &"<redacted>")
             .finish()
     }
 }
@@ -331,6 +348,7 @@ impl ReadQueryOptions {
             || self.orderby.is_some()
             || self.top.is_some()
             || self.count.is_some()
+            || self.bbox.is_some()
     }
 
     fn push_canonical(&self, output: &mut String) {
@@ -357,6 +375,11 @@ impl ReadQueryOptions {
         output.push_str(";count=");
         match self.count {
             Some(count) => output.push_str(if count { "true" } else { "false" }),
+            None => output.push_str("none"),
+        }
+        output.push_str(";bbox=");
+        match &self.bbox {
+            Some(bbox) => bbox.push_canonical(output),
             None => output.push_str("none"),
         }
     }
@@ -407,6 +430,62 @@ impl OrderByClause {
             OrderDirection::Desc => "desc",
         });
         output.push(')');
+    }
+}
+
+impl BboxClause {
+    pub fn west(&self) -> &str {
+        &self.coordinates[0]
+    }
+
+    pub fn south(&self) -> &str {
+        &self.coordinates[1]
+    }
+
+    pub fn east(&self) -> &str {
+        &self.coordinates[2]
+    }
+
+    pub fn north(&self) -> &str {
+        &self.coordinates[3]
+    }
+
+    #[allow(dead_code)]
+    pub fn longitude_span(&self) -> Result<f64, QueryParseError> {
+        let west = self
+            .west()
+            .parse::<f64>()
+            .map_err(|_| QueryParseError::InvalidValue)?;
+        let east = self
+            .east()
+            .parse::<f64>()
+            .map_err(|_| QueryParseError::InvalidValue)?;
+        Ok(east - west)
+    }
+
+    #[allow(dead_code)]
+    pub fn latitude_span(&self) -> Result<f64, QueryParseError> {
+        let south = self
+            .south()
+            .parse::<f64>()
+            .map_err(|_| QueryParseError::InvalidValue)?;
+        let north = self
+            .north()
+            .parse::<f64>()
+            .map_err(|_| QueryParseError::InvalidValue)?;
+        Ok(north - south)
+    }
+
+    fn push_canonical(&self, output: &mut String) {
+        output.push('[');
+        push_atom(output, "west", self.west());
+        output.push(',');
+        push_atom(output, "south", self.south());
+        output.push(',');
+        push_atom(output, "east", self.east());
+        output.push(',');
+        push_atom(output, "north", self.north());
+        output.push(']');
     }
 }
 
@@ -595,6 +674,7 @@ struct QueryBuilder {
     orderby: Option<OrderByClause>,
     top: Option<u32>,
     count: Option<bool>,
+    bbox: Option<BboxClause>,
     skiptoken: Option<String>,
 }
 
@@ -632,6 +712,10 @@ impl QueryBuilder {
                 ensure_absent(self.count.is_none())?;
                 self.count = Some(parse_count(value)?);
             }
+            "bbox" => {
+                ensure_absent(self.bbox.is_none())?;
+                self.bbox = Some(parse_bbox(value)?);
+            }
             "$skiptoken" => {
                 ensure_absent(self.skiptoken.is_none())?;
                 self.skiptoken = Some(parse_opaque_value(value)?);
@@ -653,6 +737,7 @@ impl QueryBuilder {
             orderby: self.orderby,
             top: self.top,
             count: self.count,
+            bbox: self.bbox,
         };
         let mode = match self.skiptoken {
             Some(token) => {
@@ -738,6 +823,400 @@ fn parse_count(value: &str) -> Result<bool, QueryParseError> {
         "false" => Ok(false),
         _ => Err(QueryParseError::InvalidValue),
     }
+}
+
+fn parse_bbox(value: &str) -> Result<BboxClause, QueryParseError> {
+    if value.is_empty()
+        || value.len() > MAX_BBOX_PARAMETER_BYTES
+        || value.bytes().any(|byte| byte.is_ascii_control())
+    {
+        return Err(QueryParseError::InvalidValue);
+    }
+    let parts = value.split(',').collect::<Vec<_>>();
+    let [west, south, east, north] = parts.as_slice() else {
+        return Err(QueryParseError::InvalidValue);
+    };
+    let west = parse_coordinate(west, "-180", "180")?;
+    let south = parse_coordinate(south, "-90", "90")?;
+    let east = parse_coordinate(east, "-180", "180")?;
+    let north = parse_coordinate(north, "-90", "90")?;
+    if west.len() + south.len() + east.len() + north.len() + 3 > MAX_BBOX_PARAMETER_BYTES
+        || compare_decimal_text(&west, &east)? == std::cmp::Ordering::Greater
+        || compare_decimal_text(&south, &north)? == std::cmp::Ordering::Greater
+    {
+        return Err(QueryParseError::InvalidValue);
+    }
+    Ok(BboxClause {
+        coordinates: Box::new([west, south, east, north]),
+    })
+}
+
+fn parse_coordinate(value: &str, min: &str, max: &str) -> Result<String, QueryParseError> {
+    canonical_bounded_decimal(value, min, max)
+}
+
+pub(crate) fn canonical_bounded_decimal(
+    value: &str,
+    min: &str,
+    max: &str,
+) -> Result<String, QueryParseError> {
+    let coordinate = ParsedDecimal::parse(value)?;
+    if compare_decimal(&coordinate, &ParsedDecimal::parse(min)?)? == std::cmp::Ordering::Less
+        || compare_decimal(&coordinate, &ParsedDecimal::parse(max)?)? == std::cmp::Ordering::Greater
+    {
+        return Err(QueryParseError::InvalidValue);
+    }
+    bounded_decimal_canonical(&coordinate)
+}
+
+#[cfg(any(test, feature = "runtime"))]
+pub(crate) fn canonical_positive_decimal_within(
+    value: &str,
+    max: &str,
+) -> Result<String, QueryParseError> {
+    let parsed = ParsedDecimal::parse(value)?;
+    if parsed.is_zero()
+        || parsed.negative
+        || compare_decimal(&parsed, &ParsedDecimal::parse(max)?)? == std::cmp::Ordering::Greater
+    {
+        return Err(QueryParseError::InvalidValue);
+    }
+    // Grant limits are compiled configuration, not the four-coordinate query
+    // parameter. Their normalized form must not inherit its wire-size limit.
+    Ok(parsed.canonical())
+}
+
+#[cfg(any(test, feature = "runtime"))]
+pub(crate) fn decimal_difference_within(
+    upper: &str,
+    lower: &str,
+    maximum: &str,
+) -> Result<bool, QueryParseError> {
+    let upper = ParsedDecimal::parse(upper)?;
+    let lower = ParsedDecimal::parse(lower)?;
+    let maximum = ParsedDecimal::parse(maximum)?;
+    if maximum.negative || maximum.is_zero() {
+        return Err(QueryParseError::InvalidValue);
+    }
+    let scale = upper.scale.max(lower.scale).max(maximum.scale);
+    let upper = upper.scaled_digits(scale)?;
+    let lower = lower.scaled_digits(scale)?;
+    let maximum = maximum.scaled_digits(scale)?;
+    let difference = signed_decimal_difference(&upper, &lower)?;
+    Ok(compare_decimal_digits(&difference, &maximum.digits) != std::cmp::Ordering::Greater)
+}
+
+fn bounded_decimal_canonical(parsed: &ParsedDecimal) -> Result<String, QueryParseError> {
+    let canonical = parsed.canonical();
+    if canonical.len() > MAX_BBOX_PARAMETER_BYTES {
+        return Err(QueryParseError::InvalidValue);
+    }
+    Ok(canonical)
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ParsedDecimal {
+    negative: bool,
+    digits: Vec<u8>,
+    scale: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SignedDecimalDigits {
+    negative: bool,
+    digits: Vec<u8>,
+}
+
+impl ParsedDecimal {
+    fn parse(value: &str) -> Result<Self, QueryParseError> {
+        if !is_decimal_number(value) {
+            return Err(QueryParseError::InvalidValue);
+        }
+        let (number, exponent) = split_decimal_exponent(value)?;
+        let mut negative = false;
+        let number = match number.strip_prefix('-') {
+            Some(rest) => {
+                negative = true;
+                rest
+            }
+            None => number,
+        };
+        let (whole, fraction) = number.split_once('.').unwrap_or((number, ""));
+        if whole.is_empty()
+            || !whole.bytes().all(|byte| byte.is_ascii_digit())
+            || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return Err(QueryParseError::InvalidValue);
+        }
+        let mut digits = whole
+            .bytes()
+            .chain(fraction.bytes())
+            .map(|byte| byte - b'0')
+            .collect::<Vec<_>>();
+        let mut scale = i32::try_from(fraction.len()).map_err(|_| QueryParseError::InvalidValue)?
+            - exponent.unwrap_or(0);
+        if scale < 0 {
+            digits.extend(std::iter::repeat_n(0, (-scale) as usize));
+            scale = 0;
+        }
+        if scale > 1000 {
+            return Err(QueryParseError::InvalidValue);
+        }
+        trim_leading_decimal_zeroes(&mut digits);
+        let mut parsed = Self {
+            negative,
+            digits,
+            scale: scale as usize,
+        };
+        parsed.trim_trailing_fraction_zeroes();
+        if parsed.digits == [0] {
+            parsed.negative = false;
+            parsed.scale = 0;
+        }
+        Ok(parsed)
+    }
+
+    fn canonical(&self) -> String {
+        let digits = self
+            .digits
+            .iter()
+            .map(|digit| char::from(b'0' + *digit))
+            .collect::<String>();
+        let magnitude = if self.scale == 0 {
+            digits
+        } else if self.digits.len() > self.scale {
+            let split = self.digits.len() - self.scale;
+            format!("{}.{}", &digits[..split], &digits[split..])
+        } else {
+            format!("0.{}{}", "0".repeat(self.scale - self.digits.len()), digits)
+        };
+        if self.negative {
+            format!("-{magnitude}")
+        } else {
+            magnitude
+        }
+    }
+
+    fn trim_trailing_fraction_zeroes(&mut self) {
+        while self.scale > 0 && self.digits.last() == Some(&0) {
+            self.digits.pop();
+            self.scale -= 1;
+        }
+        if self.digits.is_empty() {
+            self.digits.push(0);
+        }
+    }
+
+    #[cfg(any(test, feature = "runtime"))]
+    fn is_zero(&self) -> bool {
+        self.digits == [0]
+    }
+
+    fn scaled_digits(&self, scale: usize) -> Result<SignedDecimalDigits, QueryParseError> {
+        if self.scale > scale || scale - self.scale > 1000 {
+            return Err(QueryParseError::InvalidValue);
+        }
+        let mut digits = self.digits.clone();
+        digits.extend(std::iter::repeat_n(0, scale - self.scale));
+        trim_leading_decimal_zeroes(&mut digits);
+        Ok(SignedDecimalDigits {
+            negative: self.negative,
+            digits,
+        })
+    }
+}
+
+fn compare_decimal_text(left: &str, right: &str) -> Result<std::cmp::Ordering, QueryParseError> {
+    compare_decimal(&ParsedDecimal::parse(left)?, &ParsedDecimal::parse(right)?)
+}
+
+fn compare_decimal(
+    left: &ParsedDecimal,
+    right: &ParsedDecimal,
+) -> Result<std::cmp::Ordering, QueryParseError> {
+    match (left.negative, right.negative) {
+        (true, false) => return Ok(std::cmp::Ordering::Less),
+        (false, true) => return Ok(std::cmp::Ordering::Greater),
+        _ => {}
+    }
+    let scale = left.scale.max(right.scale);
+    let left = left.scaled_digits(scale)?;
+    let right = right.scaled_digits(scale)?;
+    let ordering = compare_decimal_digits(&left.digits, &right.digits);
+    if left.negative && right.negative {
+        Ok(ordering.reverse())
+    } else {
+        Ok(ordering)
+    }
+}
+
+#[cfg(any(test, feature = "runtime"))]
+fn signed_decimal_difference(
+    upper: &SignedDecimalDigits,
+    lower: &SignedDecimalDigits,
+) -> Result<Vec<u8>, QueryParseError> {
+    match (upper.negative, lower.negative) {
+        (false, false) => subtract_decimal_digits(&upper.digits, &lower.digits),
+        (false, true) => Ok(add_decimal_digits(&upper.digits, &lower.digits)),
+        (true, false) => Err(QueryParseError::InvalidValue),
+        (true, true) => subtract_decimal_digits(&lower.digits, &upper.digits),
+    }
+}
+
+#[cfg(any(test, feature = "runtime"))]
+fn add_decimal_digits(left: &[u8], right: &[u8]) -> Vec<u8> {
+    let mut output = Vec::new();
+    let mut carry = 0u8;
+    let mut left_index = left.len();
+    let mut right_index = right.len();
+    while left_index > 0 || right_index > 0 || carry > 0 {
+        let left_digit = if left_index > 0 {
+            left_index -= 1;
+            left[left_index]
+        } else {
+            0
+        };
+        let right_digit = if right_index > 0 {
+            right_index -= 1;
+            right[right_index]
+        } else {
+            0
+        };
+        let sum = left_digit + right_digit + carry;
+        output.push(sum % 10);
+        carry = sum / 10;
+    }
+    output.reverse();
+    trim_leading_decimal_zeroes(&mut output);
+    output
+}
+
+#[cfg(any(test, feature = "runtime"))]
+fn subtract_decimal_digits(left: &[u8], right: &[u8]) -> Result<Vec<u8>, QueryParseError> {
+    if compare_decimal_digits(left, right) == std::cmp::Ordering::Less {
+        return Err(QueryParseError::InvalidValue);
+    }
+    let mut output = Vec::new();
+    let mut borrow = 0i8;
+    let mut left_index = left.len();
+    let mut right_index = right.len();
+    while left_index > 0 {
+        left_index -= 1;
+        let right_digit = if right_index > 0 {
+            right_index -= 1;
+            right[right_index]
+        } else {
+            0
+        };
+        let mut digit = left[left_index] as i8 - borrow - right_digit as i8;
+        if digit < 0 {
+            digit += 10;
+            borrow = 1;
+        } else {
+            borrow = 0;
+        }
+        output.push(digit as u8);
+    }
+    if borrow != 0 {
+        return Err(QueryParseError::InvalidValue);
+    }
+    output.reverse();
+    trim_leading_decimal_zeroes(&mut output);
+    Ok(output)
+}
+
+fn split_decimal_exponent(value: &str) -> Result<(&str, Option<i32>), QueryParseError> {
+    let mut separator = None;
+    for (index, byte) in value.bytes().enumerate() {
+        if (byte == b'e' || byte == b'E') && separator.replace(index).is_some() {
+            return Err(QueryParseError::InvalidValue);
+        }
+    }
+    let Some(index) = separator else {
+        return Ok((value, None));
+    };
+    let (number, exponent) = value.split_at(index);
+    let exponent = &exponent[1..];
+    if number.is_empty() || exponent.is_empty() {
+        return Err(QueryParseError::InvalidValue);
+    }
+    let exponent = exponent
+        .parse::<i32>()
+        .map_err(|_| QueryParseError::InvalidValue)?;
+    if exponent.unsigned_abs() > 1000 {
+        return Err(QueryParseError::InvalidValue);
+    }
+    Ok((number, Some(exponent)))
+}
+
+fn compare_decimal_digits(left: &[u8], right: &[u8]) -> std::cmp::Ordering {
+    let mut left = left.to_vec();
+    let mut right = right.to_vec();
+    trim_leading_decimal_zeroes(&mut left);
+    trim_leading_decimal_zeroes(&mut right);
+    left.len().cmp(&right.len()).then_with(|| left.cmp(&right))
+}
+
+fn trim_leading_decimal_zeroes(digits: &mut Vec<u8>) {
+    let first_non_zero = digits.iter().position(|digit| *digit != 0);
+    match first_non_zero {
+        Some(index) if index > 0 => {
+            digits.drain(..index);
+        }
+        Some(_) => {}
+        None => {
+            digits.clear();
+            digits.push(0);
+        }
+    }
+}
+
+fn is_decimal_number(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.is_empty() {
+        return false;
+    }
+    let mut index = 0;
+    if bytes[index] == b'-' {
+        index += 1;
+        if index == bytes.len() {
+            return false;
+        }
+    }
+    match bytes[index] {
+        b'0' => index += 1,
+        b'1'..=b'9' => {
+            index += 1;
+            while index < bytes.len() && bytes[index].is_ascii_digit() {
+                index += 1;
+            }
+        }
+        _ => return false,
+    }
+    if index < bytes.len() && bytes[index] == b'.' {
+        index += 1;
+        let fraction_start = index;
+        while index < bytes.len() && bytes[index].is_ascii_digit() {
+            index += 1;
+        }
+        if index == fraction_start {
+            return false;
+        }
+    }
+    if index < bytes.len() && matches!(bytes[index], b'e' | b'E') {
+        index += 1;
+        if index < bytes.len() && matches!(bytes[index], b'+' | b'-') {
+            index += 1;
+        }
+        let exponent_start = index;
+        while index < bytes.len() && bytes[index].is_ascii_digit() {
+            index += 1;
+        }
+        if index == exponent_start {
+            return false;
+        }
+    }
+    index == bytes.len()
 }
 
 fn parse_bounded_scalar(value: &str) -> Result<String, QueryParseError> {
@@ -1573,6 +2052,112 @@ mod tests {
         assert_eq!(
             parse_read_query([("$skiptoken", large_token.as_str())]),
             Err(QueryParseError::InvalidValue)
+        );
+    }
+
+    #[test]
+    fn bbox_accepts_finite_crs84_decimal_and_exponent_coordinates() {
+        let parsed = parse([("bbox", "-0,1e1,1.25E2,+")]);
+        assert_eq!(parsed, Err(QueryParseError::InvalidValue));
+
+        let parsed = parse([("bbox", "-0,1e1,1.25E2,20.5")]).expect("bbox parses");
+        let parsed_canonical = parsed.canonical();
+        let ParsedReadQueryMode::Query(options) = parsed.mode else {
+            panic!("bbox is a first-page query option")
+        };
+        let bbox = options.bbox.expect("bbox option is present");
+        assert_eq!(bbox.west(), "0");
+        assert_eq!(bbox.south(), "10");
+        assert_eq!(bbox.east(), "125");
+        assert_eq!(bbox.north(), "20.5");
+
+        let equivalent = parse([("bbox", "0,10.000,125.0000,2.0500e1")]).expect("bbox parses");
+        assert_eq!(
+            parsed_canonical,
+            equivalent.canonical(),
+            "equivalent bbox numbers keep one cursor/query identity"
+        );
+    }
+
+    #[test]
+    fn bbox_rejects_crossing_non_finite_oversized_and_wrong_arity_values() {
+        for value in [
+            "100,0,90,1",
+            "0,10,1,9",
+            "-181,0,1,1",
+            "0,-91,1,1",
+            "0,0,181,1",
+            "0,0,1,91",
+            "0,0,NaN,1",
+            "0,0,inf,1",
+            "0,0,1e-1000,1",
+            "0,0,1",
+            "0,0,1,1,2",
+            "00,0,1,1",
+            "0,0,1.",
+            "0,0,180.000000000000000000000000000000000001,1",
+            "-180.000000000000000000000000000000000001,0,0,1",
+            "0,0,1,90.000000000000000000000000000000000001",
+            "0,-90.000000000000000000000000000000000001,1,0",
+        ] {
+            assert_eq!(parse([("bbox", value)]), Err(QueryParseError::InvalidValue));
+        }
+        let too_large = "1".repeat(MAX_BBOX_PARAMETER_BYTES + 1);
+        assert_eq!(
+            parse_read_query([("bbox", too_large.as_str())]),
+            Err(QueryParseError::InvalidValue)
+        );
+    }
+
+    #[test]
+    fn bbox_conflicts_with_skiptoken_and_is_value_free_in_debug() {
+        assert_eq!(
+            parse([("$skiptoken", "cursor-canary"), ("bbox", "0,0,1,1")]),
+            Err(QueryParseError::ConflictingOptions)
+        );
+        let parsed = parse([("bbox", "100.1,10.2,100.3,10.4")]).expect("bbox parses");
+        let debug = format!("{parsed:?}");
+        assert!(!debug.contains("100.1"));
+        assert!(parsed.canonical().contains("bbox=[west(5:100.1)"));
+    }
+
+    #[test]
+    fn bbox_preserves_exact_decimal_boundaries_before_span_checks() {
+        let parsed = parse([("bbox", "0,0,0.30000000000000000000000000000000000001,1")])
+            .expect("bbox parses");
+        let ParsedReadQueryMode::Query(options) = parsed.mode else {
+            panic!("bbox is a first-page query option")
+        };
+        let bbox = options.bbox.expect("bbox option is present");
+        assert_eq!(bbox.east(), "0.30000000000000000000000000000000000001");
+    }
+
+    #[test]
+    fn bbox_canonical_budget_is_shared_by_all_coordinates_not_grant_limits() {
+        assert_eq!(
+            parse([("bbox", "0,0,1e-200,1e-200")]),
+            Err(QueryParseError::InvalidValue),
+            "a short wire query must not expand past the continuation budget"
+        );
+        let parsed = parse([("bbox", "0,0,1e-100,1e-100")]).expect("bounded exponent parses");
+        let ParsedReadQueryMode::Query(options) = parsed.mode else {
+            panic!("first page query")
+        };
+        let bbox = options.bbox.expect("bbox is present");
+        let canonical = format!(
+            "{},{},{},{}",
+            bbox.west(),
+            bbox.south(),
+            bbox.east(),
+            bbox.north()
+        );
+        assert!(parse_read_query([("bbox", canonical.as_str())]).is_ok());
+
+        let maximum = canonical_positive_decimal_within("1e-300", "360")
+            .expect("a valid compiled grant is not a bbox wire value");
+        assert!(decimal_difference_within("0", "0", &maximum).expect("zero span validates"));
+        assert!(
+            !decimal_difference_within("1e-299", "0", &maximum).expect("oversized span validates")
         );
     }
 

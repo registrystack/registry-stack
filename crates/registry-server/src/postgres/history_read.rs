@@ -25,9 +25,9 @@ use crate::audit::{
 };
 use crate::contract::{FieldTypeSource, Operation};
 use crate::cursor::{
-    now_unix_seconds, CursorBinding, CursorCodec, CursorContinuation, CursorFilterExpr,
-    CursorFilterOperator, CursorLogicalOp, CursorOrderClause, CursorProjectionField,
-    CursorQueryScope,
+    now_unix_seconds, CursorAdapter, CursorBinding, CursorCodec, CursorContinuation,
+    CursorFilterExpr, CursorFilterOperator, CursorLogicalOp, CursorOrderClause,
+    CursorProjectionField, CursorQueryScope, CursorRepresentation,
 };
 use crate::history_commit::{
     capture_latest_snapshot_reference, resolve_snapshot_reference, ResolvedSnapshot,
@@ -1678,6 +1678,9 @@ fn cursor_binding(
         query_reference: references.query,
         sort_reference: references.sort,
         scope_reference: references.scope,
+        spatial_reference: references.spatial,
+        representation: CursorRepresentation::Json,
+        adapter: CursorAdapter::Native,
         page_size: request.plan.page_size,
         include_count: request.plan.include_count,
         temporal_instant: request.plan.temporal_instant.clone(),
@@ -1700,11 +1703,15 @@ fn cursor_binding_references(
             selected_fields: &request.selected_fields,
             projection: &request.plan.projection,
             filter: request.plan.filter.as_ref(),
+            spatial: None,
             order: request.plan.order.as_ref(),
             include_count: request.plan.include_count,
             page_size: request.plan.page_size,
             temporal_instant: request.plan.temporal_instant.as_deref(),
             scope,
+            representation: CursorRepresentation::Json,
+            adapter: CursorAdapter::Native,
+            adapter_origin: None,
         },
     )
     .map_err(|_| ())

@@ -384,6 +384,16 @@ pub async fn apply_verified_package(
     )
     .await
     .map_err(|_| MigrationError::ApplyFailed)?;
+    // Prerequisites are administrator-owned. Refuse a missing extension or
+    // spatial role before the existing registry enters maintenance.
+    if connection
+        .verify_compiled_prerequisites(request.package.registry(), request.roles.runtime)
+        .await
+        .is_err()
+    {
+        let _ = connection.release().await;
+        return Err(MigrationError::ApplyFailed);
+    }
     if current.is_some() {
         if let Err(error) = crate::request_retention::guard_successor_activation(
             connection.client_for_request_retention_guard(),
@@ -537,7 +547,11 @@ pub async fn apply_verified_package(
 
     let ddl_result = if current.is_some() {
         connection
-            .execute_successor_package_ddl(&statements, request.timeouts.statement)
+            .execute_successor_package_ddl(
+                &statements,
+                request.roles.runtime,
+                request.timeouts.statement,
+            )
             .await
     } else {
         connection

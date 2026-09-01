@@ -1405,6 +1405,16 @@
           },
           "type": "array"
         },
+        "geojson": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GeoJsonSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "indexes": {
           "default": [],
           "items": {
@@ -1505,6 +1515,16 @@
             "$ref": "#/$defs/FieldSource"
           },
           "type": "array"
+        },
+        "geojson": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GeoJsonSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "id": {
           "type": "string"
@@ -1751,6 +1771,18 @@
           "$ref": "#/$defs/StructuredFieldSourceSchema"
         }
       ]
+    },
+    "GeoJsonSource": {
+      "additionalProperties": false,
+      "properties": {
+        "geometryField": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "geometryField"
+      ],
+      "type": "object"
     },
     "IndexSource": {
       "additionalProperties": false,

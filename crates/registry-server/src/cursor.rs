@@ -250,6 +250,12 @@ pub struct CursorBinding {
     pub(crate) query_reference: String,
     pub(crate) sort_reference: String,
     pub(crate) scope_reference: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) spatial_reference: Option<String>,
+    #[serde(default)]
+    pub(crate) representation: CursorRepresentation,
+    #[serde(default)]
+    pub(crate) adapter: CursorAdapter,
     pub(crate) page_size: u16,
     #[serde(default)]
     pub(crate) include_count: bool,
@@ -281,6 +287,12 @@ impl fmt::Debug for CursorBinding {
             .field("query_reference", &"<redacted>")
             .field("sort_reference", &"<redacted>")
             .field("scope_reference", &"<redacted>")
+            .field(
+                "spatial_reference",
+                &self.spatial_reference.as_ref().map(|_| "<redacted>"),
+            )
+            .field("representation", &self.representation)
+            .field("adapter", &self.adapter)
             .field("page_size", &self.page_size)
             .field("include_count", &self.include_count)
             .field(
@@ -297,6 +309,8 @@ impl fmt::Debug for CursorBinding {
 pub struct CursorQuery {
     pub(crate) projection: Vec<CursorProjectionField>,
     pub(crate) filter: Option<CursorFilterExpr>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) spatial: Option<CursorSpatialQuery>,
     pub(crate) order: Option<CursorOrderClause>,
     pub(crate) include_count: bool,
     pub(crate) page_size: u16,
@@ -307,6 +321,58 @@ pub struct CursorQuery {
 impl fmt::Debug for CursorQuery {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("CursorQuery(<redacted>)")
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CursorRepresentation {
+    #[default]
+    Json,
+    GeoJson,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CursorAdapter {
+    #[default]
+    Native,
+    Gis,
+}
+
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CursorSpatialQuery {
+    pub(crate) bbox: CursorBboxQuery,
+}
+
+impl fmt::Debug for CursorSpatialQuery {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("CursorSpatialQuery(<redacted>)")
+    }
+}
+
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CursorBboxQuery {
+    pub(crate) geometry_field: String,
+    pub(crate) west: String,
+    pub(crate) south: String,
+    pub(crate) east: String,
+    pub(crate) north: String,
+    pub(crate) maximum_longitude_span_degrees: String,
+    pub(crate) maximum_latitude_span_degrees: String,
+}
+
+impl fmt::Debug for CursorBboxQuery {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CursorBboxQuery")
+            .field("geometry_field", &self.geometry_field)
+            .field("coordinates", &"<redacted>")
+            .field("maximum_longitude_span_degrees", &"<redacted>")
+            .field("maximum_latitude_span_degrees", &"<redacted>")
+            .finish()
     }
 }
 
@@ -519,6 +585,9 @@ mod tests {
             include_count: false,
             temporal_instant: Some("2026-01-01T00:00:00Z".to_owned()),
             selected_fields: vec!["label".to_owned()],
+            spatial_reference: None,
+            representation: CursorRepresentation::Json,
+            adapter: CursorAdapter::Native,
         }
     }
 
@@ -547,6 +616,7 @@ mod tests {
                         values: vec!["al".to_owned()],
                     },
                 }),
+                spatial: None,
                 order: Some(CursorOrderClause {
                     field_id: "label".to_owned(),
                     field_type: FieldTypeSource::String {
@@ -689,6 +759,21 @@ mod tests {
             {
                 let mut value = expected.clone();
                 value.scope_reference = "hmac-sha256:other-scope".to_owned();
+                value
+            },
+            {
+                let mut value = expected.clone();
+                value.spatial_reference = Some("hmac-sha256:other-spatial".to_owned());
+                value
+            },
+            {
+                let mut value = expected.clone();
+                value.representation = CursorRepresentation::GeoJson;
+                value
+            },
+            {
+                let mut value = expected.clone();
+                value.adapter = CursorAdapter::Gis;
                 value
             },
             {

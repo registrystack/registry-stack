@@ -195,6 +195,28 @@ pub struct ClaimContext {
     canonical_row_boundaries: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SpatialBboxContext {
+    west: String,
+    south: String,
+    east: String,
+    north: String,
+}
+
+impl SpatialBboxContext {
+    pub(crate) fn new(west: String, south: String, east: String, north: String) -> Result<Self> {
+        for value in [&west, &south, &east, &north] {
+            validate_required_context_value(value)?;
+        }
+        Ok(Self {
+            west,
+            south,
+            east,
+            north,
+        })
+    }
+}
+
 impl ClaimContext {
     pub fn for_compiled(
         registry: &CompiledRegistry,
@@ -2242,6 +2264,22 @@ pub async fn begin_action_transaction<'a>(
     Ok(GuardedTransaction { transaction })
 }
 
+pub(crate) async fn install_spatial_bbox_context(
+    transaction: &tokio_postgres::Transaction<'_>,
+    context: &SpatialBboxContext,
+) -> Result<()> {
+    transaction
+        .execute(
+            "SELECT set_config('registry.bbox_west', $1, true),
+                    set_config('registry.bbox_south', $2, true),
+                    set_config('registry.bbox_east', $3, true),
+                    set_config('registry.bbox_north', $4, true)",
+            &[&context.west, &context.south, &context.east, &context.north],
+        )
+        .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -2906,6 +2944,7 @@ mod tests {
                 batch: None,
                 classification: Classification::Internal,
                 access_requirements: None,
+                geojson: None,
                 derived: Vec::new(),
                 selector_profiles: Vec::new(),
                 read_paths: Vec::new(),
@@ -2958,6 +2997,7 @@ mod tests {
                         writable_fields: BTreeSet::new(),
                         filterable_fields: BTreeSet::new(),
                         sortable_fields: BTreeSet::new(),
+                        spatial_queries: None,
                         row_boundaries: vec![
                             RowBoundarySource {
                                 field: "tenant".to_owned(),
@@ -2998,6 +3038,7 @@ mod tests {
                         writable_fields: BTreeSet::new(),
                         filterable_fields: BTreeSet::new(),
                         sortable_fields: BTreeSet::new(),
+                        spatial_queries: None,
                         row_boundaries: vec![RowBoundarySource {
                             field: "id".to_owned(),
                             claim: "record_id_claim".to_owned(),

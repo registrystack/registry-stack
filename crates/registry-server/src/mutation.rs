@@ -424,7 +424,7 @@ pub async fn install_mutation_schema(
     // runtime expecting a column or nullability contract the durable outbox
     // does not have.
     migration
-        .batch_execute(
+        .batch_execute(&format!(
             "ALTER TABLE registry_internal.registry_outbox
                  ADD COLUMN IF NOT EXISTS payload_expires_at timestamptz;
              ALTER TABLE registry_internal.registry_outbox
@@ -453,7 +453,7 @@ pub async fn install_mutation_schema(
                  ) THEN
                      ALTER TABLE registry_internal.registry_idempotency
                          ADD CONSTRAINT registry_idempotency_result_kind_values
-                         CHECK (result_kind IN ('record', 'batch', 'application', 'erased'));
+                         CHECK (result_kind IN ('record', 'batch', 'application', 'immediate_action', 'erased'));
                  END IF;
                  IF NOT EXISTS (
                      SELECT 1 FROM pg_catalog.pg_constraint
@@ -474,6 +474,11 @@ pub async fn install_mutation_schema(
                                  AND record_revision IS NOT NULL AND result_count IS NOT NULL
                                  AND result_count BETWEEN 1 AND 16
                                  AND proposal_version IS NOT NULL)
+                             OR
+                             (result_kind = 'immediate_action' AND record_reference IS NULL
+                                 AND record_revision IS NULL AND result_count IS NOT NULL
+                                 AND result_count BETWEEN 0 AND {MAX_IMMEDIATE_ACTION_RESULTS}
+                                 AND proposal_version IS NULL)
                              OR
                              (result_kind = 'erased' AND record_reference IS NULL
                                  AND record_revision IS NULL AND result_count IS NULL
@@ -644,7 +649,7 @@ pub async fn install_mutation_schema(
                  END IF;
              END
              $registry_webhook_state_upgrade$;",
-        )
+        ))
         .await
         .map_err(|_| MutationError::Unavailable)?;
     let role = runtime_role.as_str();

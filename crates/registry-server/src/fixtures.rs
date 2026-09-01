@@ -35,7 +35,7 @@ use crate::data::{validate_field_value, FieldValue};
 use crate::derived_sql::MAX_DERIVED_SQL_BYTES;
 use crate::model::CompiledRoute;
 use crate::model::{ActionRouteKind, CompiledAction, CompiledActionGrant, CompiledActionRoute};
-use crate::model::{CompiledRegistry, HttpMethod};
+use crate::model::{CompiledQueryKind, CompiledQueryOperation, CompiledRegistry, HttpMethod};
 #[cfg(any(test, feature = "postgres-test"))]
 use crate::package::{canonical_signed_bytes as package_canonical_signed_bytes, VerifiedPackage};
 use crate::package::{
@@ -187,7 +187,7 @@ enum ActionSource {
     Get {
         record_ref: String,
     },
-    List,
+    List {},
     Query {
         #[serde(default)]
         select: BTreeSet<String>,
@@ -195,6 +195,8 @@ enum ActionSource {
         top: Option<u16>,
         #[serde(default)]
         count: bool,
+        #[serde(default)]
+        bbox: Option<BboxSource>,
     },
     Lookup {
         selector: String,
@@ -302,7 +304,7 @@ impl ActionSource {
         match self {
             Self::Create { .. } => Operation::Create,
             Self::Get { .. } => Operation::Get,
-            Self::List | Self::Query { .. } | Self::ReadPath { .. } => Operation::List,
+            Self::List { .. } | Self::Query { .. } | Self::ReadPath { .. } => Operation::List,
             Self::Lookup { .. } => Operation::Lookup,
             Self::Patch { .. } => Operation::Patch,
             Self::Batch { .. } => Operation::Batch,
@@ -321,7 +323,7 @@ impl ActionSource {
         let suffix = match self {
             Self::Create { .. } => "create".to_owned(),
             Self::Get { .. } => "get".to_owned(),
-            Self::List | Self::Query { .. } => "list".to_owned(),
+            Self::List { .. } | Self::Query { .. } => "list".to_owned(),
             Self::Lookup { .. } => "lookup".to_owned(),
             Self::ReadPath { path, .. } => format!("path.{path}"),
             Self::Patch { .. } => "patch".to_owned(),
@@ -356,6 +358,21 @@ struct ImmediateActionPreconditionSource {
 struct FieldChangeSource {
     field: String,
     value: Value,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct BboxSource {
+    west: String,
+    south: String,
+    east: String,
+    north: String,
+}
+
+impl BboxSource {
+    fn query_value(&self) -> String {
+        format!("{},{},{},{}", self.west, self.south, self.east, self.north)
+    }
 }
 
 #[derive(Clone, Deserialize)]
@@ -658,7 +675,13 @@ pub fn validate_fixture_journeys(
                         .cloned()
                         .ok_or(FixtureError::LogicalReferenceRefused)?;
                     validate_claims(&step.claims, profile, step.expect.outcome)?;
-                    validate_action_fields(&request, registry, entity, profile)?;
+                    validate_action_fields(
+                        &request,
+                        registry,
+                        entity,
+                        profile,
+                        step.expect.outcome,
+                    )?;
                     let response_entity = match &request {
                         ActionSource::ReadPath { path, .. } => entity
                             .read_paths
@@ -802,7 +825,7 @@ fn validate_action_references(
             ..
         } => &[record_ref, etag_ref],
         ActionSource::Create { .. }
-        | ActionSource::List
+        | ActionSource::List { .. }
         | ActionSource::Query { .. }
         | ActionSource::Lookup { .. }
         | ActionSource::Batch { .. }
@@ -911,7 +934,7 @@ fn collect_action_value_record_refs<'a>(
             collect_map_value_record_refs(input, references)
         }
         ActionSource::Get { .. }
-        | ActionSource::List
+        | ActionSource::List { .. }
         | ActionSource::Query { .. }
         | ActionSource::ReadPath { .. }
         | ActionSource::SubmitRequest { .. }
@@ -1072,6 +1095,7 @@ fn action_profile_from_grant(grant: &CompiledActionGrant) -> AccessProfileSource
         writable_fields: BTreeSet::new(),
         filterable_fields: BTreeSet::new(),
         sortable_fields: BTreeSet::new(),
+        spatial_queries: None,
         row_boundaries: grant
             .targets
             .iter()
@@ -1269,6 +1293,7 @@ fn validate_action_fields(
     registry: &CompiledRegistry,
     entity: &crate::model::CompiledEntity,
     profile: &AccessProfileSource,
+    outcome: ExpectedOutcome,
 ) -> Result<(), FixtureError> {
     let validate_data = |data: &Map<String, Value>| {
         if data.is_empty()
@@ -1283,9 +1308,9 @@ fn validate_action_fields(
     };
     match action {
         ActionSource::Create { data } => validate_data(data),
-        ActionSource::Get { .. } | ActionSource::List => Ok(()),
-        ActionSource::Query { select, top, count } => {
-            validate_structured_query(registry, entity, profile, None, select, *top, *count)
+        ActionSource::Get { .. } | ActionSource::List { .. } => Ok(()),
+        ActionSource::Query { .. } | ActionSource::ReadPath { .. } => {
+            validate_structured_query(registry, entity, profile, action, outcome)
         }
         ActionSource::Lookup { selector, values } => {
             let selector_profile = entity
@@ -1312,13 +1337,6 @@ fn validate_action_fields(
             }
             Ok(())
         }
-        ActionSource::ReadPath {
-            path,
-            select,
-            top,
-            count,
-            ..
-        } => validate_structured_query(registry, entity, profile, Some(path), select, *top, *count),
         ActionSource::Patch { changes, .. } => {
             if changes.is_empty() || changes.len() > entity.fields.len() {
                 return Err(FixtureError::JourneyBoundsRefused);
@@ -1507,15 +1525,33 @@ fn validate_structured_query(
     registry: &CompiledRegistry,
     entity: &crate::model::CompiledEntity,
     profile: &AccessProfileSource,
-    read_path: Option<&str>,
-    select: &BTreeSet<String>,
-    top: Option<u16>,
-    count: bool,
+    action: &ActionSource,
+    outcome: ExpectedOutcome,
 ) -> Result<(), FixtureError> {
+    let (read_path, select, top, count, bbox) = match action {
+        ActionSource::Query {
+            select,
+            top,
+            count,
+            bbox,
+        } => (None, select, *top, *count, bbox.as_ref()),
+        ActionSource::ReadPath {
+            path,
+            select,
+            top,
+            count,
+            ..
+        } => (Some(path.as_str()), select, *top, *count, None),
+        _ => return Err(FixtureError::LogicalReferenceRefused),
+    };
     if top.is_some_and(|top| top == 0 || top > 100) {
         return Err(FixtureError::JourneyBoundsRefused);
     }
+    let parsed_bbox = bbox.map(parse_fixture_bbox).transpose()?;
     if let Some(path) = read_path {
+        if bbox.is_some() {
+            return Err(FixtureError::LogicalReferenceRefused);
+        }
         let compiled_path = entity
             .read_paths
             .get(path)
@@ -1549,7 +1585,95 @@ fn validate_structured_query(
     {
         return Err(FixtureError::LogicalReferenceRefused);
     }
+    if let Some(bbox) = parsed_bbox.as_ref() {
+        validate_query_bbox(registry, entity, profile, bbox, outcome)?;
+    }
     Ok(())
+}
+
+fn parse_fixture_bbox(source: &BboxSource) -> Result<crate::query::BboxClause, FixtureError> {
+    let value = source.query_value();
+    let parsed = crate::query::parse_read_query([("bbox", value.as_str())])
+        .map_err(|_| FixtureError::LogicalReferenceRefused)?;
+    let crate::query::ParsedReadQueryMode::Query(options) = parsed.mode else {
+        return Err(FixtureError::LogicalReferenceRefused);
+    };
+    options.bbox.ok_or(FixtureError::LogicalReferenceRefused)
+}
+
+fn validate_query_bbox(
+    registry: &CompiledRegistry,
+    entity: &crate::model::CompiledEntity,
+    profile: &AccessProfileSource,
+    bbox: &crate::query::BboxClause,
+    outcome: ExpectedOutcome,
+) -> Result<(), FixtureError> {
+    let operation = compiled_query_operation(registry, &entity.id, &profile.id)?;
+    let Some(capability) = operation
+        .spatial
+        .as_ref()
+        .and_then(|spatial| spatial.bbox.as_ref())
+    else {
+        return if outcome == ExpectedOutcome::Refusal {
+            Ok(())
+        } else {
+            Err(FixtureError::LogicalReferenceRefused)
+        };
+    };
+    if operation.kind != CompiledQueryKind::List
+        || operation.read_path.is_some()
+        || !profile.readable_fields.contains(&capability.geometry_field)
+        || entity
+            .geojson
+            .as_ref()
+            .is_none_or(|geojson| geojson.geometry_field != capability.geometry_field)
+    {
+        return Err(FixtureError::LogicalReferenceRefused);
+    }
+    let maximum_longitude_span = capability
+        .maximum_longitude_span_degrees
+        .as_f64()
+        .filter(|value| value.is_finite() && *value > 0.0 && *value <= 360.0)
+        .ok_or(FixtureError::LogicalReferenceRefused)?;
+    let maximum_latitude_span = capability
+        .maximum_latitude_span_degrees
+        .as_f64()
+        .filter(|value| value.is_finite() && *value > 0.0 && *value <= 180.0)
+        .ok_or(FixtureError::LogicalReferenceRefused)?;
+    if bbox
+        .longitude_span()
+        .map_err(|_| FixtureError::LogicalReferenceRefused)?
+        > maximum_longitude_span
+        || bbox
+            .latitude_span()
+            .map_err(|_| FixtureError::LogicalReferenceRefused)?
+            > maximum_latitude_span
+    {
+        return if outcome == ExpectedOutcome::Refusal {
+            Ok(())
+        } else {
+            Err(FixtureError::LogicalReferenceRefused)
+        };
+    }
+    Ok(())
+}
+
+fn compiled_query_operation<'a>(
+    registry: &'a CompiledRegistry,
+    entity_id: &str,
+    profile_id: &str,
+) -> Result<&'a CompiledQueryOperation, FixtureError> {
+    registry
+        .queries()
+        .operations
+        .iter()
+        .find(|operation| {
+            operation.entity_id == entity_id
+                && operation.profile_id == profile_id
+                && operation.kind == CompiledQueryKind::List
+                && operation.read_path.is_none()
+        })
+        .ok_or(FixtureError::LogicalReferenceRefused)
 }
 
 fn compiled_field_exists(entity: &crate::model::CompiledEntity, field: &str) -> bool {
@@ -1612,11 +1736,17 @@ fn internalize_entity_action(
         ActionSource::Get { record_ref } => ActionSource::Get {
             record_ref: record_ref.clone(),
         },
-        ActionSource::List => ActionSource::List,
-        ActionSource::Query { select, top, count } => ActionSource::Query {
+        ActionSource::List { .. } => ActionSource::List {},
+        ActionSource::Query {
+            select,
+            top,
+            count,
+            bbox,
+        } => ActionSource::Query {
             select: internalize_field_set(entity, select)?,
             top: *top,
             count: *count,
+            bbox: bbox.clone(),
         },
         ActionSource::Lookup { selector, values } => ActionSource::Lookup {
             selector: selector.clone(),
@@ -1832,11 +1962,17 @@ fn externalize_action(
         ActionSource::Get { record_ref } => ActionSource::Get {
             record_ref: record_ref.clone(),
         },
-        ActionSource::List => ActionSource::List,
-        ActionSource::Query { select, top, count } => ActionSource::Query {
+        ActionSource::List { .. } => ActionSource::List {},
+        ActionSource::Query {
+            select,
+            top,
+            count,
+            bbox,
+        } => ActionSource::Query {
             select: externalize_field_set(entity, select)?,
             top: *top,
             count: *count,
+            bbox: bbox.clone(),
         },
         ActionSource::Lookup { selector, values } => ActionSource::Lookup {
             selector: selector.clone(),
@@ -2925,9 +3061,15 @@ fn fixture_request(
             let record_id = observed_record_id(observations, record_ref)?;
             path = path.replace("{record_id}", record_id);
         }
-        ActionSource::List => {}
-        ActionSource::Query { select, top, count } => {
-            extra_query_options = fixture_query_options(step, None, select, *top, *count)?;
+        ActionSource::List { .. } => {}
+        ActionSource::Query {
+            select,
+            top,
+            count,
+            bbox,
+        } => {
+            extra_query_options =
+                fixture_query_options(step, None, select, *top, *count, bbox.as_ref())?;
         }
         ActionSource::Lookup { selector, values } => {
             method = Method::POST;
@@ -2949,7 +3091,7 @@ fn fixture_request(
             let record_id = observed_record_id(observations, record_ref)?;
             path = path.replace("{record_id}", record_id);
             extra_query_options =
-                fixture_query_options(step, Some(read_path), select, *top, *count)?;
+                fixture_query_options(step, Some(read_path), select, *top, *count, None)?;
         }
         ActionSource::Patch {
             record_ref,
@@ -3058,12 +3200,12 @@ fn fixture_request(
         return Err(FixtureError::RequestConstructionRefused);
     }
     path.push_str("?accessProfile=");
-    path.push_str(&step.access_profile);
+    percent_encode_query_value(&step.access_profile, &mut path);
     for (name, value) in extra_query_options {
         path.push('&');
         path.push_str(name);
         path.push('=');
-        path.push_str(&value);
+        percent_encode_query_value(&value, &mut path);
     }
     let mut request = Request::builder()
         .method(method)
@@ -3140,6 +3282,7 @@ fn fixture_query_options(
     select: &BTreeSet<String>,
     top: Option<u16>,
     count: bool,
+    bbox: Option<&BboxSource>,
 ) -> Result<Vec<(&'static str, String)>, FixtureError> {
     let mut parameters = Vec::new();
     if !select.is_empty() {
@@ -3154,10 +3297,42 @@ fn fixture_query_options(
     if count {
         parameters.push(("$count", "true".to_owned()));
     }
+    if let Some(bbox) = bbox {
+        parameters.push(("bbox", parse_fixture_bbox(bbox)?.canonical_bbox_value()));
+    }
     if step.access_profile.is_empty() {
         return Err(FixtureError::RequestConstructionRefused);
     }
     Ok(parameters)
+}
+
+trait FixtureBboxCanonical {
+    fn canonical_bbox_value(&self) -> String;
+}
+
+impl FixtureBboxCanonical for crate::query::BboxClause {
+    fn canonical_bbox_value(&self) -> String {
+        format!(
+            "{},{},{},{}",
+            self.west(),
+            self.south(),
+            self.east(),
+            self.north()
+        )
+    }
+}
+
+fn percent_encode_query_value(value: &str, output: &mut String) {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            output.push(char::from(byte));
+        } else {
+            output.push('%');
+            output.push(char::from(HEX[usize::from(byte >> 4)]));
+            output.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+    }
 }
 
 fn json_body(value: &Value) -> Result<Body, FixtureError> {
@@ -3541,7 +3716,9 @@ fn assert_response(
             }
         }
         ExpectedOutcome::Success => match step.action {
-            ActionSource::List | ActionSource::Query { .. } | ActionSource::ReadPath { .. } => {
+            ActionSource::List { .. }
+            | ActionSource::Query { .. }
+            | ActionSource::ReadPath { .. } => {
                 let include_count = matches!(
                     step.action,
                     ActionSource::Query { count: true, .. }

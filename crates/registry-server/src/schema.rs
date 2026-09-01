@@ -395,6 +395,38 @@ mod tests {
     }
 
     #[test]
+    fn schema_accepts_geojson_and_bbox_authoring_and_rejects_duplicate_bbox_geometry() {
+        let document = schema_document();
+        let schema = compile(&document);
+        let mut instance = fixture("asset-site-placement");
+        instance["entities"][0]["fields"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "id":"location",
+                "type":"crs84-point",
+                "precision":6,
+                "classification":"internal"
+            }));
+        instance["entities"][0]["geojson"] = serde_json::json!({"geometryField":"location"});
+        instance["accessProfiles"][0]["grants"][0]["readableFields"]
+            .as_array_mut()
+            .unwrap()
+            .push(Value::String("location".to_owned()));
+        instance["accessProfiles"][0]["grants"][0]["spatialQueries"] = serde_json::json!({
+            "bbox":{
+                "maximumLongitudeSpanDegrees":0.25,
+                "maximumLatitudeSpanDegrees":1.5
+            }
+        });
+        assert!(schema.is_valid(&instance));
+
+        instance["accessProfiles"][0]["grants"][0]["spatialQueries"]["bbox"]["geometryField"] =
+            Value::String("location".to_owned());
+        assert!(!schema.is_valid(&instance));
+    }
+
+    #[test]
     fn schema_rejects_field_options_that_do_not_belong_to_the_field_type() {
         let document = schema_document();
         let schema = compile(&document);

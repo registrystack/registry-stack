@@ -500,6 +500,121 @@ fn production_schema_test_executor_has_no_raw_server_source_or_receipt_seams() {
     assert!(implementation.contains("pub fn validate_schema_test_receipt_for_package("));
 }
 
+#[test]
+fn fixture_query_builder_encodes_closed_options_without_raw_query_escape() {
+    let implementation = include_str!("../src/fixtures.rs");
+    let request_builder = implementation
+        .split_once("fn fixture_request(")
+        .and_then(|(_, tail)| tail.split_once("fn fixture_query_options("))
+        .map(|(builder, _)| builder)
+        .expect("fixture request builder remains structurally visible");
+    assert!(request_builder.contains("percent_encode_query_value(&step.access_profile"));
+    assert!(request_builder.contains("percent_encode_query_value(&value"));
+    assert!(!request_builder.contains("path.push_str(&value);"));
+    assert!(!request_builder.contains("path.push_str(&step.access_profile);"));
+
+    let query_builder = implementation
+        .split_once("fn fixture_query_options(")
+        .and_then(|(_, tail)| tail.split_once("fn json_body("))
+        .map(|(builder, _)| builder)
+        .expect("fixture query option builder remains structurally visible");
+    assert!(query_builder.contains("parse_fixture_bbox(bbox)?.canonical_bbox_value()"));
+    assert!(!query_builder.contains("bbox.query_value()"));
+}
+
+#[test]
+fn fixture_query_dsl_accepts_only_compiled_bounded_bbox_authority() {
+    let registry = compiled_spatial_fixture();
+    let valid = br#"apiVersion: registry.registrystack.org/server-journeys/v1
+journeys:
+  - id: spatial-query
+    steps:
+      - id: declared-bbox
+        entity: site
+        accessProfile: map-reader
+        claims: {}
+        request:
+          operation: query
+          bbox: {west: "100.0", south: "13.0", east: "100.1", north: "13.1"}
+          select: [code, location]
+        expect: {outcome: success, status: 200, count: 0}
+      - id: undeclared-bbox-runtime-refusal
+        entity: site
+        accessProfile: directory-reader
+        claims: {}
+        request:
+          operation: query
+          bbox: {west: "100.0", south: "13.0", east: "100.1", north: "13.1"}
+          select: [code]
+        expect: {outcome: refusal, status: 400, problemCode: request.invalid}
+"#;
+    validate_fixture_journeys(valid, &registry).expect("declared bbox and refusal preflight");
+
+    let undeclared_success = String::from_utf8(valid.to_vec())
+        .expect("fixture is UTF-8")
+        .replace(
+            "expect: {outcome: refusal, status: 400, problemCode: request.invalid}",
+            "expect: {outcome: success, status: 200, count: 0}",
+        );
+    let error = validate_fixture_journeys(undeclared_success.as_bytes(), &registry).unwrap_err();
+    assert_eq!(
+        underlying_fixture_error(&error),
+        &FixtureError::LogicalReferenceRefused
+    );
+
+    let malformed = String::from_utf8(valid.to_vec())
+        .expect("fixture is UTF-8")
+        .replace(r#"east: "100.1""#, r#"east: "bbox-sensitive-canary""#);
+    let error = validate_fixture_journeys(malformed.as_bytes(), &registry).unwrap_err();
+    assert_eq!(
+        underlying_fixture_error(&error),
+        &FixtureError::LogicalReferenceRefused
+    );
+    assert!(!format!("{error:?}").contains("bbox-sensitive-canary"));
+}
+
+#[test]
+fn fixture_bbox_does_not_extend_list_or_read_path_shapes() {
+    let registry = compiled_spatial_fixture();
+    let list_with_bbox = br#"apiVersion: registry.registrystack.org/server-journeys/v1
+journeys:
+  - id: list-shape
+    steps:
+      - id: list-bbox
+        entity: site
+        accessProfile: map-reader
+        claims: {}
+        request:
+          operation: list
+          bbox: {west: "100.0", south: "13.0", east: "100.1", north: "13.1"}
+        expect: {outcome: success, status: 200, count: 0}
+"#;
+    assert_eq!(
+        validate_fixture_journeys(list_with_bbox, &registry).unwrap_err(),
+        FixtureError::JourneyShapeRefused
+    );
+
+    let read_path_with_bbox = br#"apiVersion: registry.registrystack.org/server-journeys/v1
+journeys:
+  - id: path-shape
+    steps:
+      - id: path-bbox
+        entity: site
+        accessProfile: map-reader
+        claims: {}
+        request:
+          operation: read_path
+          path: children
+          recordRef: created-site
+          bbox: {west: "100.0", south: "13.0", east: "100.1", north: "13.1"}
+        expect: {outcome: success, status: 200, count: 0}
+"#;
+    assert_eq!(
+        validate_fixture_journeys(read_path_with_bbox, &registry).unwrap_err(),
+        FixtureError::JourneyShapeRefused
+    );
+}
+
 fn compiled_fixture() -> registry_server::CompiledRegistry {
     let module = parse_module_yaml(MODULE_SOURCE).expect("module fixture parses");
     let project_source = String::from_utf8(PROJECT_TEMPLATE.to_vec())
@@ -667,4 +782,34 @@ fn underlying_fixture_error(error: &FixtureError) -> &FixtureError {
         FixtureError::StepFailed { error, .. } => error,
         other => other,
     }
+}
+
+fn compiled_spatial_fixture() -> registry_server::CompiledRegistry {
+    let project = parse_project_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"spatial-fixture","version":"1","defaultLanguage":"en"},
+          "package":{"environment":"local","instanceId":"spatial-fixture-instance","sequence":1,"sourceRevision":"spatial-fixture-source"},
+          "entities":[{
+            "id":"site","route":"sites","mutationMode":"mutable","classification":"public",
+            "fields":[
+              {"id":"code","type":"string","maxLength":32,"required":true,"classification":"public"},
+              {"id":"location","type":"crs84-point","precision":9,"required":false,"classification":"public"}
+            ],
+            "geojson":{"geometryField":"location"}
+          }],
+          "accessProfiles":[
+            {"id":"map-reader","default":true,"anonymous":true,"grants":[{
+              "entity":"site","operations":["get","list"],"readableFields":["code","location"],
+              "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":1,"maximumLatitudeSpanDegrees":1}}
+            }]},
+            {"id":"directory-reader","anonymous":true,"grants":[{
+              "entity":"site","operations":["list"],"readableFields":["code"]
+            }]}
+          ]
+        }"#,
+    )
+    .expect("spatial project parses");
+    compile_project(&project, &[], CompileProfile::Production).expect("spatial fixture compiles")
 }

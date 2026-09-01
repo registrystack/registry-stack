@@ -1080,6 +1080,7 @@ fn validate_grant_access_requirements(
             writable_fields: BTreeSet::new(),
             filterable_fields: BTreeSet::new(),
             sortable_fields: BTreeSet::new(),
+            spatial_queries: None,
             row_boundaries: row_boundaries.to_vec(),
             lookups: Vec::new(),
             read_paths: Vec::new(),

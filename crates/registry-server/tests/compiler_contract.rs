@@ -3297,6 +3297,371 @@ fn crs84_point_and_structured_fields_cannot_be_row_boundaries_until_equality_is_
 }
 
 #[test]
+fn geojson_and_bbox_compile_only_for_direct_current_lists() {
+    let project = parse_project_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"spatial-authoring","version":"1","defaultLanguage":"en"},
+          "entities":[{
+            "id":"site","route":"sites","mutationMode":"mutable","classification":"internal",
+            "fields":[
+              {"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"},
+              {"id":"location","type":"crs84-point","precision":6,"required":true,"classification":"internal"},
+              {"id":"valid-from","type":"timestamp","validTimeRole":"valid_from","required":true,"classification":"internal"},
+              {"id":"valid-to","type":"timestamp","validTimeRole":"valid_to","classification":"internal"},
+              {"id":"scope","type":"string","maxLength":32,"required":true,"classification":"internal"}
+            ],
+            "geojson":{"geometryField":"location"},
+            "temporal":{"startField":"valid-from","endField":"valid-to","scopeFields":["scope"]},
+            "constraints":[{
+              "id":"scope-time",
+              "kind":"temporal-non-overlap",
+              "scopeFields":["scope"],
+              "startField":"valid-from",
+              "endField":"valid-to"
+            }]
+          }],
+          "accessProfiles":[{
+            "id":"map-reader","default":true,"principalClaim":"principal","grants":[{
+              "entity":"site","operations":["get","list"],"readableFields":["code","location","valid-from","valid-to","scope"],
+              "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.25,"maximumLatitudeSpanDegrees":1.5}}
+            }]
+          }]
+        }"#,
+    )
+    .expect("spatial source shape parses");
+    let compiled = compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("spatial authoring compiles");
+    assert_eq!(
+        compiled.entities()["site"]
+            .geojson
+            .as_ref()
+            .expect("GeoJSON binding compiles")
+            .geometry_field,
+        "location"
+    );
+
+    let base = compiled
+        .queries()
+        .operations
+        .iter()
+        .find(|operation| operation.id == "records.site.map-reader.list")
+        .expect("direct list query compiles");
+    let bbox = base
+        .spatial
+        .as_ref()
+        .and_then(|spatial| spatial.bbox.as_ref())
+        .expect("direct current list carries bbox capability");
+    assert_eq!(bbox.geometry_field, "location");
+    assert_eq!(bbox.maximum_longitude_span_degrees.to_string(), "0.25");
+    assert_eq!(bbox.maximum_latitude_span_degrees.to_string(), "1.5");
+    assert!(base.processing_fields.contains(&"location".to_owned()));
+
+    for id in [
+        "records.site.map-reader.current",
+        "records.site.map-reader.as-of",
+    ] {
+        let operation = compiled
+            .queries()
+            .operations
+            .iter()
+            .find(|operation| operation.id == id)
+            .expect("temporal query variant compiles");
+        assert!(
+            operation.spatial.is_none(),
+            "temporal query inventory must not inherit bbox authority"
+        );
+    }
+
+    let ordinary = compile_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"ordinary","version":"1","defaultLanguage":"en"},
+          "entities":[{
+            "id":"entry","route":"entries","mutationMode":"mutable",
+            "fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"}]
+          }],
+          "accessProfiles":[{
+            "id":"reader","default":true,"principalClaim":"principal","grants":[{
+              "entity":"entry","operations":["list"],"readableFields":["code"]
+            }]
+          }]
+        }"#,
+    )
+    .expect("ordinary project compiles");
+    let ordinary_json =
+        serde_json::to_value(&ordinary).expect("compiled ordinary project serializes");
+    assert!(!ordinary_json["entities"]["entry"]
+        .as_object()
+        .expect("compiled entity is an object")
+        .contains_key("geojson"));
+    assert!(ordinary_json["queryInventory"]["operations"]
+        .as_array()
+        .expect("operations are serialized")
+        .iter()
+        .all(|operation| !operation
+            .as_object()
+            .expect("operation is an object")
+            .contains_key("spatial")));
+}
+
+#[test]
+fn bbox_authoring_requires_declared_readable_primary_point_and_bounded_spans() {
+    let cases = [
+        (
+            r#""geojson":{"geometryField":"missing"}"#,
+            r#""operations":["list"],"readableFields":["code","location"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":2,"maximumLatitudeSpanDegrees":2}}"#,
+            "geojson.geometry_field.unknown",
+            "entities[].geojson.geometryField",
+        ),
+        (
+            r#""geojson":{"geometryField":"code"}"#,
+            r#""operations":["list"],"readableFields":["code","location"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":2,"maximumLatitudeSpanDegrees":2}}"#,
+            "geojson.geometry_field.type_unsupported",
+            "entities[].geojson.geometryField",
+        ),
+        (
+            r#""geojson":{"geometryField":"location"}"#,
+            r#""operations":["list"],"readableFields":["code","location"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0,"maximumLatitudeSpanDegrees":2}}"#,
+            "access_profile.spatial_queries.bbox.maximum_longitude_span_degrees.invalid",
+            "entities[].accessProfiles[].spatialQueries.bbox.maximumLongitudeSpanDegrees",
+        ),
+        (
+            r#""geojson":{"geometryField":"location"}"#,
+            r#""operations":["list"],"readableFields":["code","location"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":361,"maximumLatitudeSpanDegrees":2}}"#,
+            "access_profile.spatial_queries.bbox.maximum_longitude_span_degrees.invalid",
+            "entities[].accessProfiles[].spatialQueries.bbox.maximumLongitudeSpanDegrees",
+        ),
+        (
+            r#""geojson":{"geometryField":"location"}"#,
+            r#""operations":["list"],"readableFields":["code","location"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":2,"maximumLatitudeSpanDegrees":181}}"#,
+            "access_profile.spatial_queries.bbox.maximum_latitude_span_degrees.invalid",
+            "entities[].accessProfiles[].spatialQueries.bbox.maximumLatitudeSpanDegrees",
+        ),
+        (
+            r#""geojson":{"geometryField":"location"}"#,
+            r#""operations":["list"],"readableFields":["code","location"],"spatialQueries":{}"#,
+            "access_profile.spatial_queries.empty",
+            "entities[].accessProfiles[].spatialQueries",
+        ),
+        (
+            r#""geojson":{"geometryField":"location"}"#,
+            r#""operations":["list"],"readableFields":["code"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":2,"maximumLatitudeSpanDegrees":2}}"#,
+            "access_profile.spatial_queries.bbox.geometry_not_readable",
+            "entities[].accessProfiles[].readableFields",
+        ),
+        (
+            r#""geojson":{"geometryField":"location"}"#,
+            r#""operations":["get"],"readableFields":["code","location"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":2,"maximumLatitudeSpanDegrees":2}}"#,
+            "access_profile.spatial_queries.bbox.list_required",
+            "entities[].accessProfiles[].spatialQueries.bbox",
+        ),
+    ];
+
+    for (geojson, grant, code, path) in cases {
+        let source = format!(
+            r#"{{
+              "apiVersion":"registry.registrystack.org/v1alpha1",
+              "kind":"RegistryProject",
+              "registry":{{"id":"spatial-negative","version":"1","defaultLanguage":"en"}},
+              "entities":[{{
+                "id":"site","route":"sites","mutationMode":"mutable","classification":"internal",
+                "fields":[
+                  {{"id":"code","type":"string","maxLength":32,"classification":"internal"}},
+                  {{"id":"location","type":"crs84-point","precision":6,"classification":"internal"}}
+                ],
+                {geojson}
+              }}],
+              "accessProfiles":[{{
+                "id":"map-reader","default":true,"principalClaim":"principal","grants":[{{
+                  "entity":"site",{grant}
+                }}]
+              }}]
+            }}"#
+        );
+        let project = parse_project_json(source.as_bytes()).expect("source shape parses");
+        let failure = compile_project(&project, &[], CompileProfile::Authoring)
+            .expect_err("invalid bbox authoring is refused");
+        let diagnostic = failure
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == code)
+            .expect("expected spatial diagnostic is reported");
+        assert_eq!(diagnostic.path, path);
+    }
+}
+
+#[test]
+fn bbox_authoring_is_strict_and_does_not_make_points_scalar_query_fields() {
+    let strict_failure = parse_project_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"spatial-strict","version":"1","defaultLanguage":"en"},
+          "entities":[{
+            "id":"site","route":"sites","mutationMode":"mutable",
+            "fields":[{"id":"location","type":"crs84-point","precision":6,"classification":"internal"}],
+            "geojson":{"geometryField":"location"}
+          }],
+          "accessProfiles":[{
+            "id":"map-reader","default":true,"principalClaim":"principal","grants":[{
+              "entity":"site","operations":["list"],"readableFields":["location"],
+              "spatialQueries":{"bbox":{"geometryField":"location","maximumLongitudeSpanDegrees":2,"maximumLatitudeSpanDegrees":2}}
+            }]
+          }]
+        }"#,
+    )
+    .expect_err("bbox does not accept duplicate geometry declaration");
+    assert_eq!(strict_failure.diagnostics()[0].code, "source.shape.invalid");
+
+    for (member, code, message_fragment) in [
+        (
+            r#""filterableFields":["location"]"#,
+            "query.filter.field_type_unsupported",
+            "spatialQueries.bbox",
+        ),
+        (
+            r#""sortableFields":["location"]"#,
+            "query.sort.field_type_unsupported",
+            "spatialQueries.bbox",
+        ),
+    ] {
+        let source = format!(
+            r#"{{
+              "apiVersion":"registry.registrystack.org/v1alpha1",
+              "kind":"RegistryProject",
+              "registry":{{"id":"point-scalar-negative","version":"1","defaultLanguage":"en"}},
+              "entities":[{{
+                "id":"site","route":"sites","mutationMode":"mutable",
+                "fields":[{{"id":"location","type":"crs84-point","precision":6,"classification":"internal"}}]
+              }}],
+              "accessProfiles":[{{
+                "id":"reader","default":true,"principalClaim":"principal","grants":[{{
+                  "entity":"site","operations":["list"],"readableFields":["location"],{member}
+                }}]
+              }}]
+            }}"#
+        );
+        let project = parse_project_json(source.as_bytes()).expect("source shape parses");
+        let failure = compile_project(&project, &[], CompileProfile::Authoring)
+            .expect_err("point scalar query field is refused");
+        let diagnostic = failure
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == code)
+            .expect("expected scalar query diagnostic is reported");
+        assert!(diagnostic.message.contains(message_fragment));
+    }
+}
+
+#[test]
+fn anonymous_bbox_queries_cannot_process_hidden_geometry() {
+    let project = parse_project_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"spatial-public-negative","version":"1","defaultLanguage":"en"},
+          "entities":[{
+            "id":"site","route":"sites","mutationMode":"mutable","classification":"public",
+            "fields":[
+              {"id":"code","type":"string","maxLength":32,"classification":"public"},
+              {"id":"location","type":"crs84-point","precision":6,"classification":"internal"}
+            ],
+            "geojson":{"geometryField":"location"}
+          }],
+          "accessProfiles":[{
+            "id":"public-map","default":true,"anonymous":true,"grants":[{
+              "entity":"site","operations":["list"],"readableFields":["code","location"],
+              "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":2,"maximumLatitudeSpanDegrees":2}}
+            }]
+          }]
+        }"#,
+    )
+    .expect("source shape parses");
+    let failure = compile_project(&project, &[], CompileProfile::Authoring)
+        .expect_err("anonymous bbox processing over internal geometry is refused");
+    let diagnostic = failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| {
+            diagnostic.code == "access_profile.public.processing_non_public"
+                && diagnostic.path == "entities[].accessProfiles[].spatialQueries.bbox"
+        })
+        .expect("spatial public-processing diagnostic is reported");
+    assert!(diagnostic.message.contains("public GeoJSON geometry field"));
+}
+
+#[test]
+fn modules_can_add_geojson_once_but_conflicting_geometry_is_refused() {
+    let project = parse_project_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"module-spatial","version":"1","defaultLanguage":"en"},
+          "modules":[{"id":"maps","version":"1"}],
+          "entities":[{
+            "id":"site","route":"sites","mutationMode":"mutable",
+            "fields":[
+              {"id":"code","type":"string","maxLength":32,"classification":"internal"},
+              {"id":"location","type":"crs84-point","precision":6,"classification":"internal"},
+              {"id":"alternate","type":"crs84-point","precision":6,"classification":"internal"}
+            ]
+          }],
+          "accessProfiles":[{
+            "id":"map-reader","default":true,"principalClaim":"principal","grants":[{
+              "entity":"site","operations":["list"],"readableFields":["code","location"],
+              "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":2,"maximumLatitudeSpanDegrees":2}}
+            }]
+          }]
+        }"#,
+    )
+    .expect("project parses");
+    let module = parse_module_json(
+        br#"{
+          "id":"maps","version":"1",
+          "extendEntities":[{"entity":"site","geojson":{"geometryField":"location"}}]
+        }"#,
+    )
+    .expect("module parses");
+    let compiled = compile_project(&project, &[module], CompileProfile::Authoring)
+        .expect("module may add a missing GeoJSON geometry binding");
+    assert_eq!(
+        compiled.entities()["site"]
+            .geojson
+            .as_ref()
+            .expect("module binding compiles")
+            .geometry_field,
+        "location"
+    );
+
+    let mut project_with_geojson = project.clone();
+    project_with_geojson.entities[0].geojson = Some(registry_server::contract::GeoJsonSource {
+        geometry_field: "location".to_owned(),
+    });
+    let conflicting = parse_module_json(
+        br#"{
+          "id":"maps","version":"1",
+          "extendEntities":[{"entity":"site","geojson":{"geometryField":"alternate"}}]
+        }"#,
+    )
+    .expect("conflicting module parses");
+    let failure = compile_project(
+        &project_with_geojson,
+        &[conflicting],
+        CompileProfile::Authoring,
+    )
+    .expect_err("conflicting GeoJSON geometry binding is refused");
+    let diagnostic = failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "extension.geojson.conflict")
+        .expect("conflict diagnostic is reported");
+    assert_eq!(diagnostic.path, "entities[id=site].geojson.geometryField");
+}
+
+#[test]
 fn closed_constraint_grammar_compiles_typed_checks_and_refuses_expression_escape_hatches() {
     let project = parse_project_json(
         br#"{
@@ -4608,6 +4973,7 @@ fn public_profile_cannot_process_an_internal_field() {
             writable_fields: Default::default(),
             filterable_fields: Default::default(),
             sortable_fields: Default::default(),
+            spatial_queries: None,
             row_boundaries: vec![RowBoundarySource {
                 field: "asset-code".to_owned(),
                 claim: "asset_code".to_owned(),

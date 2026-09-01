@@ -22,6 +22,8 @@ cargo test --locked -p registry-server --features postgres-test --test postgres_
 cargo test --locked -p registry-server --features postgres-test --test postgres_partial_unique
 cargo test --locked -p registry-server --features postgres-test --test postgres_constraint_races
 cargo test --locked -p registry-server --features postgres-test --test postgres_read
+cargo test --locked -p registry-server --features postgres-test --test postgres_spatial_storage
+cargo test --locked -p registry-server --features postgres-test --test postgres_spatial_read
 cargo test --locked -p registry-server --features postgres-test --test postgres_revision_http
 cargo test --locked -p registry-server --features postgres-test --test postgres_history_commit
 cargo test --locked -p registry-server --features postgres-test --test postgres_historical
@@ -50,6 +52,7 @@ cargo test --locked -p registry-server --features postgres-test --test postgres_
 cargo test --locked -p registry-server --features postgres-test --test postgres_tombstone_revision
 cargo test --locked -p registry-server --features postgres-test,tooling --test postgres_package
 cargo test --locked -p registry-server --features postgres-test,tooling --test postgres_migration
+cargo test --locked -p registry-server --features postgres-test,tooling --test postgres_spatial_migration
 cargo test --locked -p registry-server --features postgres-test,tooling --test postgres_fixture_journeys
 cargo test --locked -p registry-server --features postgres-test,tooling --test schema_fingerprint_rehearsal
 cargo test --locked -p registry-server --features postgres-test --test postgres_startup

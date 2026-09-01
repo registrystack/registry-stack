@@ -218,6 +218,35 @@ fn relationship_grants_cannot_bypass_target_or_join_requirements() {
 }
 
 #[test]
+fn spatial_query_grants_do_not_satisfy_or_weaken_access_requirements() {
+    let mut value = source();
+    value["entities"][0]["fields"]
+        .as_array_mut()
+        .expect("fields are an array")
+        .push(json!({
+            "id":"location",
+            "type":"crs84-point",
+            "precision":6,
+            "classification":"internal"
+        }));
+    value["entities"][0]["geojson"] = json!({"geometryField":"location"});
+    value["accessProfiles"][0]["grants"][0]["readableFields"]
+        .as_array_mut()
+        .expect("readable fields are an array")
+        .push(json!("location"));
+    value["accessProfiles"][0]["grants"][0]["spatialQueries"] = json!({
+        "bbox": {
+            "maximumLongitudeSpanDegrees": 0.25,
+            "maximumLatitudeSpanDegrees": 1.5
+        }
+    });
+
+    compile(&value).unwrap();
+    value["accessProfiles"][0]["requiredScopes"] = json!([]);
+    assert_refused(&value, "access.requirements.scope_missing");
+}
+
+#[test]
 fn footgun_findings_are_actionable_deterministic_and_do_not_change_authority() {
     let mut value = source();
     value["entities"][0]

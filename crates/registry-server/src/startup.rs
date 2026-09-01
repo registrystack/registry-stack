@@ -625,6 +625,15 @@ async fn finish_prepared_server(
         .map_err(|_| StartupError::Oidc)?;
 
     let registry = Arc::new(startup.package().registry().clone());
+    if registry
+        .queries()
+        .operations
+        .iter()
+        .any(|operation| operation.gis_collection_id().is_some())
+        && config.listener().public_origin().is_none()
+    {
+        return Err(StartupError::RuntimeConfig);
+    }
     #[cfg(all(feature = "postgres-test", feature = "tooling"))]
     let fixture_pool = pool.clone();
     let event_destinations = Arc::new(
@@ -644,15 +653,16 @@ async fn finish_prepared_server(
     let expected = startup.expected_identity().clone();
     let expected_catalog = startup.expected_catalog().clone();
     let lock_key = startup.lock_key();
-    let readiness = Arc::new(DynamicRuntimeReadiness::new(
-        pool.clone(),
-        expected.clone(),
-        expected_catalog.clone(),
-        config.database().roles().migration().clone(),
-        config.database().roles().runtime().clone(),
+    let readiness = Arc::new(DynamicRuntimeReadiness {
+        pool: pool.clone(),
+        expected: expected.clone(),
+        expected_catalog: expected_catalog.clone(),
+        migration_role: config.database().roles().migration().clone(),
+        runtime_role: config.database().roles().runtime().clone(),
         lock_key,
-        Arc::clone(&key_source),
-    ));
+        key_source: Arc::clone(&key_source),
+        requires_postgis: registry.ddl().requires_postgis,
+    });
     if !readiness.is_ready().await {
         return Err(StartupError::DatabaseUnready);
     }
@@ -711,12 +721,14 @@ async fn finish_prepared_server(
         audit_profile,
         Some(event_destinations),
     ));
-    let service = Arc::new(
-        HttpService::new(registry, read_identity, records, readiness, cursor_codec)
-            .with_postgres_revisions(revisions)
-            .with_snapshots(snapshots)
-            .with_postgres_mutations(mutations),
-    );
+    let mut service = HttpService::new(registry, read_identity, records, readiness, cursor_codec)
+        .with_postgres_revisions(revisions)
+        .with_snapshots(snapshots)
+        .with_postgres_mutations(mutations);
+    if let Some(origin) = config.listener().public_origin() {
+        service = service.with_public_origin(origin.clone());
+    }
+    let service = Arc::new(service);
     let app = with_request_timeout(
         authenticated_router(service, authenticator),
         config.operational_timeouts().http_request,
@@ -951,6 +963,11 @@ async fn verify_opened_startup(
     verify_configured_runtime_role(&transaction, migration_role, runtime_role)
         .await
         .map_err(|_| StartupError::DatabaseUnready)?;
+    if package.registry().ddl().requires_postgis {
+        crate::postgres::verify_postgis(&transaction, migration_role, runtime_role)
+            .await
+            .map_err(|_| StartupError::DatabaseUnready)?;
+    }
     let maintenance = transaction
         .query_opt(
             "SELECT maintenance_status
@@ -1008,29 +1025,10 @@ struct DynamicRuntimeReadiness {
     runtime_role: SqlIdentifier,
     lock_key: RegistryLockKey,
     key_source: Arc<JwksFetcher>,
+    requires_postgis: bool,
 }
 
 impl DynamicRuntimeReadiness {
-    fn new(
-        pool: RuntimePool,
-        expected: ExpectedRegistryIdentity,
-        expected_catalog: ExpectedManagedCatalog,
-        migration_role: SqlIdentifier,
-        runtime_role: SqlIdentifier,
-        lock_key: RegistryLockKey,
-        key_source: Arc<JwksFetcher>,
-    ) -> Self {
-        Self {
-            pool,
-            expected,
-            expected_catalog,
-            migration_role,
-            runtime_role,
-            lock_key,
-            key_source,
-        }
-    }
-
     async fn check(&self) -> Result<()> {
         let mut client = self
             .pool
@@ -1058,6 +1056,15 @@ impl DynamicRuntimeReadiness {
         verify_configured_runtime_role(&*transaction, &self.migration_role, &self.runtime_role)
             .await
             .map_err(|_| StartupError::DatabaseUnready)?;
+        if self.requires_postgis {
+            crate::postgres::verify_postgis(
+                &*transaction,
+                &self.migration_role,
+                &self.runtime_role,
+            )
+            .await
+            .map_err(|_| StartupError::DatabaseUnready)?;
+        }
         let maintenance = transaction
             .query_opt(
                 "SELECT maintenance_status

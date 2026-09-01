@@ -9,7 +9,7 @@ use tokio_postgres::NoTls;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 use tokio_postgres::{Client, GenericClient};
 
-use crate::generated_ddl::DdlStatementKind;
+use crate::generated_ddl::{policy_sql, DdlObjectOwner, DdlPolicyRole, DdlStatementKind};
 #[cfg(any(feature = "tooling", feature = "postgres-test"))]
 use crate::history_commit::install_empty_history_baseline;
 use crate::history_store::install_history_schema_store;
@@ -19,8 +19,8 @@ use crate::mutation::install_mutation_schema;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 use super::config::ConnectionTls;
 use super::{
-    catalog::install_registry_state_schema, verify_btree_gist, PostgresKernelError, Result,
-    SqlIdentifier,
+    catalog::install_registry_state_schema, spatial_bbox_role, verify_btree_gist, verify_postgis,
+    PostgresKernelError, Result, SqlIdentifier,
 };
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 use super::{
@@ -45,6 +45,10 @@ pub async fn install_compiled_schema(
     if registry.ddl().requires_btree_gist {
         verify_btree_gist(migration).await?;
     }
+    if registry.ddl().requires_postgis {
+        let migration_role = current_role_identifier(migration).await?;
+        verify_postgis(migration, &migration_role, runtime_role).await?;
+    }
 
     install_registry_state_schema(migration, runtime_role).await?;
     install_mutation_schema(migration, runtime_role)
@@ -54,11 +58,21 @@ pub async fn install_compiled_schema(
         .await
         .map_err(|_| PostgresKernelError::Connection)?;
 
+    let mut spatial_candidate_view_statements = Vec::new();
     for statement in &registry.ddl().statements {
         if statement.kind == DdlStatementKind::Schema {
             continue;
         }
-        migration.batch_execute(&statement.sql).await?;
+        if is_spatial_candidate_view_sql(&statement.sql) {
+            spatial_candidate_view_statements.push(statement);
+            continue;
+        }
+        execute_compiled_ddl_statement(migration, &statement.sql, statement.kind, runtime_role)
+            .await?;
+    }
+    for statement in spatial_candidate_view_statements {
+        execute_compiled_ddl_statement(migration, &statement.sql, statement.kind, runtime_role)
+            .await?;
     }
 
     reconcile_compiled_runtime_acl(migration, registry, runtime_role).await
@@ -69,20 +83,39 @@ pub(crate) async fn reconcile_compiled_runtime_acl(
     registry: &CompiledRegistry,
     runtime_role: &SqlIdentifier,
 ) -> Result<()> {
+    let candidate_bbox_role = spatial_bbox_role(runtime_role);
+    let bbox_role =
+        if registry.ddl().requires_postgis || role_exists(client, &candidate_bbox_role).await? {
+            Some(candidate_bbox_role)
+        } else {
+            None
+        };
+    let bbox_revoke = bbox_role
+        .as_ref()
+        .map(|role| format!(", {}", role.quoted()))
+        .unwrap_or_default();
     client
         .batch_execute(&format!(
-            "REVOKE ALL ON SCHEMA registry_data, registry_source, registry_derived, registry_context FROM PUBLIC, {};
+            "REVOKE ALL ON SCHEMA registry_data, registry_source, registry_derived, registry_context FROM PUBLIC, {}{bbox_revoke};
              GRANT USAGE ON SCHEMA registry_data, registry_source, registry_derived, registry_context TO {};",
             runtime_role.quoted(),
             runtime_role.quoted(),
         ))
         .await?;
+    if let Some(role) = &bbox_role {
+        client
+            .batch_execute(&format!(
+                "GRANT USAGE ON SCHEMA registry_data, registry_context TO {};",
+                role.quoted(),
+            ))
+            .await?;
+    }
 
     for table in &registry.ddl().tables {
         let table_name = quote_compiled_identifier(&table.physical_name);
         client
             .batch_execute(&format!(
-                "REVOKE ALL ON TABLE registry_data.{table_name} FROM PUBLIC, {};",
+                "REVOKE ALL ON TABLE registry_data.{table_name} FROM PUBLIC, {}{bbox_revoke};",
                 runtime_role.quoted(),
             ))
             .await?;
@@ -100,13 +133,68 @@ pub(crate) async fn reconcile_compiled_runtime_acl(
                 ))
                 .await?;
         }
+        if let Some(role) = &bbox_role {
+            if !table.spatial_bbox_privileges.is_empty() {
+                let privileges = table
+                    .spatial_bbox_privileges
+                    .iter()
+                    .map(|privilege| privilege.as_sql())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                client
+                    .batch_execute(&format!(
+                        "GRANT {privileges} ON TABLE registry_data.{table_name} TO {};",
+                        role.quoted(),
+                    ))
+                    .await?;
+            }
+        }
+        for policy in &table.policies {
+            let role = match policy.applies_to {
+                DdlPolicyRole::Public => None,
+                DdlPolicyRole::Runtime => Some(runtime_role.as_str()),
+                DdlPolicyRole::SpatialBbox => bbox_role.as_ref().map(SqlIdentifier::as_str),
+            };
+            if policy.applies_to == DdlPolicyRole::SpatialBbox && role.is_none() {
+                return Err(PostgresKernelError::Configuration(
+                    "spatial bbox role membership is incomplete or invalid",
+                ));
+            }
+            client
+                .batch_execute(&format!(
+                    "DROP POLICY IF EXISTS {} ON registry_data.{table_name};
+{};",
+                    crate::generated_ddl::quote_identifier(&policy.name),
+                    policy_sql(&table_name, policy, role),
+                ))
+                .await?;
+        }
     }
     for view in &registry.ddl().views {
         let schema = quote_compiled_identifier(&view.schema);
         let view_name = quote_compiled_identifier(&view.name);
+        if view.owner == DdlObjectOwner::SpatialBbox {
+            let Some(role) = &bbox_role else {
+                return Err(PostgresKernelError::Configuration(
+                    "spatial bbox role membership is incomplete or invalid",
+                ));
+            };
+            reconcile_spatial_candidate_view_acl(
+                client,
+                &format!("{schema}.{view_name}"),
+                role,
+                runtime_role,
+                view.runtime_privileges
+                    .iter()
+                    .map(|privilege| privilege.as_sql())
+                    .collect::<Vec<_>>(),
+            )
+            .await?;
+            continue;
+        }
         client
             .batch_execute(&format!(
-                "REVOKE ALL ON TABLE {schema}.{view_name} FROM PUBLIC, {};",
+                "REVOKE ALL ON TABLE {schema}.{view_name} FROM PUBLIC, {}{bbox_revoke};",
                 runtime_role.quoted(),
             ))
             .await?;
@@ -130,7 +218,7 @@ pub(crate) async fn reconcile_compiled_runtime_acl(
         let name = quote_compiled_identifier(&function.name);
         client
             .batch_execute(&format!(
-                "REVOKE ALL ON FUNCTION {schema}.{name}({}) FROM PUBLIC, {};",
+                "REVOKE ALL ON FUNCTION {schema}.{name}({}) FROM PUBLIC, {}{bbox_revoke};",
                 function.arguments,
                 runtime_role.quoted(),
             ))
@@ -144,8 +232,34 @@ pub(crate) async fn reconcile_compiled_runtime_acl(
                 ))
                 .await?;
         }
+        if function.spatial_bbox_execute {
+            let Some(role) = &bbox_role else {
+                return Err(PostgresKernelError::Configuration(
+                    "spatial bbox role membership is incomplete or invalid",
+                ));
+            };
+            client
+                .batch_execute(&format!(
+                    "GRANT EXECUTE ON FUNCTION {schema}.{name}({}) TO {};",
+                    function.arguments,
+                    role.quoted(),
+                ))
+                .await?;
+        }
     }
     Ok(())
+}
+
+/// Test-only boundary for measuring a successor fingerprint with the same
+/// policy and privilege reconciliation used by package activation.
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub async fn reconcile_compiled_runtime_acl_for_test(
+    client: &impl GenericClient,
+    registry: &CompiledRegistry,
+    runtime_role: &SqlIdentifier,
+) -> Result<()> {
+    reconcile_compiled_runtime_acl(client, registry, runtime_role).await
 }
 
 #[cfg(any(feature = "tooling", feature = "postgres-test"))]
@@ -200,6 +314,154 @@ pub(crate) async fn install_empty_history_baseline_for_compiled_registry(
     Ok(())
 }
 
+pub(crate) async fn execute_compiled_ddl_statement(
+    client: &impl GenericClient,
+    sql: &str,
+    kind: DdlStatementKind,
+    runtime_role: &SqlIdentifier,
+) -> Result<()> {
+    if kind == DdlStatementKind::View && is_spatial_candidate_view_sql(sql) {
+        execute_spatial_candidate_view_ddl(client, sql, runtime_role).await
+    } else {
+        client.batch_execute(sql).await?;
+        Ok(())
+    }
+}
+
+async fn execute_spatial_candidate_view_ddl(
+    client: &impl GenericClient,
+    sql: &str,
+    runtime_role: &SqlIdentifier,
+) -> Result<()> {
+    if is_spatial_candidate_view_create_sql(sql) {
+        execute_spatial_candidate_view_create(client, sql, runtime_role).await
+    } else {
+        execute_spatial_candidate_view_as_bbox(client, sql, runtime_role).await
+    }
+}
+
+async fn execute_spatial_candidate_view_create(
+    client: &impl GenericClient,
+    sql: &str,
+    runtime_role: &SqlIdentifier,
+) -> Result<()> {
+    let bbox_role = spatial_bbox_role(runtime_role);
+    let view = spatial_candidate_view_qualified_name(sql)?;
+    client
+        .batch_execute(&format!(
+            "{sql};
+             GRANT CREATE ON SCHEMA registry_context TO {};
+             ALTER VIEW {view} OWNER TO {};
+             REVOKE CREATE ON SCHEMA registry_context FROM {};",
+            bbox_role.quoted(),
+            bbox_role.quoted(),
+            bbox_role.quoted(),
+        ))
+        .await?;
+    Ok(())
+}
+
+async fn execute_spatial_candidate_view_as_bbox(
+    client: &impl GenericClient,
+    sql: &str,
+    runtime_role: &SqlIdentifier,
+) -> Result<()> {
+    let bbox_role = spatial_bbox_role(runtime_role);
+    let create_grant = if is_spatial_candidate_view_replace_sql(sql) {
+        format!(
+            "GRANT CREATE ON SCHEMA registry_context TO {};",
+            bbox_role.quoted()
+        )
+    } else {
+        String::new()
+    };
+    let create_revoke = if is_spatial_candidate_view_replace_sql(sql) {
+        format!(
+            "REVOKE CREATE ON SCHEMA registry_context FROM {};",
+            bbox_role.quoted()
+        )
+    } else {
+        String::new()
+    };
+    client
+        .batch_execute(&format!(
+            "{create_grant}
+             SET LOCAL ROLE {};
+             {sql};
+             RESET ROLE;
+             {create_revoke}",
+            bbox_role.quoted(),
+        ))
+        .await?;
+    Ok(())
+}
+
+async fn reconcile_spatial_candidate_view_acl(
+    client: &impl GenericClient,
+    view: &str,
+    bbox_role: &SqlIdentifier,
+    runtime_role: &SqlIdentifier,
+    runtime_privileges: Vec<&str>,
+) -> Result<()> {
+    let runtime_grant = if runtime_privileges.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "GRANT {} ON TABLE {view} TO {};",
+            runtime_privileges.join(", "),
+            runtime_role.quoted()
+        )
+    };
+    client
+        .batch_execute(&format!(
+            "SET LOCAL ROLE {};
+             REVOKE ALL ON TABLE {view} FROM PUBLIC, {};
+             {runtime_grant}
+             RESET ROLE;",
+            bbox_role.quoted(),
+            runtime_role.quoted(),
+        ))
+        .await?;
+    Ok(())
+}
+
+pub(crate) fn is_spatial_candidate_view_sql(sql: &str) -> bool {
+    is_spatial_candidate_view_create_sql(sql)
+        || is_spatial_candidate_view_replace_sql(sql)
+        || is_spatial_candidate_view_drop_sql(sql)
+}
+
+fn is_spatial_candidate_view_create_sql(sql: &str) -> bool {
+    sql.starts_with("CREATE VIEW registry_context.\"rs_spcand_")
+}
+
+fn is_spatial_candidate_view_replace_sql(sql: &str) -> bool {
+    sql.starts_with("CREATE OR REPLACE VIEW registry_context.\"rs_spcand_")
+}
+
+pub(crate) fn is_spatial_candidate_view_drop_sql(sql: &str) -> bool {
+    sql.starts_with("DROP VIEW IF EXISTS registry_context.\"rs_spcand_")
+}
+
+fn spatial_candidate_view_qualified_name(sql: &str) -> Result<String> {
+    for prefix in [
+        "CREATE VIEW ",
+        "CREATE OR REPLACE VIEW ",
+        "DROP VIEW IF EXISTS ",
+    ] {
+        if let Some(rest) = sql.strip_prefix(prefix) {
+            let name = rest
+                .split_whitespace()
+                .next()
+                .ok_or(PostgresKernelError::RegistryUnavailable)?;
+            if name.starts_with("registry_context.\"rs_spcand_") && name.ends_with('"') {
+                return Ok(name.to_owned());
+            }
+        }
+    }
+    Err(PostgresKernelError::RegistryUnavailable)
+}
+
 pub(crate) async fn verify_postgres_15_or_newer(client: &impl GenericClient) -> Result<()> {
     let version_num: String = client
         .query_one("SELECT current_setting('server_version_num')", &[])
@@ -214,6 +476,21 @@ pub(crate) async fn verify_postgres_15_or_newer(client: &impl GenericClient) -> 
         ));
     }
     Ok(())
+}
+
+async fn role_exists(client: &impl GenericClient, role: &SqlIdentifier) -> Result<bool> {
+    Ok(client
+        .query_opt(
+            "SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = $1",
+            &[&role.as_str()],
+        )
+        .await?
+        .is_some())
+}
+
+async fn current_role_identifier(client: &impl GenericClient) -> Result<SqlIdentifier> {
+    let role: String = client.query_one("SELECT current_user", &[]).await?.get(0);
+    SqlIdentifier::parse(&role)
 }
 
 /// Candidate identity installed into a clean schema-test database.

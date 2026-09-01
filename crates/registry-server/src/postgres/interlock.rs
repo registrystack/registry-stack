@@ -36,9 +36,12 @@ use super::{
         step_progress, verify_resumable, MigrationLedgerEntry, MigrationLedgerStep,
         MigrationLedgerStepKind,
     },
-    schema::reconcile_compiled_runtime_acl,
-    verify_btree_gist, verify_migration_role, ConnectionConfig, ExpectedRegistryIdentity,
-    PostgresKernelError, Result, SqlIdentifier,
+    schema::{
+        execute_compiled_ddl_statement, is_spatial_candidate_view_drop_sql,
+        is_spatial_candidate_view_sql, reconcile_compiled_runtime_acl,
+    },
+    verify_btree_gist, verify_migration_role, verify_postgis, ConnectionConfig,
+    ExpectedRegistryIdentity, PostgresKernelError, Result, SqlIdentifier,
 };
 
 // These defense-in-depth bounds match the verified package manifest envelope:
@@ -118,6 +121,7 @@ pub struct DedicatedApplyConnection {
     lock_key: RegistryLockKey,
     locked: bool,
     verified_migration_role: bool,
+    migration_role: Option<SqlIdentifier>,
 }
 
 impl DedicatedApplyConnection {
@@ -198,6 +202,7 @@ impl DedicatedApplyConnection {
             lock_key,
             locked: true,
             verified_migration_role: migration_role.is_some(),
+            migration_role: migration_role.cloned(),
         })
     }
 
@@ -238,6 +243,7 @@ impl DedicatedApplyConnection {
     pub(crate) async fn execute_successor_package_ddl(
         &mut self,
         statements: &[PackageDdlStatement<'_>],
+        runtime_role: &SqlIdentifier,
         statement_timeout: Duration,
     ) -> Result<()> {
         ensure_verified_package_session(self.locked, self.verified_migration_role)?;
@@ -246,7 +252,15 @@ impl DedicatedApplyConnection {
         set_local_statement_timeout(&transaction, statement_timeout).await?;
         for statement in statements {
             validate_statement_checksum(statement)?;
-            if transaction.batch_execute(statement.sql).await.is_err() {
+            if execute_compiled_ddl_statement(
+                &transaction,
+                statement.sql,
+                statement.kind,
+                runtime_role,
+            )
+            .await
+            .is_err()
+            {
                 transaction.rollback().await?;
                 return Err(PostgresKernelError::Connection);
             }
@@ -300,11 +314,16 @@ impl DedicatedApplyConnection {
             compiler_lock_timeout,
             compiler_statement_timeout,
             false,
+            runtime_role,
         )
         .await?;
-        let refresh_views = compiler_statements
+        let refresh_views = compiler_statements.iter().any(|statement| {
+            statement.kind == DdlStatementKind::View
+                && !is_spatial_candidate_view_sql(statement.sql)
+        });
+        let post_manual_compiler_steps = compiler_statements
             .iter()
-            .any(|statement| statement.kind == DdlStatementKind::View);
+            .any(|statement| compiler_statement_runs_after_reviewed_steps(statement));
         if refresh_views {
             self.drop_managed_read_views(compiler_lock_timeout, compiler_statement_timeout)
                 .await?;
@@ -380,13 +399,14 @@ impl DedicatedApplyConnection {
             }
         }
 
-        if refresh_views {
+        if post_manual_compiler_steps {
             self.execute_reviewed_compiler_steps(
                 compiler_statements,
                 ledger,
                 compiler_lock_timeout,
                 compiler_statement_timeout,
                 true,
+                runtime_role,
             )
             .await?;
         }
@@ -460,6 +480,7 @@ impl DedicatedApplyConnection {
         lock_timeout: Duration,
         statement_timeout: Duration,
         views: bool,
+        runtime_role: &SqlIdentifier,
     ) -> Result<()> {
         validate_timeout(
             lock_timeout,
@@ -473,7 +494,7 @@ impl DedicatedApplyConnection {
         )?;
         for statement in statements
             .iter()
-            .filter(|statement| (statement.kind == DdlStatementKind::View) == views)
+            .filter(|statement| compiler_statement_runs_after_reviewed_steps(statement) == views)
         {
             validate_statement_checksum(statement)?;
             let ledger_step = ledger_step(ledger, 0, statement.ordinal)?;
@@ -487,14 +508,21 @@ impl DedicatedApplyConnection {
             let complete = step_progress(&transaction, ledger, ledger_step)
                 .await?
                 .complete;
-            if complete && !views {
+            let rerun_when_complete = views
+                && statement.kind == DdlStatementKind::View
+                && !is_spatial_candidate_view_sql(statement.sql);
+            if complete && !rerun_when_complete {
                 transaction.commit().await?;
                 continue;
             }
-            transaction
-                .batch_execute(statement.sql)
-                .await
-                .map_err(|_| PostgresKernelError::Connection)?;
+            execute_compiled_ddl_statement(
+                &transaction,
+                statement.sql,
+                statement.kind,
+                runtime_role,
+            )
+            .await
+            .map_err(|_| PostgresKernelError::Connection)?;
             if !complete {
                 record_step_complete(&transaction, ledger, ledger_step, 0).await?;
             }
@@ -716,9 +744,15 @@ impl DedicatedApplyConnection {
         }
         let transaction = self.client.transaction().await?;
         set_local_statement_timeout(&transaction, statement_timeout).await?;
-        if registry.ddl().requires_btree_gist {
-            verify_btree_gist(&transaction).await?;
-        }
+        verify_compiled_prerequisites_for_client(
+            &transaction,
+            registry,
+            self.migration_role
+                .as_ref()
+                .ok_or(PostgresKernelError::RegistryUnavailable)?,
+            runtime_role,
+        )
+        .await?;
         install_mutation_schema(&transaction, runtime_role)
             .await
             .map_err(|_| PostgresKernelError::Connection)?;
@@ -728,6 +762,7 @@ impl DedicatedApplyConnection {
         install_history_commit_schema(&transaction, runtime_role)
             .await
             .map_err(|_| PostgresKernelError::Connection)?;
+        let mut spatial_candidate_view_statements = Vec::new();
         for (statement, compiled) in statements.iter().zip(&registry.ddl().statements) {
             validate_statement_checksum(statement)?;
             // The two managed schemas are administrator-provisioned and owned
@@ -737,11 +772,38 @@ impl DedicatedApplyConnection {
             if compiled.kind == DdlStatementKind::Schema {
                 continue;
             }
-            if transaction.batch_execute(statement.sql).await.is_err() {
+            if is_spatial_candidate_view_sql(statement.sql) {
+                spatial_candidate_view_statements.push(statement);
+                continue;
+            }
+            if execute_compiled_ddl_statement(
+                &transaction,
+                statement.sql,
+                statement.kind,
+                runtime_role,
+            )
+            .await
+            .is_err()
+            {
                 transaction.rollback().await?;
                 return Err(PostgresKernelError::Connection);
             }
         }
+        for statement in spatial_candidate_view_statements {
+            if execute_compiled_ddl_statement(
+                &transaction,
+                statement.sql,
+                statement.kind,
+                runtime_role,
+            )
+            .await
+            .is_err()
+            {
+                transaction.rollback().await?;
+                return Err(PostgresKernelError::Connection);
+            }
+        }
+        reconcile_compiled_runtime_acl(&transaction, registry, runtime_role).await?;
         retain_descriptor(&transaction, registry, package_revision)
             .await
             .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
@@ -820,6 +882,23 @@ impl DedicatedApplyConnection {
             .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
         transaction.commit().await?;
         Ok(())
+    }
+
+    pub(crate) async fn verify_compiled_prerequisites(
+        &self,
+        registry: &CompiledRegistry,
+        runtime_role: &SqlIdentifier,
+    ) -> Result<()> {
+        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
+        verify_compiled_prerequisites_for_client(
+            &self.client,
+            registry,
+            self.migration_role
+                .as_ref()
+                .ok_or(PostgresKernelError::RegistryUnavailable)?,
+            runtime_role,
+        )
+        .await
     }
 
     /// Reconciles the exact compiler-owned runtime ACL inventory while the
@@ -1354,6 +1433,39 @@ async fn verify_retained_webhook_delivery_bindings(
         .await?;
     if incompatible.is_some() {
         return Err(PostgresKernelError::RegistryUnavailable);
+    }
+    Ok(())
+}
+
+fn compiler_statement_runs_after_reviewed_steps(statement: &PackageDdlStatement<'_>) -> bool {
+    if is_spatial_candidate_view_drop_sql(statement.sql) {
+        return false;
+    }
+    statement.kind == DdlStatementKind::View || is_spatial_projection_addition(statement)
+}
+
+fn is_spatial_projection_addition(statement: &PackageDdlStatement<'_>) -> bool {
+    (statement.kind == DdlStatementKind::Column
+        && statement.sql.contains(" ADD COLUMN ")
+        && statement
+            .sql
+            .contains("registry_spatial_ext.geometry(Point,4326)"))
+        || (statement.kind == DdlStatementKind::Index
+            && statement.sql.contains(" USING gist ")
+            && statement.sql.contains("\"rs_spgeom_"))
+}
+
+async fn verify_compiled_prerequisites_for_client(
+    client: &impl GenericClient,
+    registry: &CompiledRegistry,
+    migration_role: &SqlIdentifier,
+    runtime_role: &SqlIdentifier,
+) -> Result<()> {
+    if registry.ddl().requires_btree_gist {
+        verify_btree_gist(client).await?;
+    }
+    if registry.ddl().requires_postgis {
+        verify_postgis(client, migration_role, runtime_role).await?;
     }
     Ok(())
 }

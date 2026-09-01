@@ -1581,6 +1581,7 @@ fn covers_are_metadata_only(covers: &[ReviewedChangeCover]) -> bool {
                 | CompiledRegistryChangeCode::EntityMutationModeChanged
                 | CompiledRegistryChangeCode::EntityClassificationChanged
                 | CompiledRegistryChangeCode::EntityAccessRequirementsChanged
+                | CompiledRegistryChangeCode::EntityGeoJsonChanged
                 | CompiledRegistryChangeCode::FieldClassificationChanged
                 | CompiledRegistryChangeCode::FieldTemporalRoleChanged
                 | CompiledRegistryChangeCode::AccessProfileAdded

@@ -7,11 +7,25 @@ repository_root=$(cd -- "$product_dir/../.." && pwd)
 support="$quickstart_dir/support/quickstart.py"
 run_dir="$quickstart_dir/.run"
 mint_key_material="$repository_root/crates/registry-mint/demo/support/key_material.py"
-postgres_image='postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675'
+ordinary_postgres_image='postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675'
+spatial_postgres_image='postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6'
+postgres_image="$ordinary_postgres_image"
+postgres_platform=()
+spatial_fixture="$product_dir/acceptance/spatial-service-sites"
+spatial=false
 mode=serve
 
 for argument in "$@"; do
   case "$argument" in
+    --spatial)
+      if [[ "$spatial" == true ]]; then
+        printf '%s\n' 'the --spatial option may be supplied only once.' >&2
+        exit 2
+      fi
+      spatial=true
+      postgres_image="$spatial_postgres_image"
+      postgres_platform=(--platform linux/amd64)
+      ;;
     --smoke)
       if [[ "$mode" == smoke ]]; then
         printf '%s\n' 'the --smoke option may be supplied only once.' >&2
@@ -20,7 +34,7 @@ for argument in "$@"; do
       mode=smoke
       ;;
     *)
-      printf '%s\n' 'usage: products/registry-server/quickstart/run.sh [--smoke]' >&2
+      printf '%s\n' 'usage: products/registry-server/quickstart/run.sh [--spatial] [--smoke]' >&2
       exit 2
       ;;
   esac
@@ -94,11 +108,17 @@ registry_server="$repository_root/target/debug/registry-server"
 registry_serverctl="$repository_root/target/debug/registry-serverctl"
 mint="$repository_root/target/debug/mint"
 
-printf '%s\n' '== Initializing and checking a generic Registry project'
-"$registry_serverctl" --format json init "$run_dir/project" >"$run_dir/init-report.json"
-python3 "$support" assert-canonical-project --project "$run_dir/project"
-python3 "$support" enrich-local-package --project "$run_dir/project"
-"$registry_serverctl" --format json check "$run_dir/project" >"$run_dir/check-report.json"
+if [[ "$spatial" == true ]]; then
+  printf '%s\n' '== Preparing and checking the spatial service-site Registry project'
+  python3 "$support" prepare-spatial-project --fixture "$spatial_fixture" --project "$run_dir/project"
+  "$registry_serverctl" --format json check "$run_dir/project" >"$run_dir/check-report.json"
+else
+  printf '%s\n' '== Initializing and checking a generic Registry project'
+  "$registry_serverctl" --format json init "$run_dir/project" >"$run_dir/init-report.json"
+  python3 "$support" assert-canonical-project --project "$run_dir/project"
+  python3 "$support" enrich-local-package --project "$run_dir/project"
+  "$registry_serverctl" --format json check "$run_dir/project" >"$run_dir/check-report.json"
+fi
 
 printf '%s\n' '== Generating disposable local keys and configuration'
 uv run --quiet "$mint_key_material" p256 \
@@ -116,11 +136,19 @@ uv run --quiet "$mint_key_material" secret-hex \
 openssl rand -hex 24 >"$run_dir/secrets/database-password"
 chmod 600 "$run_dir/secrets/database-password"
 
-python3 "$support" prepare \
-  --root "$run_dir" \
-  --database-port "$database_port" \
-  --mint-port "$mint_port" \
+prepare_args=(
+  python3 "$support" prepare
+  --root "$run_dir"
+  --database-port "$database_port"
+  --mint-port "$mint_port"
   --server-port "$server_port"
+)
+if [[ "$spatial" == true ]]; then
+  qgis_secret_fingerprint=$("$mint" client-secret generate --out "$run_dir/secrets/qgis-client-secret")
+  chmod 600 "$run_dir/secrets/qgis-client-secret"
+  prepare_args+=(--spatial --qgis-client-secret-fingerprint "$qgis_secret_fingerprint")
+fi
+"${prepare_args[@]}"
 
 openssl req -x509 -new -nodes -newkey rsa:2048 -sha256 -days 2 \
   -subj '/CN=Registry Server generic quickstart CA' \
@@ -139,10 +167,15 @@ openssl x509 -req -sha256 -days 2 \
 chmod 600 "$run_dir/tls/ca.key" "$run_dir/tls/server.key"
 chmod 644 "$run_dir/tls/ca.pem" "$run_dir/tls/server.crt"
 
-printf '%s\n' '== Starting disposable PostgreSQL 17 with TLS'
+if [[ "$spatial" == true ]]; then
+  printf '%s\n' '== Starting disposable PostGIS 17-3.5 with TLS'
+else
+  printf '%s\n' '== Starting disposable PostgreSQL 17 with TLS'
+fi
 docker run --detach --name "$postgres_container" \
   --env-file "$run_dir/database/postgres.env" \
   --publish "127.0.0.1:${database_port}:5432" \
+  "${postgres_platform[@]}" \
   "$postgres_image" >"$run_dir/postgres-container-id"
 
 for attempt in $(seq 1 120); do
@@ -200,6 +233,23 @@ python3 "$support" wait-http --url "http://127.0.0.1:${mint_port}/ready" --timeo
   --client-id generic-quickstart \
   --key "$run_dir/keys/operator/signing-p256-private-jwk" |
   python3 "$support" store-token --out "$run_dir/secrets/schema-test-token"
+if [[ "$spatial" == true ]]; then
+  python3 "$support" mint-client-secret-token \
+    --url "http://127.0.0.1:${mint_port}/token" \
+    --client-id qgis-installation-central \
+    --secret "$run_dir/secrets/qgis-client-secret" \
+    --out "$run_dir/secrets/map-schema-test-token"
+  "$mint" token \
+    --url "http://127.0.0.1:${mint_port}/token" \
+    --client-id directory-reader-quickstart \
+    --key "$run_dir/keys/operator/signing-p256-private-jwk" |
+    python3 "$support" store-token --out "$run_dir/secrets/directory-schema-test-token"
+  "$mint" token \
+    --url "http://127.0.0.1:${mint_port}/token" \
+    --client-id site-reader-quickstart \
+    --key "$run_dir/keys/operator/signing-p256-private-jwk" |
+    python3 "$support" store-token --out "$run_dir/secrets/site-schema-test-token"
+fi
 
 printf '%s\n' '== Testing, packaging, and activating the local Registry'
 export SSL_CERT_FILE="$run_dir/tls/ca.pem"
@@ -218,7 +268,11 @@ schema_fingerprint=$(python3 "$support" json-field --path "$run_dir/test-report.
   --output "$run_dir/build" \
   >"$run_dir/package-report.json"
 package_revision=$(python3 "$support" json-field --path "$run_dir/package-report.json" --field packageRevision)
-python3 "$support" render-runtime --root "$run_dir" --revision "$package_revision"
+render_runtime_args=(python3 "$support" render-runtime --root "$run_dir" --revision "$package_revision")
+if [[ "$spatial" == true ]]; then
+  render_runtime_args+=(--spatial)
+fi
+"${render_runtime_args[@]}"
 
 "$registry_serverctl" apply \
   --runtime-config "$run_dir/runtime.yaml" \
@@ -233,29 +287,66 @@ server_pid=$!
 python3 "$support" wait-http --url "http://127.0.0.1:${server_port}/ready" --timeout 30
 
 printf '%s\n' '== Obtaining a short-lived operator token from Registry Mint'
+operator_token_name=operator-token
+if [[ "$spatial" == true ]]; then
+  operator_token_name="operator-token-$(openssl rand -hex 8)"
+fi
 "$mint" token \
   --url "http://127.0.0.1:${mint_port}/token" \
   --client-id generic-quickstart \
   --key "$run_dir/keys/operator/signing-p256-private-jwk" |
-  python3 "$support" store-token --out "$run_dir/secrets/operator-token"
+  python3 "$support" store-token --out "$run_dir/secrets/$operator_token_name"
 
-printf '%s\n' '== Posting and reading one generic record'
-created_id=$(python3 "$support" request --root "$run_dir" --action create --code QS-001 --label 'Quickstart example record')
-python3 "$support" request --root "$run_dir" --action get --record-id "$created_id" >"$run_dir/created-record.json"
+if [[ "$spatial" == true ]]; then
+  printf '%s\n' '== Obtaining a short-lived QGIS installation token from Registry Mint'
+  python3 "$support" mint-client-secret-token \
+    --url "http://127.0.0.1:${mint_port}/token" \
+    --client-id qgis-installation-central \
+    --secret "$run_dir/secrets/qgis-client-secret" \
+    --out "$run_dir/secrets/map-token"
 
-printf '\n%s\n' 'Registry Server generic quickstart is ready.'
-printf '  Registry Server: http://127.0.0.1:%s\n' "$server_port"
-printf '  Registry Mint:   http://127.0.0.1:%s\n' "$mint_port"
-printf '  Project:         %s\n' "$run_dir/project"
-printf '  Runtime config:  %s\n' "$run_dir/runtime.yaml"
-printf '  Operator token:  %s\n' "$run_dir/secrets/operator-token"
-printf '  Created record:  %s\n' "$created_id"
-printf '  GET helper:      %s get %s\n' "$quickstart_dir/query.sh" "$created_id"
-printf '  Logs:            %s\n' "$run_dir/logs"
+  printf '%s\n' '== Seeding and checking spatial bbox and GeoJSON reads'
+  python3 "$support" spatial-smoke \
+    --root "$run_dir" \
+    --seed "$spatial_fixture/fixtures/seed-service-sites.jsonl" \
+    --operator-token-name "$operator_token_name"
 
-if [[ "$mode" == smoke ]]; then
-  printf '%s\n' 'Registry Server generic quickstart smoke passed.'
-  exit 0
+  printf '\n%s\n' 'Registry Server spatial service-site quickstart is ready.'
+  printf '  Registry Server: http://127.0.0.1:%s\n' "$server_port"
+  printf '  Registry Mint:   http://127.0.0.1:%s\n' "$mint_port"
+  printf '  Project:         %s\n' "$run_dir/project"
+  printf '  Runtime config:  %s\n' "$run_dir/runtime.yaml"
+  printf '  QGIS OAPIF URL:  http://127.0.0.1:%s/v1/gis\n' "$server_port"
+  printf '  Collection:      service-site.installation-map-reader\n'
+  printf '  QGIS client id:  qgis-installation-central\n'
+  printf '  QGIS secret:     %s\n' "$run_dir/secrets/qgis-client-secret"
+  printf '  Operator token:  %s\n' "$run_dir/secrets/$operator_token_name"
+  printf '  Map token:       %s\n' "$run_dir/secrets/map-token"
+  printf '  Logs:            %s\n' "$run_dir/logs"
+
+  if [[ "$mode" == smoke ]]; then
+    printf '%s\n' 'Registry Server spatial quickstart smoke passed.'
+    exit 0
+  fi
+else
+  printf '%s\n' '== Posting and reading one generic record'
+  created_id=$(python3 "$support" request --root "$run_dir" --action create --code QS-001 --label 'Quickstart example record')
+  python3 "$support" request --root "$run_dir" --action get --record-id "$created_id" >"$run_dir/created-record.json"
+
+  printf '\n%s\n' 'Registry Server generic quickstart is ready.'
+  printf '  Registry Server: http://127.0.0.1:%s\n' "$server_port"
+  printf '  Registry Mint:   http://127.0.0.1:%s\n' "$mint_port"
+  printf '  Project:         %s\n' "$run_dir/project"
+  printf '  Runtime config:  %s\n' "$run_dir/runtime.yaml"
+  printf '  Operator token:  %s\n' "$run_dir/secrets/operator-token"
+  printf '  Created record:  %s\n' "$created_id"
+  printf '  GET helper:      %s get %s\n' "$quickstart_dir/query.sh" "$created_id"
+  printf '  Logs:            %s\n' "$run_dir/logs"
+
+  if [[ "$mode" == smoke ]]; then
+    printf '%s\n' 'Registry Server generic quickstart smoke passed.'
+    exit 0
+  fi
 fi
 
 printf '\n%s\n' 'Leave this terminal running. Press Ctrl-C to stop the services.'

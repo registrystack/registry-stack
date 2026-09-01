@@ -18,8 +18,11 @@ use registry_platform_audit::{verify_chain, AuditEnvelope, AuditProfile};
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_crypto::{generate_private_jwk, sign, GeneratedKeyAlgorithm, PrivateJwk};
 use registry_platform_testing::{fixtures as testing_fixtures, jwks_from_private_jwk, MockIdp};
-use registry_server::compiler::{compile_project, module_digest, CompileProfile};
-use registry_server::contract::{parse_module_yaml, parse_project_yaml};
+use registry_server::compiler::{
+    compile_project, compile_project_with_assets, module_digest, module_digest_with_assets,
+    CompileProfile,
+};
+use registry_server::contract::{parse_module_yaml, parse_project_yaml, ModuleAssetSource};
 use registry_server::fixtures::{
     execute_schema_test, validate_fixture_journeys, validate_schema_test_receipt_for_package,
     FixtureError, FixtureModuleSource, FixtureSourceFile, PostgresFixtureTestRunner,
@@ -33,7 +36,8 @@ use registry_server::package::{
 };
 use registry_server::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema,
-    managed_schema_fingerprint, ExpectedManagedCatalog, RegistryStateTestIdentity,
+    managed_schema_fingerprint, provision_postgis_prerequisites, spatial_bbox_role,
+    ExpectedManagedCatalog, RegistryStateTestIdentity,
 };
 use registry_server::runtime_config::load_runtime_config;
 use registry_server::startup::{
@@ -50,10 +54,25 @@ const MODULE_SOURCE: &[u8] = include_bytes!("fixtures/fixture-tooling/module.yam
 const JOURNEY_SOURCE: &[u8] = include_bytes!("fixtures/fixture-tooling/journeys.yaml");
 const TERMINAL_FAILURE_SOURCE: &[u8] =
     include_bytes!("fixtures/fixture-tooling/terminal-failure.yaml");
+const SPATIAL_PROJECT_SOURCE: &[u8] = include_bytes!(
+    "../../../products/registry-server/acceptance/spatial-service-sites/registry.yaml"
+);
+const SPATIAL_MODULE_SOURCE: &[u8] = include_bytes!(
+    "../../../products/registry-server/acceptance/spatial-service-sites/modules/spatial-service-sites-core/module.yaml"
+);
+const SPATIAL_MAP_LABELS_SQL: &[u8] = include_bytes!(
+    "../../../products/registry-server/acceptance/spatial-service-sites/modules/spatial-service-sites-core/sql/map-labels.sql"
+);
+const SPATIAL_JOURNEY_SOURCE: &[u8] = include_bytes!(
+    "../../../products/registry-server/acceptance/spatial-service-sites/tests/journeys.yaml"
+);
 const COMPILER_SOURCE_REVISION: &str = "fixture-project-source";
 const DATABASE_ID: &str = "fixture-database";
 const INSTANCE_ID: &str = "fixture-instance";
 const AUDIENCE: &str = "urn:registry-server:fixture-journeys";
+const QUICKSTART_COMPILER_SOURCE_REVISION: &str = "quickstart-source";
+const QUICKSTART_DATABASE_ID: &str = "generic-registry-local-db";
+const QUICKSTART_INSTANCE_ID: &str = "generic_registry_local";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn fixture_test_runs_strict_journeys_through_the_real_postgres_router() {
@@ -363,6 +382,53 @@ async fn production_schema_test_executor_uses_only_prepared_database_and_private
     idp.stop().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn public_spatial_fixture_schema_test_runs_through_the_production_executor() {
+    let (compiled, project_source) = compiled_spatial_fixture();
+    let schema_fingerprint = measure_spatial_compiled_schema_fingerprint(&compiled).await;
+    let package = spatial_package_fixture(&project_source, &schema_fingerprint);
+    let suite =
+        validate_fixture_journeys(SPATIAL_JOURNEY_SOURCE, &compiled).expect("journeys preflight");
+    let idp = MockIdp::start().await;
+
+    let database = TestDatabase::create(8).await;
+    provision_postgis_prerequisites(
+        &database.admin,
+        &database.migration_role,
+        &database.runtime_role,
+    )
+    .await
+    .expect("administrator provisions spatial schema-test prerequisites");
+    let config_path = package.write_spatial_runtime_config(&database, &idp);
+    let config = load_runtime_config(&config_path).expect("spatial runtime config loads");
+    let schema_test_database = prepare_schema_test_database_with_connection_configs_for_test(
+        &config,
+        &package.prepared,
+        &database.migration_config,
+        &database.runtime_config,
+    )
+    .await
+    .expect("spatial schema-test database prepares");
+
+    let receipt = execute_schema_test(
+        schema_test_database,
+        &config,
+        &package.prepared,
+        &suite,
+        spatial_credential_bindings(&suite, &idp),
+    )
+    .await
+    .expect("public spatial fixture schema-test succeeds");
+    assert_eq!(
+        receipt.successful_journey_ids(),
+        ["service-site-source-profile-smoke"]
+    );
+
+    cleanup_spatial_prerequisites(&database).await;
+    database.cleanup().await;
+    idp.stop().await;
+}
+
 async fn prepare_runner(
     package: &PackageFixture,
     suite: &registry_server::fixtures::ValidatedFixtureJourneys,
@@ -656,6 +722,81 @@ fn package_fixture_with_journeys(
     }
 }
 
+fn spatial_package_fixture(project: &[u8], schema_fingerprint: &str) -> PackageFixture {
+    let prepared = prepare_package(PackageBuildRequest {
+        environment: "local".to_owned(),
+        instance_id: QUICKSTART_INSTANCE_ID.to_owned(),
+        database_id: QUICKSTART_DATABASE_ID.to_owned(),
+        sequence: 1,
+        prior_revision: None,
+        compiler_source_revision: QUICKSTART_COMPILER_SOURCE_REVISION.to_owned(),
+        schema_fingerprint: schema_fingerprint.to_owned(),
+        signature_policy: SignaturePolicy {
+            threshold: 0,
+            key_ids: Vec::new(),
+        },
+        project: PackageSourceFile {
+            path: "sources/project.yaml".to_owned(),
+            bytes: project.to_vec(),
+        },
+        modules: vec![PackageModuleSource {
+            id: "spatial-service-sites-core".to_owned(),
+            path: "sources/modules/spatial-service-sites-core/module.yaml".to_owned(),
+            bytes: SPATIAL_MODULE_SOURCE.to_vec(),
+            assets: vec![PackageSourceFile {
+                path: "sql/map-labels.sql".to_owned(),
+                bytes: SPATIAL_MAP_LABELS_SQL.to_vec(),
+            }],
+        }],
+        fixture_journeys: PackageSourceFile {
+            path: FIXTURE_JOURNEYS_PATH.to_owned(),
+            bytes: SPATIAL_JOURNEY_SOURCE.to_vec(),
+        },
+        migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
+    })
+    .expect("spatial package prepares");
+    let migration_plan = prepared
+        .file_bytes()
+        .get("database/migration-plan.json")
+        .expect("prepared package includes migration plan")
+        .clone();
+    let root = tempfile::tempdir().expect("temporary package root creates");
+    let directory = root
+        .path()
+        .canonicalize()
+        .expect("temporary package root canonicalizes");
+    let package_root = directory.join("package");
+    let revision = prepared.package_revision().to_owned();
+    prepared
+        .publish_to_directory(&package_root, Vec::new())
+        .expect("local spatial package publishes");
+    let anchor = directory.join("trust-anchor.json");
+    let package = load_package(
+        &package_root,
+        &PackageLoadContext {
+            environment: "local",
+            instance_id: QUICKSTART_INSTANCE_ID,
+            database_id: QUICKSTART_DATABASE_ID,
+            database_initialization_environment: "local",
+            compiler_source_revision: QUICKSTART_COMPILER_SOURCE_REVISION,
+            trust_anchor: None,
+            intent: PackageIntent::InitialActivation,
+        },
+    )
+    .expect("spatial package closure rederives into VerifiedPackage");
+    PackageFixture {
+        _root: root,
+        directory,
+        package_root,
+        anchor,
+        revision,
+        prepared,
+        package,
+        project: project.to_vec(),
+        migration_plan,
+    }
+}
+
 impl PackageFixture {
     fn write_runtime_config(&self, database: &TestDatabase, idp: &MockIdp) -> PathBuf {
         let secrets = self.directory.join("secrets");
@@ -753,6 +894,103 @@ operationalTimeouts:
         set_private_permissions(&path);
         path
     }
+
+    fn write_spatial_runtime_config(&self, database: &TestDatabase, idp: &MockIdp) -> PathBuf {
+        let secrets = self.directory.join("secrets");
+        fs::create_dir_all(&secrets).expect("fixture secret root creates");
+        write_private(&secrets.join("database-url"), b"unused-by-test-startup");
+        write_private(&secrets.join("audit-key"), &[0x71; 32]);
+        write_private(&secrets.join("cursor-key"), &[0x52; 32]);
+        write_private(
+            &secrets.join("oidc-jwks"),
+            &serde_json::to_vec(&jwks_from_private_jwk(
+                &PrivateJwk::parse(testing_fixtures::ED25519_PRIVATE_JWK)
+                    .expect("test IdP key parses"),
+            ))
+            .expect("static JWKS serializes"),
+        );
+        let path = self.directory.join("runtime-spatial.yaml");
+        fs::write(
+            &path,
+            format!(
+                r#"apiVersion: registry.registrystack.org/server-runtime/v1alpha1
+kind: RegistryServerRuntimeConfig
+listener:
+  bind: 127.0.0.1:9
+  trustedProxy: direct
+identity:
+  environment: local
+  instanceId: {QUICKSTART_INSTANCE_ID}
+  databaseId: {QUICKSTART_DATABASE_ID}
+  databaseInitializationEnvironment: local
+secretProviders:
+  file:
+    root: {}
+database:
+  runtimeUrlRef: secret:file/database-url
+  migrationUrlRef: secret:file/migration-database-url
+  pool:
+    maxSize: 8
+    waitTimeoutMilliseconds: 2000
+    createTimeoutMilliseconds: 2000
+    recycleTimeoutMilliseconds: 2000
+  roles:
+    migration: {}
+    runtime: {}
+package:
+  root: {}
+  trustAnchorPath: {}
+  compilerSourceRevision: {QUICKSTART_COMPILER_SOURCE_REVISION}
+  activeRevision: {}
+  activeSequence: 1
+authentication:
+  oidc:
+    issuer: {}
+    audience: {AUDIENCE}
+    allowedAlgorithm: EdDSA
+    accessTokenType: JWT
+    scopeClaim: scope
+    scopeSeparator: " "
+    maxTokenLifetimeSeconds: 3600
+    leewayMilliseconds: 60000
+    jwksSource:
+      kind: static
+      documentRef: secret:file/oidc-jwks
+    jwksCache:
+      cacheTtlSeconds: 60
+      negativeCacheTtlSeconds: 1
+      refreshCooldownSeconds: 1
+      maxDocumentBytes: 65536
+      requestTimeoutMilliseconds: 5000
+      outageToleranceSeconds: 0
+  authorityClaims:
+    principal: registry_principal
+    purpose: registry_purpose
+audit:
+  hashKeyRef: secret:file/audit-key
+cursor:
+  secretRef: secret:file/cursor-key
+  maxAgeSeconds: 300
+operationalTimeouts:
+  httpRequestMilliseconds: 5000
+  shutdownGraceMilliseconds: 1000
+  recordLockMilliseconds: 2000
+  migrationLockMilliseconds: 2000
+  migrationStatementMilliseconds: 5000
+"#,
+                secrets.display(),
+                database.migration_role.as_str(),
+                database.runtime_role.as_str(),
+                self.package_root.display(),
+                self.anchor.display(),
+                self.revision,
+                idp.issuer(),
+            ),
+        )
+        .expect("strict spatial fixture runtime configuration writes");
+        set_private_permissions(&path);
+        path
+    }
 }
 
 fn successful_tokens(idp: &MockIdp) -> Vec<String> {
@@ -798,6 +1036,74 @@ fn successful_credential_bindings(
             ),
         ],
     )
+}
+
+fn spatial_credential_bindings(
+    suite: &registry_server::fixtures::ValidatedFixtureJourneys,
+    idp: &MockIdp,
+) -> SchemaTestCredentialBindings {
+    SchemaTestCredentialBindings::new(
+        suite,
+        vec![
+            SchemaTestCredentialBinding::bearer(
+                "service-site-source-profile-smoke",
+                "create-central-service-site",
+                Zeroizing::new(spatial_admin_token(idp)),
+            ),
+            SchemaTestCredentialBinding::bearer(
+                "service-site-source-profile-smoke",
+                "create-null-geometry-service-site",
+                Zeroizing::new(spatial_admin_token(idp)),
+            ),
+            SchemaTestCredentialBinding::bearer(
+                "service-site-source-profile-smoke",
+                "create-edge-service-site",
+                Zeroizing::new(spatial_admin_token(idp)),
+            ),
+            SchemaTestCredentialBinding::anonymous(
+                "service-site-source-profile-smoke",
+                "public-map-reader-lists-public-point-fields",
+            ),
+            SchemaTestCredentialBinding::anonymous(
+                "service-site-source-profile-smoke",
+                "public-map-reader-bbox-finds-central-site",
+            ),
+            SchemaTestCredentialBinding::anonymous(
+                "service-site-source-profile-smoke",
+                "directory-reader-lists-without-geometry",
+            ),
+            SchemaTestCredentialBinding::anonymous(
+                "service-site-source-profile-smoke",
+                "directory-reader-bbox-is-refused",
+            ),
+            SchemaTestCredentialBinding::bearer(
+                "service-site-source-profile-smoke",
+                "installation-client-sees-own-central-row",
+                Zeroizing::new(spatial_map_token(idp)),
+            ),
+            SchemaTestCredentialBinding::bearer(
+                "service-site-source-profile-smoke",
+                "installation-client-cannot-see-other-installation-row",
+                Zeroizing::new(spatial_map_token(idp)),
+            ),
+            SchemaTestCredentialBinding::bearer(
+                "service-site-source-profile-smoke",
+                "hidden-geometry-profile-gets-directory-fields",
+                Zeroizing::new(spatial_directory_token(idp)),
+            ),
+            SchemaTestCredentialBinding::bearer(
+                "service-site-source-profile-smoke",
+                "get-only-profile-gets-site",
+                Zeroizing::new(spatial_site_token(idp)),
+            ),
+            SchemaTestCredentialBinding::bearer(
+                "service-site-source-profile-smoke",
+                "admin-refuses-coordinate-outside-authored-bounds",
+                Zeroizing::new(spatial_admin_token(idp)),
+            ),
+        ],
+    )
+    .expect("spatial credential bindings match validated journeys")
 }
 
 fn overprivileged_credential_bindings(
@@ -893,6 +1199,43 @@ fn operator_token(idp: &MockIdp, purpose: bool) -> String {
     idp.mint_token(claims)
 }
 
+fn spatial_admin_token(idp: &MockIdp) -> String {
+    idp.mint_token(json!({
+        "aud": AUDIENCE,
+        "registry_principal": "synthetic-service-site-admin",
+        "registry_purpose": "service-site-administration",
+        "scope": "service-sites:seed",
+    }))
+}
+
+fn spatial_map_token(idp: &MockIdp) -> String {
+    idp.mint_token(json!({
+        "aud": AUDIENCE,
+        "registry_principal": "synthetic-qgis-installation",
+        "registry_purpose": "service-site-map",
+        "scope": "service-sites:map.read",
+        "service_zones": "central",
+    }))
+}
+
+fn spatial_directory_token(idp: &MockIdp) -> String {
+    idp.mint_token(json!({
+        "aud": AUDIENCE,
+        "registry_principal": "synthetic-directory-reader",
+        "registry_purpose": "service-site-directory",
+        "scope": "service-sites:directory.read",
+    }))
+}
+
+fn spatial_site_token(idp: &MockIdp) -> String {
+    idp.mint_token(json!({
+        "aud": AUDIENCE,
+        "registry_principal": "synthetic-site-reader",
+        "registry_purpose": "service-site-map",
+        "scope": "service-sites:site.read",
+    }))
+}
+
 async fn measure_compiled_schema_fingerprint(
     registry: &registry_server::CompiledRegistry,
 ) -> String {
@@ -910,6 +1253,61 @@ async fn measure_compiled_schema_fingerprint(
     migration_task.abort();
     database.cleanup().await;
     fingerprint
+}
+
+async fn measure_spatial_compiled_schema_fingerprint(
+    registry: &registry_server::CompiledRegistry,
+) -> String {
+    let database = TestDatabase::create(2).await;
+    let bbox_role = provision_postgis_prerequisites(
+        &database.admin,
+        &database.migration_role,
+        &database.runtime_role,
+    )
+    .await
+    .expect("administrator provisions PostGIS prerequisites");
+    let (migration, migration_task) = database.connect_migration().await;
+    let expected_catalog = ExpectedManagedCatalog::compiled(registry);
+    install_compiled_schema(&migration, registry, &database.runtime_role)
+        .await
+        .expect("administrator installs spatial candidate schema for fingerprinting");
+    let fingerprint =
+        managed_schema_fingerprint(&migration, &database.runtime_role, &expected_catalog)
+            .await
+            .expect("spatial candidate schema fingerprint computes");
+    drop(migration);
+    migration_task.abort();
+    cleanup_bbox_role(&database, &bbox_role).await;
+    database.cleanup().await;
+    fingerprint
+}
+
+async fn cleanup_spatial_prerequisites(database: &TestDatabase) {
+    let bbox_role = spatial_bbox_role(&database.runtime_role);
+    cleanup_bbox_role(database, &bbox_role).await;
+}
+
+async fn cleanup_bbox_role(
+    database: &TestDatabase,
+    bbox_role: &registry_server::postgres::SqlIdentifier,
+) {
+    database
+        .admin
+        .batch_execute(&format!(
+            "DROP OWNED BY {};
+             REVOKE {} FROM {};
+             DROP ROLE IF EXISTS {};",
+            quote_identifier(bbox_role.as_str()),
+            quote_identifier(bbox_role.as_str()),
+            quote_identifier(database.migration_role.as_str()),
+            quote_identifier(bbox_role.as_str()),
+        ))
+        .await
+        .expect("spatial bbox role cleanup succeeds");
+}
+
+fn quote_identifier(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\"\""))
 }
 
 fn write_json(path: &Path, value: &impl Serialize) {
@@ -949,5 +1347,30 @@ fn compiled_fixture() -> (registry_server::CompiledRegistry, Vec<u8>) {
     let project = parse_project_yaml(&project_source).expect("project fixture parses");
     let registry = compile_project(&project, &[module], CompileProfile::Production)
         .expect("fixture project compiles in Production");
+    (registry, project_source)
+}
+
+fn compiled_spatial_fixture() -> (registry_server::CompiledRegistry, Vec<u8>) {
+    let module = parse_module_yaml(SPATIAL_MODULE_SOURCE).expect("spatial module fixture parses");
+    let assets = vec![ModuleAssetSource {
+        module: Some("spatial-service-sites-core".to_owned()),
+        path: "sql/map-labels.sql".to_owned(),
+        bytes: SPATIAL_MAP_LABELS_SQL.to_vec(),
+    }];
+    let project_source = String::from_utf8(SPATIAL_PROJECT_SOURCE.to_vec())
+        .expect("spatial project fixture is UTF-8")
+        .replace(
+            "  environment: acceptance\n  instanceId: spatial-service-sites-acceptance\n  sequence: 1\n  sourceRevision: spatial-service-sites-acceptance-0.1.0\n",
+            "  environment: local\n  instanceId: generic_registry_local\n  sequence: 1\n  sourceRevision: quickstart-source\n",
+        )
+        .replace(
+            "    digest: \"sha256:f00b23dadbd5b3fe5bdd447f7b735381017c367bc177f43e5c429f85838e2725\"",
+            &format!("    digest: \"{}\"", module_digest_with_assets(&module, &assets)),
+        )
+        .into_bytes();
+    let project = parse_project_yaml(&project_source).expect("spatial project fixture parses");
+    let registry =
+        compile_project_with_assets(&project, &[module], &assets, CompileProfile::Production)
+            .expect("spatial fixture project compiles in Production");
     (registry, project_source)
 }

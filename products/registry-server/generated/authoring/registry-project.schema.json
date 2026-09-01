@@ -1515,6 +1515,17 @@
           "type": "array",
           "uniqueItems": true
         },
+        "spatialQueries": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SpatialQueryGrantSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "writableFields": {
           "default": [],
           "items": {
@@ -1605,6 +1616,16 @@
             "$ref": "#/$defs/FieldSource"
           },
           "type": "array"
+        },
+        "geojson": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GeoJsonSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "id": {
           "type": "string"
@@ -1851,6 +1872,18 @@
           "$ref": "#/$defs/StructuredFieldSourceSchema"
         }
       ]
+    },
+    "GeoJsonSource": {
+      "additionalProperties": false,
+      "properties": {
+        "geometryField": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "geometryField"
+      ],
+      "type": "object"
     },
     "IndexSource": {
       "additionalProperties": false,
@@ -2802,6 +2835,38 @@
         "id",
         "fields"
       ],
+      "type": "object"
+    },
+    "SpatialBboxGrantSource": {
+      "additionalProperties": false,
+      "properties": {
+        "maximumLatitudeSpanDegrees": {
+          "type": "number"
+        },
+        "maximumLongitudeSpanDegrees": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "maximumLongitudeSpanDegrees",
+        "maximumLatitudeSpanDegrees"
+      ],
+      "type": "object"
+    },
+    "SpatialQueryGrantSource": {
+      "additionalProperties": false,
+      "properties": {
+        "bbox": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SpatialBboxGrantSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
       "type": "object"
     },
     "StringFieldKindSchema": {

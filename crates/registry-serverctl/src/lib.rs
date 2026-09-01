@@ -4100,7 +4100,7 @@ fn explain_queries(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
-            json!({
+            let mut rendered = json!({
                 "id": operation.id,
                 "routeId": operation.route_id,
                 "profile": operation.profile_id,
@@ -4132,7 +4132,32 @@ fn explain_queries(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
                     "maxFilterPredicates": registry_server::query::MAX_FILTER_PREDICATES,
                     "maxInValues": registry_server::query::MAX_IN_VALUES,
                 }
-            })
+            });
+            if let Some(bbox) = operation.spatial.as_ref().and_then(|spatial| spatial.bbox.as_ref()) {
+                let api_name = entity
+                    .and_then(|entity| query_field_identity(entity, &bbox.geometry_field))
+                    .map(|identity| identity.api_name)
+                    .unwrap_or(&bbox.geometry_field);
+                rendered["spatialQueries"] = json!({"bbox": {
+                    "field": bbox.geometry_field,
+                    "apiName": api_name,
+                    "maximumLongitudeSpanDegrees": bbox.maximum_longitude_span_degrees,
+                    "maximumLatitudeSpanDegrees": bbox.maximum_latitude_span_degrees,
+                    "coordinateReferenceSystem": "CRS84",
+                    "requiresPostgis": true
+                }});
+                rendered["wire"]["bbox"] = json!("bbox");
+                if let Some(collection_id) = operation.gis_collection_id() {
+                    rendered["gis"] = json!({
+                        "collectionId": collection_id,
+                        "collectionPath": format!("/v1/gis/collections/{collection_id}"),
+                        "itemsPath": format!("/v1/gis/collections/{collection_id}/items"),
+                        "accessProfile": operation.profile_id,
+                        "representation": "application/geo+json"
+                    });
+                }
+            }
+            rendered
         })
         .collect::<Vec<_>>();
     serde_json::to_value(json!({ "operations": operations }))

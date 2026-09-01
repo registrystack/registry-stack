@@ -83,6 +83,8 @@ POSTGRES_TEST_COMMANDS = (
     "cargo test --locked -p registry-server --features postgres-test --test postgres_partial_unique",
     "cargo test --locked -p registry-server --features postgres-test --test postgres_constraint_races",
     "cargo test --locked -p registry-server --features postgres-test --test postgres_read",
+    "cargo test --locked -p registry-server --features postgres-test --test postgres_spatial_storage",
+    "cargo test --locked -p registry-server --features postgres-test --test postgres_spatial_read",
     "cargo test --locked -p registry-server --features postgres-test --test postgres_revision_http",
     "cargo test --locked -p registry-server --features postgres-test --test postgres_history_commit",
     "cargo test --locked -p registry-server --features postgres-test --test postgres_historical",
@@ -111,6 +113,7 @@ POSTGRES_TEST_COMMANDS = (
     "cargo test --locked -p registry-server --features postgres-test --test postgres_tombstone_revision",
     "cargo test --locked -p registry-server --features postgres-test,tooling --test postgres_package",
     "cargo test --locked -p registry-server --features postgres-test,tooling --test postgres_migration",
+    "cargo test --locked -p registry-server --features postgres-test,tooling --test postgres_spatial_migration",
     "cargo test --locked -p registry-server --features postgres-test,tooling --test postgres_fixture_journeys",
     "cargo test --locked -p registry-server --features postgres-test,tooling --test schema_fingerprint_rehearsal",
     "cargo test --locked -p registry-server --features postgres-test --test postgres_startup",
@@ -537,7 +540,7 @@ def validate_security(waves: set[str], errors: list[str]) -> None:
     invariants = as_list(matrix.get("invariants"), "security matrix.invariants", errors)
     rows = {row.get("id"): row for row in invariants if isinstance(row, dict) and isinstance(row.get("id"), str)}
     unique_ids(invariants, "security matrix.invariants", errors)
-    if set(rows) != {f"RS-SEC-{index:02d}" for index in range(1, 23)}:
+    if set(rows) != {f"RS-SEC-{index:02d}" for index in range(1, 25)}:
         errors.append("security matrix: must contain the complete closed product invariant identifiers")
     negatives: set[str] = set()
     for index, raw in enumerate(invariants):

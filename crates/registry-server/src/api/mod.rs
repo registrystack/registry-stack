@@ -9,6 +9,7 @@ mod change_request_action_tests;
 #[path = "tests/change_request_read_tests.rs"]
 mod change_request_read_tests;
 mod context;
+mod gis;
 mod metadata;
 mod service;
 
@@ -17,7 +18,7 @@ use std::sync::Arc;
 
 use axum::body::{to_bytes, Body};
 use axum::extract::{Path, RawQuery, State};
-use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_MATCH};
+use axum::http::header::{ACCEPT, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_MATCH, VARY};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post};
@@ -32,15 +33,16 @@ pub use context::{
     VerifiedContextError, VerifiedRequestAction, VerifiedRequestClaims, VerifiedRequestPresence,
     VerifiedRequestTargetAuthority, VerifiedRowBoundary,
 };
+pub(crate) use service::{cursor_query_reference_value, CursorQueryReferenceInput};
 pub use service::{
     ActionTargetConditionsInput, BatchMutationInput, CompiledLookupSelector, CompiledReadQuery,
     ConditionalMutationInput, CreateMutationInput, HeldReadResponse, HttpService,
-    ImmediateActionInput, LookupSelectorValue, ReadFilterExpr, ReadFilterOperator,
+    ImmediateActionInput, LookupSelectorValue, ReadBboxQuery, ReadFilterExpr, ReadFilterOperator,
     ReadFilterPredicate, ReadLogicalOp, ReadOrderClause, ReadProjectionField, ReadRuntimeIdentity,
-    ReadServiceError, ReadinessProbe, RecordReadKind, RecordReadRefusal, RecordReadRequest,
-    RecordReadService, RequestActionBody, RequestActionInput, RequestActionTargetAuthority,
-    RevisionReadRefusal, RevisionReadRequest, RevisionReadService, ServiceFuture,
-    SnapshotReadRequest, SnapshotReadService,
+    ReadServiceError, ReadSpatialQuery, ReadinessProbe, RecordReadKind, RecordReadRefusal,
+    RecordReadRequest, RecordReadService, RequestActionBody, RequestActionInput,
+    RequestActionTargetAuthority, RevisionReadRefusal, RevisionReadRequest, RevisionReadService,
+    ServiceFuture, SnapshotReadRequest, SnapshotReadService,
 };
 
 use crate::auth::{authenticate_request, RegistryAuthenticator};
@@ -50,9 +52,9 @@ use crate::contract::{
 };
 use crate::correlation::RequestCorrelation;
 use crate::cursor::{
-    now_unix_seconds, CursorBinding, CursorError, CursorFilterExpr, CursorFilterOperator,
-    CursorFilterPredicate, CursorLogicalOp, CursorOrderClause, CursorProjectionField,
-    CursorQueryScope,
+    now_unix_seconds, CursorAdapter, CursorBboxQuery, CursorBinding, CursorError, CursorFilterExpr,
+    CursorFilterOperator, CursorFilterPredicate, CursorLogicalOp, CursorOrderClause,
+    CursorProjectionField, CursorQueryScope, CursorRepresentation, CursorSpatialQuery,
 };
 use crate::idempotency::{HeldResponse, PermittedResponseHeader};
 use crate::model::{
@@ -188,7 +190,8 @@ fn route_set(service: Arc<HttpService>) -> Router {
         }
     }
 
-    app.fallback(not_found)
+    app.merge(gis::routes())
+        .fallback(not_found)
         .method_not_allowed_fallback(not_found)
         .with_state(service)
 }
@@ -453,6 +456,7 @@ async fn read_dispatch(
     Extension(correlation): Extension<RequestCorrelation>,
     claims: Option<Extension<VerifiedRequestClaims>>,
     RawQuery(raw_query): RawQuery,
+    headers: HeaderMap,
     Path(path): Path<HashMap<String, String>>,
 ) -> Response {
     let claims = claims
@@ -484,6 +488,7 @@ async fn read_dispatch(
         .await;
         return response;
     };
+    let representation = negotiated_read_representation(&headers);
 
     if options.request_history_after_proposal_version.is_some()
         && (route.operation != Operation::Get || surface.entity.change_request.is_none())
@@ -552,12 +557,29 @@ async fn read_dispatch(
                     .await;
                 }
             };
+            if representation == CursorRepresentation::GeoJson
+                && !geojson_available(surface.response_entity, &surface.readable_fields)
+            {
+                return audited_read_refusal(
+                    &service,
+                    &route,
+                    &surface,
+                    Some(record_id),
+                    concealed(),
+                    &correlation,
+                )
+                .await;
+            }
             let request = RecordReadRequest {
                 entity_id: route.entity_id.clone(),
                 operation_id: route.id.clone(),
                 method: route.method,
                 context: surface.context,
                 selected_fields: readable_fields,
+                representation,
+                adapter: CursorAdapter::Native,
+                adapter_origin: None,
+                geojson_next_link_prefix: None,
                 kind: RecordReadKind::Get {
                     id: record_id.clone(),
                 },
@@ -567,7 +589,7 @@ async fn read_dispatch(
                 correlation: correlation.clone(),
             };
             match service.records.get(request).await {
-                Ok(Some(record)) => exact_json(record),
+                Ok(Some(record)) => exact_read(record),
                 Ok(None) => concealed(),
                 Err(ReadServiceError::Unavailable) => unavailable(),
                 Err(ReadServiceError::CursorInvalid) => cursor_invalid(),
@@ -595,6 +617,8 @@ async fn read_dispatch(
                 &surface,
                 &options,
                 path.get("record_id").map(String::as_str),
+                representation,
+                CursorAdapter::Native,
             )
             .await
             {
@@ -640,6 +664,19 @@ async fn read_dispatch(
                 )
                 .await;
             }
+            if representation == CursorRepresentation::GeoJson
+                && !geojson_available(surface.response_entity, &surface.readable_fields)
+            {
+                return audited_read_refusal(
+                    &service,
+                    &route,
+                    &surface,
+                    path.get("record_id"),
+                    concealed(),
+                    &correlation,
+                )
+                .await;
+            }
             let maximum_records = usize::from(query.page_size) + 1;
             let kind = if let Some(read_path) = surface.read_path {
                 RecordReadKind::Relationship {
@@ -659,13 +696,17 @@ async fn read_dispatch(
                 method: route.method,
                 context: surface.context,
                 selected_fields: readable_fields,
+                representation,
+                adapter: CursorAdapter::Native,
+                adapter_origin: None,
+                geojson_next_link_prefix: None,
                 kind,
                 maximum_records,
                 request_history_after_proposal_version: None,
                 correlation: correlation.clone(),
             };
             match service.records.list(request).await {
-                Ok(response) => exact_json_no_store(response),
+                Ok(response) => exact_read_no_store(response),
                 Err(ReadServiceError::Unavailable) => unavailable(),
                 Err(ReadServiceError::CursorInvalid) => cursor_invalid(),
             }
@@ -825,6 +866,10 @@ async fn lookup_dispatch(
         method: route.method,
         context: surface.context,
         selected_fields: readable_fields,
+        representation: CursorRepresentation::Json,
+        adapter: CursorAdapter::Native,
+        adapter_origin: None,
+        geojson_next_link_prefix: None,
         kind: RecordReadKind::Lookup { selector },
         maximum_records: 2,
         request_history_after_proposal_version: None,
@@ -996,7 +1041,17 @@ async fn snapshot_dispatch(
         return audited_read_concealment(&service, &route, &options, &claims, None, &correlation)
             .await;
     };
-    let query = match read_query(&service, &route, &surface, &options, None).await {
+    let query = match read_query(
+        &service,
+        &route,
+        &surface,
+        &options,
+        None,
+        CursorRepresentation::Json,
+        CursorAdapter::Native,
+    )
+    .await
+    {
         Ok(Some(query)) if surface.read_path.is_none() => query,
         Ok(_) => return unavailable(),
         Err(error) => {
@@ -2517,6 +2572,8 @@ async fn read_query(
     surface: &AuthorizedSurface<'_>,
     options: &QueryOptions,
     root_id: Option<&str>,
+    representation: CursorRepresentation,
+    adapter: CursorAdapter,
 ) -> Result<Option<CompiledReadQuery>, ReadQueryError> {
     let Some(kind) = route.query_kind else {
         return Ok(None);
@@ -2541,6 +2598,8 @@ async fn read_query(
     } else {
         cursor_scope(surface, root_id)?
     };
+    let adapter_origin =
+        cursor_adapter_origin(service, adapter).map_err(|_| ReadQueryError::Invalid)?;
     if let Some(token) = options.skiptoken() {
         let payload = service
             .cursors
@@ -2567,6 +2626,8 @@ async fn read_query(
                     || payload.binding.page_size != payload.query.page_size
                     || payload.binding.temporal_instant != payload.query.temporal_instant
                     || &payload.query.scope != bound_scope
+                    || payload.binding.representation != representation
+                    || payload.binding.adapter != adapter
                 {
                     return Err(CursorError::Mismatch);
                 }
@@ -2601,10 +2662,18 @@ async fn read_query(
                     })
                     .transpose()
                     .map_err(|_| CursorError::Mismatch)?;
+                let spatial = payload
+                    .query
+                    .spatial
+                    .as_ref()
+                    .map(|spatial| read_spatial_from_cursor(operation, spatial))
+                    .transpose()
+                    .map_err(|_| CursorError::Mismatch)?;
                 validate_query_shape(
                     surface.response_entity,
                     operation,
                     filter.as_ref(),
+                    spatial.as_ref(),
                     order.as_ref(),
                     payload.binding.page_size,
                 )
@@ -2618,11 +2687,15 @@ async fn read_query(
                         selected_fields: &fields,
                         projection: &projection,
                         filter: filter.as_ref(),
+                        spatial: spatial.as_ref(),
                         order: order.as_ref(),
                         include_count: payload.binding.include_count,
                         page_size: payload.binding.page_size,
                         temporal_instant: payload.binding.temporal_instant.as_deref(),
                         scope: bound_scope,
+                        representation,
+                        adapter,
+                        adapter_origin: adapter_origin.as_deref(),
                     },
                 )
             })
@@ -2654,6 +2727,12 @@ async fn read_query(
             .as_ref()
             .map(|order| read_order_clause_from_cursor(surface.response_entity, operation, order))
             .transpose()?;
+        let spatial = payload
+            .query
+            .spatial
+            .as_ref()
+            .map(|spatial| read_spatial_from_cursor(operation, spatial))
+            .transpose()?;
         return Ok(Some(CompiledReadQuery {
             route_id: route.id.clone(),
             query_operation_id: operation.id.clone(),
@@ -2662,10 +2741,13 @@ async fn read_query(
             cursor_query: payload.query.clone(),
             projection,
             filter,
+            spatial,
             order,
             include_count: payload.binding.include_count,
             page_size: payload.binding.page_size,
             temporal_instant: payload.binding.temporal_instant,
+            adapter: payload.binding.adapter,
+            adapter_origin,
             continuation: Some(payload.continuation),
         }));
     }
@@ -2694,6 +2776,7 @@ async fn read_query(
         operation,
         query_options.filter.as_ref(),
     )?;
+    let spatial = first_page_spatial_query(surface, operation, query_options.bbox.as_ref())?;
     let order = match &query_options.orderby {
         Some(orderby) => {
             if orderby.direction != strict_query::OrderDirection::Asc {
@@ -2721,6 +2804,7 @@ async fn read_query(
         surface.response_entity,
         operation,
         filter.as_ref(),
+        spatial.as_ref(),
         order.as_ref(),
         page_size,
     )?;
@@ -2734,23 +2818,28 @@ async fn read_query(
             selected_fields: &fields,
             projection: &projection,
             filter: filter.as_ref(),
+            spatial: spatial.as_ref(),
             order: order.as_ref(),
             include_count,
             page_size,
             temporal_instant: temporal_instant.as_deref(),
             scope: &scope,
+            representation,
+            adapter,
+            adapter_origin: adapter_origin.as_deref(),
         },
     )
     .map_err(|_| ReadQueryError::Invalid)?;
-    let cursor_query = cursor_query_from_plan(
-        &projection,
-        filter.as_ref(),
-        order.as_ref(),
+    let cursor_query = crate::cursor::CursorQuery {
+        projection: projection.iter().map(cursor_projection_from_read).collect(),
+        filter: filter.as_ref().map(cursor_filter_expr_from_read),
+        spatial: spatial.as_ref().map(cursor_spatial_from_read),
+        order: order.as_ref().map(cursor_order_from_read),
         include_count,
         page_size,
-        temporal_instant.clone(),
+        temporal_instant: temporal_instant.clone(),
         scope,
-    );
+    };
     Ok(Some(CompiledReadQuery {
         route_id: route.id.clone(),
         query_operation_id: operation.id.clone(),
@@ -2759,10 +2848,13 @@ async fn read_query(
         cursor_query,
         projection,
         filter,
+        spatial,
         order,
         include_count,
         page_size,
         temporal_instant,
+        adapter,
+        adapter_origin,
         continuation: None,
     }))
 }
@@ -2968,6 +3060,105 @@ fn first_page_filter_expr(
         .transpose()
 }
 
+fn first_page_spatial_query(
+    surface: &AuthorizedSurface<'_>,
+    operation: &CompiledQueryOperation,
+    bbox: Option<&strict_query::BboxClause>,
+) -> Result<Option<ReadSpatialQuery>, ReadQueryError> {
+    let Some(bbox) = bbox else {
+        return Ok(None);
+    };
+    if surface.read_path.is_some() || operation.kind != CompiledQueryKind::List {
+        return Err(ReadQueryError::Invalid);
+    }
+    let capability = operation
+        .spatial
+        .as_ref()
+        .and_then(|spatial| spatial.bbox.as_ref())
+        .ok_or(ReadQueryError::Invalid)?;
+    if !surface.readable_fields.contains(&capability.geometry_field) {
+        return Err(ReadQueryError::Invalid);
+    }
+    let Some(geojson) = surface.response_entity.geojson.as_ref() else {
+        return Err(ReadQueryError::Invalid);
+    };
+    if geojson.geometry_field != capability.geometry_field {
+        return Err(ReadQueryError::Invalid);
+    }
+    if !matches!(
+        data_field_type(surface.response_entity, &capability.geometry_field),
+        Some(FieldTypeSource::Crs84Point { .. })
+    ) {
+        return Err(ReadQueryError::Invalid);
+    }
+    let maximum_longitude_span =
+        maximum_span_text(&capability.maximum_longitude_span_degrees, "360")?;
+    let maximum_latitude_span =
+        maximum_span_text(&capability.maximum_latitude_span_degrees, "180")?;
+    if !decimal_difference_within(bbox.east(), bbox.west(), &maximum_longitude_span)?
+        || !decimal_difference_within(bbox.north(), bbox.south(), &maximum_latitude_span)?
+    {
+        return Err(ReadQueryError::Invalid);
+    }
+    Ok(Some(ReadSpatialQuery {
+        bbox: ReadBboxQuery {
+            geometry_field: capability.geometry_field.clone(),
+            west: bbox.west().to_owned(),
+            south: bbox.south().to_owned(),
+            east: bbox.east().to_owned(),
+            north: bbox.north().to_owned(),
+            maximum_longitude_span_degrees: maximum_longitude_span,
+            maximum_latitude_span_degrees: maximum_latitude_span,
+        },
+    }))
+}
+
+fn read_spatial_from_cursor(
+    operation: &CompiledQueryOperation,
+    spatial: &CursorSpatialQuery,
+) -> Result<ReadSpatialQuery, ReadQueryError> {
+    let capability = operation
+        .spatial
+        .as_ref()
+        .and_then(|spatial| spatial.bbox.as_ref())
+        .ok_or(ReadQueryError::Invalid)?;
+    let maximum_longitude_span =
+        maximum_span_text(&capability.maximum_longitude_span_degrees, "360")?;
+    let maximum_latitude_span =
+        maximum_span_text(&capability.maximum_latitude_span_degrees, "180")?;
+    if spatial.bbox.geometry_field != capability.geometry_field
+        || spatial.bbox.maximum_longitude_span_degrees != maximum_longitude_span
+        || spatial.bbox.maximum_latitude_span_degrees != maximum_latitude_span
+    {
+        return Err(ReadQueryError::Invalid);
+    }
+    Ok(ReadSpatialQuery {
+        bbox: ReadBboxQuery {
+            geometry_field: spatial.bbox.geometry_field.clone(),
+            west: spatial.bbox.west.clone(),
+            south: spatial.bbox.south.clone(),
+            east: spatial.bbox.east.clone(),
+            north: spatial.bbox.north.clone(),
+            maximum_longitude_span_degrees: spatial.bbox.maximum_longitude_span_degrees.clone(),
+            maximum_latitude_span_degrees: spatial.bbox.maximum_latitude_span_degrees.clone(),
+        },
+    })
+}
+
+fn maximum_span_text(value: &serde_json::Number, upper: &str) -> Result<String, ReadQueryError> {
+    strict_query::canonical_positive_decimal_within(&value.to_string(), upper)
+        .map_err(|_| ReadQueryError::Invalid)
+}
+
+fn decimal_difference_within(
+    upper: &str,
+    lower: &str,
+    maximum: &str,
+) -> Result<bool, ReadQueryError> {
+    strict_query::decimal_difference_within(upper, lower, maximum)
+        .map_err(|_| ReadQueryError::Invalid)
+}
+
 fn read_filter_expr(
     entity: &CompiledEntity,
     operation: &CompiledQueryOperation,
@@ -3141,6 +3332,7 @@ fn validate_query_shape(
     entity: &CompiledEntity,
     operation: &CompiledQueryOperation,
     filter: Option<&ReadFilterExpr>,
+    spatial: Option<&ReadSpatialQuery>,
     order: Option<&ReadOrderClause>,
     page_size: u16,
 ) -> Result<(), ReadQueryError> {
@@ -3153,6 +3345,9 @@ fn validate_query_shape(
         if stats.predicates > MAX_FILTER_CLAUSES || stats.in_values > MAX_IN_VALUES {
             return Err(ReadQueryError::Invalid);
         }
+    }
+    if let Some(spatial) = spatial {
+        validate_spatial_shape(entity, operation, spatial)?;
     }
     if let Some(order) = order {
         let sortable = operation.sort_fields.iter().any(|field| {
@@ -3167,6 +3362,50 @@ fn validate_query_shape(
         {
             return Err(ReadQueryError::Invalid);
         }
+    }
+    Ok(())
+}
+
+fn validate_spatial_shape(
+    entity: &CompiledEntity,
+    operation: &CompiledQueryOperation,
+    spatial: &ReadSpatialQuery,
+) -> Result<(), ReadQueryError> {
+    let capability = operation
+        .spatial
+        .as_ref()
+        .and_then(|spatial| spatial.bbox.as_ref())
+        .ok_or(ReadQueryError::Invalid)?;
+    let maximum_longitude_span =
+        maximum_span_text(&capability.maximum_longitude_span_degrees, "360")?;
+    let maximum_latitude_span =
+        maximum_span_text(&capability.maximum_latitude_span_degrees, "180")?;
+    if spatial.bbox.geometry_field != capability.geometry_field
+        || spatial.bbox.maximum_longitude_span_degrees != maximum_longitude_span
+        || spatial.bbox.maximum_latitude_span_degrees != maximum_latitude_span
+        || !matches!(
+            data_field_type(entity, &spatial.bbox.geometry_field),
+            Some(FieldTypeSource::Crs84Point { .. })
+        )
+    {
+        return Err(ReadQueryError::Invalid);
+    }
+    let parsed = strict_query::parse_read_query([(
+        "bbox",
+        format!(
+            "{},{},{},{}",
+            spatial.bbox.west, spatial.bbox.south, spatial.bbox.east, spatial.bbox.north
+        ),
+    )])
+    .map_err(|_| ReadQueryError::Invalid)?;
+    let strict_query::ParsedReadQueryMode::Query(options) = parsed.mode else {
+        return Err(ReadQueryError::Invalid);
+    };
+    let bbox = options.bbox.ok_or(ReadQueryError::Invalid)?;
+    if !decimal_difference_within(bbox.east(), bbox.west(), &maximum_longitude_span)?
+        || !decimal_difference_within(bbox.north(), bbox.south(), &maximum_latitude_span)?
+    {
+        return Err(ReadQueryError::Invalid);
     }
     Ok(())
 }
@@ -3369,6 +3608,9 @@ fn cursor_binding(
         query_reference: references.query,
         sort_reference: references.sort,
         scope_reference: references.scope,
+        spatial_reference: references.spatial,
+        representation: query.representation,
+        adapter: query.adapter,
         page_size: query.page_size,
         include_count: query.include_count,
         temporal_instant: query.temporal_instant.map(str::to_owned),
@@ -3376,23 +3618,32 @@ fn cursor_binding(
     })
 }
 
-fn cursor_query_from_plan(
-    projection: &[ReadProjectionField],
-    filter: Option<&ReadFilterExpr>,
-    order: Option<&ReadOrderClause>,
-    include_count: bool,
-    page_size: u16,
-    temporal_instant: Option<String>,
-    scope: CursorQueryScope,
-) -> crate::cursor::CursorQuery {
-    crate::cursor::CursorQuery {
-        projection: projection.iter().map(cursor_projection_from_read).collect(),
-        filter: filter.map(cursor_filter_expr_from_read),
-        order: order.map(cursor_order_from_read),
-        include_count,
-        page_size,
-        temporal_instant,
-        scope,
+fn cursor_adapter_origin(
+    service: &HttpService,
+    adapter: CursorAdapter,
+) -> Result<Option<String>, CursorError> {
+    match adapter {
+        CursorAdapter::Native => Ok(None),
+        CursorAdapter::Gis => service
+            .public_origin
+            .as_ref()
+            .map(|origin| origin.as_str().to_owned())
+            .map(Some)
+            .ok_or(CursorError::Mismatch),
+    }
+}
+
+fn cursor_spatial_from_read(spatial: &ReadSpatialQuery) -> CursorSpatialQuery {
+    CursorSpatialQuery {
+        bbox: CursorBboxQuery {
+            geometry_field: spatial.bbox.geometry_field.clone(),
+            west: spatial.bbox.west.clone(),
+            south: spatial.bbox.south.clone(),
+            east: spatial.bbox.east.clone(),
+            north: spatial.bbox.north.clone(),
+            maximum_longitude_span_degrees: spatial.bbox.maximum_longitude_span_degrees.clone(),
+            maximum_latitude_span_degrees: spatial.bbox.maximum_latitude_span_degrees.clone(),
+        },
     }
 }
 
@@ -3951,6 +4202,7 @@ impl QueryOptions {
                     || options.orderby.is_some()
                     || options.top.is_some()
                     || options.count.is_some()
+                    || options.bbox.is_some()
             })
     }
 
@@ -3964,6 +4216,7 @@ impl QueryOptions {
                     || options.orderby.is_some()
                     || options.top.is_some()
                     || options.count.is_some()
+                    || options.bbox.is_some()
             })
     }
 }
@@ -4111,10 +4364,11 @@ fn lookup_unresolved() -> Response {
     )
 }
 
-fn exact_json(response: HeldReadResponse) -> Response {
+fn exact_read(response: HeldReadResponse) -> Response {
     let mut builder = Response::builder()
         .status(StatusCode::OK)
-        .header(CONTENT_TYPE, "application/json");
+        .header(CONTENT_TYPE, response.content_type())
+        .header(VARY, "authorization, accept");
     if let Some(etag) = response.strong_etag() {
         let Ok(etag) = HeaderValue::from_bytes(etag) else {
             return unavailable();
@@ -4126,16 +4380,111 @@ fn exact_json(response: HeldReadResponse) -> Response {
         .unwrap_or_else(|_| unavailable())
 }
 
+fn exact_read_no_store(response: HeldReadResponse) -> Response {
+    (
+        StatusCode::OK,
+        [
+            (CONTENT_TYPE, response.content_type()),
+            (CACHE_CONTROL, "no-store"),
+            (VARY, "authorization, accept"),
+        ],
+        response.body().to_vec(),
+    )
+        .into_response()
+}
+
 fn exact_json_no_store(response: HeldReadResponse) -> Response {
     (
         StatusCode::OK,
         [
             (CONTENT_TYPE, "application/json"),
             (CACHE_CONTROL, "no-store"),
+            (VARY, "authorization, accept"),
         ],
         response.body().to_vec(),
     )
         .into_response()
+}
+
+fn negotiated_read_representation(headers: &HeaderMap) -> CursorRepresentation {
+    let mut json_quality: Option<(u16, u8)> = None;
+    let mut geojson_quality: Option<(u16, u8)> = None;
+    for value in headers
+        .get_all(ACCEPT)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+    {
+        for media_range in value.split(',') {
+            let mut parts = media_range.split(';');
+            let media = parts.next().unwrap_or_default().trim();
+            let quality = accept_quality(parts);
+            if quality == 0 {
+                continue;
+            }
+            if media.eq_ignore_ascii_case("application/geo+json") {
+                geojson_quality = Some(geojson_quality.unwrap_or_default().max((quality, 3)));
+            } else if media.eq_ignore_ascii_case("application/json") {
+                json_quality = Some(json_quality.unwrap_or_default().max((quality, 3)));
+            } else if media == "*/*" || media.eq_ignore_ascii_case("application/*") {
+                json_quality = Some(json_quality.unwrap_or_default().max((quality, 1)));
+            }
+        }
+    }
+    match (geojson_quality, json_quality) {
+        (Some(geojson), Some(json)) if geojson > json => CursorRepresentation::GeoJson,
+        (Some(_), None) => CursorRepresentation::GeoJson,
+        _ => CursorRepresentation::Json,
+    }
+}
+
+fn accept_quality<'a>(parameters: impl Iterator<Item = &'a str>) -> u16 {
+    for parameter in parameters {
+        let Some((name, value)) = parameter.trim().split_once('=') else {
+            continue;
+        };
+        if !name.trim().eq_ignore_ascii_case("q") {
+            continue;
+        }
+        return parse_accept_quality(value.trim()).unwrap_or(0);
+    }
+    1000
+}
+
+fn parse_accept_quality(value: &str) -> Option<u16> {
+    let value = value
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .unwrap_or(value);
+    let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
+    let base = match whole {
+        "0" => 0,
+        "1" if fraction.chars().all(|character| character == '0') => 1000,
+        _ => return None,
+    };
+    if base == 1000 {
+        return Some(base);
+    }
+    if fraction.len() > 3 || !fraction.chars().all(|character| character.is_ascii_digit()) {
+        return None;
+    }
+    let mut scaled = 0u16;
+    let mut factor = 100u16;
+    for digit in fraction.bytes() {
+        scaled += u16::from(digit - b'0') * factor;
+        factor /= 10;
+    }
+    Some(scaled)
+}
+
+fn geojson_available(entity: &CompiledEntity, readable_fields: &BTreeSet<String>) -> bool {
+    let Some(geojson) = entity.geojson.as_ref() else {
+        return false;
+    };
+    readable_fields.contains(&geojson.geometry_field)
+        && matches!(
+            data_field_type(entity, &geojson.geometry_field),
+            Some(FieldTypeSource::Crs84Point { .. })
+        )
 }
 
 fn exact_mutation(response: &HeldResponse) -> Response {

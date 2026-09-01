@@ -8,7 +8,7 @@
       "file": "products/registry-server/generated/authoring/registry-project.schema.json",
       "status": "beta",
       "reference": "docs/site/src/content/docs/configure/registry-server.mdx",
-      "field_count": 343,
+      "field_count": 398,
       "fields": [
         {
           "key_path": "accessProfiles",
@@ -97,10 +97,10 @@
           "runtime_validation": null
         },
         {
-          "key_path": "accessProfiles[].grants[].allowCount",
+          "key_path": "accessProfiles[].grants[].action",
           "kind": "property",
-          "type": "boolean",
-          "required": "no",
+          "type": "string",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -110,10 +110,25 @@
           "runtime_validation": null
         },
         {
+          "key_path": "accessProfiles[].grants[].allowCount",
+          "kind": "property",
+          "type": "boolean",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "false"
+          ],
+          "runtime_validation": null
+        },
+        {
           "key_path": "accessProfiles[].grants[].allowDataExport",
           "kind": "property",
           "type": "boolean",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -128,20 +143,22 @@
           "key_path": "accessProfiles[].grants[].applyTargets",
           "kind": "property",
           "type": "array",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
-          "defaults": [],
+          "defaults": [
+            "[]"
+          ],
           "runtime_validation": null
         },
         {
           "key_path": "accessProfiles[].grants[].applyTargets[]",
           "kind": "array_item",
           "type": "object",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -154,7 +171,7 @@
           "key_path": "accessProfiles[].grants[].applyTargets[].entity",
           "kind": "property",
           "type": "string",
-          "required": "yes",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -167,7 +184,7 @@
           "key_path": "accessProfiles[].grants[].applyTargets[].rowBoundaries",
           "kind": "property",
           "type": "array",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -182,7 +199,7 @@
           "key_path": "accessProfiles[].grants[].applyTargets[].rowBoundaries[]",
           "kind": "array_item",
           "type": "object",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -195,7 +212,7 @@
           "key_path": "accessProfiles[].grants[].applyTargets[].rowBoundaries[].claim",
           "kind": "property",
           "type": "string",
-          "required": "yes",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -208,7 +225,7 @@
           "key_path": "accessProfiles[].grants[].applyTargets[].rowBoundaries[].field",
           "kind": "property",
           "type": "string",
-          "required": "yes",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -221,7 +238,7 @@
           "key_path": "accessProfiles[].grants[].applyTargets[].rowBoundaries[].operator",
           "kind": "property",
           "type": "string",
-          "required": "yes",
+          "required": "conditional",
           "values": [
             "equals",
             "in"
@@ -237,7 +254,7 @@
           "key_path": "accessProfiles[].grants[].entity",
           "kind": "property",
           "type": "string",
-          "required": "yes",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -250,7 +267,7 @@
           "key_path": "accessProfiles[].grants[].filterableFields",
           "kind": "property",
           "type": "array",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [
@@ -269,7 +286,7 @@
           "key_path": "accessProfiles[].grants[].filterableFields[]",
           "kind": "array_item",
           "type": "string",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -282,20 +299,22 @@
           "key_path": "accessProfiles[].grants[].lookups",
           "kind": "property",
           "type": "array",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
-          "defaults": [],
+          "defaults": [
+            "[]"
+          ],
           "runtime_validation": null
         },
         {
           "key_path": "accessProfiles[].grants[].lookups[]",
           "kind": "array_item",
           "type": "object",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -308,7 +327,7 @@
           "key_path": "accessProfiles[].grants[].lookups[].claimMapping",
           "kind": "property",
           "type": "object",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -323,7 +342,7 @@
           "key_path": "accessProfiles[].grants[].lookups[].claimMapping.*",
           "kind": "map_value",
           "type": "string",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -336,7 +355,7 @@
           "key_path": "accessProfiles[].grants[].lookups[].selector",
           "kind": "property",
           "type": "string",
-          "required": "yes",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -349,7 +368,7 @@
           "key_path": "accessProfiles[].grants[].lookups[].valueOrigin",
           "kind": "property",
           "type": "string",
-          "required": "yes",
+          "required": "conditional",
           "values": [
             "request",
             "verified_claim"
@@ -390,6 +409,7 @@
             "cancel_request",
             "create",
             "get",
+            "invoke",
             "list",
             "lookup",
             "patch",
@@ -409,54 +429,25 @@
           "runtime_validation": null
         },
         {
-          "key_path": "accessProfiles[].grants[].provenanceFields",
-          "kind": "property",
-          "type": "array",
-          "required": "no",
-          "values": null,
-          "values_conditional": false,
-          "constraints": [],
-          "conditional_constraints": [],
-          "description": null,
-          "defaults": [],
-          "runtime_validation": null
-        },
-        {
-          "key_path": "accessProfiles[].grants[].provenanceFields[]",
-          "kind": "array_item",
-          "type": "string",
-          "required": "no",
-          "values": [
-            "kind",
-            "reasonCode",
-            "reasonText",
-            "sourceReferences"
-          ],
-          "values_conditional": false,
-          "constraints": [],
-          "conditional_constraints": [],
-          "description": null,
-          "defaults": [],
-          "runtime_validation": null
-        },
-        {
           "key_path": "accessProfiles[].grants[].readPaths",
           "kind": "property",
           "type": "array",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
-          "defaults": [],
+          "defaults": [
+            "[]"
+          ],
           "runtime_validation": null
         },
         {
           "key_path": "accessProfiles[].grants[].readPaths[]",
           "kind": "array_item",
           "type": "object",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -469,7 +460,7 @@
           "key_path": "accessProfiles[].grants[].readPaths[].allowCount",
           "kind": "property",
           "type": "boolean",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -484,7 +475,7 @@
           "key_path": "accessProfiles[].grants[].readPaths[].filterableFields",
           "kind": "property",
           "type": "array",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [
@@ -503,7 +494,7 @@
           "key_path": "accessProfiles[].grants[].readPaths[].filterableFields[]",
           "kind": "array_item",
           "type": "string",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -516,7 +507,7 @@
           "key_path": "accessProfiles[].grants[].readPaths[].path",
           "kind": "property",
           "type": "string",
-          "required": "yes",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -529,7 +520,7 @@
           "key_path": "accessProfiles[].grants[].readPaths[].readableFields",
           "kind": "property",
           "type": "array",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [
@@ -548,7 +539,7 @@
           "key_path": "accessProfiles[].grants[].readPaths[].readableFields[]",
           "kind": "array_item",
           "type": "string",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -561,7 +552,7 @@
           "key_path": "accessProfiles[].grants[].readPaths[].sortableFields",
           "kind": "property",
           "type": "array",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [
@@ -580,7 +571,7 @@
           "key_path": "accessProfiles[].grants[].readPaths[].sortableFields[]",
           "kind": "array_item",
           "type": "string",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -593,7 +584,7 @@
           "key_path": "accessProfiles[].grants[].readableFields",
           "kind": "property",
           "type": "array",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [
@@ -612,7 +603,7 @@
           "key_path": "accessProfiles[].grants[].readableFields[]",
           "kind": "array_item",
           "type": "string",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -625,20 +616,22 @@
           "key_path": "accessProfiles[].grants[].requestPresence",
           "kind": "property",
           "type": "array",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
-          "defaults": [],
+          "defaults": [
+            "[]"
+          ],
           "runtime_validation": null
         },
         {
           "key_path": "accessProfiles[].grants[].requestPresence[]",
           "kind": "array_item",
           "type": "object",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -651,7 +644,7 @@
           "key_path": "accessProfiles[].grants[].requestPresence[].requestType",
           "kind": "property",
           "type": "string",
-          "required": "yes",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -664,7 +657,7 @@
           "key_path": "accessProfiles[].grants[].requestPresence[].rowBoundaries",
           "kind": "property",
           "type": "array",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -679,7 +672,7 @@
           "key_path": "accessProfiles[].grants[].requestPresence[].rowBoundaries[]",
           "kind": "array_item",
           "type": "object",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -692,7 +685,7 @@
           "key_path": "accessProfiles[].grants[].requestPresence[].rowBoundaries[].claim",
           "kind": "property",
           "type": "string",
-          "required": "yes",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -705,7 +698,7 @@
           "key_path": "accessProfiles[].grants[].requestPresence[].rowBoundaries[].field",
           "kind": "property",
           "type": "string",
-          "required": "yes",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -718,7 +711,7 @@
           "key_path": "accessProfiles[].grants[].requestPresence[].rowBoundaries[].operator",
           "kind": "property",
           "type": "string",
-          "required": "yes",
+          "required": "conditional",
           "values": [
             "equals",
             "in"
@@ -731,10 +724,29 @@
           "runtime_validation": null
         },
         {
-          "key_path": "accessProfiles[].grants[].reviewStages",
+          "key_path": "accessProfiles[].grants[].results",
           "kind": "property",
           "type": "array",
-          "required": "no",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "uniqueItems: true"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "[]"
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "accessProfiles[].grants[].results[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -744,10 +756,25 @@
           "runtime_validation": null
         },
         {
+          "key_path": "accessProfiles[].grants[].reviewStages",
+          "kind": "property",
+          "type": "array",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "[]"
+          ],
+          "runtime_validation": null
+        },
+        {
           "key_path": "accessProfiles[].grants[].reviewStages[]",
           "kind": "array_item",
           "type": "object",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -760,7 +787,7 @@
           "key_path": "accessProfiles[].grants[].reviewStages[].stage",
           "kind": "property",
           "type": "string",
-          "required": "yes",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -773,7 +800,7 @@
           "key_path": "accessProfiles[].grants[].reviewStages[].targets",
           "kind": "property",
           "type": "array",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -788,7 +815,7 @@
           "key_path": "accessProfiles[].grants[].reviewStages[].targets[]",
           "kind": "array_item",
           "type": "object",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -801,7 +828,7 @@
           "key_path": "accessProfiles[].grants[].reviewStages[].targets[].entity",
           "kind": "property",
           "type": "string",
-          "required": "yes",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -814,7 +841,7 @@
           "key_path": "accessProfiles[].grants[].reviewStages[].targets[].readableFields",
           "kind": "property",
           "type": "array",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [
@@ -833,7 +860,7 @@
           "key_path": "accessProfiles[].grants[].reviewStages[].targets[].readableFields[]",
           "kind": "array_item",
           "type": "string",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -846,7 +873,7 @@
           "key_path": "accessProfiles[].grants[].reviewStages[].targets[].rowBoundaries",
           "kind": "property",
           "type": "array",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -861,7 +888,7 @@
           "key_path": "accessProfiles[].grants[].reviewStages[].targets[].rowBoundaries[]",
           "kind": "array_item",
           "type": "object",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -874,7 +901,7 @@
           "key_path": "accessProfiles[].grants[].reviewStages[].targets[].rowBoundaries[].claim",
           "kind": "property",
           "type": "string",
-          "required": "yes",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -887,7 +914,7 @@
           "key_path": "accessProfiles[].grants[].reviewStages[].targets[].rowBoundaries[].field",
           "kind": "property",
           "type": "string",
-          "required": "yes",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -900,7 +927,7 @@
           "key_path": "accessProfiles[].grants[].reviewStages[].targets[].rowBoundaries[].operator",
           "kind": "property",
           "type": "string",
-          "required": "yes",
+          "required": "conditional",
           "values": [
             "equals",
             "in"
@@ -916,7 +943,7 @@
           "key_path": "accessProfiles[].grants[].revisionAccess",
           "kind": "property",
           "type": "boolean",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -931,7 +958,7 @@
           "key_path": "accessProfiles[].grants[].rowBoundaries",
           "kind": "property",
           "type": "array",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -946,7 +973,7 @@
           "key_path": "accessProfiles[].grants[].rowBoundaries[]",
           "kind": "array_item",
           "type": "object",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -959,7 +986,7 @@
           "key_path": "accessProfiles[].grants[].rowBoundaries[].claim",
           "kind": "property",
           "type": "string",
-          "required": "yes",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -972,7 +999,7 @@
           "key_path": "accessProfiles[].grants[].rowBoundaries[].field",
           "kind": "property",
           "type": "string",
-          "required": "yes",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -985,7 +1012,7 @@
           "key_path": "accessProfiles[].grants[].rowBoundaries[].operator",
           "kind": "property",
           "type": "string",
-          "required": "yes",
+          "required": "conditional",
           "values": [
             "equals",
             "in"
@@ -1001,7 +1028,7 @@
           "key_path": "accessProfiles[].grants[].sortableFields",
           "kind": "property",
           "type": "array",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [
@@ -1020,8 +1047,173 @@
           "key_path": "accessProfiles[].grants[].sortableFields[]",
           "kind": "array_item",
           "type": "string",
-          "required": "no",
+          "required": "conditional",
           "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "accessProfiles[].grants[].spatialQueries",
+          "kind": "property",
+          "type": "null | object",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "null"
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "accessProfiles[].grants[].spatialQueries.bbox",
+          "kind": "property",
+          "type": "null | object",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "accessProfiles[].grants[].spatialQueries.bbox.maximumLatitudeSpanDegrees",
+          "kind": "property",
+          "type": "number",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "accessProfiles[].grants[].spatialQueries.bbox.maximumLongitudeSpanDegrees",
+          "kind": "property",
+          "type": "number",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "accessProfiles[].grants[].targets",
+          "kind": "property",
+          "type": "array",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "[]"
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "accessProfiles[].grants[].targets[]",
+          "kind": "array_item",
+          "type": "object",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "accessProfiles[].grants[].targets[].entity",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "accessProfiles[].grants[].targets[].rowBoundaries",
+          "kind": "property",
+          "type": "array",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "[]"
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "accessProfiles[].grants[].targets[].rowBoundaries[]",
+          "kind": "array_item",
+          "type": "object",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "accessProfiles[].grants[].targets[].rowBoundaries[].claim",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "accessProfiles[].grants[].targets[].rowBoundaries[].field",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "accessProfiles[].grants[].targets[].rowBoundaries[].operator",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": [
+            "equals",
+            "in"
+          ],
           "values_conditional": false,
           "constraints": [],
           "conditional_constraints": [],
@@ -1033,7 +1225,7 @@
           "key_path": "accessProfiles[].grants[].writableFields",
           "kind": "property",
           "type": "array",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [
@@ -1052,7 +1244,7 @@
           "key_path": "accessProfiles[].grants[].writableFields[]",
           "kind": "array_item",
           "type": "string",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -1145,6 +1337,610 @@
           "kind": "array_item",
           "type": "string",
           "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions",
+          "kind": "property",
+          "type": "array",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[]",
+          "kind": "array_item",
+          "type": "object",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].effects",
+          "kind": "property",
+          "type": "array",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "[]"
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].effects[]",
+          "kind": "array_item",
+          "type": "object",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].effects[].clear",
+          "kind": "property",
+          "type": "array",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "uniqueItems: true"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "[]"
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].effects[].clear[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].effects[].id",
+          "kind": "property",
+          "type": "null | string",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].effects[].operation",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": [
+            "apply_request",
+            "approve_request",
+            "batch",
+            "cancel_request",
+            "create",
+            "get",
+            "invoke",
+            "list",
+            "lookup",
+            "patch",
+            "reject_request",
+            "request_revision",
+            "revise_request",
+            "revisions",
+            "snapshot",
+            "submit_request",
+            "tombstone"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].effects[].set",
+          "kind": "property",
+          "type": "object",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "{}"
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].effects[].set.*",
+          "kind": "map_value",
+          "type": "object",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].effects[].set.*.fromEffect",
+          "kind": "property",
+          "type": "null | string",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].effects[].set.*.fromField",
+          "kind": "property",
+          "type": "null | string",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].effects[].target",
+          "kind": "property",
+          "type": "object",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].effects[].target.entity",
+          "kind": "property",
+          "type": "null | string",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].effects[].target.fromField",
+          "kind": "property",
+          "type": "null | string",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].id",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs",
+          "kind": "property",
+          "type": "array",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "[]"
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[]",
+          "kind": "array_item",
+          "type": "object",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].apiName",
+          "kind": "property",
+          "type": "null | string",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].bbox",
+          "kind": "property",
+          "type": "null | object",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].bbox.east",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].bbox.north",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].bbox.south",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].bbox.west",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].classification",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": [
+            "internal",
+            "public",
+            "restricted"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].id",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].maxBytes",
+          "kind": "property",
+          "type": "integer",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "format: uint32",
+              "minimum: 0"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].maxLength",
+          "kind": "property",
+          "type": "integer",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "format: uint32",
+              "minimum: 0"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].maximum",
+          "kind": "property",
+          "type": "null | string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].minLength",
+          "kind": "property",
+          "type": "integer",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "format: uint32",
+              "minimum: 0"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "0"
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].minimum",
+          "kind": "property",
+          "type": "null | string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].onDelete",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": [
+            "restrict"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "\"restrict\""
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].precision",
+          "kind": "property",
+          "type": "integer",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "format: uint8",
+              "maximum: 255",
+              "minimum: 0"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].required",
+          "kind": "property",
+          "type": "boolean",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "false"
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].scale",
+          "kind": "property",
+          "type": "integer",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "format: uint8",
+              "maximum: 255",
+              "minimum: 0"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].target",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].type",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": [
+            "boolean",
+            "crs84-point",
+            "date",
+            "decimal",
+            "int64",
+            "reference",
+            "string",
+            "structured",
+            "text",
+            "timestamp",
+            "uuid",
+            "vocabulary-code"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].values",
+          "kind": "property",
+          "type": "array",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "[]"
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].values[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].vocabulary",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -1437,6 +2233,7 @@
             "cancel_request",
             "create",
             "get",
+            "invoke",
             "list",
             "lookup",
             "patch",
@@ -1553,6 +2350,7 @@
             "cancel_request",
             "create",
             "get",
+            "invoke",
             "list",
             "lookup",
             "patch",
@@ -3272,6 +4070,32 @@
         },
         {
           "key_path": "entities[].fields[].vocabulary",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].geojson",
+          "kind": "property",
+          "type": "null | object",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].geojson.geometryField",
           "kind": "property",
           "type": "string",
           "required": "conditional",
@@ -4972,8 +5796,612 @@
       "file": "products/registry-server/generated/authoring/registry-module.schema.json",
       "status": "beta",
       "reference": "docs/site/src/content/docs/configure/registry-server.mdx",
-      "field_count": 320,
+      "field_count": 364,
       "fields": [
+        {
+          "key_path": "actions",
+          "kind": "property",
+          "type": "array",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": "Named immediate actions introduced by this module.",
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[]",
+          "kind": "array_item",
+          "type": "object",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].effects",
+          "kind": "property",
+          "type": "array",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "[]"
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].effects[]",
+          "kind": "array_item",
+          "type": "object",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].effects[].clear",
+          "kind": "property",
+          "type": "array",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "uniqueItems: true"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "[]"
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].effects[].clear[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].effects[].id",
+          "kind": "property",
+          "type": "null | string",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].effects[].operation",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": [
+            "apply_request",
+            "approve_request",
+            "batch",
+            "cancel_request",
+            "create",
+            "get",
+            "invoke",
+            "list",
+            "lookup",
+            "patch",
+            "reject_request",
+            "request_revision",
+            "revise_request",
+            "revisions",
+            "snapshot",
+            "submit_request",
+            "tombstone"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].effects[].set",
+          "kind": "property",
+          "type": "object",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "{}"
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].effects[].set.*",
+          "kind": "map_value",
+          "type": "object",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].effects[].set.*.fromEffect",
+          "kind": "property",
+          "type": "null | string",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].effects[].set.*.fromField",
+          "kind": "property",
+          "type": "null | string",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].effects[].target",
+          "kind": "property",
+          "type": "object",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].effects[].target.entity",
+          "kind": "property",
+          "type": "null | string",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].effects[].target.fromField",
+          "kind": "property",
+          "type": "null | string",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].id",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs",
+          "kind": "property",
+          "type": "array",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "[]"
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[]",
+          "kind": "array_item",
+          "type": "object",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].apiName",
+          "kind": "property",
+          "type": "null | string",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].bbox",
+          "kind": "property",
+          "type": "null | object",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].bbox.east",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].bbox.north",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].bbox.south",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].bbox.west",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].classification",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": [
+            "internal",
+            "public",
+            "restricted"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].id",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].maxBytes",
+          "kind": "property",
+          "type": "integer",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "format: uint32",
+              "minimum: 0"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].maxLength",
+          "kind": "property",
+          "type": "integer",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "format: uint32",
+              "minimum: 0"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].maximum",
+          "kind": "property",
+          "type": "null | string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].minLength",
+          "kind": "property",
+          "type": "integer",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "format: uint32",
+              "minimum: 0"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "0"
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].minimum",
+          "kind": "property",
+          "type": "null | string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].onDelete",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": [
+            "restrict"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "\"restrict\""
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].precision",
+          "kind": "property",
+          "type": "integer",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "format: uint8",
+              "maximum: 255",
+              "minimum: 0"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].required",
+          "kind": "property",
+          "type": "boolean",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "false"
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].scale",
+          "kind": "property",
+          "type": "integer",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "format: uint8",
+              "maximum: 255",
+              "minimum: 0"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].target",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].type",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": [
+            "boolean",
+            "crs84-point",
+            "date",
+            "decimal",
+            "int64",
+            "reference",
+            "string",
+            "structured",
+            "text",
+            "timestamp",
+            "uuid",
+            "vocabulary-code"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].values",
+          "kind": "property",
+          "type": "array",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "[]"
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].values[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].inputs[].vocabulary",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
         {
           "key_path": "dependencies",
           "kind": "property",
@@ -5273,6 +6701,7 @@
             "cancel_request",
             "create",
             "get",
+            "invoke",
             "list",
             "lookup",
             "patch",
@@ -5389,6 +6818,7 @@
             "cancel_request",
             "create",
             "get",
+            "invoke",
             "list",
             "lookup",
             "patch",
@@ -7120,6 +8550,32 @@
           "runtime_validation": null
         },
         {
+          "key_path": "entities[].geojson",
+          "kind": "property",
+          "type": "null | object",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].geojson.geometryField",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
           "key_path": "entities[].id",
           "kind": "property",
           "type": "string",
@@ -7672,6 +9128,7 @@
             "cancel_request",
             "create",
             "get",
+            "invoke",
             "list",
             "lookup",
             "patch",
@@ -7788,6 +9245,7 @@
             "cancel_request",
             "create",
             "get",
+            "invoke",
             "list",
             "lookup",
             "patch",
@@ -9513,6 +10971,32 @@
           "runtime_validation": null
         },
         {
+          "key_path": "extendEntities[].geojson",
+          "kind": "property",
+          "type": "null | object",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "extendEntities[].geojson.geometryField",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
           "key_path": "extendEntities[].indexes",
           "kind": "property",
           "type": "array",
@@ -9756,7 +11240,7 @@
       "file": "products/registry-server/generated/runtime/runtime.schema.json",
       "status": "beta",
       "reference": "docs/site/src/content/docs/configure/registry-server.mdx",
-      "field_count": 87,
+      "field_count": 88,
       "fields": [
         {
           "key_path": "apiVersion",
@@ -10984,6 +12468,25 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "listener.publicOrigin",
+          "kind": "property",
+          "type": "null | string",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "maxLength: 2048",
+              "minLength: 1",
+              "pattern: ^https?://[^/@?#\\s]+/?$"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Canonical HTTPS origin (loopback HTTP for local development) for QGIS\ndiscovery and pagination. Required when the registry exposes GIS collections.",
           "defaults": [],
           "runtime_validation": null
         },

@@ -1638,12 +1638,31 @@ pub(crate) fn openapi_operation(spec: OpenApiOperationSpec<'_>) -> Value {
     if let Some(query_profile) = query_profile_extension(spec) {
         operation.insert(query_profile.0, query_profile.1);
     }
-    let parameters = operation_parameters(
+    let mut parameters = operation_parameters(
         spec.route,
         spec.response_entity,
         spec.query,
         spec.access_profiles,
     );
+    let geojson_profiles = geojson_profiles(spec);
+    if !geojson_profiles.is_empty() {
+        if let Some(select) = parameters
+            .iter_mut()
+            .find(|parameter| parameter["name"] == "$select")
+        {
+            select["examples"] = geojson_selection_examples(spec, &geojson_profiles);
+        }
+        parameters.push(header_parameter(
+            "Accept",
+            false,
+            json!({"type": "string", "enum": ["application/json", "application/geo+json"]}),
+            "Choose JSON or GeoJSON. Selecting fields without the primary Point returns null geometry; include that Point in $select to display a map feature.",
+        ));
+        operation.insert(
+            "x-registry-geojsonProfiles".to_owned(),
+            json!(geojson_profiles),
+        );
+    }
     if !parameters.is_empty() {
         operation.insert("parameters".to_owned(), Value::Array(parameters));
     }
@@ -1945,6 +1964,24 @@ fn read_query_parameters(
             "Strict UTC RFC3339 instant for the as-of temporal query.",
         ));
     }
+    if query_profiles_for_route(route, query, access_profiles)
+        .iter()
+        .any(|profile| {
+            profile
+                .spatial
+                .as_ref()
+                .and_then(|spatial| spatial.bbox.as_ref())
+                .is_some()
+        })
+    {
+        parameters.push(query_parameter(
+            "bbox",
+            false,
+            false,
+            json!({"type": "string", "maxLength": 256, "example": "100.4,13.6,100.6,13.8"}),
+            "Inclusive west,south,east,north CRS84 bounds within the selected profile's maximum spans. Finite decimal or exponent coordinates only; zero spans are valid. No crossing, 3D, alternate CRS or temporal queries. ANDed with $filter. Continuations carry only $skiptoken and routing/profile context.",
+        ));
+    }
     parameters
 }
 
@@ -2211,7 +2248,7 @@ pub(crate) fn json_patch_array_schema() -> Value {
 }
 
 fn operation_responses(spec: OpenApiOperationSpec<'_>) -> Value {
-    let success = match spec.route.operation {
+    let mut success = match spec.route.operation {
         Operation::Create => success_response(
             "Record created",
             StatusResponseHeaders::MutationCreate,
@@ -2287,6 +2324,22 @@ fn operation_responses(spec: OpenApiOperationSpec<'_>) -> Value {
             json!({"$ref": "#/components/schemas/ChangeRequestActionResponse"}),
         ),
     };
+    if let Some(schema) = geojson_response_schema(spec) {
+        success["content"]["application/geo+json"] = json!({"schema": schema});
+        success["headers"]["Vary"] = json!({
+            "description": "Responses vary by authorization and negotiated representation.",
+            "schema": {"type": "string"}
+        });
+        if spec.route.operation == Operation::Get {
+            success["headers"]["ETag"]["description"] = json!(
+                "Strong Registry mutation precondition for JSON only. GeoJSON does not return this validator."
+            );
+            success["headers"]["Cache-Control"] = json!({
+                "description": "Protected GeoJSON responses are not stored.",
+                "schema": {"type": "string"}
+            });
+        }
+    }
     let success_status = if spec.route.operation == Operation::Create {
         "201"
     } else {
@@ -2737,6 +2790,152 @@ fn snapshot_response_schema(spec: OpenApiOperationSpec<'_>) -> Value {
         "required": ["snapshot", "items", "pageInfo"],
         "properties": properties
     })
+}
+
+fn geojson_profiles<'a>(spec: OpenApiOperationSpec<'a>) -> Vec<&'a str> {
+    let Some(binding) = &spec.response_entity.geojson else {
+        return Vec::new();
+    };
+    if spec.route.revision_kind.is_some()
+        || spec.entity.id != spec.response_entity.id
+        || read_path_for_route(spec.route, spec.entity).is_some()
+        || !matches!(
+            (spec.route.operation, spec.route.query_kind),
+            (Operation::Get, None) | (Operation::List, Some(CompiledQueryKind::List))
+        )
+    {
+        return Vec::new();
+    }
+    spec.route
+        .access_profiles
+        .iter()
+        .filter(|profile_id| match spec.access_profiles {
+            OpenApiAccessProfiles::All => true,
+            OpenApiAccessProfiles::Selected(selected) => profile_id.as_str() == selected,
+        })
+        .filter(|profile_id| {
+            spec.entity
+                .access_profiles
+                .get(profile_id.as_str())
+                .is_some_and(|profile| profile.readable_fields.contains(&binding.geometry_field))
+        })
+        .map(String::as_str)
+        .collect()
+}
+
+fn geojson_response_schema(spec: OpenApiOperationSpec<'_>) -> Option<Value> {
+    let profiles = geojson_profiles(spec);
+    if profiles.is_empty() {
+        return None;
+    }
+    let entity = spec.response_entity;
+    let binding = entity.geojson.as_ref()?;
+    let geometry = entity.fields.get(&binding.geometry_field)?;
+    let fields: BTreeSet<_> = profiles
+        .iter()
+        .flat_map(|profile| selectable_fields_for_profile(spec, profile))
+        .collect();
+    let mut properties = Map::new();
+    for field in &entity.stored_fields {
+        if fields.contains(&field.logical.id) && field.logical.id != binding.geometry_field {
+            let schema = field_schema(&field.logical.field_type);
+            properties.insert(
+                field.logical.api_name.clone(),
+                if field.required {
+                    schema
+                } else {
+                    json!({"anyOf": [schema, {"type": "null"}]})
+                },
+            );
+        }
+    }
+    for field in entity.derived_fields.values() {
+        if fields.contains(&field.logical.id) {
+            properties.insert(
+                field.logical.api_name.clone(),
+                json!({
+                    "anyOf": [field_schema(&field.logical.field_type), {"type": "null"}]
+                }),
+            );
+        }
+    }
+    let feature = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "id", "geometry", "properties", "registry"],
+        "properties": {
+            "type": {"const": "Feature"},
+            "id": {"type": "string", "format": "uuid"},
+            "geometry": {"anyOf": [field_schema(&geometry.field_type), {"type": "null"}]},
+            "properties": {"type": "object", "additionalProperties": false, "properties": properties},
+            "registry": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["revision"],
+                "properties": {"revision": {"type": "integer", "format": "int64", "minimum": 1}}
+            }
+        },
+        "description": "Selected logical fields use their API names. The primary Point appears only as geometry. Omitting it from $select returns null geometry. Registry record metadata is in the registry foreign member."
+    });
+    if spec.route.operation == Operation::Get {
+        return Some(feature);
+    }
+    let collection = list_response_schema(spec.response_entity, spec.schema_ref);
+    Some(json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "features", "registry"],
+        "properties": {
+            "type": {"const": "FeatureCollection"},
+            "features": {"type": "array", "items": feature},
+            "registry": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["pageInfo"],
+                "properties": {
+                    "pageInfo": collection["properties"]["pageInfo"],
+                    "count": collection["properties"]["count"]
+                }
+            }
+        },
+        "description": "Live authorized collection. Follow registry.pageInfo.nextCursor with the same representation and authority. A refresh starts a fresh traversal; concurrent edits can change membership. Count is present only when requested and permitted."
+    }))
+}
+
+fn geojson_selection_examples(spec: OpenApiOperationSpec<'_>, profiles: &[&str]) -> Value {
+    let binding = spec
+        .response_entity
+        .geojson
+        .as_ref()
+        .expect("GeoJSON profiles have a binding");
+    let geometry = api_field_name(spec.response_entity, &binding.geometry_field)
+        .expect("compiled GeoJSON binding has an API field");
+    let attributes: BTreeSet<_> = profiles
+        .iter()
+        .flat_map(|profile| selectable_fields_for_profile(spec, profile))
+        .filter(|field| field != &binding.geometry_field)
+        .filter_map(|field| api_field_name(spec.response_entity, &field).map(str::to_owned))
+        .collect();
+    let attributes: Vec<_> = attributes.into_iter().take(2).collect();
+    let mut with_geometry = attributes.clone();
+    with_geometry.push(geometry.to_owned());
+    let mut examples = Map::from_iter([(
+        "withGeometry".to_owned(),
+        json!({
+            "summary": "Include the Point to render a map feature",
+            "value": with_geometry.join(",")
+        }),
+    )]);
+    if !attributes.is_empty() {
+        examples.insert(
+            "withoutGeometry".to_owned(),
+            json!({
+                "summary": "Select attributes only; GeoJSON geometry is null",
+                "value": attributes.join(",")
+            }),
+        );
+    }
+    Value::Object(examples)
 }
 
 fn batch_response_schema(
@@ -3240,7 +3439,7 @@ fn render_query_profile(
     operation: &CompiledQueryOperation,
     selectable_fields: BTreeSet<String>,
 ) -> Value {
-    json!({
+    let mut rendered = json!({
         "profile": operation.profile_id,
         "kind": query_kind_name(operation.kind),
         "maxPageSize": operation.max_page_size,
@@ -3270,7 +3469,21 @@ fn render_query_profile(
             },
             "semantics": "start_inclusive_end_exclusive",
         }))
-    })
+    });
+    if let Some(bbox) = operation
+        .spatial
+        .as_ref()
+        .and_then(|spatial| spatial.bbox.as_ref())
+    {
+        rendered["spatialQueries"] = json!({"bbox": {
+            "geometryProperty": api_field_name(entity, &bbox.geometry_field).unwrap_or(&bbox.geometry_field),
+            "maximumLongitudeSpanDegrees": bbox.maximum_longitude_span_degrees,
+            "maximumLatitudeSpanDegrees": bbox.maximum_latitude_span_degrees,
+            "coordinateReferenceSystem": "CRS84",
+            "semantics": "inclusive_2d_non_crossing"
+        }});
+    }
+    rendered
 }
 
 fn query_filter_operator_name(operator: crate::model::CompiledQueryFilterOperator) -> &'static str {
@@ -3482,4 +3695,130 @@ fn canonicalization_error() -> Diagnostic {
         "artifacts",
         "the generated artifact could not be canonicalized",
     )
+}
+
+#[cfg(test)]
+mod spatial_tests {
+    use super::*;
+    use crate::compiler::{compile_project, CompileProfile};
+    use crate::contract::parse_project_json;
+    use crate::model::CompiledRegistry;
+
+    fn registry() -> CompiledRegistry {
+        let project = parse_project_json(br#"{
+            "apiVersion":"registry.registrystack.org/v1alpha1",
+            "kind":"RegistryProject",
+            "registry":{"id":"spatial-artifacts","version":"1","defaultLanguage":"en"},
+            "entities":[{
+                "id":"site","route":"sites","mutationMode":"mutable",
+                "geojson":{"geometryField":"location"},
+                "fields":[
+                    {"id":"code","type":"string","maxLength":32,"classification":"internal"},
+                    {"id":"label","type":"string","maxLength":64,"classification":"internal"},
+                    {"id":"location","apiName":"position","type":"crs84-point","precision":9,"classification":"internal"}
+                ]
+            }],
+            "accessProfiles":[
+                {"id":"map","default":true,"principalClaim":"principal","grants":[{"entity":"site","operations":["get","list"],"readableFields":["code","label","location"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.5,"maximumLatitudeSpanDegrees":0.25}}}]},
+                {"id":"plain","principalClaim":"principal","grants":[{"entity":"site","operations":["get","list"],"readableFields":["code"]}]},
+                {"id":"geometry-only","principalClaim":"principal","grants":[{"entity":"site","operations":["get","list"],"readableFields":["location"]}]}
+            ]
+        }"#).expect("spatial artifact fixture parses");
+        compile_project(&project, &[], CompileProfile::Authoring)
+            .expect("spatial artifact fixture compiles")
+    }
+
+    fn operation(registry: &CompiledRegistry, method: Operation, profile: &str) -> Value {
+        let entity = &registry.entities()["site"];
+        let route = registry
+            .routes()
+            .routes
+            .iter()
+            .find(|route| route.operation == method)
+            .expect("fixture route exists");
+        openapi_operation(OpenApiOperationSpec {
+            route,
+            entity,
+            response_entity: entity,
+            query: registry.queries(),
+            schema_ref: "site",
+            request_schema_ref: "site",
+            readable_fields: None,
+            access_profiles: OpenApiAccessProfiles::Selected(profile),
+        })
+    }
+
+    #[test]
+    fn selected_profile_controls_bbox_and_geojson_advertisement() {
+        let registry = registry();
+        let map = operation(&registry, Operation::List, "map");
+        assert!(map["parameters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["name"] == "bbox"));
+        assert_eq!(
+            map["x-registry-queryProfile"]["spatialQueries"]["bbox"]["geometryProperty"],
+            "position"
+        );
+        assert_eq!(
+            map["x-registry-queryProfile"]["spatialQueries"]["bbox"]["maximumLatitudeSpanDegrees"],
+            0.25
+        );
+        let feature = &map["responses"]["200"]["content"]["application/geo+json"]["schema"]
+            ["properties"]["features"]["items"];
+        assert!(feature["properties"]["properties"]["properties"]["code"].is_object());
+        assert!(feature["properties"]["properties"]["properties"]
+            .get("position")
+            .is_none());
+        assert_eq!(
+            feature["properties"]["geometry"]["anyOf"][1]["type"],
+            "null"
+        );
+        assert_eq!(
+            feature["properties"]["registry"]["required"],
+            json!(["revision"])
+        );
+        let select = map["parameters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|parameter| parameter["name"] == "$select")
+            .unwrap();
+        assert_eq!(select["examples"]["withoutGeometry"]["value"], "code,label");
+        assert_eq!(
+            select["examples"]["withGeometry"]["value"],
+            "code,label,position"
+        );
+
+        let plain = operation(&registry, Operation::List, "plain");
+        assert!(!plain["parameters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["name"] == "bbox"));
+        assert!(plain["responses"]["200"]["content"]
+            .get("application/geo+json")
+            .is_none());
+        assert!(plain.get("x-registry-geojsonProfiles").is_none());
+        assert!(plain["x-registry-queryProfile"]
+            .get("spatialQueries")
+            .is_none());
+    }
+
+    #[test]
+    fn geojson_without_bbox_does_not_widen_properties() {
+        let registry = registry();
+        let get = operation(&registry, Operation::Get, "geometry-only");
+        let content = &get["responses"]["200"]["content"];
+        assert!(content["application/json"].is_object());
+        let schema = &content["application/geo+json"]["schema"];
+        assert_eq!(schema["properties"]["type"]["const"], "Feature");
+        assert_eq!(schema["properties"]["properties"]["properties"], json!({}));
+        assert!(!get["parameters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["name"] == "bbox"));
+    }
 }

@@ -1,0 +1,274 @@
+---
+title: Query a spatial registry from QGIS
+description: Start a synthetic PostGIS registry, connect QGIS with an installation credential, and refresh the map after an authenticated write.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: tutorial
+persona:
+  - data publisher
+  - operator
+locale: en
+standards_referenced:
+  - ogc-api-features
+  - geojson
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+If you are evaluating Registry Server's spatial read path, this tutorial starts a synthetic
+service-site registry on PostGIS and connects QGIS as a read-only installation client. You will
+display authorized Point records, pan within a bounded map area, import one record through the
+normal API, and see the new Point after QGIS renews its Registry Mint credential.
+
+<QuickstartMeta
+  outcome="One protected QGIS Point layer that pages, pans, renews its credential, and refreshes after an authenticated Registry Server write."
+  time="About 35 minutes, plus the first Rust build and PostGIS image download"
+  level="Source preview with synthetic data on loopback"
+  prerequisites={['A Registry Stack source checkout', 'QGIS 4.2.1 with GDAL 3.12.4', 'Running Docker', 'Rust and Cargo', 'OpenSSL', 'Python 3.11 or later and uv', 'A shell and an editor']}
+/>
+
+## Before you start
+
+Run every shell command from the Registry Stack checkout root. Keep two terminals open: the first
+runs Registry Server and Registry Mint, while the second performs the refresh write.
+
+:::caution[Use synthetic data only]
+The quickstart creates local keys, tokens, and a disposable database under
+`products/registry-server/quickstart/.run/`. A later quickstart run replaces that directory.
+Do not put production data or credentials in this exercise.
+:::
+
+## Start the spatial registry
+
+In the first terminal, start the spatial quickstart:
+
+```sh
+products/registry-server/quickstart/run.sh --spatial
+```
+
+The first run builds Registry Server, `registry-serverctl`, and Registry Mint. It also downloads
+the pinned PostGIS image. Wait for these lines; the ports and absolute paths vary:
+
+```text
+Registry Server spatial service-site quickstart is ready.
+  Registry Server: http://127.0.0.1:<server-port>
+  Registry Mint:   http://127.0.0.1:<mint-port>
+  QGIS OAPIF URL:  http://127.0.0.1:<server-port>/v1/gis
+  Collection:      service-site.installation-map-reader
+  QGIS client id:  qgis-installation-central
+  QGIS secret:     <checkout>/products/registry-server/quickstart/.run/secrets/qgis-client-secret
+```
+
+Leave the first terminal running. The launcher has compiled, tested, packaged, and applied the
+synthetic service-site project. It has also seeded Point records and checked native JSON,
+GeoJSON, and the QGIS-compatible collection route. QGIS calls this provider OAPIF, short for
+Open Geospatial Consortium (OGC) API Features. Registry Server exposes only the compatibility
+routes named in this tutorial and publishes an empty conformance list.
+
+{/* Evidence: products/registry-server/quickstart/run.sh;
+    products/registry-server/quickstart/support/quickstart.py, spatial_smoke() and QGIS_CLIENT_ID;
+    products/registry-server/scripts/test_quickstart.py. */}
+
+## Set a bounded QGIS map view
+
+Start an empty QGIS project. Select the project coordinate reference system control in the
+bottom-right corner and choose **OGC:CRS84 (WGS 84 (CRS84))**.
+
+In the QGIS Locator, enter `go 100.55,13.75` and select the result in the current project
+coordinate reference system. Set the status-bar **Scale** to `1:5000`. Switch the coordinate
+display to **Extents** and confirm that the longitude span is less than `0.24` degrees and the
+latitude span is less than `0.19` degrees.
+
+The fixture grants exact maximum spans of `0.25` longitude degrees and `0.20` latitude degrees.
+The smaller view leaves room for QGIS decimal serialization and for canvas aspect-ratio changes.
+A world view exceeds the grant and Registry Server refuses the query.
+
+{/* Evidence: products/registry-server/acceptance/spatial-service-sites/registry.yaml;
+    crates/registry-server/src/query.rs, parse_bbox();
+    crates/registry-server/tests/postgres_spatial_read.rs,
+    real_postgres_spatial_bbox_reads_preserve_authority_and_geojson_audit(). */}
+
+## Store the installation credential in QGIS
+
+1. Open **Settings > Options > Authentication > Configurations**, then select
+   **Add a new authentication configuration**. Set a QGIS master password if prompted.
+2. Name the configuration `Registry Server spatial quickstart`. Set **Resource URL** to the
+   printed Registry Server origin without `/v1/gis`.
+3. Select **OAuth2 authentication**, **Grant flow: Client Credentials**, and
+   **Resource access token method: Header**.
+4. Set **Token URL** to `http://127.0.0.1:<mint-port>/token`, using the printed Registry Mint
+   port. Set **Client ID** to `qgis-installation-central`.
+5. Open the printed `qgis-client-secret` file in a local editor and copy its value into
+   **Client secret**. Leave **Scope** empty and leave **Persist between launches** off, then save
+   the configuration.
+
+The client secret stays in QGIS's authentication database. A saved QGIS project refers to the
+configuration by its `authcfg` identifier; the secret and bearer token do not belong in the
+layer URL or project file.
+
+:::caution[Keep the client secret local]
+Do not paste the secret into shell history, a QGIS connection URL, logs, screenshots, or support
+messages. The quickstart creates the secret file with owner-only permissions.
+:::
+
+{/* Evidence: products/registry-server/quickstart/run.sh;
+    products/registry-server/quickstart/support/quickstart.py,
+    _mint_client_secret_client() and _require_owner_only_regular();
+    products/registry-server/scripts/test_quickstart.py. */}
+
+## Add the protected Point layer
+
+1. Open **Layer > Data Source Manager > WFS / OGC API - Features**, then select **New**.
+2. Name the connection `Registry Server spatial quickstart`. Set **URL** to the printed
+   **QGIS OAPIF URL** and select the saved OAuth2 configuration under **Authentication**.
+3. Keep GET and feature paging enabled. Set **Page size** to `25`, then save the connection.
+4. Select the connection under **Server Connections** and select **Connect**.
+5. Select `service-site.installation-map-reader`, enable
+   **Only request features overlapping the view extent**, and select **Add**.
+
+QGIS draws Point features near the map center. Press `F6` to open the attribute table. The
+table includes `id`, `label`, `mapLabel`, `nativeId`, `serviceKind`, `siteCode`, and `zone`.
+
+The collection uses the installation client's `service_zones: central` claim as a row boundary.
+The layer is read-only, requests at most 25 records per page, and sends the visible extent as a
+bounding box. Registry Server applies the same scope, purpose, row, and field rules to the
+QGIS-compatible route as it applies to native reads.
+
+{/* Evidence: crates/registry-server/src/api/gis.rs, collections(), collection(), items(),
+    authorize_gis_collection() and parse_items_query();
+    products/registry-server/acceptance/spatial-service-sites/registry.yaml;
+    crates/registry-server/tests/postgres_spatial_read.rs,
+    real_postgres_spatial_bbox_reads_preserve_authority_and_geojson_audit(). */}
+
+## Pan without exceeding the grant
+
+Close the attribute table and use the QGIS pan tool to move a short distance east or west. Keep
+the status-bar extent within the longitude and latitude spans used in the earlier map setup.
+
+The visible Points move and reload. If QGIS reports `query.invalid`, reduce the scale value to
+`1:2500`, return to `100.55,13.75`, and reload the layer with `F5`.
+
+The `/v1/gis` surface supplies the route shape QGIS needs, including collection discovery,
+absolute paging links, and GeoJSON features. Its conformance list is empty because Registry
+Server does not claim full Open Geospatial Consortium API Features conformance.
+
+{/* Evidence: crates/registry-server/src/api/gis.rs, landing(), conformance(), api(), items()
+    and absolute_href(); crates/registry-server/tests/postgres_spatial_read.rs. */}
+
+## Import a Point through Registry Server
+
+Keep QGIS open. In the second terminal, validate and import the supplied refresh record:
+
+```sh
+spatial_run="$PWD/products/registry-server/quickstart/.run"
+spatial_input="$PWD/products/registry-server/acceptance/spatial-service-sites/fixtures/qgis-refresh-service-site.jsonl"
+target/debug/registry-serverctl data validate \
+  --package "$spatial_run/build/package" \
+  --entity service-site --profile service-site-admin --operation create \
+  --input "$spatial_input"
+
+spatial_refresh_token="$spatial_run/secrets/refresh-token-$(openssl rand -hex 8)"
+target/debug/mint token \
+  --url "$(cat "$spatial_run/mint-origin")/token" \
+  --client-id generic-quickstart \
+  --key "$spatial_run/keys/operator/signing-p256-private-jwk" |
+  python3 products/registry-server/quickstart/support/quickstart.py \
+    store-token --out "$spatial_refresh_token"
+target/debug/registry-serverctl data import \
+  --package "$spatial_run/build/package" \
+  --server-url "$(cat "$spatial_run/server-origin")" \
+  --access-token-file "$spatial_refresh_token" \
+  --entity service-site --profile service-site-admin --operation create \
+  --input "$spatial_input" \
+  --checkpoint "$spatial_run/qgis-refresh-checkpoint.json"
+```
+
+The validation and import summaries include these lines:
+
+```text
+data validate succeeded
+items: 1
+data import succeeded
+committed items: 1
+complete: true
+```
+
+Run this block once per disposable quickstart. The checkpoint records the committed chunk so an
+interrupted import can resume without sending an already completed chunk again. The operator
+token stays in an owner-only file and is never copied into QGIS.
+
+{/* Evidence: crates/registry-serverctl/src/lib.rs;
+    products/registry-server/quickstart/support/quickstart.py, store_token();
+    products/registry-server/acceptance/spatial-service-sites/fixtures/qgis-refresh-service-site.jsonl. */}
+
+## Refresh and confirm credential renewal
+
+Return to QGIS, select the layer, and press `F5`. Open the attribute table with `F6`. Use
+**Select features using an expression** with this expression:
+
+```text
+"siteCode" = 'SVC-QGIS-REFRESH'
+```
+
+Select the matching feature and move the selection to the top. QGIS shows one record with these
+values:
+
+```text
+label        QGIS refresh example
+mapLabel     SVC-QGIS-REFRESH
+serviceKind  clinic
+siteCode     SVC-QGIS-REFRESH
+zone         central
+```
+
+Wait at least 95 seconds, then pan within the bounded extent and press `F5` again. The protected
+layer reloads without asking you to paste a token. Spatial quickstart access tokens last 60
+seconds; QGIS uses the stored client credential to request a replacement from Registry Mint.
+
+{/* Evidence: products/registry-server/quickstart/support/quickstart.py,
+    SPATIAL_TOKEN_LIFETIME_SECONDS and _mint_client_secret_client();
+    products/registry-server/acceptance/spatial-service-sites/fixtures/qgis-refresh-service-site.jsonl. */}
+
+## Stop the local services
+
+Close the QGIS project. In the first terminal, press `Ctrl+C`. The launcher stops Registry Server,
+Registry Mint, and the disposable database container. The files under
+`products/registry-server/quickstart/.run/` remain until the next quickstart replaces them.
+
+If you do not plan to repeat the tutorial, remove the QGIS server connection and OAuth2
+configuration so the disposable client secret does not remain in your QGIS authentication
+database.
+
+{/* Evidence: products/registry-server/quickstart/run.sh, cleanup(). */}
+
+## What you built
+
+- A local Registry Server package with synthetic CRS84 Point records and PostGIS-backed bbox reads
+- A protected QGIS layer using an OAuth2 client credential stored outside the project file
+- A bounded provider-side map query with page size 25 and authorized flat attributes
+- An authenticated API write that appeared after QGIS Refresh
+- A protected layer reload after the short-lived access token expired
+
+## Next
+
+- [Create and query your first registry](/tutorials/first-registry-server/) covers Registry Server records,
+  updates, refusals, and modules without the GIS client.
+- [Configure your registry](/configure/registry-server/) explains how to replace the supplied
+  fixture with your own entities and access profiles.
+- [Registry Server configuration reference](/reference/registry-server-configuration/) lists
+  the generated authoring and runtime configuration contracts.
+- [QGIS authentication](https://docs.qgis.org/4.2/en/docs/user_manual/auth_system/auth_overview.html)
+  describes the client credential store used by this tutorial.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| The first run takes several minutes on Apple Silicon | The pinned PostGIS image uses `linux/amd64`, so Docker Desktop may run it under emulation | Leave the launcher running; later runs reuse the downloaded image and compiled binaries |
+| QGIS reports `query.invalid` while adding or panning the layer | The visible extent exceeds the profile's exact bbox span grant, often after QGIS adjusts the canvas aspect ratio | Return to `100.55,13.75`, set scale to `1:2500`, confirm the displayed spans are less than `0.24` and `0.19`, then press `F5` |
+| QGIS asks for credentials or reports an OAuth2 error | The token URL, client ID, secret, or authentication selection does not match the current quickstart | Confirm the printed ports, use client ID `qgis-installation-central`, copy the current owner-only secret, leave Scope empty, and keep the first terminal running |
+| The connection opens but no Point appears | The project starts at a world extent or outside the synthetic fixture area | Set project CRS to `OGC:CRS84`, locate `100.55,13.75`, reduce the scale, and reload |
+| Refresh does not add `SVC-QGIS-REFRESH` | The import did not complete, QGIS still has an attribute filter, or the layer cache has not reloaded | Confirm `complete: true`, clear table filters, select the layer, and press `F5` |

@@ -75,8 +75,23 @@ path = "tests/postgres_migration.rs"
 required-features = ["postgres-test", "tooling"]
 
 [[test]]
+name = "postgres_spatial_migration"
+path = "tests/postgres_spatial_migration.rs"
+required-features = ["postgres-test", "tooling"]
+
+[[test]]
 name = "postgres_read"
 path = "tests/postgres_read.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_spatial_storage"
+path = "tests/postgres_spatial_storage.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_spatial_read"
+path = "tests/postgres_spatial_read.rs"
 required-features = ["postgres-test"]
 
 [[test]]

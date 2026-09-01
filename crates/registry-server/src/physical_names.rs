@@ -77,3 +77,41 @@ pub(crate) fn hex_prefix(bytes: &[u8], count: usize) -> String {
     }
     output
 }
+
+pub(crate) fn spatial_geometry_column_name(entity_id: &str, field_id: &str) -> String {
+    spatial_name(
+        "spgeom",
+        "registry-server/spatial-geometry-column/v1",
+        entity_id,
+        field_id,
+    )
+}
+
+pub(crate) fn spatial_geometry_index_name(entity_id: &str, field_id: &str) -> String {
+    spatial_name(
+        "spgix",
+        "registry-server/spatial-geometry-index/v1",
+        entity_id,
+        field_id,
+    )
+}
+
+pub(crate) fn spatial_candidate_view_name(entity_id: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"registry-server/spatial-candidate-view/v1");
+    hasher.update((entity_id.len() as u64).to_be_bytes());
+    hasher.update(entity_id.as_bytes());
+    let digest = hasher.finalize();
+    format!("rs_spcand_{}", hex_prefix(&digest, 8))
+}
+
+fn spatial_name(kind: &str, domain: &str, entity_id: &str, field_id: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(domain.as_bytes());
+    hasher.update((entity_id.len() as u64).to_be_bytes());
+    hasher.update(entity_id.as_bytes());
+    hasher.update((field_id.len() as u64).to_be_bytes());
+    hasher.update(field_id.as_bytes());
+    let digest = hasher.finalize();
+    format!("rs_{kind}_{}", hex_prefix(&digest, 8))
+}

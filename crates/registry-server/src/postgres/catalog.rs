@@ -5,14 +5,14 @@ use std::{collections::BTreeSet, fmt::Write};
 use sha2::{Digest, Sha256};
 use tokio_postgres::GenericClient;
 
-use crate::generated_ddl::{PolicyCommand, TablePrivilege};
+use crate::generated_ddl::{DdlObjectOwner, DdlPolicyRole, PolicyCommand, TablePrivilege};
 use crate::model::CompiledRegistry;
 
 #[cfg(feature = "postgres-test")]
 use super::schema::install_empty_history_baseline_for_compiled_registry;
 use super::{
-    migration_ledger::install_migration_ledger, verify_btree_gist, PostgresKernelError, Result,
-    SqlIdentifier,
+    migration_ledger::install_migration_ledger, spatial_bbox_role, verify_btree_gist,
+    PostgresKernelError, Result, SqlIdentifier,
 };
 
 const MANAGED_SCHEMAS: &[&str] = &[
@@ -60,7 +60,9 @@ impl ManagedObjectKind {
 struct ManagedObject {
     kind: ManagedObjectKind,
     name: String,
+    owner: DdlObjectOwner,
     runtime_privileges: BTreeSet<String>,
+    spatial_bbox_privileges: BTreeSet<String>,
     row_security: Option<(bool, bool)>,
 }
 
@@ -78,8 +80,17 @@ struct ManagedPolicy {
     table: String,
     name: String,
     command: String,
+    role: ManagedPolicyRole,
     has_using: bool,
     has_check: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+enum ManagedPolicyRole {
+    #[default]
+    Public,
+    Runtime,
+    SpatialBbox,
 }
 
 /// Exact managed PostgreSQL inventory accepted by catalog verification.
@@ -102,12 +113,14 @@ impl ExpectedManagedCatalog {
         catalog.table(
             "registry_data.kernel_records",
             ["DELETE", "INSERT", "SELECT", "UPDATE"],
+            std::iter::empty::<&str>(),
             Some((true, true)),
         );
         catalog.policies.insert(ManagedPolicy {
             table: "registry_data.kernel_records".to_owned(),
             name: "registry_authority_policy".to_owned(),
             command: "*".to_owned(),
+            role: ManagedPolicyRole::Public,
             has_using: true,
             has_check: true,
         });
@@ -118,6 +131,10 @@ impl ExpectedManagedCatalog {
     #[must_use]
     pub fn compiled(registry: &CompiledRegistry) -> Self {
         let mut catalog = Self::base();
+        if registry.ddl().requires_postgis {
+            catalog.grant_schema_spatial_bbox("registry_data");
+            catalog.grant_schema_spatial_bbox("registry_context");
+        }
         for (name, privileges) in [
             (
                 "registry_internal.registry_revisions",
@@ -168,11 +185,17 @@ impl ExpectedManagedCatalog {
                 &["SELECT"][..],
             ),
         ] {
-            catalog.table(name, privileges.iter().copied(), Some((false, false)));
+            catalog.table(
+                name,
+                privileges.iter().copied(),
+                std::iter::empty::<&str>(),
+                Some((false, false)),
+            );
         }
         catalog.table(
             "registry_internal.registry_commit_head",
             ["SELECT"],
+            std::iter::empty::<&str>(),
             Some((false, false)),
         );
         // Runtime workers scrub retained webhook payload bytes after delivery
@@ -203,6 +226,7 @@ impl ExpectedManagedCatalog {
             catalog.table(
                 &format!("registry_internal.{table}"),
                 privileges.iter().copied(),
+                std::iter::empty::<&str>(),
                 Some((false, false)),
             );
         }
@@ -216,6 +240,11 @@ impl ExpectedManagedCatalog {
                     .iter()
                     .copied()
                     .map(TablePrivilege::as_sql),
+                table
+                    .spatial_bbox_privileges
+                    .iter()
+                    .copied()
+                    .map(TablePrivilege::as_sql),
                 Some((true, true)),
             );
             for policy in &table.policies {
@@ -223,6 +252,7 @@ impl ExpectedManagedCatalog {
                     table: name.clone(),
                     name: policy.name.clone(),
                     command: policy_command_code(policy.command).to_owned(),
+                    role: managed_policy_role(policy.applies_to),
                     has_using: policy.using_expression.is_some(),
                     has_check: policy.check_expression.is_some(),
                 });
@@ -231,10 +261,12 @@ impl ExpectedManagedCatalog {
         for view in &registry.ddl().views {
             catalog.view(
                 &format!("{}.{}", view.schema, view.name),
+                view.owner,
                 view.runtime_privileges
                     .iter()
                     .copied()
                     .map(TablePrivilege::as_sql),
+                std::iter::empty::<&str>(),
             );
         }
         for function in &registry.ddl().functions {
@@ -244,6 +276,7 @@ impl ExpectedManagedCatalog {
                     function.schema, function.name, function.arguments
                 ),
                 function.runtime_execute.then_some("EXECUTE"),
+                function.spatial_bbox_execute.then_some("EXECUTE"),
             );
         }
         catalog
@@ -261,16 +294,19 @@ impl ExpectedManagedCatalog {
         catalog.table(
             "registry_internal.registry_state",
             ["SELECT"],
+            std::iter::empty::<&str>(),
             Some((false, false)),
         );
         catalog.table(
             "registry_internal.registry_migrations",
-            [],
+            std::iter::empty::<&str>(),
+            std::iter::empty::<&str>(),
             Some((false, false)),
         );
         catalog.table(
             "registry_internal.registry_migration_steps",
-            [],
+            std::iter::empty::<&str>(),
+            std::iter::empty::<&str>(),
             Some((false, false)),
         );
         catalog
@@ -280,48 +316,100 @@ impl ExpectedManagedCatalog {
         self.objects.insert(ManagedObject {
             kind: ManagedObjectKind::Schema,
             name: name.to_owned(),
+            owner: DdlObjectOwner::Migration,
             runtime_privileges: BTreeSet::from(["USAGE".to_owned()]),
+            spatial_bbox_privileges: BTreeSet::new(),
             row_security: None,
         });
+    }
+
+    fn grant_schema_spatial_bbox(&mut self, name: &str) {
+        let Some(existing) = self
+            .objects
+            .iter()
+            .find(|object| object.kind == ManagedObjectKind::Schema && object.name == name)
+            .cloned()
+        else {
+            return;
+        };
+        let mut object = self
+            .objects
+            .take(&existing)
+            .expect("schema object from exact catalog is removable");
+        object.spatial_bbox_privileges.insert("USAGE".to_owned());
+        self.objects.insert(object);
     }
 
     fn table(
         &mut self,
         name: &str,
-        privileges: impl IntoIterator<Item = &'static str>,
+        runtime_privileges: impl IntoIterator<Item = impl Into<String>>,
+        spatial_bbox_privileges: impl IntoIterator<Item = impl Into<String>>,
         row_security: Option<(bool, bool)>,
     ) {
         self.objects.insert(ManagedObject {
             kind: ManagedObjectKind::Table,
             name: name.to_owned(),
-            runtime_privileges: privileges.into_iter().map(str::to_owned).collect(),
+            owner: DdlObjectOwner::Migration,
+            runtime_privileges: runtime_privileges.into_iter().map(Into::into).collect(),
+            spatial_bbox_privileges: spatial_bbox_privileges
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             row_security,
         });
     }
 
-    fn sequence(&mut self, name: &str, privileges: impl IntoIterator<Item = &'static str>) {
+    fn sequence(
+        &mut self,
+        name: &str,
+        runtime_privileges: impl IntoIterator<Item = impl Into<String>>,
+    ) {
         self.objects.insert(ManagedObject {
             kind: ManagedObjectKind::Sequence,
             name: name.to_owned(),
-            runtime_privileges: privileges.into_iter().map(str::to_owned).collect(),
+            owner: DdlObjectOwner::Migration,
+            runtime_privileges: runtime_privileges.into_iter().map(Into::into).collect(),
+            spatial_bbox_privileges: BTreeSet::new(),
             row_security: None,
         });
     }
 
-    fn view(&mut self, name: &str, privileges: impl IntoIterator<Item = &'static str>) {
+    fn view(
+        &mut self,
+        name: &str,
+        owner: DdlObjectOwner,
+        runtime_privileges: impl IntoIterator<Item = impl Into<String>>,
+        spatial_bbox_privileges: impl IntoIterator<Item = impl Into<String>>,
+    ) {
         self.objects.insert(ManagedObject {
             kind: ManagedObjectKind::View,
             name: name.to_owned(),
-            runtime_privileges: privileges.into_iter().map(str::to_owned).collect(),
+            owner,
+            runtime_privileges: runtime_privileges.into_iter().map(Into::into).collect(),
+            spatial_bbox_privileges: spatial_bbox_privileges
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             row_security: None,
         });
     }
 
-    fn function(&mut self, name: &str, privilege: Option<&'static str>) {
+    fn function(
+        &mut self,
+        name: &str,
+        runtime_privilege: Option<&str>,
+        spatial_bbox_privilege: Option<&str>,
+    ) {
         self.objects.insert(ManagedObject {
             kind: ManagedObjectKind::Function,
             name: name.to_owned(),
-            runtime_privileges: privilege.into_iter().map(str::to_owned).collect(),
+            owner: DdlObjectOwner::Migration,
+            runtime_privileges: runtime_privilege.into_iter().map(str::to_owned).collect(),
+            spatial_bbox_privileges: spatial_bbox_privilege
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
             row_security: None,
         });
     }
@@ -342,12 +430,19 @@ impl ExpectedManagedCatalog {
         });
     }
 }
-
 fn policy_command_code(command: PolicyCommand) -> &'static str {
     match command {
         PolicyCommand::Select => "r",
         PolicyCommand::Insert => "a",
         PolicyCommand::Update => "w",
+    }
+}
+
+fn managed_policy_role(role: DdlPolicyRole) -> ManagedPolicyRole {
+    match role {
+        DdlPolicyRole::Public => ManagedPolicyRole::Public,
+        DdlPolicyRole::Runtime => ManagedPolicyRole::Runtime,
+        DdlPolicyRole::SpatialBbox => ManagedPolicyRole::SpatialBbox,
     }
 }
 
@@ -756,11 +851,12 @@ pub(crate) async fn verify_managed_catalog(
     migration_role: &SqlIdentifier,
     runtime_role: &SqlIdentifier,
 ) -> Result<()> {
-    verify_managed_owners_for_catalog(client, migration_role, expected_catalog).await?;
+    verify_managed_owners_for_catalog(client, migration_role, runtime_role, expected_catalog)
+        .await?;
     verify_closed_ambient_catalog(client).await?;
     verify_exact_acl(client, runtime_role, expected_catalog).await?;
     verify_row_security(client, expected_catalog).await?;
-    verify_policies(client, expected_catalog).await?;
+    verify_policies(client, expected_catalog, runtime_role).await?;
     let actual = fingerprint_catalog(
         client,
         runtime_role,
@@ -817,7 +913,7 @@ async fn verify_closed_ambient_catalog(client: &impl GenericClient) -> Result<()
                      WHERE n.nspname = ANY($1::text[])
                        AND NOT (
                            n.nspname = 'registry_context'
-                           AND p.proname = 'evaluation_date'
+                           AND p.proname IN ('evaluation_date', 'spatial_bbox_geometry')
                            AND pg_catalog.pg_get_function_identity_arguments(p.oid) = ''
                        )
                  ),
@@ -849,6 +945,7 @@ async fn verify_closed_ambient_catalog(client: &impl GenericClient) -> Result<()
 async fn verify_managed_owners_for_catalog(
     client: &impl GenericClient,
     migration_role: &SqlIdentifier,
+    runtime_role: &SqlIdentifier,
     expected_catalog: &ExpectedManagedCatalog,
 ) -> Result<()> {
     // PostgreSQL otherwise resolves this UNION column to the 63-byte `name`
@@ -883,11 +980,16 @@ async fn verify_managed_owners_for_catalog(
         .into_iter()
         .map(|row| (row.get(0), row.get(1), row.get(2)))
         .collect();
-    let owner = migration_role.as_str().to_owned();
+    let migration_owner = migration_role.as_str().to_owned();
+    let spatial_bbox_owner = spatial_bbox_role(runtime_role).as_str().to_owned();
     let expected = expected_catalog
         .objects
         .iter()
         .map(|object| {
+            let owner = match object.owner {
+                DdlObjectOwner::Migration => &migration_owner,
+                DdlObjectOwner::SpatialBbox => &spatial_bbox_owner,
+            };
             (
                 object.kind.as_str().to_owned(),
                 object.name.clone(),
@@ -940,6 +1042,7 @@ async fn verify_row_security(
 async fn verify_policies(
     client: &impl GenericClient,
     expected_catalog: &ExpectedManagedCatalog,
+    runtime_role: &SqlIdentifier,
 ) -> Result<()> {
     let rows = client
         .query(
@@ -947,28 +1050,50 @@ async fn verify_policies(
                     p.polname,
                     p.polcmd::text,
                     p.polpermissive,
-                    p.polroles = ARRAY[0::oid],
+                    CASE
+                        WHEN p.polroles = ARRAY[0::oid] THEN 'public'
+                        WHEN p.polroles = ARRAY[runtime.oid] THEN 'runtime'
+                        WHEN p.polroles = ARRAY[bbox.oid] THEN 'spatial_bbox'
+                        ELSE 'other'
+                    END,
                     p.polqual IS NOT NULL,
                     p.polwithcheck IS NOT NULL
              FROM pg_catalog.pg_policy p
              JOIN pg_catalog.pg_class c ON c.oid = p.polrelid
              JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+             LEFT JOIN pg_catalog.pg_roles runtime ON runtime.rolname = $2
+             LEFT JOIN pg_catalog.pg_roles bbox ON bbox.rolname = $3
              WHERE n.nspname = ANY($1::text[])",
-            &[&MANAGED_SCHEMAS],
+            &[
+                &MANAGED_SCHEMAS,
+                &runtime_role.as_str(),
+                &spatial_bbox_role(runtime_role).as_str(),
+            ],
         )
         .await?;
     let actual: BTreeSet<ManagedPolicy> = rows
         .into_iter()
         .map(|row| {
-            if !row.get::<_, bool>(3) || !row.get::<_, bool>(4) {
+            if !row.get::<_, bool>(3) {
                 return Err(PostgresKernelError::CatalogInvariant(
                     "managed policy mode differs from the closed catalog",
                 ));
             }
+            let role = match row.get::<_, String>(4).as_str() {
+                "public" => ManagedPolicyRole::Public,
+                "runtime" => ManagedPolicyRole::Runtime,
+                "spatial_bbox" => ManagedPolicyRole::SpatialBbox,
+                _ => {
+                    return Err(PostgresKernelError::CatalogInvariant(
+                        "managed policy role differs from the closed catalog",
+                    ));
+                }
+            };
             Ok(ManagedPolicy {
                 table: row.get(0),
                 name: row.get(1),
                 command: row.get(2),
+                role,
                 has_using: row.get(5),
                 has_check: row.get(6),
             })
@@ -1021,6 +1146,8 @@ async fn query_categorized_acl(
                  WHERE n.nspname = ANY($2::text[])
              ), runtime AS (
                  SELECT oid FROM pg_catalog.pg_roles WHERE rolname = $1
+             ), spatial_bbox AS (
+                 SELECT oid FROM pg_catalog.pg_roles WHERE rolname = $3
              )
              SELECT o.object_kind,
                     o.object_name,
@@ -1028,15 +1155,21 @@ async fn query_categorized_acl(
                         WHEN a.grantee = 0 THEN 'public'
                         WHEN a.grantee = o.owner_oid THEN 'owner'
                         WHEN a.grantee = runtime.oid THEN 'runtime'
+                        WHEN a.grantee = spatial_bbox.oid THEN 'spatial_bbox'
                         ELSE 'other'
                     END,
                     a.privilege_type,
                     a.is_grantable
              FROM managed_objects o
              CROSS JOIN runtime
+             LEFT JOIN spatial_bbox ON true
              CROSS JOIN LATERAL pg_catalog.aclexplode(o.acl) a
              ORDER BY 1, 2, 3, 4, 5",
-            &[&runtime_role.as_str(), &MANAGED_SCHEMAS],
+            &[
+                &runtime_role.as_str(),
+                &MANAGED_SCHEMAS,
+                &spatial_bbox_role(runtime_role).as_str(),
+            ],
         )
         .await?)
 }
@@ -1075,6 +1208,15 @@ async fn verify_exact_acl(
                 object.kind.as_str().to_owned(),
                 object.name.clone(),
                 "runtime".to_owned(),
+                privilege.clone(),
+                false,
+            ));
+        }
+        for privilege in &object.spatial_bbox_privileges {
+            expected.insert((
+                object.kind.as_str().to_owned(),
+                object.name.clone(),
+                "spatial_bbox".to_owned(),
                 privilege.clone(),
                 false,
             ));
@@ -1186,11 +1328,12 @@ pub async fn managed_schema_fingerprint(
     expected_catalog: &ExpectedManagedCatalog,
 ) -> Result<String> {
     let migration_role = current_role(client).await?;
-    verify_managed_owners_for_catalog(client, &migration_role, expected_catalog).await?;
+    verify_managed_owners_for_catalog(client, &migration_role, runtime_role, expected_catalog)
+        .await?;
     verify_closed_ambient_catalog(client).await?;
     verify_exact_acl(client, runtime_role, expected_catalog).await?;
     verify_row_security(client, expected_catalog).await?;
-    verify_policies(client, expected_catalog).await?;
+    verify_policies(client, expected_catalog, runtime_role).await?;
     fingerprint_catalog(
         client,
         runtime_role,

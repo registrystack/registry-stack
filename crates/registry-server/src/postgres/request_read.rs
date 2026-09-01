@@ -1476,6 +1476,10 @@ mod tests {
             method: HttpMethod::Get,
             context: AuthorizedRequestContext::new(None, None, profile.to_owned(), Vec::new()),
             selected_fields: BTreeSet::new(),
+            representation: crate::cursor::CursorRepresentation::Json,
+            adapter: crate::cursor::CursorAdapter::Native,
+            adapter_origin: None,
+            geojson_next_link_prefix: None,
             kind: RecordReadKind::Get {
                 id: "00000000-0000-4000-8000-000000000001".to_owned(),
             },

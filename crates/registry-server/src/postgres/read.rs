@@ -19,7 +19,7 @@ use uuid::Uuid;
 use crate::api::{
     AuthorizedRequestContext, HeldReadResponse, LookupSelectorValue, ReadFilterExpr,
     ReadFilterOperator, ReadFilterPredicate, ReadLogicalOp, ReadOrderClause, ReadProjectionField,
-    ReadServiceError, RecordReadKind, RecordReadRequest, RecordReadService,
+    ReadServiceError, ReadSpatialQuery, RecordReadKind, RecordReadRequest, RecordReadService,
     RowBoundaryOperator as ApiRowBoundaryOperator, ServiceFuture,
 };
 use crate::audit::{
@@ -28,8 +28,9 @@ use crate::audit::{
 };
 use crate::contract::{FieldTypeSource, Operation};
 use crate::cursor::{
-    now_unix_seconds, CursorCodec, CursorContinuation, CursorFilterExpr, CursorFilterOperator,
-    CursorLogicalOp, CursorOrderClause, CursorProjectionField, CursorQueryScope,
+    now_unix_seconds, CursorAdapter, CursorBboxQuery, CursorCodec, CursorContinuation,
+    CursorFilterExpr, CursorFilterOperator, CursorLogicalOp, CursorOrderClause,
+    CursorProjectionField, CursorQueryScope, CursorRepresentation, CursorSpatialQuery,
 };
 use crate::model::{
     request_query_field_api_name, request_query_field_type, CompiledEntity, CompiledQueryKind,
@@ -41,11 +42,12 @@ use crate::mutation::strong_record_etag;
 use crate::query_binding::{CursorBindingQuery, CursorBindingReferences};
 
 use super::{
-    begin_record_transaction, validate_field_value, ClaimContext, ExpectedRegistryIdentity,
-    RegistryLockKey, RowBoundaryContext, RuntimePool,
+    begin_record_transaction, install_spatial_bbox_context, validate_field_value, ClaimContext,
+    ExpectedRegistryIdentity, RegistryLockKey, RowBoundaryContext, RuntimePool, SpatialBboxContext,
 };
 
 const MAX_SQL_LIMIT: usize = 1000;
+const MAX_SPATIAL_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 
 /// Runtime PostgreSQL implementation of the read-only record surface.
 #[derive(Clone)]
@@ -58,6 +60,8 @@ pub struct PostgresRecordReadService {
     audit_profile: AuditProfile,
     cursors: Arc<CursorCodec>,
     fault: ReadFaultControl,
+    #[cfg(feature = "postgres-test")]
+    query_plan: Option<Arc<std::sync::Mutex<Vec<Value>>>>,
 }
 
 impl PostgresRecordReadService {
@@ -80,6 +84,8 @@ impl PostgresRecordReadService {
             audit_profile,
             cursors,
             fault: ReadFaultControl::Disabled,
+            #[cfg(feature = "postgres-test")]
+            query_plan: None,
         }
     }
 
@@ -88,6 +94,19 @@ impl PostgresRecordReadService {
     #[doc(hidden)]
     pub fn with_fault_for_test(mut self, fault: ReadFaultPoint) -> Self {
         self.fault = ReadFaultControl::At(fault);
+        self
+    }
+
+    /// Observe the actual list plan under its runtime role and transaction
+    /// context. Only node/index names and spatial-index use leave the probe.
+    #[cfg(feature = "postgres-test")]
+    #[must_use]
+    #[doc(hidden)]
+    pub fn with_query_plan_for_test(
+        mut self,
+        query_plan: Arc<std::sync::Mutex<Vec<Value>>>,
+    ) -> Self {
+        self.query_plan = Some(query_plan);
         self
     }
 
@@ -192,8 +211,33 @@ impl PostgresRecordReadService {
                 return Err(error);
             }
         };
-        let mut held = ReadResult::from_materialized(plan.operation, materialized)?;
-        if plan.operation == Operation::Get && held.response.is_some() {
+        let mut held = match ReadResult::from_materialized(&request, &plan, materialized)
+            .and_then(|result| result.enforce_spatial_response_budget(&request))
+        {
+            Ok(held) => held,
+            Err(error) => {
+                let _ = self
+                    .record_read_terminal_audit(
+                        &mut client,
+                        &claims,
+                        &request,
+                        self.terminal(
+                            &request,
+                            &claims,
+                            &plan,
+                            TerminalAuditOutcome::Refused,
+                            0,
+                            None,
+                        )?,
+                    )
+                    .await;
+                return Err(error);
+            }
+        };
+        if plan.operation == Operation::Get
+            && request.representation == CursorRepresentation::Json
+            && held.response.is_some()
+        {
             let response = held.response.take().ok_or(ReadServiceError::Unavailable)?;
             let record_id = target_record.ok_or(ReadServiceError::Unavailable)?;
             let record_revision = held.record_revision.ok_or(ReadServiceError::Unavailable)?;
@@ -284,6 +328,7 @@ impl PostgresRecordReadService {
         .map_err(|_| ReadServiceError::Unavailable)?;
         let query = request_query(&request.kind);
         install_evaluation_date(transaction.transaction(), query).await?;
+        install_spatial_query_context(transaction.transaction(), query).await?;
         if let RecordReadKind::Relationship {
             root_id, path_id, ..
         } = &request.kind
@@ -312,7 +357,7 @@ impl PostgresRecordReadService {
                 .ok_or(ReadServiceError::Unavailable)?;
             ReadRelations::relationship(&plan.source_entity, through, &plan.entity, path, root_id)?
         } else {
-            ReadRelations::collection(&plan.entity)?
+            ReadRelations::collection(&plan.entity, query, &selected_fields)?
         };
         let projection = projection(&plan.entity, &relations, &selected_fields, query)?;
         let limit =
@@ -366,6 +411,19 @@ impl PostgresRecordReadService {
                     .iter()
                     .map(|value| &**value as &(dyn ToSql + Sync))
                     .collect::<Vec<_>>();
+                #[cfg(feature = "postgres-test")]
+                if let Some(probe) = &self.query_plan {
+                    let explained: Value = transaction
+                        .transaction()
+                        .query_one(&format!("EXPLAIN (FORMAT JSON, COSTS OFF) {sql}"), &refs)
+                        .await
+                        .map_err(|_| ReadServiceError::Unavailable)?
+                        .get(0);
+                    let mut nodes = probe.lock().map_err(|_| ReadServiceError::Unavailable)?;
+                    if let Some(plan) = explained.get(0).and_then(|entry| entry.get("Plan")) {
+                        summarize_query_plan_for_test(plan, &mut nodes);
+                    }
+                }
                 transaction
                     .transaction()
                     .query(&sql, &refs)
@@ -567,6 +625,24 @@ impl PostgresRecordReadService {
     }
 }
 
+#[cfg(feature = "postgres-test")]
+fn summarize_query_plan_for_test(plan: &Value, nodes: &mut Vec<Value>) {
+    let spatial_index_condition = plan
+        .get("Index Cond")
+        .and_then(Value::as_str)
+        .is_some_and(|condition| condition.contains("rs_spgeom_") && condition.contains("&&"));
+    nodes.push(json!({
+        "nodeType": plan.get("Node Type"),
+        "indexName": plan.get("Index Name"),
+        "spatialIndexCondition": spatial_index_condition,
+    }));
+    if let Some(children) = plan.get("Plans").and_then(Value::as_array) {
+        for child in children {
+            summarize_query_plan_for_test(child, nodes);
+        }
+    }
+}
+
 impl RecordReadService for PostgresRecordReadService {
     fn get(
         &self,
@@ -640,6 +716,23 @@ struct ReadResult {
 }
 
 impl ReadResult {
+    fn enforce_spatial_response_budget(
+        self,
+        request: &RecordReadRequest,
+    ) -> Result<Self, ReadServiceError> {
+        let bounded = request.representation == CursorRepresentation::GeoJson
+            || request_query(&request.kind).is_some_and(|query| query.spatial.is_some());
+        if bounded
+            && self
+                .response
+                .as_ref()
+                .is_some_and(|response| response.body().len() > MAX_SPATIAL_RESPONSE_BYTES)
+        {
+            return Err(ReadServiceError::Unavailable);
+        }
+        Ok(self)
+    }
+
     fn empty_get() -> Self {
         Self {
             response: None,
@@ -649,11 +742,12 @@ impl ReadResult {
     }
 
     fn from_materialized(
-        operation: Operation,
+        request: &RecordReadRequest,
+        plan: &ReadPlan,
         materialized: MaterializedRead,
     ) -> Result<Self, ReadServiceError> {
-        match operation {
-            Operation::Get => {
+        match (plan.operation, request.representation) {
+            (Operation::Get, CursorRepresentation::Json) => {
                 let Some(record) = materialized.rows.into_iter().next() else {
                     return Ok(Self::empty_get());
                 };
@@ -666,7 +760,21 @@ impl ReadResult {
                     record_revision: Some(revision),
                 })
             }
-            Operation::List => {
+            (Operation::Get, CursorRepresentation::GeoJson) => {
+                let Some(record) = materialized.rows.into_iter().next() else {
+                    return Ok(Self::empty_get());
+                };
+                let revision =
+                    i64::try_from(record.revision).map_err(|_| ReadServiceError::Unavailable)?;
+                let response =
+                    HeldReadResponse::from_geojson(&feature_value(&plan.entity, record)?)?;
+                Ok(Self {
+                    response: Some(response),
+                    result_count: 1,
+                    record_revision: Some(revision),
+                })
+            }
+            (Operation::List, CursorRepresentation::Json) => {
                 let result_count = materialized.rows.len();
                 let mut body = json!({
                     "items": materialized.rows,
@@ -682,7 +790,38 @@ impl ReadResult {
                     record_revision: None,
                 })
             }
-            Operation::Lookup => {
+            (Operation::List, CursorRepresentation::GeoJson) => {
+                let result_count = materialized.rows.len();
+                let next_cursor = materialized.next_cursor;
+                let mut registry = json!({
+                    "pageInfo": {"nextCursor": next_cursor},
+                });
+                if let Some(count) = materialized.total_count {
+                    registry["count"] = json!(count);
+                }
+                let links = geojson_links(request, next_cursor.as_deref())?;
+                let features = materialized
+                    .rows
+                    .into_iter()
+                    .map(|record| feature_value(&plan.entity, record))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let mut body = json!({
+                    "type": "FeatureCollection",
+                    "features": features,
+                    "numberReturned": result_count,
+                    "registry": registry,
+                });
+                if let Some(links) = links {
+                    body["links"] = links;
+                }
+                let response = HeldReadResponse::from_geojson(&body)?;
+                Ok(Self {
+                    response: Some(response),
+                    result_count,
+                    record_revision: None,
+                })
+            }
+            (Operation::Lookup, CursorRepresentation::Json) => {
                 let mut rows = materialized.rows.into_iter();
                 let Some(record) = rows.next() else {
                     return Ok(Self::empty_get());
@@ -720,6 +859,68 @@ pub(super) struct RecordEnvelope {
     pub(super) request: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) request_presence: Option<Value>,
+}
+
+fn feature_value(
+    entity: &CompiledEntity,
+    record: RecordEnvelope,
+) -> Result<Value, ReadServiceError> {
+    let geometry_field = entity
+        .geojson
+        .as_ref()
+        .ok_or(ReadServiceError::Unavailable)?
+        .geometry_field
+        .clone();
+    let geometry_api_name =
+        compiled_api_name(entity, &geometry_field).ok_or(ReadServiceError::Unavailable)?;
+    let mut properties = record.data;
+    let geometry = match properties.remove(geometry_api_name) {
+        Some(Value::Null) | None => Value::Null,
+        Some(value) => {
+            let field = entity
+                .fields
+                .get(&geometry_field)
+                .ok_or(ReadServiceError::Unavailable)?;
+            let FieldTypeSource::Crs84Point { precision, bbox } = &field.field_type else {
+                return Err(ReadServiceError::Unavailable);
+            };
+            if !crate::contract::valid_crs84_point(&value, *precision, bbox.as_ref()) {
+                return Err(ReadServiceError::Unavailable);
+            }
+            value
+        }
+    };
+    Ok(json!({
+        "type": "Feature",
+        "id": record.id,
+        "geometry": geometry,
+        "properties": properties,
+        "registry": {"revision": record.revision},
+    }))
+}
+
+fn geojson_links(
+    request: &RecordReadRequest,
+    next_cursor: Option<&str>,
+) -> Result<Option<Value>, ReadServiceError> {
+    let Some(next_cursor) = next_cursor else {
+        return Ok(None);
+    };
+    let Some(prefix) = request.geojson_next_link_prefix.as_deref() else {
+        return Ok(None);
+    };
+    if request.adapter != CursorAdapter::Gis
+        || prefix.is_empty()
+        || prefix.len() > 2048
+        || prefix.bytes().any(|byte| byte.is_ascii_control())
+    {
+        return Err(ReadServiceError::Unavailable);
+    }
+    Ok(Some(json!([{
+        "rel": "next",
+        "type": "application/geo+json",
+        "href": format!("{prefix}{next_cursor}"),
+    }])))
 }
 
 fn request_operation(kind: &RecordReadKind) -> Operation {
@@ -950,6 +1151,7 @@ impl ReadPlan {
                 && request_query(&request.kind)
                     .and_then(|query| usize::from(query.page_size).checked_add(1))
                     != Some(request.maximum_records)
+            || !valid_read_representation_request(request)
             || !valid_entity_inventory(registry, source_entity)
             || !valid_entity_inventory(registry, entity)
             || (read_path.is_none() && !request.selected_fields.is_subset(&profile.readable_fields))
@@ -969,6 +1171,43 @@ impl ReadPlan {
             through_entity,
         })
     }
+}
+
+fn valid_read_representation_request(request: &RecordReadRequest) -> bool {
+    match (
+        request_operation(&request.kind),
+        request.representation,
+        request.adapter,
+        request.adapter_origin.as_ref(),
+        request.geojson_next_link_prefix.as_ref(),
+    ) {
+        (
+            Operation::Get | Operation::List,
+            CursorRepresentation::Json,
+            CursorAdapter::Native,
+            None,
+            None,
+        ) => true,
+        (
+            Operation::Get | Operation::List,
+            CursorRepresentation::GeoJson,
+            CursorAdapter::Native,
+            None,
+            None,
+        ) => true,
+        (
+            Operation::Get | Operation::List,
+            CursorRepresentation::GeoJson,
+            CursorAdapter::Gis,
+            Some(origin),
+            Some(prefix),
+        ) => valid_next_link_prefix(origin) && valid_next_link_prefix(prefix),
+        _ => false,
+    }
+}
+
+fn valid_next_link_prefix(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 2048 && !value.bytes().any(|byte| byte.is_ascii_control())
 }
 
 fn valid_entity_inventory(registry: &CompiledRegistry, entity: &CompiledEntity) -> bool {
@@ -1008,6 +1247,9 @@ fn validate_compiled_query_request(
         || query.cursor_binding.page_size != query.page_size
         || query.cursor_binding.include_count != query.include_count
         || query.cursor_binding.temporal_instant != query.temporal_instant
+        || query.cursor_binding.representation != request.representation
+        || query.cursor_binding.adapter != request.adapter
+        || query.adapter != request.adapter
         || query.cursor_binding.selected_fields != selected_fields
         || !valid_optional_cursor_reference(query.cursor_binding.principal_reference.as_deref())
         || !valid_optional_cursor_reference(query.cursor_binding.purpose_reference.as_deref())
@@ -1016,6 +1258,7 @@ fn validate_compiled_query_request(
         || !valid_cursor_reference(&query.cursor_binding.query_reference)
         || !valid_cursor_reference(&query.cursor_binding.sort_reference)
         || !valid_cursor_reference(&query.cursor_binding.scope_reference)
+        || !valid_optional_cursor_reference(query.cursor_binding.spatial_reference.as_deref())
         || !request
             .selected_fields
             .iter()
@@ -1053,6 +1296,9 @@ fn validate_compiled_query_request(
         if stats.predicates > 32 || stats.in_values > 100 {
             return Err(());
         }
+    }
+    if let Some(spatial) = &query.spatial {
+        validate_spatial_query(entity, operation, spatial)?;
     }
     if let Some(order) = &query.order {
         let Some(compiled_sort) = operation
@@ -1097,6 +1343,7 @@ fn validate_compiled_query_request(
         || query.cursor_binding.query_reference != references.query
         || query.cursor_binding.sort_reference != references.sort
         || query.cursor_binding.scope_reference != references.scope
+        || query.cursor_binding.spatial_reference != references.spatial
     {
         return Err(());
     }
@@ -1118,11 +1365,15 @@ fn cursor_binding_references(
             selected_fields: &request.selected_fields,
             projection: &query.projection,
             filter: query.filter.as_ref(),
+            spatial: query.spatial.as_ref(),
             order: query.order.as_ref(),
             include_count: query.include_count,
             page_size: query.page_size,
             temporal_instant: query.temporal_instant.as_deref(),
             scope: &query.cursor_query.scope,
+            representation: request.representation,
+            adapter: request.adapter,
+            adapter_origin: request.adapter_origin.as_deref(),
         },
     )
     .map_err(|_| ())
@@ -1145,12 +1396,86 @@ fn cursor_query_matches_request(
     Ok(
         query.cursor_query.projection == cursor_projection_from_read(&query.projection)
             && query.cursor_query.filter == query.filter.as_ref().map(cursor_filter_expr_from_read)
+            && query.cursor_query.spatial == query.spatial.as_ref().map(cursor_spatial_from_read)
             && query.cursor_query.order == query.order.as_ref().map(cursor_order_from_read)
             && query.cursor_query.include_count == query.include_count
             && query.cursor_query.page_size == query.page_size
             && query.cursor_query.temporal_instant == query.temporal_instant
             && query.cursor_query.scope == expected_scope,
     )
+}
+
+fn validate_spatial_query(
+    entity: &CompiledEntity,
+    operation: &CompiledQueryOperation,
+    spatial: &ReadSpatialQuery,
+) -> Result<(), ()> {
+    if operation.kind != CompiledQueryKind::List || operation.read_path.is_some() {
+        return Err(());
+    }
+    let capability = operation
+        .spatial
+        .as_ref()
+        .and_then(|spatial| spatial.bbox.as_ref())
+        .ok_or(())?;
+    let maximum_longitude_span = crate::query::canonical_positive_decimal_within(
+        &capability.maximum_longitude_span_degrees.to_string(),
+        "360",
+    )
+    .map_err(|_| ())?;
+    let maximum_latitude_span = crate::query::canonical_positive_decimal_within(
+        &capability.maximum_latitude_span_degrees.to_string(),
+        "180",
+    )
+    .map_err(|_| ())?;
+    if spatial.bbox.geometry_field != capability.geometry_field
+        || spatial.bbox.maximum_longitude_span_degrees != maximum_longitude_span
+        || spatial.bbox.maximum_latitude_span_degrees != maximum_latitude_span
+        || !matches!(
+            compiled_field_type(entity, &spatial.bbox.geometry_field),
+            Some(FieldTypeSource::Crs84Point { .. })
+        )
+    {
+        return Err(());
+    }
+    let parsed = crate::query::parse_read_query([(
+        "bbox",
+        format!(
+            "{},{},{},{}",
+            spatial.bbox.west, spatial.bbox.south, spatial.bbox.east, spatial.bbox.north
+        ),
+    )])
+    .map_err(|_| ())?;
+    let crate::query::ParsedReadQueryMode::Query(options) = parsed.mode else {
+        return Err(());
+    };
+    let bbox = options.bbox.ok_or(())?;
+    if !crate::query::decimal_difference_within(bbox.east(), bbox.west(), &maximum_longitude_span)
+        .map_err(|_| ())?
+        || !crate::query::decimal_difference_within(
+            bbox.north(),
+            bbox.south(),
+            &maximum_latitude_span,
+        )
+        .map_err(|_| ())?
+    {
+        return Err(());
+    }
+    Ok(())
+}
+
+fn cursor_spatial_from_read(spatial: &ReadSpatialQuery) -> CursorSpatialQuery {
+    CursorSpatialQuery {
+        bbox: CursorBboxQuery {
+            geometry_field: spatial.bbox.geometry_field.clone(),
+            west: spatial.bbox.west.clone(),
+            south: spatial.bbox.south.clone(),
+            east: spatial.bbox.east.clone(),
+            north: spatial.bbox.north.clone(),
+            maximum_longitude_span_degrees: spatial.bbox.maximum_longitude_span_degrees.clone(),
+            maximum_latitude_span_degrees: spatial.bbox.maximum_latitude_span_degrees.clone(),
+        },
+    }
 }
 
 fn cursor_projection_from_read(projection: &[ReadProjectionField]) -> Vec<CursorProjectionField> {
@@ -1281,6 +1606,25 @@ async fn install_evaluation_date(
     Ok(())
 }
 
+async fn install_spatial_query_context(
+    transaction: &tokio_postgres::Transaction<'_>,
+    query: Option<&crate::api::CompiledReadQuery>,
+) -> Result<(), ReadServiceError> {
+    let Some(spatial) = query.and_then(|query| query.spatial.as_ref()) else {
+        return Ok(());
+    };
+    let context = SpatialBboxContext::new(
+        spatial.bbox.west.clone(),
+        spatial.bbox.south.clone(),
+        spatial.bbox.east.clone(),
+        spatial.bbox.north.clone(),
+    )
+    .map_err(|_| ReadServiceError::Unavailable)?;
+    install_spatial_bbox_context(transaction, &context)
+        .await
+        .map_err(|_| ReadServiceError::Unavailable)
+}
+
 async fn install_read_path_context(
     transaction: &tokio_postgres::Transaction<'_>,
     path_id: &str,
@@ -1319,7 +1663,12 @@ struct ReadRelations {
 }
 
 impl ReadRelations {
-    fn collection(entity: &CompiledEntity) -> Result<Self, ReadServiceError> {
+    fn collection(
+        entity: &CompiledEntity,
+        query: Option<&crate::api::CompiledReadQuery>,
+        _selected_fields: &[String],
+    ) -> Result<Self, ReadServiceError> {
+        let spatial_query = query.is_some_and(|query| query.spatial.is_some());
         let base_alias = "base_record";
         let source_alias = "source_record";
         if !valid_physical_identifier(&entity.physical_table)
@@ -1328,6 +1677,10 @@ impl ReadRelations {
             return Err(ReadServiceError::Unavailable);
         }
         let mut derived_aliases = BTreeMap::new();
+        let id_expression = format!(
+            "{source_alias}.{}",
+            quote_identifier(&entity.canonical_id.sql_name)
+        );
         let mut from_sql = format!(
             "registry_source.{} AS {source_alias}
              JOIN registry_data.{} AS {base_alias}
@@ -1350,6 +1703,17 @@ impl ReadRelations {
                    AND request_proposal.proposal_version = request_state.proposal_version",
             );
         }
+        if spatial_query {
+            let candidate_view = crate::physical_names::spatial_candidate_view_name(&entity.id);
+            if !valid_physical_identifier(&candidate_view) {
+                return Err(ReadServiceError::Unavailable);
+            }
+            from_sql.push_str(&format!(
+                " JOIN registry_context.{} AS candidate_record
+                    ON candidate_record.id = {id_expression}",
+                quote_identifier(&candidate_view),
+            ));
+        }
         for (index, relation) in entity.derived_relations.values().enumerate() {
             let alias = format!("derived_{index}");
             let view_name = crate::generated_ddl::derived_view_name(
@@ -1361,7 +1725,7 @@ impl ReadRelations {
             }
             from_sql.push_str(&format!(
                 " LEFT JOIN registry_derived.{} AS {alias}
-                    ON {alias}.{} = {source_alias}.id",
+                    ON {alias}.{} = {id_expression}",
                 quote_identifier(&view_name),
                 quote_identifier(&entity.canonical_id.sql_name),
             ));
@@ -1370,10 +1734,7 @@ impl ReadRelations {
         Ok(Self {
             base_alias,
             source_alias,
-            id_expression: format!(
-                "{source_alias}.{}",
-                quote_identifier(&entity.canonical_id.sql_name)
-            ),
+            id_expression,
             from_sql,
             base_predicates: Vec::new(),
             derived_aliases,
@@ -1490,6 +1851,9 @@ impl ReadRelations {
             .iter()
             .find(|field| field.logical.id == field_id)
         {
+            if !valid_physical_identifier(&field.logical.sql_name) {
+                return Err(ReadServiceError::Unavailable);
+            }
             return Ok(FieldExpression {
                 sql: format!(
                     "{}.{}",
@@ -2135,24 +2499,28 @@ mod tests {
     use std::collections::BTreeSet;
     use std::time::Duration;
 
+    use serde_json::{json, Map};
+
     use crate::api::{
-        AuthorizedRequestContext, CompiledReadQuery, ReadFilterExpr, ReadFilterOperator,
-        ReadFilterPredicate, ReadOrderClause, ReadProjectionField, RecordReadKind,
-        RecordReadRequest,
+        AuthorizedRequestContext, CompiledReadQuery, ReadBboxQuery, ReadFilterExpr,
+        ReadFilterOperator, ReadFilterPredicate, ReadOrderClause, ReadProjectionField,
+        ReadSpatialQuery, RecordReadKind, RecordReadRequest,
     };
     use crate::compiler::{compile_project, CompileProfile};
     use crate::contract::{parse_project_json, FieldTypeSource};
     use crate::cursor::{
-        CursorBinding, CursorCodec, CursorContinuation, CursorFilterExpr, CursorFilterOperator,
-        CursorFilterPredicate, CursorOrderClause, CursorProjectionField, CursorQuery,
-        CursorQueryScope,
+        CursorAdapter, CursorBboxQuery, CursorBinding, CursorCodec, CursorContinuation,
+        CursorFilterExpr, CursorFilterOperator, CursorFilterPredicate, CursorOrderClause,
+        CursorProjectionField, CursorQuery, CursorQueryScope, CursorRepresentation,
+        CursorSpatialQuery,
     };
     use crate::model::{CompiledQueryKind, CompiledQuerySortDirection, HttpMethod};
     use zeroize::Zeroizing;
 
     use super::{
-        cursor_binding_references, temporal_instant_expression, ExpectedRegistryIdentity, ReadPlan,
-        ReadServiceError,
+        cursor_binding_references, feature_value, list_sql, projection, quote_identifier,
+        temporal_instant_expression, ExpectedRegistryIdentity, ReadPlan, ReadRelations,
+        ReadServiceError, RecordEnvelope,
     };
 
     #[test]
@@ -2175,6 +2543,139 @@ mod tests {
             temporal_instant_expression(&FieldTypeSource::Date, &FieldTypeSource::Timestamp, 1,),
             Err(ReadServiceError::Unavailable)
         ));
+    }
+
+    #[test]
+    fn invalid_stored_point_geojson_fails_before_response_materialization() {
+        let registry = compile_project(
+            &parse_project_json(
+                br#"{
+                  "apiVersion":"registry.registrystack.org/v1alpha1",
+                  "kind":"RegistryProject",
+                  "registry":{"id":"geojson-guard","version":"1","defaultLanguage":"en"},
+                  "entities":[{
+                    "id":"site","route":"sites","mutationMode":"mutable","classification":"public",
+                    "fields":[
+                      {"id":"code","type":"string","required":true,"maxLength":32,"classification":"public"},
+                      {"id":"location","type":"crs84-point","precision":6,"required":false,"classification":"public"}
+                    ],
+                    "geojson":{"geometryField":"location"}
+                  }],
+                  "accessProfiles":[{
+                    "id":"public","default":true,"anonymous":true,
+                    "grants":[{"entity":"site","operations":["get","list"],"readableFields":["code","location"]}]
+                  }]
+                }"#,
+            )
+            .expect("fixture parses"),
+            &[],
+            CompileProfile::Authoring,
+        )
+        .expect("fixture compiles");
+        let entity = registry
+            .entities()
+            .get("site")
+            .expect("compiled entity exists");
+        let mut data = Map::new();
+        data.insert("code".to_owned(), json!("SITE-A"));
+        data.insert(
+            "location".to_owned(),
+            json!({"type": "Point", "coordinates": [181, 0]}),
+        );
+        let record = RecordEnvelope {
+            id: "00000000-0000-4000-8000-000000000001".to_owned(),
+            revision: 1,
+            data,
+            request: None,
+            request_presence: None,
+        };
+        assert!(matches!(
+            feature_value(entity, record),
+            Err(ReadServiceError::Unavailable)
+        ));
+    }
+
+    #[test]
+    fn spatial_backend_validates_span_with_exact_decimal_query_semantics() {
+        let registry = compile_project(
+            &parse_project_json(
+                br#"{
+                  "apiVersion":"registry.registrystack.org/v1alpha1",
+                  "kind":"RegistryProject",
+                  "registry":{"id":"spatial-span-guard","version":"1","defaultLanguage":"en"},
+                  "entities":[{
+                    "id":"site","route":"sites","mutationMode":"mutable","classification":"public",
+                    "fields":[
+                      {"id":"code","type":"string","required":true,"maxLength":32,"classification":"public"},
+                      {"id":"location","type":"crs84-point","precision":6,"required":false,"classification":"public"}
+                    ],
+                    "geojson":{"geometryField":"location"}
+                  }],
+                  "accessProfiles":[{
+                    "id":"public","default":true,"anonymous":true,
+                    "grants":[{
+                      "entity":"site",
+                      "operations":["list"],
+                      "readableFields":["code","location"],
+                      "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.3,"maximumLatitudeSpanDegrees":0.2}}
+                    }]
+                  }]
+                }"#,
+            )
+            .expect("fixture parses"),
+            &[],
+            CompileProfile::Authoring,
+        )
+        .expect("fixture compiles");
+        let entity = registry
+            .entities()
+            .get("site")
+            .expect("compiled entity exists");
+        let operation = registry
+            .queries()
+            .operations
+            .iter()
+            .find(|operation| operation.kind == CompiledQueryKind::List)
+            .expect("list query operation exists");
+        let parsed = crate::query::parse_read_query([("bbox", "1e-1,0,4e-1,2e-1")])
+            .expect("bbox query parses");
+        let crate::query::ParsedReadQueryMode::Query(options) = parsed.mode else {
+            panic!("bbox is a first-page query option")
+        };
+        let bbox = options.bbox.expect("bbox option is present");
+        let spatial = ReadSpatialQuery {
+            bbox: ReadBboxQuery {
+                geometry_field: "location".to_owned(),
+                west: bbox.west().to_owned(),
+                south: bbox.south().to_owned(),
+                east: bbox.east().to_owned(),
+                north: bbox.north().to_owned(),
+                maximum_longitude_span_degrees: "0.3".to_owned(),
+                maximum_latitude_span_degrees: "0.2".to_owned(),
+            },
+        };
+        assert_eq!(spatial.bbox.west, "0.1");
+        assert_eq!(spatial.bbox.east, "0.4");
+        assert!(
+            super::validate_spatial_query(entity, operation, &spatial).is_ok(),
+            "backend accepts mathematically exact .1 to .4 span under max .3"
+        );
+
+        let just_over = ReadSpatialQuery {
+            bbox: ReadBboxQuery {
+                geometry_field: "location".to_owned(),
+                west: "0.1".to_owned(),
+                south: "0".to_owned(),
+                east: "0.40000000000000000000000000000000000001".to_owned(),
+                north: "0.2".to_owned(),
+                maximum_longitude_span_degrees: "0.3".to_owned(),
+                maximum_latitude_span_degrees: "0.2".to_owned(),
+            },
+        };
+        assert!(
+            super::validate_spatial_query(entity, operation, &just_over).is_err(),
+            "backend rejects a span that f64 subtraction would round down"
+        );
     }
 
     #[test]
@@ -2254,6 +2755,9 @@ mod tests {
                         include_count: false,
                         temporal_instant: None,
                         selected_fields: vec!["label".to_owned()],
+                        spatial_reference: None,
+                        representation: CursorRepresentation::Json,
+                        adapter: CursorAdapter::Native,
                     },
                     cursor_query: CursorQuery {
                         projection: vec![CursorProjectionField {
@@ -2274,6 +2778,7 @@ mod tests {
                                 values: vec!["hidden".to_owned()],
                             },
                         }),
+                        spatial: None,
                         order: None,
                         include_count: false,
                         page_size: 10,
@@ -2296,15 +2801,22 @@ mod tests {
                         operator: ReadFilterOperator::Eq,
                         values: vec!["hidden".to_owned()],
                     })),
+                    spatial: None,
                     order: None,
                     include_count: false,
                     page_size: 10,
                     temporal_instant: None,
+                    adapter: CursorAdapter::Native,
+                    adapter_origin: None,
                     continuation: None,
                 },
             },
             maximum_records: 11,
             request_history_after_proposal_version: None,
+            representation: CursorRepresentation::Json,
+            adapter: CursorAdapter::Native,
+            adapter_origin: None,
+            geojson_next_link_prefix: None,
             correlation: crate::correlation::RequestCorrelation::server_created(),
         };
         assert!(ReadPlan::from_request(&registry, &expected, &cursors, &request).is_err());
@@ -2358,12 +2870,297 @@ mod tests {
         query.cursor_binding.sort_reference = references.sort;
         query.cursor_binding.scope_reference = references.scope;
         assert!(ReadPlan::from_request(&registry, &expected, &cursors, &request).is_ok());
+        let native_query_reference = query_ref(&request).cursor_binding.query_reference.clone();
+
+        request.representation = CursorRepresentation::GeoJson;
+        request.adapter = CursorAdapter::Gis;
+        request.adapter_origin = Some("https://registry.example".to_owned());
+        request.geojson_next_link_prefix =
+            Some("https://registry.example/v1/gis/collections/cases/items?cursor=".to_owned());
+        {
+            let query = query_mut(&mut request);
+            query.adapter = CursorAdapter::Gis;
+            query.adapter_origin = Some("https://registry.example".to_owned());
+            query.cursor_binding.representation = CursorRepresentation::GeoJson;
+            query.cursor_binding.adapter = CursorAdapter::Gis;
+        }
+        let references =
+            cursor_binding_references(&cursors, &request, operation, query_ref(&request))
+                .expect("GIS request context has cursor references");
+        assert_ne!(references.query, native_query_reference);
+        {
+            let query = query_mut(&mut request);
+            query.cursor_binding.query_reference = references.query;
+        }
+        assert!(ReadPlan::from_request(&registry, &expected, &cursors, &request).is_ok());
+        request.adapter_origin = Some("https://other.example".to_owned());
+        assert!(ReadPlan::from_request(&registry, &expected, &cursors, &request).is_err());
+        request.representation = CursorRepresentation::Json;
+        request.adapter = CursorAdapter::Native;
+        request.adapter_origin = None;
+        request.geojson_next_link_prefix = None;
+        {
+            let query = query_mut(&mut request);
+            query.adapter = CursorAdapter::Native;
+            query.adapter_origin = None;
+            query.cursor_binding.representation = CursorRepresentation::Json;
+            query.cursor_binding.adapter = CursorAdapter::Native;
+            query.cursor_binding.query_reference = native_query_reference;
+        }
 
         query_mut(&mut request).cursor_binding.query_reference = digest();
         assert!(
             ReadPlan::from_request(&registry, &expected, &cursors, &request).is_err(),
             "a well-shaped forged binding digest fails before SQL construction"
         );
+
+        let query = query_mut(&mut request);
+        query.cursor_binding.query_reference = digest();
+        query.spatial = Some(ReadSpatialQuery {
+            bbox: ReadBboxQuery {
+                geometry_field: "label".to_owned(),
+                west: "0".to_owned(),
+                south: "0".to_owned(),
+                east: "1".to_owned(),
+                north: "1".to_owned(),
+                maximum_longitude_span_degrees: "1".to_owned(),
+                maximum_latitude_span_degrees: "1".to_owned(),
+            },
+        });
+        query.cursor_query.spatial = Some(CursorSpatialQuery {
+            bbox: CursorBboxQuery {
+                geometry_field: "label".to_owned(),
+                west: "0".to_owned(),
+                south: "0".to_owned(),
+                east: "1".to_owned(),
+                north: "1".to_owned(),
+                maximum_longitude_span_degrees: "1".to_owned(),
+                maximum_latitude_span_degrees: "1".to_owned(),
+            },
+        });
+        assert!(
+            ReadPlan::from_request(&registry, &expected, &cursors, &request).is_err(),
+            "spatial predicates require the compiled bbox capability"
+        );
+    }
+
+    #[test]
+    fn spatial_collection_relations_use_candidate_view_with_ordinary_read_surface() {
+        let registry = compile_project(
+            &parse_project_json(
+                br#"{
+                  "apiVersion":"registry.registrystack.org/v1alpha1",
+                  "kind":"RegistryProject",
+                  "registry":{"id":"spatial-relation-guard","version":"1","defaultLanguage":"en"},
+                  "entities":[{
+                    "id":"site","route":"sites","mutationMode":"mutable","classification":"public",
+                    "fields":[
+                      {"id":"code","type":"string","required":true,"maxLength":32,"classification":"public"},
+                      {"id":"location","type":"crs84-point","precision":6,"required":false,"classification":"public"}
+                    ],
+                    "geojson":{"geometryField":"location"}
+                  }],
+                  "accessProfiles":[{
+                    "id":"public","default":true,"anonymous":true,
+                    "grants":[{
+                      "entity":"site",
+                      "operations":["list"],
+                      "readableFields":["code","location"],
+                      "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":1,"maximumLatitudeSpanDegrees":1}}
+                    }]
+                  }]
+                }"#,
+            )
+            .expect("fixture parses"),
+            &[],
+            CompileProfile::Authoring,
+        )
+        .expect("fixture compiles");
+        let entity = registry
+            .entities()
+            .get("site")
+            .expect("compiled entity exists");
+        let selected_fields = ["code".to_owned(), "location".to_owned()];
+        let relations =
+            ReadRelations::collection(entity, None, &selected_fields).expect("collection builds");
+        assert!(relations.from_sql.contains("registry_source."));
+        assert!(!relations.from_sql.contains("registry_context."));
+
+        let relations = ReadRelations::collection(
+            entity,
+            Some(&CompiledReadQuery {
+                route_id: "unused".to_owned(),
+                query_operation_id: "unused".to_owned(),
+                kind: CompiledQueryKind::List,
+                cursor_binding: CursorBinding {
+                    package_revision: "unused".to_owned(),
+                    schema_fingerprint: "unused".to_owned(),
+                    registry_revision: "unused".to_owned(),
+                    route_id: "unused".to_owned(),
+                    query_operation_id: "unused".to_owned(),
+                    query_kind: CompiledQueryKind::List,
+                    selected_profile: "public".to_owned(),
+                    principal_reference: None,
+                    purpose_reference: None,
+                    row_boundary_reference: digest(),
+                    projection_reference: digest(),
+                    query_reference: digest(),
+                    sort_reference: digest(),
+                    scope_reference: digest(),
+                    page_size: 10,
+                    include_count: false,
+                    temporal_instant: None,
+                    selected_fields: selected_fields.to_vec(),
+                    spatial_reference: Some(digest()),
+                    representation: CursorRepresentation::Json,
+                    adapter: CursorAdapter::Native,
+                },
+                cursor_query: CursorQuery {
+                    projection: Vec::new(),
+                    filter: None,
+                    spatial: Some(CursorSpatialQuery {
+                        bbox: CursorBboxQuery {
+                            geometry_field: "location".to_owned(),
+                            west: "100".to_owned(),
+                            south: "13".to_owned(),
+                            east: "101".to_owned(),
+                            north: "14".to_owned(),
+                            maximum_longitude_span_degrees: "1".to_owned(),
+                            maximum_latitude_span_degrees: "1".to_owned(),
+                        },
+                    }),
+                    order: None,
+                    include_count: false,
+                    page_size: 10,
+                    temporal_instant: None,
+                    scope: CursorQueryScope::Collection {},
+                },
+                projection: Vec::new(),
+                filter: None,
+                spatial: Some(ReadSpatialQuery {
+                    bbox: ReadBboxQuery {
+                        geometry_field: "location".to_owned(),
+                        west: "100".to_owned(),
+                        south: "13".to_owned(),
+                        east: "101".to_owned(),
+                        north: "14".to_owned(),
+                        maximum_longitude_span_degrees: "1".to_owned(),
+                        maximum_latitude_span_degrees: "1".to_owned(),
+                    },
+                }),
+                order: None,
+                include_count: false,
+                page_size: 10,
+                temporal_instant: None,
+                adapter: CursorAdapter::Native,
+                adapter_origin: None,
+                continuation: None,
+            }),
+            &selected_fields,
+        )
+        .expect("spatial collection builds");
+        let candidate_view = crate::physical_names::spatial_candidate_view_name("site");
+        assert!(relations.from_sql.contains("registry_source."));
+        assert!(relations.from_sql.contains("registry_data."));
+        assert!(relations.from_sql.contains(&format!(
+            "JOIN registry_context.{} AS candidate_record",
+            quote_identifier(&candidate_view)
+        )));
+        assert!(relations
+            .from_sql
+            .contains("ON candidate_record.id = source_record.\"id\""));
+        assert!(relations.base_predicates.is_empty());
+
+        let code = entity
+            .stored_fields
+            .iter()
+            .find(|field| field.logical.id == "code")
+            .expect("code field exists");
+        let projection = projection(entity, &relations, &selected_fields, None)
+            .expect("spatial projection builds from logical source fields");
+        assert!(projection.contains(&format!(
+            "source_record.{}",
+            quote_identifier(&code.logical.sql_name)
+        )));
+        assert!(!projection.contains(&format!(
+            "base_record.{}",
+            quote_identifier(&code.physical_name)
+        )));
+        let query = CompiledReadQuery {
+            route_id: "unused".to_owned(),
+            query_operation_id: "unused".to_owned(),
+            kind: CompiledQueryKind::List,
+            cursor_binding: CursorBinding {
+                package_revision: "unused".to_owned(),
+                schema_fingerprint: "unused".to_owned(),
+                registry_revision: "unused".to_owned(),
+                route_id: "unused".to_owned(),
+                query_operation_id: "unused".to_owned(),
+                query_kind: CompiledQueryKind::List,
+                selected_profile: "public".to_owned(),
+                principal_reference: None,
+                purpose_reference: None,
+                row_boundary_reference: digest(),
+                projection_reference: digest(),
+                query_reference: digest(),
+                sort_reference: digest(),
+                scope_reference: digest(),
+                page_size: 10,
+                include_count: false,
+                temporal_instant: None,
+                selected_fields: selected_fields.to_vec(),
+                spatial_reference: Some(digest()),
+                representation: CursorRepresentation::Json,
+                adapter: CursorAdapter::Native,
+            },
+            cursor_query: CursorQuery {
+                projection: Vec::new(),
+                filter: None,
+                spatial: Some(CursorSpatialQuery {
+                    bbox: CursorBboxQuery {
+                        geometry_field: "location".to_owned(),
+                        west: "100".to_owned(),
+                        south: "13".to_owned(),
+                        east: "101".to_owned(),
+                        north: "14".to_owned(),
+                        maximum_longitude_span_degrees: "1".to_owned(),
+                        maximum_latitude_span_degrees: "1".to_owned(),
+                    },
+                }),
+                order: None,
+                include_count: false,
+                page_size: 10,
+                temporal_instant: None,
+                scope: CursorQueryScope::Collection {},
+            },
+            projection: Vec::new(),
+            filter: None,
+            spatial: Some(ReadSpatialQuery {
+                bbox: ReadBboxQuery {
+                    geometry_field: "location".to_owned(),
+                    west: "100".to_owned(),
+                    south: "13".to_owned(),
+                    east: "101".to_owned(),
+                    north: "14".to_owned(),
+                    maximum_longitude_span_degrees: "1".to_owned(),
+                    maximum_latitude_span_degrees: "1".to_owned(),
+                },
+            }),
+            order: None,
+            include_count: false,
+            page_size: 10,
+            temporal_instant: None,
+            adapter: CursorAdapter::Native,
+            adapter_origin: None,
+            continuation: None,
+        };
+        let (sql, count_sql, values) =
+            list_sql(entity, &relations, &query, &projection).expect("spatial SQL builds");
+        assert!(values.is_empty());
+        assert!(!sql.contains("ST_Intersects"));
+        assert!(!sql.contains("registry_spatial_ext"));
+        assert!(!count_sql.contains("ST_Intersects"));
+        assert!(!count_sql.contains("registry_spatial_ext"));
     }
 
     fn query_ref(request: &RecordReadRequest) -> &CompiledReadQuery {

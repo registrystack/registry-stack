@@ -429,6 +429,7 @@ export default defineConfig({
             { label: 'Modeling patterns', slug: 'explanation/registry-modeling-patterns' },
             { label: 'Create and query your first registry', slug: 'tutorials/first-registry-server' },
             { label: 'Review changes before updating a registry', slug: 'tutorials/review-registry-changes' },
+            { label: 'Map a registry in QGIS', slug: 'tutorials/query-a-spatial-registry-from-qgis' },
             { label: 'Configure your registry', slug: 'configure/registry-server' },
             { label: 'Configure webhooks', slug: 'configure/registry-server-webhooks' },
             { label: 'Configuration reference', slug: 'reference/registry-server-configuration' },

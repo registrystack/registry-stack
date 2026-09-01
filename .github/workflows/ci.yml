@@ -601,8 +601,9 @@ jobs:
     timeout-minutes: 20
     services:
       postgres:
-        # Docker Hub PostgreSQL 17.11 index, verified 2026-08-29.
-        image: postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        # PostgreSQL 17 / PostGIS 3.5.2, verified 2026-08-31. Fresh test databases
+        # remain extension-free unless a spatial test explicitly installs it.
+        image: postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6
         env:
           POSTGRES_DB: registry_server
           POSTGRES_PASSWORD: registry_server_test
@@ -662,6 +663,9 @@ jobs:
 
       - name: Registry Server generic quickstart
         run: products/registry-server/quickstart/run.sh --smoke
+
+      - name: Registry Server spatial quickstart
+        run: products/registry-server/quickstart/run.sh --spatial --smoke
 
   identifiers:
     name: Public identifier catalog

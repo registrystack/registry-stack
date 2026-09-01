@@ -25,8 +25,10 @@ use crate::contract::{
 };
 use crate::derived_sql::MAX_DERIVED_SQL_BYTES;
 use crate::generated_ddl::{
-    add_column_statement, generate_ddl_with_actions, DdlPolicy, DdlStatement, DdlStatementKind,
-    DdlTable,
+    add_column_statement, drop_spatial_bbox_function_statement,
+    drop_spatial_candidate_view_statement, generate_ddl_with_actions, quote_identifier,
+    spatial_bbox_function_statement, spatial_projection_fields, spatial_projection_statements,
+    DdlPolicy, DdlPolicyRole, DdlStatement, DdlStatementKind, DdlTable,
 };
 use crate::history_schema::{
     serialize_descriptor, HistoryEntityDescriptor, HistoryLifecycleDescriptor,
@@ -263,6 +265,7 @@ pub enum CompiledRegistryChangeCode {
     EntityMutationModeChanged,
     EntityClassificationChanged,
     EntityAccessRequirementsChanged,
+    EntityGeoJsonChanged,
     EntityTemporalChanged,
     FieldAddedOptional,
     FieldAddedRequired,
@@ -1108,6 +1111,18 @@ fn compare_entities(
                 ),
             );
         }
+        if previous_entity.geojson != candidate_entity.geojson {
+            push_change(
+                changes,
+                CompiledRegistryChangeClass::AccessOrDisclosureChange,
+                CompiledRegistryChangeCode::EntityGeoJsonChanged,
+                target(
+                    CompiledRegistryChangeTargetKind::Entity,
+                    Some(entity_id.as_str()),
+                    None,
+                ),
+            );
+        }
         if previous_entity.temporal != candidate_entity.temporal {
             push_change(
                 changes,
@@ -1699,6 +1714,86 @@ fn additive_migration_plan(
     let mut new_statement_ids = BTreeSet::<String>::new();
     let mut replacement_view_statement_ids = BTreeSet::<String>::new();
     let mut added_columns = BTreeMap::<String, Vec<DdlStatement>>::new();
+    let previous_ddl = generate_ddl_with_actions(
+        &previous.entities,
+        &previous.physical_names,
+        &previous.actions,
+    );
+    let mut removed_spatial_statements = Vec::new();
+    if candidate.ddl().requires_postgis && !previous_ddl.requires_postgis {
+        new_statement_ids.insert(spatial_bbox_function_statement().id);
+    }
+    for previous_table in &previous_ddl.tables {
+        let previous_entity = &previous.entities[&previous_table.entity_id];
+        let candidate_view_statement_id =
+            format!("entity.{}.spatial-candidates-view", previous_entity.id);
+        let previous_view_statement = previous_ddl
+            .statements
+            .iter()
+            .find(|statement| statement.id == candidate_view_statement_id);
+        let candidate_view_statement = candidate
+            .ddl()
+            .statements
+            .iter()
+            .find(|statement| statement.id == candidate_view_statement_id);
+        if previous_view_statement.map(|statement| &statement.sql)
+            != candidate_view_statement.map(|statement| &statement.sql)
+        {
+            if previous_view_statement.is_some() {
+                // The view depends on the generated geometry and helper. Drop
+                // it before either dependency changes, then recreate it below.
+                removed_spatial_statements.push(
+                    drop_spatial_candidate_view_statement(previous_entity)
+                        .expect("generated candidate view has a drop statement"),
+                );
+            }
+            if candidate_view_statement.is_some() {
+                new_statement_ids.insert(candidate_view_statement_id);
+            }
+        }
+        let previous_fields = spatial_projection_fields(previous_entity);
+        let candidate_entity = candidate.entities().get(&previous_table.entity_id);
+        let candidate_fields = candidate_entity
+            .map(spatial_projection_fields)
+            .unwrap_or_default();
+        let removed_fields: Vec<_> = previous_fields.difference(&candidate_fields).collect();
+        let candidate_table = candidate
+            .ddl()
+            .tables
+            .iter()
+            .find(|table| table.entity_id == previous_table.entity_id);
+        for policy in &previous_table.policies {
+            if policy.applies_to == DdlPolicyRole::SpatialBbox
+                && (!removed_fields.is_empty()
+                    || !candidate_table.is_some_and(|table| {
+                        table
+                            .policies
+                            .iter()
+                            .any(|candidate| candidate.name == policy.name)
+                    }))
+            {
+                removed_spatial_statements.push(DdlStatement {
+                    id: format!(
+                        "entity.{}.policy.{}.drop",
+                        previous_table.entity_id, policy.name
+                    ),
+                    kind: DdlStatementKind::Policy,
+                    sql: format!(
+                        "DROP POLICY IF EXISTS {} ON registry_data.{}",
+                        quote_identifier(&policy.name),
+                        quote_identifier(&previous_entity.physical_table)
+                    ),
+                });
+            }
+        }
+        for field in removed_fields {
+            let projection = spatial_projection_statements(previous_entity, field);
+            removed_spatial_statements.extend([projection.drop_index, projection.drop_column]);
+        }
+    }
+    if previous_ddl.requires_postgis && !candidate.ddl().requires_postgis {
+        removed_spatial_statements.push(drop_spatial_bbox_function_statement());
+    }
 
     for (entity_id, candidate_entity) in candidate.entities() {
         if !previous.entities.contains_key(entity_id) {
@@ -1728,6 +1823,15 @@ fn additive_migration_plan(
                 replacement_view_statement_ids.insert(source_view_id.clone());
                 new_statement_ids.insert(source_view_id);
             }
+        }
+        let previous_fields = spatial_projection_fields(previous_entity);
+        for field_id in spatial_projection_fields(candidate_entity).difference(&previous_fields) {
+            let projection = spatial_projection_statements(candidate_entity, field_id);
+            added_columns
+                .entry(entity_id.clone())
+                .or_default()
+                .push(projection.add_column);
+            new_statement_ids.insert(projection.create_index.id);
         }
         for (relation_id, relation) in &candidate_entity.derived_relations {
             match previous_entity.derived_relations.get(relation_id) {
@@ -1761,7 +1865,7 @@ fn additive_migration_plan(
         }
     }
 
-    let mut statements = Vec::new();
+    let mut statements = removed_spatial_statements;
     for statement in &candidate.ddl().statements {
         if let Some(entity_id) = table_statement_entity_id(&statement.id) {
             if let Some(columns) = added_columns.get(entity_id) {
@@ -1840,25 +1944,33 @@ fn reviewed_successor_migration_plan(
         &change_set.from_revision,
         additive_changes,
     );
-    let refresh_views = additive
-        .statements
-        .iter()
-        .any(|statement| statement.kind == DdlStatementKind::View)
-        || change_set.changes.iter().any(|change| {
-            matches!(
-                change.code,
-                CompiledRegistryChangeCode::EntityRemoved
-                    | CompiledRegistryChangeCode::FieldAddedRequired
-                    | CompiledRegistryChangeCode::FieldRemoved
-                    | CompiledRegistryChangeCode::FieldTypeChanged
-                    | CompiledRegistryChangeCode::FieldPhysicalNameChanged
-                    | CompiledRegistryChangeCode::DerivedRelationRemoved
-                    | CompiledRegistryChangeCode::DerivedRelationChanged
-            )
-        });
+    let refresh_views = additive.statements.iter().any(|statement| {
+        statement.kind == DdlStatementKind::View && !is_spatial_candidate_view_statement(statement)
+    }) || change_set.changes.iter().any(|change| {
+        matches!(
+            change.code,
+            CompiledRegistryChangeCode::EntityRemoved
+                | CompiledRegistryChangeCode::FieldAddedRequired
+                | CompiledRegistryChangeCode::FieldRemoved
+                | CompiledRegistryChangeCode::FieldTypeChanged
+                | CompiledRegistryChangeCode::FieldPhysicalNameChanged
+                | CompiledRegistryChangeCode::DerivedRelationRemoved
+                | CompiledRegistryChangeCode::DerivedRelationChanged
+        )
+    });
     let mut statements = additive.statements;
     if refresh_views {
         statements.retain(|statement| statement.kind != DdlStatementKind::View);
+        // Candidate views depend directly on source columns too. A structural
+        // change can require their removal even when the rendered predicate
+        // stays identical, so remove them before compiler or reviewed DDL.
+        let mut candidate_view_drops = baseline
+            .entities
+            .values()
+            .filter_map(drop_spatial_candidate_view_statement)
+            .collect::<Vec<_>>();
+        candidate_view_drops.append(&mut statements);
+        statements = candidate_view_drops;
         statements.extend(
             candidate
                 .ddl()
@@ -1961,6 +2073,12 @@ fn drop_policy_statement(entity_id: &str, table: &DdlTable, policy_name: &str) -
 
 fn quote_sql_identifier(identifier: &str) -> String {
     format!("\"{}\"", identifier.replace('"', "\"\""))
+}
+
+fn is_spatial_candidate_view_statement(statement: &DdlStatement) -> bool {
+    statement.kind == DdlStatementKind::View
+        && (statement.id.ends_with(".spatial-candidates-view")
+            || statement.id.ends_with(".spatial-candidates-view.drop"))
 }
 
 fn table_statement_entity_id(statement_id: &str) -> Option<&str> {
