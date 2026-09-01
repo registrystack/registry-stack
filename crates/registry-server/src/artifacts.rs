@@ -366,14 +366,14 @@ fn entity_schema(entity: &CompiledEntity, entities: &BTreeMap<String, CompiledEn
     for field in &entity.stored_fields {
         properties.insert(
             field.logical.api_name.clone(),
-            field_schema(&field.logical.field_type),
+            field_value_schema(&field.logical.field_type, !field.required),
         );
         if field.required {
             required.push(Value::String(field.logical.api_name.clone()));
         }
     }
     for field in entity.derived_fields.values() {
-        let mut schema = field_schema(&field.logical.field_type);
+        let mut schema = field_value_schema(&field.logical.field_type, true);
         schema
             .as_object_mut()
             .expect("field schemas are objects")
@@ -424,7 +424,7 @@ pub(crate) fn openapi_entity_input_schema(
         }
         properties.insert(
             field.logical.api_name.clone(),
-            field_schema(&field.logical.field_type),
+            field_value_schema(&field.logical.field_type, !field.required),
         );
         if field.required {
             required.push(Value::String(field.logical.api_name.clone()));
@@ -1292,7 +1292,16 @@ fn action_route_kind_name(kind: ActionRouteKind) -> &'static str {
     }
 }
 
-fn field_schema(field_type: &FieldTypeSource) -> Value {
+pub(crate) fn field_value_schema(field_type: &FieldTypeSource, nullable: bool) -> Value {
+    let schema = field_schema(field_type);
+    if nullable {
+        json!({"anyOf": [schema, {"type": "null"}]})
+    } else {
+        schema
+    }
+}
+
+pub(crate) fn field_schema(field_type: &FieldTypeSource) -> Value {
     match field_type {
         FieldTypeSource::Boolean => json!({"type": "boolean"}),
         FieldTypeSource::String {
@@ -2080,26 +2089,7 @@ fn json_request_body(schema: Value) -> Value {
 fn json_patch_request_body() -> Value {
     json!({
         "required": true,
-        "content": {
-            "application/json-patch+json": {
-                "schema": {
-                    "type": "array",
-                    "minItems": 1,
-                    "maxItems": 128,
-                    "items": {
-                        "type": "object",
-                        "additionalProperties": true,
-                        "required": ["op", "path"],
-                        "properties": {
-                            "op": {"type": "string", "enum": ["add", "remove", "replace", "move", "copy", "test"]},
-                            "path": {"type": "string", "maxLength": 1024},
-                            "from": {"type": "string", "maxLength": 1024},
-                            "value": true
-                        }
-                    }
-                }
-            }
-        }
+        "content": {"application/json-patch+json": {"schema": json_patch_array_schema()}}
     })
 }
 
@@ -2199,21 +2189,23 @@ fn bounded_text_schema(max_bytes: usize) -> Value {
     })
 }
 
-fn json_patch_array_schema() -> Value {
+pub(crate) fn json_patch_array_schema() -> Value {
     json!({
         "type": "array",
         "minItems": 1,
         "maxItems": 128,
         "items": {
             "type": "object",
-            "additionalProperties": true,
+            "additionalProperties": false,
             "required": ["op", "path"],
             "properties": {
-                "op": {"type": "string", "enum": ["add", "remove", "replace", "move", "copy", "test"]},
-                "path": {"type": "string", "maxLength": 1024},
-                "from": {"type": "string", "maxLength": 1024},
+                "op": {"type": "string", "enum": ["add", "replace", "remove", "test"]},
+                "path": {"type": "string"},
                 "value": true
-            }
+            },
+            "if": {"properties": {"op": {"const": "remove"}}},
+            "then": {"not": {"required": ["value"]}},
+            "else": {"required": ["value"]}
         }
     })
 }
@@ -2316,7 +2308,8 @@ fn operation_responses(spec: OpenApiOperationSpec<'_>) -> Value {
             json!({
                 "description": "Problem response",
                 "headers": {
-                    "traceparent": traceparent_header("Trace context for this problem response.")
+                    "traceparent": traceparent_header("Trace context for this problem response."),
+                    "Cache-Control": no_store_header()
                 },
                 "content": {
                     "application/problem+json": {
@@ -2352,7 +2345,7 @@ fn success_response(description: &str, headers: StatusResponseHeaders, schema: V
             "ETag": etag_header(),
         }),
         StatusResponseHeaders::NoStore => json!({
-            "Cache-Control": {"description": "Always no-store for caller-bound read collections, lookup results, and revision history.", "schema": {"const": "no-store"}},
+            "Cache-Control": no_store_header(),
         }),
         StatusResponseHeaders::Mutation => json!({
             "ETag": etag_header(),
@@ -2370,8 +2363,16 @@ fn success_response(description: &str, headers: StatusResponseHeaders, schema: V
             "traceparent".to_owned(),
             traceparent_header("Trace context for this response."),
         );
+    header_map
+        .as_object_mut()
+        .expect("response headers are objects")
+        .insert("Cache-Control".to_owned(), no_store_header());
     response.insert("headers".to_owned(), header_map);
     Value::Object(response)
+}
+
+fn no_store_header() -> Value {
+    json!({"description": "Caller-dependent responses must not be stored.", "schema": {"const": "no-store"}})
 }
 
 fn etag_header() -> Value {

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import base64
 import json
 import os
 import re
@@ -34,6 +35,14 @@ def public_jwk(kid: str) -> dict[str, str]:
     }
 
 
+def compact_jwt(expires: int) -> str:
+    def encode(value: dict[str, object]) -> str:
+        raw = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+    return f"{encode({'alg': 'ES256', 'typ': 'JWT'})}.{encode({'exp': expires})}.signature"
+
+
 class DemoProvisioningTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -58,13 +67,14 @@ class DemoProvisioningTests(unittest.TestCase):
 
         project = (self.root / "project/registry.yaml").read_text(encoding="utf-8")
         self.assertIn("environment: local", project)
-        self.assertIn(f"instanceId: {DEMO.INSTANCE_ID}", project)
+        self.assertIn(f"instanceId: {DEMO.BUSINESS_INSTANCE_ID}", project)
         self.assertNotIn("business-establishments-acceptance", project)
         self.assertFalse(any((self.root / "project").rglob(".DS_Store")))
 
         mint = (self.root / "mint/mint.yaml").read_text(encoding="utf-8")
         self.assertIn("validationMode: supervised-local-development", mint)
         self.assertIn("audiences: [urn:registry-server:business-demo]", mint)
+        self.assertIn("lifetimeSeconds: 300", mint)
         self.assertIn("algorithms: [ES256]", mint)
         self.assertNotIn("database-password", mint)
         operator = (self.root / "mint/clients/business-demo.yaml").read_text(encoding="utf-8")
@@ -80,6 +90,7 @@ class DemoProvisioningTests(unittest.TestCase):
         self.assertIn("apiVersion: registry.registrystack.org/server-runtime/v1alpha1", runtime)
         self.assertIn("kind: RegistryServerRuntimeConfig", runtime)
         self.assertIn("accessTokenType: at+jwt", runtime)
+        self.assertIn("maxTokenLifetimeSeconds: 300", runtime)
         self.assertIn("kind: static", runtime)
         self.assertIn("documentRef: secret:file/mint-jwks", runtime)
         self.assertIn("principal: registry_principal", runtime)
@@ -119,6 +130,42 @@ class DemoProvisioningTests(unittest.TestCase):
         self.assertIn(f"root: {self.root.resolve() / 'build/package'}", runtime)
         self.assertIn("bind: 127.0.0.1:18080", runtime)
 
+    def test_token_lifetime_override_binds_mint_and_server_consistently(self) -> None:
+        DEMO.prepare(
+            self.root,
+            self.fixture,
+            15432,
+            18081,
+            18080,
+            token_lifetime_seconds=900,
+        )
+        mint = (self.root / "mint/mint.yaml").read_text(encoding="utf-8")
+        runtime_test = (self.root / "runtime-test.yaml").read_text(encoding="utf-8")
+        self.assertIn("lifetimeSeconds: 900", mint)
+        self.assertIn("maxTokenLifetimeSeconds: 900", runtime_test)
+
+        revision = "sha256:" + "2" * 64
+        DEMO.render_runtime(self.root, revision, token_lifetime_seconds=900)
+        runtime = (self.root / "runtime.yaml").read_text(encoding="utf-8")
+        self.assertIn("maxTokenLifetimeSeconds: 900", runtime)
+
+    def test_token_lifetime_override_is_bounded(self) -> None:
+        with self.assertRaisesRegex(DEMO.DemoError, "between 60 and 900"):
+            DEMO.prepare(
+                self.root,
+                self.fixture,
+                15432,
+                18081,
+                18080,
+                token_lifetime_seconds=59,
+            )
+        with self.assertRaisesRegex(DEMO.DemoError, "between 60 and 900"):
+            DEMO.render_runtime(
+                self.root,
+                "sha256:" + "2" * 64,
+                token_lifetime_seconds=901,
+            )
+
     def test_webhook_mode_extends_only_the_disposable_module_and_binds_its_compiled_digest(
         self,
     ) -> None:
@@ -135,13 +182,14 @@ class DemoProvisioningTests(unittest.TestCase):
         module = (
             self.root / "project/modules/business-establishment-summary/module.yaml"
         ).read_text(encoding="utf-8")
-        self.assertIn(DEMO.WEBHOOK_MODULE_LOCK, project)
-        self.assertNotIn(DEMO.WEBHOOK_MODULE_LOCK + "    digest:", project)
+        hook = DEMO.FIXTURE_CONFIGS["business-establishments"]["webhook"]
+        self.assertIn(hook["module_lock"], project)
+        self.assertNotIn(hook["module_lock"] + "    digest:", project)
         self.assertIn("id: operating-created-v1", module)
         self.assertIn("afterEquals:\n            operating-status: operating", module)
         self.assertLess(
             module.index("id: operating-created-v1"),
-            module.index(DEMO.WEBHOOK_ENTITY_INSERTION),
+            module.index(hook["entity_insertion"]),
         )
         self.assertEqual(fixture_module.read_bytes(), original_fixture_module)
 
@@ -153,7 +201,7 @@ class DemoProvisioningTests(unittest.TestCase):
                     "explanation": {
                         "moduleClosure": [
                             {
-                                "id": DEMO.WEBHOOK_MODULE_ID,
+                                "id": hook["module_id"],
                                 "version": "0.1.0",
                                 "digest": digest,
                             }
@@ -198,13 +246,13 @@ class DemoProvisioningTests(unittest.TestCase):
             "ce-id": event_id,
             "ce-source": (
                 "urn:registrystack:registry:business-establishments:"
-                f"instance:{DEMO.INSTANCE_ID}"
+                f"instance:{DEMO.BUSINESS_INSTANCE_ID}"
             ),
-            "ce-type": DEMO.WEBHOOK_EVENT_ID,
+            "ce-type": "operating-created-v1",
             "ce-time": "2026-01-01T00:00:00Z",
             "ce-dataschema": (
                 "urn:registry-server:event-schema:business-establishments:establishment:"
-                f"{DEMO.WEBHOOK_EVENT_ID}:sha256:" + "5" * 64
+                "operating-created-v1:sha256:" + "5" * 64
             ),
             "x-registry-event-generation": "1",
             "x-registry-delivery-attempt": "1",
@@ -249,23 +297,26 @@ class DemoProvisioningTests(unittest.TestCase):
         )
 
     def test_webhook_verification_covers_every_matching_seeded_establishment(self) -> None:
-        establishments, _, _ = DEMO.seed_spec()
+        (self.root / "fixture-kind").write_text("business-establishments\n", encoding="ascii")
+        establishments, _, _ = DEMO.business_seed_spec()
         events = {}
-        for index, establishment in enumerate(establishments, start=1):
+        slot = 0
+        for establishment in establishments:
             if establishment["operatingStatus"] != "operating":
                 continue
+            slot += 1
             attempts = [{"generation": 1, "attempt": 1, "accepted": True}]
-            if index == 2:
+            if slot == 2:
                 attempts = [
                     {"generation": 1, "attempt": 1, "accepted": False},
                     {"generation": 1, "attempt": 2, "accepted": True},
                 ]
-            elif index == 3:
+            elif slot == 3:
                 attempts = [
                     {"generation": 1, "attempt": 1, "accepted": False},
                     {"generation": 2, "attempt": 1, "accepted": True},
                 ]
-            events[f"event-{index}"] = {"slot": index, "attempts": attempts}
+            events[f"event-{slot}"] = {"slot": slot, "attempts": attempts}
         (self.root / "webhook-receiver-state.json").write_text(
             json.dumps({"verificationFailures": 0, "events": events}),
             encoding="utf-8",
@@ -307,9 +358,9 @@ class DemoProvisioningTests(unittest.TestCase):
         )
         self.assertEqual(actual, expected)
 
-    def test_seed_is_referentially_closed_and_stable(self) -> None:
-        establishments, businesses, assignments = DEMO.seed_spec()
-        establishment_codes = {establishment["establishmentCode"] for establishment in establishments}
+    def test_business_seed_is_referentially_closed_and_stable(self) -> None:
+        establishments, businesses, assignments = DEMO.business_seed_spec()
+        establishment_codes = {item["establishmentCode"] for item in establishments}
         business_codes = {business["businessCode"] for business in businesses}
         self.assertEqual((len(establishments), len(businesses), len(assignments)), (8, 3, 8))
         self.assertEqual(len(establishment_codes), len(establishments))
@@ -330,11 +381,11 @@ class DemoProvisioningTests(unittest.TestCase):
         self.assertTrue(all(row["establishmentCode"] in establishment_codes for row in assignments))
         self.assertTrue(all(row["businessCode"] in business_codes for row in assignments))
         self.assertEqual(
-            {establishment["establishmentKind"] for establishment in establishments},
-            {"production", "warehouse", "office"},
+            {item["operatingStatus"] for item in establishments},
+            {"operating", "suspended"},
         )
         self.assertEqual(
-            sum(establishment["operatingStatus"] == "operating" for establishment in establishments),
+            sum(item["operatingStatus"] == "operating" for item in establishments),
             7,
         )
 
@@ -403,7 +454,7 @@ class DemoProvisioningTests(unittest.TestCase):
         with mock.patch.object(DEMO, "_request", side_effect=request), mock.patch.object(
             DEMO, "_print_query"
         ):
-            DEMO.query(self.root, "viewer")
+            DEMO.query_business(self.root, "viewer")
 
         self.assertEqual(len(calls), 4)
         self.assertEqual(calls[0][0:3], ("GET", f"/v1/records/businesses/{business_id}?accessProfile=business-viewer", "viewer-token"))
@@ -419,6 +470,15 @@ class DemoProvisioningTests(unittest.TestCase):
             encoding="utf-8",
         )
         calls: list[tuple[str, str, object]] = []
+        expected_get_rows = [
+            [
+                {"establishmentCode": "ESTABLISHMENT-DEMO-001", "siteName": "North Quay Head Office", "establishmentKind": "office", "operatingStatus": "operating"},
+                {"establishmentCode": "ESTABLISHMENT-DEMO-002", "siteName": "North Quay Riverside Works", "establishmentKind": "production", "operatingStatus": "operating"},
+            ],
+            [{"businessCode": "BUSINESS-DEMO-001", "administrativeArea": "north-demo", "localRegistrationNumber": 1001, "branchCount": 1}],
+            [{"businessCode": "BUSINESS-DEMO-001", "productionSiteCount": 1, "suspendedSiteCount": 0, "hasProductionSite": True}],
+            [{"businessCode": "BUSINESS-DEMO-002", "hasProductionSite": True, "branchCount": 1, "suspendedSiteCount": 1}],
+        ]
 
         def request(
             root: Path,
@@ -436,21 +496,16 @@ class DemoProvisioningTests(unittest.TestCase):
                     "revision": 1,
                     "data": {"businessCode": "BUSINESS-DEMO-001"},
                 }, {}
-            rows = [
-                [
-                    {"establishmentCode": "ESTABLISHMENT-DEMO-001", "siteName": "North Quay Head Office", "establishmentKind": "office", "operatingStatus": "operating"},
-                    {"establishmentCode": "ESTABLISHMENT-DEMO-002", "siteName": "North Quay Riverside Works", "establishmentKind": "production", "operatingStatus": "operating"},
-                ],
-                [{"businessCode": "BUSINESS-DEMO-001", "administrativeArea": "north-demo", "localRegistrationNumber": 1001, "branchCount": 1}],
-                [{"businessCode": "BUSINESS-DEMO-001", "productionSiteCount": 1, "suspendedSiteCount": 0, "hasProductionSite": True}],
-                [{"businessCode": "BUSINESS-DEMO-002", "hasProductionSite": True, "branchCount": 1, "suspendedSiteCount": 1}],
-            ][len(calls) - 1]
-            return {"items": [{"data": row} for row in rows], "count": len(rows)}, {}
+            rows = expected_get_rows[len([call for call in calls if call[0] == "GET"]) - 1]
+            return {
+                "items": [{"id": str(uuid.uuid4()), "data": row} for row in rows],
+                "count": len(rows),
+            }, {}
 
         with mock.patch.object(DEMO, "_request", side_effect=request), mock.patch.object(
             DEMO, "_print_query"
         ):
-            DEMO.query(self.root, "operator")
+            DEMO.query_business(self.root, "operator")
 
         query_paths = [call[1] for call in calls[:-1]]
         self.assertIn("$select=establishmentCode,siteName,establishmentKind,operatingStatus", query_paths[0])
@@ -458,7 +513,7 @@ class DemoProvisioningTests(unittest.TestCase):
         self.assertIn("$filter=administrativeArea%20eq", query_paths[1])
         self.assertIn("$orderby=localRegistrationNumber", query_paths[1])
         self.assertIn("$filter=hasProductionSite%20eq", query_paths[2])
-        self.assertIn("suspendedSiteCount%20eq%200", query_paths[2])
+        self.assertIn("suspendedSiteCount%20eq", query_paths[2])
         self.assertIn("$filter=hasProductionSite%20eq", query_paths[3])
         self.assertTrue(
             all(
@@ -469,7 +524,7 @@ class DemoProvisioningTests(unittest.TestCase):
                     "administrative-area",
                     "local-registration-number",
                     "production-site-count",
-                    "has-production-site",
+                    "suspended-site-count",
                 )
             )
         )
@@ -491,6 +546,355 @@ class DemoProvisioningTests(unittest.TestCase):
         (bad_fixture / "registry.yaml").write_text("apiVersion: wrong\n", encoding="utf-8")
         with self.assertRaisesRegex(DEMO.DemoError, "expected package line"):
             DEMO.prepare(self.root, bad_fixture, 15432, 18081, 18080)
+
+    def test_prepare_household_remains_explicit_legacy_demo_fixture(self) -> None:
+        household_fixture = MODULE_PATH.parents[2] / "acceptance/publicschema-household"
+
+        DEMO.prepare(
+            self.root,
+            household_fixture,
+            15432,
+            18081,
+            18080,
+            fixture_kind="household",
+        )
+
+        project = (self.root / "project/registry.yaml").read_text(encoding="utf-8")
+        runtime = (self.root / "runtime-test.yaml").read_text(encoding="utf-8")
+        self.assertIn(f"instanceId: {DEMO.INSTANCE_ID}", project)
+        self.assertNotIn("publicschema-household-acceptance", project)
+        self.assertIn("audience: urn:registry-server:household-demo", runtime)
+        self.assertIn("allowedClients: [household-demo, household-demo-no-purpose, household-demo-viewer]", runtime)
+        self.assertTrue((self.root / "mint/clients/household-demo.yaml").is_file())
+        self.assertTrue((self.root / "mint/clients/household-demo-no-purpose.yaml").is_file())
+
+    def test_prepare_asset_site_writes_distinct_clients_credentials_and_local_project(self) -> None:
+        for name in ("planner", "planner-no-purpose"):
+            (self.root / f"keys/{name}-public.jwk.json").write_text(
+                json.dumps(public_jwk(f"{name}-key")), encoding="utf-8"
+            )
+        asset_fixture = MODULE_PATH.parents[2] / "acceptance/asset-site-placement"
+
+        DEMO.prepare(self.root, asset_fixture, 15432, 18081, 18080, fixture_kind="asset-site")
+
+        project = (self.root / "project/registry.yaml").read_text(encoding="utf-8")
+        self.assertIn("environment: local", project)
+        self.assertIn(f"instanceId: {DEMO.ASSET_SITE_INSTANCE_ID}", project)
+        self.assertIn(f"sourceRevision: {DEMO.ASSET_SITE_SOURCE_REVISION}", project)
+        self.assertNotIn("asset-site-placement-acceptance", project)
+        self.assertIn("requiredScopes: [registry:asset:operate]", project)
+        self.assertIn("requiredScopes: [registry:asset:plan]", project)
+        journeys = (self.root / "project/tests/journeys.yaml").read_text(encoding="utf-8")
+        self.assertIn("scopes: [registry:asset:operate]", journeys)
+        self.assertEqual(journeys.count("scopes: [registry:asset:plan]"), 2)
+        self.assertIn(
+            "      - id: planner-without-purpose-is-concealed\n"
+            "        entity: asset-item\n"
+            "        accessProfile: site-planner\n"
+            "        claims:\n"
+            "          principal: synthetic-site-planner\n"
+            "          scopes: [registry:asset:plan]\n"
+            "        request:\n"
+            "          operation: get\n"
+            "          recordRef: renamed-asset\n",
+            journeys,
+        )
+
+        runtime = (self.root / "runtime-test.yaml").read_text(encoding="utf-8")
+        self.assertIn(f"audience: {DEMO.ASSET_SITE_AUDIENCE}", runtime)
+        self.assertIn("allowedClients: [asset-site-demo-operator, asset-site-demo-planner, asset-site-demo-planner-no-purpose]", runtime)
+        self.assertIn(f"instanceId: {DEMO.ASSET_SITE_INSTANCE_ID}", runtime)
+
+        operator = (self.root / "mint/clients/asset-site-demo-operator.yaml").read_text(encoding="utf-8")
+        planner = (self.root / "mint/clients/asset-site-demo-planner.yaml").read_text(encoding="utf-8")
+        no_purpose = (self.root / "mint/clients/asset-site-demo-planner-no-purpose.yaml").read_text(encoding="utf-8")
+        self.assertIn('registry_principal: "synthetic-asset-operator"', operator)
+        self.assertIn('scopes: ["registry:asset:operate"]', operator)
+        self.assertIn('registry_purpose: "asset-management"', operator)
+        self.assertIn('registry_principal: "synthetic-site-planner"', planner)
+        self.assertIn('scopes: ["registry:asset:plan"]', planner)
+        self.assertIn('registry_purpose: "site-planning"', planner)
+        self.assertIn('registry_principal: "synthetic-site-planner"', no_purpose)
+        self.assertIn('scopes: ["registry:asset:plan"]', no_purpose)
+        self.assertNotIn("registry_purpose", no_purpose)
+
+        credentials = (self.root / "schema-test-credentials.yaml").read_text(encoding="utf-8")
+        self.assertIn("stepId: planner-without-purpose-is-concealed", credentials)
+        self.assertIn("tokenRef: secret:file/planner-no-purpose-token", credentials)
+
+    def test_prepare_facility_writes_row_bound_clients_and_schema_credentials(self) -> None:
+        (self.root / "keys/south-operator-public.jwk.json").write_text(
+            json.dumps(public_jwk("south-operator-key")), encoding="utf-8"
+        )
+        facility_fixture = MODULE_PATH.parents[2] / "acceptance/facility"
+
+        DEMO.prepare(self.root, facility_fixture, 15432, 18081, 18080, fixture_kind="facility")
+
+        project = (self.root / "project/registry.yaml").read_text(encoding="utf-8")
+        self.assertIn("environment: local", project)
+        self.assertIn(f"instanceId: {DEMO.FACILITY_INSTANCE_ID}", project)
+        self.assertIn(f"sourceRevision: {DEMO.FACILITY_SOURCE_REVISION}", project)
+        self.assertNotIn("facility-acceptance", project)
+        self.assertIn("requiredScopes: [registry:facility:operate]", project)
+        self.assertEqual(project.count("claim: administrative_boundaries"), 5)
+        self.assertEqual(project.count("operator: equals"), 5)
+        self.assertNotIn("operator: in", project)
+
+        runtime = (self.root / "runtime-test.yaml").read_text(encoding="utf-8")
+        self.assertIn(f"audience: {DEMO.FACILITY_AUDIENCE}", runtime)
+        self.assertIn("allowedClients: [facility-demo-operator, facility-demo-south-operator]", runtime)
+
+        north = (self.root / "mint/clients/facility-demo-operator.yaml").read_text(encoding="utf-8")
+        south = (self.root / "mint/clients/facility-demo-south-operator.yaml").read_text(encoding="utf-8")
+        self.assertIn('scopes: ["registry:facility:operate"]', north)
+        self.assertIn('registry_purpose: "facility-registry"', north)
+        self.assertIn('administrative_boundaries: "north-district"', north)
+        self.assertIn('administrative_boundaries: "south-district"', south)
+
+        credentials = (self.root / "schema-test-credentials.yaml").read_text(encoding="utf-8")
+        self.assertIn("stepId: south-district-claim-cannot-see-north-record", credentials)
+        self.assertIn("tokenRef: secret:file/south-operator-token", credentials)
+        journeys = (self.root / "project/tests/journeys.yaml").read_text(encoding="utf-8")
+        self.assertEqual(journeys.count("scopes: [registry:facility:operate]"), 2)
+
+    def test_prepare_inspection_writes_inspector_clients_and_schema_credentials(self) -> None:
+        inspection_fixture = MODULE_PATH.parents[2] / "acceptance/inspection"
+
+        DEMO.prepare(self.root, inspection_fixture, 15432, 18081, 18080, fixture_kind="inspection")
+
+        project = (self.root / "project/registry.yaml").read_text(encoding="utf-8")
+        self.assertIn("environment: local", project)
+        self.assertIn(f"instanceId: {DEMO.INSPECTION_INSTANCE_ID}", project)
+        self.assertIn(f"sourceRevision: {DEMO.INSPECTION_SOURCE_REVISION}", project)
+        self.assertNotIn("inspection-acceptance", project)
+        self.assertIn("requiredScopes: [registry:inspection:inspect]", project)
+
+        runtime = (self.root / "runtime-test.yaml").read_text(encoding="utf-8")
+        self.assertIn(f"audience: {DEMO.INSPECTION_AUDIENCE}", runtime)
+        self.assertIn("allowedClients: [inspection-demo-inspector, inspection-demo-no-purpose]", runtime)
+
+        inspector = (self.root / "mint/clients/inspection-demo-inspector.yaml").read_text(
+            encoding="utf-8"
+        )
+        no_purpose = (self.root / "mint/clients/inspection-demo-no-purpose.yaml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('scopes: ["registry:inspection:inspect"]', inspector)
+        self.assertIn('registry_principal: "synthetic-inspection-inspector"', inspector)
+        self.assertIn('registry_purpose: "facility-inspection"', inspector)
+        self.assertIn('registry_principal: "synthetic-inspection-inspector"', no_purpose)
+        self.assertNotIn("registry_purpose", no_purpose)
+
+        credentials = (self.root / "schema-test-credentials.yaml").read_text(encoding="utf-8")
+        self.assertIn("stepId: inspector-without-purpose-is-concealed", credentials)
+        self.assertIn("tokenRef: secret:file/no-purpose-token", credentials)
+        journeys = (self.root / "project/tests/journeys.yaml").read_text(encoding="utf-8")
+        self.assertEqual(journeys.count("scopes: [registry:inspection:inspect]"), 2)
+
+    def test_seed_asset_site_uses_normal_api_routes_and_validates_planner_projection(self) -> None:
+        created_ids = {
+            "/v1/records/assets": str(uuid.uuid4()),
+            "/v1/records/sites": str(uuid.uuid4()),
+            "/v1/records/placements": str(uuid.uuid4()),
+            "/v1/records/inspections": str(uuid.uuid4()),
+        }
+        calls: list[tuple[str, str, str, dict[str, object] | None]] = []
+
+        def request(
+            root: Path,
+            method: str,
+            path: str,
+            token_name: str,
+            body: dict[str, object] | None = None,
+            idempotency_key: str | None = None,
+            expected: int = 200,
+        ) -> tuple[dict[str, object], dict[str, str]]:
+            calls.append((method, path, token_name, body))
+            route = path.split("?", 1)[0]
+            if method == "POST":
+                return {"id": created_ids[route], "data": body.get("data", {}) if body else {}}, {}
+            if token_name == "planner-no-purpose-token":
+                return {"code": "resource.not_found"}, {}
+            return {"items": [{"id": "one", "data": {"assetCode": "ASSET-SYNTH-001", "label": "Synthetic water pump"}}]}, {}
+
+        with mock.patch.object(DEMO, "_request", side_effect=request), mock.patch("builtins.print"):
+            DEMO.seed_asset_site(self.root)
+
+        post_paths = [call[1] for call in calls if call[0] == "POST"]
+        self.assertEqual(
+            post_paths,
+            [
+                "/v1/records/assets?accessProfile=asset-operator",
+                "/v1/records/sites?accessProfile=asset-operator",
+                "/v1/records/placements?accessProfile=asset-operator",
+                "/v1/records/inspections?accessProfile=asset-operator",
+            ],
+        )
+        self.assertTrue((self.root / "seed-record-ids.json").is_file())
+        rendered = json.dumps([call[3] for call in calls if call[0] == "POST"], sort_keys=True)
+        self.assertIn("observedAt", rendered)
+        self.assertIn("validFrom", rendered)
+
+    def test_seed_facility_uses_normal_api_routes_and_row_boundary_claims(self) -> None:
+        created_ids = {
+            "/v1/records/facilities": [str(uuid.uuid4()), str(uuid.uuid4())],
+            "/v1/records/permits": [str(uuid.uuid4()), str(uuid.uuid4())],
+            "/v1/records/installations": [str(uuid.uuid4())],
+            "/v1/records/discharge-reports": [str(uuid.uuid4()), str(uuid.uuid4())],
+        }
+        calls: list[tuple[str, str, str, dict[str, object] | None]] = []
+
+        def request(
+            root: Path,
+            method: str,
+            path: str,
+            token_name: str,
+            body: dict[str, object] | None = None,
+            idempotency_key: str | None = None,
+            expected: int = 200,
+        ) -> tuple[dict[str, object], dict[str, str]]:
+            calls.append((method, path, token_name, body))
+            route = path.split("?", 1)[0]
+            if method == "POST":
+                return {"id": created_ids[route].pop(0), "data": body.get("data", {}) if body else {}}, {}
+            if expected == 404:
+                return {"code": "resource.not_found"}, {}
+            return {"items": [{"id": "one", "data": {"facilityCode": "FACILITY-SYNTH-001"}}]}, {}
+
+        with mock.patch.object(DEMO, "_request", side_effect=request), mock.patch("builtins.print"):
+            DEMO.seed_facility(self.root)
+
+        post_calls = [call for call in calls if call[0] == "POST"]
+        self.assertEqual(
+            [call[1] for call in post_calls],
+            [
+                "/v1/records/facilities?accessProfile=facility-operator",
+                "/v1/records/facilities?accessProfile=facility-operator",
+                "/v1/records/permits?accessProfile=facility-operator",
+                "/v1/records/permits?accessProfile=facility-operator",
+                "/v1/records/installations?accessProfile=facility-operator",
+                "/v1/records/discharge-reports?accessProfile=facility-operator",
+                "/v1/records/discharge-reports?accessProfile=facility-operator",
+            ],
+        )
+        self.assertEqual(post_calls[0][2], "operator-token")
+        self.assertEqual(post_calls[1][2], "south-operator-token")
+        rendered = json.dumps([call[3] for call in post_calls], sort_keys=True)
+        self.assertIn('"administrativeBoundary": "north-district"', rendered)
+        self.assertIn('"centroid"', rendered)
+        self.assertIn('"areaValue": "1.2500"', rendered)
+        self.assertTrue((self.root / "seed-record-ids.json").is_file())
+
+    def test_seed_inspection_uses_normal_api_routes_and_create_only_records(self) -> None:
+        created_ids = {
+            "/v1/records/authorities": [str(uuid.uuid4())],
+            "/v1/records/inspections": [str(uuid.uuid4())],
+            "/v1/records/inspection-observations": [str(uuid.uuid4())],
+            "/v1/records/permits": [str(uuid.uuid4()), str(uuid.uuid4())],
+        }
+        calls: list[tuple[str, str, str, dict[str, object] | None]] = []
+
+        def request(
+            root: Path,
+            method: str,
+            path: str,
+            token_name: str,
+            body: dict[str, object] | None = None,
+            idempotency_key: str | None = None,
+            expected: int = 200,
+        ) -> tuple[dict[str, object], dict[str, str]]:
+            calls.append((method, path, token_name, body))
+            route = path.split("?", 1)[0]
+            if method == "POST":
+                return {"id": created_ids[route].pop(0), "data": body.get("data", {}) if body else {}}, {}
+            if expected == 404:
+                return {"code": "resource.not_found"}, {}
+            expected_count = 2 if route == "/v1/records/permits" else 1
+            return {"items": [{"id": str(uuid.uuid4()), "data": {}} for _ in range(expected_count)]}, {}
+
+        with mock.patch.object(DEMO, "_request", side_effect=request), mock.patch("builtins.print"):
+            DEMO.seed_inspection(self.root)
+
+        post_paths = [call[1] for call in calls if call[0] == "POST"]
+        self.assertEqual(
+            post_paths,
+            [
+                "/v1/records/authorities?accessProfile=inspection-inspector",
+                "/v1/records/inspections?accessProfile=inspection-inspector",
+                "/v1/records/inspection-observations?accessProfile=inspection-inspector",
+                "/v1/records/permits?accessProfile=inspection-inspector",
+                "/v1/records/permits?accessProfile=inspection-inspector",
+            ],
+        )
+        rendered = json.dumps([call[3] for call in calls if call[0] == "POST"], sort_keys=True)
+        self.assertIn("observationSchemaMetadata", rendered)
+        self.assertIn("correctedPermit", rendered)
+        self.assertIn("INSPECTION-SYNTH-001", rendered)
+        self.assertTrue((self.root / "seed-record-ids.json").is_file())
+
+    def test_handoff_contains_only_frozen_persona_metadata_and_owner_only_token_paths(self) -> None:
+        (self.root / "server-origin").write_text("http://127.0.0.1:18080\n", encoding="ascii")
+        expires = 1798761600
+        for name in ("operator-token", "viewer-token"):
+            path = self.root / f"secrets/{name}"
+            path.write_text(compact_jwt(expires), encoding="ascii")
+            path.chmod(0o600)
+
+        handoff = self.root / "handoff.json"
+        DEMO.write_handoff(self.root, "business-establishments", handoff)
+
+        self.assertEqual(handoff.stat().st_mode & 0o077, 0)
+        value = json.loads(handoff.read_text(encoding="utf-8"))
+        self.assertEqual(value["schemaVersion"], "registry-workspace/demo/v1")
+        self.assertEqual(value["registry"], {"id": "business-establishments", "baseUrl": "http://127.0.0.1:18080"})
+        self.assertEqual(
+            value["personas"],
+            [
+                {
+                    "id": "business-operator",
+                    "label": "Business operator",
+                    "tokenFile": str((self.root / "secrets/operator-token").resolve()),
+                    "accessProfile": "business-operator",
+                    "expiresAt": "2027-01-01T00:00:00Z",
+                },
+                {
+                    "id": "business-viewer",
+                    "label": "Business viewer",
+                    "tokenFile": str((self.root / "secrets/viewer-token").resolve()),
+                    "accessProfile": "business-viewer",
+                    "expiresAt": "2027-01-01T00:00:00Z",
+                },
+            ],
+        )
+        rendered = json.dumps(value, sort_keys=True)
+        self.assertNotIn(compact_jwt(expires), rendered)
+
+    def test_handoff_refuses_group_readable_token_files(self) -> None:
+        (self.root / "server-origin").write_text("http://127.0.0.1:18080\n", encoding="ascii")
+        for name in ("operator-token", "viewer-token"):
+            path = self.root / f"secrets/{name}"
+            path.write_text(compact_jwt(1798752000), encoding="ascii")
+            path.chmod(0o600)
+        (self.root / "secrets/viewer-token").chmod(0o640)
+
+        with self.assertRaisesRegex(DEMO.DemoError, "owner-only"):
+            DEMO.write_handoff(self.root, "business-establishments", self.root / "handoff.json")
+
+    def test_handoff_for_new_fixtures_contains_only_frontend_personas(self) -> None:
+        (self.root / "server-origin").write_text("http://127.0.0.1:18080\n", encoding="ascii")
+        (self.root / "secrets/operator-token").write_text(compact_jwt(1798761600), encoding="ascii")
+        (self.root / "secrets/operator-token").chmod(0o600)
+
+        for fixture_kind, expected in (
+            ("facility", "facility-operator"),
+            ("inspection", "inspection-inspector"),
+        ):
+            handoff = self.root / f"{fixture_kind}-handoff.json"
+            DEMO.write_handoff(self.root, fixture_kind, handoff)
+            value = json.loads(handoff.read_text(encoding="utf-8"))
+            self.assertEqual([persona["id"] for persona in value["personas"]], [expected])
+            self.assertNotIn("south-operator-token", json.dumps(value, sort_keys=True))
+            self.assertNotIn("no-purpose-token", json.dumps(value, sort_keys=True))
 
     def test_demo_root_must_not_be_a_symbolic_link(self) -> None:
         linked_root = Path(self.temporary.name) / "linked-run"

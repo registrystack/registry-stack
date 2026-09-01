@@ -289,6 +289,114 @@ vocabularies:
     values: [single, extended]
 "#;
 
+const METADATA_LABEL_PROJECT: &str = r#"
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: metadata-labels
+  version: 1
+  defaultLanguage: en
+manifestProjection:
+  accessProfile: operator
+  classificationCeiling: public
+  catalog:
+    baseUrl: https://metadata-labels.example.test
+    title: Metadata Labels
+    publisher: {name: Publisher}
+  dataset: {title: Metadata Labels}
+  entities:
+    - id: permit
+      identifiers:
+        - {field: display-token, kind: display}
+entities:
+  - id: permit
+    route: permits
+    mutationMode: mutable
+    classification: public
+    fields:
+      - {id: import-source, type: string, required: true, maxLength: 64, classification: public}
+      - {id: source-record-id, type: string, required: true, maxLength: 64, classification: public}
+      - {id: permit-number, type: string, required: true, maxLength: 64, classification: public}
+      - {id: display-token, type: string, required: true, maxLength: 64, classification: public}
+      - {id: hidden-permit-key, type: string, required: true, maxLength: 64, classification: public}
+      - {id: valid-from, type: date, required: true, classification: public}
+      - {id: valid-to, type: date, classification: public}
+    temporal:
+      startField: valid-from
+      endField: valid-to
+      scopeFields: [permit-number]
+    constraints:
+      - {kind: unique, fields: [hidden-permit-key]}
+      - {kind: unique, fields: [permit-number, valid-from]}
+      - {kind: unique, fields: [import-source, source-record-id]}
+      - {kind: temporal-non-overlap, scopeFields: [permit-number], startField: valid-from, endField: valid-to}
+  - id: inspection
+    route: inspections
+    mutationMode: mutable
+    classification: public
+    fields:
+      - {id: import-source, type: string, required: true, maxLength: 64, classification: public}
+      - {id: source-record-id, type: string, required: true, maxLength: 64, classification: public}
+      - {id: inspection-code, type: text, required: true, maxLength: 64, classification: public}
+      - {id: hidden-inspection-key, type: string, required: true, maxLength: 64, classification: public}
+      - {id: valid-from, type: date, required: true, classification: public, validTimeRole: valid_from}
+      - {id: valid-to, type: date, classification: public, validTimeRole: valid_to}
+    temporal:
+      startField: valid-from
+      endField: valid-to
+      scopeFields: [inspection-code]
+    constraints:
+      - {kind: unique, fields: [hidden-inspection-key, valid-from]}
+      - {kind: unique, fields: [inspection-code, valid-from]}
+      - {kind: unique, fields: [import-source, source-record-id]}
+      - {kind: temporal-non-overlap, scopeFields: [inspection-code], startField: valid-from, endField: valid-to}
+  - id: finding
+    route: findings
+    mutationMode: mutable
+    classification: public
+    fields:
+      - {id: inspection, type: reference, target: inspection, required: true, classification: public}
+  - id: certificate
+    route: certificates
+    mutationMode: mutable
+    classification: public
+    fields:
+      - {id: import-source, type: string, required: true, maxLength: 64, classification: public}
+      - {id: certificate-code, type: text, required: true, maxLength: 64, classification: public}
+      - {id: hidden-certificate-key, type: string, required: true, maxLength: 64, classification: public}
+    constraints:
+      - {kind: unique, fields: [hidden-certificate-key]}
+      - {kind: unique, fields: [certificate-code]}
+accessProfiles:
+  - id: operator
+    default: true
+    anonymous: true
+    grants:
+      - entity: permit
+        operations: [get, list]
+        readableFields: [import-source, source-record-id, permit-number, display-token, valid-from, valid-to]
+      - entity: inspection
+        operations: [get, list]
+        readableFields: [import-source, source-record-id, inspection-code, valid-from, valid-to]
+        filterableFields: [inspection-code]
+        sortableFields: [inspection-code]
+      - entity: finding
+        operations: [get]
+        readableFields: [inspection]
+      - entity: certificate
+        operations: [get, list]
+        readableFields: [import-source, certificate-code]
+  - id: redacted-reader
+    anonymous: true
+    grants:
+      - entity: inspection
+        operations: [get]
+        readableFields: [import-source, valid-from]
+      - entity: finding
+        operations: [get]
+        readableFields: [inspection]
+"#;
+
 #[derive(Default)]
 struct RecordingReadService {
     calls: AtomicUsize,
@@ -414,6 +522,47 @@ fn snapshot_harness(
 #[tokio::test]
 async fn snapshot_route_requires_its_own_current_authority_and_never_calls_live_reads() {
     let (app, records, snapshots) = snapshot_harness(SNAPSHOT_PROJECT, &[]);
+    let metadata = body_json(
+        send_to(
+            &app,
+            Method::GET,
+            "/v1/registry?accessProfile=history",
+            Some(caseworker_claims("case-management")),
+        )
+        .await,
+    )
+    .await;
+    let operation = metadata_operation(&metadata, "records.assignment.snapshot");
+    assert_eq!(operation["query"]["temporal"]["mode"], "snapshot");
+    assert_eq!(
+        operation["query"]["temporal"]["snapshot"],
+        json!({
+            "parameter": "snapshot",
+            "required": false,
+            "schema": {"type": "string", "maxLength": registry_server::query::MAX_OPAQUE_VALUE_BYTES},
+        })
+    );
+    assert_eq!(
+        operation["query"]["temporal"]["validAt"],
+        json!({
+            "parameter": "validAt",
+            "required": false,
+            "schema": {"type": "string", "format": "date"},
+        })
+    );
+    assert_eq!(
+        operation["request"]["queryParameters"],
+        json!([
+            "$count",
+            "$filter",
+            "$orderby",
+            "$select",
+            "$skiptoken",
+            "$top",
+            "snapshot",
+            "validAt"
+        ])
+    );
     for (suffix, claims) in [
         ("", None),
         ("", Some(caseworker_claims("wrong-purpose"))),
@@ -740,10 +889,29 @@ async fn in_filter_values_are_one_deterministic_finite_set() {
 async fn lookup_body_exactness_origin_types_and_unresolved_equivalence_are_value_free() {
     let harness = Harness::from_project(LOOKUP_PATH_PROJECT, true);
     let operator_claims = Some(caseworker_claims("case-management"));
+    let metadata = body_json(
+        harness
+            .send(
+                Method::GET,
+                "/v1/registry?accessProfile=operator",
+                operator_claims.clone(),
+            )
+            .await,
+    )
+    .await;
+    let lookup = metadata_operation(&metadata, "records.household.lookup");
+    let projection_parameter = lookup["request"]["queryParameters"][0]
+        .as_str()
+        .expect("lookup permits projection");
+    assert_eq!(projection_parameter, "$select");
+    let projected_lookup = format!(
+        "{}?accessProfile=operator&{projection_parameter}=householdCode",
+        lookup["path"].as_str().unwrap()
+    );
     let accepted = harness
         .send_json(
             Method::POST,
-            "/v1/records/households:lookup?accessProfile=operator&$select=householdCode",
+            &projected_lookup,
             operator_claims.clone(),
             json!({
                 "selector": "by-local-reference",
@@ -1076,7 +1244,7 @@ async fn relationship_discovery_uses_target_entity_and_unions_authorized_operati
         openapi["components"]["schemas"]["person"]["properties"],
         json!({
             "personCode": {"type": "string", "minLength": 0, "maxLength": 64},
-            "sensitiveNote": {"type": "string", "minLength": 0, "maxLength": 64}
+            "sensitiveNote": {"anyOf": [{"type": "string", "minLength": 0, "maxLength": 64}, {"type": "null"}]}
         })
     );
 
@@ -1167,7 +1335,7 @@ async fn derived_fields_are_discoverable_as_read_only_response_properties() {
     .await;
     assert_eq!(
         schema["properties"]["eligibilityScore"],
-        json!({"type": "integer", "format": "int64", "readOnly": true})
+        json!({"anyOf": [{"type": "integer", "format": "int64"}, {"type": "null"}], "readOnly": true})
     );
     assert_eq!(
         schema["properties"]["label"],
@@ -2650,5 +2818,356 @@ fn assert_no_mutation_methods(document: &Value) {
         assert!(methods.get("post").is_none());
         assert!(methods.get("patch").is_none());
         assert!(methods.get("delete").is_none());
+    }
+}
+
+fn metadata_operation<'a>(document: &'a Value, id: &str) -> &'a Value {
+    document["operations"]
+        .as_array()
+        .expect("operation metadata")
+        .iter()
+        .find(|operation| operation["id"] == id)
+        .expect("authorized operation")
+}
+
+#[tokio::test]
+async fn workspace_metadata_title_fields_prefer_readable_unique_text_or_string_before_generic_fallback(
+) {
+    let harness = Harness::from_project(METADATA_LABEL_PROJECT, true);
+    let document = body_json(harness.send(Method::GET, "/v1/registry", None).await).await;
+
+    let permit_get = metadata_operation(&document, "records.permit.get");
+    assert_eq!(
+        permit_get["titleFields"],
+        json!(["display-token"]),
+        "authored manifest identifiers keep precedence over compiled temporal labels"
+    );
+
+    let inspection_get = metadata_operation(&document, "records.inspection.get");
+    assert_eq!(
+        inspection_get["titleFields"],
+        json!(["inspection-code"]),
+        "readable single-field temporal scopes are preferred over arbitrary readable strings"
+    );
+    let inspection_current = metadata_operation(&document, "records.inspection.current");
+    assert_eq!(inspection_current["query"]["kind"], "current");
+    assert_eq!(
+        inspection_current["titleFields"],
+        json!(["inspection-code"])
+    );
+    let certificate_get = metadata_operation(&document, "records.certificate.get");
+    assert_eq!(
+        certificate_get["titleFields"],
+        json!(["certificate-code"]),
+        "non-temporal readable single-field unique text keys stay above arbitrary readable strings"
+    );
+
+    let finding = metadata_operation(&document, "records.finding.get");
+    let reference = &finding["fields"][0]["reference"];
+    assert_eq!(reference["targetEntity"], "inspection");
+    assert!(reference["operations"]
+        .as_array()
+        .expect("reference operations")
+        .iter()
+        .any(|operation| operation["labelFields"] == json!(["inspection-code"])));
+
+    let rendered = document.to_string();
+    for hidden in [
+        "hidden-permit-key",
+        "hidden-inspection-key",
+        "hidden-certificate-key",
+    ] {
+        assert!(!rendered.contains(hidden), "metadata leaked {hidden}");
+    }
+
+    let redacted = body_json(
+        harness
+            .send(
+                Method::GET,
+                "/v1/registry?accessProfile=redacted-reader",
+                None,
+            )
+            .await,
+    )
+    .await;
+    let redacted_inspection = metadata_operation(&redacted, "records.inspection.get");
+    assert_eq!(redacted_inspection["titleFields"], json!(["import-source"]));
+    assert_eq!(
+        redacted_inspection["readableFields"],
+        json!(["import-source", "valid-from"])
+    );
+    let redacted_reference =
+        &metadata_operation(&redacted, "records.finding.get")["fields"][0]["reference"];
+    assert!(redacted_reference["operations"]
+        .as_array()
+        .expect("redacted reference operations")
+        .iter()
+        .all(|operation| operation["labelFields"] == json!(["import-source"])));
+    assert!(!redacted.to_string().contains("inspection-code"));
+    assert_eq!(harness.records.calls(), 0);
+}
+
+#[tokio::test]
+async fn workspace_metadata_keeps_route_fields_selectors_and_query_capabilities_separate() {
+    let harness = Harness::from_project(LOOKUP_PATH_PROJECT, true);
+    let response = harness
+        .send(
+            Method::GET,
+            "/v1/registry?accessProfile=operator",
+            Some(caseworker_claims("case-management")),
+        )
+        .await;
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    let document = body_json(response).await;
+    assert_eq!(document["metadataVersion"], "1");
+    assert!(document["revision"].is_string());
+    let path = metadata_operation(&document, "records.household.path.people");
+    assert_eq!(path["sourceEntity"], "household");
+    assert_eq!(path["responseEntity"], "person");
+    assert_eq!(path["readPath"], json!({"id":"people", "label":"People"}));
+    assert_eq!(path["readableFields"], json!(["person-code"]));
+    assert_eq!(path["fields"][0]["apiName"], "personCode");
+    assert_eq!(path["titleFields"], json!(["person-code"]));
+    assert_eq!(path["query"]["allowCount"], true);
+    assert_eq!(
+        path["query"]["filterableFields"][0]["apiName"],
+        "personCode"
+    );
+    assert_eq!(
+        path["query"]["sortableFields"][0],
+        json!({"id":"person-code","apiName":"personCode","directions":["asc"]})
+    );
+    assert_eq!(
+        path["request"]["queryParameters"],
+        json!([
+            "$count",
+            "$filter",
+            "$orderby",
+            "$select",
+            "$skiptoken",
+            "$top"
+        ])
+    );
+    assert_eq!(
+        path["query"]["maxPageSize"],
+        path["query"]["defaultPageSize"]
+    );
+    let direct = metadata_operation(&document, "records.person.get");
+    assert_eq!(direct["readableFields"], json!(["sensitive-note"]));
+    assert_eq!(
+        direct["fields"][0]["schema"]["anyOf"][1],
+        json!({"type":"null"})
+    );
+    assert_eq!(direct["request"]["queryParameters"], json!(["$select"]));
+    assert_eq!(direct["createWritableFields"], json!([]));
+    assert_eq!(direct["patchWritableFields"], json!([]));
+    assert_eq!(direct["requiredCapabilities"], json!([]));
+    let lookup = metadata_operation(&document, "records.household.lookup");
+    assert_eq!(lookup["selectors"].as_array().unwrap().len(), 2);
+    assert_eq!(lookup["selectors"][0]["valueOrigin"], "request");
+    assert_eq!(
+        lookup["selectors"][0]["requestFields"],
+        json!(["householdCode"])
+    );
+    assert_eq!(
+        lookup["selectors"][0]["fields"][0]["schema"],
+        json!({"type":"string","minLength":0,"maxLength":64})
+    );
+    assert_eq!(lookup["request"]["queryParameters"], json!(["$select"]));
+    let openapi = body_json(
+        harness
+            .send(
+                Method::GET,
+                "/openapi.json?accessProfile=operator",
+                Some(caseworker_claims("case-management")),
+            )
+            .await,
+    )
+    .await;
+    let query_parameters = openapi["paths"][lookup["path"].as_str().unwrap()]["post"]["parameters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|parameter| parameter["in"] == "query" && parameter["name"] != "accessProfile")
+        .map(|parameter| parameter["name"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        lookup["request"]["queryParameters"],
+        json!(query_parameters)
+    );
+    let rendered = document.to_string();
+    for hidden in [
+        "private-note",
+        "privateNote",
+        "by-private-note",
+        "sourceRef",
+        "targetRef",
+        "claimMapping",
+        "physicalName",
+        "processingFields",
+    ] {
+        assert!(!rendered.contains(hidden), "metadata leaked {hidden}");
+    }
+    assert_eq!(harness.records.calls(), 0);
+}
+
+#[tokio::test]
+async fn workspace_metadata_lookup_claim_origin_exposes_no_private_claim_mapping() {
+    let harness = Harness::from_project(LOOKUP_PATH_PROJECT, true);
+    let claims = caseworker_claims_with_direct(
+        "case-management",
+        [
+            (
+                "household_id",
+                VerifiedClaimValue::direct_string("00000000-0000-4000-8000-000000000001").unwrap(),
+            ),
+            (
+                "household_code",
+                VerifiedClaimValue::direct_string("PRIVATE-SELECTOR-VALUE").unwrap(),
+            ),
+        ],
+    );
+    let document = body_json(
+        harness
+            .send(
+                Method::GET,
+                "/v1/registry?accessProfile=viewer",
+                Some(claims),
+            )
+            .await,
+    )
+    .await;
+    let lookup = metadata_operation(&document, "records.household.lookup");
+    assert_eq!(lookup["selectors"].as_array().unwrap().len(), 1);
+    assert_eq!(lookup["selectors"][0]["valueOrigin"], "verified_claim");
+    assert_eq!(lookup["request"]["queryParameters"], json!(["$select"]));
+    assert_eq!(lookup["selectors"][0]["requestFields"], json!([]));
+    assert_eq!(
+        lookup["selectors"][0]["fields"][0]["apiName"],
+        "householdCode"
+    );
+    let rendered = document.to_string();
+    for hidden in [
+        "household_id",
+        "household_code",
+        "PRIVATE-SELECTOR-VALUE",
+        "administrative-area",
+        "by-local-reference",
+        "claimMapping",
+        "path.people",
+    ] {
+        assert!(!rendered.contains(hidden), "metadata leaked {hidden}");
+    }
+    assert_eq!(document["operations"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn workspace_references_require_independent_same_profile_target_operations() {
+    let source = LOOKUP_PATH_PROJECT.replace("      - entity: person\n        operations: [get, list]", "      - entity: membership\n        operations: [get]\n        readableFields: [person]\n      - entity: person\n        operations: [get, list]");
+    let harness = Harness::from_project(&source, true);
+    let document = body_json(
+        harness
+            .send(
+                Method::GET,
+                "/v1/registry?accessProfile=operator",
+                Some(caseworker_claims("case-management")),
+            )
+            .await,
+    )
+    .await;
+    let membership = metadata_operation(&document, "records.membership.get");
+    assert_eq!(membership["fields"].as_array().unwrap().len(), 1);
+    let reference = &membership["fields"][0]["reference"];
+    assert_eq!(reference["targetEntity"], "person");
+    assert_eq!(reference["manualEntry"], true);
+    assert_eq!(reference["operations"].as_array().unwrap().len(), 2);
+    for operation in reference["operations"].as_array().unwrap() {
+        assert_eq!(operation["accessProfile"], "operator");
+        assert_eq!(operation["labelFields"], json!(["sensitive-note"]));
+        assert_ne!(operation["operationId"], "records.household.path.people");
+    }
+    let path_only = source.replace("      - entity: person\n        operations: [get, list]\n        readableFields: [sensitive-note]\n        filterableFields: [sensitive-note]\n        sortableFields: [sensitive-note]\n", "");
+    let harness = Harness::from_project(&path_only, true);
+    let document = body_json(
+        harness
+            .send(
+                Method::GET,
+                "/v1/registry?accessProfile=operator",
+                Some(caseworker_claims("case-management")),
+            )
+            .await,
+    )
+    .await;
+    let reference =
+        &metadata_operation(&document, "records.membership.get")["fields"][0]["reference"];
+    assert_eq!(reference, &json!({"manualEntry":true,"operations":[]}));
+    assert!(document["operations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|operation| operation["readPath"]["id"] == "people"));
+    // The no-profile request can have different compiled defaults per route.
+    // Even a visible direct operation in another profile cannot label this reference.
+    let other_profile = format!("{path_only}      - entity: person\n        operations: [get, list]\n        readableFields: [sensitive-note]\n");
+    let harness = Harness::from_project(&other_profile, true);
+    let document = body_json(
+        harness
+            .send(
+                Method::GET,
+                "/v1/registry",
+                Some(caseworker_claims("case-management")),
+            )
+            .await,
+    )
+    .await;
+    assert_eq!(
+        metadata_operation(&document, "records.person.get")["accessProfile"],
+        "viewer"
+    );
+    assert_eq!(
+        metadata_operation(&document, "records.membership.get")["fields"][0]["reference"],
+        json!({"manualEntry":true,"operations":[]})
+    );
+}
+
+#[tokio::test]
+async fn workspace_temporal_capabilities_and_no_store_cover_success_and_refusal() {
+    let harness = Harness::from_project(DISCOVERY_MATRIX_PROJECT, true);
+    let document = body_json(
+        harness
+            .send(
+                Method::GET,
+                "/v1/registry?accessProfile=caseworker",
+                Some(caseworker_claims("case-management")),
+            )
+            .await,
+    )
+    .await;
+    let as_of = document["operations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|operation| operation["query"]["kind"] == "as_of")
+        .unwrap();
+    assert_eq!(as_of["query"]["temporal"]["parameter"], "asOf");
+    assert_eq!(as_of["query"]["temporal"]["required"], true);
+    assert!(as_of["request"]["queryParameters"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("asOf")));
+    for uri in [
+        "/v1/registry",
+        "/openapi.json",
+        "/v1/schemas/public-record",
+        "/v1/records/public-records",
+        "/v1/records/public-records/00000000-0000-4000-8000-000000000001",
+        "/v1/registry?accessProfile=unknown",
+        "/v1/schemas/protected-ledger",
+        "/v1/records/public-records?$top=0",
+        "/missing",
+    ] {
+        let response = harness.send(Method::GET, uri, None).await;
+        assert_eq!(response.headers()["cache-control"], "no-store", "{uri}");
+        assert!(response.headers().contains_key("traceparent"));
     }
 }

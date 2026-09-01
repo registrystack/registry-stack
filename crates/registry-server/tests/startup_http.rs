@@ -153,6 +153,7 @@ async fn request_timeout_returns_value_free_problem() {
         .expect("router responds");
 
     assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
+    assert_eq!(response.headers()["cache-control"], "no-store");
     let traceparent = response
         .headers()
         .get("traceparent")

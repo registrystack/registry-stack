@@ -772,13 +772,18 @@ async fn request_timeout(
 }
 
 fn timeout_problem() -> Response {
-    crate::correlation::problem_response(
+    let mut response = crate::correlation::problem_response(
         StatusCode::GATEWAY_TIMEOUT,
         "urn:registry-server:problem:request.timeout",
         "Gateway Timeout",
         "The request timed out.",
         "request.timeout",
-    )
+    );
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    response
 }
 
 /// Bind and serve a previously prepared server. Binding consumes the

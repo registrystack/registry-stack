@@ -3042,17 +3042,29 @@ fn generic_decimal_crs84_point_and_structured_fields_compile_to_deterministic_dd
         .get("generated/schemas/reading.schema.json")
         .expect("entity schema generated");
     let schema: Value = parse_json_strict(&schema.bytes).expect("schema is strict JSON");
-    assert_eq!(schema["properties"]["amount"]["type"], "string");
-    assert_eq!(schema["properties"]["amount"]["x-registry-decimalScale"], 2);
+    for name in ["amount", "location", "payload"] {
+        assert_eq!(
+            schema["properties"][name]["anyOf"][1],
+            json!({"type": "null"})
+        );
+    }
+    assert_eq!(schema["properties"]["amount"]["anyOf"][0]["type"], "string");
     assert_eq!(
-        schema["properties"]["location"]["description"],
+        schema["properties"]["amount"]["anyOf"][0]["x-registry-decimalScale"],
+        2
+    );
+    assert_eq!(
+        schema["properties"]["location"]["anyOf"][0]["description"],
         "CRS84 GeoJSON Point with coordinates in [longitude, latitude] order."
     );
     assert_eq!(
-        schema["properties"]["payload"]["properties"]["batch"]["type"],
+        schema["properties"]["payload"]["anyOf"][0]["properties"]["batch"]["type"],
         "string"
     );
-    assert_eq!(schema["properties"]["payload"]["x-registry-maxBytes"], 256);
+    assert_eq!(
+        schema["properties"]["payload"]["anyOf"][0]["x-registry-maxBytes"],
+        256
+    );
 }
 
 #[test]
@@ -4262,7 +4274,7 @@ fn generated_openapi_separates_security_and_mutation_input_from_read_schema() {
         openapi["components"]["schemas"]["business-record-create-input"]["properties"],
         json!({
             "code": {"type": "string", "minLength": 0, "maxLength": 32},
-            "draftNote": {"type": "string", "minLength": 0, "maxLength": 80}
+            "draftNote": {"anyOf": [{"type": "string", "minLength": 0, "maxLength": 80}, {"type": "null"}]}
         })
     );
     assert_eq!(
@@ -4308,7 +4320,7 @@ fn entity_schema_uses_compiled_api_names_and_preserves_field_contracts() {
     assert_eq!(
         schema["properties"],
         json!({
-            "caseNoteText": {"type": "string", "maxLength": 200},
+            "caseNoteText": {"anyOf": [{"type": "string", "maxLength": 200}, {"type": "null"}]},
             "householdCode": {"type": "string", "minLength": 0, "maxLength": 64},
             "householdKind": {
                 "type": "string",
