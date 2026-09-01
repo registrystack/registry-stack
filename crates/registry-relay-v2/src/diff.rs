@@ -473,6 +473,17 @@ fn diff_resource(
             "the published resource description changed",
         );
     }
+    if previous.dataset_identifier != current.dataset_identifier
+        || previous.entity_type_identifier != current.entity_type_identifier
+    {
+        push(
+            changes,
+            ChangeClass::ResourceMeaningChanged,
+            ChangeImpact::Breaking,
+            format!("{root}.registryRecordContext"),
+            "the Registry Record dataset or entity-type identity changed",
+        );
+    }
     if previous.semantic_class != current.semantic_class {
         push(
             changes,
@@ -1565,6 +1576,25 @@ mod tests {
 
         let report = diff_registries(&previous, &current);
         assert!(report.changes.is_empty());
+    }
+
+    #[test]
+    fn registry_record_context_identity_change_is_breaking() {
+        let previous = compiled();
+        let mut current = previous.clone();
+        current.resources[0].dataset_identifier = "replacement-dataset".into();
+
+        let report = diff_registries(&previous, &current);
+        assert!(report.changes.contains(&ContractChange {
+            class: ChangeClass::ResourceMeaningChanged,
+            impact: ChangeImpact::Breaking,
+            location: format!(
+                "resources.{}.registryRecordContext",
+                current.resources[0].id
+            ),
+            description: "the Registry Record dataset or entity-type identity changed".into(),
+        }));
+        assert!(report.changes.contains(&compiled_model_change()));
     }
 
     #[test]

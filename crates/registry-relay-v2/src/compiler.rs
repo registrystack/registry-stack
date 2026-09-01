@@ -919,6 +919,18 @@ impl<'a> Compiler<'a> {
                     "a resource identifier must be URL-safe kebab case within the runtime route ceiling",
                 );
             }
+            require_nonempty(
+                &mut self.report,
+                &resource.dataset_identifier,
+                "resource.dataset_identifier_empty",
+                &format!("{root}.datasetIdentifier"),
+            );
+            require_nonempty(
+                &mut self.report,
+                &resource.entity_type_identifier,
+                "resource.entity_type_identifier_empty",
+                &format!("{root}.entityTypeIdentifier"),
+            );
             if resource.title.trim().is_empty() || resource.description.trim().is_empty() {
                 self.error(
                     "resource.documentation_empty",
@@ -988,6 +1000,25 @@ impl<'a> Compiler<'a> {
                         "property.name_invalid",
                         &location,
                         "property keys must be URL-safe camelCase",
+                    );
+                }
+                if matches!(
+                    name,
+                    "data"
+                        | "items"
+                        | "pageInfo"
+                        | "meta"
+                        | "registryIdentifier"
+                        | "datasetIdentifier"
+                        | "entityTypeIdentifier"
+                        | "recordIdentifier"
+                        | "revisionIdentifier"
+                        | "nextCursor"
+                ) {
+                    self.error(
+                        "property.name_registry_record_infrastructure",
+                        &location,
+                        "Registry Record envelope, context, and identifier members cannot be authored as domain data",
                     );
                 }
                 if property.label.trim().is_empty() || property.description.trim().is_empty() {
@@ -1619,6 +1650,8 @@ impl<'a> Compiler<'a> {
             };
             compiled.push(CompiledResource {
                 id: resource.id.clone(),
+                dataset_identifier: resource.dataset_identifier.clone(),
+                entity_type_identifier: resource.entity_type_identifier.clone(),
                 title: resource.title.clone(),
                 description: resource.description.clone(),
                 semantic_class,
@@ -5341,6 +5374,73 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn resource_registry_record_identifiers_must_be_nonempty() {
+        let base = RegistryContract::parse_yaml(valid_contract()).expect("strict contract");
+        for (field, code) in [
+            ("datasetIdentifier", "resource.dataset_identifier_empty"),
+            (
+                "entityTypeIdentifier",
+                "resource.entity_type_identifier_empty",
+            ),
+        ] {
+            let mut value = serde_json::to_value(&base).expect("contract serializes");
+            *value
+                .pointer_mut(&format!("/resources/0/{field}"))
+                .expect("resource context field") = serde_json::json!("  ");
+            let contract =
+                serde_json::from_value::<RegistryContract>(value).expect("strict contract shape");
+            let report =
+                compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
+                    .expect_err("empty Registry Record context must not compile");
+            assert!(
+                report.diagnostics.iter().any(|diagnostic| {
+                    diagnostic.code == code
+                        && diagnostic.location == format!("resources[0].{field}")
+                }),
+                "missing {code}: {:?}",
+                report.diagnostics
+            );
+        }
+    }
+
+    #[test]
+    fn registry_record_infrastructure_cannot_be_duplicated_as_domain_data() {
+        let base = RegistryContract::parse_yaml(valid_contract()).expect("strict contract");
+        for field in [
+            "data",
+            "items",
+            "pageInfo",
+            "meta",
+            "registryIdentifier",
+            "datasetIdentifier",
+            "entityTypeIdentifier",
+            "recordIdentifier",
+            "revisionIdentifier",
+            "nextCursor",
+        ] {
+            let mut value = serde_json::to_value(&base).expect("contract serializes");
+            let property = value
+                .pointer("/resources/0/properties/name")
+                .expect("example property")
+                .clone();
+            value
+                .pointer_mut("/resources/0/properties")
+                .and_then(serde_json::Value::as_object_mut)
+                .expect("resource properties")
+                .insert(field.into(), property);
+            let contract =
+                serde_json::from_value::<RegistryContract>(value).expect("strict contract shape");
+            let report =
+                compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
+                    .expect_err("duplicated Registry Record context must not compile");
+            assert!(report.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == "property.name_registry_record_infrastructure"
+                    && diagnostic.location == format!("resources[0].properties.{field}")
+            }));
+        }
+    }
+
+    #[test]
     fn route_identifiers_cannot_compile_unreachable_paths() {
         let base = RegistryContract::parse_yaml(valid_contract()).expect("strict contract");
         let boundary = "a".repeat(MAXIMUM_ROUTE_IDENTIFIER_BYTES);
@@ -7890,6 +7990,8 @@ sources:
   db: {kind: sqlite, profile: snapshot, expectedSchemaFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
 resources:
   - id: record
+    datasetIdentifier: records
+    entityTypeIdentifier: record
     title: Record
     description: One governed Record
     semanticClass: local:Record

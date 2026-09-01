@@ -496,15 +496,37 @@ fn assert_expectations(
             );
         }
     }
-    if step.expect.registry_core_required == Some(true)
-        && (records.is_empty() || records.iter().any(|record| !has_registry_core(record)))
-    {
-        mismatch(
-            diagnostics,
-            "fixture.registry_core_mismatch",
-            &location,
-            "Registry Core context",
-        );
+    if step.expect.registry_core_required == Some(true) {
+        let registry_record_envelope = response
+            .headers
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| {
+                value.starts_with("application/json") || value.starts_with("application/ld+json")
+            });
+        let record_context_matches = if registry_record_envelope {
+            response.document.is_some_and(has_registry_record_context)
+                && records.iter().all(|record| {
+                    has_record_core(record)
+                        && [
+                            "registryIdentifier",
+                            "datasetIdentifier",
+                            "entityTypeIdentifier",
+                        ]
+                        .iter()
+                        .all(|key| record.get(key).is_none())
+                })
+        } else {
+            records.iter().all(|record| has_registry_core(record))
+        };
+        if records.is_empty() || !record_context_matches {
+            mismatch(
+                diagnostics,
+                "fixture.registry_core_mismatch",
+                &location,
+                "Registry Core context",
+            );
+        }
     }
     if !step.expect.domain_data_keys.is_empty() {
         let expected = step
@@ -1217,6 +1239,7 @@ fn normalized_records(document: &Value) -> Value {
             object.remove("@context");
             object.remove("@id");
             object.remove("@type");
+            object.remove("registryIdentifier");
             if let Some(domain) = object.get_mut("domainData").and_then(Value::as_object_mut) {
                 domain.retain(|_, value| {
                     value.get("type").and_then(Value::as_str) != Some("Point")
@@ -1263,8 +1286,11 @@ fn geojson_features(document: &Value) -> Vec<&Value> {
 }
 
 fn has_registry_core(record: &Value) -> bool {
+    record.get("registryIdentifier").is_some() && has_record_core(record)
+}
+
+fn has_record_core(record: &Value) -> bool {
     [
-        "registryIdentifier",
         "recordIdentifier",
         "revisionIdentifier",
         "lifecycleState",
@@ -1276,6 +1302,22 @@ fn has_registry_core(record: &Value) -> bool {
     ]
     .iter()
     .all(|key| record.get(key).is_some())
+}
+
+fn has_registry_record_context(document: &Value) -> bool {
+    [
+        "registryIdentifier",
+        "datasetIdentifier",
+        "entityTypeIdentifier",
+    ]
+    .iter()
+    .all(|key| {
+        document
+            .get("meta")
+            .and_then(|meta| meta.get(key))
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty())
+    })
 }
 
 fn validate_domain_data_expectations(

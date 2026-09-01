@@ -19,7 +19,8 @@ The intended boundaries are firmer than the syntax:
 - `RelayRuntime` binds deployment-local paths, listeners, token issuers, and audit storage without changing resources, operations, disclosure, or semantics;
 - SQLite views and columns are source bindings, while resources and properties are the public model;
 - one contract describes one Registry; each resource is a Record type within it;
-- every Record has mandatory Registry Core bindings in addition to selectable domain properties;
+- every resource declares required `datasetIdentifier` and `entityTypeIdentifier` values beside `id`; Relay never infers either value from the resource id, route, view, or semantic class;
+- every Record has mandatory Registry Core bindings in addition to selectable domain properties, while homogeneous Registry, dataset, and entity-type context appears once in JSON or JSON-LD response `meta`;
 - `sourceRequired` governs complete source-Record validation, while the public access-profile schema permits any compiled selectable `domainData` subset;
 - external semantic alignment is optional and file-based, pinned, and reviewed;
 - every operation declares one default and a finite ordered set of access profiles; an operation with any public access profile uses a public default; access and disclosure belong to the access profile, while the requester may only select fewer properties within the chosen access profile;
@@ -71,21 +72,29 @@ public-facts projection for search. It is not a trust anchor, and protected
 operations and internal source, access, policy, and audit fields are excluded
 by the provider-public-projection invariant tests.
 
-Every successful item has the same non-selectable core shape. For example:
+Every successful JSON or JSON-LD response carries one homogeneous Registry
+Record context in response-level `meta`. Items do not repeat that context. For
+example, an identifier read has this shape:
 
 ```json
 {
-  "registryIdentifier": "urn:example:registry:registered-businesses",
-  "recordIdentifier": "B-00142",
-  "revisionIdentifier": "17",
-  "lifecycleState": "ACTIVE",
-  "schemaReference": "https://business.example.invalid/v2/artifacts/registered-business.schema.json",
-  "semanticModelReference": "https://business.example.invalid/v2/artifacts/registered-business.vocabulary.jsonld",
-  "authorityIdentifier": "urn:example:institution:company-registrar",
-  "recordedAt": "2026-08-01T10:30:00Z",
-  "domainData": {
-    "legalName": "Example Cooperative",
-    "registrationStatus": "ACTIVE"
+  "data": {
+    "recordIdentifier": "B-00142",
+    "revisionIdentifier": "17",
+    "lifecycleState": "ACTIVE",
+    "schemaReference": "https://business.example.invalid/v2/artifacts/registered-business.schema.json",
+    "semanticModelReference": "https://business.example.invalid/v2/artifacts/registered-business.vocabulary.jsonld",
+    "authorityIdentifier": "urn:example:institution:company-registrar",
+    "recordedAt": "2026-08-01T10:30:00Z",
+    "domainData": {
+      "legalName": "Example Cooperative",
+      "registrationStatus": "ACTIVE"
+    }
+  },
+  "meta": {
+    "registryIdentifier": "urn:example:registry:registered-businesses",
+    "datasetIdentifier": "legal-entities",
+    "entityTypeIdentifier": "company"
   }
 }
 ```
@@ -93,7 +102,9 @@ Every successful item has the same non-selectable core shape. For example:
 `fields=legalName,registrationStatus` narrowed only `domainData`. List responses
 place such items in `items`; single reads and resolved lookups place one in
 `data`. The semantic-model reference resolves to the generated local vocabulary;
-the response `meta` links the JSON-LD context separately.
+the response `meta` retains Relay operation, access, disclosure, source, field,
+and link extensions. JSON-LD adds the shared Registry Record context before the
+generated operation context. GeoJSON remains a separate media profile.
 
 Each example shows the governed and runtime documents together for readability. A real project would keep them as separately validated files and package them with synthetic fixtures and generated artifacts.
 
@@ -164,6 +175,8 @@ sources:
 
 resources:
   - id: assistance-enrolment
+    datasetIdentifier: assistance-enrolments
+    entityTypeIdentifier: assistance-enrolment
     title: Assistance enrolment
     description: Reviewed consultation view of one assistance enrolment Record
     semanticClass: local:AssistanceEnrolment
@@ -336,7 +349,7 @@ What this example must prove:
 - a useful local vocabulary, JSON-LD context, JSON Schema, and SHACL starter are generated without any external vocabulary mapping;
 - no match, ambiguity, and a hidden row return the same `404` problem except for trace
   correlation, while an invalid selected source Record fails closed as `503 source.unavailable`;
-- mandatory Registry Core context remains present and capability discovery derives only constrained `consultation.search`.
+- mandatory Registry Record context remains present and capability discovery derives only constrained `consultation.search`.
 
 ## Example 2: public business registry
 
@@ -394,6 +407,8 @@ sources:
 
 resources:
   - id: registered-business
+    datasetIdentifier: legal-entities
+    entityTypeIdentifier: company
     title: Registered business
     description: Public registration facts for one legal business Record
     semanticClass: local:RegisteredBusiness
@@ -542,6 +557,8 @@ it names exact CRS84 and a closed two-column `source`, then
 
 ```yaml
 - id: registered-premises
+  datasetIdentifier: business-premises
+  entityTypeIdentifier: premises
   title: Registered premises
   description: Current synthetic public premises locations associated with registered businesses.
   semanticClass: local:RegisteredPremises
@@ -690,6 +707,8 @@ sources:
 
 resources:
   - id: civil-event
+    datasetIdentifier: civil-events
+    entityTypeIdentifier: civil-event
     title: Civil event registration
     description: Protected registration facts for one civil-event Record
     semanticClass: local:CivilEventRegistration
@@ -921,11 +940,13 @@ resources[].classificationDefaults.handling
 resources[].classificationDefaults.institutional
 resources[].classificationDefaults.privacy
 resources[].classificationDefaults.status
+resources[].datasetIdentifier
 resources[].description
 resources[].disclosureProfiles
 resources[].disclosureProfiles.*
 resources[].disclosureProfiles.*.properties
 resources[].disclosureProfiles.*.properties[]
+resources[].entityTypeIdentifier
 resources[].id
 resources[].operations
 resources[].operations.list
@@ -1261,7 +1282,7 @@ registry contract
 The examples also freeze these boundaries:
 
 - Registry Manifest projection is later portability tooling, not a runtime input;
-- Registry Core fields are native and cannot be removed;
+- Registry Record context and core fields are native and cannot be removed;
 - `fields` is one comma-separated property syntax across list, read, and lookup;
 - a live source remains useful for read and lookup but is unversioned, `no-store`, and has no paginated list;
 - handling uses `public`, `internal`, `confidential`, and `restricted`, while purpose and row binding remain explicit constraints;

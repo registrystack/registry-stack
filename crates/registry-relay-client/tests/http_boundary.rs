@@ -10,10 +10,10 @@ use axum::Router;
 use registry_platform_httputil::client::{BearerToken, TokenError, TokenProvider};
 use registry_relay_client::{
     BoundingBox, CollectionContinuation, CollectionContinuationProjection,
-    CollectionRouteProjection, Conditional, ListRequest, LookupRequest, ProblemCode, RecordFormat,
-    RecordOptions, RelayClient, RelayClientConfig, RelayClientError, ResourceContinuation,
-    ResourceListRequest, SdmxDataRequest, SdmxStructureKind, SdmxStructureRequest, SearchRequest,
-    StrongEtag,
+    CollectionRouteProjection, Conditional, ListRequest, LookupRequest, ProblemCode,
+    ProtocolFailure, RecordFormat, RecordOptions, RecordResponse, RelayClient, RelayClientConfig,
+    RelayClientError, ResourceContinuation, ResourceListRequest, SdmxDataRequest,
+    SdmxStructureKind, SdmxStructureRequest, SearchRequest, StrongEtag,
 };
 use serde_json::json;
 use tokio::net::TcpListener;
@@ -52,6 +52,11 @@ enum Mode {
     ArtifactDuplicateMedia,
     TooManyHeaders,
     WrongMedia,
+    RecordJson,
+    RecordJsonLd,
+    RecordJsonLdMissingContext,
+    RecordJsonLdMismatchedContext,
+    RecordJsonLegacyContextPlacement,
 }
 
 async fn handler(State(state): State<TestState>, request: Request<Body>) -> Response<Body> {
@@ -244,8 +249,83 @@ async fn handler(State(state): State<TestState>, request: Request<Body>) -> Resp
             br#"{"status":"ok"}"#,
             Some(TRACEPARENT),
         ),
+        Mode::RecordJson => record_response(request.uri().path(), "application/json", None, false),
+        Mode::RecordJsonLd => record_response(
+            request.uri().path(),
+            "application/ld+json",
+            Some(json!([
+                "https://id.registrystack.org/contexts/registry-record/v1",
+                "https://relay.example.invalid/contexts/record.jsonld"
+            ])),
+            false,
+        ),
+        Mode::RecordJsonLdMissingContext => {
+            record_response(request.uri().path(), "application/ld+json", None, false)
+        }
+        Mode::RecordJsonLdMismatchedContext => record_response(
+            request.uri().path(),
+            "application/ld+json",
+            Some(json!([
+                "https://id.registrystack.org/contexts/registry-record/v1",
+                "https://relay.example.invalid/contexts/not-the-metadata-context.jsonld"
+            ])),
+            false,
+        ),
+        Mode::RecordJsonLegacyContextPlacement => {
+            record_response(request.uri().path(), "application/json", None, true)
+        }
         Mode::Routes => route_response(request.uri().path()),
     }
+}
+
+fn record_response(
+    path: &str,
+    media_type: &str,
+    json_ld_context: Option<serde_json::Value>,
+    legacy_context_placement: bool,
+) -> Response<Body> {
+    let mut record = json!({
+        "recordIdentifier": "record-1",
+        "revisionIdentifier": "revision-1",
+        "lifecycleState": "active",
+        "schemaReference": "https://relay.example.invalid/schemas/record",
+        "semanticModelReference": "https://relay.example.invalid/models/record",
+        "authorityIdentifier": "authority",
+        "recordedAt": "2026-09-01T00:00:00Z",
+        "domainData": {"name": "Example"}
+    });
+    if legacy_context_placement {
+        record["registryIdentifier"] = json!("legacy-registry");
+    }
+    let meta = json!({
+        "registryIdentifier": "registry",
+        "datasetIdentifier": "dataset",
+        "entityTypeIdentifier": "entity-type",
+        "operationIdentifier": "record.read",
+        "accessProfile": "public",
+        "family": "consultation",
+        "pattern": "retrieve",
+        "disclosureProfile": "public",
+        "contractRevision": "1",
+        "sourceRevision": {"profile": "snapshot", "status": "versioned", "value": "1"},
+        "selectedFields": ["name"],
+        "links": {
+            "self": "https://relay.example.invalid/v2/resources/records/record-1",
+            "context": "https://relay.example.invalid/contexts/record.jsonld",
+            "schema": "https://relay.example.invalid/schemas/record",
+            "semanticModel": "https://relay.example.invalid/models/record"
+        }
+    });
+    let mut document = if path.ends_with("/records") {
+        json!({"items": [record], "pageInfo": {"nextCursor": null}, "meta": meta})
+    } else {
+        json!({"data": record, "meta": meta})
+    };
+    if let Some(context) = json_ld_context {
+        document["@context"] = context;
+    }
+    let body = serde_json::to_vec(&document).expect("record response serializes");
+    wire_response(StatusCode::OK, media_type, &body, Some(TRACEPARENT))
 }
 
 fn route_response(path: &str) -> Response<Body> {
@@ -650,6 +730,73 @@ async fn response_headers_media_and_bodies_are_bounded_before_exposure() {
         client.health().await.expect_err("body bound refused"),
         RelayClientError::Transport { .. }
     ));
+}
+
+#[tokio::test]
+async fn registry_record_context_is_response_metadata_and_json_ld_context_is_governed() {
+    let (client, _) = test_client(Mode::RecordJson, None).await;
+    let json = client
+        .read_record("people", "record-1", &RecordOptions::default(), None)
+        .await
+        .expect("JSON Registry Record response");
+    let Conditional::Complete(complete) = json else {
+        panic!("record unexpectedly not modified");
+    };
+    let RecordResponse::Json(record) = complete.value else {
+        panic!("ordinary JSON unexpectedly decoded as GeoJSON");
+    };
+    assert_eq!(record.meta.registry_identifier, "registry");
+    assert_eq!(record.meta.dataset_identifier, "dataset");
+    assert_eq!(record.meta.entity_type_identifier, "entity-type");
+    assert!(record.json_ld_context.is_none());
+
+    let (client, _) = test_client(Mode::RecordJsonLd, None).await;
+    let json_ld = client
+        .read_record(
+            "people",
+            "record-1",
+            &RecordOptions::default().format(RecordFormat::JsonLd),
+            None,
+        )
+        .await
+        .expect("governed JSON-LD Registry Record response");
+    let Conditional::Complete(complete) = json_ld else {
+        panic!("JSON-LD record unexpectedly not modified");
+    };
+    let RecordResponse::Json(record) = complete.value else {
+        panic!("JSON-LD unexpectedly decoded as GeoJSON");
+    };
+    assert_eq!(
+        record
+            .json_ld_context
+            .as_ref()
+            .expect("JSON-LD context")
+            .relay_context(),
+        record.meta.links.context
+    );
+
+    for mode in [
+        Mode::RecordJsonLdMissingContext,
+        Mode::RecordJsonLdMismatchedContext,
+        Mode::RecordJsonLegacyContextPlacement,
+    ] {
+        let (client, _) = test_client(mode, None).await;
+        let options = match mode {
+            Mode::RecordJsonLegacyContextPlacement => RecordOptions::default(),
+            _ => RecordOptions::default().format(RecordFormat::JsonLd),
+        };
+        let error = client
+            .read_record("people", "record-1", &options, None)
+            .await
+            .expect_err("malformed Registry Record response refused");
+        assert!(matches!(
+            error,
+            RelayClientError::Protocol {
+                failure: ProtocolFailure::Body,
+                ..
+            }
+        ));
+    }
 }
 
 #[test]

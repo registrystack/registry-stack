@@ -62,7 +62,7 @@ while IFS= read -r path; do
   [[ -n "$path" ]] || continue
   relative="${path#"$PRODUCT_DIR/"}"
   case "$relative" in
-    acceptance/*|CONCEPT.md|DEFINITION-OF-DONE.md|CONFIGURATION-EXAMPLES.md|IMPLEMENTATION.md|README.md|STANDARDS-ALIGNMENT.md|scripts/check-source-neutrality.sh|scripts/check-generated.sh|scripts/test_adopter_workflow.py|scripts/validate_product.py|scripts/test_validate_product.py|contracts/generated-baselines.yaml|contracts/package-layout.yaml|contracts/acceptance-scenario-matrix.yaml|contracts/security-invariant-matrix.yaml)
+    acceptance/*|CHANGELOG.md|CONCEPT.md|DEFINITION-OF-DONE.md|CONFIGURATION-EXAMPLES.md|IMPLEMENTATION.md|README.md|STANDARDS-ALIGNMENT.md|scripts/check-source-neutrality.sh|scripts/check-generated.sh|scripts/test_adopter_workflow.py|scripts/validate_product.py|scripts/test_validate_product.py|contracts/generated-baselines.yaml|contracts/package-layout.yaml|contracts/acceptance-scenario-matrix.yaml|contracts/security-invariant-matrix.yaml)
       continue
       ;;
   esac

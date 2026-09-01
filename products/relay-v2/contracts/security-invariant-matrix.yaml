@@ -146,13 +146,17 @@ invariants:
       - {path: crates/registry-relay-v2/src/compiler.rs, name: transformed_properties_cannot_be_list_filters_or_order_keys}
       - {path: crates/registry-relay-v2/tests/access_profile_http.rs, name: transforms_are_bounded_value_free_and_terminal_audit_gates_exact_bytes}
   - id: sec-access-profile-state-and-metadata-binding
-    threat: A cursor, ETag, metadata route, artifact, or quota crosses an access-profile boundary or reveals a protected profile.
-    enforcementPoint: Access profile-bound cursor and cache identity, exact access-profile artifact gates, and operation-owned quota state.
+    threat: A cursor, ETag, response context, metadata route, artifact, or quota crosses a dataset, entity-type, Registry Record profile, representation, field-projection, or access-profile boundary, or reveals a protected profile.
+    enforcementPoint: Dataset-, entity-type-, Registry Record profile-, representation-, field-, and access-profile-bound cursor and cache identity; exact generated response-context constants and access-profile artifact gates; and operation-owned quota state.
     negativeTest: cursor_and_etag_are_bound_to_selected_access_profile
-    expected: Cursor and ETag reuse across profiles fails; metadata and artifacts authorize one access profile exactly; adding profiles does not multiply the operation quota.
+    expected: Cursor and ETag reuse across dataset, entity-type, response-profile, representation, field, or access-profile contexts fails; JSON and JSON-LD place the exact governed homogeneous context only in response meta; the generated operation schema rejects wrong Registry, dataset, and entity-type constants; metadata and artifacts authorize one access profile exactly; adding profiles does not multiply the operation quota.
     evidence: real-router-access-profile-state-tests
     tests:
       - {path: crates/registry-relay-v2/tests/access_profile_http.rs, name: cursor_and_etag_are_bound_to_selected_access_profile}
+      - {path: crates/registry-relay-v2/src/cursor.rs, name: cursor_refuses_every_mismatched_request_binding_and_expiry}
+      - {path: crates/registry-relay-v2/src/artifacts.rs, name: exact_operation_schema_rejects_wrong_registry_record_context_constants}
+      - {path: crates/registry-relay-v2/src/semantics.rs, name: operation_context_does_not_redefine_shared_registry_record_terms}
+      - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: all_four_registry_http_journeys_use_the_real_router}
       - {path: crates/registry-relay-v2/tests/access_profile_http.rs, name: metadata_and_artifacts_authorize_each_access_profile_exactly}
       - {path: crates/registry-relay-v2/tests/access_profile_http.rs, name: quotas_remain_operation_scoped_across_access_profiles}
   - id: sec-operation-quota

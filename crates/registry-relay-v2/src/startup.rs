@@ -1014,6 +1014,8 @@ sources:
   records: {kind: sqlite, profile: snapshot, expectedSchemaFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
 resources:
   - id: record
+    datasetIdentifier: records
+    entityTypeIdentifier: record
     title: Record
     description: Reviewed record
     semanticClass: local:Record

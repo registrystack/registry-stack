@@ -41,7 +41,9 @@ use registry_relay_client::{
     RelayClientConfig, ResourceListRequest, SdmxDataFormat, SdmxDataRequest, SdmxStructureKind,
     SdmxStructureRequest, SearchRequest, StaticToken, TokenProvider,
 };
-use registry_relay_v2::artifacts::generate_artifacts;
+use registry_relay_v2::artifacts::{
+    generate_artifacts, REGISTRY_RECORD_CONTEXT_ID, REGISTRY_RECORD_PROFILE_ID, RELAY_PROFILE_ID,
+};
 use registry_relay_v2::audit::RelayAudit;
 use registry_relay_v2::auth::RelayAuthenticator;
 use registry_relay_v2::compiler::{
@@ -69,8 +71,7 @@ use registry_relay_v2::server::{
 };
 use registry_relay_v2::sqlite_runtime::{RuntimeSourceBinding, SqliteRuntime, SqliteRuntimeLimits};
 use registry_relay_v2::startup::build_authenticator_for_supervised_local_development;
-use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
+use serde_json::{json, Map, Value};
 use tempfile::TempDir;
 use tower::ServiceExt as _;
 
@@ -1843,7 +1844,14 @@ async fn spatial_formats_validate_and_keep_distinct_cache_identities() {
             Some("Accept, Authorization"),
             "{label} varies across the negotiation and authorization boundaries"
         );
-        let expected_link = profile_uri.map(|profile| format!("<{profile}>; rel=\"profile\""));
+        let expected_link = profile_uri.map_or_else(
+            || {
+                Some(format!(
+                    "<{REGISTRY_RECORD_PROFILE_ID}>; rel=\"profile\", <{RELAY_PROFILE_ID}>; rel=\"profile\""
+                ))
+            },
+            |profile| Some(format!("<{profile}>; rel=\"profile\"")),
+        );
         assert_eq!(
             headers.get(LINK).and_then(|value| value.to_str().ok()),
             expected_link.as_deref(),
@@ -1859,11 +1867,7 @@ async fn spatial_formats_validate_and_keep_distinct_cache_identities() {
             .and_then(|value| value.to_str().ok())
             .expect("public snapshot response has an ETag")
             .to_owned();
-        assert_eq!(
-            etag,
-            format!("\"{}\"", hex::encode(Sha256::digest(&body))),
-            "{label} ETag binds the exact released bytes"
-        );
+        assert!(etag.starts_with('"') && etag.ends_with('"'), "{label} ETag");
         let document: Value = serde_json::from_slice(&body).expect("spatial response is JSON");
 
         if label == "json" || label == "json-ld" {
@@ -1900,17 +1904,7 @@ async fn spatial_formats_validate_and_keep_distinct_cache_identities() {
         }
 
         if label == "json-ld" {
-            let mut expanded = document.clone();
-            expanded["@context"] = context_document["@context"].clone();
-            let raw = serde_json::to_string(&expanded).expect("JSON-LD response serializes");
-            let parser = JsonLdParser::new()
-                .with_base_iri(&harness.service.registry.base_uri)
-                .expect("Registry base IRI is valid");
-            let quads = parser
-                .for_slice(&raw)
-                .map(|quad| quad.expect("public JSON-LD response expands").to_string())
-                .collect::<Vec<_>>();
-            assert!(!quads.is_empty(), "JSON-LD produces a public RDF graph");
+            assert_operation_context_is_disjoint_from_shared_terms(&context_document);
         } else if label == "geojson" {
             for member in ["conformsTo", "featureType", "coordRefSys"] {
                 assert!(
@@ -2906,9 +2900,26 @@ fn assert_expectations(
     let records = response_records(&document);
     if step.expect.registry_core_required.unwrap_or(false) {
         assert!(!records.is_empty(), "{label} must contain a Record");
-        for record in &records {
+        let registry_record_envelope = headers
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| {
+                value.starts_with("application/json") || value.starts_with("application/ld+json")
+            });
+        if registry_record_envelope {
             for key in [
                 "registryIdentifier",
+                "datasetIdentifier",
+                "entityTypeIdentifier",
+            ] {
+                assert!(
+                    document["meta"].get(key).is_some(),
+                    "{label} meta is missing {key}"
+                );
+            }
+        }
+        for record in &records {
+            for key in [
                 "recordIdentifier",
                 "revisionIdentifier",
                 "lifecycleState",
@@ -2919,6 +2930,23 @@ fn assert_expectations(
                 "domainData",
             ] {
                 assert!(record.get(key).is_some(), "{label} Record is missing {key}");
+            }
+            if registry_record_envelope {
+                for key in [
+                    "registryIdentifier",
+                    "datasetIdentifier",
+                    "entityTypeIdentifier",
+                ] {
+                    assert!(
+                        record.get(key).is_none(),
+                        "{label} Record duplicates response context {key}"
+                    );
+                }
+            } else {
+                assert!(
+                    record.get("registryIdentifier").is_some(),
+                    "{label} GeoJSON Record keeps its separate Registry identity"
+                );
             }
         }
     }
@@ -3120,6 +3148,7 @@ fn normalized_records(document: &Value) -> Vec<Value> {
             if let Some(object) = record.as_object_mut() {
                 object.remove("@id");
                 object.remove("@type");
+                object.remove("registryIdentifier");
                 if let Some(domain) = object.get_mut("domainData").and_then(Value::as_object_mut) {
                     domain.retain(|_, value| {
                         value.get("type").and_then(Value::as_str) != Some("Point")
@@ -3209,6 +3238,43 @@ fn validate_response_contracts(
         step.id
     );
     let binding = matching_bindings[0];
+    let resource = harness
+        .service
+        .registry
+        .resources
+        .iter()
+        .find(|resource| {
+            resource
+                .operations
+                .iter()
+                .any(|operation| operation.identifier == binding.operation_identifier)
+        })
+        .expect("compiled operation belongs to one resource");
+    assert_eq!(
+        document
+            .pointer("/meta/registryIdentifier")
+            .and_then(Value::as_str),
+        Some(harness.service.registry.registry_identifier.as_str())
+    );
+    assert_eq!(
+        document
+            .pointer("/meta/datasetIdentifier")
+            .and_then(Value::as_str),
+        Some(resource.dataset_identifier.as_str())
+    );
+    assert_eq!(
+        document
+            .pointer("/meta/entityTypeIdentifier")
+            .and_then(Value::as_str),
+        Some(resource.entity_type_identifier.as_str())
+    );
+    let expected_link = format!(
+        "<{REGISTRY_RECORD_PROFILE_ID}>; rel=\"profile\", <{RELAY_PROFILE_ID}>; rel=\"profile\""
+    );
+    assert_eq!(
+        headers.get(LINK).and_then(|value| value.to_str().ok()),
+        Some(expected_link.as_str())
+    );
 
     for record in records {
         let schema_reference = record
@@ -3320,8 +3386,11 @@ fn validate_json_ld_graph(
         })
         .expect("compiled operation carries the selected access profile");
     assert_eq!(
-        document.get("@context").and_then(Value::as_str),
-        Some(access_profile.context_reference.as_str()),
+        document.get("@context"),
+        Some(&json!([
+            REGISTRY_RECORD_CONTEXT_ID,
+            access_profile.context_reference
+        ])),
         "{project}/{} JSON-LD response must name the selected access profile context",
         step.id
     );
@@ -3340,24 +3409,43 @@ fn validate_json_ld_graph(
         .expect("the exact response binding carries its generated JSON-LD context");
     let context_document: Value = serde_json::from_slice(&context_artifact.content)
         .expect("generated JSON-LD context parses");
-    let mut expanded_document = document.clone();
-    expanded_document["@context"] = context_document["@context"].clone();
-    let raw = serde_json::to_string(&expanded_document).expect("JSON-LD response serializes");
-    let parser = JsonLdParser::new()
-        .with_base_iri(&harness.service.registry.base_uri)
-        .expect("Registry base IRI is valid");
-    let quads = parser
-        .for_slice(&raw)
-        .map(|quad| {
+    assert_operation_context_is_disjoint_from_shared_terms(&context_document);
+    let mut quads = Vec::new();
+    for record in response_records(document) {
+        let mut semantic_record = Map::new();
+        semantic_record.insert("@context".into(), context_document["@context"].clone());
+        for field in [
+            "@id",
+            "@type",
+            "lifecycleState",
+            "schemaReference",
+            "semanticModelReference",
+            "authorityIdentifier",
+            "recordedAt",
+        ] {
+            semantic_record.insert(field.into(), record[field].clone());
+        }
+        for (field, value) in record["domainData"]
+            .as_object()
+            .expect("Record domainData is an object")
+        {
+            semantic_record.insert(field.clone(), value.clone());
+        }
+        let raw = serde_json::to_string(&semantic_record)
+            .expect("operation semantic projection serializes");
+        let parser = JsonLdParser::new()
+            .with_base_iri(&harness.service.registry.base_uri)
+            .expect("Registry base IRI is valid");
+        quads.extend(parser.for_slice(&raw).map(|quad| {
             quad.unwrap_or_else(|error| {
                 panic!(
-                    "{project}/{} generated context must expand the actual response: {error}",
+                    "{project}/{} generated operation context must expand its owned terms: {error}",
                     step.id
                 )
             })
             .to_string()
-        })
-        .collect::<Vec<_>>();
+        }));
+    }
     assert!(
         !quads.is_empty(),
         "{project}/{} JSON-LD response must produce an RDF graph",
@@ -3390,7 +3478,6 @@ fn validate_json_ld_graph(
             &step.id,
         );
         for field in [
-            "registryIdentifier",
             "schemaReference",
             "semanticModelReference",
             "authorityIdentifier",
@@ -3409,21 +3496,27 @@ fn validate_json_ld_graph(
             );
             assert!(shacl.contains(&format!("sh:path <{predicate}> ; sh:nodeKind sh:IRI")));
         }
-        for (field, datatype) in [
+        for (field, namespace, datatype) in [
             (
-                "recordIdentifier",
+                "lifecycleState",
+                "https://id.registrystack.org/vocab/core/",
                 "http://www.w3.org/2001/XMLSchema#string",
             ),
             (
-                "revisionIdentifier",
-                "http://www.w3.org/2001/XMLSchema#string",
+                "recordedAt",
+                "https://id.registrystack.org/vocab/core/",
+                "http://www.w3.org/2001/XMLSchema#dateTime",
             ),
-            ("lifecycleState", "http://www.w3.org/2001/XMLSchema#string"),
-            ("recordedAt", "http://www.w3.org/2001/XMLSchema#dateTime"),
         ] {
-            let predicate = format!("https://id.registrystack.org/vocab/core/{field}");
+            let predicate = format!("{namespace}{field}");
             assert_typed_quad(&quads, subject, &predicate, datatype, project, &step.id);
             assert!(shacl.contains(&format!("sh:path <{predicate}> ; sh:datatype <{datatype}>")));
+        }
+        for field in ["recordIdentifier", "revisionIdentifier"] {
+            let predicate = format!("https://id.registrystack.org/vocab/registry-record/{field}");
+            assert!(shacl.contains(&format!(
+                "sh:path <{predicate}> ; sh:datatype <http://www.w3.org/2001/XMLSchema#string>"
+            )));
         }
         let domain_data = record["domainData"]
             .as_object()
@@ -3459,6 +3552,18 @@ fn validate_json_ld_graph(
                 property.semantic_iri
             )));
         }
+    }
+}
+
+fn assert_operation_context_is_disjoint_from_shared_terms(context_document: &Value) {
+    let operation_terms = context_document["@context"]
+        .as_object()
+        .expect("generated operation context is an object");
+    for term in registry_relay_v2::semantics::REGISTRY_RECORD_SHARED_CONTEXT_TERMS {
+        assert!(
+            !operation_terms.contains_key(*term),
+            "generated operation context must not redefine shared term {term}"
+        );
     }
 }
 

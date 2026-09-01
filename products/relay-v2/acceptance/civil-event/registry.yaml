@@ -49,6 +49,8 @@ sources:
     expectedSchemaFingerprint: sha256:7f770d64cb19ec54caca2aa56378b13a43cd5edc206ff44b5fecc99ee9e63759
 resources:
   - id: civil-event
+    datasetIdentifier: civil-events
+    entityTypeIdentifier: civil-event
     title: Civil-event registration
     description: Current synthetic civil-event registration.
     semanticClass: local:CivilEventRegistration
