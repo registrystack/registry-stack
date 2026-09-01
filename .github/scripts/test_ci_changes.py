@@ -920,7 +920,7 @@ class CiChangesTest(unittest.TestCase):
         )[1].split("\n  identifiers:\n", 1)[0]
 
         self.assertIn(
-            "postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675",
+            "postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6",
             registry_server_job,
         )
         self.assertIn(
