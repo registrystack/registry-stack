@@ -164,6 +164,53 @@ class CatalogGeneratorTest(unittest.TestCase):
         self.assertEqual(schema["artifact"]["path"], "schemas/v1.json")
         self.assertNotEqual(schema["source"]["sha256"], schema["artifact"]["sha256"])
 
+    def test_profile_record_binds_source_and_artifact(self) -> None:
+        profile = self.root / "profile.md"
+        profile.write_text("Registry Record profile source\n")
+        self.track("profile.md")
+        self.write_config(
+            [
+                {
+                    "uri": f"{generate.BASE_URL}/profiles/example/v1",
+                    "kind": "profile",
+                    "status": "active",
+                    "compatibilityLine": "v1",
+                    "owner": "example",
+                    "title": "Example profile",
+                    "description": "Example profile artifact.",
+                    "sourcePath": "src/vocab.rs",
+                    "artifactPath": "profile.md",
+                    "mediaType": "text/markdown",
+                }
+            ]
+        )
+        entry = next(
+            entry
+            for entry in self.build()["entries"]
+            if entry["kind"] == "profile"
+        )
+        self.assertEqual(entry["source"]["path"], "src/vocab.rs")
+        self.assertEqual(entry["artifact"]["path"], "profile.md")
+        self.assertNotEqual(entry["source"]["sha256"], entry["artifact"]["sha256"])
+
+    def test_profile_record_requires_an_artifact(self) -> None:
+        self.write_config(
+            [
+                {
+                    "uri": f"{generate.BASE_URL}/profiles/example/v1",
+                    "kind": "profile",
+                    "status": "active",
+                    "compatibilityLine": "v1",
+                    "owner": "example",
+                    "title": "Example profile",
+                    "description": "Example profile artifact.",
+                    "sourcePath": "src/vocab.rs",
+                }
+            ]
+        )
+        with self.assertRaisesRegex(generate.CatalogError, "requires an artifact"):
+            self.build()
+
     def test_duplicate_identifier_is_rejected(self) -> None:
         self.write_config(
             [

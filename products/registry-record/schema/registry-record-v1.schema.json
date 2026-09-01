@@ -1,0 +1,201 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://id.registrystack.org/schemas/registry-record/v1",
+  "title": "Registry Record v1 base response",
+  "description": "Open base conformance aid for one Registry record or a homogeneous Registry record collection. It validates no media type, resolves no context IRI, and grants no trust; exact product schemas must close the emitted shape and context.",
+  "properties": {
+    "@context": {
+      "description": "For JSON-LD only: the shared context URI, or an ordered composition beginning with it and followed by one or more unique absolute HTTPS product context IRIs. JSON responses must omit this member, and exact product schemas must pin their full context array.",
+      "oneOf": [
+        {
+          "const": "https://id.registrystack.org/contexts/registry-record/v1"
+        },
+        {
+          "type": "array",
+          "minItems": 2,
+          "uniqueItems": true,
+          "prefixItems": [
+            {
+              "const": "https://id.registrystack.org/contexts/registry-record/v1"
+            }
+          ],
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "format": "iri",
+            "pattern": "^[hH][tT][tT][pP][sS]://[^/?#\\s]+(?:[/?#][^\\s]*)?$"
+          }
+        }
+      ]
+    }
+  },
+  "oneOf": [
+    { "$ref": "#/$defs/singleResponse" },
+    { "$ref": "#/$defs/collectionResponse" }
+  ],
+  "$defs": {
+    "opaqueIdentifier": {
+      "type": "string",
+      "minLength": 1
+    },
+    "extensionValue": {
+      "description": "An open product extension value that cannot introduce a nested JSON-LD context.",
+      "oneOf": [
+        {
+          "type": ["null", "boolean", "number", "string"]
+        },
+        {
+          "type": "array",
+          "items": { "$ref": "#/$defs/extensionValue" }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "not": { "const": "@context" }
+          },
+          "additionalProperties": { "$ref": "#/$defs/extensionValue" }
+        }
+      ]
+    },
+    "domainData": {
+      "type": "object",
+      "propertyNames": {
+        "not": { "const": "@context" }
+      },
+      "not": {
+        "anyOf": [
+          { "required": ["data"] },
+          { "required": ["items"] },
+          { "required": ["pageInfo"] },
+          { "required": ["meta"] },
+          { "required": ["registryIdentifier"] },
+          { "required": ["datasetIdentifier"] },
+          { "required": ["entityTypeIdentifier"] },
+          { "required": ["recordIdentifier"] },
+          { "required": ["revisionIdentifier"] },
+          { "required": ["nextCursor"] }
+        ]
+      },
+      "additionalProperties": { "$ref": "#/$defs/extensionValue" }
+    },
+    "record": {
+      "type": "object",
+      "required": ["recordIdentifier", "revisionIdentifier", "domainData"],
+      "not": {
+        "anyOf": [
+          { "required": ["data"] },
+          { "required": ["items"] },
+          { "required": ["pageInfo"] },
+          { "required": ["meta"] },
+          { "required": ["registryIdentifier"] },
+          { "required": ["datasetIdentifier"] },
+          { "required": ["entityTypeIdentifier"] },
+          { "required": ["nextCursor"] },
+          { "required": ["@context"] }
+        ]
+      },
+      "properties": {
+        "recordIdentifier": { "$ref": "#/$defs/opaqueIdentifier" },
+        "revisionIdentifier": { "$ref": "#/$defs/opaqueIdentifier" },
+        "domainData": { "$ref": "#/$defs/domainData" }
+      },
+      "additionalProperties": { "$ref": "#/$defs/extensionValue" }
+    },
+    "responseMeta": {
+      "type": "object",
+      "required": ["registryIdentifier", "datasetIdentifier", "entityTypeIdentifier"],
+      "not": {
+        "anyOf": [
+          { "required": ["data"] },
+          { "required": ["items"] },
+          { "required": ["pageInfo"] },
+          { "required": ["recordIdentifier"] },
+          { "required": ["revisionIdentifier"] },
+          { "required": ["domainData"] },
+          { "required": ["nextCursor"] },
+          { "required": ["@context"] }
+        ]
+      },
+      "properties": {
+        "registryIdentifier": { "$ref": "#/$defs/opaqueIdentifier" },
+        "datasetIdentifier": { "$ref": "#/$defs/opaqueIdentifier" },
+        "entityTypeIdentifier": { "$ref": "#/$defs/opaqueIdentifier" }
+      },
+      "additionalProperties": { "$ref": "#/$defs/extensionValue" }
+    },
+    "pageInfo": {
+      "type": "object",
+      "required": ["nextCursor"],
+      "not": {
+        "anyOf": [
+          { "required": ["data"] },
+          { "required": ["items"] },
+          { "required": ["meta"] },
+          { "required": ["registryIdentifier"] },
+          { "required": ["datasetIdentifier"] },
+          { "required": ["entityTypeIdentifier"] },
+          { "required": ["recordIdentifier"] },
+          { "required": ["revisionIdentifier"] },
+          { "required": ["domainData"] },
+          { "required": ["@context"] }
+        ]
+      },
+      "properties": {
+        "nextCursor": {
+          "anyOf": [
+            { "$ref": "#/$defs/opaqueIdentifier" },
+            { "type": "null" }
+          ]
+        }
+      },
+      "additionalProperties": { "$ref": "#/$defs/extensionValue" }
+    },
+    "singleResponse": {
+      "type": "object",
+      "required": ["data", "meta"],
+      "not": {
+        "anyOf": [
+          { "required": ["items"] },
+          { "required": ["pageInfo"] },
+          { "required": ["registryIdentifier"] },
+          { "required": ["datasetIdentifier"] },
+          { "required": ["entityTypeIdentifier"] },
+          { "required": ["recordIdentifier"] },
+          { "required": ["revisionIdentifier"] },
+          { "required": ["domainData"] },
+          { "required": ["nextCursor"] }
+        ]
+      },
+      "properties": {
+        "data": { "$ref": "#/$defs/record" },
+        "meta": { "$ref": "#/$defs/responseMeta" }
+      },
+      "additionalProperties": { "$ref": "#/$defs/extensionValue" }
+    },
+    "collectionResponse": {
+      "type": "object",
+      "required": ["items", "pageInfo", "meta"],
+      "not": {
+        "anyOf": [
+          { "required": ["data"] },
+          { "required": ["registryIdentifier"] },
+          { "required": ["datasetIdentifier"] },
+          { "required": ["entityTypeIdentifier"] },
+          { "required": ["recordIdentifier"] },
+          { "required": ["revisionIdentifier"] },
+          { "required": ["domainData"] },
+          { "required": ["nextCursor"] }
+        ]
+      },
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/record" }
+        },
+        "pageInfo": { "$ref": "#/$defs/pageInfo" },
+        "meta": { "$ref": "#/$defs/responseMeta" }
+      },
+      "additionalProperties": { "$ref": "#/$defs/extensionValue" }
+    }
+  }
+}

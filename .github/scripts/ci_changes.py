@@ -341,6 +341,7 @@ def identifier_catalog_inputs(
 
     inputs = [
         "products/identifiers/**",
+        "products/registry-record/**",
         "crates/registry-relay-v2/examples/audit-event-schema.rs",
         "crates/registry-relay-v2/src/audit.rs",
     ]
@@ -523,6 +524,10 @@ def classify(
             elif path.startswith("products/identifiers/"):
                 # The catalog gate compiles its focused Relay V2 exporter.
                 # Catalog-only tooling does not require the full Rust matrix.
+                pass
+            elif path.startswith("products/registry-record/"):
+                # The shared profile is static product material. Its owning
+                # identifier and profile gates do not require a Rust shard.
                 pass
             elif path.startswith(("crates/", "products/")):
                 # A new or moved Rust package must not silently escape the test matrix.

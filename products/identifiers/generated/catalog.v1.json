@@ -3,6 +3,24 @@
   "baseUrl": "https://id.registrystack.org",
   "entries": [
     {
+      "uri": "https://id.registrystack.org/contexts/registry-record/v1",
+      "kind": "context",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "registry-record",
+      "title": "Registry Record v1 JSON-LD context",
+      "description": "Governed JSON-LD terms for the Registry Record v1 base response profile.",
+      "source": {
+        "path": "products/registry-record/profile/registry-record-v1.md",
+        "sha256": "f165e62044df2129b5cc533d3199cf81ae23d263617f39437ee37be87d3b37fe"
+      },
+      "artifact": {
+        "path": "products/registry-record/context/registry-record-v1.jsonld",
+        "sha256": "9b8bf452538214d8559b4e8034446bfade37b5f409cfeaaace650a567423be71",
+        "mediaType": "application/ld+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/ns/registry-manifest/v1#",
       "kind": "namespace",
       "status": "active",
@@ -776,6 +794,24 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/profiles/registry-record/v1",
+      "kind": "profile",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "registry-record",
+      "title": "Registry Record v1 profile",
+      "description": "Open base response profile for one Registry record or a homogeneous Registry record collection.",
+      "source": {
+        "path": "products/registry-record/profile/registry-record-v1.md",
+        "sha256": "f165e62044df2129b5cc533d3199cf81ae23d263617f39437ee37be87d3b37fe"
+      },
+      "artifact": {
+        "path": "products/registry-record/profile/registry-record-v1.md",
+        "sha256": "f165e62044df2129b5cc533d3199cf81ae23d263617f39437ee37be87d3b37fe",
+        "mediaType": "text/markdown"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/identifiers/catalog.v1.schema.json",
       "kind": "schema",
       "status": "active",
@@ -785,11 +821,29 @@
       "description": "JSON Schema for the Registry Stack identifier catalog.",
       "source": {
         "path": "products/identifiers/contracts/catalog.v1.schema.json",
-        "sha256": "25eb7b86185ab1d3aa5919752790c2600b5610b484397836eab17b82924e9d01"
+        "sha256": "e45632976b2436dc468805b78e6ac35d4cb05340b260370d011eee68fcf28c5d"
       },
       "artifact": {
         "path": "products/identifiers/contracts/catalog.v1.schema.json",
-        "sha256": "25eb7b86185ab1d3aa5919752790c2600b5610b484397836eab17b82924e9d01",
+        "sha256": "e45632976b2436dc468805b78e6ac35d4cb05340b260370d011eee68fcf28c5d",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/registry-record/v1",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "registry-record",
+      "title": "Registry Record v1 base response",
+      "description": "Registry Record base response profile JSON Schema.",
+      "source": {
+        "path": "products/registry-record/schema/registry-record-v1.schema.json",
+        "sha256": "31cae7de9e84904e300d0d77ffbfdfc7a1de6127719a0ccbb3f6a88d7306510e"
+      },
+      "artifact": {
+        "path": "products/registry-record/schema/registry-record-v1.schema.json",
+        "sha256": "31cae7de9e84904e300d0d77ffbfdfc7a1de6127719a0ccbb3f6a88d7306510e",
         "mediaType": "application/schema+json"
       }
     },
@@ -848,6 +902,24 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/schemas/registry-server/authoring/registry-module.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "registry-server",
+      "title": "Registry Server authored module",
+      "description": "Registry Server project authoring JSON Schema.",
+      "source": {
+        "path": "crates/registry-server/src/schema.rs",
+        "sha256": "a2ea247e5e90bbbe2cbcfe9f7546a1c19b0f9fb0c6d28b16fa8571bf9ac24f01"
+      },
+      "artifact": {
+        "path": "products/registry-server/generated/authoring/registry-module.schema.json",
+        "sha256": "0e91e77caa0f7749ecdb1bf8428ae77b3d8a1fa2859045f92bb34cfc0767e1bf",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/registry-server/authoring/registry-project.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",
@@ -857,11 +929,11 @@
       "description": "Registry Server project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-server/src/schema.rs",
-        "sha256": "b8adb47a1ae445395121e3d51f4d7dac93e5465032cef5c55b47430ed4f3ee80"
+        "sha256": "a2ea247e5e90bbbe2cbcfe9f7546a1c19b0f9fb0c6d28b16fa8571bf9ac24f01"
       },
       "artifact": {
         "path": "products/registry-server/generated/authoring/registry-project.schema.json",
-        "sha256": "d553fe4ce669a36018a520ae7f16cf7c33837a4c7000027b831598d744fc7187",
+        "sha256": "1dd7f2803605efaa69855cb07b7e24062b9697f1f10a3e8e85d31e510c34ae26",
         "mediaType": "application/schema+json"
       }
     },
@@ -875,11 +947,11 @@
       "description": "Registry Server runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-server/src/schema.rs",
-        "sha256": "b8adb47a1ae445395121e3d51f4d7dac93e5465032cef5c55b47430ed4f3ee80"
+        "sha256": "a2ea247e5e90bbbe2cbcfe9f7546a1c19b0f9fb0c6d28b16fa8571bf9ac24f01"
       },
       "artifact": {
         "path": "products/registry-server/generated/runtime/runtime.schema.json",
-        "sha256": "76ab2845bff3f137c6c8640725d74879332d991544543bdb8c86821613653b9b",
+        "sha256": "c273fdb60c7721c28038d0809aaf92a132c54857cc2dd60e29e10444e1387d99",
         "mediaType": "application/schema+json"
       }
     },
@@ -946,6 +1018,19 @@
       "source": {
         "path": "products/relay-v2/CONCEPT.md",
         "sha256": "6502c4860b3ff48cb85f5833099be607c8d4b2d0d1126fb4b8e3a7790820a7d7"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/vocab/registry-record/",
+      "kind": "vocabulary",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "registry-record",
+      "title": "Registry Record vocabulary",
+      "description": "Vocabulary base for Registry Record v1 response-profile terms.",
+      "source": {
+        "path": "products/registry-record/context/registry-record-v1.jsonld",
+        "sha256": "9b8bf452538214d8559b4e8034446bfade37b5f409cfeaaace650a567423be71"
       }
     },
     {
