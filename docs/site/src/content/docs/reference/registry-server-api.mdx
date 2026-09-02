@@ -324,8 +324,13 @@ server states:
 draft ──submit──▶ submitted ──approve (every stage)──▶ approved ──apply──▶ applied
   ▲                   │ reject ──▶ rejected ──revise──▶ draft
   │                   └ request-revision ──▶ needs_changes ──revise──▶ draft
-  └── cancel from any state except applied and canceled ──▶ canceled
+  └── cancel from any state except applied and canceled ──▶ canceled (owner only)
 ```
+
+Three of those transitions belong to the principal that owns the request. `submit` and `revise`
+move the owner's own draft, and `cancel` is the owner's withdrawal: a reviewer rejects a request
+rather than cancelling it. Another principal does not see those actions in `actions`, and calling
+one regardless is refused with `precondition.failed`.
 
 Two declarations shorten the path. With `review: {mode: none}` there are no stages, and `submit`
 moves the request straight to `approved`. When the proposal's disposition is `apply`, from
@@ -333,6 +338,12 @@ moves the request straight to `approved`. When the proposal's disposition is `ap
 approval also applies the request in the same transaction. That action is offered only to a
 profile holding `apply_request` and `applyTargets` for every target; another profile does not see
 it in `actions`, and calling it regardless is refused with `precondition.failed`.
+
+An `rhai` planner runs at submit. A planner that produces no plan refuses the submission with
+`400 request.plan_refused`, whose detail names the failure kind from the planner's closed
+vocabulary and nothing else; a planner that ran out of its time budget returns
+`503 service.unavailable` instead. Nothing is stored either way: the request stays a draft, and
+the refusal is journaled with the same failure kind.
 
 A read of the request record adds `data.request`:
 
@@ -391,7 +402,8 @@ while target revisions reference the request.
 the application policy with its allowed dispositions and queue reasons.
 
 {/* Evidence: crates/registry-server/src/request_workflow.rs, RequestState;
-    crates/registry-server/src/api/mod.rs, request_action_dispatch();
+    crates/registry-server/src/mutation/request.rs, action_requires_request_owner();
+    crates/registry-server/src/api/mod.rs, request_action_dispatch() and planner_failure_problem();
     crates/registry-server/src/artifacts.rs, request_action_response_schema() and request_capability_metadata();
     crates/registry-server/src/fixtures.rs, assert_request_action_shape();
     crates/registry-server/src/postgres/request_read.rs;

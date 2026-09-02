@@ -50,6 +50,7 @@
     - ['`request.invalid`', '400', 'The body, headers, or path did not match the compiled contract. `fieldPath` names the member when there is one.']
     - ['`query.invalid`', '400', 'A query option was malformed, over a bound, or not permitted by the grant.']
     - ['`query.cursor_invalid`', '400', 'A `$skiptoken` that is malformed, was issued for a different query, or has expired.']
+    - ['`request.plan_refused`', '400', 'A change request was submitted and its bounded planner produced no plan. The detail names the failure kind from a closed vocabulary and nothing else. A planner that ran out of time returns `503 service.unavailable` instead.']
     - ['`unsupported.media_type`', '415', 'A body without the required `Content-Type`.']
     - ['`precondition.required`', '428', 'A route that requires `If-Match` was called without it.']
     - ['`precondition.failed`', '412', '`If-Match` did not match the current revision.']
@@ -69,7 +70,7 @@
     - ['`request-revision`', '`/actions/stages/{stage}/request-revision`', '`{"proposalVersion", "effectDigest"}`', '`submitted`']
     - ['`revise`', '`/actions/revise`', '`{"rebase": false}`', '`needs_changes`, `rejected`']
     - ['`revise` with rebase', '`/actions/revise`', '`{"rebase": true}`', '`submitted`, `approved`, `needs_changes`, `rejected`']
-    - ['`cancel`', '`/actions/cancel`', '`{}`', 'Any state except `applied` and `canceled`']
+    - ['`cancel`', '`/actions/cancel`', '`{}`', 'Any state except `applied` and `canceled`, and only for the principal that owns the request']
     - ['`apply`', '`/actions/apply`', '`{"proposalVersion", "effectDigest"}`', '`approved`']
 - id: field-encodings
   title: Field type encodings
