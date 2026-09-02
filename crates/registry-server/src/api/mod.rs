@@ -58,6 +58,7 @@ use crate::cursor::{
     CursorProjectionField, CursorQueryScope, CursorRepresentation, CursorSpatialQuery,
 };
 use crate::idempotency::{HeldResponse, PermittedResponseHeader};
+use crate::metrics::{AnonymousRefusal, AnonymousRefusalReason};
 use crate::model::{
     request_query_field_id_for_api, request_query_field_type, CompiledChangeRequest,
     CompiledChangeRequestApplicationMode, CompiledChangeRequestDisposition,
@@ -1108,6 +1109,9 @@ async fn audited_known_revision_refusal(
     response: Response,
     correlation: &RequestCorrelation,
 ) -> Response {
+    if claims.principal().is_none() {
+        return anonymous_refusal(response, AnonymousRefusalReason::RevisionRequestInvalid);
+    }
     match revisions
         .refusal(RevisionReadRefusal {
             method: route.method,
@@ -1133,6 +1137,9 @@ async fn audited_revision_refusal(
     response: Response,
     correlation: &RequestCorrelation,
 ) -> Response {
+    if surface.context.principal().is_none() {
+        return anonymous_refusal(response, AnonymousRefusalReason::RevisionRefused);
+    }
     match revisions
         .refusal(RevisionReadRefusal {
             method: route.method,
@@ -1158,6 +1165,9 @@ async fn audited_revision_concealment(
     target_record: Option<&String>,
     correlation: &RequestCorrelation,
 ) -> Response {
+    if claims.principal().is_none() {
+        return anonymous_refusal(concealed(), AnonymousRefusalReason::RevisionConcealed);
+    }
     let selected_access_profile = options.access_profile().and_then(|profile| {
         route
             .access_profiles
@@ -1190,6 +1200,9 @@ async fn audited_known_read_refusal(
     response: Response,
     correlation: &RequestCorrelation,
 ) -> Response {
+    if claims.principal().is_none() {
+        return anonymous_refusal(response, AnonymousRefusalReason::ReadRequestInvalid);
+    }
     match service
         .read_refusal(
             route.operation,
@@ -1218,6 +1231,9 @@ async fn audited_read_refusal(
     response: Response,
     correlation: &RequestCorrelation,
 ) -> Response {
+    if surface.context.principal().is_none() {
+        return anonymous_refusal(response, AnonymousRefusalReason::ReadRefused);
+    }
     match service
         .read_refusal(
             route.operation,
@@ -1246,6 +1262,9 @@ async fn audited_read_concealment(
     target_record: Option<&String>,
     correlation: &RequestCorrelation,
 ) -> Response {
+    if claims.principal().is_none() {
+        return anonymous_refusal(concealed(), AnonymousRefusalReason::ReadConcealed);
+    }
     let selected_access_profile = options.access_profile().and_then(|profile| {
         route
             .access_profiles
@@ -2163,6 +2182,9 @@ async fn audited_mutation_refusal(
     response: Response,
     correlation: &RequestCorrelation,
 ) -> Response {
+    if context.principal().is_none() {
+        return anonymous_refusal(response, AnonymousRefusalReason::MutationRefused);
+    }
     match mutations
         .record_refusal(crate::audit::HttpRefusalAudit {
             method: route.method,
@@ -2189,6 +2211,9 @@ async fn audited_mutation_concealment(
     target_record: Option<&str>,
     correlation: &RequestCorrelation,
 ) -> Response {
+    if claims.principal().is_none() {
+        return anonymous_refusal(concealed(), AnonymousRefusalReason::MutationConcealed);
+    }
     // Only a profile the compiled route grants may reach the journal, so an
     // unknown caller-supplied value is recorded as absent.
     let selected_profile = match options.access_profile() {
@@ -4423,6 +4448,26 @@ fn method_name(method: crate::model::HttpMethod) -> &'static str {
         crate::model::HttpMethod::Patch => "patch",
         crate::model::HttpMethod::Post => "post",
     }
+}
+
+/// Mark a refusal of a request that carries no principal, so the telemetry
+/// boundary counts it instead of the journal recording it.
+///
+/// A caller with no principal names nobody the journal could hold
+/// accountable, and an unauthenticated caller that could append would grow
+/// the hash chain without bound and serialize every audited write behind its
+/// head lock. The refusal keeps its operational signal as a bounded counter
+/// and a debug line; refusals of an authenticated principal are unaffected
+/// and still append.
+fn anonymous_refusal(mut response: Response, reason: AnonymousRefusalReason) -> Response {
+    tracing::debug!(
+        reason = reason.label(),
+        "refused a request without a principal before admission"
+    );
+    response
+        .extensions_mut()
+        .insert(AnonymousRefusal { reason });
+    response
 }
 
 fn concealed() -> Response {

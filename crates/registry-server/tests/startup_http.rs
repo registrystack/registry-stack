@@ -1008,6 +1008,105 @@ async fn configured_metrics_record_served_requests_with_closed_value_free_labels
     assert_forbidden_values_absent(body);
 }
 
+/// A request that presents no credential and is refused before admission is
+/// counted on the metrics listener under a closed reason, so the operational
+/// signal survives the refusal no longer reaching the hash-chained journal.
+#[tokio::test]
+async fn anonymous_pre_admission_refusals_are_counted_under_closed_reasons() {
+    let _request_logs = captured_request_logs();
+    let registry = compiled_registry();
+    let service = Arc::new(HttpService::new(
+        Arc::clone(&registry),
+        ReadRuntimeIdentity {
+            package_revision: "package-startup-http".to_owned(),
+            schema_fingerprint: "schema-startup-http".to_owned(),
+        },
+        Arc::new(NoopRecords::default()),
+        Arc::new(SlowReadiness),
+        Arc::new(
+            CursorCodec::new(Zeroizing::new(vec![0x46; 32]), Duration::from_secs(300))
+                .expect("test cursor key is valid"),
+        ),
+    ));
+    let authenticator = Arc::new(
+        RegistryAuthenticator::new(
+            &registry,
+            TokenVerifierConfig::access_token_profile(
+                "https://issuer.example",
+                vec!["urn:registry-server:test".to_owned()],
+                vec![Algorithm::EdDSA],
+                vec!["at+jwt".to_owned()],
+            ),
+            Arc::new(JwksFetcher::new_static(
+                JwkSet { keys: Vec::new() },
+                JwksFetcherConfig::defaults(),
+            )),
+            AuthorityClaimConfig::new("registry_principal", None),
+        )
+        .expect("anonymous Registry has a valid production authenticator"),
+    );
+    let metrics = Arc::new(Metrics::without_pool_for_test());
+    let app = with_request_timeout_and_metrics_for_test(
+        authenticated_router(service, authenticator),
+        Duration::from_secs(10),
+        Some(Arc::clone(&metrics)),
+    );
+
+    // A profile no anonymous caller can hold, then an unparsable query on a
+    // route the anonymous caller can otherwise reach. Both carry no
+    // credential, so neither names a principal.
+    for (uri, expected) in [
+        (
+            format!("/v1/records/public-records?accessProfile={QUERY_VALUE_CANARY}"),
+            StatusCode::NOT_FOUND,
+        ),
+        (
+            format!("/v1/records/public-records?pageSize={QUERY_VALUE_CANARY}"),
+            StatusCode::BAD_REQUEST,
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&uri)
+                    .body(Body::empty())
+                    .expect("anonymous refusal request builds"),
+            )
+            .await
+            .expect("anonymous refusal request responds");
+        assert_eq!(response.status(), expected, "{uri} is refused");
+    }
+
+    let scrape = metrics::metrics_app(Arc::clone(&metrics))
+        .oneshot(
+            Request::builder()
+                .uri("/metrics")
+                .body(Body::empty())
+                .expect("scrape request builds"),
+        )
+        .await
+        .expect("scrape request responds");
+    assert_eq!(scrape.status(), StatusCode::OK);
+    let body = to_bytes(scrape.into_body(), 1024 * 1024)
+        .await
+        .expect("scrape body reads");
+    let body = std::str::from_utf8(&body).expect("scrape body is UTF-8");
+    assert!(
+        body.contains(
+            "registry_server_anonymous_refusals_total{route=\"/v1/records/public-records\",method=\"GET\",reason=\"read_concealed\"} 1\n"
+        ),
+        "the concealed anonymous read is counted under its registered route template: {body}"
+    );
+    assert!(
+        body.contains(
+            "registry_server_anonymous_refusals_total{route=\"/v1/records/public-records\",method=\"GET\",reason=\"read_request_invalid\"} 1\n"
+        ),
+        "the unparsable anonymous query is counted under its own reason: {body}"
+    );
+    assert_forbidden_values_absent(body);
+}
+
 struct TestDirectory {
     directory: PathBuf,
 }

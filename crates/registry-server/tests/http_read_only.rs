@@ -682,8 +682,20 @@ async fn snapshot_route_requires_its_own_current_authority_and_never_calls_live_
     assert_eq!(records.calls.load(Ordering::SeqCst), 0);
     assert_eq!(records.refusals.load(Ordering::SeqCst), 0);
     snapshots.refusal_fails.store(true, Ordering::SeqCst);
-    let response = send_to(&app, Method::GET, "/v1/records/assignments:snapshot", None).await;
+    let response = send_to(
+        &app,
+        Method::GET,
+        "/v1/records/assignments:snapshot",
+        Some(caseworker_claims("wrong-purpose")),
+    )
+    .await;
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    // A caller that presents no credential names no principal, so its refusal
+    // is counted rather than journaled and never reaches the refusal audit.
+    let before = snapshots.refusals.load(Ordering::SeqCst);
+    let response = send_to(&app, Method::GET, "/v1/records/assignments:snapshot", None).await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(snapshots.refusals.load(Ordering::SeqCst), before);
 }
 
 #[tokio::test]
@@ -1823,12 +1835,32 @@ async fn known_route_malformed_query_is_refusal_audited_before_response() {
     let harness = Harness::new(true);
     harness.records.refusal_fails.store(true, Ordering::SeqCst);
     let response = harness
-        .send(Method::GET, "/v1/records/cases?$filter=label%20eq", None)
+        .send(
+            Method::GET,
+            "/v1/records/cases?$filter=label%20eq",
+            Some(caseworker_claims("case-management")),
+        )
         .await;
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body_json(response).await["code"], "source.unavailable");
     assert_eq!(harness.records.calls(), 0);
     assert_eq!(harness.records.refusal_calls(), 1);
+}
+
+/// The same refusal from a caller that presents no credential names no
+/// principal, so it is never appended to the hash-chained journal: an
+/// unauthenticated caller cannot grow the chain or contend for its head lock.
+#[tokio::test]
+async fn anonymous_malformed_query_is_refused_without_a_refusal_audit() {
+    let harness = Harness::new(true);
+    harness.records.refusal_fails.store(true, Ordering::SeqCst);
+    let response = harness
+        .send(Method::GET, "/v1/records/cases?$filter=label%20eq", None)
+        .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(response).await["code"], "query.invalid");
+    assert_eq!(harness.records.calls(), 0);
+    assert_eq!(harness.records.refusal_calls(), 0);
 }
 
 #[tokio::test]
@@ -2973,6 +3005,11 @@ async fn real_router_serves_only_authorized_explicit_revision_routes() {
     let public = send_to(&app, Method::GET, &list_path, None).await;
     assert_eq!(public.status(), StatusCode::NOT_FOUND);
     assert_eq!(revisions.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        revisions.refusals.load(Ordering::SeqCst),
+        0,
+        "a refusal that names no principal is counted, not journaled"
+    );
 
     let wrong_purpose = send_to(
         &app,
@@ -3065,7 +3102,7 @@ async fn real_router_serves_only_authorized_explicit_revision_routes() {
         .expect("operations")
         .iter()
         .any(|operation| operation["operation"] == "revisions"));
-    assert!(revisions.refusals.load(Ordering::SeqCst) >= 3);
+    assert!(revisions.refusals.load(Ordering::SeqCst) >= 2);
 
     revisions.refusal_fails.store(true, Ordering::SeqCst);
     let audit_failure = send_to(

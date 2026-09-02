@@ -1902,6 +1902,10 @@ async fn refusal_audit_records_only_compiled_access_profiles() {
         None,
     );
     let claims = api_claims("case-management", Some("zone-a"));
+    // Every refusal below names a principal, so the journal records it; a
+    // refusal of a request that carries no principal is counted on the metrics
+    // listener instead.
+    let refused_claims = api_claims("wrong-purpose", Some("zone-a"));
 
     // A caller-chosen profile that no compiled route grants is refused, and the
     // audit journal records no profile rather than the caller's bytes.
@@ -1926,7 +1930,7 @@ async fn refusal_audit_records_only_compiled_access_profiles() {
         &app,
         Method::POST,
         "/v1/records/widgets?accessProfile=operator",
-        None,
+        Some(refused_claims.clone()),
         &[
             ("content-type", "application/json"),
             ("idempotency-key", "refusal-profile-compiled"),
@@ -1941,7 +1945,7 @@ async fn refusal_audit_records_only_compiled_access_profiles() {
         &app,
         Method::POST,
         "/v1/records/widgets",
-        None,
+        Some(refused_claims),
         &[
             ("content-type", "application/json"),
             ("idempotency-key", "refusal-profile-default"),

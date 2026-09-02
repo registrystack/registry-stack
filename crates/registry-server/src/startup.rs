@@ -830,6 +830,13 @@ async fn request_timeout(
     };
     let status = crate::correlation::status_class(response.status());
     let elapsed = started.elapsed();
+    // A refusal of a caller with no principal is counted here instead of
+    // being appended to the hash-chained journal; the refusal site marks the
+    // response and this boundary already holds the matched route template.
+    let anonymous_refusal = response
+        .extensions()
+        .get::<metrics::AnonymousRefusal>()
+        .copied();
     let response = if owns_boundary {
         crate::correlation::finish_response(response, &correlation, method, started)
     } else {
@@ -837,6 +844,9 @@ async fn request_timeout(
     };
     if let Some(metrics) = &telemetry.metrics {
         metrics.record_http(&route, method, status, elapsed);
+        if let Some(refusal) = anonymous_refusal {
+            metrics.record_anonymous_refusal(&route, method, refusal.reason);
+        }
     }
     response
 }

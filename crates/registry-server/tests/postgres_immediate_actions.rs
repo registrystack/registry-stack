@@ -1168,6 +1168,10 @@ async fn action_refusal_audit_records_only_compiled_access_profiles() {
     let (database, registry, identity) = setup_action_registry().await;
     let app = action_router(&database, registry.clone(), identity);
 
+    // Every refusal below names a principal, so the journal records it; a
+    // refusal of a request that carries no principal is counted on the metrics
+    // listener instead.
+
     // A caller-chosen profile that no compiled action route grants is refused,
     // and the audit journal records no profile rather than the caller's bytes.
     let unknown = response_parts(
@@ -1196,7 +1200,7 @@ async fn action_refusal_audit_records_only_compiled_access_profiles() {
             &app,
             Method::POST,
             "/v1/actions/register-household-contact?accessProfile=contact-shadow",
-            None,
+            Some(action_claims()),
             &[
                 ("content-type", "application/json"),
                 ("idempotency-key", "action-refusal-compiled-profile"),
@@ -1214,7 +1218,7 @@ async fn action_refusal_audit_records_only_compiled_access_profiles() {
             &app,
             Method::POST,
             "/v1/actions/register-household-contact",
-            None,
+            Some(shadow_claims()),
             &[
                 ("content-type", "application/json"),
                 ("idempotency-key", "action-refusal-default-profile"),

@@ -16,6 +16,14 @@
 //! bounded by the route table regardless of traffic. The pool gauges are
 //! republished from the live pool at scrape time and carry only a fixed state
 //! label.
+//!
+//! The anonymous refusal counter is the operational signal for requests that
+//! carry no principal and are refused before admission. Those refusals are
+//! counted here rather than appended to the hash-chained audit journal: they
+//! name no principal to hold accountable, and journaling them would let an
+//! unauthenticated caller grow the journal and serialize every audited write
+//! behind its head lock. Its reason label is the same kind of closed
+//! vocabulary as the labels above.
 
 use std::{
     collections::BTreeMap,
@@ -50,6 +58,7 @@ const DURATION_BUCKETS: [f64; 9] = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.
 #[derive(Default)]
 pub struct Metrics {
     series: Mutex<BTreeMap<HttpSeriesKey, HttpSeries>>,
+    anonymous_refusals: Mutex<BTreeMap<AnonymousRefusalKey, u64>>,
     /// The pool the metrics scrape handler samples immediately before each
     /// render. `None` for registries that are never served on the metrics
     /// listener (for example, a focused unit test).
@@ -68,6 +77,68 @@ struct HttpSeries {
     requests: u64,
     duration_sum: f64,
     bucket_counts: [u64; DURATION_BUCKETS.len()],
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct AnonymousRefusalKey {
+    route: String,
+    method: &'static str,
+    reason: &'static str,
+}
+
+/// Why a request carrying no principal was refused before admission.
+///
+/// Each value names one refusal site at the HTTP boundary, so the vocabulary
+/// is closed by construction and no problem detail, message, or request value
+/// can widen it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
+pub(crate) enum AnonymousRefusalReason {
+    /// The request query could not be parsed, so no surface was selected.
+    ReadRequestInvalid,
+    /// No read surface admitted the caller: profile selection, route
+    /// membership, the anonymous restriction, or an absent scope or purpose.
+    ReadConcealed,
+    /// A read surface admitted the caller and the request was then refused.
+    ReadRefused,
+    /// The revision query could not be parsed, so no surface was selected.
+    RevisionRequestInvalid,
+    /// No revision surface admitted the caller.
+    RevisionConcealed,
+    /// A revision surface admitted the caller and the request was refused.
+    RevisionRefused,
+    /// No mutation surface admitted the caller.
+    MutationConcealed,
+    /// A mutation surface admitted the caller and the request was refused.
+    MutationRefused,
+    /// No immediate action surface admitted the caller, or the action request
+    /// was refused before invocation.
+    ActionRefused,
+}
+
+impl AnonymousRefusalReason {
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::ReadRequestInvalid => "read_request_invalid",
+            Self::ReadConcealed => "read_concealed",
+            Self::ReadRefused => "read_refused",
+            Self::RevisionRequestInvalid => "revision_request_invalid",
+            Self::RevisionConcealed => "revision_concealed",
+            Self::RevisionRefused => "revision_refused",
+            Self::MutationConcealed => "mutation_concealed",
+            Self::MutationRefused => "mutation_refused",
+            Self::ActionRefused => "action_refused",
+        }
+    }
+}
+
+/// Response marker for one anonymous pre-admission refusal.
+///
+/// The refusal sites in the HTTP surface attach this to the response they
+/// return; the telemetry boundary, which already holds the matched route
+/// template and the metrics registry, is what counts it.
+#[derive(Clone, Copy)]
+pub(crate) struct AnonymousRefusal {
+    pub(crate) reason: AnonymousRefusalReason,
 }
 
 impl Metrics {
@@ -115,6 +186,26 @@ impl Metrics {
         }
     }
 
+    /// Record one anonymous request refused before admission. `route` must
+    /// come from [`route_template`] so the label set stays closed.
+    pub(crate) fn record_anonymous_refusal(
+        &self,
+        route: &str,
+        method: &'static str,
+        reason: AnonymousRefusalReason,
+    ) {
+        let key = AnonymousRefusalKey {
+            route: route.to_owned(),
+            method,
+            reason: reason.label(),
+        };
+        let mut refusals = self
+            .anonymous_refusals
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *refusals.entry(key).or_default() += 1;
+    }
+
     /// Render the Prometheus text exposition of the current registry.
     pub(crate) fn render(&self) -> String {
         let series = self
@@ -158,6 +249,20 @@ impl Metrics {
                 "registry_server_http_request_duration_seconds_count{{{}}} {}\n",
                 labels(key),
                 value.requests
+            ));
+        }
+        let refusals = self
+            .anonymous_refusals
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        body.push_str(
+            "# HELP registry_server_anonymous_refusals_total Requests without a principal refused before admission.\n",
+        );
+        body.push_str("# TYPE registry_server_anonymous_refusals_total counter\n");
+        for (key, count) in refusals.iter() {
+            body.push_str(&format!(
+                "registry_server_anonymous_refusals_total{{route=\"{}\",method=\"{}\",reason=\"{}\"}} {count}\n",
+                key.route, key.method, key.reason
             ));
         }
         body.push_str(
@@ -235,6 +340,7 @@ mod tests {
     use super::*;
     use axum::http::Method;
     use axum::middleware::Next;
+    use std::collections::BTreeSet;
     use tower::util::ServiceExt;
 
     #[test]
@@ -275,6 +381,70 @@ mod tests {
             1,
             "unrouted requests collapse onto one series"
         );
+    }
+
+    #[test]
+    fn anonymous_refusals_accumulate_under_a_closed_reason_vocabulary() {
+        let metrics = Metrics::default();
+        metrics.record_anonymous_refusal(
+            "/v1/records/cases",
+            "GET",
+            AnonymousRefusalReason::ReadConcealed,
+        );
+        metrics.record_anonymous_refusal(
+            "/v1/records/cases",
+            "GET",
+            AnonymousRefusalReason::ReadConcealed,
+        );
+        metrics.record_anonymous_refusal(
+            "/v1/records/cases",
+            "GET",
+            AnonymousRefusalReason::ReadRequestInvalid,
+        );
+        let rendered = metrics.render();
+        assert!(rendered.contains(
+            "registry_server_anonymous_refusals_total{route=\"/v1/records/cases\",method=\"GET\",reason=\"read_concealed\"} 2\n"
+        ));
+        assert!(rendered.contains(
+            "registry_server_anonymous_refusals_total{route=\"/v1/records/cases\",method=\"GET\",reason=\"read_request_invalid\"} 1\n"
+        ));
+        assert_eq!(
+            rendered
+                .matches("registry_server_anonymous_refusals_total{")
+                .count(),
+            2,
+            "one series per distinct route, method and reason"
+        );
+    }
+
+    #[test]
+    fn every_anonymous_refusal_reason_carries_a_distinct_snake_case_label() {
+        // The vocabulary is closed: a reason is a variant of this enum, so a
+        // label can never be free text derived from a request.
+        let labels: Vec<&str> = [
+            AnonymousRefusalReason::ReadRequestInvalid,
+            AnonymousRefusalReason::ReadConcealed,
+            AnonymousRefusalReason::ReadRefused,
+            AnonymousRefusalReason::RevisionRequestInvalid,
+            AnonymousRefusalReason::RevisionConcealed,
+            AnonymousRefusalReason::RevisionRefused,
+            AnonymousRefusalReason::MutationConcealed,
+            AnonymousRefusalReason::MutationRefused,
+            AnonymousRefusalReason::ActionRefused,
+        ]
+        .into_iter()
+        .map(AnonymousRefusalReason::label)
+        .collect();
+        let unique: BTreeSet<&str> = labels.iter().copied().collect();
+        assert_eq!(unique.len(), labels.len(), "labels are distinct");
+        for label in labels {
+            assert!(
+                label
+                    .chars()
+                    .all(|character| character.is_ascii_lowercase() || character == '_'),
+                "{label} is a fixed snake_case token"
+            );
+        }
     }
 
     #[test]

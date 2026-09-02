@@ -265,6 +265,9 @@ async fn action_refusal(
     correlation: &RequestCorrelation,
     response: Response,
 ) -> Response {
+    if claims.principal().is_none() {
+        return anonymous_refusal(response, AnonymousRefusalReason::ActionRefused);
+    }
     // Only a profile the compiled action route grants may reach the journal, so
     // an unknown caller-supplied value is recorded as absent.
     let selected_access_profile = match options.access_profile() {
