@@ -466,6 +466,21 @@ fn receipt_acceptance_tracks_operation_specific_proposal_transitions() {
     assert!(!submit.accepts_receipt(&lifecycle_receipt("submitted", 7, None)));
     assert!(!submit.accepts_receipt(&lifecycle_receipt_at(10, "submitted", 7, Some(DIGEST),)));
 
+    let approve = RegistryServerRequestMetadata::from_value(
+        request_metadata(vec![action(
+            RegistryServerLifecycleOperation::ApproveRequest,
+            Some("review"),
+        )]),
+        false,
+    )
+    .unwrap()
+    .promote_actions(&authority("case-worker"), &record_binding())
+    .unwrap()
+    .remove(0);
+    assert!(approve.accepts_receipt(&lifecycle_receipt("submitted", 7, Some(DIGEST))));
+    assert!(approve.accepts_receipt(&lifecycle_receipt("approved", 7, Some(DIGEST))));
+    assert!(!approve.accepts_receipt(&lifecycle_receipt("draft", 7, Some(DIGEST))));
+
     let needs_changes = RegistryServerRequestMetadata::from_value(
         json!({
             "serverState": "needs_changes",

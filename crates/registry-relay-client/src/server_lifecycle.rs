@@ -1151,22 +1151,31 @@ impl RegistryServerLifecycleAction {
     }
 
     pub(crate) fn accepts_receipt(&self, receipt: &RegistryServerLifecycleActionReceipt) -> bool {
-        let expected_state = match self.operation {
-            RegistryServerLifecycleOperation::SubmitRequest => {
-                RegistryServerRequestState::Submitted
-            }
-            RegistryServerLifecycleOperation::ApproveRequest => {
-                RegistryServerRequestState::Approved
-            }
-            RegistryServerLifecycleOperation::RejectRequest => RegistryServerRequestState::Rejected,
-            RegistryServerLifecycleOperation::RequestRevision => {
-                RegistryServerRequestState::NeedsChanges
-            }
-            RegistryServerLifecycleOperation::ReviseRequest => RegistryServerRequestState::Draft,
-            RegistryServerLifecycleOperation::CancelRequest => RegistryServerRequestState::Canceled,
-            RegistryServerLifecycleOperation::ApplyRequest => RegistryServerRequestState::Applied,
-        };
         let request = receipt.request();
+        let state_matches = match self.operation {
+            RegistryServerLifecycleOperation::SubmitRequest => {
+                request.server_state() == RegistryServerRequestState::Submitted
+            }
+            RegistryServerLifecycleOperation::ApproveRequest => matches!(
+                request.server_state(),
+                RegistryServerRequestState::Submitted | RegistryServerRequestState::Approved
+            ),
+            RegistryServerLifecycleOperation::RejectRequest => {
+                request.server_state() == RegistryServerRequestState::Rejected
+            }
+            RegistryServerLifecycleOperation::RequestRevision => {
+                request.server_state() == RegistryServerRequestState::NeedsChanges
+            }
+            RegistryServerLifecycleOperation::ReviseRequest => {
+                request.server_state() == RegistryServerRequestState::Draft
+            }
+            RegistryServerLifecycleOperation::CancelRequest => {
+                request.server_state() == RegistryServerRequestState::Canceled
+            }
+            RegistryServerLifecycleOperation::ApplyRequest => {
+                request.server_state() == RegistryServerRequestState::Applied
+            }
+        };
         let proposal_matches = match self.operation {
             RegistryServerLifecycleOperation::SubmitRequest => {
                 request.proposal_version() == Some(self.proposal_version)
@@ -1191,7 +1200,7 @@ impl RegistryServerLifecycleAction {
                 .snapshot()
                 .strip_prefix("rs1_")
                 .is_none_or(|value| validate_canonical_uuid(value).is_err())
-            || request.server_state() != expected_state
+            || !state_matches
             || !proposal_matches
         {
             return false;
