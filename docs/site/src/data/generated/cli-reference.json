@@ -4122,6 +4122,77 @@
               ],
               "constraints": [],
               "subcommands": []
+            },
+            {
+              "name": "reconcile",
+              "invocation": "registry-serverctl migration reconcile",
+              "about": "Assess a Registry pinned by a failed activation, and execute only the safe transition it names",
+              "long_about": null,
+              "usage": "registry-serverctl migration reconcile [OPTIONS] --runtime-config <ABSOLUTE_FILE> --package <ABSOLUTE_DIRECTORY> --operator-reference <REFERENCE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Absolute Registry Server runtime configuration file",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--package <ABSOLUTE_DIRECTORY>",
+                  "description": "Absolute directory of the verified package the failed activation pinned",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--operator-reference <REFERENCE>",
+                  "description": "Operator change reference recorded as a keyed hash beside an executed transition",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--execute",
+                  "description": "Perform the single safe transition the assessment names",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
             }
           ]
         },

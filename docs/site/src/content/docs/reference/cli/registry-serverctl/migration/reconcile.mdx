@@ -1,6 +1,6 @@
 ---
-title: "registry-serverctl explain command reference"
-description: "Generated syntax and options for registry-serverctl explain."
+title: "registry-serverctl migration reconcile command reference"
+description: "Generated syntax and options for registry-serverctl migration reconcile."
 status: draft
 draft: true
 owner: registry-docs
@@ -14,7 +14,7 @@ standards_referenced: []
 
 {/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}
 
-Explain compiled model, access, route, or event inventories.
+Assess a Registry pinned by a failed activation, and execute only the safe transition it names.
 
 ## Contract status
 
@@ -23,22 +23,17 @@ This page is generated from the public Clap command tree for Registry Stack sour
 ## Usage
 
 ```text
-registry-serverctl explain [OPTIONS] <SUBJECT> <PROJECT>
+registry-serverctl migration reconcile [OPTIONS] --runtime-config <ABSOLUTE_FILE> --package <ABSOLUTE_DIRECTORY> --operator-reference <REFERENCE>
 ```
-
-## Arguments
-
-| Argument | Always required | Default | Values | Environment | Description |
-| --- | --- | --- | --- | --- | --- |
-| `<SUBJECT>` | Yes | n/a | `model`, `access`, `routes`, `queries`, `actions`, `change-requests`, `events` | n/a | Compiled inventory to explain |
-| `<PROJECT>` | Yes | n/a | n/a | n/a | Registry Server project directory |
 
 ## Options
 
 | Option | Always required | Default | Values | Environment | Description |
 | --- | --- | --- | --- | --- | --- |
-| `--production` | No | n/a | n/a | n/a | Enforce production-only package closure requirements |
-| `--scenario <JSON_FILE>` | No | n/a | n/a | n/a | For access only: bounded JSON with synthetic claims. Performs no token verification or record access |
+| `--runtime-config <ABSOLUTE_FILE>` | Yes | n/a | n/a | n/a | Absolute Registry Server runtime configuration file |
+| `--package <ABSOLUTE_DIRECTORY>` | Yes | n/a | n/a | n/a | Absolute directory of the verified package the failed activation pinned |
+| `--operator-reference <REFERENCE>` | Yes | n/a | n/a | n/a | Operator change reference recorded as a keyed hash beside an executed transition |
+| `--execute` | No | n/a | n/a | n/a | Perform the single safe transition the assessment names |
 | `--format <FORMAT>` | No | `human` | `human`, `json` | n/a | Emit the selected command's report in this format |
 | `-h, --help` | No | n/a | n/a | n/a | Print help |
 

@@ -467,13 +467,35 @@ coverage and artifact hashes; for `migration.review.fingerprint_mismatch`, rehea
 candidate again. Reviewed artifacts cannot authorize a change the planner classifies as
 unsupported.
 
-:::caution[A failed activation is fix-forward only]
+:::caution[A failed activation pins its target]
 Activation enters maintenance and may change persistent data. If `apply` fails after maintenance
-begins, readiness stays unavailable and a restart does not repair it. There is no command that
-clears the failed state: resolve the reported cause and retry the same target package, or restore
-the database from the backup you took before activation and start the activation again. Do not
-run generated SQL by hand or edit migration state. Take that backup before every `apply`.
+begins, readiness stays unavailable, a restart does not repair it, and the target stays pinned: no
+other successor can activate until that target is resolved. Resolving the reported cause and
+retrying the same target package is the ordinary answer. When it is not available, `migration
+reconcile` reports what the database actually holds and names the one transition that is safe. Do
+not run generated SQL by hand or edit migration state. Take a backup before every `apply`.
 :::
+
+`migration reconcile --runtime-config <file> --package <dir> --operator-reference <ref>` assesses a
+pinned Registry and changes nothing without `--execute`. It takes the same exclusive migration lock
+an activation takes, so it never reads a half-applied package, and it compares the live managed
+catalog against both the pinned target's expected catalog and the active package's using the
+verification an activation performs. It reports exactly one outcome:
+
+| Outcome | What the database holds | Next move |
+| --- | --- | --- |
+| `ready` | Nothing is pinned. | Nothing to reconcile. |
+| `in_progress` | Another session holds the migration lock. | Wait for that activation to finish, then assess again. |
+| `completable` | Every durable step of the pinned target succeeded and the catalog is exactly the target's. Only the activation transition is missing. | Rerun with `--execute` to finish the activation. |
+| `revertible` | The pinned target reached no durable step and the catalog is still exactly the active package's. | Rerun with `--execute` to abandon the target. |
+| `unresolvable` | The catalog matches neither package, or a reviewed migration committed steps only the same target can finish. | Restore the pre-activation backup. The report names the catalog invariant that differs. |
+
+`--execute` performs only the transition the assessment named, refuses every other outcome, and
+records the transition in the audit chain inside that transition's own transaction. Completing an
+activation writes the same ledger, history baseline, and postconditions a successful `apply` writes,
+so update the runtime file and restart as you would after any activation. Abandoning a target clears
+the pin and leaves the active revision untouched, and it retires that target revision: the abandoned
+package keeps its failed ledger row, so a later attempt needs a newly built package revision.
 
 `migration explain --runtime-config <file>` describes the configured package's migration plan
 without executing it; it does not report live database status. New schema fingerprints identify
@@ -485,6 +507,8 @@ server binary, and earlier packages keep verifying under their recorded rules.
     crates/registry-serverctl/src/reviewed_migrations.rs;
     crates/registry-server/src/migration_plan.rs;
     crates/registry-server/src/migration.rs, apply_verified_package();
+    crates/registry-server/src/migration_reconcile.rs;
+    crates/registry-serverctl/src/reconcile_lifecycle.rs;
     crates/registry-server/src/package.rs;
     crates/registry-server/src/postgres/interlock.rs;
     crates/registry-server/src/postgres/catalog.rs, CatalogFingerprintVersion;
@@ -737,7 +761,7 @@ and `--max-pages` bound one operator run.
 | `test` refuses the runtime file | Compare it with the serving file: same identity, schema-test database references, an empty package root, and a placeholder revision. |
 | `package` refuses the receipt | The receipt binds sources, baseline, fingerprint, and signature policy. Rerun `test` for the exact candidate. |
 | `apply --initial` reports a binding error | The runtime file must already name the target package's revision and sequence one. |
-| `apply` fails after maintenance begins | Read the report, fix the cause, and retry the same target, or restore the pre-activation backup. Nothing clears the state. |
+| `apply` fails after maintenance begins | Read the report, fix the cause, and retry the same target. If that is not available, run `migration reconcile` to assess the pinned target, execute the transition it names, and restore the pre-activation backup only when it reports `unresolvable`. |
 | `doctor` reports `startup.oidc.refused` | Check the issuer, discovery reachability or the static JWKS document, the algorithm, and the leeway bound. |
 | The runtime file is refused with `runtime_config.invalid_metrics_listener` | `metricsListener.bind` must be a loopback or private address with a non-zero port, distinct from `listener.bind`. |
 | Every token is refused | Compare the token's header and claims with the token table; a list-valued `aud` or a missing principal claim refuses the token. |
