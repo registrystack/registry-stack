@@ -710,6 +710,68 @@ class DemoProvisioningTests(unittest.TestCase):
         journeys = (self.root / "project/tests/journeys.yaml").read_text(encoding="utf-8")
         self.assertEqual(journeys.count("scopes: [registry:facility:operate]"), 2)
 
+    def test_prepare_asset_change_request_writes_exact_lifecycle_clients_and_credentials(self) -> None:
+        for name in ("submitter", "reviewer", "supervisor", "applier"):
+            (self.root / f"keys/{name}-public.jwk.json").write_text(
+                json.dumps(public_jwk(f"{name}-key")), encoding="utf-8"
+            )
+        fixture = MODULE_PATH.parents[2] / "acceptance/asset-site-placement-change-requests"
+
+        DEMO.prepare(
+            self.root,
+            fixture,
+            15432,
+            18081,
+            18080,
+            fixture_kind="asset-change-request",
+        )
+
+        project = (self.root / "project/registry.yaml").read_text(encoding="utf-8")
+        self.assertIn("environment: local", project)
+        self.assertIn(f"instanceId: {DEMO.ASSET_CHANGE_INSTANCE_ID}", project)
+        self.assertIn(f"sourceRevision: {DEMO.ASSET_CHANGE_SOURCE_REVISION}", project)
+        self.assertNotIn("asset-site-placement-change-requests-acceptance", project)
+        self.assertIn("requiredScopes: [registry:asset:operate]", project)
+        journeys = (self.root / "project/tests/journeys.yaml").read_text(encoding="utf-8")
+        self.assertIn("scopes: [registry:asset:operate]", journeys)
+
+        runtime = (self.root / "runtime-test.yaml").read_text(encoding="utf-8")
+        self.assertIn(f"audience: {DEMO.ASSET_CHANGE_AUDIENCE}", runtime)
+        self.assertIn(
+            "allowedClients: [asset-change-demo-operator, asset-change-demo-submitter, asset-change-demo-reviewer, asset-change-demo-supervisor, asset-change-demo-applier]",
+            runtime,
+        )
+        expected = {
+            "submitter": ("registry:corrections:submit", "asset-correction"),
+            "reviewer": ("registry:corrections:review", "asset-correction-review"),
+            "supervisor": ("registry:corrections:supervise", "asset-correction-review"),
+            "applier": ("registry:corrections:apply", "asset-correction-apply"),
+        }
+        for persona, (scope, purpose) in expected.items():
+            client = (
+                self.root / f"mint/clients/asset-change-demo-{persona}.yaml"
+            ).read_text(encoding="utf-8")
+            self.assertIn(f'scopes: ["{scope}"]', client)
+            self.assertIn(f'registry_principal: "correction-{persona}"', client)
+            self.assertIn(f'registry_purpose: "{purpose}"', client)
+        operator = (
+            self.root / "mint/clients/asset-change-demo-operator.yaml"
+        ).read_text(encoding="utf-8")
+        self.assertIn('scopes: ["registry:asset:operate"]', operator)
+
+        credentials = (self.root / "schema-test-credentials.yaml").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(credentials.count("journeyId: placement-correction-request-flow"), 14)
+        for token_name in (
+            "operator-token",
+            "submitter-token",
+            "reviewer-token",
+            "supervisor-token",
+            "applier-token",
+        ):
+            self.assertIn(f"tokenRef: secret:file/{token_name}", credentials)
+
     def test_prepare_inspection_writes_inspector_clients_and_schema_credentials(self) -> None:
         inspection_fixture = MODULE_PATH.parents[2] / "acceptance/inspection"
 
@@ -844,6 +906,71 @@ class DemoProvisioningTests(unittest.TestCase):
         self.assertIn('"areaValue": "1.2500"', rendered)
         self.assertTrue((self.root / "seed-record-ids.json").is_file())
 
+    def test_seed_asset_change_request_leaves_one_actor_bound_draft(self) -> None:
+        created_ids = {
+            "/v1/records/assets": [str(uuid.uuid4())],
+            "/v1/records/sites": [str(uuid.uuid4()), str(uuid.uuid4())],
+            "/v1/records/placements": [str(uuid.uuid4())],
+            "/v1/records/placement-correction-requests": [str(uuid.uuid4())],
+        }
+        calls: list[tuple[str, str, str, dict[str, object] | None]] = []
+
+        def request(
+            root: Path,
+            method: str,
+            path: str,
+            token_name: str,
+            body: dict[str, object] | None = None,
+            idempotency_key: str | None = None,
+            expected: int = 200,
+        ) -> tuple[dict[str, object], dict[str, str]]:
+            calls.append((method, path, token_name, body))
+            route = path.split("?", 1)[0]
+            if method == "POST":
+                return profiled_record(
+                    created_ids[route].pop(0), body.get("data", {}) if body else {}
+                ), {}
+            response = profiled_record(
+                json.loads((self.root / "seed-record-ids.json").read_text(encoding="utf-8"))[
+                    "changeRequests"
+                ]["PLACEMENT-CORRECTION"],
+                {"reason": "Site correction after supervisor field audit"},
+            )
+            response["data"]["request"] = {
+                "serverState": "draft",
+                "actions": [{"operation": "submit_request"}],
+            }
+            return response, {}
+
+        with mock.patch.object(DEMO, "_request", side_effect=request), mock.patch(
+            "builtins.print"
+        ):
+            DEMO.seed_asset_change_request(self.root)
+
+        post_calls = [call for call in calls if call[0] == "POST"]
+        self.assertEqual(
+            [call[1] for call in post_calls],
+            [
+                "/v1/records/assets?accessProfile=asset-operator",
+                "/v1/records/sites?accessProfile=asset-operator",
+                "/v1/records/sites?accessProfile=asset-operator",
+                "/v1/records/placements?accessProfile=asset-operator",
+                "/v1/records/placement-correction-requests?accessProfile=correction-submitter",
+            ],
+        )
+        self.assertEqual([call[2] for call in post_calls[:4]], ["operator-token"] * 4)
+        self.assertEqual(post_calls[4][2], "submitter-token")
+        self.assertEqual(calls[-1][0:3], (
+            "GET",
+            calls[-1][1],
+            "submitter-token",
+        ))
+        self.assertIn("accessProfile=correction-submitter", calls[-1][1])
+        seed_ids = json.loads(
+            (self.root / "seed-record-ids.json").read_text(encoding="utf-8")
+        )
+        self.assertIn("PLACEMENT-CORRECTION", seed_ids["changeRequests"])
+
     def test_seed_inspection_uses_normal_api_routes_and_create_only_records(self) -> None:
         created_ids = {
             "/v1/records/authorities": [str(uuid.uuid4())],
@@ -956,6 +1083,53 @@ class DemoProvisioningTests(unittest.TestCase):
             self.assertEqual([persona["id"] for persona in value["personas"]], [expected])
             self.assertNotIn("south-operator-token", json.dumps(value, sort_keys=True))
             self.assertNotIn("no-purpose-token", json.dumps(value, sort_keys=True))
+
+    def test_change_request_handoff_carries_only_an_inert_record_path_and_persona_order(self) -> None:
+        (self.root / "server-origin").write_text(
+            "http://127.0.0.1:18080\n", encoding="ascii"
+        )
+        request_id = str(uuid.uuid4())
+        (self.root / "seed-record-ids.json").write_text(
+            json.dumps(
+                {"changeRequests": {"PLACEMENT-CORRECTION": request_id}},
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        for name in ("submitter", "reviewer", "supervisor", "applier"):
+            path = self.root / f"secrets/{name}-token"
+            path.write_text(compact_jwt(1798761600), encoding="ascii")
+            path.chmod(0o600)
+
+        handoff = self.root / "asset-change-request-handoff.json"
+        DEMO.write_handoff(self.root, "asset-change-request", handoff)
+
+        value = json.loads(handoff.read_text(encoding="utf-8"))
+        self.assertEqual(
+            [persona["id"] for persona in value["personas"]],
+            [
+                "correction-submitter",
+                "correction-reviewer",
+                "correction-supervisor",
+                "correction-applier",
+            ],
+        )
+        self.assertEqual(
+            value["walkthrough"],
+            {
+                "kind": "asset-placement-correction",
+                "entryPath": f"/records/placement-correction-request/{request_id}",
+                "personaOrder": [
+                    "correction-submitter",
+                    "correction-reviewer",
+                    "correction-supervisor",
+                    "correction-applier",
+                ],
+            },
+        )
+        rendered = json.dumps(value, sort_keys=True)
+        self.assertNotIn(compact_jwt(1798761600), rendered)
+        self.assertNotIn("operator-token", rendered)
 
     def test_demo_root_must_not_be_a_symbolic_link(self) -> None:
         linked_root = Path(self.temporary.name) / "linked-run"

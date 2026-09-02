@@ -14,6 +14,27 @@ Both examples set `changeRequest.retention.mode: operator_erase`. That mode does
 not create a TTL or scheduler. It means retained request detail can be erased
 only through the explicit operator retention command path.
 
+## Run the asset example with Registry Workspace
+
+The Registry Server demo can leave the asset correction fixture running and
+emit an owner-only handoff for Registry Workspace:
+
+```bash
+products/registry-server/demo/run.sh --fixture asset-change-request \
+  --handoff /absolute/new/path/change-request-handoff.json
+```
+
+The demo seeds one draft correction from North Yard to South Yard. The handoff
+contains separate submitter, reviewer, supervisor, and applier token-file paths,
+plus an inert request-record path. It contains no token bytes and grants no
+action by itself. A client must fetch caller-filtered metadata and the request
+record after every persona change, then use only the action currently advertised
+in `data.request.actions[]`.
+
+Registry Workspace can attach to the generated handoff, or launch this mode
+itself with its documented `asset-change-request` demo command. The interactive
+sequence is submit, approve `review`, approve `final-approval`, then apply.
+
 The committed examples are fixture copies, so the existing direct-write
 acceptance fixtures keep their original behavior:
 

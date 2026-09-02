@@ -63,6 +63,7 @@ Choose another maintained fixture with `--fixture`:
 ```bash
 products/registry-server/demo/run.sh --fixture household
 products/registry-server/demo/run.sh --fixture asset-site
+products/registry-server/demo/run.sh --fixture asset-change-request
 products/registry-server/demo/run.sh --fixture facility
 products/registry-server/demo/run.sh --fixture inspection
 ```
@@ -72,6 +73,23 @@ The corresponding query helper uses the same fixture choice:
 ```bash
 products/registry-server/demo/query.sh --fixture facility operator
 products/registry-server/demo/query.sh --fixture inspection inspector
+products/registry-server/demo/query.sh --fixture asset-change-request submitter
+```
+
+`asset-change-request` uses the reviewed
+`asset-site-placement-change-requests` acceptance project. It creates an asset,
+an original and corrected site, the current placement, and one draft placement
+correction request through the authenticated API. Its owner-only handoff exposes
+four separate Workspace personas in the required order: submitter, reviewer,
+supervisor, and applier. It contains an inert deep link to the synthetic request,
+but no bearer token or lifecycle authority. Each actor must still obtain its
+currently permitted action from a fresh request GET.
+
+Generate a handoff for another local client with:
+
+```bash
+products/registry-server/demo/run.sh --fixture asset-change-request \
+  --handoff /absolute/new/path/change-request-handoff.json
 ```
 
 Use `--webhook` to add a local loopback receiver and exercise the configured

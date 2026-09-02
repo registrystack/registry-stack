@@ -19,7 +19,7 @@ handoff_path=""
 token_lifetime_seconds=300
 
 usage() {
-  printf '%s\n' 'usage: products/registry-server/demo/run.sh [--smoke] [--webhook] [--fixture business-establishments|household|asset-site|facility|inspection] [--state-dir PATH] [--handoff PATH] [--token-lifetime-seconds 60..900]' >&2
+  printf '%s\n' 'usage: products/registry-server/demo/run.sh [--smoke] [--webhook] [--fixture business-establishments|household|asset-site|asset-change-request|facility|inspection] [--state-dir PATH] [--handoff PATH] [--token-lifetime-seconds 60..900]' >&2
 }
 
 while [[ $# -gt 0 ]]; do
@@ -97,6 +97,14 @@ case "$fixture_kind" in
     database_id='asset-site-placement-demo'
     if [[ "$webhook" == true ]]; then
       printf '%s\n' 'the --webhook option is not supported for the asset-site fixture.' >&2
+      exit 2
+    fi
+    ;;
+  asset-change-request)
+    fixture="$product_dir/acceptance/asset-site-placement-change-requests"
+    database_id='asset-site-placement-change-requests-demo'
+    if [[ "$webhook" == true ]]; then
+      printf '%s\n' 'the --webhook option is not supported for the asset-change-request fixture.' >&2
       exit 2
     fi
     ;;
@@ -249,6 +257,12 @@ if [[ "$fixture_kind" == asset-site ]]; then
   uv run --quiet "$mint_key_material" p256 \
     --private-out "$run_dir/keys/planner-no-purpose/signing-p256-private-jwk" \
     --public-out "$run_dir/keys/planner-no-purpose-public.jwk.json"
+elif [[ "$fixture_kind" == asset-change-request ]]; then
+  for persona in submitter reviewer supervisor applier; do
+    uv run --quiet "$mint_key_material" p256 \
+      --private-out "$run_dir/keys/$persona/signing-p256-private-jwk" \
+      --public-out "$run_dir/keys/$persona-public.jwk.json"
+  done
 elif [[ "$fixture_kind" == facility ]]; then
   uv run --quiet "$mint_key_material" p256 \
     --private-out "$run_dir/keys/south-operator/signing-p256-private-jwk" \
@@ -410,6 +424,19 @@ elif [[ "$fixture_kind" == asset-site ]]; then
     --client-id asset-site-demo-planner-no-purpose \
     --key "$run_dir/keys/planner-no-purpose/signing-p256-private-jwk" |
     python3 "$support" store-token --out "$run_dir/secrets/planner-no-purpose-token"
+elif [[ "$fixture_kind" == asset-change-request ]]; then
+  "$mint" token \
+    --url "http://127.0.0.1:${mint_port}/token" \
+    --client-id asset-change-demo-operator \
+    --key "$run_dir/keys/operator/signing-p256-private-jwk" |
+    python3 "$support" store-token --out "$run_dir/secrets/operator-token"
+  for persona in submitter reviewer supervisor applier; do
+    "$mint" token \
+      --url "http://127.0.0.1:${mint_port}/token" \
+      --client-id "asset-change-demo-$persona" \
+      --key "$run_dir/keys/$persona/signing-p256-private-jwk" |
+      python3 "$support" store-token --out "$run_dir/secrets/$persona-token"
+  done
 elif [[ "$fixture_kind" == facility ]]; then
   "$mint" token \
     --url "http://127.0.0.1:${mint_port}/token" \
@@ -569,6 +596,8 @@ elif [[ "$fixture_kind" == household ]]; then
   printf '\n%s\n' 'Registry Server household demo is ready.'
 elif [[ "$fixture_kind" == asset-site ]]; then
   printf '\n%s\n' 'Registry Server asset-site demo is ready.'
+elif [[ "$fixture_kind" == asset-change-request ]]; then
+  printf '\n%s\n' 'Registry Server asset change-request demo is ready.'
 elif [[ "$fixture_kind" == facility ]]; then
   printf '\n%s\n' 'Registry Server facility demo is ready.'
 else
@@ -581,6 +610,8 @@ if [[ "$fixture_kind" == business-establishments || "$fixture_kind" == household
   printf '  Viewer token:    %s\n' "$run_dir/secrets/viewer-token"
 elif [[ "$fixture_kind" == asset-site ]]; then
   printf '  Planner token:   %s\n' "$run_dir/secrets/planner-token"
+elif [[ "$fixture_kind" == asset-change-request ]]; then
+  printf '  Persona tokens:  %s\n' "$run_dir/secrets"
 else
   printf '  Persona token:   %s\n' "$run_dir/secrets/operator-token"
 fi

@@ -47,6 +47,15 @@ ASSET_PLANNER_CLIENT = "asset-site-demo-planner"
 ASSET_PLANNER_NO_PURPOSE_CLIENT = "asset-site-demo-planner-no-purpose"
 ASSET_OPERATOR_SCOPE = "registry:asset:operate"
 ASSET_PLANNER_SCOPE = "registry:asset:plan"
+ASSET_CHANGE_DATABASE_ID = "asset-site-placement-change-requests-demo"
+ASSET_CHANGE_INSTANCE_ID = "asset-site-placement-change-requests-local"
+ASSET_CHANGE_SOURCE_REVISION = "asset-site-placement-change-requests-local-0.1.0"
+ASSET_CHANGE_AUDIENCE = "urn:registry-server:asset-change-request-demo"
+ASSET_CHANGE_OPERATOR_CLIENT = "asset-change-demo-operator"
+ASSET_CHANGE_SUBMITTER_CLIENT = "asset-change-demo-submitter"
+ASSET_CHANGE_REVIEWER_CLIENT = "asset-change-demo-reviewer"
+ASSET_CHANGE_SUPERVISOR_CLIENT = "asset-change-demo-supervisor"
+ASSET_CHANGE_APPLIER_CLIENT = "asset-change-demo-applier"
 FACILITY_DATABASE_ID = "facility-demo"
 FACILITY_INSTANCE_ID = "facility-local"
 FACILITY_SOURCE_REVISION = "facility-local-0.1.0"
@@ -78,6 +87,11 @@ ASSET_SITE_PROJECT_REPLACEMENTS = {
     "  environment: acceptance": "  environment: local",
     "  instanceId: asset-site-placement-acceptance": f"  instanceId: {ASSET_SITE_INSTANCE_ID}",
     "  sourceRevision: asset-site-placement-acceptance-0.1.0": f"  sourceRevision: {ASSET_SITE_SOURCE_REVISION}",
+}
+ASSET_CHANGE_PROJECT_REPLACEMENTS = {
+    "  environment: acceptance": "  environment: local",
+    "  instanceId: asset-site-placement-change-requests-acceptance": f"  instanceId: {ASSET_CHANGE_INSTANCE_ID}",
+    "  sourceRevision: asset-site-placement-change-requests-acceptance-0.1.0": f"  sourceRevision: {ASSET_CHANGE_SOURCE_REVISION}",
 }
 FACILITY_PROJECT_REPLACEMENTS = {
     "  environment: acceptance": "  environment: local",
@@ -225,6 +239,47 @@ FIXTURE_CONFIGS: dict[str, dict[str, Any]] = {
             },
         ],
     },
+    "asset-change-request": {
+        "registry_id": "asset-site-placement-change-requests",
+        "database_id": ASSET_CHANGE_DATABASE_ID,
+        "instance_id": ASSET_CHANGE_INSTANCE_ID,
+        "source_revision": ASSET_CHANGE_SOURCE_REVISION,
+        "audience": ASSET_CHANGE_AUDIENCE,
+        "replacements": ASSET_CHANGE_PROJECT_REPLACEMENTS,
+        "allowed_clients": [
+            ASSET_CHANGE_OPERATOR_CLIENT,
+            ASSET_CHANGE_SUBMITTER_CLIENT,
+            ASSET_CHANGE_REVIEWER_CLIENT,
+            ASSET_CHANGE_SUPERVISOR_CLIENT,
+            ASSET_CHANGE_APPLIER_CLIENT,
+        ],
+        "personas": [
+            {
+                "id": "correction-submitter",
+                "label": "Correction submitter",
+                "token_name": "submitter-token",
+                "access_profile": "correction-submitter",
+            },
+            {
+                "id": "correction-reviewer",
+                "label": "Correction reviewer",
+                "token_name": "reviewer-token",
+                "access_profile": "correction-reviewer",
+            },
+            {
+                "id": "correction-supervisor",
+                "label": "Correction supervisor",
+                "token_name": "supervisor-token",
+                "access_profile": "correction-supervisor",
+            },
+            {
+                "id": "correction-applier",
+                "label": "Correction applier",
+                "token_name": "applier-token",
+                "access_profile": "correction-applier",
+            },
+        ],
+    },
     "facility": {
         "registry_id": "facility",
         "database_id": FACILITY_DATABASE_ID,
@@ -273,7 +328,7 @@ def _fixture_config(fixture_kind: str) -> dict[str, Any]:
         return FIXTURE_CONFIGS[fixture_kind]
     except KeyError as error:
         raise DemoError(
-            "fixture must be business-establishments, household, asset-site, facility, or inspection"
+            "fixture must be business-establishments, household, asset-site, asset-change-request, facility, or inspection"
         ) from error
 
 
@@ -452,6 +507,28 @@ def _local_project(
             "          operation: get\n"
             "          recordRef: renamed-asset\n",
             "asset-site fixture no longer has the expected no-purpose planner step",
+        )
+        journeys_path.write_text(journeys, encoding="utf-8")
+    elif fixture_kind == "asset-change-request":
+        source = _replace_once(
+            source,
+            "  - id: asset-operator\n    default: true\n    principalClaim: registry_principal\n    requiredPurposes:",
+            "  - id: asset-operator\n    default: true\n    principalClaim: registry_principal\n"
+            f"    requiredScopes: [{ASSET_OPERATOR_SCOPE}]\n    requiredPurposes:",
+            "asset change-request fixture no longer has the expected asset-operator access profile",
+        )
+        journeys_path = target / "tests/journeys.yaml"
+        journeys = journeys_path.read_text(encoding="utf-8")
+        journeys = _replace_once(
+            journeys,
+            "        claims: &operator_claims\n"
+            "          principal: asset-operator\n"
+            "          purpose: asset-management\n",
+            "        claims: &operator_claims\n"
+            "          principal: asset-operator\n"
+            f"          scopes: [{ASSET_OPERATOR_SCOPE}]\n"
+            "          purpose: asset-management\n",
+            "asset change-request fixture no longer has the expected operator journey claims",
         )
         journeys_path.write_text(journeys, encoding="utf-8")
     elif fixture_kind == "facility":
@@ -825,6 +902,63 @@ def prepare(
                 {"registry_principal": "synthetic-site-planner"},
             ),
         )
+    elif fixture_kind == "asset-change-request":
+        submitter_public = _read_json_object(root / "keys/submitter-public.jwk.json")
+        reviewer_public = _read_json_object(root / "keys/reviewer-public.jwk.json")
+        supervisor_public = _read_json_object(root / "keys/supervisor-public.jwk.json")
+        applier_public = _read_json_object(root / "keys/applier-public.jwk.json")
+        clients = (
+            (
+                ASSET_CHANGE_OPERATOR_CLIENT,
+                operator_public,
+                [ASSET_OPERATOR_SCOPE],
+                {
+                    "registry_principal": "asset-operator",
+                    "registry_purpose": "asset-management",
+                },
+            ),
+            (
+                ASSET_CHANGE_SUBMITTER_CLIENT,
+                submitter_public,
+                ["registry:corrections:submit"],
+                {
+                    "registry_principal": "correction-submitter",
+                    "registry_purpose": "asset-correction",
+                },
+            ),
+            (
+                ASSET_CHANGE_REVIEWER_CLIENT,
+                reviewer_public,
+                ["registry:corrections:review"],
+                {
+                    "registry_principal": "correction-reviewer",
+                    "registry_purpose": "asset-correction-review",
+                },
+            ),
+            (
+                ASSET_CHANGE_SUPERVISOR_CLIENT,
+                supervisor_public,
+                ["registry:corrections:supervise"],
+                {
+                    "registry_principal": "correction-supervisor",
+                    "registry_purpose": "asset-correction-review",
+                },
+            ),
+            (
+                ASSET_CHANGE_APPLIER_CLIENT,
+                applier_public,
+                ["registry:corrections:apply"],
+                {
+                    "registry_principal": "correction-applier",
+                    "registry_purpose": "asset-correction-apply",
+                },
+            ),
+        )
+        for client_id, public_key, scopes, claims in clients:
+            _write_new(
+                root / f"mint/clients/{client_id}.yaml",
+                _mint_client(client_id, public_key, scopes, claims),
+            )
     elif fixture_kind == "facility":
         south_operator_public = _read_json_object(root / "keys/south-operator-public.jwk.json")
         _write_new(
@@ -1037,6 +1171,25 @@ bindings:
   - {journeyId: asset-and-site-caller-surfaces, stepId: planner-gets-site, credential: {type: bearer, tokenRef: secret:file/planner-token}}
   - {journeyId: asset-and-site-caller-surfaces, stepId: planner-lists-sites, credential: {type: bearer, tokenRef: secret:file/planner-token}}
   - {journeyId: asset-and-site-caller-surfaces, stepId: planner-without-purpose-is-concealed, credential: {type: bearer, tokenRef: secret:file/planner-no-purpose-token}}
+"""
+    elif fixture_kind == "asset-change-request":
+        credentials = """apiVersion: registry.registrystack.org/server-schema-test-credentials/v1
+kind: SchemaTestCredentials
+bindings:
+  - {journeyId: placement-correction-request-flow, stepId: create-asset, credential: {type: bearer, tokenRef: secret:file/operator-token}}
+  - {journeyId: placement-correction-request-flow, stepId: create-original-site, credential: {type: bearer, tokenRef: secret:file/operator-token}}
+  - {journeyId: placement-correction-request-flow, stepId: create-corrected-site, credential: {type: bearer, tokenRef: secret:file/operator-token}}
+  - {journeyId: placement-correction-request-flow, stepId: create-placement, credential: {type: bearer, tokenRef: secret:file/operator-token}}
+  - {journeyId: placement-correction-request-flow, stepId: create-correction-request, credential: {type: bearer, tokenRef: secret:file/submitter-token}}
+  - {journeyId: placement-correction-request-flow, stepId: edit-correction-request, credential: {type: bearer, tokenRef: secret:file/submitter-token}}
+  - {journeyId: placement-correction-request-flow, stepId: get-before-submit, credential: {type: bearer, tokenRef: secret:file/submitter-token}}
+  - {journeyId: placement-correction-request-flow, stepId: submit-correction-request, credential: {type: bearer, tokenRef: secret:file/submitter-token}}
+  - {journeyId: placement-correction-request-flow, stepId: get-before-review, credential: {type: bearer, tokenRef: secret:file/reviewer-token}}
+  - {journeyId: placement-correction-request-flow, stepId: approve-review-stage, credential: {type: bearer, tokenRef: secret:file/reviewer-token}}
+  - {journeyId: placement-correction-request-flow, stepId: get-before-final-approval, credential: {type: bearer, tokenRef: secret:file/supervisor-token}}
+  - {journeyId: placement-correction-request-flow, stepId: approve-final-stage, credential: {type: bearer, tokenRef: secret:file/supervisor-token}}
+  - {journeyId: placement-correction-request-flow, stepId: get-before-apply, credential: {type: bearer, tokenRef: secret:file/applier-token}}
+  - {journeyId: placement-correction-request-flow, stepId: apply-correction-request, credential: {type: bearer, tokenRef: secret:file/applier-token}}
 """
     elif fixture_kind == "facility":
         credentials = """apiVersion: registry.registrystack.org/server-schema-test-credentials/v1
@@ -1738,6 +1891,87 @@ def seed_asset_site(root: Path) -> None:
     print("Seeded 1 synthetic asset, site, placement, and create-only inspection.")
 
 
+def seed_asset_change_request(root: Path) -> None:
+    root = _require_root(root)
+    asset_id = _create(
+        root,
+        "/v1/records/assets",
+        "change-request-asset",
+        {"assetCode": "PUMP-001", "label": "Pump 001", "assetClass": "equipment"},
+        "asset-operator",
+        "operator-token",
+    )
+    original_site_id = _create(
+        root,
+        "/v1/records/sites",
+        "change-request-north-yard",
+        {"siteCode": "NORTH-YARD", "label": "North Yard"},
+        "asset-operator",
+        "operator-token",
+    )
+    corrected_site_id = _create(
+        root,
+        "/v1/records/sites",
+        "change-request-south-yard",
+        {"siteCode": "SOUTH-YARD", "label": "South Yard"},
+        "asset-operator",
+        "operator-token",
+    )
+    placement_id = _create(
+        root,
+        "/v1/records/placements",
+        "change-request-placement",
+        {"asset": asset_id, "site": original_site_id, "validFrom": "2026-01-01"},
+        "asset-operator",
+        "operator-token",
+    )
+    request_id = _create(
+        root,
+        "/v1/records/placement-correction-requests",
+        "placement-correction-request",
+        {
+            "placement": placement_id,
+            "proposedSite": corrected_site_id,
+            "reason": "Site correction after supervisor field audit",
+        },
+        "correction-submitter",
+        "submitter-token",
+    )
+    _write_json(
+        root / "seed-record-ids.json",
+        {
+            "assets": {"PUMP-001": asset_id},
+            "sites": {
+                "NORTH-YARD": original_site_id,
+                "SOUTH-YARD": corrected_site_id,
+            },
+            "placements": {"PUMP-001": placement_id},
+            "changeRequests": {"PLACEMENT-CORRECTION": request_id},
+        },
+    )
+
+    submitter_view, _ = _request(
+        root,
+        "GET",
+        f"/v1/records/placement-correction-requests/{urllib.parse.quote(request_id, safe='')}?accessProfile=correction-submitter",
+        "submitter-token",
+    )
+    data = submitter_view.get("data")
+    request = data.get("request") if isinstance(data, dict) else None
+    actions = request.get("actions") if isinstance(request, dict) else None
+    if (
+        not isinstance(request, dict)
+        or request.get("serverState") != "draft"
+        or not isinstance(actions, list)
+        or not any(
+            isinstance(action, dict) and action.get("operation") == "submit_request"
+            for action in actions
+        )
+    ):
+        raise DemoError("seeded correction request did not expose its draft submit action")
+    print("Seeded one draft asset-placement correction request and its supporting records.")
+
+
 def seed_facility(root: Path) -> None:
     root = _require_root(root)
     north_facility_id = _create(
@@ -2337,6 +2571,37 @@ def query_asset_site(root: Path, suite: str = "all") -> None:
         _print_query("Site planner without purpose is concealed", concealed)
 
 
+def query_asset_change_request(root: Path, suite: str = "all") -> None:
+    root = _require_root(root)
+    seed_ids = _read_json_object(root / "seed-record-ids.json")
+    change_requests = seed_ids.get("changeRequests")
+    if not isinstance(change_requests, dict) or not isinstance(
+        change_requests.get("PLACEMENT-CORRECTION"), str
+    ):
+        raise DemoError("seed record ids do not contain the correction request")
+    request_id = change_requests["PLACEMENT-CORRECTION"]
+    personas = (
+        ("submitter", "Correction submitter", "correction-submitter", "submitter-token"),
+        ("reviewer", "Correction reviewer", "correction-reviewer", "reviewer-token"),
+        ("supervisor", "Correction supervisor", "correction-supervisor", "supervisor-token"),
+        ("applier", "Correction applier", "correction-applier", "applier-token"),
+    )
+    selected = personas if suite == "all" else tuple(
+        persona for persona in personas if persona[0] == suite
+    )
+    if not selected:
+        raise DemoError("the selected change-request query suite is unavailable")
+    for _suite, label, profile, token_name in selected:
+        response, _ = _request(
+            root,
+            "GET",
+            f"/v1/records/placement-correction-requests/{urllib.parse.quote(request_id, safe='')}?accessProfile={profile}",
+            token_name,
+        )
+        _profiled_record(response)
+        _print_query(label, response)
+
+
 def query_facility(root: Path, suite: str = "all") -> None:
     root = _require_root(root)
     if suite not in ("all", "operator"):
@@ -2461,15 +2726,31 @@ def write_handoff(root: Path, fixture_kind: str, out: Path) -> None:
                 "expiresAt": _token_expires_at(token),
             }
         )
-    _write_json(
-        out,
-        {
-            "schemaVersion": "registry-workspace/demo/v1",
-            "registry": {"id": config["registry_id"], "baseUrl": server_origin},
-            "personas": personas,
-        },
-        0o600,
-    )
+    handoff = {
+        "schemaVersion": "registry-workspace/demo/v1",
+        "registry": {"id": config["registry_id"], "baseUrl": server_origin},
+        "personas": personas,
+    }
+    if fixture_kind == "asset-change-request":
+        seed_ids = _read_json_object(root / "seed-record-ids.json")
+        change_requests = seed_ids.get("changeRequests")
+        request_id = (
+            change_requests.get("PLACEMENT-CORRECTION")
+            if isinstance(change_requests, dict)
+            else None
+        )
+        try:
+            canonical_request_id = str(uuid.UUID(request_id)) if isinstance(request_id, str) else ""
+        except ValueError as error:
+            raise DemoError("seeded correction request identifier is not a UUID") from error
+        if canonical_request_id != request_id:
+            raise DemoError("seeded correction request identifier is not canonical")
+        handoff["walkthrough"] = {
+            "kind": "asset-placement-correction",
+            "entryPath": f"/records/placement-correction-request/{canonical_request_id}",
+            "personaOrder": [persona["id"] for persona in config["personas"]],
+        }
+    _write_json(out, handoff, 0o600)
 
 
 def wait_http(url: str, timeout_seconds: float) -> None:
@@ -2493,7 +2774,14 @@ def wait_http(url: str, timeout_seconds: float) -> None:
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser()
     commands = result.add_subparsers(dest="command", required=True)
-    fixture_choices = ("business-establishments", "household", "asset-site", "facility", "inspection")
+    fixture_choices = (
+        "business-establishments",
+        "household",
+        "asset-site",
+        "asset-change-request",
+        "facility",
+        "inspection",
+    )
     ports_parser = commands.add_parser("ports")
     ports_parser.add_argument("--count", type=int, choices=(3, 4), default=3)
     prepare_parser = commands.add_parser("prepare")
@@ -2591,6 +2879,8 @@ def main() -> int:
                 seed(args.root)
             elif args.fixture_kind == "asset-site":
                 seed_asset_site(args.root)
+            elif args.fixture_kind == "asset-change-request":
+                seed_asset_change_request(args.root)
             elif args.fixture_kind == "facility":
                 seed_facility(args.root)
             elif args.fixture_kind == "inspection":
@@ -2606,6 +2896,8 @@ def main() -> int:
                 query(args.root, args.suite)
             elif args.fixture_kind == "asset-site":
                 query_asset_site(args.root, args.suite)
+            elif args.fixture_kind == "asset-change-request":
+                query_asset_change_request(args.root, args.suite)
             elif args.fixture_kind == "facility":
                 query_facility(args.root, args.suite)
             elif args.fixture_kind == "inspection":
