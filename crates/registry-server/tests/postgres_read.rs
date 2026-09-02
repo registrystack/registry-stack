@@ -543,6 +543,35 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
     assert_ids(sorted_third.clone(), &[SORT_NULL_B_RECORD]);
     assert!(sorted_third["pageInfo"]["nextCursor"].is_null());
 
+    let counted_first = send(
+        &app,
+        "/v1/records/widgets?$select=label,rank&$filter=startswith(label,'sort-key-')&$orderby=rank&$top=2&$count=true",
+        Some(read_claims(["zone-a"])),
+    )
+    .await;
+    assert_eq!(counted_first.status(), StatusCode::OK);
+    let counted_first = body_json(counted_first).await;
+    assert_eq!(
+        counted_first["count"], 5,
+        "the first page counts the whole authorized result"
+    );
+    let counted_cursor = counted_first["pageInfo"]["nextCursor"]
+        .as_str()
+        .expect("counted page overfetches")
+        .to_owned();
+    let counted_second = send(
+        &app,
+        &format!("/v1/records/widgets?$skiptoken={counted_cursor}"),
+        Some(read_claims(["zone-a"])),
+    )
+    .await;
+    assert_eq!(counted_second.status(), StatusCode::OK);
+    let counted_second = body_json(counted_second).await;
+    assert_eq!(
+        counted_second["count"], 5,
+        "a continuation counts the same result, not only the rows after its boundary"
+    );
+
     let replay_cursor = next_cursor(
         &app,
         "/v1/records/widgets?$select=label,rank&$filter=startswith(label,'sort-key-')&$orderby=rank&$top=2",
@@ -661,6 +690,96 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
         Some(read_claims(["zone-a"])),
     )
     .await;
+
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_reads_do_not_depend_on_the_database_time_zone() {
+    let database = TestDatabase::create(4).await;
+    database
+        .admin
+        .execute("CREATE EXTENSION IF NOT EXISTS btree_gist", &[])
+        .await
+        .expect("administrator installs btree_gist for temporal exclusion constraints");
+    let (migration, migration_task) = database.connect_migration().await;
+    let compiled = Arc::new(compiled_registry());
+    install_compiled_schema(&migration, &compiled, &database.runtime_role)
+        .await
+        .expect("migration installs the complete compiled PostgreSQL schema");
+    let catalog = ExpectedManagedCatalog::compiled(&compiled);
+    let identity = initialize_registry_state_for_catalog_test(
+        &migration,
+        &database.runtime_role,
+        &catalog,
+        RegistryStateTestIdentity {
+            package_id: PACKAGE_ID,
+            environment: "local",
+            instance_id: INSTANCE_ID,
+            database_id: DATABASE_ID,
+            package_revision: "package-read-1",
+            package_sequence: 1,
+        },
+    )
+    .await
+    .expect("migration initializes durable Registry identity");
+    let database_name: String = migration
+        .query_one("SELECT current_database()", &[])
+        .await
+        .expect("migration reads its own database name")
+        .get(0);
+    migration_task.abort();
+    database
+        .admin
+        .execute(
+            &format!(
+                "ALTER DATABASE {} SET timezone = 'Pacific/Kiritimati'",
+                quote_identifier(&database_name)
+            ),
+            &[],
+        )
+        .await
+        .expect("administrator moves the database default off UTC");
+
+    let pool = database
+        .runtime_config
+        .build_pool()
+        .expect("bounded runtime pool builds");
+    let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock identity is bounded");
+    seed_records(&database, &pool, lock_key, &identity, &compiled, true).await;
+    let profile = AuditProfile::production_from_secret_bytes(vec![0x6d; 32].into())
+        .expect("test owns a strongly keyed audit profile");
+    let app = read_router(
+        pool,
+        compiled.clone(),
+        identity,
+        lock_key,
+        profile,
+        None,
+    );
+
+    let current = send(
+        &app,
+        "/v1/records/assignments:current",
+        Some(read_claims(["zone-a"])),
+    )
+    .await;
+    assert_eq!(current.status(), StatusCode::OK);
+    let current = body_json(current).await;
+    assert_ids(current.clone(), &[TEMPORAL_OPEN_RECORD]);
+    assert_eq!(
+        current["items"][0]["domainData"]["validFrom"], "2020-06-01T00:00:00+00:00",
+        "timestamps render in UTC whatever the database default time zone is"
+    );
+
+    let as_of = send(
+        &app,
+        "/v1/records/assignments:as-of?$select=label&asOf=2020-05-31T23:59:59Z",
+        Some(read_claims(["zone-a"])),
+    )
+    .await;
+    assert_eq!(as_of.status(), StatusCode::OK);
+    assert_ids(body_json(as_of).await, &[TEMPORAL_OLD_RECORD]);
 
     database.cleanup().await;
 }
@@ -1465,6 +1584,7 @@ fn registry_source() -> String {
               "filterableFields":["jurisdiction","label","ordinal","rank"],
               "sortableFields":["ordinal","label","rank"],
               "lookups":[{"selector":"by-amount","valueOrigin":"request"}],
+              "allowCount":true,
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
             },{
               "entity":"assignment",

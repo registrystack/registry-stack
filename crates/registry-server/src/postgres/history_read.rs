@@ -35,7 +35,7 @@ use crate::history_commit::{
 use crate::history_reference::SnapshotReference;
 use crate::history_schema::{
     DecodedHistorySnapshot, HistoryFieldCompatibility, HistoryFieldSource,
-    HistorySchemaCompatibility, HistorySchemaDescriptor,
+    HistorySchemaCompatibility, HistorySchemaDescriptor, HistoryValueSource,
 };
 use crate::history_store::load_descriptor;
 use crate::model::{
@@ -54,7 +54,7 @@ const MAX_SQL_LIMIT: usize = 1000;
 const MAX_HISTORY_PACKAGE_DESCRIPTORS: usize = 64;
 // LIMIT bounds output, not latest-revision selection or historical filtering.
 // Bound every database statement as well as the outer HTTP request lifetime.
-const HISTORY_STATEMENT_TIMEOUT: &str = "2000ms";
+pub(crate) const HISTORY_STATEMENT_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Runtime implementation of the stored-record snapshot query surface.
 #[derive(Clone)]
@@ -221,25 +221,20 @@ impl PostgresSnapshotReadService {
         )
         .await
         .map_err(|_| ReadServiceError::Unavailable)?;
-        let transaction = guarded.transaction();
-        transaction
-            .execute(
-                "SELECT set_config('statement_timeout', $1::text, true)",
-                &[&HISTORY_STATEMENT_TIMEOUT],
-            )
+        guarded
+            .set_statement_budget(HISTORY_STATEMENT_TIMEOUT)
             .await
             .map_err(|_| ReadServiceError::Unavailable)?;
+        let transaction = guarded.transaction();
         #[cfg(feature = "postgres-test")]
         if matches!(
             self.fault,
             SnapshotReadFaultControl::At(SnapshotReadFaultPoint::HistoricalStatementTimeout)
         ) {
+            // Outrun the installed budget rather than lowering it, so the
+            // refusal proves the budget historical reads actually carry.
             transaction
-                .execute("SELECT set_config('statement_timeout', '5ms', true)", &[])
-                .await
-                .map_err(|_| ReadServiceError::Unavailable)?;
-            transaction
-                .execute("SELECT pg_sleep(0.05)", &[])
+                .execute(&outrunning_sleep_statement(), &[])
                 .await
                 .map_err(|_| ReadServiceError::Unavailable)?;
         }
@@ -285,6 +280,7 @@ impl PostgresSnapshotReadService {
             transaction,
             &plan.entity,
             &plan.required_fields,
+            &plan.authorizing_fields,
             package_revisions,
         )
         .await?;
@@ -523,6 +519,7 @@ struct SnapshotReadPlan {
     entity: CompiledEntity,
     query_operation: CompiledQueryOperation,
     required_fields: BTreeSet<String>,
+    authorizing_fields: BTreeSet<String>,
 }
 
 impl SnapshotReadPlan {
@@ -666,10 +663,17 @@ impl SnapshotReadPlan {
             return Err(());
         }
         let required_fields = required_history_fields(request, operation)?;
+        let authorizing_fields = request
+            .context
+            .row_boundaries()
+            .iter()
+            .map(|boundary| boundary.field().to_owned())
+            .collect();
         Ok(Self {
             entity: entity.clone(),
             query_operation: operation.clone(),
             required_fields,
+            authorizing_fields,
         })
     }
 }
@@ -699,6 +703,12 @@ async fn snapshot_from_scope(
     }
 }
 
+#[cfg(feature = "postgres-test")]
+pub(crate) fn outrunning_sleep_statement() -> String {
+    let seconds = (HISTORY_STATEMENT_TIMEOUT + Duration::from_millis(250)).as_secs_f64();
+    format!("SELECT pg_sleep({seconds})")
+}
+
 async fn load_latest_active_package_revisions(
     transaction: &tokio_postgres::Transaction<'_>,
     entity_id: &str,
@@ -722,6 +732,8 @@ async fn load_latest_active_package_revisions(
                 AND revision.record_id = latest.record_id
                 AND revision.record_revision = latest.record_revision
               WHERE revision.record_lifecycle = 'active'
+                AND revision.snapshot IS NOT NULL
+                AND revision.erased_at IS NULL
               ORDER BY revision.package_revision
               LIMIT $3::bigint",
             &[
@@ -745,6 +757,7 @@ async fn load_compatible_descriptors(
     transaction: &tokio_postgres::Transaction<'_>,
     entity: &CompiledEntity,
     required_fields: &BTreeSet<String>,
+    authorizing_fields: &BTreeSet<String>,
     package_revisions: Vec<String>,
 ) -> Result<BTreeMap<String, CompatibleDescriptor>, ReadServiceError> {
     let mut descriptors = BTreeMap::new();
@@ -753,7 +766,7 @@ async fn load_compatible_descriptors(
             .await
             .map_err(|_| ReadServiceError::Unavailable)?;
         let compatibility = descriptor
-            .compatibility_for_fields(entity, required_fields)
+            .compatibility_for_fields(entity, required_fields, authorizing_fields)
             .map_err(|_| ReadServiceError::Unavailable)?;
         descriptors.insert(
             package_revision,
@@ -836,13 +849,16 @@ impl HistorySqlField {
         let mut arms = Vec::new();
         for (package_revision, field) in &self.package_sources {
             let source = match &field.source {
-                HistoryFieldSource::SnapshotKey { key } => format!(
+                HistoryValueSource::Retained(HistoryFieldSource::SnapshotKey { key }) => format!(
                     "(convert_from(revision.snapshot, 'UTF8')::jsonb -> {})",
                     sql_quote_literal(key)
                 ),
-                HistoryFieldSource::JournalRecordId => {
+                HistoryValueSource::Retained(HistoryFieldSource::JournalRecordId) => {
                     "to_jsonb(revision.record_id::text)".to_owned()
                 }
+                // A revision recorded before the field existed carries no value
+                // for it, and reads as the null the record held.
+                HistoryValueSource::AbsentAtRecording => "NULL::jsonb".to_owned(),
             };
             arms.push(format!(
                 "WHEN {} THEN {source}",
@@ -871,7 +887,9 @@ async fn ensure_required_snapshot_keys_present(
         .filter(|field| field.field_id != "id")
         .flat_map(|field| {
             field.package_sources.iter().filter_map(|(package, source)| {
-                let HistoryFieldSource::SnapshotKey { key } = &source.source else {
+                let HistoryValueSource::Retained(HistoryFieldSource::SnapshotKey { key }) =
+                    &source.source
+                else {
                     return None;
                 };
                 Some(format!(
@@ -903,6 +921,8 @@ async fn ensure_required_snapshot_keys_present(
                 AND revision.record_id = latest.record_id
                 AND revision.record_revision = latest.record_revision
               WHERE revision.record_lifecycle = 'active'
+                AND revision.snapshot IS NOT NULL
+                AND revision.erased_at IS NULL
                 AND ({})
               LIMIT 1
          )",
@@ -983,6 +1003,10 @@ fn snapshot_page_sql(
     ))
 }
 
+// A revision whose retained payload was erased carries no canonical snapshot.
+// Latest-revision selection skips it, so the record leaves the result instead of
+// returning a fabricated row or failing the whole page. Package-descriptor
+// resolution and the retained-key probe skip the same revisions.
 fn historical_cte(fields: &HistoryFieldSet) -> Result<String, ReadServiceError> {
     let field_projection = fields
         .by_field
@@ -1018,6 +1042,8 @@ fn historical_cte(fields: &HistoryFieldSet) -> Result<String, ReadServiceError> 
                 AND revision.record_id = latest.record_id
                 AND revision.record_revision = latest.record_revision
               WHERE revision.record_lifecycle = 'active'
+                AND revision.snapshot IS NOT NULL
+                AND revision.erased_at IS NULL
          )"
     ))
 }
@@ -1309,8 +1335,9 @@ fn row_to_record(
         .try_get::<_, String>(2)
         .map_err(|_| ReadServiceError::Unavailable)?;
     let snapshot = row
-        .try_get::<_, Vec<u8>>(3)
-        .map_err(|_| ReadServiceError::Unavailable)?;
+        .try_get::<_, Option<Vec<u8>>>(3)
+        .map_err(|_| ReadServiceError::Unavailable)?
+        .ok_or(ReadServiceError::Unavailable)?;
     if !valid_canonical_uuid(&id) || revision <= 0 {
         return Err(ReadServiceError::Unavailable);
     }

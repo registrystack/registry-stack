@@ -2026,6 +2026,27 @@ impl GuardedTransaction<'_> {
         self.transaction()
     }
 
+    /// Bounds every later statement in this transaction. A statement that
+    /// outruns the budget fails its read instead of holding the shared
+    /// Registry lock and a pooled connection for an unbounded time.
+    pub(crate) async fn set_statement_budget(&self, budget: Duration) -> Result<()> {
+        if budget.is_zero() || budget > Duration::from_secs(30) {
+            return Err(PostgresKernelError::Configuration(
+                "statement budget must be between 1 millisecond and 30 seconds",
+            ));
+        }
+        let budget_millis = i32::try_from(budget.as_millis()).map_err(|_| {
+            PostgresKernelError::Configuration("statement budget is outside PostgreSQL bounds")
+        })?;
+        self.transaction
+            .execute(
+                "SELECT set_config('statement_timeout', $1::text, true)",
+                &[&format!("{budget_millis}ms")],
+            )
+            .await?;
+        Ok(())
+    }
+
     pub async fn commit(self) -> Result<()> {
         self.transaction.commit().await?;
         Ok(())
@@ -2140,6 +2161,12 @@ pub async fn begin_record_transaction<'a>(
             "SELECT set_config('lock_timeout', $1::text, true)",
             &[&format!("{timeout_millis}ms")],
         )
+        .await?;
+    // Date and timestamp casts, ordering and rendering all read the session
+    // time zone. Pin it so a record or history answer never depends on the
+    // deployment's database default.
+    transaction
+        .execute("SELECT set_config('TimeZone', 'UTC', true)", &[])
         .await?;
     transaction
         .execute(

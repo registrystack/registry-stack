@@ -258,6 +258,30 @@ async fn real_postgres_revision_http_is_bounded_authorized_atomic_and_audit_gate
         .to_string()
         .contains("valid-row-must-not-be-released"));
 
+    let slow_statement = revision_router(
+        pool.clone(),
+        Arc::clone(&registry),
+        identity.clone(),
+        lock_key,
+        audit_profile.clone(),
+        Some(RevisionReadFaultPoint::HistoricalStatementTimeout),
+    );
+    let outrun_budget = send(
+        &slow_statement,
+        &format!("/v1/records/widgets/{RECORD_ID}/revisions/2"),
+        Some(history_claims("case-review", ["zone-a"])),
+    )
+    .await;
+    assert_eq!(
+        outrun_budget.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "a revision statement that outruns the database budget refuses the read"
+    );
+    assert_eq!(
+        body_json(outrun_budget).await["code"],
+        "source.unavailable"
+    );
+
     let before_fault = audit_count(&database).await;
     let faulting = revision_router(
         pool.clone(),

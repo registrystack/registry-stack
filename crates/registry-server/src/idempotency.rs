@@ -22,7 +22,11 @@ pub(crate) const MAX_IMMEDIATE_ACTION_RESULTS: u16 =
 const MAX_IDEMPOTENCY_KEY_BYTES: usize = 256;
 const MAX_HEADER_VALUE_BYTES: usize = 8 * 1024;
 const MAX_HELD_BODY_BYTES: usize = 2 * 1024 * 1024;
-const ERASED_RESPONSE_BODY: &[u8] = br#"{"kind":"erased"}"#;
+// Overwrites the held bytes of a key whose record history was erased. The table
+// requires a nonempty body and a 2xx status on every row, so an erased key keeps
+// a minimal placeholder instead of the response it cached. Replay refuses on the
+// `erased` result kind, so this placeholder never reaches a caller.
+const ERASED_TOMBSTONE_BODY: &[u8] = br#"{"kind":"erased"}"#;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum PermittedResponseHeader {
@@ -455,7 +459,10 @@ pub(crate) async fn lock_and_load(
         return Err(IdempotencyError::Conflict);
     }
     let metadata = match row.get::<_, String>(1).as_str() {
-        "erased" => return Err(IdempotencyError::Unavailable),
+        // Erasure is irreversible, so the consumed key answers with the same
+        // terminal conflict the erased-at path answers with. A transient outage
+        // would invite a client to retry a key that can never succeed.
+        "erased" => return Err(IdempotencyError::Conflict),
         "record" => {
             let record_revision = row
                 .get::<_, Option<i64>>(2)
@@ -717,7 +724,7 @@ pub(crate) async fn tombstone_erased_cached_responses(
                 &erase_through_revision,
                 &snapshot_references,
                 &record_id_text,
-                &ERASED_RESPONSE_BODY,
+                &ERASED_TOMBSTONE_BODY,
                 &headers,
             ],
         )

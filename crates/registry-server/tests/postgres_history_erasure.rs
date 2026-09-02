@@ -314,8 +314,19 @@ async fn audited_erasure_deletes_targeted_history_and_makes_bookmark_unavailable
     )
     .await;
     assert!(
-        matches!(replay, Err(idempotency::IdempotencyError::Unavailable)),
+        matches!(replay, Err(idempotency::IdempotencyError::Conflict)),
         "erased idempotency tombstones refuse replay before releasing cached bytes"
+    );
+    // The refusal is permanent, so it must reach the caller as the terminal
+    // 409 idempotency.conflict rather than an outage clients retry forever.
+    assert!(
+        matches!(
+            registry_server::mutation::MutationError::from(
+                registry_server::idempotency::IdempotencyError::Conflict
+            ),
+            registry_server::mutation::MutationError::IdempotencyConflict
+        ),
+        "a consumed erased key answers with a terminal conflict"
     );
     transaction.commit().await.expect("resolution commits");
 

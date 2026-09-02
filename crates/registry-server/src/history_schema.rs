@@ -87,10 +87,14 @@ impl HistorySchemaDescriptor {
     pub fn compatibility_for_fields(
         &self,
         active_entity: &CompiledEntity,
-        required_fields: &BTreeSet<String>,
+        requested_fields: &BTreeSet<String>,
+        authorizing_fields: &BTreeSet<String>,
     ) -> Result<HistorySchemaCompatibility, HistorySchemaError> {
-        self.entity(&active_entity.id)?
-            .compatibility_for_fields(active_entity, required_fields)
+        self.entity(&active_entity.id)?.compatibility_for_fields(
+            active_entity,
+            requested_fields,
+            authorizing_fields,
+        )
     }
 
     pub fn required_history_fields<S, R, T, SI, RI, TI>(
@@ -232,22 +236,49 @@ impl From<&CompiledEntity> for HistoryEntityDescriptor {
 }
 
 impl HistoryEntityDescriptor {
+    /// Describes how each requested field of one retained revision is read.
+    ///
+    /// `authorizing_fields` names the fields that decide which rows a caller may
+    /// see. They must be present in the descriptor, because a row cannot be
+    /// authorized from a value the revision never recorded.
     pub fn compatibility_for_fields(
         &self,
         active_entity: &CompiledEntity,
-        required_fields: &BTreeSet<String>,
+        requested_fields: &BTreeSet<String>,
+        authorizing_fields: &BTreeSet<String>,
     ) -> Result<HistorySchemaCompatibility, HistorySchemaError> {
         self.validate()?;
         if self.id != active_entity.id {
             return Err(HistorySchemaError::MissingEntity);
         }
         let mut fields = BTreeMap::new();
-        for field_id in required_fields {
-            let retained = self
-                .field(field_id)
-                .ok_or(HistorySchemaError::MissingRequiredField)?;
+        for field_id in requested_fields {
             let active = active_field(active_entity, field_id)
                 .ok_or(HistorySchemaError::MissingRequiredField)?;
+            let Some(retained) = self.field(field_id) else {
+                // The descriptor predates the field, so the revision recorded no
+                // value for it and an optional field reads as the null the record
+                // held. A required field, a validity boundary, and a field that
+                // decides row visibility refuse instead of inventing a value.
+                if active.required
+                    || active.valid_time_role.is_some()
+                    || authorizing_fields.contains(field_id)
+                {
+                    return Err(HistorySchemaError::MissingRequiredField);
+                }
+                fields.insert(
+                    field_id.clone(),
+                    HistoryFieldCompatibility {
+                        field_id: field_id.clone(),
+                        active_api_name: active.api_name.to_owned(),
+                        source: HistoryValueSource::AbsentAtRecording,
+                        field_type: active.field_type.clone(),
+                        required: false,
+                        nullable: true,
+                    },
+                );
+                continue;
+            };
             if !retained.compatible_with(active)? {
                 return Err(HistorySchemaError::IncompatibleField);
             }
@@ -256,7 +287,7 @@ impl HistoryEntityDescriptor {
                 HistoryFieldCompatibility {
                     field_id: field_id.clone(),
                     active_api_name: active.api_name.to_owned(),
-                    source: retained.source.clone(),
+                    source: HistoryValueSource::Retained(retained.source.clone()),
                     field_type: retained.field_type.clone(),
                     required: active.required,
                     nullable: !active.required,
@@ -284,15 +315,16 @@ impl HistoryEntityDescriptor {
         let mut by_api_name = Map::new();
         for field in compatibility.fields.values() {
             let value = match &field.source {
-                HistoryFieldSource::JournalRecordId => {
+                HistoryValueSource::Retained(HistoryFieldSource::JournalRecordId) => {
                     let value =
                         journal_record_id.ok_or(HistorySchemaError::MissingRequiredField)?;
                     Value::String(value.to_owned())
                 }
-                HistoryFieldSource::SnapshotKey { key } => snapshot
+                HistoryValueSource::Retained(HistoryFieldSource::SnapshotKey { key }) => snapshot
                     .get(key)
                     .cloned()
                     .ok_or(HistorySchemaError::MissingRequiredField)?,
+                HistoryValueSource::AbsentAtRecording => Value::Null,
             };
             validate_history_value(&value, &field.field_type, field.required)?;
             if by_field_id
@@ -477,11 +509,23 @@ pub struct HistorySchemaCompatibility {
     pub fields: BTreeMap<String, HistoryFieldCompatibility>,
 }
 
+/// Where one requested field's value for a retained revision comes from.
+///
+/// This is a runtime reading decision, not part of the retained descriptor
+/// grammar, so a stored descriptor can never declare a field absent.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum HistoryValueSource {
+    /// The descriptor carries the field, and the revision recorded a value.
+    Retained(HistoryFieldSource),
+    /// The descriptor predates the field, so the field reads as null.
+    AbsentAtRecording,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HistoryFieldCompatibility {
     pub field_id: String,
     pub active_api_name: String,
-    pub source: HistoryFieldSource,
+    pub source: HistoryValueSource,
     pub field_type: FieldTypeSource,
     pub required: bool,
     pub nullable: bool,
@@ -719,6 +763,28 @@ mod tests {
         HistorySchemaDescriptor::from_compiled_entities("registry", "sha256:package", [entity])
     }
 
+    fn add_note_field(entity: &mut CompiledEntity, is_required: bool) {
+        let note = stored(
+            "note",
+            "note",
+            FieldTypeSource::Text { max_length: 256 },
+            is_required,
+            None,
+        );
+        entity.fields.insert(
+            "note".to_owned(),
+            crate::model::CompiledField {
+                id: "note".to_owned(),
+                field_type: note.logical.field_type.clone(),
+                required: is_required,
+                classification: Classification::Restricted,
+                valid_time_role: None,
+                physical_name: "f_note".to_owned(),
+            },
+        );
+        entity.stored_fields.push(note);
+    }
+
     fn required(fields: &[&str]) -> BTreeSet<String> {
         fields.iter().map(|field| (*field).to_owned()).collect()
     }
@@ -740,7 +806,7 @@ mod tests {
             .api_name = "householdId".to_owned();
         let descriptor = descriptor_for(&old);
         let compatibility = descriptor
-            .compatibility_for_fields(&active, &required(&["id", "household"]))
+            .compatibility_for_fields(&active, &required(&["id", "household"]), &required(&[]))
             .expect("rename preserves stable field compatibility");
 
         let decoded = descriptor
@@ -790,8 +856,94 @@ mod tests {
         let descriptor = descriptor_for(&old);
 
         descriptor
-            .compatibility_for_fields(&active, &required(&["person", "valid-from"]))
+            .compatibility_for_fields(
+                &active,
+                &required(&["person", "valid-from"]),
+                &required(&[]),
+            )
             .expect("unrelated additive field does not affect old compatible query");
+    }
+
+    #[test]
+    fn optional_field_absent_from_an_older_descriptor_reads_as_null() {
+        let old = membership_entity();
+        let descriptor = descriptor_for(&old);
+        let mut active = old.clone();
+        add_note_field(&mut active, false);
+
+        let compatibility = descriptor
+            .compatibility_for_fields(
+                &active,
+                &required(&["household", "note"]),
+                &required(&["household"]),
+            )
+            .expect("granting an optional field the old revision predates keeps the query usable");
+        assert_eq!(
+            compatibility.fields["note"].source,
+            HistoryValueSource::AbsentAtRecording
+        );
+        assert!(compatibility.fields["note"].nullable);
+        assert_eq!(
+            compatibility.fields["household"].source,
+            HistoryValueSource::Retained(HistoryFieldSource::SnapshotKey {
+                key: "household".to_owned()
+            })
+        );
+
+        let decoded = descriptor
+            .decode_snapshot_for_fields(
+                &compatibility,
+                &snapshot(json!({
+                    "person": "00000000-0000-4000-8000-000000000001",
+                    "household": "A",
+                    "valid-from": "2026-01-01",
+                    "valid-to": null
+                })),
+                None,
+            )
+            .expect("a snapshot recorded before the field decodes");
+        assert_eq!(decoded.by_field_id["household"], json!("A"));
+        assert_eq!(decoded.by_field_id["note"], Value::Null);
+        assert_eq!(decoded.by_api_name["note"], Value::Null);
+    }
+
+    #[test]
+    fn absent_required_authorizing_and_validity_fields_stay_unavailable() {
+        let old = membership_entity();
+        let descriptor = descriptor_for(&old);
+
+        let mut active = old.clone();
+        add_note_field(&mut active, false);
+        assert_eq!(
+            descriptor
+                .compatibility_for_fields(&active, &required(&["note"]), &required(&["note"]))
+                .expect_err("a field that decides row visibility cannot read as null"),
+            HistorySchemaError::MissingRequiredField
+        );
+
+        let mut newly_required = old.clone();
+        add_note_field(&mut newly_required, true);
+        assert_eq!(
+            descriptor
+                .compatibility_for_fields(&newly_required, &required(&["note"]), &required(&[]))
+                .expect_err("a required field cannot read as null"),
+            HistorySchemaError::MissingRequiredField
+        );
+
+        let mut boundary = old.clone();
+        add_note_field(&mut boundary, false);
+        boundary
+            .stored_fields
+            .iter_mut()
+            .find(|field| field.logical.id == "note")
+            .expect("fixture field exists")
+            .valid_time_role = Some(ValidTimeRole::ValidTo);
+        assert_eq!(
+            descriptor
+                .compatibility_for_fields(&boundary, &required(&["note"]), &required(&[]))
+                .expect_err("a validity boundary cannot read as null"),
+            HistorySchemaError::MissingRequiredField
+        );
     }
 
     #[test]
@@ -806,7 +958,7 @@ mod tests {
             .retain(|field| field.logical.id != "household");
         assert_eq!(
             descriptor
-                .compatibility_for_fields(&missing, &required(&["household"]))
+                .compatibility_for_fields(&missing, &required(&["household"]), &required(&[]))
                 .expect_err("active query field must exist"),
             HistorySchemaError::MissingRequiredField
         );
@@ -822,7 +974,7 @@ mod tests {
             .field_type = FieldTypeSource::Int64;
         assert_eq!(
             descriptor
-                .compatibility_for_fields(&changed, &required(&["household"]))
+                .compatibility_for_fields(&changed, &required(&["household"]), &required(&[]))
                 .expect_err("type changes must not reinterpret old values"),
             HistorySchemaError::IncompatibleField
         );
@@ -837,7 +989,7 @@ mod tests {
             .required = true;
         assert_eq!(
             descriptor
-                .compatibility_for_fields(&tightened, &required(&["valid-to"]))
+                .compatibility_for_fields(&tightened, &required(&["valid-to"]), &required(&[]))
                 .expect_err("a newly required field cannot rely on nullable retained bytes"),
             HistorySchemaError::IncompatibleField
         );
@@ -857,11 +1009,11 @@ mod tests {
         let descriptor = descriptor_for(&old);
 
         descriptor
-            .compatibility_for_fields(&active, &required(&["household"]))
+            .compatibility_for_fields(&active, &required(&["household"]), &required(&[]))
             .expect("stored field query does not activate current derived SQL");
         assert_eq!(
             descriptor
-                .compatibility_for_fields(&active, &required(&["risk-score"]))
+                .compatibility_for_fields(&active, &required(&["risk-score"]), &required(&[]))
                 .expect_err("historical derived fields are unsupported"),
             HistorySchemaError::MissingRequiredField
         );
@@ -872,7 +1024,11 @@ mod tests {
         let entity = membership_entity();
         let descriptor = descriptor_for(&entity);
         let compatibility = descriptor
-            .compatibility_for_fields(&entity, &required(&["household", "valid-to"]))
+            .compatibility_for_fields(
+                &entity,
+                &required(&["household", "valid-to"]),
+                &required(&[]),
+            )
             .expect("compatible fields");
 
         assert_eq!(
@@ -966,7 +1122,7 @@ mod tests {
         );
 
         let compatibility = descriptor
-            .compatibility_for_fields(&entity, &required(&["household"]))
+            .compatibility_for_fields(&entity, &required(&["household"]), &required(&[]))
             .expect("compatible fields");
         let noncanonical_snapshot = br#"{"household":"A"}
 "#;

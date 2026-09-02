@@ -36,6 +36,7 @@ use crate::model::{
 };
 use crate::record_profile::{self, RecordRepresentation};
 
+use super::history_read::HISTORY_STATEMENT_TIMEOUT;
 use super::{
     begin_record_transaction, validate_field_value, ClaimContext, ExpectedRegistryIdentity,
     RegistryLockKey, RowBoundaryContext, RuntimePool,
@@ -202,6 +203,23 @@ impl PostgresRevisionReadService {
         )
         .await
         .map_err(|_| ReadServiceError::Unavailable)?;
+        transaction
+            .set_statement_budget(HISTORY_STATEMENT_TIMEOUT)
+            .await
+            .map_err(|_| ReadServiceError::Unavailable)?;
+        #[cfg(feature = "postgres-test")]
+        if matches!(
+            self.fault,
+            RevisionReadFaultControl::At(RevisionReadFaultPoint::HistoricalStatementTimeout)
+        ) {
+            // Outrun the installed budget rather than lowering it, so the
+            // refusal proves the budget revision reads actually carry.
+            transaction
+                .transaction()
+                .execute(&super::history_read::outrunning_sleep_statement(), &[])
+                .await
+                .map_err(|_| ReadServiceError::Unavailable)?;
+        }
         let record_id =
             Uuid::parse_str(&request.record_id).map_err(|_| ReadServiceError::Unavailable)?;
         if record_id.to_string() != request.record_id {
@@ -732,8 +750,9 @@ async fn revision_from_row(
         row_authorization_fields.iter(),
         std::iter::empty::<&String>(),
     );
+    let authorizing_fields = row_authorization_fields.iter().cloned().collect();
     let compatibility = descriptor
-        .compatibility_for_fields(entity, &required_fields)
+        .compatibility_for_fields(entity, &required_fields, &authorizing_fields)
         .map_err(history_schema_error)?;
     let decoded = descriptor
         .decode_snapshot_for_fields(&compatibility, &snapshot, Some(&record_id.to_string()))
@@ -927,7 +946,12 @@ async fn commit_context_visible(
             row_authorization_fields.iter(),
             std::iter::empty::<&String>(),
         );
-        let compatibility = match descriptor.compatibility_for_fields(entity, &required_fields) {
+        let authorizing_fields = row_authorization_fields.iter().cloned().collect();
+        let compatibility = match descriptor.compatibility_for_fields(
+            entity,
+            &required_fields,
+            &authorizing_fields,
+        ) {
             Ok(compatibility) => compatibility,
             Err(_) => return Ok(false),
         };
@@ -1211,12 +1235,14 @@ fn row_boundary_reference(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RevisionReadFaultPoint {
     BeforeTerminalAudit,
+    HistoricalStatementTimeout,
 }
 
 #[cfg(not(feature = "postgres-test"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RevisionReadFaultPoint {
     BeforeTerminalAudit,
+    HistoricalStatementTimeout,
 }
 
 #[derive(Clone, Copy)]

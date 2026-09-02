@@ -334,6 +334,15 @@ impl PostgresRecordReadService {
         )
         .await
         .map_err(|_| ReadServiceError::Unavailable)?;
+        install_request_visibility_context(
+            transaction.transaction(),
+            &plan.entity,
+            request.context.selected_profile(),
+            claims,
+            &self.audit_profile,
+            &self.expected.database_id,
+        )
+        .await?;
         let query = request_query(&request.kind);
         install_evaluation_date(transaction.transaction(), query).await?;
         install_spatial_query_context(transaction.transaction(), query).await?;
@@ -394,10 +403,16 @@ impl PostgresRecordReadService {
                     .query_operation
                     .as_ref()
                     .ok_or(ReadServiceError::Unavailable)?;
-                let (sql, count_sql, values) =
-                    list_sql(&plan.entity, &relations, query, &projection)?;
+                let ListStatements {
+                    page_sql: sql,
+                    count_sql,
+                    count_parameters,
+                    values,
+                } = list_sql(&plan.entity, &relations, query, &projection)?;
                 if query.include_count {
                     let refs = values
+                        .get(..count_parameters)
+                        .ok_or(ReadServiceError::Unavailable)?
                         .iter()
                         .map(|value| value as &(dyn ToSql + Sync))
                         .collect::<Vec<_>>();
@@ -631,6 +646,37 @@ impl PostgresRecordReadService {
             correlation: request.correlation.clone(),
         })
     }
+}
+
+async fn install_request_visibility_context(
+    transaction: &tokio_postgres::Transaction<'_>,
+    entity: &CompiledEntity,
+    selected_profile: &str,
+    claims: &ClaimContext,
+    audit_profile: &AuditProfile,
+    database_id: &str,
+) -> Result<(), ReadServiceError> {
+    let profile = entity
+        .access_profiles
+        .get(selected_profile)
+        .ok_or(ReadServiceError::Unavailable)?;
+    if entity.change_request.is_none()
+        || profile.request_visibility
+            != Some(crate::contract::RequestVisibilitySource::Owner)
+    {
+        return Ok(());
+    }
+    let owner_reference =
+        crate::mutation::request_actor_reference(audit_profile, database_id, claims)
+            .map_err(|_| ReadServiceError::Unavailable)?;
+    transaction
+        .execute(
+            "SELECT set_config('registry.request_owner_reference', $1, true)",
+            &[&owner_reference],
+        )
+        .await
+        .map_err(|_| ReadServiceError::Unavailable)?;
+    Ok(())
 }
 
 #[cfg(feature = "postgres-test")]
@@ -2228,12 +2274,25 @@ fn projection(
     Ok(expressions.join(", "))
 }
 
+/// The page statement and the `$count` statement of one list query.
+///
+/// The count answers the whole authorized result at this query's predicates, so
+/// it stays the same on every page. Only the page statement carries the
+/// continuation boundary, and `count_parameters` names the leading values the
+/// count statement binds.
+struct ListStatements {
+    page_sql: String,
+    count_sql: String,
+    count_parameters: usize,
+    values: Vec<String>,
+}
+
 fn list_sql(
     entity: &CompiledEntity,
     relations: &ReadRelations,
     query: &crate::api::CompiledReadQuery,
     projection: &str,
-) -> Result<(String, String, Vec<String>), ReadServiceError> {
+) -> Result<ListStatements, ReadServiceError> {
     let mut values = Vec::new();
     let mut predicates = relations.base_predicates.clone();
     if let Some(filter) = &query.filter {
@@ -2268,6 +2327,8 @@ fn list_sql(
     ) {
         return Err(ReadServiceError::Unavailable);
     }
+    let count_where_sql = where_clause(&predicates);
+    let count_parameters = values.len();
     if let Some(continuation) = &query.continuation {
         if !valid_canonical_uuid(&continuation.last_record_id) {
             return Err(ReadServiceError::CursorInvalid);
@@ -2300,11 +2361,7 @@ fn list_sql(
             ));
         }
     }
-    let where_sql = if predicates.is_empty() {
-        "TRUE".to_owned()
-    } else {
-        predicates.join(" AND ")
-    };
+    let where_sql = where_clause(&predicates);
     let order = if let Some(order) = &query.order {
         let field = relations.field_expression(entity, &order.field_id)?;
         format!(
@@ -2315,8 +2372,8 @@ fn list_sql(
         format!("{} ASC", relations.id_expression)
     };
     let limit_parameter = values.len() + 1;
-    Ok((
-        format!(
+    Ok(ListStatements {
+        page_sql: format!(
             "SELECT {projection}
              FROM {}
              WHERE {where_sql}
@@ -2324,14 +2381,23 @@ fn list_sql(
              LIMIT ${limit_parameter}::bigint",
             relations.from_sql
         ),
-        format!(
+        count_sql: format!(
             "SELECT count(*)::bigint
              FROM {}
-             WHERE {where_sql}",
+             WHERE {count_where_sql}",
             relations.from_sql
         ),
+        count_parameters,
         values,
-    ))
+    })
+}
+
+fn where_clause(predicates: &[String]) -> String {
+    if predicates.is_empty() {
+        "TRUE".to_owned()
+    } else {
+        predicates.join(" AND ")
+    }
 }
 
 fn lookup_sql(
@@ -3277,13 +3343,13 @@ mod tests {
             adapter_origin: None,
             continuation: None,
         };
-        let (sql, count_sql, values) =
+        let statements =
             list_sql(entity, &relations, &query, &projection).expect("spatial SQL builds");
-        assert!(values.is_empty());
-        assert!(!sql.contains("ST_Intersects"));
-        assert!(!sql.contains("registry_spatial_ext"));
-        assert!(!count_sql.contains("ST_Intersects"));
-        assert!(!count_sql.contains("registry_spatial_ext"));
+        assert!(statements.values.is_empty());
+        assert!(!statements.page_sql.contains("ST_Intersects"));
+        assert!(!statements.page_sql.contains("registry_spatial_ext"));
+        assert!(!statements.count_sql.contains("ST_Intersects"));
+        assert!(!statements.count_sql.contains("registry_spatial_ext"));
     }
 
     fn query_ref(request: &RecordReadRequest) -> &CompiledReadQuery {

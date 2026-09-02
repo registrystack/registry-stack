@@ -56,6 +56,9 @@ const LATER_VISIBLE: &str = "00000000-0000-4000-8000-000000000003";
 const LATER_COMMIT: &str = "00000000-0000-4000-8000-000000000004";
 const OTHER_JURISDICTION: &str = "00000000-0000-4000-8000-000000000005";
 const AUTHORITY_CHANGED: &str = "00000000-0000-4000-8000-000000000006";
+const NOTED: &str = "00000000-0000-4000-8000-000000000007";
+const PREDATES_NOTE: &str = "00000000-0000-4000-8000-000000000008";
+const OLDER_PACKAGE_REVISION: &str = "package-history-0";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn snapshot_http_reconstructs_before_filters_and_keeps_pages_pinned() {
@@ -628,6 +631,174 @@ async fn snapshot_refuses_derived_fields_missing_descriptors_and_terminal_audit_
     database.cleanup().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn snapshot_omits_erased_revisions_without_failing_the_page() {
+    let database = prepared_database().await;
+    erase_retained_revision(&database.migration, MEMBERSHIP, 3).await;
+    let app = snapshot_router(
+        database.pool.clone(),
+        database.compiled.clone(),
+        database.identity.clone(),
+        database.lock_key,
+        database.audit_profile.clone(),
+        database.cursors.clone(),
+        None,
+    );
+
+    let page = send(
+        &app,
+        &format!(
+            "/v1/records/memberships:snapshot?accessProfile=archivist&snapshot={}&$select=householdCode&$orderby=householdCode&$count=true",
+            snapshot_ref(LATEST_REFERENCE_UUID)
+        ),
+        Some(history_claims(["zone-a"])),
+    )
+    .await;
+    assert_eq!(page.status(), StatusCode::OK);
+    let page = body_json(page).await;
+    assert_eq!(
+        item_ids(&page),
+        vec![AUTHORITY_CHANGED, LATER_VISIBLE, OTHER_JURISDICTION],
+        "a record whose selected revision is erased leaves the page instead of failing it"
+    );
+    assert_eq!(
+        page["count"], 3,
+        "the count matches the rows the same query returns"
+    );
+
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn snapshot_reads_a_later_optional_field_as_null_under_older_descriptors() {
+    let mut database = prepared_database().await;
+    retain_descriptor_predating_the_note(&database.migration, &database.compiled).await;
+    seed_note_records(&mut database.migration).await;
+    let app = snapshot_router(
+        database.pool.clone(),
+        database.compiled.clone(),
+        database.identity.clone(),
+        database.lock_key,
+        database.audit_profile.clone(),
+        database.cursors.clone(),
+        None,
+    );
+
+    let response = send(
+        &app,
+        &format!(
+            "/v1/records/memberships:snapshot?snapshot={}&$select=householdCode,caseNote&$orderby=householdCode",
+            snapshot_ref(LATEST_REFERENCE_UUID)
+        ),
+        Some(history_claims(["zone-a"])),
+    )
+    .await;
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "granting a field older revisions predate keeps the saved snapshot readable"
+    );
+    let body = body_json(response).await;
+    assert_eq!(
+        item_ids(&body),
+        vec![MEMBERSHIP, LATER_VISIBLE, NOTED, PREDATES_NOTE]
+    );
+    let items = body["items"].as_array().expect("items are an array");
+    assert_eq!(items[2]["domainData"]["caseNote"], json!("kept"));
+    assert_eq!(
+        items[3]["domainData"]["caseNote"],
+        Value::Null,
+        "a revision recorded before the field reads as the null it held"
+    );
+    assert_eq!(
+        items[0]["domainData"]["caseNote"],
+        Value::Null,
+        "a retained null and an absent field read the same"
+    );
+
+    // A filter over the same field answers from those values rather than
+    // refusing the whole snapshot.
+    let filtered = send(
+        &app,
+        &format!(
+            "/v1/records/memberships:snapshot?snapshot={}&$select=householdCode&$orderby=householdCode&$filter=householdCode%20eq%20'N-LEGACY'",
+            snapshot_ref(LATEST_REFERENCE_UUID)
+        ),
+        Some(history_claims(["zone-a"])),
+    )
+    .await;
+    assert_eq!(filtered.status(), StatusCode::OK);
+    assert_eq!(item_ids(&body_json(filtered).await), vec![PREDATES_NOTE]);
+
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn snapshot_valid_at_does_not_depend_on_the_database_time_zone() {
+    let database = prepared_database().await;
+    let database_name: String = database
+        .migration
+        .query_one("SELECT current_database()", &[])
+        .await
+        .expect("migration reads its own database name")
+        .get(0);
+    database
+        .database
+        .admin
+        .execute(
+            &format!(
+                "ALTER DATABASE {} SET timezone = 'Pacific/Kiritimati'",
+                quote_identifier(&database_name)
+            ),
+            &[],
+        )
+        .await
+        .expect("administrator moves the database default off UTC");
+    let app = snapshot_router(
+        database.pool.clone(),
+        database.compiled.clone(),
+        database.identity.clone(),
+        database.lock_key,
+        database.audit_profile.clone(),
+        database.cursors.clone(),
+        None,
+    );
+
+    let boundary = send(
+        &app,
+        &format!(
+            "/v1/records/memberships:snapshot?snapshot={}&validAt=2026-06-15&$select=householdCode",
+            snapshot_ref(LATEST_REFERENCE_UUID)
+        ),
+        Some(history_claims(["zone-a"])),
+    )
+    .await;
+    assert_eq!(boundary.status(), StatusCode::OK);
+    assert_eq!(
+        item_ids(&body_json(boundary).await),
+        vec![LATER_VISIBLE],
+        "an end-exclusive calendar date selects the same rows under any database default time zone"
+    );
+
+    let inside = send(
+        &app,
+        &format!(
+            "/v1/records/memberships:snapshot?snapshot={}&validAt=2026-06-05&$select=householdCode&$orderby=householdCode",
+            snapshot_ref(LATEST_REFERENCE_UUID)
+        ),
+        Some(history_claims(["zone-a"])),
+    )
+    .await;
+    assert_eq!(inside.status(), StatusCode::OK);
+    assert_eq!(
+        item_ids(&body_json(inside).await),
+        vec![MEMBERSHIP, LATER_VISIBLE],
+        "a calendar date inside both intervals selects the same rows under any database default time zone"
+    );
+
+    database.cleanup().await;
+}
+
 struct PreparedHistoryDatabase {
     database: TestDatabase,
     migration: Client,
@@ -804,7 +975,8 @@ fn compiled_registry_for_temporal_type(temporal_type: &str) -> registry_server::
           {"id":"household-code","type":"string","maxLength":32,"required":true,"classification":"internal"},
           {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"internal"},
           {"id":"valid-from","type":"date","required":true,"classification":"internal"},
-          {"id":"valid-to","type":"date","classification":"internal"}
+          {"id":"valid-to","type":"date","classification":"internal"},
+          {"id":"case-note","type":"string","maxLength":64,"classification":"internal"}
         ],
         "temporal":{"startField":"valid-from","endField":"valid-to"},
         "derived":[{
@@ -816,9 +988,16 @@ fn compiled_registry_for_temporal_type(temporal_type: &str) -> registry_server::
         "id":"historian","default":true,"principalClaim":"registry_principal",
         "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
         "grants":[{
-          "entity":"membership","operations":["snapshot"],"readableFields":["household-code","jurisdiction","valid-from","valid-to","member-count"],
+          "entity":"membership","operations":["snapshot"],"readableFields":["household-code","jurisdiction","valid-from","valid-to","case-note","member-count"],
           "filterableFields":["household-code"],"sortableFields":["household-code"],"allowCount":true,
           "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
+        }]
+      },{
+        "id":"archivist","principalClaim":"registry_principal",
+        "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
+        "grants":[{
+          "entity":"membership","operations":["snapshot"],"readableFields":["household-code","jurisdiction","valid-from","valid-to","case-note"],
+          "filterableFields":["household-code"],"sortableFields":["household-code"],"allowCount":true
         }]
       }]
     }"#
@@ -851,6 +1030,78 @@ async fn retain_descriptor(migration: &Client, compiled: &registry_server::Compi
         )
         .await
         .expect("migration retains history descriptor");
+}
+
+async fn retain_descriptor_predating_the_note(
+    migration: &Client,
+    compiled: &registry_server::CompiledRegistry,
+) {
+    let mut descriptor =
+        HistorySchemaDescriptor::from_compiled_registry(compiled, OLDER_PACKAGE_REVISION);
+    let removed = descriptor
+        .entities
+        .get_mut("membership")
+        .expect("fixture entity is described")
+        .stored_fields
+        .remove("case-note");
+    assert!(
+        removed.is_some(),
+        "the older descriptor predates the optional note"
+    );
+    let bytes = serialize_descriptor(&descriptor).expect("descriptor serializes canonically");
+    migration
+        .execute(
+            "INSERT INTO registry_internal.registry_history_schemas
+                 (package_revision, descriptor)
+             VALUES ($1, $2)
+             ON CONFLICT (package_revision) DO UPDATE SET descriptor = EXCLUDED.descriptor",
+            &[&OLDER_PACKAGE_REVISION, &bytes],
+        )
+        .await
+        .expect("migration retains the older history descriptor");
+}
+
+async fn seed_note_records(migration: &mut Client) {
+    let transaction = migration
+        .transaction()
+        .await
+        .expect("migration begins note seed transaction");
+    insert_revision(
+        &transaction,
+        NOTED,
+        1,
+        None,
+        "active",
+        json!({
+            "household-code": "N-CURRENT",
+            "jurisdiction": "zone-a",
+            "valid-from": "2026-01-01",
+            "valid-to": null,
+            "case-note": "kept"
+        }),
+        2,
+    )
+    .await;
+    insert_revision_for_package(
+        &transaction,
+        PREDATES_NOTE,
+        1,
+        None,
+        "active",
+        json!({
+            "household-code": "N-LEGACY",
+            "jurisdiction": "zone-a",
+            "valid-from": "2026-01-01",
+            "valid-to": null
+        }),
+        2,
+        OLDER_PACKAGE_REVISION,
+    )
+    .await;
+    transaction
+        .commit()
+        .await
+        .expect("note seed transaction commits");
 }
 
 async fn seed_history(migration: &mut Client) {
@@ -1305,8 +1556,37 @@ async fn insert_revision(
     revision: i64,
     predecessor: Option<i64>,
     lifecycle: &str,
+    mut snapshot: Value,
+    commit_position: i64,
+) {
+    // A retained snapshot carries every stored key of its package revision, so
+    // default the optional note and let each case state only what it exercises.
+    if let Some(object) = snapshot.as_object_mut() {
+        object.entry("case-note").or_insert(Value::Null);
+    }
+    insert_revision_for_package(
+        transaction,
+        record_id,
+        revision,
+        predecessor,
+        lifecycle,
+        snapshot,
+        commit_position,
+        PACKAGE_REVISION,
+    )
+    .await;
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn insert_revision_for_package(
+    transaction: &Transaction<'_>,
+    record_id: &str,
+    revision: i64,
+    predecessor: Option<i64>,
+    lifecycle: &str,
     snapshot: Value,
     commit_position: i64,
+    package_revision: &str,
 ) {
     let record_id = uuid(record_id);
     let snapshot = canonicalize_json(&snapshot).expect("fixture snapshot canonicalizes");
@@ -1325,7 +1605,7 @@ async fn insert_revision(
                 &revision,
                 &predecessor,
                 &lifecycle,
-                &PACKAGE_REVISION,
+                &package_revision,
                 &HMAC_REF,
                 &HMAC_REF,
                 &snapshot,
@@ -1345,6 +1625,21 @@ async fn insert_revision(
         )
         .await
         .expect("commit member inserts");
+}
+
+async fn erase_retained_revision(migration: &Client, record_id: &str, revision: i64) {
+    let erased = migration
+        .execute(
+            "UPDATE registry_internal.registry_revisions
+                SET snapshot = NULL, erased_at = transaction_timestamp()
+              WHERE entity_id = 'membership'
+                AND record_id = $1::text::uuid
+                AND record_revision = $2::bigint",
+            &[&record_id, &revision],
+        )
+        .await
+        .expect("retention erasure clears the retained snapshot");
+    assert_eq!(erased, 1, "the erased fixture revision exists");
 }
 
 async fn send(
@@ -1397,6 +1692,10 @@ fn item_ids(body: &Value) -> Vec<&str> {
                 .expect("item id is a string")
         })
         .collect()
+}
+
+fn quote_identifier(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\"\""))
 }
 
 fn snapshot_ref(uuid: &str) -> String {
