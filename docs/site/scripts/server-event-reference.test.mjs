@@ -8,7 +8,9 @@ import { eventConfiguration } from '../src/lib/server-event-reference.mjs';
 const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8');
 const configuration = JSON.parse(read('../src/data/generated/server-configuration.json'));
 const tables = parse(read('../src/data/server-events.yaml'));
-const page = read('../src/content/docs/reference/registry-server-events.mdx');
+const page = read('../src/content/docs/reference/registry-server-api.mdx');
+const operateGuide = read('../src/content/docs/operate/registry-server.mdx');
+const configurationGuide = read('../src/content/docs/configure/registry-server.mdx');
 
 test('event fields reuse the complete module schema selection without changing definitions', () => {
   const before = structuredClone(configuration);
@@ -69,14 +71,11 @@ test('header lookup covers the exact platform event request header inventory', (
 });
 
 test('webhook setup and contract lookup have separate connected pages', () => {
-  const guide = read('../src/content/docs/configure/registry-server-webhooks.mdx');
-  const configurationGuide = read('../src/content/docs/configure/registry-server.mdx');
-  assert.match(guide, /doc_type: how-to/);
-  assert.match(guide, /target\/debug\/registry-serverctl webhook replay/);
-  assert.match(guide, /\.\.\/\.\.\/reference\/registry-server-events\//);
+  assert.match(operateGuide, /doc_type: how-to/);
+  assert.match(operateGuide, /target\/debug\/registry-serverctl webhook replay/);
+  assert.match(operateGuide, /\.\.\/\.\.\/reference\/registry-server-api\//);
   assert.match(page, /doc_type: reference/);
-  assert.match(page, /\.\.\/\.\.\/configure\/registry-server-webhooks\//);
+  assert.match(page, /\.\.\/\.\.\/operate\/registry-server\//);
   assert.doesNotMatch(page, /```sh/);
-  assert.doesNotMatch(configurationGuide, /record-labelled-v1/);
-  assert.match(configurationGuide, /\.\.\/registry-server-webhooks\//);
+  assert.match(configurationGuide, /\.\.\/\.\.\/operate\/registry-server\//);
 });

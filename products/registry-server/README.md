@@ -23,12 +23,19 @@ package review, signature policy, or the separate migration database role.
 
 ## First-hour local quickstart
 
-The documentation site has four adopter pages:
+The documentation site has nine adopter pages: an overview, three tutorials, an
+authoring guide, an operating guide, a modeling-patterns explainer, and two
+reference pages.
 
-- [Registry Server overview](../../docs/site/src/content/docs/explanation/configuration-defined-registry.mdx)
+- [Build a registry with Registry Server](../../docs/site/src/content/docs/explanation/configuration-defined-registry.mdx)
 - [Create and query your first registry](../../docs/site/src/content/docs/tutorials/first-registry-server.mdx)
-- [Configure your registry](../../docs/site/src/content/docs/configure/registry-server.mdx)
-- [Registry Server history reference](../../docs/site/src/content/docs/reference/registry-server-history.mdx)
+- [Review changes before updating a registry](../../docs/site/src/content/docs/tutorials/review-registry-changes.mdx)
+- [Query a spatial registry from QGIS](../../docs/site/src/content/docs/tutorials/query-a-spatial-registry-from-qgis.mdx)
+- [Author a registry project](../../docs/site/src/content/docs/configure/registry-server.mdx)
+- [Deploy and operate a registry](../../docs/site/src/content/docs/operate/registry-server.mdx)
+- [Modeling patterns for registries](../../docs/site/src/content/docs/explanation/registry-modeling-patterns.mdx)
+- [Registry Server configuration reference](../../docs/site/src/content/docs/reference/registry-server-configuration.mdx)
+- [Registry Server API reference](../../docs/site/src/content/docs/reference/registry-server-api.mdx)
 
 For a generic, domain-neutral local path, run:
 
@@ -113,8 +120,10 @@ For a compatible successor, repeat test, package, external signing, and apply
 with the active runtime configuration as the baseline, then restart the same
 server executable on the successor package. A migration failure after
 maintenance begins leaves the database durably in maintenance and readiness
-fails until an operator resolves the cause and applies the exact successor
-again or completes the reviewed restore path.
+fails until an operator resolves the cause and applies the exact target
+package again, or restores the operator's own pre-activation backup and
+starts activation again from there. No command clears a failed maintenance
+state.
 
 Authoring, signing, and migration authority are deliberately separate. An
 author or coding agent can edit configuration, inspect a diff, and run checks.

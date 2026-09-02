@@ -244,19 +244,47 @@ test('keeps the Server guide and references in one adoption path', () => {
   const slugs = [...server.matchAll(/slug: '([^']+)'/g)].map((match) => match[1]);
   assert.deepEqual(slugs, [
     'explanation/configuration-defined-registry',
-    'explanation/registry-modeling-patterns',
     'tutorials/first-registry-server',
     'tutorials/review-registry-changes',
     'tutorials/query-a-spatial-registry-from-qgis',
     'configure/registry-server',
-    'configure/registry-server-webhooks',
+    'operate/registry-server',
+    'explanation/registry-modeling-patterns',
     'reference/registry-server-configuration',
-    'reference/registry-server-history',
-    'reference/registry-server-events',
+    'reference/registry-server-api',
   ]);
   for (const slug of slugs) {
     assert.ok(hasDocForSlug(slug), `${slug} must be reachable from the Server journey`);
-    assert.ok(homepageSource.includes(`](${slug}/)`), `${slug} must be linked from the homepage`);
+    // A link may land on a section of the page rather than its top, so allow
+    // an optional `#fragment` after the trailing slash.
+    const escaped = slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    assert.match(
+      homepageSource,
+      new RegExp(`\\]\\(${escaped}/(#[-a-z]+)?\\)`),
+      `${slug} must be linked from the homepage`,
+    );
+  }
+});
+
+test('redirects the retired Server webhook, history, and event pages to their merged pages', () => {
+  assert.match(
+    configSource,
+    /'\/configure\/registry-server-webhooks\/': internalRedirect\('\/operate\/registry-server\/'\)/,
+  );
+  assert.match(
+    configSource,
+    /'\/reference\/registry-server-history\/': internalRedirect\('\/reference\/registry-server-api\/'\)/,
+  );
+  assert.match(
+    configSource,
+    /'\/reference\/registry-server-events\/': internalRedirect\('\/reference\/registry-server-api\/'\)/,
+  );
+  for (const retired of [
+    'configure/registry-server-webhooks',
+    'reference/registry-server-history',
+    'reference/registry-server-events',
+  ]) {
+    assert.equal(hasDocForSlug(retired), false, `${retired} must not be a published page`);
   }
 });
 

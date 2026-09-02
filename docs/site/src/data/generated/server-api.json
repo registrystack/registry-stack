@@ -12,20 +12,20 @@
       [
         "`GET /v1/registry`",
         "metadata",
-        "Always",
-        "Entity inventory: route, dataset identifier, the operations each entity exposes with the profile that grants each, and the schema path."
+        "The caller reaches at least one route",
+        "Entity inventory filtered to the caller: route, dataset identifier, the operations each entity exposes with the profile that grants each, and the schema path. A caller with no visible route gets the concealed 404."
       ],
       [
         "`GET /v1/schemas/{entity}`",
         "metadata",
-        "Always",
+        "The caller reaches the entity",
         "JSON Schema for the entity record, the target of the `describedby` link."
       ],
       [
         "`GET /openapi.json`",
         "metadata",
-        "Always",
-        "The compiled OpenAPI document for this registry."
+        "The caller reaches at least one route",
+        "The compiled OpenAPI document, filtered to the caller's routes."
       ],
       [
         "`GET /health` and `GET /healthz`",

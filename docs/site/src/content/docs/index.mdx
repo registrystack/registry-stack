@@ -72,13 +72,15 @@ authenticated write.
 Use [modeling patterns](explanation/registry-modeling-patterns/) to choose identifier, relationship,
 declaration, provenance, and document-reference structures for your registry.
 
-Follow [configure webhooks](configure/registry-server-webhooks/) to notify another service.
+Follow [bind webhook receivers](operate/registry-server/#bind-webhook-receivers) to notify another
+service.
 Use the [configuration reference](reference/registry-server-configuration/) to look up keys,
 defaults, and constraints.
-Use the [history reference](reference/registry-server-history/) for saved snapshots,
-effective-time queries, correction context, and retained-history erasure, and the
-[events and webhooks reference](reference/registry-server-events/) for the receiver contract,
-signatures, and delivery behavior.
+Use the [API reference](reference/registry-server-api/#history-reads) for saved snapshots,
+effective-time queries, and correction context, and the
+[events and webhooks section](reference/registry-server-api/#events-and-webhooks) for the receiver
+contract, signatures, and delivery behavior. For retained-history erasure, see
+[erase retained history](operate/registry-server/#erase-retained-history).
 
 {/* Evidence: crates/registry-server/src/contract.rs, RegistryProject and RegistryModule;
     crates/registry-server/tests/postgres_pilot_acceptance.rs;

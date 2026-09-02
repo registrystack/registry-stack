@@ -138,6 +138,11 @@ export default defineConfig({
     '/explanation/trust-posture-and-security-guarantees/': internalRedirect('/security/'),
     '/reference/security-self-assessment/': internalRedirect('/security/self-assessment/'),
     '/reference/openssf-evidence/': internalRedirect('/security/openssf-evidence/'),
+    // Webhook configuration, history reads, and the event reference are
+    // sections of the operate and API reference pages.
+    '/configure/registry-server-webhooks/': internalRedirect('/operate/registry-server/'),
+    '/reference/registry-server-history/': internalRedirect('/reference/registry-server-api/'),
+    '/reference/registry-server-events/': internalRedirect('/reference/registry-server-api/'),
     // Retired pages keep old links useful by sending readers to a supported
     // task or reference page.
     '/journeys/': internalRedirect('/'),
@@ -426,15 +431,14 @@ export default defineConfig({
           label: 'Build a registry',
           items: [
             { label: 'Registry Server overview', slug: 'explanation/configuration-defined-registry' },
-            { label: 'Modeling patterns', slug: 'explanation/registry-modeling-patterns' },
             { label: 'Create and query your first registry', slug: 'tutorials/first-registry-server' },
             { label: 'Review changes before updating a registry', slug: 'tutorials/review-registry-changes' },
             { label: 'Map a registry in QGIS', slug: 'tutorials/query-a-spatial-registry-from-qgis' },
             { label: 'Configure your registry', slug: 'configure/registry-server' },
-            { label: 'Configure webhooks', slug: 'configure/registry-server-webhooks' },
+            { label: 'Deploy and operate a registry', slug: 'operate/registry-server' },
+            { label: 'Modeling patterns', slug: 'explanation/registry-modeling-patterns' },
             { label: 'Configuration reference', slug: 'reference/registry-server-configuration' },
-            { label: 'History reference', slug: 'reference/registry-server-history' },
-            { label: 'Events and webhooks reference', slug: 'reference/registry-server-events' },
+            { label: 'API reference', slug: 'reference/registry-server-api' },
           ],
         },
         {
