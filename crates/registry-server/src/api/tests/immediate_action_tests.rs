@@ -360,11 +360,11 @@ async fn action_only_discovery_is_profile_filtered_without_entity_read_access() 
     );
     assert!(!body.to_string().contains("registrar"));
 
-    let body = response_json(
-        super::super::registry_metadata(State(service.clone()), None, RawQuery(None)).await,
-    )
-    .await;
-    assert!(body.get("actions").is_none());
+    // An anonymous caller with no visible operation or action receives the
+    // same value-free 404 as on record routes.
+    let anonymous =
+        super::super::registry_metadata(State(service.clone()), None, RawQuery(None)).await;
+    assert_eq!(anonymous.status(), StatusCode::NOT_FOUND);
     let refused = super::super::openapi(
         State(service),
         None,
