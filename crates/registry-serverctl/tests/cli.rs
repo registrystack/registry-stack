@@ -431,7 +431,14 @@ struct TestProject {
 
 impl TestProject {
     fn asset_fixture() -> Self {
-        Self::from_registry_source(asset_fixture())
+        let project = Self::from_registry_source(asset_fixture());
+        // The acceptance project locks a module, so its source travels with the
+        // registry document; a lock without a source is a deleted module.
+        let module_directory = project.path().join("modules/asset-site-placement-core");
+        fs::create_dir_all(&module_directory).expect("module directory is created");
+        fs::write(module_directory.join("module.yaml"), asset_fixture_module())
+            .expect("module source is copied");
+        project
     }
 
     fn from_registry_source(source: &[u8]) -> Self {
@@ -548,6 +555,12 @@ impl RuntimePackageFixture {
 fn asset_fixture() -> &'static [u8] {
     include_bytes!(
         "../../../products/registry-server/acceptance/asset-site-placement/registry.yaml"
+    )
+}
+
+fn asset_fixture_module() -> &'static [u8] {
+    include_bytes!(
+        "../../../products/registry-server/acceptance/asset-site-placement/modules/asset-site-placement-core/module.yaml"
     )
 }
 
@@ -1197,6 +1210,69 @@ fn project_lock_check_refuses_stale_digest_without_rewriting() {
 }
 
 #[test]
+fn check_refuses_a_deleted_or_renamed_module_source_like_the_lock_check() {
+    for (case, break_source) in [
+        (
+            "module.lock.source_missing",
+            Box::new(|module_directory: &Path| {
+                fs::remove_dir_all(module_directory).expect("module directory removes");
+            }) as Box<dyn Fn(&Path)>,
+        ),
+        (
+            "source.module.id_mismatch",
+            Box::new(|module_directory: &Path| {
+                fs::write(
+                    module_directory.join("module.yaml"),
+                    String::from_utf8(modular_project_module().to_vec())
+                        .expect("module is UTF-8")
+                        .replace("id: core", "id: renamed"),
+                )
+                .expect("renamed module source writes");
+            }),
+        ),
+    ] {
+        let project = TestProject::from_registry_source(modular_project_without_locks());
+        let module_directory = project.path().join("modules/core");
+        fs::create_dir_all(&module_directory).expect("module directory creates");
+        fs::write(
+            module_directory.join("module.yaml"),
+            modular_project_module(),
+        )
+        .expect("module source writes");
+        let locked =
+            registry_serverctl(&["--format", "json", "project", "lock", path(project.path())]);
+        assert!(locked.status.success(), "{locked:?}");
+
+        break_source(&module_directory);
+
+        let checked = registry_serverctl(&["--format", "json", "check", path(project.path())]);
+        let lock_checked = registry_serverctl(&[
+            "--format",
+            "json",
+            "project",
+            "lock",
+            path(project.path()),
+            "--check",
+        ]);
+
+        assert_eq!(checked.status.code(), Some(1), "{case}: {checked:?}");
+        assert_eq!(
+            lock_checked.status.code(),
+            Some(1),
+            "{case}: {lock_checked:?}"
+        );
+        let report = json_stdout(&checked);
+        assert_eq!(report["command"], "check");
+        assert_eq!(report["diagnostics"][0]["code"], case);
+        assert_eq!(
+            report["diagnostics"][0],
+            json_stdout(&lock_checked)["diagnostics"][0],
+            "{case}"
+        );
+    }
+}
+
+#[test]
 fn project_lock_refuses_missing_locked_source_without_rendering_values() {
     const MODULE_CANARY: &str = "missing-module-canary";
     let project = TestProject::from_registry_source(
@@ -1237,6 +1313,24 @@ modules:
 }
 
 #[test]
+fn init_writes_a_bare_relative_destination_into_the_working_directory() {
+    let project = TestProject::asset_fixture();
+    let output = Command::new(env!("CARGO_BIN_EXE_registry-serverctl"))
+        .args(["--format", "json", "init", "initialized"])
+        .current_dir(project.path())
+        .output()
+        .expect("registry-serverctl runs");
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(project.path().join("initialized/registry.yaml").is_file());
+    assert!(project
+        .path()
+        .join("initialized/tests/journeys.yaml")
+        .is_file());
+    assert_eq!(json_stdout(&output)["command"], "init");
+}
+
+#[test]
 fn init_and_generate_missing_output_parents_have_exact_logical_diagnostics() {
     const PATH_CANARY: &str = "registry-serverctl-missing-parent-canary";
 
@@ -1261,7 +1355,7 @@ fn init_and_generate_missing_output_parents_have_exact_logical_diagnostics() {
                 "code": "output.parent.invalid",
                 "artifact": "project_initialization",
                 "path": "output.parent",
-                "message": "the output parent directory is not available",
+                "message": "the output parent directory is not available; create it, or give a destination inside a directory that exists",
                 "suggestedAction": "choose_safe_output_directory"
             }]
         })
@@ -1290,7 +1384,7 @@ fn init_and_generate_missing_output_parents_have_exact_logical_diagnostics() {
                 "code": "output.parent.invalid",
                 "artifact": "generated_artifacts",
                 "path": "output.parent",
-                "message": "the output parent directory is not available",
+                "message": "the output parent directory is not available; create it, or give a destination inside a directory that exists",
                 "suggestedAction": "retry_artifact_generation"
             }]
         })
@@ -1326,6 +1420,56 @@ fn generate_selectors_publish_only_selected_artifacts() {
         .expect("artifacts is an array");
     assert_eq!(artifacts.len(), 1);
     assert_eq!(artifacts[0]["path"], "generated/openapi.json");
+}
+
+#[test]
+fn unavailable_artifact_selections_name_the_selection_and_the_alternatives() {
+    let project = TestProject::asset_fixture();
+    let output_root = project.path().join("unknown-artifact-output");
+
+    let unknown = registry_serverctl(&[
+        "--format",
+        "json",
+        "generate",
+        "actoins",
+        project.path().to_str().expect("path is UTF-8"),
+        "--output",
+        output_root.to_str().expect("path is UTF-8"),
+    ]);
+
+    assert_eq!(unknown.status.code(), Some(2), "{unknown:?}");
+    let report = json_stdout(&unknown);
+    assert_eq!(report["diagnostics"][0]["code"], "usage.invalid");
+    let message = report["diagnostics"][0]["message"]
+        .as_str()
+        .expect("usage message is a string");
+    assert!(message.contains("actoins"), "{message}");
+    for selection in [
+        "openapi", "schemas", "actions", "manifest", "metadata", "sql",
+    ] {
+        assert!(message.contains(selection), "{message}");
+    }
+    assert!(!output_root.exists());
+
+    let empty = registry_serverctl(&[
+        "--format",
+        "json",
+        "generate",
+        "actions",
+        project.path().to_str().expect("path is UTF-8"),
+        "--output",
+        output_root.to_str().expect("path is UTF-8"),
+    ]);
+
+    assert_eq!(empty.status.code(), Some(1), "{empty:?}");
+    let report = json_stdout(&empty);
+    assert_eq!(report["diagnostics"][0]["code"], "artifact.selection.empty");
+    let message = report["diagnostics"][0]["message"]
+        .as_str()
+        .expect("selection message is a string");
+    assert!(message.contains("actions"), "{message}");
+    assert!(message.contains("openapi"), "{message}");
+    assert!(!output_root.exists());
 }
 
 #[test]
@@ -1468,7 +1612,6 @@ fn manifest_selector_requires_the_compiled_manifest_projection() {
 #[test]
 fn module_discovery_ignores_only_regular_finder_metadata() {
     let project = TestProject::asset_fixture();
-    fs::create_dir(project.path().join("modules")).expect("modules directory creates");
     fs::write(project.path().join("modules/.DS_Store"), b"finder metadata")
         .expect("Finder metadata writes");
     let accepted = registry_serverctl(&[
@@ -2375,7 +2518,7 @@ fn package_refuses_missing_noncanonical_and_stale_receipts_before_output() {
     let refused_report = json_stdout(&refused);
     assert_eq!(
         refused_report["diagnostics"][0]["code"],
-        "package.test_receipt.refused"
+        "package.test_receipt.invalid"
     );
     assert_tool_diagnostic(
         &refused_report["diagnostics"][0],
@@ -2439,6 +2582,7 @@ fn package_receipt_is_stale_for_every_candidate_binding_change() {
     let cases = [
         (
             "database",
+            "package.test_receipt.identity_mismatch",
             original_project.clone(),
             original_module.clone(),
             original_journeys.clone(),
@@ -2448,6 +2592,7 @@ fn package_receipt_is_stale_for_every_candidate_binding_change() {
         ),
         (
             "fingerprint",
+            "package.test_receipt.fingerprint_mismatch",
             original_project.clone(),
             original_module.clone(),
             original_journeys.clone(),
@@ -2457,6 +2602,7 @@ fn package_receipt_is_stale_for_every_candidate_binding_change() {
         ),
         (
             "signature-policy",
+            "package.test_receipt.candidate_mismatch",
             original_project.clone(),
             original_module.clone(),
             original_journeys.clone(),
@@ -2466,6 +2612,7 @@ fn package_receipt_is_stale_for_every_candidate_binding_change() {
         ),
         (
             "project",
+            "package.test_receipt.candidate_mismatch",
             original_project_text
                 .replace(PACKAGE_SOURCE_REVISION, "alternate-source")
                 .into_bytes(),
@@ -2477,6 +2624,7 @@ fn package_receipt_is_stale_for_every_candidate_binding_change() {
         ),
         (
             "module",
+            "package.test_receipt.candidate_mismatch",
             original_project_text
                 .replace(&original_module_digest, &altered_module_digest)
                 .into_bytes(),
@@ -2488,6 +2636,7 @@ fn package_receipt_is_stale_for_every_candidate_binding_change() {
         ),
         (
             "environment",
+            "package.test_receipt.identity_mismatch",
             original_project_text
                 .replace(
                     "\"environment\":\"production\"",
@@ -2502,6 +2651,7 @@ fn package_receipt_is_stale_for_every_candidate_binding_change() {
         ),
         (
             "instance",
+            "package.test_receipt.identity_mismatch",
             original_project_text
                 .replace(PACKAGE_INSTANCE, "alternate-instance")
                 .into_bytes(),
@@ -2513,6 +2663,7 @@ fn package_receipt_is_stale_for_every_candidate_binding_change() {
         ),
         (
             "journey",
+            "package.test_receipt.candidate_mismatch",
             original_project.clone(),
             original_module.clone(),
             String::from_utf8(original_journeys.clone())
@@ -2525,7 +2676,9 @@ fn package_receipt_is_stale_for_every_candidate_binding_change() {
         ),
     ];
 
-    for (name, project_bytes, module_bytes, journeys, database, fingerprint, keys) in cases {
+    for (name, expected_code, project_bytes, module_bytes, journeys, database, fingerprint, keys) in
+        cases
+    {
         fs::write(project.path().join("registry.yaml"), project_bytes)
             .expect("altered project writes");
         fs::write(
@@ -2547,10 +2700,7 @@ fn package_receipt_is_stale_for_every_candidate_binding_change() {
         );
         assert_eq!(output.status.code(), Some(1), "{name}: {output:?}");
         let report = json_stdout(&output);
-        assert_eq!(
-            report["diagnostics"][0]["code"], "package.test_receipt.refused",
-            "{name}"
-        );
+        assert_eq!(report["diagnostics"][0]["code"], expected_code, "{name}");
         assert!(!build.exists(), "{name}");
         let rendered = String::from_utf8(output.stdout).expect("diagnostic is UTF-8");
         assert!(!rendered.contains(path(project.path())), "{name}");
@@ -2598,9 +2748,77 @@ fn package_receipt_is_stale_for_every_candidate_binding_change() {
     assert_eq!(sequence.status.code(), Some(1), "{sequence:?}");
     assert_eq!(
         json_stdout(&sequence)["diagnostics"][0]["code"],
-        "package.test_receipt.refused"
+        "package.test_receipt.identity_mismatch"
     );
     assert!(!sequence_build.exists());
+}
+
+#[test]
+fn package_takes_the_schema_fingerprint_from_the_receipt_and_refuses_disagreement() {
+    let (project, _signing, key_id) = packaging_project();
+    let fingerprint = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
+    let disagreeing = "sha256:3333333333333333333333333333333333333333333333333333333333333333";
+    let prepared = prepare_packaging_candidate(
+        &project,
+        PACKAGE_DATABASE,
+        fingerprint,
+        1,
+        vec![key_id.clone()],
+    );
+    let receipt = project.path().join("fingerprint-receipt.json");
+    fs::write(
+        &receipt,
+        schema_test_receipt_bytes(&prepared, &["package-record-list"]),
+    )
+    .expect("schema-test receipt writes");
+    let signature_key_arg = format!("--signature-key-id={key_id}");
+    let derived_build = project.path().join("derived-fingerprint-build");
+
+    let derived = registry_serverctl(&[
+        "--format",
+        "json",
+        "package",
+        path(project.path()),
+        "--database-id",
+        PACKAGE_DATABASE,
+        "--signature-threshold",
+        "1",
+        &signature_key_arg,
+        "--test-receipt",
+        path(&receipt),
+        "--output",
+        path(&derived_build),
+    ]);
+
+    assert!(derived.status.success(), "{derived:?}");
+    let report = json_stdout(&derived);
+    assert_eq!(report["state"], "awaiting_signatures");
+    assert!(derived_build.join("signing-input.json").is_file());
+    assert!(derived_build.join("schema-test-receipt.json").is_file());
+
+    let disagreeing_build = project.path().join("disagreeing-fingerprint-build");
+    let refused = package_candidate_command(
+        &project,
+        PACKAGE_DATABASE,
+        disagreeing,
+        1,
+        &[key_id],
+        &receipt,
+        &disagreeing_build,
+    );
+
+    assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+    let report = json_stdout(&refused);
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "package.test_receipt.fingerprint_mismatch"
+    );
+    let message = report["diagnostics"][0]["message"]
+        .as_str()
+        .expect("fingerprint message is a string");
+    assert!(message.contains(fingerprint), "{message}");
+    assert!(message.contains(disagreeing), "{message}");
+    assert!(!disagreeing_build.exists());
 }
 
 #[test]
@@ -2646,7 +2864,7 @@ fn package_resume_requires_the_exact_receipt_evidence() {
     assert_eq!(missing.status.code(), Some(1), "{missing:?}");
     assert_eq!(
         json_stdout(&missing)["diagnostics"][0]["code"],
-        "package.test_receipt.refused"
+        "package.test_receipt.evidence_mismatch"
     );
     assert!(!build.join("package").exists());
 
@@ -2664,7 +2882,7 @@ fn package_resume_requires_the_exact_receipt_evidence() {
     assert_eq!(substituted.status.code(), Some(1), "{substituted:?}");
     assert_eq!(
         json_stdout(&substituted)["diagnostics"][0]["code"],
-        "package.test_receipt.refused"
+        "package.test_receipt.evidence_mismatch"
     );
     assert!(!build.join("package").exists());
 
@@ -2776,7 +2994,7 @@ fn test_help_requires_test_inputs_and_exposes_no_package_or_apply_authority() {
         "usage.invalid"
     );
 
-    let package_requires_schema_fingerprint = registry_serverctl(&[
+    let package_reads_the_receipt_fingerprint = registry_serverctl(&[
         "--format",
         "json",
         "package",
@@ -2788,11 +3006,146 @@ fn test_help_requires_test_inputs_and_exposes_no_package_or_apply_authority() {
         "--output",
         path(&project.path().join("build")),
     ]);
-    assert_eq!(package_requires_schema_fingerprint.status.code(), Some(2));
+    assert_eq!(package_reads_the_receipt_fingerprint.status.code(), Some(1));
     assert_eq!(
-        json_stdout(&package_requires_schema_fingerprint)["diagnostics"][0]["code"],
-        "usage.invalid"
+        json_stdout(&package_reads_the_receipt_fingerprint)["diagnostics"][0]["code"],
+        "package.test_receipt.missing"
     );
+}
+
+#[test]
+fn refused_fixture_journeys_name_the_journey_file_and_the_refusal() {
+    let (project, _signing, key_id) = packaging_project();
+    let runtime = test_runtime_config(&project);
+    write_test_secret(&project, "operator-token", b"aaa.bbb.ccc");
+    let credentials = project.path().join("journey-credentials.yaml");
+    fs::write(
+        &credentials,
+        credential_source("type: bearer\n      tokenRef: secret:file/operator-token\n"),
+    )
+    .expect("credential fixture writes");
+    fs::write(
+        project.path().join("tests/journeys.yaml"),
+        br#"apiVersion: registry.registrystack.org/server-journeys/v0
+journeys:
+  - id: package-record-list
+    steps:
+      - id: list-records
+        entity: record
+        accessProfile: reader
+        claims: {principal: package-reader}
+        request: {operation: list}
+        expect: {outcome: success, status: 200, count: 0}
+"#,
+    )
+    .expect("refused journey suite writes");
+    let output = project.path().join("journey-receipt.json");
+
+    let result = test_candidate_command(&project, 1, &[key_id], &runtime, &credentials, &output);
+
+    let rendered = String::from_utf8(result.stdout.clone()).expect("refusal JSON is UTF-8");
+    let report: Value = serde_json::from_str(&rendered).expect("refusal JSON parses");
+    assert_eq!(result.status.code(), Some(1), "{rendered}");
+    assert_eq!(report["diagnostics"][0]["code"], "test.journeys.refused");
+    assert_eq!(report["diagnostics"][0]["path"], "tests/journeys.yaml");
+    let message = report["diagnostics"][0]["message"]
+        .as_str()
+        .expect("journey message is a string");
+    assert!(message.to_lowercase().contains("version"), "{message}");
+    assert!(!output.exists());
+}
+
+#[test]
+fn refused_credentials_name_the_document_path_and_the_journey() {
+    let (project, _signing, key_id) = packaging_project();
+    let runtime = test_runtime_config(&project);
+    write_test_secret(&project, "operator-token", b"aaa.bbb.ccc");
+    let credentials = project.path().join("unknown-journey-credentials.yaml");
+    fs::write(
+        &credentials,
+        r#"apiVersion: registry.registrystack.org/server-schema-test-credentials/v1
+kind: SchemaTestCredentials
+bindings:
+  - journeyId: package-record-lists
+    stepId: list-records
+    credential:
+      type: bearer
+      tokenRef: secret:file/operator-token
+"#,
+    )
+    .expect("credential fixture writes");
+    let output = project.path().join("unknown-journey-receipt.json");
+
+    let result = test_candidate_command(
+        &project,
+        1,
+        std::slice::from_ref(&key_id),
+        &runtime,
+        &credentials,
+        &output,
+    );
+
+    let rendered = String::from_utf8(result.stdout.clone()).expect("refusal JSON is UTF-8");
+    let report: Value = serde_json::from_str(&rendered).expect("refusal JSON parses");
+    assert_eq!(result.status.code(), Some(1), "{rendered}");
+    assert_eq!(report["diagnostics"][0]["code"], "test.credentials.refused");
+    assert_eq!(report["diagnostics"][0]["path"], "bindings[0].journeyId");
+    let message = report["diagnostics"][0]["message"]
+        .as_str()
+        .expect("credential message is a string");
+    assert!(message.contains("package-record-list"), "{message}");
+    assert!(
+        !rendered.contains("secret:file/operator-token"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("aaa.bbb.ccc"), "{rendered}");
+    assert!(!output.exists());
+
+    let duplicate = project.path().join("duplicate-credentials.yaml");
+    fs::write(
+        &duplicate,
+        r#"apiVersion: registry.registrystack.org/server-schema-test-credentials/v1
+kind: SchemaTestCredentials
+bindings:
+  - journeyId: package-record-list
+    stepId: list-records
+    credential:
+      type: bearer
+      tokenRef: secret:file/operator-token
+  - journeyId: package-record-list
+    stepId: list-records
+    credential:
+      type: bearer
+      tokenRef: secret:file/operator-token
+"#,
+    )
+    .expect("credential fixture writes");
+    let duplicate_output = project.path().join("duplicate-receipt.json");
+
+    let result = test_candidate_command(
+        &project,
+        1,
+        &[key_id],
+        &runtime,
+        &duplicate,
+        &duplicate_output,
+    );
+
+    let rendered = String::from_utf8(result.stdout.clone()).expect("refusal JSON is UTF-8");
+    let report: Value = serde_json::from_str(&rendered).expect("refusal JSON parses");
+    assert_eq!(result.status.code(), Some(1), "{rendered}");
+    assert_eq!(report["diagnostics"][0]["code"], "test.credentials.refused");
+    assert_eq!(report["diagnostics"][0]["path"], "bindings[1]");
+    let message = report["diagnostics"][0]["message"]
+        .as_str()
+        .expect("credential message is a string");
+    assert!(message.contains("package-record-list"), "{message}");
+    assert!(message.contains("list-records"), "{message}");
+    assert!(
+        !rendered.contains("secret:file/operator-token"),
+        "{rendered}"
+    );
+    assert!(!duplicate_output.exists());
 }
 
 #[test]
@@ -3111,10 +3464,12 @@ fn authoring_and_test_candidate_sources_are_read_once_and_bounded() {
     .expect("oversized project source writes");
     let check_project = registry_serverctl(&["--format", "json", "check", path(project.path())]);
     assert_eq!(check_project.status.code(), Some(1), "{check_project:?}");
+    let project_report = json_stdout(&check_project);
     assert_eq!(
-        json_stdout(&check_project)["diagnostics"][0]["code"],
+        project_report["diagnostics"][0]["code"],
         "source.file.bounds"
     );
+    assert_eq!(project_report["diagnostics"][0]["path"], "registry.yaml");
     let test_project = test_candidate_command(
         &project,
         1,
@@ -3140,9 +3495,14 @@ fn authoring_and_test_candidate_sources_are_read_once_and_bounded() {
     .expect("oversized module source writes");
     let check_module = registry_serverctl(&["--format", "json", "check", path(project.path())]);
     assert_eq!(check_module.status.code(), Some(1), "{check_module:?}");
+    let module_report = json_stdout(&check_module);
     assert_eq!(
-        json_stdout(&check_module)["diagnostics"][0]["code"],
+        module_report["diagnostics"][0]["code"],
         "source.file.bounds"
+    );
+    assert_eq!(
+        module_report["diagnostics"][0]["path"],
+        "modules/core/module.yaml"
     );
     let test_module = test_candidate_command(
         &project,
@@ -3263,9 +3623,14 @@ fn package_fixture_journey_source_is_required_regular_bounded_and_value_free() {
     fs::remove_file(&journey_path).expect("fixture journeys remove");
     let missing = registry_serverctl(&arguments);
     assert_eq!(missing.status.code(), Some(1), "{missing:?}");
+    let missing_report = json_stdout(&missing);
     assert_eq!(
-        json_stdout(&missing)["diagnostics"][0]["code"],
+        missing_report["diagnostics"][0]["code"],
         "source.fixture_journeys.missing"
+    );
+    assert_eq!(
+        missing_report["diagnostics"][0]["path"],
+        "tests/journeys.yaml"
     );
 
     let target = project.path().join("journey-source-canary.yaml");
@@ -3273,9 +3638,14 @@ fn package_fixture_journey_source_is_required_regular_bounded_and_value_free() {
     symlink(&target, &journey_path).expect("fixture journey symlink creates");
     let linked = registry_serverctl(&arguments);
     assert_eq!(linked.status.code(), Some(1), "{linked:?}");
+    let linked_report = json_stdout(&linked);
     assert_eq!(
-        json_stdout(&linked)["diagnostics"][0]["code"],
+        linked_report["diagnostics"][0]["code"],
         "source.file.invalid"
+    );
+    assert_eq!(
+        linked_report["diagnostics"][0]["path"],
+        "tests/journeys.yaml"
     );
     fs::remove_file(&journey_path).expect("fixture journey symlink removes");
 
@@ -3286,9 +3656,14 @@ fn package_fixture_journey_source_is_required_regular_bounded_and_value_free() {
     .expect("oversized fixture journey writes");
     let oversized = registry_serverctl(&arguments);
     assert_eq!(oversized.status.code(), Some(1), "{oversized:?}");
+    let oversized_report = json_stdout(&oversized);
     assert_eq!(
-        json_stdout(&oversized)["diagnostics"][0]["code"],
+        oversized_report["diagnostics"][0]["code"],
         "source.file.bounds"
+    );
+    assert_eq!(
+        oversized_report["diagnostics"][0]["path"],
+        "tests/journeys.yaml"
     );
 
     for output in [missing, linked, oversized] {
@@ -3839,11 +4214,33 @@ fn json_usage_errors_are_machine_readable_and_value_free() {
     let report = json_stdout(&output);
     assert_eq!(report["command"], "usage");
     assert_eq!(report["diagnostics"][0]["code"], "usage.invalid");
+    let message = report["diagnostics"][0]["message"]
+        .as_str()
+        .expect("usage message is a string");
+    assert!(message.contains("--unknown"), "{message}");
+    assert!(!message.contains('\u{1b}'), "{message}");
     assert_tool_diagnostic(
         &report["diagnostics"][0],
         "command_arguments",
         "correct_command_usage",
     );
+}
+
+#[test]
+fn human_usage_errors_name_the_offending_argument() {
+    let unknown_flag = registry_serverctl(&["check", "--unknwon"]);
+
+    assert_eq!(unknown_flag.status.code(), Some(2));
+    assert!(unknown_flag.stdout.is_empty());
+    let rendered = String::from_utf8_lossy(&unknown_flag.stderr).into_owned();
+    assert!(rendered.contains("--unknwon"), "{rendered}");
+
+    let missing_argument = registry_serverctl(&["check"]);
+
+    assert_eq!(missing_argument.status.code(), Some(2));
+    assert!(missing_argument.stdout.is_empty());
+    let rendered = String::from_utf8_lossy(&missing_argument.stderr).into_owned();
+    assert!(rendered.contains("<PROJECT>"), "{rendered}");
 }
 
 #[test]

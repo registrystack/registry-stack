@@ -58,10 +58,10 @@ pub(crate) enum TestLifecycleError {
     Candidate,
     CandidateBinding { path: &'static str },
     ReviewFingerprint,
-    Journeys,
+    Journeys { message: String },
     JourneySyntax { path: String, message: &'static str },
     JourneyStep { path: String, message: String },
-    Credentials,
+    Credentials { path: String, message: String },
     Database,
     Execution,
     OutputPreflight,
@@ -168,10 +168,13 @@ pub(crate) fn run(
         request.candidate.registry(),
     ) {
         Ok(suite) => suite,
-        Err(_) => {
+        Err(error) => {
             return Err(
-                diagnose_fixture_journey_shape(request.candidate.fixture_journeys())
-                    .unwrap_or(TestLifecycleError::Journeys),
+                diagnose_fixture_journey_shape(request.candidate.fixture_journeys()).unwrap_or(
+                    TestLifecycleError::Journeys {
+                        message: error.to_string(),
+                    },
+                ),
             );
         }
     };
@@ -263,30 +266,91 @@ fn load_credentials(
     suite: &registry_server::fixtures::ValidatedFixtureJourneys,
 ) -> Result<SchemaTestCredentialBindings, TestLifecycleError> {
     let bytes = read_credentials(path)?;
-    let raw = std::str::from_utf8(&bytes).map_err(|_| TestLifecycleError::Credentials)?;
-    let document: CredentialDocument =
-        serde_norway::from_str(raw).map_err(|_| TestLifecycleError::Credentials)?;
-    if document.api_version != CREDENTIALS_API_VERSION || document.kind != CREDENTIALS_KIND {
-        return Err(TestLifecycleError::Credentials);
+    let raw = std::str::from_utf8(&bytes).map_err(|_| {
+        credentials_refusal("credentials", "the credentials document must be UTF-8")
+    })?;
+    let document: CredentialDocument = serde_norway::from_str(raw).map_err(|error| {
+        let location = error
+            .location()
+            .map(|location| {
+                format!(
+                    " at line {} column {}",
+                    location.line(),
+                    location.column()
+                )
+            })
+            .unwrap_or_default();
+        credentials_refusal(
+            "credentials",
+            format!("the credentials document could not be parsed{location}; write a strict SchemaTestCredentials document"),
+        )
+    })?;
+    if document.api_version != CREDENTIALS_API_VERSION {
+        return Err(credentials_refusal(
+            "apiVersion",
+            format!("the credentials document apiVersion must be {CREDENTIALS_API_VERSION}"),
+        ));
     }
-    let resolver = config
-        .secret_resolver()
-        .map_err(|_| TestLifecycleError::Credentials)?;
+    if document.kind != CREDENTIALS_KIND {
+        return Err(credentials_refusal(
+            "kind",
+            format!("the credentials document kind must be {CREDENTIALS_KIND}"),
+        ));
+    }
+    let resolver = config.secret_resolver().map_err(|_| {
+        credentials_refusal(
+            "credentials",
+            "the runtime configuration provides no usable secret resolver for credential references",
+        )
+    })?;
+    let journey_ids = suite.journey_ids();
+    let mut bound_steps = std::collections::BTreeSet::new();
     let mut bindings = Vec::with_capacity(document.bindings.len());
-    for binding in document.bindings {
+    for (index, binding) in document.bindings.into_iter().enumerate() {
+        if !journey_ids.contains(&binding.journey_id.as_str()) {
+            return Err(credentials_refusal(
+                format!("bindings[{index}].journeyId"),
+                format!(
+                    "the packaged journey suite has no journey with this id; it declares {}",
+                    journey_ids.join(", ")
+                ),
+            ));
+        }
+        if !bound_steps.insert((binding.journey_id.clone(), binding.step_id.clone())) {
+            return Err(credentials_refusal(
+                format!("bindings[{index}]"),
+                format!(
+                    "journey {} step {} already has a credential binding; bind every step exactly once",
+                    binding.journey_id, binding.step_id
+                ),
+            ));
+        }
+        let journey_id = binding.journey_id.clone();
+        let step_id = binding.step_id.clone();
         let binding = match binding.credential {
             CredentialDocumentMode::Anonymous => {
                 SchemaTestCredentialBinding::anonymous(binding.journey_id, binding.step_id)
             }
             CredentialDocumentMode::Bearer { token_ref } => {
                 if !is_protected_secret_reference(&token_ref) {
-                    return Err(TestLifecycleError::Credentials);
+                    return Err(credentials_refusal(
+                        format!("bindings[{index}].credential.tokenRef"),
+                        format!("the bearer credential for journey {journey_id} step {step_id} must reference a protected secret, either secret:file/<name> or secret:env/<NAME>"),
+                    ));
                 }
-                let secret = resolver
-                    .resolve(&token_ref)
-                    .map_err(|_| TestLifecycleError::Credentials)?;
+                let secret = resolver.resolve(&token_ref).map_err(|_| {
+                    credentials_refusal(
+                        format!("bindings[{index}].credential.tokenRef"),
+                        format!("the secret referenced for journey {journey_id} step {step_id} could not be resolved"),
+                    )
+                })?;
                 let token = std::str::from_utf8(secret.expose_secret())
-                    .map_err(|_| TestLifecycleError::Credentials)?
+                    .map_err(|_| {
+                        credentials_refusal(
+                            format!("bindings[{index}].credential.tokenRef"),
+                            format!("the secret referenced for journey {journey_id} step {step_id} is not UTF-8"),
+                        )
+                    })?
                     .to_owned();
                 SchemaTestCredentialBinding::bearer(
                     binding.journey_id,
@@ -297,43 +361,92 @@ fn load_credentials(
         };
         bindings.push(binding);
     }
-    SchemaTestCredentialBindings::new(suite, bindings).map_err(|_| TestLifecycleError::Credentials)
+    SchemaTestCredentialBindings::new(suite, bindings).map_err(|_| {
+        credentials_refusal(
+            "bindings",
+            format!(
+                "bind exactly one credential to every step of journeys {}; anonymous steps require an anonymous binding and protected steps require a well-formed bearer token",
+                journey_ids.join(", ")
+            ),
+        )
+    })
+}
+
+fn credentials_refusal(path: impl Into<String>, message: impl Into<String>) -> TestLifecycleError {
+    TestLifecycleError::Credentials {
+        path: path.into(),
+        message: message.into(),
+    }
 }
 
 fn read_credentials(path: &Path) -> Result<Vec<u8>, TestLifecycleError> {
+    let unavailable = || {
+        credentials_refusal(
+            "credentials",
+            "the credentials file is not available; supply --credentials with an existing regular file",
+        )
+    };
+    let unreadable = || credentials_refusal("credentials", "the credentials file cannot be read");
+    let changed = || {
+        credentials_refusal(
+            "credentials",
+            "the credentials file changed while it was read",
+        )
+    };
+    let bounds = || {
+        credentials_refusal(
+            "credentials",
+            format!(
+                "the credentials file must be a non-empty regular file of at most {MAX_CREDENTIAL_DOCUMENT_BYTES} bytes"
+            ),
+        )
+    };
     if !path.is_absolute() || super::has_parent_component(path) {
-        return Err(TestLifecycleError::Credentials);
+        return Err(credentials_refusal(
+            "credentials",
+            "the credentials path must be absolute and must not contain parent traversal",
+        ));
     }
     super::ensure_no_symlink_components(path, "test.credentials.path_invalid", "credentials")
-        .map_err(|_| TestLifecycleError::Credentials)?;
-    let metadata = fs::symlink_metadata(path).map_err(|_| TestLifecycleError::Credentials)?;
-    if metadata.file_type().is_symlink()
-        || !metadata.is_file()
-        || metadata.len() == 0
-        || metadata.len() > MAX_CREDENTIAL_DOCUMENT_BYTES
-    {
-        return Err(TestLifecycleError::Credentials);
+        .map_err(|_| {
+            credentials_refusal(
+                "credentials",
+                "the credentials path must not resolve through a symbolic link",
+            )
+        })?;
+    let metadata = fs::symlink_metadata(path).map_err(|_| unavailable())?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(credentials_refusal(
+            "credentials",
+            "the credentials file must be a regular file and must not be a symbolic link",
+        ));
     }
-    let file = File::open(path).map_err(|_| TestLifecycleError::Credentials)?;
-    let opened = file
-        .metadata()
-        .map_err(|_| TestLifecycleError::Credentials)?;
-    let after = fs::symlink_metadata(path).map_err(|_| TestLifecycleError::Credentials)?;
+    if metadata.len() == 0 || metadata.len() > MAX_CREDENTIAL_DOCUMENT_BYTES {
+        return Err(bounds());
+    }
+    let file = File::open(path).map_err(|_| unreadable())?;
+    let opened = file.metadata().map_err(|_| unreadable())?;
+    let after = fs::symlink_metadata(path).map_err(|_| unavailable())?;
     if after.file_type().is_symlink()
         || !opened.is_file()
         || !super::same_file_metadata(&metadata, &opened)
         || !super::same_file_metadata(&opened, &after)
-        || opened.len() > MAX_CREDENTIAL_DOCUMENT_BYTES
     {
-        return Err(TestLifecycleError::Credentials);
+        return Err(changed());
     }
-    let capacity = usize::try_from(opened.len()).map_err(|_| TestLifecycleError::Credentials)?;
+    if opened.len() > MAX_CREDENTIAL_DOCUMENT_BYTES {
+        return Err(bounds());
+    }
+    let capacity = usize::try_from(opened.len()).map_err(|_| bounds())?;
     let mut bytes = Vec::with_capacity(capacity);
     file.take(MAX_CREDENTIAL_DOCUMENT_BYTES.saturating_add(1))
         .read_to_end(&mut bytes)
-        .map_err(|_| TestLifecycleError::Credentials)?;
-    if bytes.len() as u64 != opened.len() || bytes.len() as u64 > MAX_CREDENTIAL_DOCUMENT_BYTES {
-        return Err(TestLifecycleError::Credentials);
+        .map_err(|_| unreadable())?;
+    if bytes.len() as u64 > MAX_CREDENTIAL_DOCUMENT_BYTES {
+        return Err(bounds());
+    }
+    if bytes.len() as u64 != opened.len() {
+        return Err(changed());
     }
     Ok(bytes)
 }

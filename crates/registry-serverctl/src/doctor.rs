@@ -66,15 +66,17 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "cursor",
             "the cursor profile was refused",
         ),
+        // The dependency reports one refusal for its whole key source, so the
+        // sentence names the closed set of causes without naming any value.
         StartupError::Oidc => (
             "startup.oidc.refused",
-            "authentication",
-            "the OIDC key source was refused",
+            "authentication.oidc",
+            "the OIDC key source was refused: from this host the configured issuer must be reachable, must present a TLS certificate this host trusts, and must publish a key set holding at least one key for the configured algorithms",
         ),
         StartupError::Authentication => (
             "startup.authentication.refused",
             "authentication",
-            "the authentication profile was refused",
+            "the authentication profile was refused: check the claim mapping, the accepted algorithms, and the audience against the package this runtime serves",
         ),
         StartupError::EventDestinations => (
             "startup.event_destinations.refused",
@@ -138,11 +140,20 @@ mod tests {
             ),
             (StartupError::Audit, "startup.audit.refused", "audit"),
             (StartupError::Cursor, "startup.cursor.refused", "cursor"),
-            (StartupError::Oidc, "startup.oidc.refused", "authentication"),
+            (
+                StartupError::Oidc,
+                "startup.oidc.refused",
+                "authentication.oidc",
+            ),
             (
                 StartupError::Authentication,
                 "startup.authentication.refused",
                 "authentication",
+            ),
+            (
+                StartupError::EventDestinations,
+                "startup.event_destinations.refused",
+                "eventDestinations",
             ),
             (
                 StartupError::Listener,
@@ -163,6 +174,36 @@ mod tests {
             assert_eq!(diagnostic.code, expected_code);
             assert_eq!(diagnostic.path, expected_path);
             assert!(!diagnostic.message.contains(&rendered_dependency_error));
+        }
+    }
+
+    #[test]
+    fn authentication_dependency_refusals_name_the_causes_an_operator_checks() {
+        let key_source = startup_diagnostic(StartupError::Oidc);
+        assert_eq!(key_source.code, "startup.oidc.refused");
+        assert_eq!(key_source.path, "authentication.oidc");
+        for cause in ["reachable", "TLS", "key set", "issuer"] {
+            assert!(
+                key_source.message.contains(cause),
+                "{cause}: {}",
+                key_source.message
+            );
+        }
+
+        let profile = startup_diagnostic(StartupError::Authentication);
+        assert_eq!(profile.code, "startup.authentication.refused");
+        assert_eq!(profile.path, "authentication");
+        for cause in ["claim", "algorithm", "audience"] {
+            assert!(
+                profile.message.contains(cause),
+                "{cause}: {}",
+                profile.message
+            );
+        }
+
+        for diagnostic in [key_source, profile] {
+            assert!(!diagnostic.message.contains("http"));
+            assert!(!diagnostic.message.contains("://"));
         }
     }
 }

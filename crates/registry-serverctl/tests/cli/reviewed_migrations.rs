@@ -304,9 +304,18 @@ fn reviewed_successor_changed_review_invalidates_the_schema_test_receipt() {
     });
     let output = fixture.run("package", true);
     assert!(!output.status.success());
+    let diagnostic = json_stdout(&output)["diagnostics"][0].clone();
     assert_eq!(
-        json_stdout(&output)["diagnostics"][0]["code"],
-        "package.test_receipt.refused"
+        diagnostic["code"],
+        "package.test_receipt.candidate_mismatch"
+    );
+    assert_eq!(diagnostic["path"], "testReceipt.candidatePackageRevision");
+    assert!(
+        diagnostic["message"]
+            .as_str()
+            .unwrap()
+            .contains("candidatePackageRevision"),
+        "{diagnostic}"
     );
     assert!(!fixture.project.path().join("build").exists());
 }
@@ -470,4 +479,126 @@ fn reviewed_successor_refuses_symlinks_and_oversized_artifacts() {
         json_stdout(&output)["diagnostics"][0]["code"],
         "migration.review.file"
     );
+}
+
+/// A successor project whose project and module sources are mutated before
+/// compilation, for the refusals an adopter meets before authoring a review.
+fn successor_project(
+    mutate_module: impl FnOnce(&mut Value),
+    mutate_project: impl FnOnce(&mut Value),
+) -> (RuntimePackageFixture, TestProject, String) {
+    let baseline = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
+    let envelope: registry_server::package::PackageEnvelope =
+        serde_json::from_slice(&fs::read(baseline.package.join("package.json")).unwrap()).unwrap();
+    let key_id = envelope.signed.signature_policy.key_ids[0].clone();
+    let mut module: Value = serde_json::from_slice(&package_module_bytes()).unwrap();
+    mutate_module(&mut module);
+    let module_bytes = canonicalize_json(&module).unwrap();
+    let parsed = parse_module_json(&module_bytes).unwrap();
+    let mut source: Value =
+        serde_json::from_slice(&package_project_bytes(&module_digest(&parsed))).unwrap();
+    source["package"]["sequence"] = json!(2);
+    mutate_project(&mut source);
+    let project_bytes = canonicalize_json(&source).unwrap();
+    let project = TestProject::from_registry_source(&project_bytes);
+    fs::create_dir_all(project.path().join("modules/core")).unwrap();
+    fs::write(
+        project.path().join("modules/core/module.yaml"),
+        &module_bytes,
+    )
+    .unwrap();
+    fs::create_dir(project.path().join("tests")).unwrap();
+    fs::write(
+        project.path().join(FIXTURE_JOURNEYS_PATH),
+        PACKAGE_FIXTURE_JOURNEYS,
+    )
+    .unwrap();
+    (baseline, project, key_id)
+}
+
+fn package_successor(
+    baseline: &RuntimePackageFixture,
+    project: &TestProject,
+    key_id: &str,
+) -> Output {
+    registry_serverctl(&[
+        "--format",
+        "json",
+        "package",
+        path(project.path()),
+        "--database-id",
+        PACKAGE_DATABASE,
+        "--baseline-runtime-config",
+        path(&baseline.runtime_config),
+        "--signature-threshold",
+        "1",
+        "--signature-key-id",
+        key_id,
+        "--schema-fingerprint",
+        FINGERPRINT,
+        "--test-receipt",
+        path(&project.path().join("absent-receipt.json")),
+        "--output",
+        path(&project.path().join("build")),
+    ])
+}
+
+#[test]
+fn a_successor_needing_review_names_every_change_and_its_target() {
+    let (baseline, project, key_id) = successor_project(
+        |module| {
+            module["entities"][0]["fields"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({
+                    "id": "label",
+                    "type": "string",
+                    "maxLength": 32,
+                    "required": true,
+                    "classification": "internal"
+                }));
+        },
+        |_| {},
+    );
+    let output = package_successor(&baseline, &project, &key_id);
+    assert!(!output.status.success(), "{output:?}");
+    let diagnostic = json_stdout(&output)["diagnostics"][0].clone();
+    assert_eq!(diagnostic["code"], "migration.review.required");
+    let message = diagnostic["message"].as_str().unwrap().to_owned();
+    assert!(message.contains("field_added_required"), "{message}");
+    assert!(message.contains("record.label"), "{message}");
+    assert!(message.contains("--reviewed-migrations"), "{message}");
+    assert!(!project.path().join("build").exists());
+}
+
+#[test]
+fn an_unsupported_successor_names_every_change_and_why_it_cannot_be_planned() {
+    let (baseline, project, key_id) =
+        successor_project(|_| {}, |source| source["registry"]["version"] = json!("2"));
+    let output = package_successor(&baseline, &project, &key_id);
+    assert!(!output.status.success(), "{output:?}");
+    let diagnostic = json_stdout(&output)["diagnostics"][0].clone();
+    assert_eq!(diagnostic["code"], "migration.change.unsupported");
+    let message = diagnostic["message"].as_str().unwrap().to_owned();
+    assert!(message.contains("registry_version_changed"), "{message}");
+    assert!(message.contains("registry_identity_changed"), "{message}");
+    assert!(message.contains("at registry"), "{message}");
+    assert!(
+        message.contains("bound to the database for its lifetime"),
+        "{message}"
+    );
+    assert!(!project.path().join("build").exists());
+}
+
+#[test]
+fn a_refused_review_names_the_changes_it_has_to_cover() {
+    let fixture = ReviewFixture::create();
+    fixture.mutate_json("descriptor.json", |value| value["covers"] = json!([]));
+    let output = fixture.run("package", true);
+    let diagnostic = json_stdout(&output)["diagnostics"][0].clone();
+    assert_eq!(diagnostic["code"], "migration.review.refused");
+    let message = diagnostic["message"].as_str().unwrap().to_owned();
+    assert!(message.contains("access_profile_changed"), "{message}");
+    assert!(message.contains("at record.reader"), "{message}");
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("private-review-value-canary"));
 }

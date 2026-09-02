@@ -20,6 +20,19 @@ struct TestProject {
 
 impl TestProject {
     fn create() -> Self {
+        Self::create_from(SAMPLE_EVENT_SOURCE)
+    }
+
+    /// A project without any authored event, for the refusal an adopter meets
+    /// when there is nothing to sample.
+    fn without_events() -> Self {
+        let (before_events, _) = SAMPLE_EVENT_SOURCE
+            .split_once("    events:")
+            .expect("the sample project authors events");
+        Self::create_from(before_events)
+    }
+
+    fn create_from(registry_yaml: &str) -> Self {
         let root = std::env::current_dir()
             .expect("current directory is available")
             .join(format!(
@@ -28,9 +41,16 @@ impl TestProject {
                 TEMPORARY_COUNTER.fetch_add(1, Ordering::Relaxed)
             ));
         fs::create_dir(&root).expect("test project directory creates");
-        fs::write(
-            root.join("registry.yaml"),
-            br#"apiVersion: registry.registrystack.org/v1alpha1
+        fs::write(root.join("registry.yaml"), registry_yaml).expect("test project writes");
+        Self { root }
+    }
+
+    fn path(&self) -> &Path {
+        &self.root
+    }
+}
+
+const SAMPLE_EVENT_SOURCE: &str = r#"apiVersion: registry.registrystack.org/v1alpha1
 kind: RegistryProject
 registry:
   id: webhook-sample
@@ -63,16 +83,7 @@ entities:
         projection: [active, count, observed-at, status]
         webhook:
           destinationId: sample-receiver
-"#,
-        )
-        .expect("test project writes");
-        Self { root }
-    }
-
-    fn path(&self) -> &Path {
-        &self.root
-    }
-}
+"#;
 
 impl Drop for TestProject {
     fn drop(&mut self) {
@@ -219,6 +230,34 @@ fn unavailable_sample_event_is_value_free_and_field_addressed() {
         report["diagnostics"][0]["suggestedAction"],
         "select_webhook_event"
     );
+    let message = report["diagnostics"][0]["message"]
+        .as_str()
+        .expect("message is a string");
+    assert!(message.contains(EVENT_ID), "{message}");
+
+    let without_events = TestProject::without_events();
+    let (status, stdout, stderr) = run([
+        OsStr::new("registry-serverctl"),
+        OsStr::new("--format"),
+        OsStr::new("json"),
+        OsStr::new("webhook"),
+        OsStr::new("sample"),
+        without_events.path().as_os_str(),
+        OsStr::new("--event"),
+        OsStr::new(EVENT_ID),
+    ]);
+
+    assert_eq!(status, 1);
+    assert!(stderr.is_empty());
+    let report: Value = serde_json::from_str(&stdout).expect("failure is JSON");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "webhook.sample.event_refused"
+    );
+    let message = report["diagnostics"][0]["message"]
+        .as_str()
+        .expect("message is a string");
+    assert!(message.contains("authors no webhook delivery"), "{message}");
 }
 
 #[test]

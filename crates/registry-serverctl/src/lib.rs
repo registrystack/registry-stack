@@ -267,8 +267,9 @@ struct PackageArgs {
     candidate: PackageCandidateArgs,
 
     /// Exact managed-catalog SHA-256 produced by the reviewed PostgreSQL rehearsal.
+    /// Read from the schema-test receipt when it is not supplied.
     #[arg(long, value_name = "SHA256")]
-    schema_fingerprint: String,
+    schema_fingerprint: Option<String>,
 
     /// Canonical receipt from a successful schema test of this exact candidate.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
@@ -1186,29 +1187,22 @@ where
                 let _ = write!(stdout, "{error}");
                 return ExitCode::SUCCESS;
             }
+            if !machine_mode {
+                // The parser already names the unknown flag or the missing
+                // argument, so an adopter reads clap's own rendering.
+                let _ = write!(stderr, "{error}");
+                return ExitCode::from(USAGE_EXIT);
+            }
             let report = FailureReport {
                 ok: false,
                 command: "usage",
                 diagnostics: vec![tool_diagnostic(
-                    diagnostic(
-                        "usage.invalid",
-                        "arguments",
-                        "the command arguments are invalid",
-                    ),
+                    diagnostic("usage.invalid", "arguments", &unstyled_usage(&error)),
                     DiagnosticArtifact::CommandArguments,
                     SuggestedAction::CorrectCommandUsage,
                 )],
             };
-            let _ = write_failure(
-                &report,
-                if machine_mode {
-                    OutputFormat::Json
-                } else {
-                    OutputFormat::Human
-                },
-                stdout,
-                stderr,
-            );
+            let _ = write_failure(&report, OutputFormat::Json, stdout, stderr);
             return ExitCode::from(USAGE_EXIT);
         }
     };
@@ -1582,8 +1576,11 @@ fn history_erasure_lifecycle_failure(error: HistoryErasureLifecycleError) -> Fai
 
 fn webhook_sample(args: &WebhookSampleArgs) -> Result<WebhookSampleSuccessReport, FailureReport> {
     let compiled = compile(&args.project, ProfileArg::Authoring, "webhook sample")?;
-    let outcome = webhook_lifecycle::sample(&compiled, &args.event)
-        .map_err(|error| webhook_lifecycle_failure("webhook sample", error))?;
+    let outcome =
+        webhook_lifecycle::sample(&compiled, &args.event).map_err(|error| match error {
+            WebhookLifecycleError::Event => unavailable_webhook_event(&compiled),
+            error => webhook_lifecycle_failure("webhook sample", error),
+        })?;
     Ok(WebhookSampleSuccessReport {
         ok: true,
         command: "webhook sample",
@@ -1614,6 +1611,37 @@ fn webhook_replay(args: &WebhookReplayArgs) -> Result<WebhookReplaySuccessReport
         command: "webhook replay",
         outcome,
     })
+}
+
+/// Name the authored event ids this project delivers, so an adopter selects one
+/// without reading the project again. The selection an adopter typed is not
+/// rendered back.
+fn unavailable_webhook_event(compiled: &CompiledRegistry) -> FailureReport {
+    let mut authored: Vec<&str> = compiled
+        .event_deliveries()
+        .deliveries
+        .iter()
+        .map(|delivery| delivery.event_id.as_str())
+        .collect();
+    authored.sort_unstable();
+    authored.dedup();
+    let message = if authored.is_empty() {
+        "this project authors no webhook delivery, so there is no event to sample".to_owned()
+    } else {
+        format!(
+            "the selected webhook event is unavailable; this project delivers: {}",
+            authored.join(", ")
+        )
+    };
+    FailureReport {
+        ok: false,
+        command: "webhook sample",
+        diagnostics: vec![tool_diagnostic(
+            diagnostic("webhook.sample.event_refused", "event", &message),
+            DiagnosticArtifact::WebhookSample,
+            SuggestedAction::SelectWebhookEvent,
+        )],
+    }
 }
 
 fn webhook_lifecycle_failure(command: &'static str, error: WebhookLifecycleError) -> FailureReport {
@@ -1924,9 +1952,20 @@ fn diff(args: &DiffArgs) -> Result<DiffSuccessReport, FailureReport> {
 }
 
 fn package(args: &PackageArgs) -> Result<PackageSuccessReport, FailureReport> {
-    let prepared = prepare_candidate(&args.candidate, args.schema_fingerprint.clone(), "package")?;
-    let receipt = package_lifecycle::validate_test_receipt(&args.test_receipt, &prepared)
-        .map_err(package_lifecycle_failure)?;
+    // The receipt names the fingerprint its rehearsal reached, so an operator who
+    // does not restate it still packages against that exact managed catalogue.
+    let schema_fingerprint = match &args.schema_fingerprint {
+        Some(supplied) => supplied.clone(),
+        None => package_lifecycle::receipt_schema_fingerprint(&args.test_receipt)
+            .map_err(package_lifecycle_failure)?,
+    };
+    let prepared = prepare_candidate(&args.candidate, schema_fingerprint, "package")?;
+    let receipt = package_lifecycle::validate_test_receipt(
+        &args.test_receipt,
+        &prepared,
+        args.schema_fingerprint.as_deref(),
+    )
+    .map_err(package_lifecycle_failure)?;
     let outcome =
         package_lifecycle::run(prepared, receipt, &args.output, args.signatures.as_deref())
             .map_err(package_lifecycle_failure)?;
@@ -2033,9 +2072,10 @@ fn capture_candidate(
                 .collect(),
         })
         .collect();
-    let fixture_journey_bytes = read_bounded_regular_file(
+    let fixture_journey_bytes = read_bounded_source_file(
         &args.project.join(FIXTURE_JOURNEYS_PATH),
         "source.fixture_journeys.missing",
+        FIXTURE_JOURNEYS_PATH,
         MAX_PACKAGE_SOURCE_FILE_BYTES,
     )
     .map_err(|diagnostic| FailureReport {
@@ -2048,6 +2088,7 @@ fn capture_candidate(
         )],
     })?;
     let mut prevalidation_schema_fingerprint = None;
+    let mut reviewed_changes = String::new();
     let (prior_revision, migration_plan) = match args.baseline_runtime_config.as_deref() {
         Some(runtime_config) => {
             let baseline = inspect_runtime_predecessor_package(runtime_config)
@@ -2065,6 +2106,29 @@ fn capture_candidate(
                     SuggestedAction::CorrectRuntimeConfiguration,
                 ));
             }
+            let changes = registry_server::package::compiled_registry_change_set_from_baseline(
+                baseline.migration_baseline(),
+                &compiled,
+                baseline.package_revision(),
+            );
+            let unsupported = rendered_changes(&changes.changes, |change| {
+                change.class == CompiledRegistryChangeClass::Unsupported
+            });
+            if !unsupported.is_empty() {
+                return Err(candidate_failure(
+                    command,
+                    "migration.change.unsupported",
+                    "candidate",
+                    &format!(
+                        "the migration planner does not support these successor changes: {unsupported}. Inspect diff and revise the candidate. Reviewed artifacts cannot authorize unsupported changes"
+                    ),
+                    DiagnosticArtifact::DatabaseMigration,
+                    SuggestedAction::CorrectPackageBuild,
+                ));
+            }
+            let reviewable = rendered_changes(&changes.changes, |change| {
+                change.class != CompiledRegistryChangeClass::CompatibleAdditive
+            });
             let plan = if let Some(directory) = &args.reviewed_migrations {
                 let review = reviewed_migrations::capture(directory).map_err(|diagnostic| {
                     source_failure(
@@ -2075,31 +2139,13 @@ fn capture_candidate(
                     )
                 })?;
                 prevalidation_schema_fingerprint = Some(review.declared_schema_fingerprint);
+                reviewed_changes = reviewable;
                 PackageMigrationPlanInput::ReviewedSuccessorFromBaseline {
                     prior_baseline: Box::new(baseline.migration_baseline().clone()),
                     prior_schema_fingerprint: baseline.schema_fingerprint().to_owned(),
                     migrations: review.sources,
                 }
             } else {
-                let changes = registry_server::package::compiled_registry_change_set_from_baseline(
-                    baseline.migration_baseline(),
-                    &compiled,
-                    baseline.package_revision(),
-                );
-                if changes
-                    .changes
-                    .iter()
-                    .any(|change| change.class == CompiledRegistryChangeClass::Unsupported)
-                {
-                    return Err(candidate_failure(
-                        command,
-                        "migration.change.unsupported",
-                        "candidate",
-                        "the successor contains a change the migration planner does not support; inspect diff and revise the candidate. Reviewed artifacts cannot authorize unsupported changes",
-                        DiagnosticArtifact::DatabaseMigration,
-                        SuggestedAction::CorrectPackageBuild,
-                    ));
-                }
                 if registry_server::package::change_set_to_applicable_migration_plan(&changes)
                     .is_err()
                 {
@@ -2107,7 +2153,9 @@ fn capture_candidate(
                         command,
                         "migration.review.required",
                         "reviewedMigrations",
-                        "the successor contains changes that cannot be applied automatically; run diff, review the migration and its rehearsal evidence, then provide --reviewed-migrations to both test and package",
+                        &format!(
+                            "the successor cannot be applied automatically; the changes to review are: {reviewable}. Run diff, review the migration and its rehearsal evidence, then provide --reviewed-migrations to both test and package"
+                        ),
                         DiagnosticArtifact::DatabaseMigration,
                         SuggestedAction::CorrectPackageBuild,
                     ));
@@ -2157,9 +2205,18 @@ fn capture_candidate(
         prevalidation_schema_fingerprint,
     };
     if args.reviewed_migrations.is_some() {
-        candidate.prevalidate().map_err(|_| candidate_failure(command, "migration.review.refused", "reviewedMigrations",
-            "the reviewed plan was refused; check exact change coverage, canonical JSON, artifact hashes, prior package/schema bindings, and target fingerprint. Use the same reviewed directory for test and package",
-            DiagnosticArtifact::DatabaseMigration, SuggestedAction::CorrectPackageBuild))?;
+        candidate.prevalidate().map_err(|_| {
+            candidate_failure(
+                command,
+                "migration.review.refused",
+                "reviewedMigrations",
+                &format!(
+                    "the reviewed plan was refused; it has to cover exactly these changes: {reviewed_changes}. Check change coverage, canonical JSON, artifact hashes, prior package and schema bindings, and target fingerprint. Use the same reviewed directory for test and package"
+                ),
+                DiagnosticArtifact::DatabaseMigration,
+                SuggestedAction::CorrectPackageBuild,
+            )
+        })?;
     }
     Ok(candidate)
 }
@@ -2232,15 +2289,62 @@ fn package_lifecycle_failure(error: PackageLifecycleError) -> FailureReport {
             DiagnosticArtifact::SchemaTestReceipt,
             SuggestedAction::SupplySchemaTestReceipt,
         ),
-        PackageLifecycleError::TestReceiptRefused | PackageLifecycleError::TestReceiptEvidence => {
-            package_failure(
-                "package.test_receipt.refused",
-                "testReceipt",
-                "the schema-test receipt was refused",
-                DiagnosticArtifact::SchemaTestReceipt,
-                SuggestedAction::SupplySchemaTestReceipt,
-            )
-        }
+        PackageLifecycleError::TestReceiptRefused { message } => package_failure(
+            "package.test_receipt.refused",
+            "testReceipt",
+            &message,
+            DiagnosticArtifact::SchemaTestReceipt,
+            SuggestedAction::SupplySchemaTestReceipt,
+        ),
+        PackageLifecycleError::TestReceiptInvalid { message } => package_failure(
+            "package.test_receipt.invalid",
+            "testReceipt",
+            &message,
+            DiagnosticArtifact::SchemaTestReceipt,
+            SuggestedAction::SupplySchemaTestReceipt,
+        ),
+        PackageLifecycleError::TestReceiptFingerprint { receipt, supplied } => package_failure(
+            "package.test_receipt.fingerprint_mismatch",
+            "testReceipt.targetManagedSchemaFingerprint",
+            &format!(
+                "--schema-fingerprint is {supplied} but the schema-test receipt was produced for {receipt}"
+            ),
+            DiagnosticArtifact::SchemaTestReceipt,
+            SuggestedAction::SupplySchemaTestReceipt,
+        ),
+        PackageLifecycleError::TestReceiptIdentity {
+            field,
+            receipt,
+            package,
+        } => package_failure(
+            "package.test_receipt.identity_mismatch",
+            &format!("testReceipt.{field}"),
+            &format!(
+                "the schema-test receipt records {field} {receipt} but this candidate declares {package}"
+            ),
+            DiagnosticArtifact::SchemaTestReceipt,
+            SuggestedAction::SupplySchemaTestReceipt,
+        ),
+        PackageLifecycleError::TestReceiptCandidate {
+            field,
+            receipt,
+            package,
+        } => package_failure(
+            "package.test_receipt.candidate_mismatch",
+            &format!("testReceipt.{field}"),
+            &format!(
+                "the schema-test receipt records {field} {receipt} but this candidate builds {package}; run test again for this candidate"
+            ),
+            DiagnosticArtifact::SchemaTestReceipt,
+            SuggestedAction::SupplySchemaTestReceipt,
+        ),
+        PackageLifecycleError::TestReceiptEvidence { message } => package_failure(
+            "package.test_receipt.evidence_mismatch",
+            "testReceipt",
+            &message,
+            DiagnosticArtifact::SchemaTestReceipt,
+            SuggestedAction::SupplySchemaTestReceipt,
+        ),
     }
 }
 
@@ -2281,6 +2385,32 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
                 )],
             };
         }
+        TestLifecycleError::Journeys { message } => {
+            return FailureReport {
+                ok: false,
+                command: "test",
+                diagnostics: vec![tool_diagnostic(
+                    diagnostic(
+                        "test.journeys.refused",
+                        FIXTURE_JOURNEYS_PATH,
+                        &format!("the packaged schema-test journey suite was refused: {message}"),
+                    ),
+                    DiagnosticArtifact::FixtureJourneys,
+                    SuggestedAction::CorrectFixtureJourneys,
+                )],
+            };
+        }
+        TestLifecycleError::Credentials { path, message } => {
+            return FailureReport {
+                ok: false,
+                command: "test",
+                diagnostics: vec![tool_diagnostic(
+                    diagnostic("test.credentials.refused", &path, &message),
+                    DiagnosticArtifact::SchemaTestCredentials,
+                    SuggestedAction::SupplySchemaTestCredentials,
+                )],
+            };
+        }
         error => error,
     };
     let (code, path, message, artifact, action) = match error {
@@ -2293,6 +2423,8 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
         ),
         TestLifecycleError::RuntimeConfig(_) => unreachable!("handled before match"),
         TestLifecycleError::JourneySyntax { .. } => unreachable!("handled before match"),
+        TestLifecycleError::Journeys { .. } => unreachable!("handled before match"),
+        TestLifecycleError::Credentials { .. } => unreachable!("handled before match"),
         TestLifecycleError::JourneyStep { .. } => unreachable!("handled before match"),
         TestLifecycleError::CandidateBinding { .. } => unreachable!("handled before match"),
         TestLifecycleError::Candidate => (
@@ -2302,26 +2434,12 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
             DiagnosticArtifact::SchemaTestCandidate,
             SuggestedAction::CorrectSchemaTestCandidate,
         ),
-        TestLifecycleError::Journeys => (
-            "test.journeys.refused",
-            "journeys",
-            "the packaged schema-test journey suite was refused",
-            DiagnosticArtifact::FixtureJourneys,
-            SuggestedAction::CorrectFixtureJourneys,
-        ),
         TestLifecycleError::ReviewFingerprint => (
             "migration.review.fingerprint_mismatch",
             "reviewedMigrations",
             "the reviewed target fingerprint does not match the schema measured on the disposable database; rehearse the exact candidate and correct the review evidence before retrying",
             DiagnosticArtifact::DatabaseMigration,
             SuggestedAction::CorrectPackageBuild,
-        ),
-        TestLifecycleError::Credentials => (
-            "test.credentials.refused",
-            "credentials",
-            "the schema-test credential bindings were refused",
-            DiagnosticArtifact::SchemaTestCredentials,
-            SuggestedAction::SupplySchemaTestCredentials,
         ),
         TestLifecycleError::Database => (
             "test.database.unavailable",
@@ -2763,6 +2881,45 @@ fn unsupported_diff_findings(diff: &CompiledRegistryDiff) -> Vec<Diagnostic> {
         .collect()
 }
 
+/// List the selected changes as `code at target`, with the sentence a code
+/// carries beyond its name, so a refusal names what an adopter has to act on.
+fn rendered_changes(
+    changes: &[registry_server::package::CompiledRegistryChange],
+    selected: impl Fn(&registry_server::package::CompiledRegistryChange) -> bool,
+) -> String {
+    let mut rendered: Vec<String> = changes
+        .iter()
+        .filter(|change| selected(change))
+        .map(|change| {
+            let target = match (
+                change.target.entity_id.as_deref(),
+                change.target.member_id.as_deref(),
+            ) {
+                (Some(entity), Some(member)) => format!("{entity}.{member}"),
+                (Some(entity), None) => entity.to_owned(),
+                (None, _) => "registry".to_owned(),
+            };
+            let mut line = format!("{} at {target}", change_code_name(change.code));
+            if let Some(explanation) = change.code.explanation() {
+                line.push_str(" (");
+                line.push_str(explanation);
+                line.push(')');
+            }
+            line
+        })
+        .collect();
+    rendered.sort();
+    rendered.dedup();
+    rendered.join("; ")
+}
+
+fn change_code_name(code: registry_server::package::CompiledRegistryChangeCode) -> String {
+    serde_json::to_value(code)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| format!("{code:?}"))
+}
+
 fn diff_change_path(change: &registry_server::package::CompiledRegistryChange) -> String {
     match (
         change.target.entity_id.as_deref(),
@@ -2780,6 +2937,17 @@ fn requested_json(arguments: &[OsString]) -> bool {
             || (argument == "--format"
                 && arguments.get(index + 1).is_some_and(|next| next == "json"))
     })
+}
+
+/// Render a parser error as plain text so a machine-readable diagnostic carries
+/// the argument the parser named without terminal styling.
+fn unstyled_usage(error: &clap::Error) -> String {
+    let rendered = error.render().to_string();
+    let rendered = rendered.trim();
+    rendered
+        .strip_prefix("error: ")
+        .unwrap_or(rendered)
+        .to_owned()
 }
 
 fn profile(production: bool) -> ProfileArg {
@@ -2842,9 +3010,10 @@ fn project_migrate(
         )
     })?;
     let registry_path = project_path.join("registry.yaml");
-    let original = read_bounded_regular_file(
+    let original = read_bounded_source_file(
         &registry_path,
         "source.project.missing",
+        "registry.yaml",
         AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
     )
     .map_err(|diagnostic| {
@@ -3181,8 +3350,9 @@ fn explain(
                 "--scenario is available only for explain access",
             )));
         }
-        let bytes = read_bounded_regular_file(path, "access.scenario.unavailable", 65_536)
-            .map_err(scenario_error)?;
+        let bytes =
+            read_bounded_source_file(path, "access.scenario.unavailable", "scenario", 65_536)
+                .map_err(scenario_error)?;
         let source = parse_json_strict(&bytes).map_err(|_| scenario_error(diagnostic("access.scenario.invalid", "scenario", "provide a strict JSON access scenario with synthetic claims; duplicate keys and malformed JSON are refused")))?;
         let scenario = serde_json::from_value(source).map_err(|_| scenario_error(diagnostic("access.scenario.invalid", "scenario", "use entity, accessProfile, operation, optional readPath, and claims; claims accepts principalClaim, principal, scopes, purpose, and directClaims")))?;
         Some(
@@ -3321,9 +3491,10 @@ fn source_failure(
 
 fn capture_project_source(project_path: &Path) -> Result<CapturedProjectSource, Diagnostic> {
     validate_project_directory(project_path)?;
-    let project_bytes = read_bounded_regular_file(
+    let project_bytes = read_bounded_source_file(
         &project_path.join("registry.yaml"),
         "source.project.missing",
+        "registry.yaml",
         AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
     )?;
     let project = parse_project_yaml(&project_bytes).map_err(first_diagnostic)?;
@@ -3331,6 +3502,7 @@ fn capture_project_source(project_path: &Path) -> Result<CapturedProjectSource, 
         .into_iter()
         .map(|(id, bytes)| {
             let module = parse_module_yaml(&bytes).map_err(first_diagnostic)?;
+            ensure_module_id_matches_directory(&module.id, &id)?;
             let assets = load_module_asset_files(project_path, &id, &module)?;
             Ok(CapturedModuleSource {
                 id,
@@ -3340,6 +3512,7 @@ fn capture_project_source(project_path: &Path) -> Result<CapturedProjectSource, 
             })
         })
         .collect::<Result<Vec<_>, Diagnostic>>()?;
+    ensure_every_lock_has_a_source(&project, &modules)?;
     Ok(CapturedProjectSource {
         project,
         project_bytes,
@@ -3347,13 +3520,54 @@ fn capture_project_source(project_path: &Path) -> Result<CapturedProjectSource, 
     })
 }
 
+/// A module directory and the id its source declares are one name, so a rename
+/// is reported by every command that reads the project, not only by locking.
+fn ensure_module_id_matches_directory(
+    declared_id: &str,
+    directory_id: &str,
+) -> Result<(), Diagnostic> {
+    if declared_id == directory_id {
+        return Ok(());
+    }
+    Err(diagnostic(
+        "source.module.id_mismatch",
+        &format!("modules/{directory_id}/module.yaml"),
+        "the module source id must match its directory name",
+    ))
+}
+
+/// A lock without a source is a deleted module, reported the same way wherever
+/// the project is read. Module ids stay out of the sentence.
+fn ensure_every_lock_has_a_source(
+    project: &RegistryProject,
+    modules: &[CapturedModuleSource],
+) -> Result<(), Diagnostic> {
+    let discovered = modules
+        .iter()
+        .map(|module| module.id.as_str())
+        .collect::<BTreeSet<_>>();
+    if project
+        .modules
+        .iter()
+        .any(|lock| !discovered.contains(lock.id.as_str()))
+    {
+        return Err(diagnostic(
+            "module.lock.source_missing",
+            "project.modules",
+            "every module lock must have a discovered module source",
+        ));
+    }
+    Ok(())
+}
+
 fn capture_project_source_for_lock(
     project_path: &Path,
 ) -> Result<CapturedProjectSource, Diagnostic> {
     validate_project_directory(project_path)?;
-    let project_bytes = read_bounded_regular_file(
+    let project_bytes = read_bounded_source_file(
         &project_path.join("registry.yaml"),
         "source.project.missing",
+        "registry.yaml",
         AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
     )?;
     let project = parse_project_yaml(&project_bytes).map_err(first_diagnostic)?;
@@ -3371,13 +3585,7 @@ fn capture_project_source_for_lock(
         .into_iter()
         .map(|(directory_id, bytes)| {
             let module = parse_module_yaml(&bytes).map_err(first_diagnostic)?;
-            if module.id != directory_id {
-                return Err(diagnostic(
-                    "source.module.id_mismatch",
-                    &format!("modules/{directory_id}/module.yaml"),
-                    "the module source id must match its directory name",
-                ));
-            }
+            ensure_module_id_matches_directory(&module.id, &directory_id)?;
             let assets = load_module_asset_files(project_path, &directory_id, &module)?;
             Ok(CapturedModuleSource {
                 id: directory_id,
@@ -3387,17 +3595,7 @@ fn capture_project_source_for_lock(
             })
         })
         .collect::<Result<Vec<_>, Diagnostic>>()?;
-    let discovered = modules
-        .iter()
-        .map(|module| module.id.as_str())
-        .collect::<BTreeSet<_>>();
-    if locked.iter().any(|id| !discovered.contains(id)) {
-        return Err(diagnostic(
-            "module.lock.source_missing",
-            "project.modules",
-            "every module lock must have a discovered module source",
-        ));
-    }
+    ensure_every_lock_has_a_source(&project, &modules)?;
     Ok(CapturedProjectSource {
         project,
         project_bytes,
@@ -3481,9 +3679,10 @@ fn load_module_files(
     module_paths
         .into_iter()
         .map(|(id, path)| {
-            let bytes = read_bounded_regular_file(
+            let bytes = read_bounded_source_file(
                 &path,
                 "source.module.missing",
+                &format!("modules/{id}/module.yaml"),
                 AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
             )?;
             Ok((id, bytes))
@@ -3550,9 +3749,10 @@ fn discover_module_files(project_path: &Path) -> Result<Vec<(String, Vec<u8>)>, 
     module_paths
         .into_iter()
         .map(|(id, path)| {
-            let bytes = read_bounded_regular_file(
+            let bytes = read_bounded_source_file(
                 &path,
                 "source.module.missing",
+                &format!("modules/{id}/module.yaml"),
                 AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
             )?;
             Ok((id, bytes))
@@ -3593,9 +3793,10 @@ fn load_module_asset_files(
     paths
         .into_iter()
         .map(|path| {
-            let bytes = read_bounded_regular_file(
+            let bytes = read_bounded_source_file(
                 &project_path.join("modules").join(module_id).join(&path),
                 "source.module_asset.missing",
+                &format!("modules/{module_id}/{path}"),
                 MAX_DERIVED_SQL_ASSET_BYTES,
             )?;
             if bytes.is_empty() {
@@ -3836,9 +4037,10 @@ fn write_project_registry(
     updated: &[u8],
 ) -> Result<(), Diagnostic> {
     let registry_path = project_path.join("registry.yaml");
-    let current = read_bounded_regular_file(
+    let current = read_bounded_source_file(
         &registry_path,
         "source.project.missing",
+        "registry.yaml",
         AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
     )?;
     if current != original {
@@ -3968,9 +4170,10 @@ fn write_migration_files_with_fault(
             "the project directory is not available",
             "the project directory must be a directory and must not be a symbolic link",
         )?;
-        let current = read_bounded_regular_file(
+        let current = read_bounded_source_file(
             &path,
             "project.migrate.source_missing",
+            relative_path,
             AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
         )?;
         if current != *original {
@@ -4066,9 +4269,10 @@ fn write_migration_files_with_fault(
     // closes the concurrent-edit window without letting one file advance while
     // another is stale.
     let revalidation = targets.iter().try_for_each(|target| {
-        let current = read_bounded_regular_file(
+        let current = read_bounded_source_file(
             &target.path,
             "project.migrate.source_missing",
+            &target.relative_path,
             AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
         )
         .map_err(|_| migration_concurrent_change_diagnostic(&target.relative_path))?;
@@ -4233,6 +4437,31 @@ fn sync_directory(_path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+impl ArtifactSelector {
+    fn selects(self, path: &str) -> bool {
+        match self {
+            ArtifactSelector::Openapi => path == "generated/openapi.json",
+            ArtifactSelector::Schemas => {
+                path.starts_with("generated/schemas/")
+                    || path.starts_with("generated/action-schemas/")
+            }
+            ArtifactSelector::Actions => {
+                path == "compiled/actions.json" || path.starts_with("generated/action-schemas/")
+            }
+            ArtifactSelector::Manifest => path.starts_with("generated/manifest/"),
+            ArtifactSelector::Metadata => path == "generated/metadata/registry.json",
+            ArtifactSelector::Sql => path == "generated/postgres/schema.sql",
+        }
+    }
+
+    fn name(self) -> String {
+        self.to_possible_value()
+            .expect("artifact selections are visible")
+            .get_name()
+            .to_owned()
+    }
+}
+
 fn selected_artifacts(
     artifacts: &GeneratedArtifacts,
     selector: ArtifactSelector,
@@ -4240,27 +4469,32 @@ fn selected_artifacts(
     let selected: Vec<_> = artifacts
         .entries()
         .values()
-        .filter(|artifact| match selector {
-            ArtifactSelector::Openapi => artifact.path == "generated/openapi.json",
-            ArtifactSelector::Schemas => {
-                artifact.path.starts_with("generated/schemas/")
-                    || artifact.path.starts_with("generated/action-schemas/")
-            }
-            ArtifactSelector::Actions => {
-                artifact.path == "compiled/actions.json"
-                    || artifact.path.starts_with("generated/action-schemas/")
-            }
-            ArtifactSelector::Manifest => artifact.path.starts_with("generated/manifest/"),
-            ArtifactSelector::Metadata => artifact.path == "generated/metadata/registry.json",
-            ArtifactSelector::Sql => artifact.path == "generated/postgres/schema.sql",
-        })
+        .filter(|artifact| selector.selects(&artifact.path))
         .cloned()
         .collect();
     if selected.is_empty() {
+        let available = ArtifactSelector::value_variants()
+            .iter()
+            .filter(|candidate| {
+                artifacts
+                    .entries()
+                    .values()
+                    .any(|artifact| candidate.selects(&artifact.path))
+            })
+            .map(|candidate| candidate.name())
+            .collect::<Vec<_>>();
+        let available = if available.is_empty() {
+            "none".to_owned()
+        } else {
+            available.join(", ")
+        };
         return Err(diagnostic(
             "artifact.selection.empty",
             "artifacts",
-            "the selected artifact is unavailable for this compiled project",
+            &format!(
+                "this compiled project produces no {} artifact; it produces: {available}",
+                selector.name()
+            ),
         ));
     }
     Ok(selected)
@@ -5127,51 +5361,64 @@ fn validate_directory_for(
     ensure_no_symlink_components(path, code, report_path)
 }
 
+/// Read a bounded regular file whose diagnostics address the project closure as
+/// a whole, for callers that report their own file-addressed refusal.
 fn read_bounded_regular_file(
     path: &Path,
     missing_code: &str,
     bound: u64,
 ) -> Result<Vec<u8>, Diagnostic> {
+    read_bounded_source_file(path, missing_code, "project", bound)
+}
+
+/// Read a bounded regular file and address every refusal at `report_path`, the
+/// project-relative name of the file being read.
+fn read_bounded_source_file(
+    path: &Path,
+    missing_code: &str,
+    report_path: &str,
+    bound: u64,
+) -> Result<Vec<u8>, Diagnostic> {
     let metadata = fs::symlink_metadata(path).map_err(|_| {
         diagnostic(
             missing_code,
-            "project",
+            report_path,
             "the required authoring source is not available",
         )
     })?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(diagnostic(
             "source.file.invalid",
-            "project",
+            report_path,
             "authoring sources must be regular files and must not be symbolic links",
         ));
     }
-    ensure_no_symlink_components(path, "source.file.invalid", "project")?;
+    ensure_no_symlink_components(path, "source.file.invalid", report_path)?;
     if metadata.len() > bound {
         return Err(diagnostic(
             "source.file.bounds",
-            "project",
+            report_path,
             "an authoring source exceeds its fixed size bound",
         ));
     }
     let file = File::open(path).map_err(|_| {
         diagnostic(
             "source.file.unreadable",
-            "project",
+            report_path,
             "an authoring source cannot be read",
         )
     })?;
     let opened = file.metadata().map_err(|_| {
         diagnostic(
             "source.file.unreadable",
-            "project",
+            report_path,
             "an authoring source cannot be read",
         )
     })?;
     let after = fs::symlink_metadata(path).map_err(|_| {
         diagnostic(
             "source.file.invalid",
-            "project",
+            report_path,
             "authoring sources must be regular files and must not be symbolic links",
         )
     })?;
@@ -5182,21 +5429,21 @@ fn read_bounded_regular_file(
     {
         return Err(diagnostic(
             "source.file.invalid",
-            "project",
+            report_path,
             "authoring sources must be regular files and must not be symbolic links",
         ));
     }
     if opened.len() > bound {
         return Err(diagnostic(
             "source.file.bounds",
-            "project",
+            report_path,
             "an authoring source exceeds its fixed size bound",
         ));
     }
     let capacity = usize::try_from(opened.len()).map_err(|_| {
         diagnostic(
             "source.file.bounds",
-            "project",
+            report_path,
             "an authoring source exceeds its fixed size bound",
         )
     })?;
@@ -5206,14 +5453,14 @@ fn read_bounded_regular_file(
         .map_err(|_| {
             diagnostic(
                 "source.file.unreadable",
-                "project",
+                report_path,
                 "an authoring source cannot be read",
             )
         })?;
     if bytes.len() as u64 > bound || bytes.len() as u64 != opened.len() {
         return Err(diagnostic(
             "source.file.bounds",
-            "project",
+            report_path,
             "an authoring source exceeds its fixed size bound",
         ));
     }
@@ -5276,12 +5523,17 @@ fn write_files_with_before_publish(
             "the output directory must be a new path without parent-directory components",
         ));
     }
-    let parent = output.parent().unwrap_or_else(|| Path::new("."));
+    // A bare relative destination names a child of the working directory, so its
+    // empty parent is that directory.
+    let parent = match output.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
     validate_directory_for(
         parent,
         "output.parent.invalid",
         "output.parent",
-        "the output parent directory is not available",
+        "the output parent directory is not available; create it, or give a destination inside a directory that exists",
         "the output parent must be a directory and must not be a symbolic link",
     )?;
     ensure_no_symlink_components(output, "output.destination.invalid", "output")?;
