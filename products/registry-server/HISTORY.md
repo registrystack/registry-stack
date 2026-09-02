@@ -242,8 +242,9 @@ record values or reason text.
 Coverage is conservative: snapshots at or after the earliest erased commit
 become unavailable, including later snapshots. Erasing baseline data makes all
 snapshot coverage unavailable. Earlier complete snapshots may remain usable;
-the command never silently re-baselines the registry. Live writes and separately
-authorized maintenance remain available.
+the command never silently re-baselines the registry, and `history rebaseline`
+below is the separate command that does it explicitly. Live writes and
+separately authorized maintenance remain available.
 
 Operators remain responsible for current records, saved exports, copies already
 delivered to external consumers, and backup expiry. Change-request proposals and
@@ -257,3 +258,36 @@ The executable acceptance journey is
 packages, certificate-verified PostgreSQL, real authenticated HTTP requests,
 restart, an additive upgrade and access revocation. Its temporary credentials
 and data are disposable; it is not a production deployment script.
+
+## Restore snapshot coverage
+
+Nothing in the write path widens coverage again, so snapshot reads of current
+state stay unavailable after an erasure until the migration authority
+re-establishes a covered position. That is the same authority and the same
+bounded interlock as the erasure, in its own audited command.
+
+Prepare an absolute, owner-only JSON file carrying the operator reference alone,
+using permissions `0600` on Unix:
+
+```json
+{
+  "operatorReference": "approved-maintenance-002"
+}
+```
+
+```bash
+registry-serverctl history rebaseline \
+  --runtime-config /absolute/path/runtime.yaml \
+  --request-file /absolute/path/rebaseline.json
+```
+
+One transaction proves the retained journal head of every live row still
+reproduces that row, installs one baseline commit at the head, and moves the
+coverage baseline to it. It resurrects nothing: snapshot references before the
+new baseline remain unavailable, because the bytes they named are gone. The
+command refuses when coverage is already complete, when the registry is not
+ready, when a retained revision is not indexed by a commit, and when a live row
+has no retained journal head that reproduces it. The 1,000-row live bound that
+applies to establishing an existing-data baseline applies here too. The result
+and keyed audit contain counts and positions, not record values; the operator
+reference is recorded as a keyed hash.
