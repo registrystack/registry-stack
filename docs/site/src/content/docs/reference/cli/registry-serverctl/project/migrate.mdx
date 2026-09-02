@@ -1,6 +1,6 @@
 ---
-title: "evidencectl verify command reference"
-description: "Generated syntax and options for evidencectl verify."
+title: "registry-serverctl project migrate command reference"
+description: "Generated syntax and options for registry-serverctl project migrate."
 status: draft
 draft: true
 owner: registry-docs
@@ -14,7 +14,7 @@ standards_referenced: []
 
 {/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}
 
-Verify one retained Evidence Gateway response offline.
+Migrate the retired singular Manifest projection to the plural resource model.
 
 ## Contract status
 
@@ -23,21 +23,21 @@ This page is generated from the public Clap command tree for Registry Stack sour
 ## Usage
 
 ```text
-evidencectl verify --context <CONTEXT> --output <OUTPUT> <RESPONSE>
+registry-serverctl project migrate [OPTIONS] <PROJECT>
 ```
 
 ## Arguments
 
 | Argument | Always required | Default | Values | Environment | Description |
 | --- | --- | --- | --- | --- | --- |
-| `<RESPONSE>` | Yes | n/a | n/a | n/a | Signed JWS or SD-JWT VC response returned by Evidence Gateway |
+| `<PROJECT>` | Yes | n/a | n/a | n/a | Registry Server project directory |
 
 ## Options
 
 | Option | Always required | Default | Values | Environment | Description |
 | --- | --- | --- | --- | --- | --- |
-| `--context <CONTEXT>` | Yes | n/a | n/a | n/a | Owner-only verification context retained before the response existed |
-| `--output <OUTPUT>` | Yes | n/a | n/a | n/a | New owner-only file for the exact verified Evidence Gateway payload |
+| `--write` | No | n/a | n/a | n/a | Write the reviewed migration. Without this flag, only a diff is emitted |
+| `--format <FORMAT>` | No | `human` | `human`, `json` | n/a | Emit the selected command's report in this format |
 | `-h, --help` | No | n/a | n/a | n/a | Print help |
 
 ## Generation contract

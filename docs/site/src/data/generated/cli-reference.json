@@ -3264,6 +3264,60 @@
               ],
               "constraints": [],
               "subcommands": []
+            },
+            {
+              "name": "migrate",
+              "invocation": "registry-serverctl project migrate",
+              "about": "Migrate the retired singular Manifest projection to the plural resource model",
+              "long_about": null,
+              "usage": "registry-serverctl project migrate [OPTIONS] <PROJECT>",
+              "arguments": [
+                {
+                  "display": "<PROJECT>",
+                  "description": "Registry Server project directory",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--write",
+                  "description": "Write the reviewed migration. Without this flag, only a diff is emitted",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
             }
           ]
         },
@@ -3283,6 +3337,7 @@
               "possible_values": [
                 "openapi",
                 "schemas",
+                "actions",
                 "manifest",
                 "metadata",
                 "sql"
@@ -3363,6 +3418,7 @@
                 "access",
                 "routes",
                 "queries",
+                "actions",
                 "change-requests",
                 "events"
               ],
@@ -3509,7 +3565,7 @@
           "invocation": "registry-serverctl package",
           "about": "Build a deterministic production-profile signing input or publish its externally signed package",
           "long_about": null,
-          "usage": "registry-serverctl package [OPTIONS] --database-id <ID> --schema-fingerprint <SHA256> --test-receipt <ABSOLUTE_FILE> --output <DIRECTORY> <PROJECT>",
+          "usage": "registry-serverctl package [OPTIONS] --database-id <ID> --test-receipt <ABSOLUTE_FILE> --output <DIRECTORY> <PROJECT>",
           "arguments": [
             {
               "display": "<PROJECT>",
@@ -3571,8 +3627,8 @@
             },
             {
               "display": "--schema-fingerprint <SHA256>",
-              "description": "Exact managed-catalog SHA-256 produced by the reviewed PostgreSQL rehearsal",
-              "always_required": true,
+              "description": "Exact managed-catalog SHA-256 produced by the reviewed PostgreSQL rehearsal. Read from the schema-test receipt when it is not supplied",
+              "always_required": false,
               "repeatable": false,
               "default_values": [],
               "possible_values": [],

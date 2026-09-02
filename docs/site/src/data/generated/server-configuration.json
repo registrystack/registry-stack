@@ -8,7 +8,7 @@
       "file": "products/registry-server/generated/authoring/registry-project.schema.json",
       "status": "beta",
       "reference": "docs/site/src/content/docs/configure/registry-server.mdx",
-      "field_count": 398,
+      "field_count": 427,
       "fields": [
         {
           "key_path": "accessProfiles",
@@ -4204,6 +4204,19 @@
           "runtime_validation": null
         },
         {
+          "key_path": "entities[].primaryDataset",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
           "key_path": "entities[].readPaths",
           "kind": "property",
           "type": "array",
@@ -4656,6 +4669,19 @@
           "runtime_validation": null
         },
         {
+          "key_path": "manifestProjection.catalog.publisher.id",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
           "key_path": "manifestProjection.catalog.publisher.iri",
           "kind": "property",
           "type": "null | string",
@@ -4779,9 +4805,9 @@
           "runtime_validation": null
         },
         {
-          "key_path": "manifestProjection.dataService",
+          "key_path": "manifestProjection.dataServices",
           "kind": "property",
-          "type": "null | object",
+          "type": "array",
           "required": "conditional",
           "values": null,
           "values_conditional": false,
@@ -4792,7 +4818,20 @@
           "runtime_validation": null
         },
         {
-          "key_path": "manifestProjection.dataService.conformsTo",
+          "key_path": "manifestProjection.dataServices[]",
+          "kind": "array_item",
+          "type": "object",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "manifestProjection.dataServices[].conformsTo",
           "kind": "property",
           "type": "null | string",
           "required": "conditional",
@@ -4805,7 +4844,7 @@
           "runtime_validation": null
         },
         {
-          "key_path": "manifestProjection.dataService.description",
+          "key_path": "manifestProjection.dataServices[].description",
           "kind": "property",
           "type": "null | object | string",
           "required": "conditional",
@@ -4818,7 +4857,7 @@
           "runtime_validation": null
         },
         {
-          "key_path": "manifestProjection.dataService.description.*",
+          "key_path": "manifestProjection.dataServices[].description.*",
           "kind": "map_value",
           "type": "string",
           "required": "conditional",
@@ -4831,7 +4870,7 @@
           "runtime_validation": null
         },
         {
-          "key_path": "manifestProjection.dataService.endpointDescription",
+          "key_path": "manifestProjection.dataServices[].endpointDescription",
           "kind": "property",
           "type": "null | string",
           "required": "conditional",
@@ -4844,7 +4883,7 @@
           "runtime_validation": null
         },
         {
-          "key_path": "manifestProjection.dataService.endpointUrl",
+          "key_path": "manifestProjection.dataServices[].endpointUrl",
           "kind": "property",
           "type": "string",
           "required": "conditional",
@@ -4857,7 +4896,7 @@
           "runtime_validation": null
         },
         {
-          "key_path": "manifestProjection.dataService.id",
+          "key_path": "manifestProjection.dataServices[].id",
           "kind": "property",
           "type": "string",
           "required": "conditional",
@@ -4870,7 +4909,7 @@
           "runtime_validation": null
         },
         {
-          "key_path": "manifestProjection.dataService.iri",
+          "key_path": "manifestProjection.dataServices[].iri",
           "kind": "property",
           "type": "null | string",
           "required": "conditional",
@@ -4883,7 +4922,33 @@
           "runtime_validation": null
         },
         {
-          "key_path": "manifestProjection.dataService.title",
+          "key_path": "manifestProjection.dataServices[].servesDatasets",
+          "kind": "property",
+          "type": "array",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "manifestProjection.dataServices[].servesDatasets[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "manifestProjection.dataServices[].title",
           "kind": "property",
           "type": "object | string",
           "required": "conditional",
@@ -4896,7 +4961,7 @@
           "runtime_validation": null
         },
         {
-          "key_path": "manifestProjection.dataService.title.*",
+          "key_path": "manifestProjection.dataServices[].title.*",
           "kind": "map_value",
           "type": "string",
           "required": "conditional",
@@ -4909,8 +4974,21 @@
           "runtime_validation": null
         },
         {
-          "key_path": "manifestProjection.dataset",
+          "key_path": "manifestProjection.datasets",
           "kind": "property",
+          "type": "array",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "manifestProjection.datasets[]",
+          "kind": "array_item",
           "type": "object",
           "required": "conditional",
           "values": null,
@@ -4922,7 +5000,20 @@
           "runtime_validation": null
         },
         {
-          "key_path": "manifestProjection.dataset.applicableLegislation",
+          "key_path": "manifestProjection.datasets[].accessProfile",
+          "kind": "property",
+          "type": "null | string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "manifestProjection.datasets[].applicableLegislation",
           "kind": "property",
           "type": "array",
           "required": "conditional",
@@ -4937,7 +5028,7 @@
           "runtime_validation": null
         },
         {
-          "key_path": "manifestProjection.dataset.applicableLegislation[]",
+          "key_path": "manifestProjection.datasets[].applicableLegislation[]",
           "kind": "array_item",
           "type": "string",
           "required": "conditional",
@@ -4950,7 +5041,24 @@
           "runtime_validation": null
         },
         {
-          "key_path": "manifestProjection.dataset.conformsTo",
+          "key_path": "manifestProjection.datasets[].classificationCeiling",
+          "kind": "property",
+          "type": "null | string",
+          "required": "conditional",
+          "values": [
+            "internal",
+            "public",
+            "restricted"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "manifestProjection.datasets[].conformsTo",
           "kind": "property",
           "type": "array",
           "required": "conditional",
@@ -4965,7 +5073,7 @@
           "runtime_validation": null
         },
         {
-          "key_path": "manifestProjection.dataset.conformsTo[]",
+          "key_path": "manifestProjection.datasets[].conformsTo[]",
           "kind": "array_item",
           "type": "string",
           "required": "conditional",
@@ -4978,7 +5086,7 @@
           "runtime_validation": null
         },
         {
-          "key_path": "manifestProjection.dataset.description",
+          "key_path": "manifestProjection.datasets[].description",
           "kind": "property",
           "type": "null | object | string",
           "required": "conditional",
@@ -4991,7 +5099,7 @@
           "runtime_validation": null
         },
         {
-          "key_path": "manifestProjection.dataset.description.*",
+          "key_path": "manifestProjection.datasets[].description.*",
           "kind": "map_value",
           "type": "string",
           "required": "conditional",
@@ -5004,7 +5112,20 @@
           "runtime_validation": null
         },
         {
-          "key_path": "manifestProjection.dataset.id",
+          "key_path": "manifestProjection.datasets[].id",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "manifestProjection.datasets[].iri",
           "kind": "property",
           "type": "null | string",
           "required": "conditional",
@@ -5017,7 +5138,7 @@
           "runtime_validation": null
         },
         {
-          "key_path": "manifestProjection.dataset.owner",
+          "key_path": "manifestProjection.datasets[].owner",
           "kind": "property",
           "type": "null | string",
           "required": "conditional",
@@ -5030,7 +5151,7 @@
           "runtime_validation": null
         },
         {
-          "key_path": "manifestProjection.dataset.spatialCoverage",
+          "key_path": "manifestProjection.datasets[].spatialCoverage",
           "kind": "property",
           "type": "null | string",
           "required": "conditional",
@@ -5043,7 +5164,7 @@
           "runtime_validation": null
         },
         {
-          "key_path": "manifestProjection.dataset.status",
+          "key_path": "manifestProjection.datasets[].status",
           "kind": "property",
           "type": "null | string",
           "required": "conditional",
@@ -5062,7 +5183,7 @@
           "runtime_validation": null
         },
         {
-          "key_path": "manifestProjection.dataset.title",
+          "key_path": "manifestProjection.datasets[].title",
           "kind": "property",
           "type": "object | string",
           "required": "conditional",
@@ -5075,7 +5196,202 @@
           "runtime_validation": null
         },
         {
-          "key_path": "manifestProjection.dataset.title.*",
+          "key_path": "manifestProjection.datasets[].title.*",
+          "kind": "map_value",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "manifestProjection.datasets[].version",
+          "kind": "property",
+          "type": "null | string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "manifestProjection.distributions",
+          "kind": "property",
+          "type": "array",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "manifestProjection.distributions[]",
+          "kind": "array_item",
+          "type": "object",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "manifestProjection.distributions[].accessService",
+          "kind": "property",
+          "type": "null | string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "manifestProjection.distributions[].accessUrl",
+          "kind": "property",
+          "type": "null | string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "manifestProjection.distributions[].dataset",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "manifestProjection.distributions[].description",
+          "kind": "property",
+          "type": "null | object | string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "manifestProjection.distributions[].description.*",
+          "kind": "map_value",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "manifestProjection.distributions[].downloadUrl",
+          "kind": "property",
+          "type": "null | string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "manifestProjection.distributions[].format",
+          "kind": "property",
+          "type": "null | string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "manifestProjection.distributions[].id",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "manifestProjection.distributions[].iri",
+          "kind": "property",
+          "type": "null | string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "manifestProjection.distributions[].mediaType",
+          "kind": "property",
+          "type": "null | string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "manifestProjection.distributions[].title",
+          "kind": "property",
+          "type": "null | object | string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "manifestProjection.distributions[].title.*",
           "kind": "map_value",
           "type": "string",
           "required": "conditional",
@@ -5357,6 +5673,58 @@
         },
         {
           "key_path": "manifestProjection.entities[].title.*",
+          "kind": "map_value",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "manifestProjection.publicService",
+          "kind": "property",
+          "type": "object",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "manifestProjection.publicService.id",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "manifestProjection.publicService.title",
+          "kind": "property",
+          "type": "object | string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "manifestProjection.publicService.title.*",
           "kind": "map_value",
           "type": "string",
           "required": "conditional",
@@ -5683,6 +6051,19 @@
           "runtime_validation": null
         },
         {
+          "key_path": "registry.canonicalBaseIri",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
           "key_path": "registry.defaultLanguage",
           "kind": "property",
           "type": "string",
@@ -5796,7 +6177,7 @@
       "file": "products/registry-server/generated/authoring/registry-module.schema.json",
       "status": "beta",
       "reference": "docs/site/src/content/docs/configure/registry-server.mdx",
-      "field_count": 364,
+      "field_count": 365,
       "fields": [
         {
           "key_path": "actions",
@@ -8664,6 +9045,19 @@
             "create_only",
             "mutable"
           ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].primaryDataset",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
           "values_conditional": false,
           "constraints": [],
           "conditional_constraints": [],
