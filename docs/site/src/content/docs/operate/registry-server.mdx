@@ -367,6 +367,7 @@ scraper's network boundary rather than a public one.
 | --- | --- | --- |
 | `registry_server_http_requests_total` | counter | `route`, `method`, `status` |
 | `registry_server_http_request_duration_seconds` | histogram | `route`, `method`, `status` |
+| `registry_server_anonymous_refusals_total` | counter | `route`, `method`, `reason` |
 | `registry_server_pool_connections` | gauge | `state`: `max_size`, `size`, `available`, `waiting` |
 
 `route` is the matched route template, such as `/v1/records/placements/{record_id}`, or
@@ -375,7 +376,22 @@ scraper's network boundary rather than a public one.
 without bound, and no label carries a principal, a token, or a record value. Pool states are read
 from the connection pool at scrape time.
 
-{/* Evidence: crates/registry-server/src/metrics.rs;
+`registry_server_anonymous_refusals_total` counts requests that presented no credential and were
+refused before admission: a profile the caller cannot hold, a route it cannot see, an absent scope
+or purpose, or a query the route cannot parse. `reason` is one of nine fixed values,
+`read_request_invalid`, `read_concealed`, `read_refused`, `revision_request_invalid`,
+`revision_concealed`, `revision_refused`, `mutation_concealed`, `mutation_refused`, and
+`action_refused`, derived from the refusal itself rather than from anything the request carried.
+These refusals are counted here rather than appended to the hash-chained audit journal, because a
+caller with no principal names nobody the journal could hold accountable, and an unauthenticated
+client that could append would grow the journal without bound and serialize every audited write
+behind its head lock. Refusals of an authenticated principal are journaled exactly as before, and
+so is every admitted request. Alert on a sharp rise in this counter the way you would on a rise in
+`client_error` responses: it is the signal the journal no longer carries.
+
+{/* Evidence: crates/registry-server/src/metrics.rs, AnonymousRefusalReason;
+    crates/registry-server/src/api/mod.rs, anonymous_refusal();
+    crates/registry-server/tests/postgres_anonymous_refusals.rs;
     crates/registry-server/src/runtime_config.rs, MetricsListenerConfig;
     crates/registry-server/src/startup.rs. */}
 

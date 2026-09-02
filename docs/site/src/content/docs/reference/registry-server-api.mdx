@@ -452,8 +452,11 @@ A refusal is an RFC 9457 problem document with `Content-Type: application/proble
 }
 ```
 
-`traceId` is a 32-character hexadecimal value that also appears in the server's audit record for
-the request, so an operator can find the refusal without the client sending any record value.
+`traceId` is a 32-character hexadecimal value that also appears in the server's request log and, for
+every request the journal records, in its audit record, so an operator can find the refusal without
+the client sending any record value. A request that presents no credential and is refused before
+admission is counted on the metrics listener rather than journaled, so its `traceId` is in the
+request log only; see [Scrape metrics](../../operate/registry-server/#scrape-metrics).
 `fieldPath` names the offending body member when the refusal is about one.
 
 <ApiReferenceTable id="problem-codes" />

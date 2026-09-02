@@ -48,7 +48,7 @@ The compiler turns the project into one immutable model, and every runtime behav
 - **Routes.** Each entity gets a route under `/v1/records/` with create, read, list, patch, tombstone, lookup, batch, and history operations, but only the operations you enable.
 - **Envelope.** Every record travels in the Registry Record envelope: a `data` object holding the record identifier, the revision identifier, and the domain fields, plus a `meta` object naming the registry, dataset, and entity type. The same envelope carries a JSON-LD context on request.
 - **Documents.** The server publishes a JSON Schema per entity and one OpenAPI document, both derived from the compiled model rather than written by hand.
-- **Audit.** Every request writes a chained audit record. Every mutation writes a revision, and every revision keeps the change context that produced it.
+- **Audit.** Every admitted request writes a chained audit record, and so does every refusal that names a principal. A request that presents no credential and is refused before admission is counted on the metrics listener instead, so an unauthenticated caller cannot grow the chain; see [Scrape metrics](../../operate/registry-server/#scrape-metrics). Every mutation writes a revision, and every revision keeps the change context that produced it.
 
 Field identifiers in the project are kebab-case; the API exposes them as camelCase unless you set `apiName`.
 The compiler refuses field names that collide with envelope members, so `recordIdentifier` or `snapshot` can never be a domain field.
