@@ -496,11 +496,80 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
     lock_timeout_is_bounded().await;
 }
 
+/// A field added with `required: true` reaches an entity that already holds
+/// rows. The compiled successor DDL must add the column without `NOT NULL`,
+/// let the reviewed backfill populate it, and only then constrain it, so the
+/// activation completes instead of entering durable failed maintenance.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_added_required_field_backfills_before_the_column_is_constrained() {
+    let database = TestDatabase::create(1).await;
+    let _unused_harness_configs = (&database.runtime_config, &database.tls_runtime_config);
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs the required extension");
+
+    let base = compile_variant(Variant::Base, 1);
+    let initial_fingerprint = initial_fingerprint(&database, &base).await;
+    let initial = prepare_and_load_initial(&base, &initial_fingerprint);
+    let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("added required field scenario activates its initial package");
+    seed_backfill_rows(&database, &base, 5).await;
+
+    let candidate = compile_variant(Variant::BatchAddedRequired, 2);
+    let change_set =
+        compiled_registry_change_set(&base, &candidate, &active.package_revision).changes;
+    assert!(
+        change_set.iter().any(|change| {
+            change.code == CompiledRegistryChangeCode::FieldAddedRequired
+                && change.class == CompiledRegistryChangeClass::DataBackfillRequired
+        }),
+        "adding a required field stays a reviewable data backfill"
+    );
+
+    let target_fingerprint = added_required_target_fingerprint(&database, &candidate).await;
+    let source = added_required_source(
+        "add-required-batch",
+        &active,
+        &base,
+        &candidate,
+        &target_fingerprint,
+        5,
+    );
+    let package = prepare_and_load_reviewed(
+        2,
+        &active,
+        &base,
+        Variant::BatchAddedRequired,
+        &target_fingerprint,
+        source,
+    );
+
+    let activated = apply(
+        &database,
+        &package,
+        ApplyPrecondition::Successor { current: &active },
+    )
+    .await
+    .expect("the reviewed backfill runs before the added column is constrained");
+    assert_ready_target(&database, &activated).await;
+    assert_added_required_column(&database, &candidate, "reviewed-batch").await;
+    assert_eq!(
+        activated.schema_fingerprint, target_fingerprint,
+        "the upgraded managed schema matches the measured target schema"
+    );
+
+    database.cleanup().await;
+}
+
 #[derive(Clone, Copy)]
 enum Variant {
     Base,
     RankRequired,
     LegacyRemoved,
+    BatchAddedRequired,
 }
 
 #[derive(Clone, Copy)]
@@ -716,8 +785,13 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
     } else {
         r#",{"id":"legacy","type":"string","maxLength":16,"classification":"internal"}"#
     };
+    let batch = if matches!(variant, Variant::BatchAddedRequired) {
+        r#",{"id":"batch","type":"string","maxLength":16,"classification":"internal","required":true}"#
+    } else {
+        ""
+    };
     format!(
-        r#"{{"id":"core","version":"1","entities":[{{"id":"asset","primaryDataset":"migration-registry","route":"assets","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}},{{"id":"rank","type":"int64","classification":"internal"{rank_required}}}{legacy}],"accessProfiles":[{{"id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}}]}}"#
+        r#"{{"id":"core","version":"1","entities":[{{"id":"asset","primaryDataset":"migration-registry","route":"assets","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}},{{"id":"rank","type":"int64","classification":"internal"{rank_required}}}{legacy}{batch}],"accessProfiles":[{{"id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}}]}}"#
     )
     .into_bytes()
 }
@@ -979,6 +1053,89 @@ fn backfill_source(request: BackfillSourceRequest<'_>) -> ReviewedMigrationSourc
         backup: None,
         row_assertions: vec![RehearsalRowAssertion {
             step_id: "backfill-rank".to_owned(),
+            affected_rows: rehearsed_rows,
+        }],
+    })
+}
+
+fn added_required_source(
+    id: &str,
+    current: &ExpectedRegistryIdentity,
+    prior: &CompiledRegistry,
+    candidate: &CompiledRegistry,
+    final_fingerprint: &str,
+    rehearsed_rows: u64,
+) -> ReviewedMigrationSource {
+    let change = compiled_registry_change_set(prior, candidate, &current.package_revision)
+        .changes
+        .into_iter()
+        .find(|change| change.code == CompiledRegistryChangeCode::FieldAddedRequired)
+        .expect("the added required field is classified");
+    let entity = &candidate.entities()["asset"];
+    let field = &entity.fields["batch"];
+    let base = format!("modules/core/migrations/{id}");
+    let update_path = format!("{base}/steps/backfill-batch.sql");
+    let pre_path = format!("{base}/assertions/pre.sql");
+    let post_path = format!("{base}/assertions/post.sql");
+    let update_sql = format!(
+        "UPDATE registry_data.{} SET {} = 'reviewed-batch' WHERE record_id = ANY($1::pg_catalog.uuid[])",
+        entity.physical_table, field.physical_name
+    );
+    let pre_sql = format!(
+        "SELECT pg_catalog.count(*) >= 0 FROM registry_data.{}",
+        entity.physical_table
+    );
+    let post_sql = format!(
+        "SELECT pg_catalog.count(*) = pg_catalog.count({}) FROM registry_data.{}",
+        field.physical_name, entity.physical_table
+    );
+    let descriptor = ReviewedMigrationDescriptor {
+        id: id.to_owned(),
+        change_class: CompiledRegistryChangeClass::DataBackfillRequired,
+        covers: vec![ReviewedChangeCover::from(&change)],
+        recovery: ReviewedMigrationRecovery::ExactTargetResume,
+        lock_timeout_ms: 50,
+        statement_timeout_ms: 5_000,
+        steps: vec![ReviewedMigrationStepDescriptor::ChunkedBackfill {
+            id: "backfill-batch".to_owned(),
+            entity_id: "asset".to_owned(),
+            sql_path: update_path.clone(),
+            objects: vec![ReviewedMigrationObject {
+                schema: "registry_data".to_owned(),
+                table: entity.physical_table.clone(),
+                entity_id: "asset".to_owned(),
+                kind: ReviewedMigrationObjectKind::Field,
+                member_id: Some("batch".to_owned()),
+                physical_name: field.physical_name.clone(),
+            }],
+            cursor: ChunkCursorProtocol::RecordIdUuidArray,
+            chunk_size: 2,
+            max_total_rows: 10,
+            lock_timeout_ms: 50,
+            statement_timeout_ms: 5_000,
+            exact_affected_rows: true,
+        }],
+        pre_assertions: vec![ReviewedMigrationAssertionDescriptor {
+            id: "pre".to_owned(),
+            sql_path: pre_path.clone(),
+        }],
+        post_assertions: vec![ReviewedMigrationAssertionDescriptor {
+            id: "post".to_owned(),
+            sql_path: post_path.clone(),
+        }],
+        rehearsal_receipt_path: format!("{base}/rehearsal.json"),
+        backup_binding_path: None,
+    };
+    reviewed_source(ReviewedSourceRequest {
+        descriptor,
+        current,
+        final_fingerprint,
+        steps: vec![(update_path, update_sql)],
+        pre: (pre_path, pre_sql),
+        post: (post_path, post_sql),
+        backup: None,
+        row_assertions: vec![RehearsalRowAssertion {
+            step_id: "backfill-batch".to_owned(),
             affected_rows: rehearsed_rows,
         }],
     })
@@ -1282,6 +1439,50 @@ async fn required_target_fingerprint(
         .rollback()
         .await
         .expect("required target rehearsal rolls back");
+    task.abort();
+    fingerprint
+}
+
+/// Rehearses the added required column the way an adopter must: the column
+/// arrives nullable, the reviewed backfill populates it, and only then does it
+/// become `NOT NULL`. The compiler-owned read views are rebuilt because they
+/// project the entity's columns.
+async fn added_required_target_fingerprint(
+    database: &TestDatabase,
+    candidate: &CompiledRegistry,
+) -> String {
+    let entity = &candidate.entities()["asset"];
+    let table = quote(&entity.physical_table);
+    let batch = quote(&entity.fields["batch"].physical_name);
+    let (mut migration, task) = database.connect_migration().await;
+    let transaction = migration
+        .transaction()
+        .await
+        .expect("added required target fingerprint transaction starts");
+    drop_managed_views_for_fingerprint(&transaction).await;
+    transaction
+        .batch_execute(&format!(
+            "ALTER TABLE registry_data.{table} ADD COLUMN {batch} varchar(16);
+             ALTER TABLE registry_data.{table} NO FORCE ROW LEVEL SECURITY;
+             UPDATE registry_data.{table} SET {batch} = 'reviewed-batch';
+             ALTER TABLE registry_data.{table} FORCE ROW LEVEL SECURITY;
+             ALTER TABLE registry_data.{table} ALTER COLUMN {batch} SET NOT NULL"
+        ))
+        .await
+        .expect("added required target rehearses");
+    create_candidate_views_for_fingerprint(&transaction, candidate, database.runtime_role.as_str())
+        .await;
+    let fingerprint = managed_schema_fingerprint(
+        &transaction,
+        &database.runtime_role,
+        &ExpectedManagedCatalog::compiled(candidate),
+    )
+    .await
+    .expect("added required target fingerprint computes");
+    transaction
+        .rollback()
+        .await
+        .expect("added required target rehearsal rolls back");
     task.abort();
     fingerprint
 }
@@ -1697,6 +1898,44 @@ async fn assert_ready_target(database: &TestDatabase, expected: &ExpectedRegistr
     assert_eq!(row.get::<_, i64>(2), expected.package_sequence);
     assert_eq!(row.get::<_, String>(3), "ready");
     assert_eq!(row.get::<_, Option<String>>(4), None);
+}
+
+async fn assert_added_required_column(
+    database: &TestDatabase,
+    candidate: &CompiledRegistry,
+    expected: &str,
+) {
+    let entity = &candidate.entities()["asset"];
+    let column = database
+        .admin
+        .query_one(
+            "SELECT is_nullable
+             FROM information_schema.columns
+             WHERE table_schema = 'registry_data'
+               AND table_name = $1
+               AND column_name = $2",
+            &[
+                &entity.physical_table,
+                &entity.fields["batch"].physical_name,
+            ],
+        )
+        .await
+        .expect("added column nullability reads");
+    assert_eq!(column.get::<_, String>(0), "NO");
+    let rows = database
+        .admin
+        .query(
+            &format!(
+                "SELECT {} FROM registry_data.{} ORDER BY record_id",
+                quote(&entity.fields["batch"].physical_name),
+                quote(&entity.physical_table)
+            ),
+            &[],
+        )
+        .await
+        .expect("added column values read");
+    assert_eq!(rows.len(), 5);
+    assert!(rows.iter().all(|row| row.get::<_, String>(0) == expected));
 }
 
 async fn assert_all_ranks(database: &TestDatabase, registry: &CompiledRegistry, expected: i64) {

@@ -55,13 +55,23 @@ fn reviewed_migration_plan_closes_ast_sql_and_bound_evidence() {
         prepare_reviewed_package(Variant::RequiredField, previous, vec![artifacts.source()])
             .expect("reviewed successor package prepares");
 
-    assert!(!prepared.manifest().migration_plan.statements.is_empty());
-    assert!(prepared
-        .manifest()
-        .migration_plan
-        .statements
+    let statements = &prepared.manifest().migration_plan.statements;
+    assert!(!statements.is_empty());
+    let columns = statements
         .iter()
-        .all(|statement| statement.kind == DdlStatementKind::View));
+        .filter(|statement| statement.kind == DdlStatementKind::Column)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        columns.len(),
+        2,
+        "the added required field arrives as a nullable column plus a deferred NOT NULL"
+    );
+    assert!(columns[0].sql.contains(" ADD COLUMN ") && !columns[0].sql.contains("NOT NULL"));
+    assert!(columns[1].sql.contains(" ALTER COLUMN ") && columns[1].sql.ends_with(" SET NOT NULL"));
+    assert!(statements
+        .iter()
+        .all(|statement| statement.kind == DdlStatementKind::View
+            || statement.kind == DdlStatementKind::Column));
     assert_eq!(
         prepared.manifest().migration_plan.reviewed_descriptors,
         vec!["modules/core/migrations/required-field/descriptor.json"]

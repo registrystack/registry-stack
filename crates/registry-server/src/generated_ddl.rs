@@ -676,6 +676,11 @@ pub(crate) fn derived_view_name(source_relation: &str, derived_relation: &str) -
     format!("{}_{}", &candidate[..46], hex_prefix(&digest, 8))
 }
 
+/// The column a successor adds to an entity that may already hold rows. A
+/// required field arrives without `NOT NULL`, because the rows an entity
+/// already holds carry no value for it yet;
+/// [`set_column_not_null_statement`] carries that requiredness and the apply
+/// path runs it once the reviewed backfill has committed.
 #[cfg(feature = "runtime")]
 pub(crate) fn add_column_statement(
     entity: &CompiledEntity,
@@ -687,18 +692,55 @@ pub(crate) fn add_column_statement(
         sql: format!(
             "ALTER TABLE registry_data.{} ADD COLUMN {}",
             quote_identifier(&entity.physical_table),
-            column_definition_for_entity(entity, field)
+            column_definition(
+                field,
+                nullable_when_tombstoned(entity, field),
+                !added_column_defers_not_null(entity, field)
+            )
         ),
     }
+}
+
+/// The deferred requiredness of a column a successor adds, or `None` when the
+/// added column carries its requiredness inline. The compiled `CREATE TABLE`
+/// of a fresh database is unaffected: this statement exists only to reach the
+/// same column state on a database that already holds rows.
+#[cfg(feature = "runtime")]
+pub(crate) fn set_column_not_null_statement(
+    entity: &CompiledEntity,
+    field: &crate::model::CompiledField,
+) -> Option<DdlStatement> {
+    added_column_defers_not_null(entity, field).then(|| DdlStatement {
+        id: format!("entity.{}.field.{}.column.not-null", entity.id, field.id),
+        kind: DdlStatementKind::Column,
+        sql: format!(
+            "ALTER TABLE registry_data.{} ALTER COLUMN {} SET NOT NULL",
+            quote_identifier(&entity.physical_table),
+            quote_identifier(&field.physical_name)
+        ),
+    })
+}
+
+/// Requiredness expressed as a tombstone-aware `CHECK` stays inline, because
+/// its constraint name is chosen by PostgreSQL from the column definition and
+/// a separately added constraint would not carry the same managed identity.
+#[cfg(feature = "runtime")]
+fn added_column_defers_not_null(
+    entity: &CompiledEntity,
+    field: &crate::model::CompiledField,
+) -> bool {
+    field.required && !nullable_when_tombstoned(entity, field)
 }
 
 fn column_definition_for_entity(
     entity: &CompiledEntity,
     field: &crate::model::CompiledField,
 ) -> String {
-    let nullable_when_tombstoned =
-        entity.change_request.is_some() && !request_row_boundary_fields(entity).contains(&field.id);
-    column_definition(field, nullable_when_tombstoned)
+    column_definition(field, nullable_when_tombstoned(entity, field), true)
+}
+
+fn nullable_when_tombstoned(entity: &CompiledEntity, field: &crate::model::CompiledField) -> bool {
+    entity.change_request.is_some() && !request_row_boundary_fields(entity).contains(&field.id)
 }
 
 fn request_row_boundary_fields(entity: &CompiledEntity) -> BTreeSet<String> {
@@ -728,13 +770,15 @@ fn request_row_boundary_fields(entity: &CompiledEntity) -> BTreeSet<String> {
 fn column_definition(
     field: &crate::model::CompiledField,
     nullable_when_tombstoned: bool,
+    inline_requiredness: bool,
 ) -> String {
     let identifier = quote_identifier(&field.physical_name);
     let mut column = format!("{} {}", identifier, sql_type(&field.field_type));
-    if field.required && !nullable_when_tombstoned {
+    let required = field.required && inline_requiredness;
+    if required && !nullable_when_tombstoned {
         column.push_str(" NOT NULL");
     }
-    if field.required && nullable_when_tombstoned {
+    if required && nullable_when_tombstoned {
         column.push_str(" CHECK (record_lifecycle = 'tombstoned' OR ");
         column.push_str(&identifier);
         column.push_str(" IS NOT NULL)");
@@ -3355,6 +3399,49 @@ mod tests {
         spatial_projection_fields, spatial_projection_statements, DdlStatementKind,
         SPATIAL_BBOX_FUNCTION_NAME,
     };
+
+    #[cfg(feature = "runtime")]
+    #[test]
+    fn an_added_required_column_carries_its_requiredness_in_a_separate_statement() {
+        use crate::generated_ddl::{add_column_statement, set_column_not_null_statement};
+
+        let registry = compile_spatial_registry();
+        let entity = &registry.entities()["site"];
+        let field = &entity.fields["code"];
+
+        let add_column = add_column_statement(entity, field);
+        assert_eq!(add_column.kind, DdlStatementKind::Column);
+        assert!(add_column.sql.contains(" ADD COLUMN "));
+        assert!(
+            !add_column.sql.contains("NOT NULL"),
+            "an added required column must accept NULL until the backfill commits"
+        );
+
+        let set_not_null =
+            set_column_not_null_statement(entity, field).expect("requiredness is deferred");
+        assert_eq!(set_not_null.kind, DdlStatementKind::Column);
+        assert_eq!(
+            set_not_null.sql,
+            format!(
+                "ALTER TABLE registry_data.\"{}\" ALTER COLUMN \"{}\" SET NOT NULL",
+                entity.physical_table, field.physical_name
+            )
+        );
+        assert_ne!(add_column.id, set_not_null.id);
+
+        let create_table = registry
+            .ddl()
+            .statements
+            .iter()
+            .find(|statement| statement.id == "entity.site.table")
+            .expect("compiled table DDL exists");
+        assert!(
+            create_table
+                .sql
+                .contains(&format!("\"{}\" varchar(32) NOT NULL", field.physical_name)),
+            "a fresh database keeps the required column inline"
+        );
+    }
 
     #[test]
     fn spatial_projection_helpers_are_deterministic_and_reversible() {

@@ -27,8 +27,9 @@ use crate::derived_sql::MAX_DERIVED_SQL_BYTES;
 use crate::generated_ddl::{
     add_column_statement, drop_spatial_bbox_function_statement,
     drop_spatial_candidate_view_statement, generate_ddl_with_actions, quote_identifier,
-    spatial_bbox_function_statement, spatial_projection_fields, spatial_projection_statements,
-    DdlPolicy, DdlPolicyRole, DdlStatement, DdlStatementKind, DdlTable,
+    set_column_not_null_statement, spatial_bbox_function_statement, spatial_projection_fields,
+    spatial_projection_statements, DdlPolicy, DdlPolicyRole, DdlStatement, DdlStatementKind,
+    DdlTable,
 };
 use crate::history_schema::{
     serialize_descriptor, HistoryEntityDescriptor, HistoryLifecycleDescriptor,
@@ -1860,19 +1861,21 @@ fn additive_migration_plan(
         }
         let previous_entity = &previous.entities[entity_id];
         for (field_id, field) in &candidate_entity.fields {
-            if !previous_entity.fields.contains_key(field_id) && !field.required {
-                added_columns
-                    .entry(entity_id.clone())
-                    .or_default()
-                    .push(add_column_statement(candidate_entity, field));
-                if matches!(field.field_type, FieldTypeSource::Reference { .. }) {
-                    new_statement_ids
-                        .insert(format!("entity.{entity_id}.field.{field_id}.reference"));
-                }
-                let source_view_id = format!("entity.{entity_id}.source-view");
-                replacement_view_statement_ids.insert(source_view_id.clone());
-                new_statement_ids.insert(source_view_id);
+            if previous_entity.fields.contains_key(field_id) {
+                continue;
             }
+            // A required field's column arrives nullable and is constrained
+            // by a second statement the interlock runs after the reviewed
+            // backfill has populated the rows the entity already holds.
+            let columns = added_columns.entry(entity_id.clone()).or_default();
+            columns.push(add_column_statement(candidate_entity, field));
+            columns.extend(set_column_not_null_statement(candidate_entity, field));
+            if matches!(field.field_type, FieldTypeSource::Reference { .. }) {
+                new_statement_ids.insert(format!("entity.{entity_id}.field.{field_id}.reference"));
+            }
+            let source_view_id = format!("entity.{entity_id}.source-view");
+            replacement_view_statement_ids.insert(source_view_id.clone());
+            new_statement_ids.insert(source_view_id);
         }
         let previous_fields = spatial_projection_fields(previous_entity);
         for field_id in spatial_projection_fields(candidate_entity).difference(&previous_fields) {

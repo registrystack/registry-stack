@@ -1242,7 +1242,6 @@ pub enum RevisionReadFaultPoint {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RevisionReadFaultPoint {
     BeforeTerminalAudit,
-    HistoricalStatementTimeout,
 }
 
 #[derive(Clone, Copy)]

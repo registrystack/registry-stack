@@ -1441,7 +1441,18 @@ fn compiler_statement_runs_after_reviewed_steps(statement: &PackageDdlStatement<
     if is_spatial_candidate_view_drop_sql(statement.sql) {
         return false;
     }
-    statement.kind == DdlStatementKind::View || is_spatial_projection_addition(statement)
+    statement.kind == DdlStatementKind::View
+        || is_spatial_projection_addition(statement)
+        || is_deferred_not_null(statement)
+}
+
+/// A column a successor adds for a required field arrives accepting NULL, so
+/// the reviewed backfill can populate the rows the entity already holds. The
+/// statement that constrains it belongs after those steps.
+fn is_deferred_not_null(statement: &PackageDdlStatement<'_>) -> bool {
+    statement.kind == DdlStatementKind::Column
+        && statement.sql.contains(" ALTER COLUMN ")
+        && statement.sql.ends_with(" SET NOT NULL")
 }
 
 fn is_spatial_projection_addition(statement: &PackageDdlStatement<'_>) -> bool {
@@ -1901,6 +1912,28 @@ mod tests {
             ),
             Err(PostgresKernelError::Configuration(_))
         ));
+    }
+
+    #[test]
+    fn deferred_requiredness_runs_after_the_reviewed_steps() {
+        let statement = |sql, kind| PackageDdlStatement {
+            sql,
+            checksum: "",
+            kind,
+            ordinal: 0,
+        };
+        assert!(compiler_statement_runs_after_reviewed_steps(&statement(
+            "ALTER TABLE registry_data.\"rs_e_asset\" ALTER COLUMN \"rs_f_batch\" SET NOT NULL",
+            DdlStatementKind::Column,
+        )));
+        assert!(!compiler_statement_runs_after_reviewed_steps(&statement(
+            "ALTER TABLE registry_data.\"rs_e_asset\" ADD COLUMN \"rs_f_batch\" varchar(16)",
+            DdlStatementKind::Column,
+        )));
+        assert!(!compiler_statement_runs_after_reviewed_steps(&statement(
+            "ALTER TABLE registry_data.\"rs_e_asset\" ALTER COLUMN \"rs_f_batch\" DROP NOT NULL",
+            DdlStatementKind::Column,
+        )));
     }
 
     #[test]
