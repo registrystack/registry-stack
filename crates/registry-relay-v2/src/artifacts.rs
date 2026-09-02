@@ -1502,10 +1502,15 @@ fn operation_response_schema(
         }
     });
     let exact_record_schema = |access_profile: &crate::model::CompiledAccessProfile| {
+        // Every OpenAPI subschema states its own `type`; the maintained OpenAPI
+        // model reads a schema object only when it does. The record referenced
+        // beside this constraint is an object, so stating it here narrows
+        // nothing the composed schema did not already require.
         let representation_constraint = if json_ld {
-            json!({"required": ["@id", "@type"]})
+            json!({"type": "object", "required": ["@id", "@type"]})
         } else {
             json!({
+                "type": "object",
                 "not": {
                     "anyOf": [
                         {"required": ["@id"]},

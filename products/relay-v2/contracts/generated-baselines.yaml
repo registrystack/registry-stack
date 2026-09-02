@@ -2,7 +2,7 @@ schemaVersion: relay.registrystack.org/generated-baselines/v1alpha1
 product: relay-v2
 projects:
   social-assistance:
-    packageRevision: sha256:0ec288701bccbf991a8505d891366c8f4ac5fee4204e468537075c215afdcd10
+    packageRevision: sha256:c87a4d3612773d03d167fcbf510a1bd5d09cc07ce1b2f27fa27acb17e84ca439
     contractRevision: sha256:d05828ef947a78e3716e808b40fa60952c2179291c0d68402e3f9ce83b299454
     sourceSchemaFingerprints:
       assistance: sha256:936a90a03d06be67a76226d6999a830c04f6604a3ff8b340a62fdd378d8c6d91
@@ -218,7 +218,7 @@ projects:
       mediaType: application/yaml
       operationIdentifier: null
       path: generated/openapi.full.yaml
-      sha256: sha256:a0ef1fdcf8f5a6c870d6345364d2a2b4149b35a774603d9673b281b25f0271b9
+      sha256: sha256:23bf20b6c4e11bfa568f9428519185b87ca1b605489315bd10605b5a62e21910
       visibility: operator-only
     - accessBinding: null
       id: openapi-public
@@ -283,7 +283,7 @@ projects:
       size: 6630
       visibility: operator-only
   business-registry:
-    packageRevision: sha256:f47b5c1d12bafe76ebcb2f96bad21d86e5f058690257a2c6ce391172a5892410
+    packageRevision: sha256:2725ee1e6ee2b5e2b9d00af0d7a7b62546197e6d892d42b9cd08a89da2fc602e
     contractRevision: sha256:e7bce610dec7dd1d5227e7931950fce675804efdf9537b8f31346c749732b5ae
     sourceSchemaFingerprints:
       companies: sha256:dd62b98578f0fa7341eeeaaac4b34da9b79405ae067dc06e5edb004c2d4a38fe
@@ -950,14 +950,14 @@ projects:
       mediaType: application/yaml
       operationIdentifier: null
       path: generated/openapi.full.yaml
-      sha256: sha256:7e29a89b5b3f5461ce69c3cd1ddefb84f0f78c7d90ddf4e0d203acda97c09488
+      sha256: sha256:24f528938a9e1dddf0e876ef05325d4c67b04c77c9496d410be6fa7e3ceba17e
       visibility: operator-only
     - accessBinding: null
       id: openapi-public
       mediaType: application/json
       operationIdentifier: null
       path: generated/openapi.public.json
-      sha256: sha256:0a8861025055c8a9c58ce30c8a2f6804bd2c3376943ed2c77fd9cf830b89d81f
+      sha256: sha256:08d66c8923272385b48fcf37a287f292878c031053b50ae4fb56783a024bf5d1
       visibility: public
     governedFiles:
     - generated: false
@@ -1021,7 +1021,7 @@ projects:
       size: 11451
       visibility: operator-only
   civil-event:
-    packageRevision: sha256:1e3544592b5a1b30ea53cf2a3f63ea9703a734ea5482117120e2c466265a1207
+    packageRevision: sha256:3c0da730ded5ded5393f414a201faea5a9f3fc35664a63277910df60fd1911ca
     contractRevision: sha256:61632ff51324349d7fbb4c80738bf2d3a42cc5cb337882f13e2c67b492918a39
     sourceSchemaFingerprints:
       events: sha256:7f770d64cb19ec54caca2aa56378b13a43cd5edc206ff44b5fecc99ee9e63759
@@ -1305,7 +1305,7 @@ projects:
       mediaType: application/yaml
       operationIdentifier: null
       path: generated/openapi.full.yaml
-      sha256: sha256:cb766d410c040f1b872e8476fe5514cacfb7cbe973bc8bbc0dc4829d48d348a1
+      sha256: sha256:75f04195ce58fce80908834c4fe4c1b0f88e1136057a1b60712cd2d421cc4b8f
       visibility: operator-only
     - accessBinding: null
       id: openapi-public
