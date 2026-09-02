@@ -559,6 +559,41 @@ fn runtime_config_errors_expose_stable_value_free_metadata() {
             "/eventDestinations",
         ),
         (RuntimeConfigError::Secret, "runtime_config.secret", "/"),
+        (
+            RuntimeConfigError::PackageRootUnavailable,
+            "runtime_config.package_root_unavailable",
+            "/package/root",
+        ),
+        (
+            RuntimeConfigError::UnsafePackageRoot,
+            "runtime_config.unsafe_package_root",
+            "/package/root",
+        ),
+        (
+            RuntimeConfigError::TrustAnchorUnavailable,
+            "runtime_config.trust_anchor_unavailable",
+            "/package/trustAnchorPath",
+        ),
+        (
+            RuntimeConfigError::UnsafeTrustAnchor,
+            "runtime_config.unsafe_trust_anchor",
+            "/package/trustAnchorPath",
+        ),
+        (
+            RuntimeConfigError::SecretProviderRootUnavailable,
+            "runtime_config.secret_provider_root_unavailable",
+            "/secretProviders/file/root",
+        ),
+        (
+            RuntimeConfigError::UnsafeSecretProviderRoot,
+            "runtime_config.unsafe_secret_provider_root",
+            "/secretProviders/file/root",
+        ),
+        (
+            RuntimeConfigError::InvalidOidcLeeway,
+            "runtime_config.invalid_oidc_leeway",
+            "/authentication/oidc/leewayMilliseconds",
+        ),
     ];
 
     for (error, code, path) in cases {
@@ -1312,7 +1347,257 @@ fn loaded_paths_must_not_be_symlinks() {
 
     assert_eq!(
         load_runtime_config(&config_path).expect_err("symlink path refused"),
-        RuntimeConfigError::InvalidPackage
+        RuntimeConfigError::UnsafePackageRoot
+    );
+
+    let linked_anchor = fixture.path("linked-trust-anchor.json");
+    symlink(&fixture.trust_anchor, &linked_anchor).expect("trust anchor symlink creates");
+    let raw = valid_runtime(&fixture.secret_root, &fixture.package_root, &linked_anchor);
+    let anchor_config_path = fixture.path("runtime-anchor-symlink.yaml");
+    fs::write(&anchor_config_path, raw).expect("runtime config writes");
+
+    assert_eq!(
+        load_runtime_config(&anchor_config_path).expect_err("symlinked trust anchor refused"),
+        RuntimeConfigError::UnsafeTrustAnchor
+    );
+
+    let linked_secret_root = fixture.path("linked-secrets");
+    symlink(&fixture.secret_root, &linked_secret_root).expect("secret root symlink creates");
+    let raw = valid_runtime(
+        &linked_secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+    let secret_config_path = fixture.path("runtime-secret-symlink.yaml");
+    fs::write(&secret_config_path, raw).expect("runtime config writes");
+
+    assert_eq!(
+        load_runtime_config(&secret_config_path)
+            .expect_err("symlinked secret provider root refused"),
+        RuntimeConfigError::UnsafeSecretProviderRoot
+    );
+}
+
+/// A mistyped `--runtime-config` path must read as a missing file, never as a
+/// security refusal that accuses the operator of an unsafe deployment.
+#[test]
+fn a_missing_runtime_config_file_is_unavailable_rather_than_unsafe() {
+    let fixture = RuntimeFixture::new();
+    for missing in [
+        fixture.path("runtme.yaml"),
+        fixture.path("absent-directory").join("runtime.yaml"),
+    ] {
+        let error = load_runtime_config_with_env(&missing, env_lookup)
+            .expect_err("a missing runtime configuration file is refused");
+        assert_eq!(
+            error,
+            RuntimeConfigError::Unavailable,
+            "{}",
+            missing.display()
+        );
+        assert_eq!(error.code(), "runtime_config.unavailable");
+    }
+}
+
+/// An unreadable parent directory is a permissions fault, not a symlink attack.
+#[cfg(unix)]
+#[test]
+fn an_unreadable_runtime_config_directory_is_unavailable_rather_than_unsafe() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let fixture = RuntimeFixture::new();
+    let closed = fixture.path("closed-config-directory");
+    fs::create_dir(&closed).expect("closed config directory creates");
+    let config_path = closed.join("runtime.yaml");
+    fs::write(
+        &config_path,
+        valid_runtime(
+            &fixture.secret_root,
+            &fixture.package_root,
+            &fixture.trust_anchor,
+        ),
+    )
+    .expect("runtime config writes");
+    fs::set_permissions(&closed, fs::Permissions::from_mode(0o000))
+        .expect("config directory permissions close");
+    let privileged = fs::read_dir(&closed).is_ok();
+    let result = load_runtime_config_with_env(&config_path, env_lookup);
+    fs::set_permissions(&closed, fs::Permissions::from_mode(0o700))
+        .expect("config directory permissions restore");
+
+    if privileged {
+        // A privileged process is not denied by the mode bits, so the refusal
+        // this test describes cannot be observed here.
+        return;
+    }
+    assert_eq!(
+        result.expect_err("an unreadable runtime configuration directory is refused"),
+        RuntimeConfigError::Unavailable
+    );
+}
+
+/// The package root and the package trust anchor are two separate files, so a
+/// missing one must not be reported as the other.
+#[test]
+fn missing_package_root_and_trust_anchor_are_reported_at_their_own_paths() {
+    let fixture = RuntimeFixture::new();
+    let missing_root_path = fixture.path("runtime-missing-package-root.yaml");
+    fs::write(
+        &missing_root_path,
+        valid_runtime(
+            &fixture.secret_root,
+            &fixture.path("absent-package"),
+            &fixture.trust_anchor,
+        ),
+    )
+    .expect("runtime config writes");
+    let missing_anchor_path = fixture.path("runtime-missing-trust-anchor.yaml");
+    fs::write(
+        &missing_anchor_path,
+        valid_runtime(
+            &fixture.secret_root,
+            &fixture.package_root,
+            &fixture.path("absent-trust-anchor.json"),
+        ),
+    )
+    .expect("runtime config writes");
+    let missing_secret_root_path = fixture.path("runtime-missing-secret-root.yaml");
+    fs::write(
+        &missing_secret_root_path,
+        valid_runtime(
+            &fixture.path("absent-secrets"),
+            &fixture.package_root,
+            &fixture.trust_anchor,
+        ),
+    )
+    .expect("runtime config writes");
+
+    let root_error =
+        load_runtime_config(&missing_root_path).expect_err("a missing package root is refused");
+    let anchor_error = load_runtime_config(&missing_anchor_path)
+        .expect_err("a missing package trust anchor is refused");
+    let secret_error = load_runtime_config(&missing_secret_root_path)
+        .expect_err("a missing file secret provider root is refused");
+
+    assert_eq!(root_error, RuntimeConfigError::PackageRootUnavailable);
+    assert_eq!(root_error.path(), "/package/root");
+    assert_eq!(root_error.code(), "runtime_config.package_root_unavailable");
+    assert_eq!(anchor_error, RuntimeConfigError::TrustAnchorUnavailable);
+    assert_eq!(anchor_error.path(), "/package/trustAnchorPath");
+    assert_eq!(
+        anchor_error.code(),
+        "runtime_config.trust_anchor_unavailable"
+    );
+    assert!(
+        anchor_error.to_string().contains("trust anchor"),
+        "the trust anchor refusal names the file it read: {anchor_error}"
+    );
+    assert_eq!(
+        secret_error,
+        RuntimeConfigError::SecretProviderRootUnavailable
+    );
+    assert_eq!(secret_error.path(), "/secretProviders/file/root");
+}
+
+/// The verifier applies leeway in whole seconds, so a sub-second value would be
+/// silently truncated. Refuse it at load time instead.
+#[test]
+fn oidc_leeway_must_be_whole_seconds_within_its_documented_range() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+    for accepted in [0_u64, 1_000, 60_000, 300_000] {
+        let config = parse_runtime_config_with_env(
+            &base.replace(
+                "leewayMilliseconds: 60000",
+                &format!("leewayMilliseconds: {accepted}"),
+            ),
+            env_lookup,
+        )
+        .expect("a whole-second leeway is accepted");
+        assert_eq!(
+            config
+                .authentication()
+                .oidc()
+                .token_verifier_config()
+                .leeway,
+            Duration::from_millis(accepted)
+        );
+    }
+    for refused in [1_u64, 500, 999, 1_500, 300_001] {
+        let error = parse_runtime_config_with_env(
+            &base.replace(
+                "leewayMilliseconds: 60000",
+                &format!("leewayMilliseconds: {refused}"),
+            ),
+            env_lookup,
+        )
+        .expect_err("a leeway the verifier cannot apply exactly is refused");
+        assert_eq!(error, RuntimeConfigError::InvalidOidcLeeway, "{refused}");
+        assert_eq!(error.path(), "/authentication/oidc/leewayMilliseconds");
+        assert_eq!(error.code(), "runtime_config.invalid_oidc_leeway");
+        let message = error.to_string();
+        assert!(
+            message.contains("whole number of seconds") && message.contains("300000"),
+            "the leeway refusal states the accepted range: {message}"
+        );
+    }
+}
+
+/// `listener.trustedProxy` is a required closed-list deployment declaration.
+/// Both postures load, and neither changes any other loaded binding: no
+/// runtime path reads the posture.
+#[test]
+fn listener_trusted_proxy_postures_load_and_change_no_other_binding() {
+    let fixture = RuntimeFixture::new();
+    let direct = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+    let upstream = direct.replace(
+        "trustedProxy: direct",
+        "trustedProxy: operator-controlled-upstream",
+    );
+
+    let direct_config =
+        parse_runtime_config_with_env(&direct, env_lookup).expect("direct posture loads");
+    let upstream_config = parse_runtime_config_with_env(&upstream, env_lookup)
+        .expect("operator-controlled-upstream posture loads");
+
+    assert_eq!(
+        direct_config.listener().trusted_proxy(),
+        TrustedProxyPosture::Direct
+    );
+    assert_eq!(
+        upstream_config.listener().trusted_proxy(),
+        TrustedProxyPosture::OperatorControlledUpstream
+    );
+    assert_eq!(
+        direct_config.listener().bind(),
+        upstream_config.listener().bind(),
+        "the posture does not restrict the accepted bind address"
+    );
+    assert_eq!(
+        direct_config
+            .listener()
+            .public_origin()
+            .map(|origin| origin.as_str().to_owned()),
+        upstream_config
+            .listener()
+            .public_origin()
+            .map(|origin| origin.as_str().to_owned())
+    );
+    assert_eq!(
+        parse_runtime_config_with_env(
+            &direct.replace("trustedProxy: direct", "trustedProxy: reverse-proxy"),
+            env_lookup
+        )
+        .expect_err("an undeclared posture is refused"),
+        RuntimeConfigError::Document
     );
 }
 

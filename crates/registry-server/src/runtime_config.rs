@@ -62,6 +62,7 @@ const MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS: u8 = 30;
 const DEFAULT_POOL_WAIT_TIMEOUT_MILLISECONDS: u64 = 30_000;
 const DEFAULT_POOL_CREATE_TIMEOUT_MILLISECONDS: u64 = 30_000;
 const DEFAULT_POOL_RECYCLE_TIMEOUT_MILLISECONDS: u64 = 30_000;
+const MAX_OIDC_LEEWAY_MILLISECONDS: u64 = 300_000;
 const DEFAULT_JWKS_CACHE_TTL_SECONDS: u64 = 600;
 const DEFAULT_JWKS_NEGATIVE_CACHE_TTL_SECONDS: u64 = 60;
 const DEFAULT_JWKS_REFRESH_COOLDOWN_SECONDS: u64 = 30;
@@ -125,12 +126,26 @@ pub enum RuntimeConfigError {
     InvalidListener,
     #[error("runtime configuration contains an invalid secret provider binding")]
     InvalidSecretProvider,
+    #[error("the configured file secret provider root is missing or is not a readable directory")]
+    SecretProviderRootUnavailable,
+    #[error("the configured file secret provider root path contains a symbolic link")]
+    UnsafeSecretProviderRoot,
     #[error("runtime configuration contains an invalid database binding")]
     InvalidDatabase,
     #[error("runtime configuration contains an invalid package binding")]
     InvalidPackage,
+    #[error("the configured package root is missing or is not a readable directory")]
+    PackageRootUnavailable,
+    #[error("the configured package root path contains a symbolic link")]
+    UnsafePackageRoot,
+    #[error("the configured package trust anchor file is missing or is not a readable file")]
+    TrustAnchorUnavailable,
+    #[error("the configured package trust anchor path contains a symbolic link")]
+    UnsafeTrustAnchor,
     #[error("runtime configuration contains an invalid OIDC binding")]
     InvalidOidc,
+    #[error("the OIDC leeway must be a whole number of seconds from 0 to 300000 milliseconds")]
+    InvalidOidcLeeway,
     #[error("runtime configuration contains an invalid audit binding")]
     InvalidAudit,
     #[error("runtime configuration contains an invalid cursor binding")]
@@ -184,9 +199,18 @@ impl RuntimeConfigError {
             Self::InvalidBinding => "runtime_config.invalid_binding",
             Self::InvalidListener => "runtime_config.invalid_listener",
             Self::InvalidSecretProvider => "runtime_config.invalid_secret_provider",
+            Self::SecretProviderRootUnavailable => {
+                "runtime_config.secret_provider_root_unavailable"
+            }
+            Self::UnsafeSecretProviderRoot => "runtime_config.unsafe_secret_provider_root",
             Self::InvalidDatabase => "runtime_config.invalid_database",
             Self::InvalidPackage => "runtime_config.invalid_package",
+            Self::PackageRootUnavailable => "runtime_config.package_root_unavailable",
+            Self::UnsafePackageRoot => "runtime_config.unsafe_package_root",
+            Self::TrustAnchorUnavailable => "runtime_config.trust_anchor_unavailable",
+            Self::UnsafeTrustAnchor => "runtime_config.unsafe_trust_anchor",
             Self::InvalidOidc => "runtime_config.invalid_oidc",
+            Self::InvalidOidcLeeway => "runtime_config.invalid_oidc_leeway",
             Self::InvalidAudit => "runtime_config.invalid_audit",
             Self::InvalidCursor => "runtime_config.invalid_cursor",
             Self::InvalidEventDestination => "runtime_config.invalid_event_destination",
@@ -210,9 +234,15 @@ impl RuntimeConfigError {
             Self::InvalidKind => "/kind",
             Self::InvalidListener => "/listener",
             Self::InvalidSecretProvider => "/secretProviders",
+            Self::SecretProviderRootUnavailable | Self::UnsafeSecretProviderRoot => {
+                "/secretProviders/file/root"
+            }
             Self::InvalidDatabase => "/database",
             Self::InvalidPackage => "/package",
+            Self::PackageRootUnavailable | Self::UnsafePackageRoot => "/package/root",
+            Self::TrustAnchorUnavailable | Self::UnsafeTrustAnchor => "/package/trustAnchorPath",
             Self::InvalidOidc => "/authentication/oidc",
+            Self::InvalidOidcLeeway => "/authentication/oidc/leewayMilliseconds",
             Self::InvalidAudit => "/audit",
             Self::InvalidCursor => "/cursor",
             Self::InvalidEventDestination => "/eventDestinations",
@@ -238,7 +268,11 @@ pub fn load_runtime_config_with_env(
     lookup: impl Fn(&str) -> Option<String>,
 ) -> Result<RuntimeConfig> {
     validate_absolute_lexical_path(path, RuntimeConfigError::UnsafeFile)?;
-    reject_symlink_components(path, RuntimeConfigError::UnsafeFile)?;
+    reject_symlink_components(
+        path,
+        RuntimeConfigError::UnsafeFile,
+        RuntimeConfigError::Unavailable,
+    )?;
     let bytes = read_bounded_runtime_config(path, MAX_RUNTIME_CONFIG_BYTES)?;
     let raw = std::str::from_utf8(&bytes).map_err(|_| RuntimeConfigError::Document)?;
     parse_runtime_config_with_env(raw, lookup).and_then(|config| {
@@ -513,12 +547,24 @@ impl RuntimeConfig {
     }
 
     fn validate_loaded_paths(&self) -> Result<()> {
-        validate_existing_directory(&self.package.root, RuntimeConfigError::InvalidPackage)?;
+        validate_existing_directory(
+            &self.package.root,
+            RuntimeConfigError::UnsafePackageRoot,
+            RuntimeConfigError::PackageRootUnavailable,
+        )?;
         if let Some(trust_anchor) = self.package_trust_anchor() {
-            validate_existing_file(trust_anchor, RuntimeConfigError::InvalidPackage)?;
+            validate_existing_file(
+                trust_anchor,
+                RuntimeConfigError::UnsafeTrustAnchor,
+                RuntimeConfigError::TrustAnchorUnavailable,
+            )?;
         }
         if let Some(root) = self.secret_providers.file_root() {
-            validate_existing_directory(root, RuntimeConfigError::InvalidSecretProvider)?;
+            validate_existing_directory(
+                root,
+                RuntimeConfigError::UnsafeSecretProviderRoot,
+                RuntimeConfigError::SecretProviderRootUnavailable,
+            )?;
         }
         Ok(())
     }
@@ -944,7 +990,7 @@ impl OidcVerifierConfig {
             return Err(RuntimeConfigError::InvalidOidc);
         }
         let max_token_lifetime = seconds_bounded(raw.max_token_lifetime_seconds, 1, 3600)?;
-        let leeway = millis_bounded(raw.leeway_milliseconds, 0, 300_000)?;
+        let leeway = oidc_leeway(raw.leeway_milliseconds)?;
         Ok(Self {
             issuer: raw.issuer,
             audience: raw.audience,
@@ -1964,7 +2010,7 @@ fn install_schema_constraints(schema: &mut Value) {
         (
             "/$defs/RawOidcVerifierConfig/properties/leewayMilliseconds",
             0,
-            300_000,
+            MAX_OIDC_LEEWAY_MILLISECONDS,
         ),
         (
             "/$defs/RawJwksCacheConfig/properties/cacheTtlSeconds",
@@ -2506,25 +2552,46 @@ fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.created().ok() == right.created().ok()
 }
 
-fn validate_existing_directory(path: &Path, error: RuntimeConfigError) -> Result<()> {
-    reject_symlink_components(path, error)?;
-    let metadata = fs::symlink_metadata(path).map_err(|_| error)?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(error);
+fn validate_existing_directory(
+    path: &Path,
+    unsafe_error: RuntimeConfigError,
+    unavailable_error: RuntimeConfigError,
+) -> Result<()> {
+    reject_symlink_components(path, unsafe_error, unavailable_error)?;
+    let metadata = fs::symlink_metadata(path).map_err(|_| unavailable_error)?;
+    if metadata.file_type().is_symlink() {
+        return Err(unsafe_error);
+    }
+    if !metadata.is_dir() {
+        return Err(unavailable_error);
     }
     Ok(())
 }
 
-fn validate_existing_file(path: &Path, error: RuntimeConfigError) -> Result<()> {
-    reject_symlink_components(path, error)?;
-    let metadata = fs::symlink_metadata(path).map_err(|_| error)?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(error);
+fn validate_existing_file(
+    path: &Path,
+    unsafe_error: RuntimeConfigError,
+    unavailable_error: RuntimeConfigError,
+) -> Result<()> {
+    reject_symlink_components(path, unsafe_error, unavailable_error)?;
+    let metadata = fs::symlink_metadata(path).map_err(|_| unavailable_error)?;
+    if metadata.file_type().is_symlink() {
+        return Err(unsafe_error);
+    }
+    if !metadata.is_file() {
+        return Err(unavailable_error);
     }
     Ok(())
 }
 
-fn reject_symlink_components(path: &Path, error: RuntimeConfigError) -> Result<()> {
+/// Refuses a path any of whose components is a symbolic link. A component the
+/// process cannot read is a separate outcome: it reports the configured path as
+/// unavailable rather than accusing the deployment of an unsafe path.
+fn reject_symlink_components(
+    path: &Path,
+    unsafe_error: RuntimeConfigError,
+    unavailable_error: RuntimeConfigError,
+) -> Result<()> {
     let mut checked = PathBuf::new();
     for component in path.components() {
         checked.push(component.as_os_str());
@@ -2532,9 +2599,9 @@ fn reject_symlink_components(path: &Path, error: RuntimeConfigError) -> Result<(
             continue;
         }
         match fs::symlink_metadata(&checked) {
-            Ok(metadata) if metadata.file_type().is_symlink() => return Err(error),
+            Ok(metadata) if metadata.file_type().is_symlink() => return Err(unsafe_error),
             Ok(_) => {}
-            Err(_) => return Err(error),
+            Err(_) => return Err(unavailable_error),
         }
     }
     Ok(())
@@ -2632,6 +2699,15 @@ fn validate_bounded_list(values: &[String]) -> Result<()> {
 
 fn millis(value: u64) -> Result<Duration> {
     millis_bounded(value, 1, 60_000)
+}
+
+/// The token verifier applies leeway in whole seconds, so a value carrying
+/// sub-second precision would be truncated without the operator being told.
+fn oidc_leeway(milliseconds: u64) -> Result<Duration> {
+    if milliseconds > MAX_OIDC_LEEWAY_MILLISECONDS || !milliseconds.is_multiple_of(1_000) {
+        return Err(RuntimeConfigError::InvalidOidcLeeway);
+    }
+    Ok(Duration::from_millis(milliseconds))
 }
 
 fn millis_bounded(value: u64, min: u64, max: u64) -> Result<Duration> {

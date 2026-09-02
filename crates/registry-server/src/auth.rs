@@ -83,16 +83,31 @@ impl fmt::Debug for DirectClaimExpectation {
     }
 }
 
-/// A closed construction failure. It deliberately carries no configured URL
-/// or claim value that an operator could accidentally copy into a log.
+/// A closed construction failure. Each variant names the check that refused
+/// the deployment, and deliberately carries no configured URL, claim name, or
+/// claim value that an operator could accidentally copy into a log.
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
 pub enum AuthenticationConfigError {
     #[error("the OIDC access-token verification profile is invalid")]
     InvalidVerifierProfile,
     #[error("an authority claim mapping is invalid")]
     InvalidClaimMapping,
-    #[error("the authority claim mapping does not match the compiled Registry")]
-    CompiledAuthorityMismatch,
+    #[error("a compiled anonymous access profile carries a principal claim, required scopes, required purposes, or row boundaries")]
+    AnonymousProfileCarriesAuthority,
+    #[error("the configured principal claim is not the principal claim a compiled access profile requires")]
+    PrincipalClaimMismatch,
+    #[error("a compiled row boundary selects a field the compiled entity does not declare")]
+    BoundaryFieldNotCompiled,
+    #[error("a compiled verified-claim lookup names a selector profile the compiled entity does not declare")]
+    LookupSelectorNotCompiled,
+    #[error("a compiled verified-claim lookup leaves a selector field without a claim mapping")]
+    LookupClaimMappingIncomplete,
+    #[error("a compiled verified-claim lookup maps a field the compiled entity does not declare")]
+    LookupFieldNotCompiled,
+    #[error("a purpose claim must be configured exactly when a compiled access profile requires a purpose")]
+    PurposeClaimMismatch,
+    #[error("two compiled authority mappings expect different value shapes for one claim")]
+    ConflictingClaimExpectation,
 }
 
 /// A closed request failure. Platform verifier details and the bearer value
@@ -308,17 +323,17 @@ fn validate_claim_mapping(
                     || !profile.required_purposes.is_empty()
                     || !profile.row_boundaries.is_empty()
                 {
-                    return Err(AuthenticationConfigError::CompiledAuthorityMismatch);
+                    return Err(AuthenticationConfigError::AnonymousProfileCarriesAuthority);
                 }
                 continue;
             }
             if profile.principal_claim.as_deref() != Some(claims.principal_claim.as_str()) {
-                return Err(AuthenticationConfigError::CompiledAuthorityMismatch);
+                return Err(AuthenticationConfigError::PrincipalClaimMismatch);
             }
             purpose_required |= !profile.required_purposes.is_empty();
             for boundary in &profile.row_boundaries {
                 let field_type = compiled_authority_field_type(entity, &boundary.field)
-                    .ok_or(AuthenticationConfigError::CompiledAuthorityMismatch)?;
+                    .ok_or(AuthenticationConfigError::BoundaryFieldNotCompiled)?;
                 let expectation = DirectClaimExpectation {
                     field_type,
                     multi_value: boundary.operator == BoundaryOperator::In,
@@ -337,16 +352,16 @@ fn validate_claim_mapping(
                 let selector = entity
                     .selector_profiles
                     .get(&lookup.selector)
-                    .ok_or(AuthenticationConfigError::CompiledAuthorityMismatch)?;
+                    .ok_or(AuthenticationConfigError::LookupSelectorNotCompiled)?;
                 for field_id in &selector.fields {
                     let claim = lookup
                         .claim_mapping
                         .get(field_id)
-                        .ok_or(AuthenticationConfigError::CompiledAuthorityMismatch)?;
+                        .ok_or(AuthenticationConfigError::LookupClaimMappingIncomplete)?;
                     let field_type = entity
                         .fields
                         .get(field_id)
-                        .ok_or(AuthenticationConfigError::CompiledAuthorityMismatch)?
+                        .ok_or(AuthenticationConfigError::LookupFieldNotCompiled)?
                         .field_type
                         .clone();
                     insert_direct_claim_expectation(
@@ -370,7 +385,7 @@ fn validate_claim_mapping(
         }
     }
     if purpose_required != claims.purpose_claim.is_some() {
-        return Err(AuthenticationConfigError::CompiledAuthorityMismatch);
+        return Err(AuthenticationConfigError::PurposeClaimMismatch);
     }
     Ok(expected_direct_claims)
 }
@@ -399,7 +414,7 @@ fn insert_direct_claim_expectation(
     }
     match claims.insert(name.to_owned(), expectation.clone()) {
         Some(prior) if prior != expectation => {
-            Err(AuthenticationConfigError::CompiledAuthorityMismatch)
+            Err(AuthenticationConfigError::ConflictingClaimExpectation)
         }
         _ => Ok(()),
     }
@@ -471,10 +486,13 @@ pub(crate) fn map_authority_claim(
 ) -> Result<VerifiedClaimValue, AuthenticationError> {
     if multi_value {
         let values = value.as_array().ok_or(AuthenticationError::InvalidClaims)?;
+        // A value repeated in a multi-valued claim asserts the same authority
+        // once, so identical mapped values collapse. Every entry is still
+        // mapped and validated, and the bound on distinct values still applies.
         let values = values
             .iter()
             .map(|value| mapped_scalar_claim(value, field_type))
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<BTreeSet<_>, _>>()?;
         VerifiedClaimValue::direct_string_set(values)
             .map_err(|_| AuthenticationError::InvalidClaims)
     } else {

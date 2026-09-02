@@ -364,6 +364,80 @@ async fn malformed_purpose_and_row_boundary_shapes_are_refused_before_record_io(
     }
 }
 
+/// An identity provider that repeats one value in a multi-valued claim asserts
+/// the same authority once, so the repeats collapse instead of refusing the
+/// token. The bound on distinct values still applies.
+#[tokio::test]
+async fn repeated_values_in_a_multi_valued_claim_collapse_to_one_authority() {
+    let harness = Harness::new().await;
+    let second_jurisdiction = "area-b-never-rendered";
+    let mut claims = valid_claims();
+    claims["jurisdictions"] = json!([
+        JURISDICTION,
+        JURISDICTION,
+        second_jurisdiction,
+        JURISDICTION
+    ]);
+    let token = harness.signed_token(claims, "JWT");
+
+    let response = harness
+        .send(
+            "/v1/records/cases/00000000-0000-4000-8000-000000000001?accessProfile=caseworker",
+            &[bearer(&token)],
+            None,
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(harness.records.calls.load(Ordering::SeqCst), 1);
+    {
+        let requests = harness.records.requests.lock().expect("record requests");
+        let context = &requests[0].context;
+        assert_eq!(
+            context
+                .row_boundaries()
+                .iter()
+                .find(|boundary| boundary.field() == "jurisdiction")
+                .expect("jurisdiction boundary")
+                .values(),
+            &BTreeSet::from([JURISDICTION.to_owned(), second_jurisdiction.to_owned()])
+        );
+    }
+
+    let mut repeated_beyond_the_bound = valid_claims();
+    repeated_beyond_the_bound["jurisdictions"] = json!(vec![JURISDICTION; 128]);
+    let repeated_token = harness.signed_token(repeated_beyond_the_bound, "JWT");
+    let response = harness
+        .send(
+            "/v1/records/cases/00000000-0000-4000-8000-000000000001?accessProfile=caseworker",
+            &[bearer(&repeated_token)],
+            None,
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(harness.records.calls.load(Ordering::SeqCst), 2);
+
+    let mut too_many_distinct = valid_claims();
+    too_many_distinct["jurisdictions"] = json!((0..65)
+        .map(|index| format!("area-{index}-never-rendered"))
+        .collect::<Vec<_>>());
+    let distinct_token = harness.signed_token(too_many_distinct, "JWT");
+    assert_refused_without_record_call(&harness, &distinct_token).await;
+}
+
+/// The deployment binds exactly one audience, and the mapping does not widen
+/// it: an array audience is refused even when it contains the bound value.
+/// Multi-audience access tokens are a deliberate non-goal of this profile.
+#[tokio::test]
+async fn an_array_audience_is_refused_even_when_it_carries_the_bound_audience() {
+    let harness = Harness::new().await;
+    for audience in [json!([AUDIENCE]), json!([AUDIENCE, "urn:example:other"])] {
+        let mut claims = valid_claims();
+        claims["aud"] = audience;
+        let token = harness.signed_token(claims, "JWT");
+        assert_refused_without_record_call(&harness, &token).await;
+    }
+}
+
 #[tokio::test]
 async fn canonical_id_row_boundary_uses_the_compiled_uuid_claim_type() {
     let project = parse_project_yaml(CANONICAL_ID_BOUNDARY_PROJECT.as_bytes())
@@ -601,13 +675,84 @@ async fn constructor_rejects_empty_duplicate_reserved_and_incomplete_mappings() 
         assert_eq!(error, AuthenticationConfigError::InvalidClaimMapping);
     }
 
-    for claims in [
-        AuthorityClaimConfig::new("registry_principal", None),
-        AuthorityClaimConfig::new("wrong_principal", Some("purpose".to_owned())),
+    for (claims, expected) in [
+        (
+            AuthorityClaimConfig::new("registry_principal", None),
+            AuthenticationConfigError::PurposeClaimMismatch,
+        ),
+        (
+            AuthorityClaimConfig::new("wrong_principal", Some("purpose".to_owned())),
+            AuthenticationConfigError::PrincipalClaimMismatch,
+        ),
     ] {
         let error = authenticator(&harness.registry, &harness.idp, claims)
             .expect_err("incomplete compiled authority mapping is refused");
-        assert_eq!(error, AuthenticationConfigError::CompiledAuthorityMismatch);
+        assert_eq!(error, expected);
+    }
+}
+
+/// The construction refusal is what an operator reads at startup, so each
+/// compiled-authority check reports itself. The message still carries no
+/// configured claim name or claim value.
+#[tokio::test]
+async fn compiled_authority_refusals_name_the_check_that_failed_without_values() {
+    let harness = Harness::new().await;
+    let principal = authenticator(
+        &harness.registry,
+        &harness.idp,
+        AuthorityClaimConfig::new("wrong_principal", Some("purpose".to_owned())),
+    )
+    .expect_err("a principal claim the compiled profile does not name is refused");
+    let purpose = authenticator(
+        &harness.registry,
+        &harness.idp,
+        AuthorityClaimConfig::new("registry_principal", None),
+    )
+    .expect_err("a compiled purpose requirement without a purpose claim is refused");
+
+    let conflicting_source = PROJECT.replace(
+        "          - {field: tenant, claim: tenant, operator: equals}",
+        "          - {field: tenant, claim: jurisdictions, operator: equals}",
+    );
+    let conflicting_project =
+        parse_project_yaml(conflicting_source.as_bytes()).expect("conflicting project parses");
+    let conflicting_registry =
+        compile_project(&conflicting_project, &[], CompileProfile::Authoring)
+            .expect("conflicting project compiles");
+    let conflicting = authenticator(&conflicting_registry, &harness.idp, authority_claims())
+        .expect_err("one claim cannot carry two compiled value shapes");
+
+    assert_eq!(principal, AuthenticationConfigError::PrincipalClaimMismatch);
+    assert_eq!(purpose, AuthenticationConfigError::PurposeClaimMismatch);
+    assert_eq!(
+        conflicting,
+        AuthenticationConfigError::ConflictingClaimExpectation
+    );
+    let messages = [
+        principal.to_string(),
+        purpose.to_string(),
+        conflicting.to_string(),
+    ];
+    assert_eq!(
+        messages.iter().collect::<BTreeSet<_>>().len(),
+        messages.len(),
+        "each compiled authority check reports itself: {messages:?}"
+    );
+    assert!(messages[0].contains("principal claim"), "{}", messages[0]);
+    assert!(messages[1].contains("purpose"), "{}", messages[1]);
+    for error in [principal, purpose, conflicting] {
+        let rendered = format!("{error} {error:?}");
+        for canary in [
+            PRINCIPAL,
+            PURPOSE,
+            JURISDICTION,
+            TENANT,
+            AUDIENCE,
+            "wrong_principal",
+            "registry_principal",
+        ] {
+            assert!(!rendered.contains(canary), "refusal exposed {canary}");
+        }
     }
 }
 
