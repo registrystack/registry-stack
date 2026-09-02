@@ -334,15 +334,6 @@ impl PostgresRecordReadService {
         )
         .await
         .map_err(|_| ReadServiceError::Unavailable)?;
-        install_request_visibility_context(
-            transaction.transaction(),
-            &plan.entity,
-            request.context.selected_profile(),
-            claims,
-            &self.audit_profile,
-            &self.expected.database_id,
-        )
-        .await?;
         let query = request_query(&request.kind);
         install_evaluation_date(transaction.transaction(), query).await?;
         install_spatial_query_context(transaction.transaction(), query).await?;
@@ -646,37 +637,6 @@ impl PostgresRecordReadService {
             correlation: request.correlation.clone(),
         })
     }
-}
-
-async fn install_request_visibility_context(
-    transaction: &tokio_postgres::Transaction<'_>,
-    entity: &CompiledEntity,
-    selected_profile: &str,
-    claims: &ClaimContext,
-    audit_profile: &AuditProfile,
-    database_id: &str,
-) -> Result<(), ReadServiceError> {
-    let profile = entity
-        .access_profiles
-        .get(selected_profile)
-        .ok_or(ReadServiceError::Unavailable)?;
-    if entity.change_request.is_none()
-        || profile.request_visibility
-            != Some(crate::contract::RequestVisibilitySource::Owner)
-    {
-        return Ok(());
-    }
-    let owner_reference =
-        crate::mutation::request_actor_reference(audit_profile, database_id, claims)
-            .map_err(|_| ReadServiceError::Unavailable)?;
-    transaction
-        .execute(
-            "SELECT set_config('registry.request_owner_reference', $1, true)",
-            &[&owner_reference],
-        )
-        .await
-        .map_err(|_| ReadServiceError::Unavailable)?;
-    Ok(())
 }
 
 #[cfg(feature = "postgres-test")]
