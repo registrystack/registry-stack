@@ -3628,6 +3628,15 @@ fn problem_responses(operation: Operation) -> BTreeMap<&'static str, Vec<Problem
         );
     }
     if is_request_action(operation) {
+        if operation == Operation::SubmitRequest {
+            // The bounded planner runs at submit, so submit is the only action
+            // that can refuse for a plan the planner would not produce.
+            responses.entry("400").or_default().push(ProblemExample {
+                code: "request.plan_refused",
+                detail:
+                    "The change-request planner refused the submission: change_request.planner.execution.",
+            });
+        }
         responses.insert(
             "503",
             vec![ProblemExample {
@@ -3697,6 +3706,7 @@ fn problem_schema() -> Value {
                     "query.cursor_invalid",
                     "query.invalid",
                     "request.invalid",
+                    "request.plan_refused",
                     "request.timeout",
                     "resource.not_found",
                     "service.unavailable",

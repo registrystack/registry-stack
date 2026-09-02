@@ -143,11 +143,12 @@ impl MutationCoordinator {
         {
             return Err(MutationError::InvalidRequest);
         }
-        let audit = |kind| PreIoAudit {
+        let audit = |kind, refusal_reason| PreIoAudit {
             kind,
             method: route.method,
             operation_id: &route.id,
             target_record: Some(input.record_id),
+            refusal_reason,
             correlation: input.correlation,
         };
         record_pre_io_audit(
@@ -157,7 +158,7 @@ impl MutationCoordinator {
             &self.expected,
             claims,
             &self.audit_profile,
-            audit(PreIoAuditKind::Attempt),
+            audit(PreIoAuditKind::Attempt, None),
         )
         .await?;
         let deadline = tokio::time::Instant::now() + REQUEST_ACTION_TIMEOUT;
@@ -174,6 +175,13 @@ impl MutationCoordinator {
             {
                 Ok(candidate) => candidate,
                 Err(error) => {
+                    // A planner failure is journaled by its closed vocabulary,
+                    // so the refusal is reviewable without the script text or
+                    // the values the submission carried.
+                    let refusal_reason = match error {
+                        MutationError::PlannerFailure(planner) => Some(planner.code()),
+                        _ => None,
+                    };
                     if !fault.is_enabled() {
                         record_pre_io_audit(
                             client,
@@ -182,7 +190,7 @@ impl MutationCoordinator {
                             &self.expected,
                             claims,
                             &self.audit_profile,
-                            audit(PreIoAuditKind::Refusal),
+                            audit(PreIoAuditKind::Refusal, refusal_reason),
                         )
                         .await?;
                     }
@@ -231,7 +239,7 @@ impl MutationCoordinator {
                 &self.expected,
                 claims,
                 &self.audit_profile,
-                audit(PreIoAuditKind::Refusal),
+                audit(PreIoAuditKind::Refusal, None),
             )
             .await?;
         }
@@ -366,11 +374,20 @@ impl MutationCoordinator {
             .ok_or(MutationError::InvalidRequest)?;
         let candidate =
             crate::rhai_planner::plan_change_request_effects(plan, &intake, deadline.into_std())
-                .map_err(|error| match error {
-                    crate::rhai_planner::ChangeRequestPlannerError::Deadline => {
-                        MutationError::Unavailable
-                    }
-                    _ => MutationError::InvalidRequest,
+                .map_err(|error| {
+                    // The operator learns which entity refused, which planner
+                    // ran, and the closed failure kind. Script text, request
+                    // values, and target data stay out of the log.
+                    tracing::warn!(
+                        entity_id = %entity.id,
+                        planner_digest = plan
+                            .planner
+                            .as_ref()
+                            .map_or("none", |planner| planner.script_sha256.as_str()),
+                        planner_failure = %error.code(),
+                        "change-request planner produced no plan"
+                    );
+                    MutationError::PlannerFailure(error)
                 })?;
         let reserved_create_ids = candidate
             .effects

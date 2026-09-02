@@ -1219,6 +1219,7 @@ impl MutationCoordinator {
                 method: request.plan.route.method,
                 operation_id: &request.plan.route.id,
                 target_record: None,
+                refusal_reason: None,
                 correlation: &request.correlation,
             },
         )
@@ -1244,6 +1245,7 @@ impl MutationCoordinator {
                 method: request.plan.route.method,
                 operation_id: &request.plan.route.id,
                 target_record: request.record_id,
+                refusal_reason: None,
                 correlation: &request.correlation,
             },
         )
@@ -1953,6 +1955,11 @@ pub enum MutationError {
     Unavailable,
     #[error("mutation transaction was aborted by PostgreSQL concurrency control")]
     RetryableConflict,
+    /// The bounded change-request planner produced no plan. The failure kind
+    /// travels with the error so the refusal is recorded and reported by the
+    /// planner's closed vocabulary, never by script text or request values.
+    #[error("change-request planner produced no plan")]
+    PlannerFailure(crate::rhai_planner::ChangeRequestPlannerError),
 }
 
 #[cfg(feature = "postgres-test")]

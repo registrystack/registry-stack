@@ -5011,6 +5011,7 @@ fn generated_openapi_routes_and_physical_names_share_one_compiled_inventory() {
             "query.cursor_invalid",
             "query.invalid",
             "request.invalid",
+            "request.plan_refused",
             "request.timeout",
             "resource.not_found",
             "service.unavailable",

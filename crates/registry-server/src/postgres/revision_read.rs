@@ -114,6 +114,7 @@ impl PostgresRevisionReadService {
                         method: request.method,
                         operation_id: &request.operation_id,
                         target_record: Some(&request.record_id),
+                        refusal_reason: None,
                         correlation: &request.correlation,
                     },
                 )
@@ -135,6 +136,7 @@ impl PostgresRevisionReadService {
                 method: request.method,
                 operation_id: &request.operation_id,
                 target_record: Some(&request.record_id),
+                refusal_reason: None,
                 correlation: &request.correlation,
             },
         )

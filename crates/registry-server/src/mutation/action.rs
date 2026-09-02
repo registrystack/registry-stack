@@ -180,6 +180,7 @@ impl MutationCoordinator {
                 method: HttpMethod::Post,
                 operation_id,
                 target_record: None,
+                refusal_reason: None,
                 correlation,
             },
         )

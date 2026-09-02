@@ -29,6 +29,10 @@ pub struct PreIoAudit<'a> {
     pub method: HttpMethod,
     pub operation_id: &'a str,
     pub target_record: Option<&'a str>,
+    /// Why the refusal happened, drawn from a closed vocabulary the caller
+    /// owns. It is a fixed term, never a value read from the request or the
+    /// record.
+    pub refusal_reason: Option<&'a str>,
     pub correlation: &'a RequestCorrelation,
 }
 
@@ -165,7 +169,7 @@ pub async fn record_pre_io_audit(
     let transaction = begin_record_transaction(client, lock_key, lock_timeout, expected, claims)
         .await
         .map_err(|_| RegistryAuditError::Unavailable)?;
-    let record = json!({
+    let mut record = json!({
         "schema": "registry-server-audit/v1",
         "phase": match event.kind {
             PreIoAuditKind::Attempt => "attempt",
@@ -181,6 +185,7 @@ pub async fn record_pre_io_audit(
         "principalReference": principal_reference,
         "recordReference": record_reference,
     });
+    insert_refusal_reason(&mut record, event.refusal_reason);
     append_envelope(transaction.transaction(), profile, record).await?;
     transaction
         .commit()
@@ -215,7 +220,7 @@ pub(crate) async fn record_action_pre_io_audit(
     let transaction = begin_action_transaction(client, lock_key, lock_timeout, expected, claims)
         .await
         .map_err(|_| RegistryAuditError::Unavailable)?;
-    let record = json!({
+    let mut record = json!({
         "schema": "registry-server-audit/v1",
         "phase": match event.kind {
             PreIoAuditKind::Attempt => "attempt",
@@ -231,6 +236,7 @@ pub(crate) async fn record_action_pre_io_audit(
         "principalReference": principal_reference,
         "actionId": claims.action_id(),
     });
+    insert_refusal_reason(&mut record, event.refusal_reason);
     append_envelope(transaction.transaction(), profile, record).await?;
     transaction
         .commit()
@@ -672,6 +678,18 @@ pub(crate) async fn append_read_terminal_audit(
 
 /// Appends one canonical record to the chained Registry audit journal, linking
 /// it to the durable head under the same transaction as the change it records.
+/// Name why a refusal happened, when the caller has a closed-vocabulary term
+/// for it. The audit journal stays minimized: the term is fixed by the code
+/// that raised the refusal and carries no request or record value.
+fn insert_refusal_reason(record: &mut Value, reason: Option<&str>) {
+    let Some(reason) = reason else {
+        return;
+    };
+    if let Some(object) = record.as_object_mut() {
+        object.insert("refusalReason".to_owned(), Value::String(reason.to_owned()));
+    }
+}
+
 pub(crate) async fn append_envelope(
     transaction: &Transaction<'_>,
     profile: &AuditProfile,

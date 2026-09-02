@@ -143,6 +143,7 @@ impl PostgresRecordReadService {
                         method: request.method,
                         operation_id: &request.operation_id,
                         target_record,
+                        refusal_reason: None,
                         correlation: &request.correlation,
                     },
                 )
@@ -164,6 +165,7 @@ impl PostgresRecordReadService {
                     method: request.method,
                     operation_id: &request.operation_id,
                     target_record,
+                    refusal_reason: None,
                     correlation: &request.correlation,
                 },
             )
@@ -184,6 +186,7 @@ impl PostgresRecordReadService {
                 method: request.method,
                 operation_id: &request.operation_id,
                 target_record,
+                refusal_reason: None,
                 correlation: &request.correlation,
             },
         )

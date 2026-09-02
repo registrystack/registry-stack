@@ -133,6 +133,7 @@ impl PostgresSnapshotReadService {
                         method: request.method,
                         operation_id: &request.operation_id,
                         target_record: None,
+                        refusal_reason: None,
                         correlation: &request.correlation,
                     },
                 )
@@ -154,6 +155,7 @@ impl PostgresSnapshotReadService {
                 method: request.method,
                 operation_id: &request.operation_id,
                 target_record: None,
+                refusal_reason: None,
                 correlation: &request.correlation,
             },
         )

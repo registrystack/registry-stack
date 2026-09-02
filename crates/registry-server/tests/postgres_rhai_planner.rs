@@ -479,6 +479,170 @@ async fn staged_rhai_final_approval_applies_atomically_and_faults_roll_back_ever
     database.cleanup().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failing_rhai_planner_refuses_the_submission_and_records_its_kind() {
+    let _test_guard = PLANNER_TEST_LOCK.lock().await;
+    let database = TestDatabase::create(4).await;
+    let registry = Arc::new(refusing_rhai_registry());
+    let package_id = "refusing-rhai-planner";
+    let identity = install_staged_registry(&database, &registry, package_id).await;
+    let app = staged_router(&database, registry, identity, package_id, None);
+    reset_test_planner_invocation_count();
+    let operator = verified_claims("refusing-operator", "person-maintenance", &[]);
+    let submitter = verified_claims(
+        "refusing-submitter",
+        "person-name-change",
+        &["registry:person-name:submit"],
+    );
+
+    let person = direct_create_record(
+        &app,
+        "/v1/records/persons?accessProfile=person-operator",
+        operator.clone(),
+        "refusing-rhai-create-person",
+        json!({"personCode":"SEC-RHAI-REFUSED","displayName":"Before Refusing Planner"}),
+    )
+    .await;
+    let request = direct_create_record(
+        &app,
+        "/v1/records/person-name-change-requests?accessProfile=name-change-submitter",
+        submitter.clone(),
+        "refusing-rhai-create-request",
+        json!({
+            "person": person.id,
+            "givenName": "  Mary  ",
+            "familyName": "  Jackson  ",
+            "handling": "routine"
+        }),
+    )
+    .await;
+    let draft = direct_get_record(
+        &app,
+        &format!(
+            "/v1/records/person-name-change-requests/{}?accessProfile=name-change-submitter",
+            request.id
+        ),
+        submitter.clone(),
+    )
+    .await;
+    let submit = action(&draft.body, "submit_request");
+    let refused =
+        direct_send_action(&app, &submit, submitter, "refusing-rhai-submit", json!({})).await;
+
+    assert_eq!(refused.status, StatusCode::BAD_REQUEST, "{}", refused.body);
+    assert_eq!(refused.body["code"], "request.plan_refused");
+    assert_eq!(
+        refused.body["detail"],
+        "The change-request planner refused the submission: change_request.planner.execution."
+    );
+    assert_eq!(test_planner_invocation_count(), 1);
+
+    // The refusal names the closed planner vocabulary and nothing else: not the
+    // script, not the authored request values, not the target it would change.
+    let refusal_text = String::from_utf8(refused.bytes.clone()).expect("problem body is UTF-8");
+    for withheld in [
+        "refuse_this_submission",
+        "Mary",
+        "Jackson",
+        person.id.as_str(),
+        request.id.as_str(),
+    ] {
+        assert!(
+            !refusal_text.contains(withheld),
+            "the refusal must withhold {withheld}: {refusal_text}"
+        );
+    }
+
+    // A refused plan freezes nothing and leaves the target untouched.
+    let snapshot = staged_persistence_snapshot(&database, &request.id).await;
+    assert_eq!(snapshot.state, "draft");
+    assert_eq!(snapshot.proposals, 0);
+    assert_eq!(snapshot.targets, 0);
+    assert_eq!(snapshot.applications, 0);
+    assert_eq!(snapshot.results, 0);
+    let unchanged = direct_get_record(
+        &app,
+        &format!(
+            "/v1/records/persons/{}?accessProfile=person-operator",
+            person.id
+        ),
+        operator,
+    )
+    .await;
+    assert_eq!(unchanged.body["revision"], 1);
+    assert_eq!(
+        unchanged.body["data"]["displayName"],
+        "Before Refusing Planner"
+    );
+
+    // The refusal is journaled with the same closed vocabulary the caller saw.
+    let refusals = audit_refusal_reasons(&database).await;
+    assert_eq!(
+        refusals,
+        vec!["change_request.planner.execution".to_owned()]
+    );
+
+    database.cleanup().await;
+}
+
+async fn audit_refusal_reasons(database: &TestDatabase) -> Vec<String> {
+    let rows = database
+        .admin
+        .query("SELECT envelope FROM registry_internal.registry_audit", &[])
+        .await
+        .expect("administrator can inspect audit envelopes");
+    rows.iter()
+        .filter_map(|row| {
+            let envelope: Value = serde_json::from_slice(&row.get::<_, Vec<u8>>(0))
+                .expect("audit envelope is strict JSON");
+            envelope["record"]["refusalReason"]
+                .as_str()
+                .map(str::to_owned)
+        })
+        .collect()
+}
+
+/// A planner that compiles and declares the committed fixture's write, then
+/// fails while it runs. It is the shortest way to reach the planner failure
+/// path with every other part of the fixture contract left alone.
+const REFUSING_PLANNER_SCRIPT: &str = r#"
+fn plan(ctx) {
+    ctx.request["given-name"].refuse_this_submission();
+    #{
+        effects: [#{
+            target: #{fromField: "person"},
+            operation: "patch",
+            set: #{"display-name": "unreachable"}
+        }],
+        disposition: "apply"
+    }
+}
+"#;
+
+fn refusing_rhai_registry() -> registry_server::CompiledRegistry {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/registry-server/acceptance/person-name-change-rhai");
+    let project_bytes = std::fs::read(root.join("registry.yaml"))
+        .expect("committed Rhai fixture project is readable");
+    let project: Value =
+        serde_norway::from_slice(&project_bytes).expect("Rhai fixture YAML converts to JSON");
+    let project = parse_project_json(
+        &serde_json::to_vec(&project).expect("refusing Rhai project serializes"),
+    )
+    .expect("refusing Rhai project follows the strict contract");
+    compile_project_with_assets(
+        &project,
+        &[],
+        &[ModuleAssetSource {
+            module: None,
+            path: "scripts/person-name-change.rhai".to_owned(),
+            bytes: REFUSING_PLANNER_SCRIPT.as_bytes().to_vec(),
+        }],
+        CompileProfile::Production,
+    )
+    .expect("refusing Rhai project closes under the Production compiler")
+}
+
 fn staged_rhai_registry() -> registry_server::CompiledRegistry {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../products/registry-server/acceptance/person-name-change-rhai");
