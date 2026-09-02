@@ -614,9 +614,10 @@ def request(root: Path, action: str, code: str | None, label: str | None, record
             f"quickstart-{code}",
             201,
         )
-        identifier = document.get("id")
-        if not isinstance(identifier, str):
-            raise QuickstartError("created record has no id")
+        record = document.get("data")
+        identifier = record.get("recordIdentifier") if isinstance(record, dict) else None
+        if not isinstance(identifier, str) or not identifier:
+            raise QuickstartError("created record has no data.recordIdentifier")
         print(identifier)
     elif action == "get":
         if not record_id:
@@ -672,7 +673,7 @@ def spatial_smoke(root: Path, seed: Path, operator_token_name: str = "operator-t
         None,
         token_name="map-token",
     )
-    rows = list_document.get("items", list_document.get("records"))
+    rows = list_document.get("items")
     if not isinstance(rows, list) or not rows:
         raise QuickstartError("spatial bbox record list returned no visible rows")
     geojson = _request(

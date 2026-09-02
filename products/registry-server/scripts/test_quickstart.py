@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
+import json
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 PRODUCT_ROOT = Path(__file__).resolve().parents[1]
@@ -39,6 +43,33 @@ def prepare_root(root: Path) -> None:
     (root / "secrets/database-password").write_text("abcdef0123456789", encoding="ascii")
     (root / "keys/mint-public.jwk.json").write_text('{"kid":"mint-key","kty":"EC"}', encoding="utf-8")
     (root / "keys/operator-public.jwk.json").write_text('{"kid":"operator-key","kty":"EC"}', encoding="utf-8")
+
+
+def prepare_request_root(root: Path) -> None:
+    root.chmod(0o700)
+    (root / "secrets").mkdir(mode=0o700)
+    (root / "server-origin").write_text("http://127.0.0.1:1\n", encoding="ascii")
+    token_path = root / "secrets/operator-token"
+    token_path.write_text("header.payload.signature", encoding="ascii")
+    token_path.chmod(0o600)
+    map_token_path = root / "secrets/map-token"
+    map_token_path.write_text("header.payload.signature", encoding="ascii")
+    map_token_path.chmod(0o600)
+
+
+class _FakeHttpResponse:
+    def __init__(self, status: int, body: bytes) -> None:
+        self.status = status
+        self._body = body
+
+    def read(self) -> bytes:
+        return self._body
+
+    def __enter__(self) -> "_FakeHttpResponse":
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
+        return False
 
 
 class RegistryServerQuickstartTests(unittest.TestCase):
@@ -121,6 +152,89 @@ class RegistryServerQuickstartTests(unittest.TestCase):
             self.assertIn("directory-reader-bbox-is-refused", credentials)
             self.assertIn("credential: {type: anonymous}", credentials)
 
+    def test_create_record_reads_record_identifier_from_registry_record_envelope(self) -> None:
+        helper = load_helper()
+        with tempfile.TemporaryDirectory() as root_dir:
+            root = Path(root_dir)
+            prepare_request_root(root)
+            envelope = json.dumps(
+                {
+                    "data": {
+                        "recordIdentifier": "11111111-1111-1111-1111-111111111111",
+                        "revisionIdentifier": "1",
+                        "domainData": {"code": "QS-001", "label": "Quickstart example record"},
+                    },
+                    "meta": {
+                        "registryIdentifier": "generic-registry-local-db",
+                        "datasetIdentifier": "records",
+                        "entityTypeIdentifier": "record",
+                    },
+                }
+            ).encode()
+
+            def fake_urlopen(request: object, timeout: float = 10) -> _FakeHttpResponse:
+                return _FakeHttpResponse(201, envelope)
+
+            captured = io.StringIO()
+            with mock.patch("urllib.request.urlopen", fake_urlopen):
+                with contextlib.redirect_stdout(captured):
+                    helper.request(root, "create", "QS-001", "Quickstart example record", None)
+            self.assertEqual(captured.getvalue().strip(), "11111111-1111-1111-1111-111111111111")
+
+    def test_spatial_smoke_reads_rows_from_items_and_rejects_legacy_records_key(self) -> None:
+        helper = load_helper()
+        with tempfile.TemporaryDirectory() as root_dir:
+            root = Path(root_dir)
+            prepare_request_root(root)
+            seed = root / "seed.jsonl"
+            seed.write_text(
+                "\n".join(json.dumps({"operation": "create", "data": {"code": f"S-{index}"}}) for index in range(200)) + "\n",
+                encoding="utf-8",
+            )
+            created = {
+                "data": {"recordIdentifier": "x", "revisionIdentifier": "1", "domainData": {}},
+                "meta": {"registryIdentifier": "r", "datasetIdentifier": "d", "entityTypeIdentifier": "e"},
+            }
+            geojson = {"type": "FeatureCollection", "features": [{}]}
+
+            def fake_request_with_legacy_records_key(
+                root_arg: Path,
+                method: str,
+                path: str,
+                body: dict | None,
+                idempotency_key: str | None = None,
+                expected: int = 200,
+                token_name: str = "operator-token",
+                accept: str = "application/json",
+            ) -> dict:
+                if method == "POST":
+                    return created
+                if accept == "application/geo+json":
+                    return geojson
+                return {"records": [{}]}
+
+            with mock.patch.object(helper, "_request", fake_request_with_legacy_records_key):
+                with self.assertRaises(helper.QuickstartError):
+                    helper.spatial_smoke(root, seed)
+
+            def fake_request_with_items_key(
+                root_arg: Path,
+                method: str,
+                path: str,
+                body: dict | None,
+                idempotency_key: str | None = None,
+                expected: int = 200,
+                token_name: str = "operator-token",
+                accept: str = "application/json",
+            ) -> dict:
+                if method == "POST":
+                    return created
+                if accept == "application/geo+json":
+                    return geojson
+                return {"items": [{}], "pageInfo": {"nextCursor": None}, "meta": {}}
+
+            with mock.patch.object(helper, "_request", fake_request_with_items_key):
+                helper.spatial_smoke(root, seed)
 
     def test_spatial_launcher_preserves_generic_default_and_switches_only_on_flag(self) -> None:
         run_source = (QUICKSTART / "run.sh").read_text(encoding="utf-8")

@@ -181,6 +181,7 @@ umask 077
 mkdir -m 700 "$run_dir" "$run_dir/secrets" "$run_dir/keys" "$run_dir/logs" "$run_dir/tls"
 printf '%s\n' "$fixture_kind" >"$run_dir/fixture-kind"
 
+# supervision-signal-handling: setup begin
 mint_pid=""
 server_pid=""
 receiver_pid=""
@@ -200,7 +201,13 @@ cleanup() {
   fi
   docker rm -f "$postgres_container" >/dev/null 2>&1 || true
 }
-trap cleanup EXIT HUP INT TERM
+trap cleanup EXIT HUP
+stop_on_signal() {
+  printf '\n%s\n' 'Stopping the demo services.'
+  exit 0
+}
+trap stop_on_signal INT TERM
+# supervision-signal-handling: setup end
 
 if [[ "$webhook" == true ]]; then
   ports=$(python3 "$support" ports --count 4)
@@ -631,6 +638,7 @@ if [[ "$mode" == smoke ]]; then
 fi
 
 printf '\n%s\n' 'Leave this terminal running. Press Ctrl-C to stop the services.'
+# supervision-signal-handling: wait begin
 while kill -0 "$mint_pid" >/dev/null 2>&1 && kill -0 "$server_pid" >/dev/null 2>&1; do
   if [[ "$webhook" == true ]] && ! kill -0 "$receiver_pid" >/dev/null 2>&1; then
     break
@@ -639,3 +647,4 @@ while kill -0 "$mint_pid" >/dev/null 2>&1 && kill -0 "$server_pid" >/dev/null 2>
 done
 printf '%s\n' "A demo service stopped unexpectedly; inspect $run_dir/logs." >&2
 exit 1
+# supervision-signal-handling: wait end

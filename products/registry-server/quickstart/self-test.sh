@@ -2,10 +2,128 @@
 set -euo pipefail
 
 quickstart_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+product_dir=$(cd -- "$quickstart_dir/.." && pwd)
 
 bash -n "$quickstart_dir/run.sh"
 bash -n "$quickstart_dir/query.sh"
 python3 -m py_compile "$quickstart_dir/support/quickstart.py"
 python3 "$quickstart_dir/support/quickstart.py" self-test --quickstart-dir "$quickstart_dir"
+
+# Extracts the setup and wait regions a launcher marks with
+# "# supervision-signal-handling: <region> begin/end" comments, then drives
+# the real code through both an operator SIGINT and a genuine crash without
+# starting Docker, Mint, or the server: the region is spliced into a harness
+# script that stands in placeholder "sleep" processes for mint_pid/server_pid.
+check_supervision_signal_handling() {
+  local launcher="$1"
+  local label="$2"
+  local preamble="${3:-}"
+
+  local setup_block wait_block
+  setup_block=$(sed -n '/^# supervision-signal-handling: setup begin$/,/^# supervision-signal-handling: setup end$/p' "$launcher")
+  wait_block=$(sed -n '/^# supervision-signal-handling: wait begin$/,/^# supervision-signal-handling: wait end$/p' "$launcher")
+  if [[ -z "$setup_block" ]]; then
+    printf 'FAIL: %s is missing the supervision-signal-handling setup markers\n' "$label" >&2
+    exit 1
+  fi
+  if [[ -z "$wait_block" ]]; then
+    printf 'FAIL: %s is missing the supervision-signal-handling wait markers\n' "$label" >&2
+    exit 1
+  fi
+
+  local stub_bin harness_dir run_dir
+  stub_bin=$(mktemp -d)
+  harness_dir=$(mktemp -d)
+  run_dir="$harness_dir/run"
+  mkdir -p "$run_dir"
+  cat >"$stub_bin/docker" <<'DOCKER_STUB'
+#!/usr/bin/env bash
+exit 1
+DOCKER_STUB
+  chmod +x "$stub_bin/docker"
+
+  # Operator stop: SIGINT must shut the placeholder services down and exit 0.
+  local operator_script="$harness_dir/operator-stop.sh"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'set -euo pipefail\n'
+    printf 'run_dir=%q\n' "$run_dir"
+    [[ -n "$preamble" ]] && printf '%s\n' "$preamble"
+    printf '%s\n' "$setup_block"
+    printf 'sleep 100 &\n'
+    printf 'mint_pid=$!\n'
+    printf 'printf %%s "$mint_pid" >%q\n' "$harness_dir/mint.pid"
+    printf 'sleep 100 &\n'
+    printf 'server_pid=$!\n'
+    printf 'printf %%s "$server_pid" >%q\n' "$harness_dir/server.pid"
+    printf '%s\n' "$wait_block"
+  } >"$operator_script"
+  chmod +x "$operator_script"
+
+  local operator_stderr="$harness_dir/operator-stop.stderr"
+  # Job control keeps the background process from inheriting SIGINT as
+  # ignored, which is bash's default for asynchronous commands and would
+  # otherwise make the trap below untestable from this non-interactive script.
+  set -m
+  PATH="$stub_bin:$PATH" bash "$operator_script" >/dev/null 2>"$operator_stderr" &
+  local harness_pid=$!
+  set +m
+  sleep 0.3
+  kill -INT "$harness_pid"
+  local status=0
+  wait "$harness_pid" || status=$?
+  if [[ "$status" -ne 0 ]]; then
+    printf 'FAIL: %s did not exit 0 on SIGINT (exit %s)\n' "$label" "$status" >&2
+    cat "$operator_stderr" >&2
+    exit 1
+  fi
+  if grep -q 'stopped unexpectedly' "$operator_stderr"; then
+    printf 'FAIL: %s reported an unexpected stop on operator SIGINT\n' "$label" >&2
+    exit 1
+  fi
+  local mint_child server_child
+  mint_child=$(cat "$harness_dir/mint.pid")
+  server_child=$(cat "$harness_dir/server.pid")
+  if kill -0 "$mint_child" >/dev/null 2>&1 || kill -0 "$server_child" >/dev/null 2>&1; then
+    printf 'FAIL: %s left a placeholder service running after SIGINT\n' "$label" >&2
+    exit 1
+  fi
+
+  # Genuine crash: the supervision loop must still exit 1 and report it.
+  local crash_script="$harness_dir/crash.sh"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'set -euo pipefail\n'
+    printf 'run_dir=%q\n' "$run_dir"
+    [[ -n "$preamble" ]] && printf '%s\n' "$preamble"
+    printf '%s\n' "$setup_block"
+    printf 'sleep 100 &\n'
+    printf 'mint_pid=$!\n'
+    printf 'sleep 100 &\n'
+    printf 'server_pid=$!\n'
+    printf 'kill "$server_pid"\n'
+    printf 'wait "$server_pid" 2>/dev/null || true\n'
+    printf '%s\n' "$wait_block"
+  } >"$crash_script"
+  chmod +x "$crash_script"
+
+  local crash_stderr="$harness_dir/crash.stderr"
+  status=0
+  PATH="$stub_bin:$PATH" bash "$crash_script" >/dev/null 2>"$crash_stderr" || status=$?
+  if [[ "$status" -ne 1 ]]; then
+    printf 'FAIL: %s did not exit 1 on a genuine crash (exit %s)\n' "$label" "$status" >&2
+    cat "$crash_stderr" >&2
+    exit 1
+  fi
+  if ! grep -q 'stopped unexpectedly' "$crash_stderr"; then
+    printf 'FAIL: %s did not report the crash\n' "$label" >&2
+    exit 1
+  fi
+
+  rm -rf "$stub_bin" "$harness_dir"
+}
+
+check_supervision_signal_handling "$quickstart_dir/run.sh" "quickstart run.sh"
+check_supervision_signal_handling "$product_dir/demo/run.sh" "demo run.sh" 'webhook=false'
 
 printf '%s\n' 'Registry Server generic quickstart self-test passed'

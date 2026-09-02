@@ -71,6 +71,7 @@ fi
 umask 077
 mkdir -m 700 "$run_dir" "$run_dir/secrets" "$run_dir/keys" "$run_dir/logs" "$run_dir/tls"
 
+# supervision-signal-handling: setup begin
 mint_pid=""
 server_pid=""
 postgres_container="registry-server-quickstart-${PPID}-$$"
@@ -85,7 +86,13 @@ cleanup() {
   fi
   docker rm -f "$postgres_container" >/dev/null 2>&1 || true
 }
-trap cleanup EXIT HUP INT TERM
+trap cleanup EXIT HUP
+stop_on_signal() {
+  printf '\n%s\n' 'Stopping the quickstart services.'
+  exit 0
+}
+trap stop_on_signal INT TERM
+# supervision-signal-handling: setup end
 
 ports=$(python3 "$support" ports)
 read -r database_port mint_port server_port <<EOF
@@ -350,8 +357,10 @@ else
 fi
 
 printf '\n%s\n' 'Leave this terminal running. Press Ctrl-C to stop the services.'
+# supervision-signal-handling: wait begin
 while kill -0 "$mint_pid" >/dev/null 2>&1 && kill -0 "$server_pid" >/dev/null 2>&1; do
   sleep 1
 done
 printf '%s\n' "A quickstart service stopped unexpectedly; inspect $run_dir/logs." >&2
 exit 1
+# supervision-signal-handling: wait end
