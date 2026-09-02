@@ -342,6 +342,7 @@ A read of the request record adds `data.request`:
   "proposalVersion": 2,
   "effectDigest": "sha256:9f2c…",
   "proposal": {"reviewMode": "staged", "applicationDisposition": "queue"},
+  "editable": false,
   "actions": [
     {"operation": "approve_request", "stage": "review", "href": "/v1/records/placement-corrections/2d7e…/actions/stages/review/approve", "ifMatch": "\"rs-hmac-sha256:…\""}
   ]
@@ -353,7 +354,8 @@ A read of the request record adds `data.request`:
 
 `proposal` appears once the request has been submitted and describes the frozen proposal's policy:
 `reviewMode` is `staged` or `none`, `applicationDisposition` is `apply` or `queue`, and a queued
-plan adds `queueReason` with its `code` and `label`.
+plan adds `queueReason` with its `code` and `label`. `editable` is `true` only while the request
+is a draft, the caller owns it, and the selected profile may patch it.
 
 <ApiReferenceTable id="request-actions" />
 
