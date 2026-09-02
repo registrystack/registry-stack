@@ -28,6 +28,7 @@ const required = {
   ],
   'openapi-sources': ['id', 'name', 'owner', 'source', 'artifact', 'status', 'reference_path'],
   'server-events': ['id', 'title', 'columns', 'rows'],
+  'server-api': ['id', 'title', 'columns', 'rows'],
 };
 
 const generated = [];

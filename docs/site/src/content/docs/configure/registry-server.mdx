@@ -1,6 +1,6 @@
 ---
-title: Configure your registry
-description: Define a Registry Server model, check permissions, and prepare a package for deployment.
+title: Author a registry project
+description: Write the registry, module, and journey files Registry Server compiles, grant access per profile, declare change requests, actions, and events, and check the project before it reaches a database.
 status: draft
 owner: registry-docs
 source_repos:
@@ -11,178 +11,323 @@ locale: en
 standards_referenced:
   - openapi
   - json-schema
+  - geojson
   - cloudevents
 ---
 
-Use this guide to adapt Registry Server to your institution's records and permissions.
-Define the model in an authoring project, check the generated API, then prepare a tested package
-for your operator to deploy.
+This guide covers the authoring side of Registry Server: the files you write and the `registry-serverctl` commands that check them without a database.
+Database setup, packaging, applying, webhook binding, and erasure belong to [Deploy and operate a registry](../../operate/registry-server/).
+If you have not run a registry yet, start with [Build your first registry](../../tutorials/first-registry-server/).
 
-## Before you start
+You need the `registry-serverctl` binary.
+From a checkout of `registry-stack`:
 
-Use the source checkout and binaries from [your first registry](../../tutorials/first-registry-server/).
-Run commands from the checkout root. You need an editor and synthetic test records.
-Model checks and API generation work without a database; testing writes needs a separate PostgreSQL database.
+```sh
+cargo build --locked -p registry-serverctl
+target/debug/registry-serverctl --help
+```
+
+Every command accepts `--format json` for machine-readable output, and every finding names the file path and document path that caused it.
+
+{/* Evidence: crates/registry-serverctl/src/lib.rs; crates/registry-server/src/compiler.rs. */}
 
 ## Create a project
-
-Initialize a project:
 
 ```sh
 target/debug/registry-serverctl init ./my-registry
 ```
 
-The command creates `my-registry/registry.yaml` and `my-registry/tests/journeys.yaml`.
-The starter has a `record` entity with a unique `code`, a `label`, and an operator access profile.
-Adapt its test cases along with the model.
+The command writes two files: `registry.yaml`, with one `record` entity and one `operator` profile, and `tests/journeys.yaml`, with a journey that creates, reads, and lists a record.
+It then compiles the project and reports three findings that every new project carries:
 
-The findings `package.identity.missing` and `manifest_projection.missing` do not block authoring.
-Add package identity before deployment; Manifest catalogue metadata is optional.
+| Finding | Meaning | When to act |
+|---|---|---|
+| `access.profile.unrestricted_collection` | The `operator` profile can list every row. | Add a row boundary before the registry holds more than one caller's data, or accept it for a registry-wide operator role. |
+| `manifest_projection.missing` | No Registry Manifest projection is declared. | Before a production package. |
+| `package.identity.missing` | No package identity is declared. | Before a production package. |
 
-In `registry.yaml`, set `registry.id`, `registry.version`, and `registry.defaultLanguage` for your
-project. Add entities to `entities`, controlled code lists to `vocabularies`, and caller rules to
-top-level `accessProfiles`. Keep database URLs, token issuers, and secrets out of this file.
+Findings that need review do not fail `check` by default.
+`check --deny-findings` fails on any of them, and `check --production` enforces the production closure rules as well.
 
-{/* Evidence: crates/registry-serverctl/src/lib.rs, init_files();
-    crates/registry-server/src/contract.rs, RegistryProject;
-    crates/registry-server/src/compiler.rs. */}
+{/* Evidence: crates/registry-serverctl/src/lib.rs, init(); products/registry-server/acceptance/asset-site-placement-change-requests/registry.yaml. */}
 
-## Extend the model
+## The registry file
 
-Add fields directly to an entity's `fields` list, or put a reusable extension in
-`modules/<module-id>/module.yaml` under `extendEntities`.
-The [first-registry tutorial](../../tutorials/first-registry-server/) includes a complete module example.
-If the entity belongs to another module, name that module in `dependencies`.
+`registry.yaml` is one document with these top-level members:
 
-Add the field to each caller grant's `readableFields` or `writableFields` as needed.
-Grant filtering, sorting, and counts separately.
-Declaring a field or assigning its classification does not grant access to it.
+| Member | What it holds |
+|---|---|
+| `apiVersion`, `kind` | `registry.registrystack.org/v1alpha1` and `RegistryProject`. |
+| `registry` | `id`, `version`, `defaultLanguage`, and `canonicalBaseIri`, the base of every record IRI. |
+| `package` | Production identity: `environment`, `instanceId`, `sequence`, `sourceRevision`. Required for a production package. |
+| `manifestProjection` | The Registry Manifest catalog a deployment publishes: the profile it describes, a classification ceiling, and catalog metadata. Required for a production package. |
+| `modules` | Included modules by `id`, `version`, and `digest`. |
+| `entities` | Entities declared in this file. |
+| `accessProfiles` | Every profile a token can select. |
+| `vocabularies` | Closed code lists that `vocabulary-code` fields reference. |
 
-{/* Evidence: crates/registry-server/src/contract.rs, EntityExtensionSource and ProjectAccessProfileSource;
-    crates/registry-server/src/compiler.rs; crates/registry-server/src/auth.rs. */}
+Identifiers in the project are kebab-case: entity ids, field ids, profile ids, vocabulary ids.
+The API exposes field ids in camelCase, so `asset-code` becomes `assetCode`, unless a field sets `apiName`.
 
-After adding or changing a module, update its lock and check the project:
+## Entities and fields
 
-```sh
-target/debug/registry-serverctl project lock ./my-registry
-target/debug/registry-serverctl check ./my-registry
+```yaml
+entities:
+  - id: asset-item
+    primaryDataset: asset-registry
+    route: assets
+    mutationMode: mutable
+    batch: {maximumItems: 100, maximumBytes: 262144}
+    fields:
+      - {id: asset-code, type: string, required: true, maxLength: 64, classification: internal}
+      - {id: label, type: string, required: true, maxLength: 200, classification: internal}
+      - {id: asset-class, type: vocabulary-code, vocabulary: asset-classification, required: true, classification: internal}
+    constraints:
+      - {kind: unique, fields: [asset-code]}
+vocabularies:
+  - {id: asset-classification, values: [equipment, vehicle, furniture]}
 ```
 
-The lock records module IDs, versions, and content digests in `registry.yaml`.
-Review and commit it with the module source, including any module-owned SQL files.
-On a failed check, follow the diagnostic's field path and suggested action.
-Use `project lock ./my-registry --check` in automation to detect stale locks without rewriting them.
+An entity needs an `id`, a `primaryDataset` that names the dataset its records belong to, a `route` that becomes the path segment under `/v1/records/`, and a `mutationMode`.
+`mutable` allows patches; `create_only` refuses them, which suits event-like records such as inspections.
+`tombstone: true` enables the tombstone operation.
+`batch` sets the item and byte limits of one batch request for the entity.
 
-Authored IDs use kebab-case (`internal-note`); JSON properties use lower camel case (`internalNote`).
-Use the generated schema for API property names.
+Every field carries `id`, `type`, `required`, and `classification`, one of `public`, `internal`, or `restricted`.
+Classification never grants access on its own: the manifest projection uses it as a ceiling, and profiles still list the fields they can read.
 
-{/* Evidence: crates/registry-serverctl/src/lib.rs, project_lock() and check();
-    crates/registry-server/src/logical_names.rs; crates/registry-server/src/physical_names.rs;
-    crates/registry-server/tests/postgres_mutation_logical_names.rs. */}
+| Type | Field members | Notes |
+|---|---|---|
+| `boolean` | | |
+| `string` | `maxLength`, `minLength` | Single-line, bounded text. |
+| `text` | `maxLength` | Longer text; not filterable. |
+| `int64` | | Whole numbers. |
+| `decimal` | `precision`, `scale`, `minimum`, `maximum` | Exact decimals, exposed as strings. |
+| `date`, `timestamp` | | ISO 8601; timestamps are UTC. |
+| `uuid` | | |
+| `vocabulary-code` | `vocabulary` or `values` | A code from a declared vocabulary or an inline list. |
+| `reference` | `target`, `onDelete` | The identifier of a record in another entity. `onDelete` defaults to `restrict`. |
+| `crs84-point` | `precision`, `bbox` | A GeoJSON Point in CRS84 longitude and latitude. |
+| `structured` | `schema`, `maxBytes` | A JSON value validated by an inline JSON Schema. |
 
-## Connect related records
+Constraints are evaluated on every write:
 
-Use `type: reference` and `target: <entity-id>` for a field that points to another record.
-When the link needs its own role or dates, use a separate relationship entity.
-The business-establishments example defines `establishment`, `business`, and `operator-assignment`; assignment records have
-`valid-from` and `valid-to` fields with a non-overlap constraint.
+| `kind` | Members | Checks |
+|---|---|---|
+| `unique` | `fields`, optional `when` | No two live records share the values. `when` narrows the rule to rows where a field equals a value, is null, is not null, or the record is in an active lifecycle. |
+| `compare` | `left`, `operator`, `right` | Two fields of one record compare as `less_than`, `less_than_or_equal`, `greater_than`, or `greater_than_or_equal`. |
+| `int_range` | `field`, `minimum`, `maximum` | An `int64` field stays within bounds. |
+| `vocabulary` | `field`, `values` | A field takes one of the listed values. |
+| `temporal-non-overlap` | `startField`, `endField`, `scopeFields` | No two records with equal scope fields have overlapping validity. |
 
-Define exact lookups in `selectorProfiles` and related-record queries in `readPaths`.
-Grant access to each lookup or read path and its returned fields.
-Lookup values select records; they do not establish the caller's right to read them.
+The compiler refuses field names that collide with Registry Record envelope members, so no field can be called `recordIdentifier`, `revisionIdentifier`, `snapshot`, `request`, or `requestPresence`.
+[Registry Server API reference](../../reference/registry-server-api/) lists the wire encoding of every type.
 
-Open the example project at
-`products/registry-server/acceptance/business-establishments/`. The `facility`, `inspection`, `business`,
-and `asset-site-placement` sibling projects demonstrate other models using the same compiler.
-Review their fields and constraints before adapting them for your institution.
+{/* Evidence: products/registry-server/generated/authoring/registry-module.schema.json; crates/registry-server/src/compiler.rs, reserved_logical_name(). */}
 
-{/* Evidence: products/registry-server/acceptance/business-establishments/registry.yaml;
-    products/registry-server/acceptance/business-establishments/modules/business-establishments-core/module.yaml;
-    crates/registry-server/src/auth.rs; crates/registry-server/src/contract.rs, ReadPathSource. */}
+## Related records
 
-## Check permissions and generate the API
+A `reference` field stores another record's identifier and the server checks that the target exists and that the caller may read it.
+For a many-to-many relationship, declare a relationship entity with two references, then let readers walk it with a read path:
 
-Explain the effective permissions:
+```yaml
+  - id: household
+    primaryDataset: household-registry
+    route: households
+    mutationMode: mutable
+    fields:
+      - {id: household-code, type: string, required: true, maxLength: 64, classification: internal}
+      - {id: administrative-area, type: string, required: true, maxLength: 64, classification: internal}
+      - {id: local-household-number, type: int64, required: true, classification: internal}
+    selectorProfiles:
+      - {id: by-local-reference, fields: [administrative-area, local-household-number]}
+      - {id: by-household-code, fields: [household-code]}
+    readPaths:
+      - {id: people, through: group-membership, to: person, route: people}
+  - id: group-membership
+    primaryDataset: household-registry
+    route: group-memberships
+    mutationMode: mutable
+    fields:
+      - {id: household, type: reference, target: household, required: true, classification: internal}
+      - {id: person, type: reference, target: person, required: true, classification: internal}
+```
+
+A **selector profile** names the fields a caller can present to find one record without knowing its identifier.
+The lookup route accepts the selector values and returns the single matching record or a `lookup.unresolved` problem.
+A **read path** exposes the records reachable through a relationship entity at `/v1/records/households/{id}/people`, paged and filtered like a list.
+Both are inert until a profile grants them.
+
+{/* Evidence: products/registry-server/acceptance/publicschema-household/modules/publicschema-household-core/module.yaml; crates/registry-server/src/api/mod.rs. */}
+
+## Time and place
+
+A temporal entity declares which fields bound a record's validity:
+
+```yaml
+  - id: membership-record
+    primaryDataset: household-registry
+    route: memberships
+    mutationMode: mutable
+    fields:
+      - {id: subject, type: reference, target: person, required: true, classification: internal}
+      - {id: group, type: reference, target: household, required: true, classification: internal}
+      - {id: valid-from, type: date, required: true, classification: internal}
+      - {id: valid-to, type: date, required: false, classification: internal}
+    temporal:
+      startField: valid-from
+      endField: valid-to
+    constraints:
+      - {kind: temporal-non-overlap, scopeFields: [subject], startField: valid-from, endField: valid-to}
+```
+
+The server then answers `asOf` reads by valid time, and callers can ask which membership was in force on a date.
+Grant the `snapshot` operation to a profile that needs to re-read records as they were recorded at an earlier mutation.
+
+A `crs84-point` field stores a location.
+Add a `bbox` limit on the field and a `spatialQueries.bbox` grant on the profile, and the list route accepts a bounding box.
+The GIS routes described in the API reference publish the same records as GeoJSON for desktop clients.
+
+{/* Evidence: products/registry-server/acceptance/household-history/registry.yaml; products/registry-server/acceptance/spatial-service-sites/registry.yaml. */}
+
+## Modules
+
+A module is a reusable file under `modules/<id>/module.yaml` that contributes entities, vocabularies, events, and extensions to entities declared elsewhere:
+
+```yaml
+id: record-notifications
+version: 0.1.0
+extendEntities:
+  - entity: record
+    events:
+      - id: record-labelled-v1
+        trigger: patched
+        projection: [code, label]
+        when:
+          kind: fields
+          changed: [label]
+        webhook:
+          destinationId: record-receiver
+```
+
+`registry.yaml` includes it under `modules` with its `id`, `version`, and content `digest`.
+Compute the digests with `registry-serverctl project lock ./my-registry` after any module edit; a stale digest is a compile error, which is how a reviewed project stays pinned to the module content it was reviewed with.
+An `extendEntities` entry may add `fields`, `constraints`, `events`, `selectorProfiles`, `readPaths`, `accessRequirements`, and change control to an entity the module does not own.
+
+{/* Evidence: products/registry-server/generated/authoring/registry-module.schema.json; crates/registry-serverctl/src/lib.rs. */}
+
+## Access profiles
+
+A token selects one profile per request, and the profile decides everything: which operations, fields, rows, lookups, and paths the request may touch.
+
+```yaml
+accessProfiles:
+  - id: site-planner
+    principalClaim: registry_principal
+    requiredScopes: [registry:sites:plan]
+    requiredPurposes: [site-planning]
+    grants:
+      - entity: asset-site
+        operations: [get, list]
+        readableFields: [site-code, label, zone]
+        filterableFields: [site-code, zone]
+        sortableFields: [site-code]
+        allowCount: true
+        rowBoundaries:
+          - {field: zone, claim: planning_zones, operator: in}
+      - entity: household
+        operations: [get, lookup]
+        readableFields: [household-code]
+        lookups:
+          - {selector: by-household-code, valueOrigin: request}
+        readPaths:
+          - {path: people, readableFields: [person-code, legal-name]}
+  - id: public-directory
+    anonymous: true
+    grants:
+      - {entity: asset-site, operations: [get, list], readableFields: [site-code, label]}
+```
+
+Profile members:
+
+| Member | Effect |
+|---|---|
+| `principalClaim` | The token claim that identifies the caller in audit records. Required unless the profile is `anonymous`. |
+| `requiredScopes`, `requiredPurposes` | Every listed scope, and one of the listed purposes, must be present in the token. |
+| `default: true` | The profile a request gets when it names none. One profile at most. |
+| `anonymous: true` | No token needed. Anonymous profiles cannot carry row boundaries, lookups from claims, or write operations. |
+
+Grant members:
+
+| Member | Effect |
+|---|---|
+| `operations` | The operations this profile may perform on the entity. |
+| `readableFields`, `writableFields` | Fields the profile can read and write. A write never reveals a field the profile cannot read. |
+| `filterableFields`, `sortableFields`, `allowCount` | What `$filter`, `$orderby`, and `$count` may use. |
+| `rowBoundaries` | Each entry compares a field with a verified token claim using `equals` or `in`. Rows outside the boundary do not exist for the caller, on reads and on writes. |
+| `lookups` | The selector profiles this grant may use, and whether the values come from the request or from a `verified_claim` with a `claimMapping`. |
+| `readPaths` | The read paths this grant may follow and the target fields it may read. |
+| `spatialQueries.bbox` | Allows bounding-box queries and caps their span in degrees. |
+| `requestPresence` | Lets a reader of a target entity see that a change request of the named type is pending against a record. |
+| `reviewStages`, `applyTargets` | Which review stages a reviewer may decide, and which target entities an applier may write. See change requests. |
+| `action`, `targets`, `results` | An action grant instead of an entity grant. See immediate actions. |
+
+The operations a grant may list:
+
+| Operation | Grants |
+|---|---|
+| `create`, `get`, `list`, `patch`, `tombstone`, `batch` | Direct reads and writes. `tombstone` needs `tombstone: true` on the entity. |
+| `lookup` | Selector lookups declared under `lookups`. |
+| `revisions`, `snapshot` | Reading revision history and snapshot or effective-time reads. |
+| `submit_request`, `revise_request`, `cancel_request` | Submitter actions on a change-request entity. |
+| `approve_request`, `reject_request`, `request_revision` | Reviewer actions, limited by `reviewStages`. |
+| `apply_request` | Applying an approved request, limited by `applyTargets`. |
+| `invoke` | Invoking an immediate action. |
+
+A profile that can list an entity without a row boundary raises `access.profile.unrestricted_collection`.
+Caller-supplied filters are never authorization, so decide deliberately whether a registry-wide view is what you want.
+
+{/* Evidence: products/registry-server/acceptance/asset-site-placement-change-requests/registry.yaml; products/registry-server/acceptance/business-establishments/registry.yaml; crates/registry-server/src/auth.rs. */}
+
+## Access requirements
+
+An entity can state what any profile touching it must satisfy, and the compiler checks every profile against it:
+
+```yaml
+  - id: facility
+    accessRequirements:
+      requiredScopes: [facility:read]
+      allowedPurposes: [facility-registry]
+      rowBoundaries:
+        - {field: administrative-boundary, claim: administrative_boundaries, operator: in}
+```
+
+A profile that grants the entity without the scope, with another purpose, or without an equivalent row boundary fails the check.
+Put requirements on entities whose data must never leave a jurisdiction or a purpose, so a later profile cannot widen access by accident.
+
+To see the result for one profile:
 
 ```sh
 target/debug/registry-serverctl explain access ./my-registry
 ```
 
-The report shows each profile's operations, readable and writable fields, filters, sorting,
-row restrictions, related-record grants, history, and export permissions.
-Required scopes combine with AND. The verified purpose must match one listed `requiredPurposes`
-value; an empty list leaves purpose unrestricted. Row predicates combine with AND.
-Selecting a profile by name never grants authority, and profiles are not merged.
-Use `explain queries` for the complete permitted query shapes.
-Add `--format json` when another tool consumes a report.
+The report lists, per profile and entity, the operations, fields, boundaries, lookups, and paths that were compiled, and every warning attached to them.
 
-`check` reports review findings for profiles without required scopes, unrestricted collection
-reads, writable row-boundary fields, historical disclosure, exports, related-record grants,
-and fields classified above their entity. Each finding names the entity, profile, and setting
-and explains what to review. Findings do not change permissions or block ordinary compilation.
-Use `check ./my-registry --deny-findings` when your automation requires a configuration with no
-findings. Intentional broad access still produces findings. This flag covers all authoring
-findings, including incomplete package identity and metadata.
+### Preview synthetic claims
 
-{/* Evidence: crates/registry-server/src/access.rs, access_findings() and explain_access();
-    crates/registry-server/src/api/mod.rs, authorize_profile_claims();
-    crates/registry-serverctl/src/lib.rs, CheckArgs and write_access_explanation();
-    crates/registry-serverctl/tests/cli.rs, access_review_example_explains_simulates_and_refuses_footguns_without_live_data. */}
-
-### Require restrictions on every profile
-
-Add `accessRequirements` to an entity when a scope, purpose, or row restriction must apply to
-every profile. For the starter's `record` entity:
-
-```yaml
-accessRequirements:
-  requiredScopes: [registry:generic:operate]
-  allowedPurposes: [registry-operations]
-```
-
-Every profile on that entity must explicitly require those scopes. When `allowedPurposes` is
-nonempty, profiles must restrict their purposes to a nonempty subset of it; an empty or omitted
-list imposes no purpose requirement. Requirements grant nothing and refuse anonymous access.
-You can also declare `rowBoundaries`; profiles must include the exact field, claim, and operator
-bindings. A caller's filter does not satisfy a row requirement.
-
-Remove a required scope from the profile and run `check` again. Compilation refuses the omission
-with `access.requirements.scope_missing`. Restore the scope to make the check pass.
-These checks also cover profiles added by modules. An extension may introduce requirements on an
-entity with none, but cannot replace existing requirements.
-
-For relationship routes, the root profile must satisfy the target and join entities' scope and
-purpose requirements. The current relationship plan enforces root row restrictions only.
-If the target or join entity has row requirements, compilation refuses that read-path grant;
-use a direct route on the protected entity instead.
-
-For change requests, `reviewStages` and `applyTargets` must satisfy the affected entity's
-requirements, using the profile's scopes and purposes and each target grant's row bindings.
-A `requestPresence` grant must satisfy the request entity's requirements using its own
-request-row bindings. Access to a record alone does not disclose whether a request is pending.
-Requirements govern request access. Review independently configured webhook disclosure separately.
-
-{/* Evidence: crates/registry-server/src/contract.rs, AccessRequirementsSource;
-    crates/registry-server/src/access.rs, validate_access_requirements();
-    crates/registry-server/src/change_request.rs, validate_grant_access_requirements();
-    crates/registry-server/src/compiler.rs, merge_extension();
-    crates/registry-server/tests/access_configuration.rs;
-    crates/registry-server/tests/compiler_contract.rs. */}
-
-### Try synthetic caller claims
-
-Save this JSON as `access-scenario.json` beside your project. It matches the unmodified starter:
+Save a scenario file beside the project:
 
 ```json
 {
-  "entity": "record",
-  "accessProfile": "operator",
+  "entity": "asset-site",
+  "accessProfile": "site-planner",
   "operation": "list",
   "claims": {
     "principalClaim": "registry_principal",
-    "principal": "synthetic-operator",
-    "scopes": ["registry:generic:operate"],
-    "purpose": "registry-operations"
+    "principal": "synthetic-planner",
+    "scopes": ["registry:sites:plan"],
+    "purpose": "site-planning",
+    "directClaims": {"planning_zones": ["north"]}
   }
 }
 ```
@@ -191,279 +336,284 @@ Save this JSON as `access-scenario.json` beside your project. It matches the unm
 target/debug/registry-serverctl explain access ./my-registry --scenario ./access-scenario.json
 ```
 
-The preview reports whether these claims satisfy profile admission, using the same admission
-function as HTTP. Remove the scope and repeat to see `required_scope_missing`.
-For a claim-bound row restriction, add synthetic values under `claims.directClaims`, using the
-declared field's scalar type for `equals` or an array for `in`. Claim values are not printed.
+The preview runs the same admission function as the HTTP layer and reports whether the claims are admitted and which rule refused them, such as `required_scope_missing`.
+It verifies no token, reads no record, and prints no claim value.
+Both admitted and refused previews exit successfully; with `--format json`, read `explanation.admitted`.
+The scenario file is limited to 64 KiB and refuses unknown members.
 
-Both allowed and refused previews exit successfully because explanation completed.
-For machine checks, use JSON output and inspect `explanation.admitted`.
-Malformed or oversized scenarios fail; the JSON file is limited to 64 KiB and rejects unknown
-fields and duplicate keys.
-
-:::caution[An allowed preview is not a successful request]
-Use invented claims only, never a real token or personal data. The preview verifies no credentials,
-issues no authority, and checks no records, query, request body, database, or audit availability.
-Run the real fixture journeys before deployment to verify those boundaries.
+:::caution[An admitted preview is not an authorised request]
+Use invented claims only, never a real token or personal data. Row boundaries, query bounds, request bodies, and audit availability are only exercised by journeys against a database.
 :::
 
-{/* Evidence: crates/registry-server/src/access_preview.rs, AccessScenario and preview_access();
-    crates/registry-serverctl/src/lib.rs, ExplainArgs and explain();
-    crates/registry-server/tests/access_configuration.rs, synthetic_preview_uses_http_admission_and_never_renders_claim_values. */}
+{/* Evidence: crates/registry-server/src/access_preview.rs, AccessScenario and preview_access(); crates/registry-serverctl/src/lib.rs, ExplainArgs and explain(); products/registry-server/examples/access-review/registry.yaml. */}
 
-### Generate the API
+## Change requests
 
-Generate request schemas and OpenAPI, each into a new directory:
+A change request is an entity of its own whose records propose a change to another entity.
+Three declarations connect them: the request entity's `changeRequest` block, the target entity's `changeControl` block, and the profiles that submit, review, and apply.
+
+```yaml
+entities:
+  - id: asset-placement
+    primaryDataset: asset-registry
+    route: placements
+    mutationMode: mutable
+    changeControl:
+      requiredFor: [patch]
+    fields:
+      - {id: asset, type: reference, target: asset-item, required: true, classification: internal}
+      - {id: site, type: reference, target: asset-site, required: true, classification: internal}
+  - id: placement-correction-request
+    primaryDataset: asset-registry
+    route: placement-corrections
+    mutationMode: mutable
+    fields:
+      - {id: placement, type: reference, target: asset-placement, required: true, classification: internal}
+      - {id: proposed-site, type: reference, target: asset-site, required: true, classification: internal}
+      - {id: reason, type: text, required: true, maxLength: 2000, classification: internal}
+    changeRequest:
+      effects:
+        - target: {fromField: placement}
+          operation: patch
+          set:
+            site: {fromField: proposed-site}
+      review:
+        stages:
+          - {id: review, approvals: 1, excludeSubmitter: true}
+          - {id: final-approval, approvals: 1, excludeSubmitter: true}
+      retention:
+        mode: operator_erase
+```
+
+- **`changeControl.requiredFor`** lists the operations on the target that must go through a request. With `[patch]`, a direct patch of a placement is refused even for a profile that holds `patch`.
+- **`effects`** describe what applying the request writes. `target` names the record from a reference field, `operation` is `create` or `patch`, `set` maps target fields to request fields, and `clear` lists target fields to null.
+- **`review.stages`** run in order. Each stage needs `approvals` distinct approvers, and `excludeSubmitter` keeps the submitter out of that stage.
+- **`retention.mode`** is `retain` or `operator_erase`. With `operator_erase`, an operator can erase the proposal detail of an applied or canceled request while the record and its state remain.
+
+Profiles then split the roles:
+
+```yaml
+accessProfiles:
+  - id: correction-submitter
+    principalClaim: registry_principal
+    requiredScopes: [registry:corrections:submit]
+    requiredPurposes: [asset-correction]
+    grants:
+      - entity: placement-correction-request
+        operations: [create, get, patch, submit_request, revise_request, cancel_request]
+        readableFields: [placement, proposed-site, reason]
+        writableFields: [placement, proposed-site, reason]
+  - id: correction-reviewer
+    principalClaim: registry_principal
+    requiredScopes: [registry:corrections:review]
+    requiredPurposes: [asset-correction-review]
+    grants:
+      - entity: placement-correction-request
+        operations: [get, list, approve_request, reject_request, request_revision]
+        readableFields: [placement, proposed-site, reason]
+        reviewStages:
+          - stage: review
+            targets:
+              - {entity: asset-placement, readableFields: [site], rowBoundaries: []}
+  - id: correction-applier
+    principalClaim: registry_principal
+    requiredScopes: [registry:corrections:apply]
+    requiredPurposes: [asset-correction-apply]
+    grants:
+      - entity: placement-correction-request
+        operations: [get, apply_request]
+        readableFields: [placement, proposed-site, reason]
+        applyTargets:
+          - {entity: asset-placement, rowBoundaries: []}
+```
+
+A reviewer's `reviewStages` names the stages the profile may decide and the target fields it may see while deciding.
+An applier's `applyTargets` names the entities the profile may write when it applies, with row boundaries of its own.
+Give the profiles that read the target entity a `requestPresence` entry so they can see that a correction is pending.
+
+The request record moves through `draft`, `submitted`, `needs_changes`, `rejected`, `approved`, `applied`, and `canceled`.
+The API reference describes each action, its route, and the states it accepts.
+
+To see everything the compiler derived, including the routes each profile receives:
 
 ```sh
-target/debug/registry-serverctl generate schemas ./my-registry --output ./my-registry-schemas
-target/debug/registry-serverctl generate openapi ./my-registry --output ./my-registry-api
+target/debug/registry-serverctl explain change-requests ./my-registry
 ```
 
-Open the schemas in `my-registry-schemas/generated/schemas/` and the API description in
-`my-registry-api/generated/openapi.json`. Check your field names, types, and permitted operations.
-These describe the whole compiled project; the running `/openapi.json` endpoint filters its
-description for the authenticated caller. Edit the project and regenerate into fresh directories
-to change these files.
+{/* Evidence: products/registry-server/acceptance/asset-site-placement-change-requests/registry.yaml; crates/registry-server/src/request_workflow.rs; crates/registry-server/src/access.rs. */}
 
-For configuration keys, types, defaults, and constraints, use the
-[configuration reference](../../reference/registry-server-configuration/).
-The source checkout includes `registry-project.schema.json` and `registry-module.schema.json`
-under `products/registry-server/generated/authoring/`, plus
-`products/registry-server/generated/runtime/runtime.schema.json` for editor validation.
-Generated record schemas describe API data, not configuration files.
+## Immediate actions
 
-{/* Evidence: crates/registry-serverctl/src/lib.rs, ExplainSubject, ArtifactSelector, and generate();
-    crates/registry-server/src/artifacts.rs; crates/registry-server/src/api/mod.rs, openapi();
-    products/registry-server/generated/authoring/registry-project.schema.json;
-    products/registry-server/generated/authoring/registry-module.schema.json;
-    products/registry-server/generated/runtime/runtime.schema.json. */}
+An action writes several records in one transaction from one typed input, without a review step:
 
-### Write requests
-
-Create requests wrap the public properties in `data`. For the unmodified starter:
-
-```json
-{"data":{"code":"EX-003","label":"Example record"}}
+```yaml
+actions:
+  - id: register-asset-with-inspection
+    inputs:
+      - {id: asset-code, apiName: assetCode, type: string, required: true, maxLength: 64, classification: internal}
+      - {id: label, type: string, required: true, maxLength: 200, classification: internal}
+      - {id: jurisdiction, type: string, required: true, maxLength: 80, classification: internal}
+      - {id: observed-at, apiName: observedAt, type: timestamp, required: true, classification: internal}
+      - {id: inspection-result, apiName: initialResult, type: vocabulary-code, vocabulary: inspection-result, required: true, classification: internal}
+    effects:
+      - id: asset
+        target: {entity: asset}
+        operation: create
+        set:
+          asset-code: {fromField: asset-code}
+          label: {fromField: label}
+          jurisdiction: {fromField: jurisdiction}
+      - id: initial-inspection
+        target: {entity: asset-inspection}
+        operation: create
+        set:
+          asset: {fromEffect: asset}
+          observed-at: {fromField: observed-at}
+          result: {fromField: inspection-result}
+          jurisdiction: {fromField: jurisdiction}
 ```
 
-Send it to the generated create route with a token, an `accessProfile`, and an `Idempotency-Key`.
-PATCH uses `application/json-patch+json` and requires the current `ETag`, including its quotes, in
-`If-Match`. Reuse an idempotency key only for a retry of the same write.
-The tutorial demonstrates both requests and a version conflict.
+`inputs` use the same types and members as fields.
+Each effect has an `id`, a `target` that is either a fixed `entity` or a record named by an input reference through `fromField`, and `set` values that come `fromField` or `fromEffect`, so a later effect can reference a record an earlier effect created.
 
-### Queries and bulk data
+The grant names the action, the targets it may write, and the effect results the caller gets back:
 
-List queries use `$select`, `$filter`, `$orderby`, `$top`, `$count`, and `$skiptoken` where the
-selected grant permits them. A field that can be read is not automatically filterable or sortable.
-Keep pagination bound to the original query and profile.
-Snapshot queries use the same permitted query controls with explicit `snapshot` access, an optional
-saved snapshot reference, and an optional `validAt` effective-time filter.
-Use the [history reference](../../reference/registry-server-history/) for correction context,
-snapshot access, field compatibility, and retained-history erasure.
-
-For bulk data, `registry-serverctl data validate` checks an import against a package plan.
-`data import` and `data export` use the authenticated batch and list APIs with the configured
-permissions. Supply tokens through `--access-token-file`.
-Keep an import checkpoint and its `.state` sidecar together for resumable imports. Each export
-starts with new output and checkpoint files.
-
-{/* Evidence: crates/registry-server/src/artifacts.rs; crates/registry-server/src/mutation.rs;
-    crates/registry-server/src/idempotency.rs; crates/registry-server/src/query.rs;
-    crates/registry-server/src/cursor.rs; crates/registry-server/src/postgres/history_read.rs;
-    crates/registry-serverctl/src/data_lifecycle.rs;
-    crates/registry-serverctl/src/lib.rs, DataCommand. */}
-
-## Configure webhooks
-
-Use [configure Registry Server webhooks](../registry-server-webhooks/) to declare an event, bind
-its receiver, verify delivery, and replay a failed attempt.
-The [events and webhooks reference](../../reference/registry-server-events/) lists the exact
-configuration fields, request format, and delivery behavior.
-
-## Prepare a deployment
-
-The author prepares the package, an external signer approves its exact contents, and the operator
-applies it using migration credentials. Production requires signed packages; the quickstart's
-unsigned package is a local-development exception.
-
-The runtime document uses `apiVersion: registry.registrystack.org/server-runtime/v1alpha1` and
-`kind: RegistryServerRuntimeConfig`. Its main bindings are:
-
-| Runtime section | Operator supplies |
-| --- | --- |
-| `identity` and `package` | Environment, instance and database identity, exact package revision and sequence, compiler identity, and trust anchors |
-| `database` | Separate runtime and migration roles, secret references for their connection URLs, and pool bounds |
-| `authentication` | OpenID Connect (OIDC) issuer, audience, token validation settings, and principal/purpose claim names |
-| `secretProviders`, `audit`, and `cursor` | Protected secret storage and the keys used for audit hashing and pagination |
-| `listener` and `eventDestinations` | Listener/proxy configuration and the exact logical destinations required by the package |
-
-Use typed references such as `secret:file/runtime-database-url`, resolved under the configured
-file-provider root, instead of putting credentials in YAML. OIDC keys can come from issuer
-discovery or a static `jwksSource` document. Static keys are loaded at startup; rotate them through
-a configuration change and restart. Configure [Registry Mint](../mint/) only if your deployment
-needs a token issuer.
-
-{/* Evidence: crates/registry-server/src/runtime_config.rs, RuntimeConfig;
-    crates/registry-server/tests/runtime_config.rs;
-    crates/registry-platform-config/src/secrets.rs, SecretReference. */}
-
-To prepare a pilot deployment:
-
-1. Provision PostgreSQL with the administrator-installed `btree_gist` extension, isolated roles,
-   TLS, and a separate schema-test database. Keep migration credentials off the serving process
-   when they are not needed.
-2. Add the project's package identity and run `check --production`. Run `test` against the separate
-   database with real test credential bindings. Retain the receipt and schema fingerprint for the
-   exact candidate. Fixture claims alone are not deployment credentials.
-3. Run `package` with that receipt, fingerprint, database identity, and signature policy. A
-   production candidate waits for detached signatures over `signing-input.json`. Have your signer
-   produce them, then rerun `package` with `--signatures` and the same unchanged signing input,
-   receipt, and output directory. The CLI does not accept a private signing key.
-4. With the migration credential, activate the signed package using `apply --initial` for the first
-   activation. Set the serving runtime file to the activated package, then use `verify` for package
-   verification and `doctor` for dependency checks. Start `registry-server --config <absolute-file>`
-   and check `/ready` before admitting traffic.
-
-This is a deployment checklist, not a provisioning procedure.
-Use each subcommand's `--help` for required arguments.
-`products/registry-server/scripts/test-adopter-workflow.sh` runs a synthetic signed deployment,
-upgrade, and recovery exercise.
-
-{/* Evidence: crates/registry-serverctl/src/lib.rs, PackageArgs, TestArgs, ApplyArgs, and DoctorArgs;
-    crates/registry-serverctl/src/test_lifecycle.rs; crates/registry-serverctl/src/package_lifecycle.rs;
-    crates/registry-serverctl/src/doctor.rs; products/registry-server/scripts/test-adopter-workflow.sh. */}
-
-### Change an active registry
-
-For a successor, compare against the active package with
-`diff <project> --runtime-config <absolute-file>`.
-Use the active package's runtime file as `--baseline-runtime-config` for both test and package.
-The diff includes before/after access settings and the direction of individual scope, purpose,
-row-boundary, field, count, history, and export changes. Related-record and other mixed changes
-remain marked for review rather than receiving an inferred overall direction.
-Entity requirement changes are included even when the existing profiles still satisfy them.
-Review the migration plan even when a change appears additive. A required field on existing records
-needs a data migration; adding an optional field is not the same operation.
-
-Adding an optional field without changing grants can use the automatic successor path.
-Adding that field to `readableFields` also changes disclosure and requires review.
-If test or package reports `migration.review.required`, prepare a reviewed migration directory:
-
-```text
-reviewed-migrations/
-  modules/<module-id>/migrations/<migration-id>/
-    descriptor.json
-    rehearsal.json
-    steps/<step-id>.sql             if the descriptor declares SQL steps
-    assertions/<assertion-id>.sql   if the descriptor declares assertions
-    fixtures/<fixture-id>.jsonl     if the rehearsal references fixtures
-    backup.json                    for destructive changes
+```yaml
+  - id: asset-registrar
+    principalClaim: registry_principal
+    requiredScopes: [registry:asset:register]
+    requiredPurposes: [asset-registration]
+    grants:
+      - action: register-asset-with-inspection
+        operations: [invoke]
+        targets:
+          - entity: asset
+            rowBoundaries:
+              - {field: jurisdiction, claim: jurisdiction, operator: equals}
+          - entity: asset-inspection
+            rowBoundaries:
+              - {field: jurisdiction, claim: jurisdiction, operator: equals}
+        results: [asset]
 ```
 
-The descriptor names the change class, the exact change codes and targets it covers, timeouts,
-recovery mode, and its evidence paths. Use the codes and targets from `diff --format json`.
-JSON artifacts must use canonical JSON: sorted keys, no extra whitespace, and no duplicate keys.
-Keep only referenced artifacts in this directory; symbolic links and unrelated files are refused.
-Module IDs group migration artifacts and do not have to name a declared model module.
+Row boundaries on action targets apply to the records the action writes, so a registrar bound to one jurisdiction cannot register an asset in another.
+Actions that patch existing records take preconditions: the caller first asks for target conditions, then invokes with the ETags it received, and the action fails with `precondition.failed` if a target moved in between.
+`explain actions` lists every compiled action with its inputs, effects, and grants.
 
-The rehearsal receipt binds the prior package and schema, descriptor and SQL hashes, the measured
-target schema, and applicable timeout and recovery proofs. Your migration rehearsal process must
-produce that evidence. The CLI reads and validates the files; it does not perform the review or
-generate this migration receipt. A metadata-only permission or entity-requirement change can have
-empty steps and assertions, without dummy SQL. It still needs rehearsal evidence.
+{/* Evidence: products/registry-server/fixtures/asset-registration-actions/registry.yaml; products/registry-server/fixtures/asset-registration-actions/modules/asset-registration-actions-core/module.yaml; crates/registry-server/src/mutation/action.rs. */}
 
-Pass the same reviewed directory to both commands:
+## Events
+
+Events are declared on entities, usually inside a module, and delivered by the runtime to the webhook destination the deployment binds:
+
+| Member | Values |
+|---|---|
+| `trigger` | `created`, `patched`, `tombstoned`, or `request_lifecycle` for change-request state changes. |
+| `when` | Optional. `kind: fields` with `changed`, `beforeEquals`, and `afterEquals`; or `kind: request_lifecycle` with `transitions`, `toStates`, and `stages`. Every listed test must hold. |
+| `projection` | The field ids copied into the event payload's `values`. Restricted fields cannot be projected. |
+| `webhook.destinationId` | The destination the runtime configuration binds to a receiver URL and signing key. |
+
+Field ids in `when` and `projection` are the authored kebab-case ids, and the payload keeps them.
+Use a new event id when you change the projection in a way receivers must notice.
 
 ```sh
-target/debug/registry-serverctl test ./my-registry \
-  --baseline-runtime-config "<absolute-active-runtime-file>" \
-  --reviewed-migrations ./reviewed-migrations \
-  --runtime-config "<absolute-test-runtime-file>" \
-  --credentials "<absolute-test-credentials-file>" \
-  --database-id "<database-id>" \
-  --signature-threshold 1 --signature-key-id "<signer-key-id>" \
-  --output "<absolute-schema-test-receipt-file>"
-
-target/debug/registry-serverctl package ./my-registry \
-  --baseline-runtime-config "<absolute-active-runtime-file>" \
-  --reviewed-migrations ./reviewed-migrations \
-  --database-id "<database-id>" \
-  --schema-fingerprint "<fingerprint-from-test>" \
-  --test-receipt "<absolute-schema-test-receipt-file>" \
-  --signature-threshold 1 --signature-key-id "<signer-key-id>" \
-  --output "<package-build-directory>"
+target/debug/registry-serverctl webhook sample ./my-registry --event record-labelled-v1
 ```
 
-The test runtime must select a separate, empty test database. Test measures the target schema,
-checks it against the reviewed fingerprint, runs the fixture journeys, and writes a schema-test
-receipt. This receipt is distinct from the migration rehearsal receipt in the reviewed directory.
-Package then prepares the signing input. Complete detached signing and apply as for the initial
-deployment, omitting `--initial` on apply.
+The sample renders the exact HTTP request a receiver will get, with synthetic values, so you can build the receiver before the registry exists.
+`explain events` lists every compiled event with its trigger, conditions, projection, and destination.
+[Registry Server API reference](../../reference/registry-server-api/#events-and-webhooks) documents the headers, signature, and retry contract.
 
-Use CLI and Server binaries from the same build for testing and deployment.
-New schema fingerprints identify table columns by name, so a fresh installation and an in-place
-upgrade can match even when PostgreSQL stores their columns in a different order.
-Existing packages retain their recorded fingerprints and signatures and still verify using the
-original rules. A package measured with the updated algorithm needs the updated Server binary.
+{/* Evidence: products/registry-server/generated/authoring/registry-module.schema.json; crates/registry-server/src/webhook.rs. */}
 
-{/* Evidence: crates/registry-server/src/postgres/catalog.rs, CatalogFingerprintVersion;
-    crates/registry-server/tests/postgres_package/fingerprint.rs,
-    signed_legacy_fingerprint_starts_and_upgrades_without_rewriting_package_bytes. */}
+## Journeys
 
-If any source, reviewed artifact, baseline, or signature-policy input changes, repeat test and
-signing. Package refuses a schema-test receipt for a different candidate.
-For `migration.review.refused`, check exact change coverage and the artifact hashes and bindings.
-For `migration.review.fingerprint_mismatch`, rehearse the exact candidate and correct its evidence.
-Reviewed artifacts cannot authorize a change classified as unsupported by the migration planner.
+`tests/journeys.yaml` holds the scenarios `registry-serverctl test` runs against a database.
+A journey is a list of steps; each step names an entity, a profile, the claims the synthetic token carries, one request, and the outcome it expects.
 
-{/* Evidence: crates/registry-serverctl/src/lib.rs, PackageCandidateArgs and capture_candidate();
-    crates/registry-serverctl/src/reviewed_migrations.rs;
-    crates/registry-serverctl/src/test_lifecycle.rs;
-    crates/registry-server/src/migration_plan.rs, ReviewedMigrationDescriptor and MigrationRehearsalReceipt;
-    crates/registry-serverctl/tests/cli/reviewed_migrations.rs;
-    products/registry-server/scripts/test-adopter-workflow.sh. */}
+```yaml
+apiVersion: registry.registrystack.org/server-journeys/v1
+journeys:
+  - id: placement-correction
+    steps:
+      - id: create-site
+        entity: asset-site
+        accessProfile: asset-operator
+        claims: &operator_claims
+          principal: synthetic-operator
+          scopes: [registry:assets:operate]
+          purpose: asset-management
+        request:
+          operation: create
+          data: {site-code: north-yard, label: North Yard}
+        expect: {outcome: success, status: 201, fields: {site-code: north-yard}}
+        capture: north-yard
+      - id: rename-site
+        entity: asset-site
+        accessProfile: asset-operator
+        claims: *operator_claims
+        request:
+          operation: patch
+          recordRef: north-yard
+          etagRef: north-yard
+          changes:
+            - {field: label, value: North Yard Depot}
+        expect: {outcome: success, status: 200, fields: {label: North Yard Depot}}
+      - id: planner-outside-zone-sees-nothing
+        entity: asset-site
+        accessProfile: site-planner
+        claims:
+          principal: synthetic-planner
+          scopes: [registry:sites:plan]
+          purpose: site-planning
+          directClaims: {planning_zones: [south]}
+        request: {operation: get, recordRef: north-yard}
+        expect: {outcome: refusal, status: 404}
+```
 
-:::caution[Rehearse migration and recovery]
-Activation can change persistent data and enter maintenance. Test the exact successor and retain
-the reviewed backup/recovery artifacts before applying it. Do not run generated SQL manually or
-clear migration state to force the service ready.
-:::
+| Step member | Meaning |
+|---|---|
+| `claims` | `principal`, `scopes`, `purpose`, and `directClaims` for the claims row boundaries and claim lookups read. Values are synthetic. |
+| `request.operation` | `create`, `get`, `list`, `query`, `lookup`, `read_path`, `patch`, `batch`, or a change-request action such as `submit_request`, `approve_request` with a `stage`, or `apply_request`. |
+| `recordRef`, `etagRef` | A record and ETag captured by an earlier step. |
+| `data`, `changes`, `items`, `selector` and `values`, `path`, `select`, `top`, `count`, `bbox` | The request body or query for the operation. |
+| `expect` | `outcome` is `success` or `refusal`; `status` is the HTTP status; `fields` asserts returned values; `count` asserts the item count; `problemCode` asserts the problem code of a refusal. |
+| `capture` | Stores the returned record and ETag under a name for later steps. |
 
-If apply fails after maintenance begins, readiness stays unavailable. Review the failed apply
-report and use `migration explain --runtime-config <absolute-file>` to inspect the configured
-package's migration plan. This command explains the package, not live database status. Resolve the
-reported cause, then retry the exact successor or follow the reviewed restore path.
-A restart alone does not repair a failed migration.
-After a successful activation, restart Server with the successor package selected.
+A refused read of a row outside the caller's boundary returns 404, because the server conceals what the caller may not know exists.
+Write a refusal step for every boundary you rely on; the compiler cannot prove a row boundary works, only a journey can.
 
-{/* Evidence: crates/registry-serverctl/src/lib.rs, DiffArgs and MigrationCommand;
-    crates/registry-server/src/tooling.rs, access_change_details();
-    crates/registry-serverctl/src/apply_lifecycle.rs; crates/registry-server/src/migration.rs;
-    crates/registry-server/tests/postgres_migration.rs; products/registry-server/scripts/test-adopter-workflow.sh. */}
+{/* Evidence: products/registry-server/acceptance/asset-site-placement-change-requests/tests/journeys.yaml; products/registry-server/acceptance/facility/tests/journeys.yaml; crates/registry-server/src/fixtures.rs. */}
 
-## Check before deployment
+## Check, explain, and generate
 
-Include successful writes and refused requests in `tests/journeys.yaml`.
-Test missing permissions, forbidden fields, record restrictions, and relationship constraints.
-Rerun database tests after source changes. Retain the source, locks, generated files, test receipt,
-signatures, and runtime configuration for each deployment; store secrets separately.
+```sh
+target/debug/registry-serverctl check ./my-registry --deny-findings
+target/debug/registry-serverctl explain model ./my-registry
+target/debug/registry-serverctl explain routes ./my-registry
+target/debug/registry-serverctl explain queries ./my-registry
+target/debug/registry-serverctl generate openapi ./my-registry --output ./generated/openapi
+target/debug/registry-serverctl generate schemas ./my-registry --output ./generated/schemas
+```
+
+`explain` takes one subject: `model`, `access`, `routes`, `queries`, `actions`, `change-requests`, or `events`.
+`generate` writes one artifact family into a new directory: `openapi`, `schemas`, `actions`, `manifest`, `metadata`, or `sql`.
+Output is deterministic, so a second run over the same project produces identical bytes, and you can commit the generated documents and diff them in review.
+The running server publishes the same OpenAPI document at `/openapi.json` and the same schemas under `/v1/schemas/`.
+
+Add `--production` to any of these commands to apply the production closure rules: package identity, manifest projection, and pinned module digests must all be present.
 
 ## Troubleshooting
 
-| Symptom | Next move |
-| --- | --- |
-| A module lock is stale | Run `project lock`, review its diff, and repeat the check. |
-| A property is refused or missing | Check its public JSON name and the selected grant's readable/writable field lists. |
-| A filter, sort, or count is refused | Check that the selected grant explicitly permits it. |
-| A saved snapshot query returns `503 source.unavailable` | Check retained history coverage, compatible field metadata, and erasure maintenance history before retrying with a fresh reference. |
-| Runtime parsing rejects a governed member | Move model or permission changes into the authoring project and build a successor package. |
-| Production packaging refuses the candidate | Check production diagnostics, receipt identity, fingerprint, and detached signature policy. |
-| Readiness remains unavailable after migration failure | Review the failed apply report and resolve or restore through the reviewed recovery path. |
+- **A finding names a path such as `entities[id=record].fields[id=label]`.** The path is a document path into `registry.yaml` or the module file the finding names. Fix the member it points at; findings never require guesswork about location.
+- **`check` passes but `check --deny-findings` fails.** A finding that needs review is present. Read it and either change the project or accept the finding knowingly; the production gate will ask again.
+- **A module digest does not match.** Run `project lock` after editing a module, then review the digest change together with the module diff.
+- **A profile grants a field the entity does not have.** Field ids in grants are the authored kebab-case ids, not the camelCase API names.
+- **A journey step fails with 404 where you expected data.** The profile's row boundary or purpose excluded the caller. Compare the step's `claims` with the grant, and use `explain access --scenario` to see which admission rule refused it.
 
 ## Next
 
-- [Return to the local tutorial](../../tutorials/first-registry-server/) to compare a known working setup.
-- [Review the product boundary](../../explanation/configuration-defined-registry/) before adding domain workflows.
-- [Use the history reference](../../reference/registry-server-history/) for corrections and saved snapshots.
-- [Configure Registry Mint](../mint/) for a deployment-owned token issuer.
+- [Deploy and operate a registry](../../operate/registry-server/): database, runtime configuration, test, package, apply, webhooks, and erasure.
+- [Registry Server configuration reference](../../reference/registry-server-configuration/): every project and runtime key.
+- [Registry Server API reference](../../reference/registry-server-api/): what clients see once the project runs.
+- [Registry modeling patterns](../../explanation/registry-modeling-patterns/): how to shape entities, references, and history.

@@ -1,0 +1,671 @@
+---
+title: Deploy and operate a registry
+description: Provision PostgreSQL, write the runtime configuration, test, sign, and activate a Registry Server package, bind webhook receivers, and run the maintenance commands an active registry needs.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: how-to
+persona:
+  - operator
+locale: en
+standards_referenced:
+  - cloudevents
+---
+
+This guide takes a registry project that passes `check --production` from an empty PostgreSQL
+server to a serving Registry Server process, then covers the work an active registry needs:
+successor packages, webhook receivers, history and request maintenance, and bulk data moves.
+Write the project first with [Author a registry project](../../configure/registry-server/).
+
+Three roles take part. The author prepares a package from the project. A signer approves the exact
+package bytes with a key the deployment trusts. The operator, holding the migration credential,
+activates the signed package and runs the server. One person may hold all three roles on a pilot;
+the commands stay the same. Build the two binaries from one checkout and use that same build for
+testing, packaging, activation, and serving:
+
+```sh
+cargo build --locked -p registry-serverctl -p registry-server
+```
+
+Every command reads `--help`. Paths given to `--runtime-config`, `--credentials`, `--output`, and
+`--package` must be absolute.
+
+{/* Evidence: crates/registry-serverctl/src/lib.rs, TestArgs, PackageArgs, ApplyArgs, and DoctorArgs;
+    products/registry-server/scripts/test-adopter-workflow.sh. */}
+
+## Provision PostgreSQL
+
+Registry Server needs PostgreSQL 15 or newer, with TLS between the server and the database. A
+project with a `crs84-point` field needs PostgreSQL 16 or newer and PostGIS. Create two login
+roles: a migration role that owns the schema and applies packages, and a runtime role the serving
+process uses. Keep the migration credential off the serving host when no activation is in
+progress.
+
+```sql
+CREATE ROLE registry_migration LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+  NOINHERIT NOBYPASSRLS PASSWORD '<migration-password>';
+CREATE ROLE registry_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+  NOINHERIT NOBYPASSRLS PASSWORD '<runtime-password>';
+```
+
+Create two databases with the same shape: the serving database, and an empty schema-test database
+that `test` may fill and drop. In each database, as an administrator:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+REVOKE ALL ON DATABASE registry FROM PUBLIC;
+GRANT CONNECT ON DATABASE registry TO registry_migration, registry_runtime;
+CREATE SCHEMA registry_internal AUTHORIZATION registry_migration;
+CREATE SCHEMA registry_data AUTHORIZATION registry_migration;
+CREATE SCHEMA registry_source AUTHORIZATION registry_migration;
+CREATE SCHEMA registry_derived AUTHORIZATION registry_migration;
+CREATE SCHEMA registry_context AUTHORIZATION registry_migration;
+REVOKE ALL ON SCHEMA registry_internal, registry_data, registry_source,
+  registry_derived, registry_context FROM PUBLIC;
+```
+
+Registry Server creates every table, function, and policy inside those five schemas from the
+package. It never creates a schema, an extension, or a role, so a missing prerequisite surfaces
+at `test` or `apply` rather than at runtime.
+
+For a spatial project, add a bounding-box role named after the runtime role with the suffix
+`__spatial_bbox`, and install PostGIS in a dedicated schema that neither registry role owns:
+
+```sql
+CREATE ROLE registry_runtime__spatial_bbox NOLOGIN NOSUPERUSER NOCREATEDB
+  NOCREATEROLE NOINHERIT NOBYPASSRLS;
+GRANT registry_runtime__spatial_bbox TO registry_migration
+  WITH INHERIT FALSE, SET TRUE, ADMIN FALSE;
+-- in each database
+CREATE SCHEMA registry_spatial_ext AUTHORIZATION postgres;
+CREATE EXTENSION IF NOT EXISTS postgis WITH SCHEMA registry_spatial_ext;
+REVOKE CREATE ON DATABASE registry FROM PUBLIC, registry_migration, registry_runtime;
+REVOKE ALL ON SCHEMA registry_spatial_ext FROM PUBLIC;
+GRANT USAGE ON SCHEMA registry_spatial_ext
+  TO registry_migration, registry_runtime, registry_runtime__spatial_bbox;
+```
+
+The quickstart under `products/registry-server/quickstart/` writes exactly these statements for a
+local container, so its generated `database/` directory is a working reference.
+
+{/* Evidence: products/registry-server/quickstart/support/quickstart.py, _initialize_sql();
+    crates/registry-server/src/postgres/schema.rs;
+    crates/registry-server/src/postgres/roles.rs. */}
+
+## Write the runtime configuration
+
+The runtime file binds one package to one database, one token issuer, and one listener. It is a
+deployment artifact: keep it with the operator, outside the authoring project, and never put a
+credential in it. Values such as `secret:file/<name>` resolve to owner-only files under the file
+provider root; `secret:env/<NAME>` reads an environment variable when `secretProviders.environment`
+is declared.
+
+```yaml
+apiVersion: registry.registrystack.org/server-runtime/v1alpha1
+kind: RegistryServerRuntimeConfig
+listener:
+  bind: 127.0.0.1:8080
+  trustedProxy: operator-controlled-upstream
+  publicOrigin: https://registry.example.org
+identity:
+  environment: production
+  instanceId: civil-registry-1
+  databaseId: civil-registry-db-1
+  databaseInitializationEnvironment: production
+secretProviders:
+  file:
+    root: /etc/registry-server/secrets
+database:
+  runtimeUrlRef: secret:file/runtime-database-url
+  migrationUrlRef: secret:file/migration-database-url
+  pool:
+    maxSize: 8
+  roles:
+    migration: registry_migration
+    runtime: registry_runtime
+package:
+  root: /var/lib/registry-server/packages/build-1/package
+  trustAnchorPath: /etc/registry-server/package-trust-anchor.json
+  compilerSourceRevision: civil-registry-0.1.0
+  activeRevision: sha256:<package revision reported by package>
+  activeSequence: 1
+authentication:
+  oidc:
+    issuer: https://issuer.example.org
+    audience: registry-server
+    allowedAlgorithm: ES256
+    accessTokenType: at+jwt
+    scopeClaim: scope
+    scopeSeparator: " "
+    allowedClients: [registry-console]
+    deniedKids: []
+    maxTokenLifetimeSeconds: 300
+    leewayMilliseconds: 30000
+    jwksSource:
+      kind: discovery
+  authorityClaims:
+    principal: registry_principal
+    purpose: registry_purpose
+audit:
+  hashKeyRef: secret:file/audit-key
+cursor:
+  secretRef: secret:file/cursor-key
+eventDestinations: {}
+```
+
+| Section | What it binds |
+| --- | --- |
+| `listener` | The bind address, the `trustedProxy` posture (`direct` or `operator-controlled-upstream`), and the optional public origin that generated documents cite. The runtime accepts the posture and does not yet act on it, so enforce client addresses and TLS at your proxy. |
+| `identity` | The environment, instance, and database this file may serve. `environment` and `instanceId` must equal the `package` block in `registry.yaml`; `databaseId` must equal the `--database-id` given to `test` and `package`. |
+| `secretProviders` | The file root (owner-only files) and, when declared, the environment provider. |
+| `database` | Secret references for the runtime and migration connection URLs, pool bounds, and the two role names the package's policies are written for. |
+| `package` | The activated package directory, the trust anchor, the source revision the project declares as `package.sourceRevision`, and the active revision and sequence. |
+| `authentication` | The OpenID Connect verifier and the claim names that carry Registry authority. |
+| `audit` and `cursor` | The key that chains the audit journal and the secret that signs pagination cursors. Loss of either key invalidates existing chains or cursors. |
+| `eventDestinations` and `eventDelivery` | One binding per webhook destination the package declares, and payload retention. |
+| `operationalTimeouts` | Optional HTTP request, record lock, migration lock, migration statement, and shutdown grace bounds. |
+
+`leewayMilliseconds` must be a whole number of seconds and at most 300000. Static keys under
+`jwksSource: {kind: static, documentRef: ...}` load at startup; rotate them through a
+configuration change and restart. With `kind: discovery`, the runtime reads the issuer's discovery
+document and caches its JWKS under the optional `jwksCache` bounds.
+
+{/* Evidence: crates/registry-server/src/runtime_config.rs, RuntimeConfig;
+    crates/registry-server/tests/runtime_config.rs;
+    crates/registry-platform-config/src/secrets.rs, SecretReference;
+    products/registry-server/generated/runtime/runtime.schema.json. */}
+
+### What a token must carry
+
+Registry Server verifies a bearer access token before it reads any claim. Configure the issuer so
+that every token for this deployment satisfies the table. Fixture claims from `journeys.yaml`
+are never accepted by a running server.
+
+| Token part | Requirement |
+| --- | --- |
+| `alg`, `typ`, `kid` headers | `alg` equals `allowedAlgorithm`; `typ` equals `accessTokenType`; `kid` is present in the JWKS and absent from `deniedKids`. |
+| `iss` | Equals `issuer`. |
+| `aud` | The single string `audience`. Configure the issuer to emit one audience for this resource; a list is refused. |
+| `exp`, `iat`, `nbf` | The lifetime is at most `maxTokenLifetimeSeconds`; clock skew up to `leewayMilliseconds` is tolerated. |
+| `azp` or `client_id` | Listed in `allowedClients` when that list is not empty. |
+| `scope` | The claim named by `scopeClaim`, split on `scopeSeparator`, covers the profile's `requiredScopes`. |
+| principal claim | The claim named by `authorityClaims.principal` carries the caller identity that row boundaries compare against. |
+| purpose claim | The claim named by `authorityClaims.purpose` is required when the profile lists `requiredPurposes`. |
+
+Deployments without an identity provider can run [Registry Mint](../../configure/mint/) as the
+issuer. Its demo key material scripts also generate the secrets this page references.
+
+{/* Evidence: crates/registry-server/src/auth.rs;
+    crates/registry-server/tests/http_auth.rs;
+    crates/registry-platform-oidc/src/lib.rs. */}
+
+## Test the candidate
+
+`test` compiles the project, applies it to the empty schema-test database, measures the resulting
+schema, runs every journey in `tests/journeys.yaml` over real HTTP with real tokens, and writes a
+receipt that `package` later binds to. Prepare three inputs:
+
+1. A test runtime file: the same document as the serving one, with `database` pointing at the
+   schema-test database, `package.root` an empty directory, and `package.activeRevision` a
+   placeholder of `sha256:` followed by 64 hexadecimal digits.
+2. Real access tokens from your issuer for each journey principal, stored as owner-only files under
+   the secret root.
+3. A credentials document binding every journey step to a token or to anonymous access:
+
+```yaml
+apiVersion: registry.registrystack.org/server-schema-test-credentials/v1
+kind: SchemaTestCredentials
+bindings:
+  - journeyId: record-lifecycle
+    stepId: create-record
+    credential: {type: bearer, tokenRef: secret:file/schema-test-token}
+  - journeyId: record-lifecycle
+    stepId: get-record
+    credential: {type: bearer, tokenRef: secret:file/schema-test-token}
+  - journeyId: record-lifecycle
+    stepId: list-records
+    credential: {type: anonymous}
+```
+
+Then run the test with the signature policy the package will carry:
+
+```sh
+target/debug/registry-serverctl --format json test ./my-registry \
+  --runtime-config /srv/registry/runtime-test.yaml \
+  --credentials /srv/registry/schema-test-credentials.yaml \
+  --database-id civil-registry-db-1 \
+  --signature-threshold 1 --signature-key-id registry-signer-2026 \
+  --output /srv/registry/schema-test-receipt.json
+```
+
+The report names the candidate `packageRevision`, the measured `schemaFingerprint`, and the
+journeys that passed. Keep the receipt and the fingerprint with the candidate: `package` refuses a
+receipt taken for different sources, a different baseline, or a different signature policy.
+A journey failure reports the journey and step without record values.
+
+{/* Evidence: crates/registry-serverctl/src/test_lifecycle.rs;
+    crates/registry-serverctl/src/lib.rs, TestArgs;
+    crates/registry-server/src/fixtures.rs. */}
+
+## Package and sign
+
+`package` writes the deployable package directory and stops at the signing boundary:
+
+```sh
+target/debug/registry-serverctl --format json package ./my-registry \
+  --database-id civil-registry-db-1 \
+  --schema-fingerprint "<schemaFingerprint from the test report>" \
+  --test-receipt /srv/registry/schema-test-receipt.json \
+  --signature-threshold 1 --signature-key-id registry-signer-2026 \
+  --output /srv/registry/build-1
+```
+
+The report's `state` is `awaiting_signatures` and `build-1/signing-input.json` holds the exact
+bytes to sign. The command never accepts a private key. Your signer produces a detached Ed25519
+signature over those bytes, for example with OpenSSL, and returns a signature document:
+
+```sh
+openssl pkeyutl -sign -rawin -inkey registry-signer-2026.pem \
+  -in /srv/registry/build-1/signing-input.json -out signature.bin
+```
+
+```json
+{"signatures": [{"keyId": "registry-signer-2026", "signatureHex": "<hex-encoded signature.bin>"}]}
+```
+
+Rerun the same `package` command with `--signatures <document>` and the unchanged inputs and
+output directory. The report's `state` becomes published and `packageRevision` names the package.
+The package directory is `build-1/package`.
+
+The trust anchor the runtime file names lists the public keys and the threshold the deployment
+accepts, bound to the same identity:
+
+```json
+{
+  "apiVersion": "registry.registrystack.org/package-trust/v1",
+  "environment": "production",
+  "instanceId": "civil-registry-1",
+  "databaseId": "civil-registry-db-1",
+  "threshold": 1,
+  "keys": [
+    {
+      "keyId": "registry-signer-2026",
+      "jwk": {"kty": "OKP", "crv": "Ed25519", "alg": "EdDSA",
+              "kid": "registry-signer-2026", "x": "<base64url public key>"}
+    }
+  ]
+}
+```
+
+`--signature-threshold 0` builds an unsigned package. Production activation refuses it; the
+quickstart uses it for local development only.
+
+{/* Evidence: crates/registry-serverctl/src/package_lifecycle.rs;
+    crates/registry-serverctl/src/lib.rs, PackageArgs;
+    crates/registry-server/src/package.rs;
+    products/registry-server/scripts/test-adopter-workflow.sh. */}
+
+## Activate and serve
+
+Write the serving runtime file with `package.root` pointing at `build-1/package`,
+`activeRevision` equal to the reported `packageRevision`, and `activeSequence: 1`. Then activate
+with the migration credential:
+
+```sh
+target/debug/registry-serverctl --format json apply \
+  --runtime-config /etc/registry-server/runtime.yaml \
+  --package /srv/registry/build-1/package --initial
+```
+
+`--initial` activates sequence one in an uninitialized database and requires the runtime file to
+already name that package. The report carries the activated revision, sequence, and schema
+fingerprint. Confirm the configuration before starting the process:
+
+```sh
+target/debug/registry-serverctl verify --runtime-config /etc/registry-server/runtime.yaml
+target/debug/registry-serverctl doctor --runtime-config /etc/registry-server/runtime.yaml
+registry-server --config /etc/registry-server/runtime.yaml
+```
+
+`verify` opens no runtime dependency. It proves that the configured package verifies against the
+trust anchor and identity, and reports the registry id, version, and revision plus inventory
+counts. It does not say whether the database is on that package; the `apply` report and readiness
+do. `doctor` opens every startup dependency without binding the listener: the runtime file, the
+package, the database connection and its readiness, the audit and cursor keys, OIDC key
+material, event destination bindings, and the listener address. Start the process and check
+`GET /ready` before admitting traffic; `GET /health` reports liveness only.
+
+Retain the project sources, module locks, generated files, test receipt, signature documents, and
+runtime file for each activation. Store secrets separately.
+
+{/* Evidence: crates/registry-serverctl/src/apply_lifecycle.rs;
+    crates/registry-serverctl/src/doctor.rs;
+    crates/registry-serverctl/src/lib.rs, VerifyArgs and verify();
+    crates/registry-server/src/api/mod.rs;
+    crates/registry-server/src/startup.rs. */}
+
+## Change an active registry
+
+A successor package goes through the same test, package, sign, and apply sequence with the active
+package as its baseline. Start by comparing the edited project with the active package:
+
+```sh
+target/debug/registry-serverctl --format json diff ./my-registry \
+  --runtime-config /etc/registry-server/runtime.yaml
+```
+
+The diff lists model, access, and route changes with their change codes and, for access changes,
+their direction: a scope, purpose, row-boundary, field, count, history, or export change is marked
+as widening or narrowing, and mixed changes are marked for review. Set `package.sequence` in
+`registry.yaml` to the next sequence. `registry.version` is bound to the database for its
+lifetime: a package that changes it can only initialize a new database.
+
+Pass the active runtime file as `--baseline-runtime-config` to both `test` and `package`. A change
+the migration planner classifies as additive, such as a new optional field or a widened grant,
+needs no further evidence. When `test` or `package` reports `migration.review.required`, prepare a
+reviewed migration directory and pass it to both commands as `--reviewed-migrations`:
+
+```text
+reviewed-migrations/
+  modules/<module-id>/migrations/<migration-id>/
+    descriptor.json
+    rehearsal.json
+    steps/<step-id>.sql             when the descriptor declares SQL steps
+    assertions/<assertion-id>.sql   when the descriptor declares assertions
+    fixtures/<fixture-id>.jsonl     when the rehearsal references fixtures
+    backup.json                     for destructive changes
+```
+
+The descriptor names the change class, the exact change codes and targets from `diff --format
+json`, timeouts, recovery mode, and its evidence paths. The rehearsal receipt binds the prior
+package and schema, the descriptor and SQL hashes, the measured target schema, and the timeout
+and recovery proofs. Your rehearsal process produces that evidence against the exact candidate;
+the command line validates it and does not generate it. JSON artifacts use canonical JSON: sorted
+keys, no extra whitespace. Keep only referenced files in the directory; symbolic links and
+unrelated files are refused. A metadata-only change can declare empty steps and assertions and
+still needs rehearsal evidence. A field added as required is created without its constraint, your
+reviewed steps backfill it, and the plan constrains the column afterwards.
+
+```sh
+target/debug/registry-serverctl --format json test ./my-registry \
+  --baseline-runtime-config /etc/registry-server/runtime.yaml \
+  --reviewed-migrations ./reviewed-migrations \
+  --runtime-config /srv/registry/runtime-test.yaml \
+  --credentials /srv/registry/schema-test-credentials.yaml \
+  --database-id civil-registry-db-1 \
+  --signature-threshold 1 --signature-key-id registry-signer-2026 \
+  --output /srv/registry/schema-test-receipt-2.json
+```
+
+Package and sign as before, then activate. For a successor, the runtime file given to `apply`
+still names the active package; the target comes from `--package`. A destructive change also
+needs its reviewed backup artifact, bound by its descriptor path:
+
+```sh
+target/debug/registry-serverctl --format json apply \
+  --runtime-config /etc/registry-server/runtime.yaml \
+  --package /srv/registry/build-2/package \
+  --backup modules/core/migrations/0002/backup.json=/srv/registry/backups/0002.dump
+```
+
+After a successful activation, update the runtime file to the successor's package directory,
+revision, and sequence, run `verify`, and restart the server. Editing the runtime file does not
+change the active process. If any source, reviewed artifact, baseline, or signature-policy input
+changes, repeat the test and the signing. For `migration.review.refused`, check the change
+coverage and artifact hashes; for `migration.review.fingerprint_mismatch`, rehearse the exact
+candidate again. Reviewed artifacts cannot authorize a change the planner classifies as
+unsupported.
+
+:::caution[A failed activation is fix-forward only]
+Activation enters maintenance and may change persistent data. If `apply` fails after maintenance
+begins, readiness stays unavailable and a restart does not repair it. There is no command that
+clears the failed state: resolve the reported cause and retry the same target package, or restore
+the database from the backup you took before activation and start the activation again. Do not
+run generated SQL by hand or edit migration state. Take that backup before every `apply`.
+:::
+
+`migration explain --runtime-config <file>` describes the configured package's migration plan
+without executing it; it does not report live database status. New schema fingerprints identify
+columns by name, so a fresh installation and an in-place upgrade match even when PostgreSQL stores
+columns in a different order. A package measured with the updated algorithm needs the updated
+server binary, and earlier packages keep verifying under their recorded rules.
+
+{/* Evidence: crates/registry-serverctl/src/lib.rs, DiffArgs, PackageCandidateArgs, and MigrationCommand;
+    crates/registry-serverctl/src/reviewed_migrations.rs;
+    crates/registry-server/src/migration_plan.rs;
+    crates/registry-server/src/migration.rs, apply_verified_package();
+    crates/registry-server/src/package.rs;
+    crates/registry-server/src/postgres/interlock.rs;
+    crates/registry-server/src/postgres/catalog.rs, CatalogFingerprintVersion;
+    crates/registry-server/tests/postgres_migration.rs;
+    crates/registry-serverctl/tests/cli/reviewed_migrations.rs;
+    products/registry-server/scripts/test-adopter-workflow.sh. */}
+
+## Bind webhook receivers
+
+Every event with a `webhook` in the project names a destination id. The package refuses to
+activate until the runtime file binds each of them, and it refuses extra bindings. Destination
+URLs and secret references belong in the runtime file, never in a module:
+
+```yaml
+eventDestinations:
+  record-receiver:
+    origin: https://receiver.example.org
+    path: /events
+    networkProfile: productionHttps
+    dnsFamily: dualStackStrict
+    allowedPrivateCidrs: []
+    hmacSha256KeyRef: secret:file/record-webhook-key
+    classificationCeiling: restricted
+    deliveryCeilings:
+      attemptTimeoutMilliseconds: 1000
+      maximumAttempts: 3
+eventDelivery:
+  payloadRetentionDays: 7
+```
+
+The destination's `classificationCeiling` must cover the event's derived classification; a binding
+cannot add fields to a payload. Generate the shared HMAC-SHA-256 key inside the secret root and
+provision the same bytes to the receiver through its own secret store:
+
+```sh
+uv run --quiet crates/registry-mint/demo/support/key_material.py secret-hex \
+  --out /etc/registry-server/secrets/record-webhook-key
+```
+
+For a receiver on a private network, list the intended canonical ranges in `allowedPrivateCidrs`.
+Use `dnsFamily: ipv4Only` only on an IPv4-only network. Optional `tls.caBundleRef` and
+`tls.clientIdentityRef` name PEM secrets for a private certificate authority and mutual TLS.
+`networkProfile: loopbackDevelopmentHttp` exists for local development only. A binding may tighten
+the compiled ceilings, five attempts with a five-second timeout each unless the module says
+otherwise, and never widen them; the example tightens both. Automatic retries keep the event id
+and idempotency key. Any `2xx` acknowledges delivery; redirects, timeouts, and other responses
+follow the bounded retry policy. Activation refuses a rebinding that would leave retained pending
+or dead-lettered deliveries without the binding they were captured under.
+
+Your receiver verifies `X-Registry-Signature` against the exact request bytes and checks
+`X-Registry-Delivery-Time` for freshness before acting. The
+[API reference](../../reference/registry-server-api/#events-and-webhooks) defines the request
+shape and the signing input byte order, and `webhook sample <project> --event <id>` prints a
+request with a placeholder signature for building the verifier. Deduplicate retries by
+`Idempotency-Key`, use the record revision to order events, and acknowledge only after durably
+recording acceptance.
+
+Inspect pending, dead-lettered, and expired deliveries, then replay a dead letter after fixing the
+receiver:
+
+```sh
+target/debug/registry-serverctl --format json webhook list \
+  --runtime-config /etc/registry-server/runtime.yaml --limit 50
+
+target/debug/registry-serverctl webhook replay \
+  --runtime-config /etc/registry-server/runtime.yaml \
+  --event-id "<eventId>" --delivery-id "<deliveryId>" \
+  --expected-generation "<generation>"
+```
+
+The list carries delivery metadata and no record values. A delivery that exhausts its attempts
+becomes a dead letter with `replayEligible: true` while its payload is retained. Successful
+delivery erases the payload, and retained payloads expire after `payloadRetentionDays`, which
+defaults to 7 and is capped at 30. An empty list is not proof of success: in-flight attempts and
+completed deliveries are excluded, so confirm effects from the receiver's own record. Replay
+keeps the event id and issues a new generation and idempotency key; if the receiver's earlier
+effect is uncertain, check its state before replaying.
+
+Operator commands connect to PostgreSQL directly. When the database uses a private certificate
+authority, set `SSL_CERT_FILE` to its PEM bundle for each command.
+
+{/* Evidence: crates/registry-server/src/event_destination.rs, RawEventDestinationConfig;
+    crates/registry-server/src/runtime_config.rs;
+    crates/registry-server/src/webhook.rs;
+    crates/registry-server/src/outbox.rs;
+    crates/registry-serverctl/src/webhook_lifecycle.rs;
+    crates/registry-serverctl/src/lib.rs, WebhookListArgs and WebhookReplayArgs;
+    crates/registry-mint/demo/support/key_material.py. */}
+
+## Erase retained history
+
+The migration authority can erase the retained revisions of one record up to a revision number.
+This is irreversible maintenance, not an API permission, and it does not remove the current
+record. Apply the institution's live-data removal policy separately.
+
+:::danger[History erasure is irreversible]
+Confirm the record and the approved revision boundary before running the command, and account for
+backups, saved exports, and copies already delivered to consumers. A saved snapshot reference
+cannot restore erased bytes. There is no dry run.
+:::
+
+Write an owner-only JSON request file (mode `0600`) so identifiers and reasons never appear in
+process arguments:
+
+```json
+{
+  "entityId": "membership-record",
+  "recordId": "00000000-0000-4000-8000-000000000001",
+  "eraseThroughRevision": 2,
+  "operatorReference": "approved-maintenance-001",
+  "reason": "approved-retention-request"
+}
+```
+
+```sh
+target/debug/registry-serverctl history erase \
+  --runtime-config /etc/registry-server/runtime.yaml \
+  --request-file /srv/registry/private/erasure.json
+```
+
+One transaction erases at most 10,000 revisions, scrubs affected correction context and retained
+outbox payloads, and replaces affected cached idempotency responses with refusal tombstones, so a
+retried mutation key cannot replay an erased body. The result and the audit record carry counts,
+not values. Snapshot references at or after the earliest erased commit become unavailable,
+including every later snapshot; erasing baseline data makes all snapshot coverage unavailable,
+and nothing re-baselines the registry afterwards. Live reads and writes continue.
+
+{/* Evidence: crates/registry-server/src/history_erasure.rs;
+    crates/registry-serverctl/src/history_erasure_lifecycle.rs;
+    crates/registry-server/tests/postgres_history_erasure.rs;
+    products/registry-server/scripts/test-historical-workflow.sh. */}
+
+## Erase change-request detail
+
+Change-request proposals and application receipts keep their own retention. A request entity
+whose `changeRequest.retention.mode` is `operator_erase` allows the operator to erase the payload
+detail of one proposal version while keeping its value-free lifecycle rows; the default `retain`
+mode refuses erasure. List the retained rows, count what one erasure would remove, then erase:
+
+```sh
+target/debug/registry-serverctl --format json request-retention list \
+  --runtime-config /etc/registry-server/runtime.yaml \
+  --request-entity placement-correction-request --limit 50
+
+target/debug/registry-serverctl --format json request-retention dry-run \
+  --runtime-config /etc/registry-server/runtime.yaml \
+  --request-entity placement-correction-request \
+  --request-id "<requestId>" --proposal-version 3
+
+target/debug/registry-serverctl --format json request-retention erase \
+  --runtime-config /etc/registry-server/runtime.yaml \
+  --request-entity placement-correction-request \
+  --request-id "<requestId>" --proposal-version 3
+```
+
+Each list row reports the request state, whether the version is current or pinned, its retention
+mode, `eligibleForErasure`, and whether detail is already erased. The dry run and the erasure
+report counts of proposal snapshots, target snapshots, idempotency results, request revision
+snapshots, outbox payloads, and intake rows. Erasing record history does not erase these rows,
+and erasing these rows does not touch record history.
+
+{/* Evidence: crates/registry-server/src/request_retention.rs;
+    crates/registry-serverctl/src/request_retention.rs;
+    crates/registry-serverctl/src/lib.rs, RequestRetentionCommand. */}
+
+## Move data in bulk
+
+`data import` and `data export` drive the ordinary authenticated batch and list routes, so every
+row passes the same grants, validation, and audit as an interactive client. They need the package
+directory, the server URL, and a file holding one bearer token and nothing else. Each import line
+is one JSON object naming the operation and the record data:
+
+```json
+{"operation": "create", "data": {"code": "AA", "label": "First"}}
+```
+
+```sh
+target/debug/registry-serverctl data validate \
+  --package /srv/registry/build-1/package \
+  --entity record --profile operator --operation create \
+  --input /srv/registry/import/records.jsonl
+
+target/debug/registry-serverctl data import \
+  --package /srv/registry/build-1/package \
+  --server-url https://registry.example.org \
+  --access-token-file /srv/registry/private/import-token \
+  --entity record --profile operator --operation create \
+  --input /srv/registry/import/records.jsonl \
+  --checkpoint /srv/registry/import/records.checkpoint --max-chunks 20
+
+target/debug/registry-serverctl data export \
+  --package /srv/registry/build-1/package \
+  --server-url https://registry.example.org \
+  --access-token-file /srv/registry/private/export-token \
+  --entity record --profile operator --field code --field label \
+  --output /srv/registry/export/records.jsonl \
+  --checkpoint /srv/registry/export/records.checkpoint --max-pages 50
+```
+
+`data validate` checks every line against the compiled plan without a network. An import commits
+one bounded chunk at a time and records progress in the checkpoint file beside a sidecar the
+command owns, so a rerun with the same checkpoint resumes after the last committed chunk and never
+re-sends a committed one. An export writes the checkpoint after every page; continuation comes
+from the server's cursor, so editing the checkpoint cannot skip or repeat pages. `--max-chunks`
+and `--max-pages` bound one operator run.
+
+{/* Evidence: crates/registry-server/src/data.rs;
+    crates/registry-serverctl/src/data_lifecycle.rs;
+    crates/registry-serverctl/src/lib.rs, DataCommand;
+    crates/registry-serverctl/tests/cli.rs. */}
+
+## Troubleshooting
+
+| Symptom | Next move |
+| --- | --- |
+| `test` refuses the runtime file | Compare it with the serving file: same identity, schema-test database references, an empty package root, and a placeholder revision. |
+| `package` refuses the receipt | The receipt binds sources, baseline, fingerprint, and signature policy. Rerun `test` for the exact candidate. |
+| `apply --initial` reports a binding error | The runtime file must already name the target package's revision and sequence one. |
+| `apply` fails after maintenance begins | Read the report, fix the cause, and retry the same target, or restore the pre-activation backup. Nothing clears the state. |
+| `doctor` reports `startup.oidc.refused` | Check the issuer, discovery reachability or the static JWKS document, the algorithm, and the leeway bound. |
+| Every token is refused | Compare the token's header and claims with the token table; a list-valued `aud` or a missing principal claim refuses the token. |
+| A webhook never fires | Confirm the destination is bound, the receiver returns `2xx`, and the event's condition matched; use `webhook list` for dead letters. |
+| Replay is refused | Refresh the list and check the generation, `replayEligible`, payload expiry, and the destination binding. |
+| A saved snapshot returns `503 source.unavailable` | Retained history no longer covers it, after an erasure or an incompatible successor. Take a fresh reference. |
+| `request-retention erase` is refused | The request entity's retention mode is `retain`, or the version is pinned. |
+| An operator command cannot reach PostgreSQL | Check the migration URL secret, the role names, and `SSL_CERT_FILE` for a private authority. |
+
+## Next
+
+- [Author a registry project](../../configure/registry-server/) for the model, access, and journey files.
+- [Registry Server API](../../reference/registry-server-api/) for the routes, problem codes, and webhook contract.
+- [Configuration reference](../../reference/registry-server-configuration/) for every runtime key.
+- [Build a registry with Registry Server](../../explanation/configuration-defined-registry/) for the product boundary.
