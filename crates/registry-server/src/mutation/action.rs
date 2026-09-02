@@ -1117,13 +1117,11 @@ fn validate_action_input(
     }
     for source in &action.inputs {
         match input.get(&source.id) {
-            Some(value) => {
-                if !validate_field_value(FieldValue::Json(value), &source.field_type) {
-                    return Err(MutationError::InvalidRequest);
-                }
+            Some(value) if !validate_field_value(FieldValue::Json(value), &source.field_type) => {
+                return Err(MutationError::InvalidRequest);
             }
             None if source.required => return Err(MutationError::InvalidRequest),
-            None => {}
+            Some(_) | None => {}
         }
     }
     Ok(input)

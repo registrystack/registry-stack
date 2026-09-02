@@ -427,10 +427,7 @@ fn action_terminal_record(
     application_reference: &str,
 ) -> Result<serde_json::Map<String, Value>, RegistryAuditError> {
     if terminal.entity_id.is_some()
-        || !terminal
-            .action_id
-            .as_deref()
-            .is_some_and(|id| !id.is_empty())
+        || terminal.action_id.as_deref().is_none_or(|id| id.is_empty())
         || !matches!(
             terminal.outcome,
             TerminalAuditOutcome::Committed | TerminalAuditOutcome::Replayed

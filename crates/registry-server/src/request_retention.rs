@@ -716,10 +716,10 @@ async fn load_erasure_plan(
         .map_err(map_retention_error)?;
     let proposal_exists = proposal.is_some();
     let inspectable_pinned_current_detail = !enforce_operator_erase && current_detail && pinned;
-    if !proposal_exists
-        && !(current_detail && current_state == "canceled")
-        && !inspectable_pinned_current_detail
-    {
+    let canceled_current_detail = current_detail && current_state == "canceled";
+    let erasure_target_exists =
+        proposal_exists || canceled_current_detail || inspectable_pinned_current_detail;
+    if !erasure_target_exists {
         return Err(RequestRetentionError::Unavailable);
     }
     let erase_current_intake = current_detail

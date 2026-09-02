@@ -659,13 +659,17 @@ impl PublicOrigin {
             || host
                 .parse::<std::net::IpAddr>()
                 .is_ok_and(|address| address.is_loopback());
+        let scheme_allowed = match uri.scheme_str() {
+            Some("https") => true,
+            Some("http") => loopback,
+            _ => false,
+        };
         if authority.host().is_empty()
             || (authority.as_str() != authority.host() && authority.port_u16().is_none())
             || authority.port_u16() == Some(0)
             || !matches!(uri.path(), "" | "/")
             || uri.query().is_some()
-            || !matches!(uri.scheme_str(), Some("https"))
-                && !(uri.scheme_str() == Some("http") && loopback)
+            || !scheme_allowed
         {
             return Err(RuntimeConfigError::InvalidListener);
         }
