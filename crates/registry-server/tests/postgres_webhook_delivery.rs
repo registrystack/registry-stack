@@ -953,6 +953,192 @@ async fn real_postgres_webhook_delivery_finishes_prior_package_work_after_compat
     database.cleanup().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_webhook_delivery_reap_refuses_an_out_of_bounds_captured_attempt_timeout() {
+    let receiver = HttpsReceiver::start().await;
+    let database = TestDatabase::create(6).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    let compiled = compiled_registry();
+    install_compiled_schema(&migration, &compiled, &database.runtime_role)
+        .await
+        .expect("migration installs webhook delivery state");
+    let identity = initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &compiled,
+        registry_state_test_identity(),
+    )
+    .await
+    .expect("migration initializes active package identity with empty history");
+    migration_task.abort();
+
+    let fixture = DestinationFixture::new(&receiver);
+    let destinations = Arc::new(fixture.activate(&compiled));
+    let pool = database
+        .runtime_config
+        .build_pool()
+        .expect("bounded runtime pool builds");
+    let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x7c; 32].into())
+        .expect("test owns a keyed audit profile");
+    let lock_key = RegistryLockKey::derive("webhook-delivery-registry")
+        .expect("test lock identity is bounded");
+    let coordinator = MutationCoordinator::new_with_event_destinations(
+        lock_key,
+        Duration::from_secs(2),
+        identity.clone(),
+        audit_profile.clone(),
+        Some(Arc::clone(&destinations)),
+    );
+    let plan = MutationPlan::from_compiled(&compiled, "records.case.create")
+        .expect("create plan retains the exact compiler delivery");
+    let claims = mutation_claims(&compiled);
+    let mut mutation_client = pool
+        .get_for_test()
+        .await
+        .expect("runtime mutation connection is available");
+    let policy_corrupted = create_event(
+        &database,
+        &coordinator,
+        &mut mutation_client,
+        &plan,
+        &claims,
+        "delivery-policy-corrupted",
+        "policy-corrupted",
+    )
+    .await;
+
+    let service = WebhookDeliveryService::new(
+        pool.clone(),
+        Arc::clone(&destinations),
+        identity,
+        lock_key,
+        Duration::from_secs(2),
+        audit_profile.clone(),
+    );
+
+    // deployed_attempt_timeout_ms is bound by a database check constraint
+    // (BETWEEN 100 AND attempt_timeout_ms, itself capped at 10000), so an out-of-bounds value
+    // can only be installed by lifting that constraint first, the same way a corrupted row could
+    // otherwise only arise from a bug outside this crate's own write path.
+    let deployed_attempt_timeout_bound = database
+        .admin
+        .query_one(
+            "SELECT conname, pg_get_constraintdef(oid)
+             FROM pg_constraint
+             WHERE conrelid = 'registry_internal.registry_webhook_deliveries'::regclass
+               AND contype = 'c'
+               AND pg_get_constraintdef(oid) LIKE '%deployed_attempt_timeout_ms%'",
+            &[],
+        )
+        .await
+        .expect("the deployed attempt timeout bound constraint is found");
+    let deployed_attempt_timeout_bound_name: String = deployed_attempt_timeout_bound.get(0);
+    let deployed_attempt_timeout_bound_definition: String = deployed_attempt_timeout_bound.get(1);
+    database
+        .admin
+        .execute(
+            &format!(
+                "ALTER TABLE registry_internal.registry_webhook_deliveries \
+                 DROP CONSTRAINT {deployed_attempt_timeout_bound_name}"
+            ),
+            &[],
+        )
+        .await
+        .expect("the deployed attempt timeout bound constraint is lifted to install a canary");
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_webhook_deliveries
+             SET deployed_attempt_timeout_ms = 20000
+             WHERE event_id = $1 AND compiled_delivery_id = $2",
+            &[
+                &policy_corrupted.event_id,
+                &policy_corrupted.compiled_delivery_id,
+            ],
+        )
+        .await
+        .expect("administrator installs an out-of-bounds attempt timeout canary");
+    assert_eq!(
+        service.deliver_once().await,
+        Err(WebhookDeliveryError::Unavailable),
+        "claim refuses a pending row whose captured attempt timeout is out of bounds"
+    );
+    assert_eq!(
+        delivery_state(&database, &policy_corrupted).await,
+        (1, "pending".to_owned(), 0),
+        "a refused claim leaves the pending row untouched"
+    );
+    let stale_policy_token = Uuid::new_v4();
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_webhook_delivery_state
+             SET state = 'leased', attempt = 2, next_attempt_at = NULL,
+                 attempt_started_at = transaction_timestamp() - interval '10 seconds',
+                 lease_expires_at = transaction_timestamp() - interval '5 seconds',
+                 lease_token = $3, updated_at = transaction_timestamp()
+             WHERE event_id = $1 AND compiled_delivery_id = $2",
+            &[
+                &policy_corrupted.event_id,
+                &policy_corrupted.compiled_delivery_id,
+                &stale_policy_token,
+            ],
+        )
+        .await
+        .expect("administrator simulates one expired lease over the same corrupted policy");
+    assert_eq!(
+        service.deliver_once().await,
+        Err(WebhookDeliveryError::Unavailable),
+        "the lease reaper refuses the same captured attempt timeout corruption claim refuses"
+    );
+    assert_eq!(
+        delivery_state(&database, &policy_corrupted).await,
+        (1, "leased".to_owned(), 2),
+        "a refused reap leaves the expired lease in place instead of rescheduling or dead-lettering it"
+    );
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_webhook_deliveries
+             SET deployed_attempt_timeout_ms = 100
+             WHERE event_id = $1 AND compiled_delivery_id = $2",
+            &[
+                &policy_corrupted.event_id,
+                &policy_corrupted.compiled_delivery_id,
+            ],
+        )
+        .await
+        .expect("administrator withdraws the attempt timeout canary");
+    database
+        .admin
+        .execute(
+            &format!(
+                "ALTER TABLE registry_internal.registry_webhook_deliveries \
+                 ADD CONSTRAINT {deployed_attempt_timeout_bound_name} \
+                 {deployed_attempt_timeout_bound_definition} NOT VALID"
+            ),
+            &[],
+        )
+        .await
+        .expect("the deployed attempt timeout bound constraint is restored");
+    assert_eq!(
+        service.deliver_once().await,
+        Ok(WebhookWorkOutcome::Idle),
+        "the exhausted attempt reaps normally once its captured policy is valid again"
+    );
+    assert_eq!(
+        delivery_state(&database, &policy_corrupted).await,
+        (1, "dead_lettered".to_owned(), 2),
+        "the exhausted attempt reaps normally once its captured policy is valid again"
+    );
+
+    drop(mutation_client);
+    drop(service);
+    drop(pool);
+    receiver.stop().await;
+    database.cleanup().await;
+}
+
 #[derive(Clone)]
 struct CapturedEvent {
     event_id: Uuid,

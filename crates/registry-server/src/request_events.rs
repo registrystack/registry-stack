@@ -257,6 +257,10 @@ fn lifecycle_deduplication_key(event_type: &str, event: &RequestLifecycleEvent<'
     )
 }
 
+// Proposal version, workflow revision, transition, and stage id are relied on to uniquely
+// determine from_state, to_state, and effect_digest for one request lifecycle event, so this
+// digest omits those three fields from its input; verify_existing_event catches any divergence
+// when an insert reuses the event_id this digest derives.
 fn lifecycle_digest(event_type: &str, event: &RequestLifecycleEvent<'_>) -> [u8; 32] {
     let mut input = Vec::new();
     append_length_prefixed(&mut input, b"registry-server-request-lifecycle-event-v1");

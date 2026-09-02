@@ -645,6 +645,7 @@ impl WebhookDeliveryService {
             .query_opt(
                 "SELECT state.event_id, state.compiled_delivery_id,
                         state.generation, state.attempt, state.lease_token,
+                        delivery.deployed_attempt_timeout_ms,
                         delivery.deployed_maximum_attempts,
                         delivery.retry_delays_ms,
                         delivery.package_revision
@@ -677,14 +678,21 @@ impl WebhookDeliveryService {
         let lease_token = row
             .try_get::<_, Uuid>(4)
             .map_err(|_| WebhookDeliveryError::Unavailable)?;
+        let deployed_attempt_timeout_ms = row
+            .try_get::<_, i64>(5)
+            .map_err(|_| WebhookDeliveryError::Unavailable)?;
         let deployed_maximum_attempts = row
-            .try_get::<_, i16>(5)
+            .try_get::<_, i16>(6)
             .map_err(|_| WebhookDeliveryError::Unavailable)?;
         let retry_delays_ms = row
-            .try_get::<_, Vec<i64>>(6)
+            .try_get::<_, Vec<i64>>(7)
             .map_err(|_| WebhookDeliveryError::Unavailable)?;
-        let package_revision = bounded_text(&row, 7, 256)?;
-        validate_captured_policy(100, deployed_maximum_attempts, &retry_delays_ms)?;
+        let package_revision = bounded_text(&row, 8, 256)?;
+        validate_captured_policy(
+            deployed_attempt_timeout_ms,
+            deployed_maximum_attempts,
+            &retry_delays_ms,
+        )?;
         let dead_lettered = attempt >= deployed_maximum_attempts;
         append_webhook_audit(
             transaction,
