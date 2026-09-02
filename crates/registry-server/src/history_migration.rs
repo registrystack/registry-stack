@@ -116,10 +116,10 @@ struct LatestRevisionSnapshot {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct BaselineMember {
-    entity_id: String,
-    record_id: Uuid,
-    record_revision: i64,
+pub(crate) struct BaselineMember {
+    pub(crate) entity_id: String,
+    pub(crate) record_id: Uuid,
+    pub(crate) record_revision: i64,
 }
 
 #[cfg(feature = "runtime")]
@@ -299,24 +299,35 @@ async fn establish_existing_history_baseline(
     retain_verified_descriptor(transaction, predecessor_descriptor)
         .await
         .map_err(|_| HistoryMigrationError::RevisionUnavailable)?;
-    let members =
-        verify_latest_journal_matches_live_rows(transaction, predecessor_baseline).await?;
+    verify_revision_journal_uses_active_descriptor(transaction, predecessor_baseline).await?;
+    let members = verify_live_rows_match_journal_heads(
+        transaction,
+        &predecessor_baseline.entities,
+        Some(&predecessor_baseline.package_revision),
+    )
+    .await?;
     insert_existing_history_baseline(transaction, &current.package_revision, &members).await
 }
 
+/// Prove the retained journal head of every live row reproduces that row, and
+/// return the members a baseline commit would index.
+///
+/// `required_package_revision` pins every journal head to one package revision,
+/// as an existing-data migration baseline requires. A live registry whose
+/// journal legitimately spans several package revisions passes `None`; each
+/// head keeps its own retained descriptor either way.
 #[cfg(feature = "runtime")]
-async fn verify_latest_journal_matches_live_rows(
+pub(crate) async fn verify_live_rows_match_journal_heads(
     transaction: &Transaction<'_>,
-    predecessor_baseline: &CompiledRegistryMigrationBaseline,
+    entities: &BTreeMap<String, CompiledEntity>,
+    required_package_revision: Option<&str>,
 ) -> Result<Vec<BaselineMember>> {
-    verify_revision_journal_uses_active_descriptor(transaction, predecessor_baseline).await?;
-    let expected_members =
-        count_predecessor_baseline_members(transaction, predecessor_baseline).await?;
+    let expected_members = count_baseline_members(transaction, entities).await?;
     let mut members = Vec::with_capacity(
         usize::try_from(expected_members)
             .map_err(|_| HistoryMigrationError::BaselineBudgetExceeded)?,
     );
-    for entity in predecessor_baseline.entities.values() {
+    for entity in entities.values() {
         let live_rows = capture_entity_rows(transaction, entity, true).await?;
         let latest_revisions = load_latest_revision_snapshots(transaction, &entity.id).await?;
         if live_rows.keys().ne(latest_revisions.keys()) {
@@ -330,7 +341,8 @@ async fn verify_latest_journal_matches_live_rows(
                 .map_err(|_| HistoryMigrationError::RevisionUnavailable)?;
             if live.record_revision != latest.record_revision
                 || live.record_lifecycle != latest.record_lifecycle
-                || latest.package_revision != predecessor_baseline.package_revision
+                || required_package_revision
+                    .is_some_and(|required| latest.package_revision != required)
                 || snapshot != latest.snapshot
             {
                 return Err(HistoryMigrationError::UnexpectedRowShape);
@@ -378,12 +390,12 @@ async fn verify_revision_journal_uses_active_descriptor(
 }
 
 #[cfg(feature = "runtime")]
-async fn count_predecessor_baseline_members(
+async fn count_baseline_members(
     transaction: &Transaction<'_>,
-    predecessor_baseline: &CompiledRegistryMigrationBaseline,
+    entities: &BTreeMap<String, CompiledEntity>,
 ) -> Result<u64> {
     let mut total = 0_u64;
-    for entity in predecessor_baseline.entities.values() {
+    for entity in entities.values() {
         let count = count_entity_rows(transaction, entity).await?;
         total = total
             .checked_add(count)

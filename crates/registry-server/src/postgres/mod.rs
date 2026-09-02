@@ -44,8 +44,8 @@ pub use history_read::SnapshotReadFaultPoint;
 pub use interlock::DedicatedApplyConnection;
 pub use interlock::RegistryLockKey;
 pub(crate) use interlock::{
-    DedicatedApplyConnection as VerifiedPackageApplyConnection, PackageDdlStatement,
-    ReviewedExecutionOutcome, ReviewedPackageExecutionRequest,
+    set_force_row_security, DedicatedApplyConnection as VerifiedPackageApplyConnection,
+    PackageDdlStatement, ReviewedExecutionOutcome, ReviewedPackageExecutionRequest,
 };
 pub(crate) use migration_ledger::{
     statement_checksum, MigrationArtifactBinding, MigrationLedgerEntry, MigrationLedgerStep,

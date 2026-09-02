@@ -40,6 +40,7 @@ mod apply_lifecycle;
 mod data_lifecycle;
 mod doctor;
 mod history_erasure_lifecycle;
+mod history_rebaseline_lifecycle;
 mod package_inspection;
 mod package_lifecycle;
 mod project_migration;
@@ -54,6 +55,10 @@ use data_lifecycle::{
 };
 use history_erasure_lifecycle::{
     HistoryErasureLifecycleError, HistoryErasureLifecycleOutcome, HistoryErasureLifecycleRequest,
+};
+use history_rebaseline_lifecycle::{
+    HistoryRebaselineLifecycleError, HistoryRebaselineLifecycleOutcome,
+    HistoryRebaselineLifecycleRequest,
 };
 use package_inspection::{
     inspect_runtime_package, inspect_runtime_predecessor_package, RuntimePackageInspectionError,
@@ -615,6 +620,9 @@ enum MigrationCommand {
 enum HistoryCommand {
     /// Erase retained history for one record using an owner-only JSON request file.
     Erase(HistoryEraseArgs),
+
+    /// Restore snapshot coverage from the current state using an owner-only JSON request file.
+    Rebaseline(HistoryRebaselineArgs),
 }
 
 #[derive(Debug, Args)]
@@ -631,6 +639,17 @@ struct HistoryEraseArgs {
     runtime_config: PathBuf,
 
     /// Absolute owner-only JSON erasure request file.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    request_file: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct HistoryRebaselineArgs {
+    /// Absolute Registry Server runtime configuration file.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
+
+    /// Absolute owner-only JSON rebaseline request file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     request_file: PathBuf,
 }
@@ -829,6 +848,7 @@ enum DiagnosticArtifact {
     WebhookOperations,
     RequestRetentionOperation,
     HistoryErasure,
+    HistoryRebaseline,
     PlannerTest,
 }
 
@@ -872,6 +892,7 @@ enum SuggestedAction {
     VerifyWebhookOperation,
     VerifyRequestRetentionOperation,
     PrepareHistoryErasureRequest,
+    PrepareHistoryRebaselineRequest,
     CorrectPlannerTestInput,
 }
 
@@ -909,6 +930,15 @@ struct HistoryEraseSuccessReport {
     command: &'static str,
     #[serde(flatten)]
     outcome: HistoryErasureLifecycleOutcome,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HistoryRebaselineSuccessReport {
+    ok: bool,
+    command: &'static str,
+    #[serde(flatten)]
+    outcome: HistoryRebaselineLifecycleOutcome,
 }
 
 #[derive(Serialize)]
@@ -1398,6 +1428,12 @@ where
                     Err(failure) => write_failure(&failure, format, stdout, stderr),
                 };
             }
+            HistoryCommand::Rebaseline(args) => {
+                return match history_rebaseline(&args) {
+                    Ok(report) => write_history_rebaseline_success(&report, format, stdout, stderr),
+                    Err(failure) => write_failure(&failure, format, stdout, stderr),
+                };
+            }
         },
         Command::Data(args) => match args.command {
             DataCommand::Validate(args) => {
@@ -1648,6 +1684,146 @@ fn history_erasure_lifecycle_failure(error: HistoryErasureLifecycleError) -> Fai
     FailureReport {
         ok: false,
         command: "history erase",
+        diagnostics: vec![tool_diagnostic(
+            diagnostic(code, path, message),
+            artifact,
+            action,
+        )],
+    }
+}
+
+fn history_rebaseline(
+    args: &HistoryRebaselineArgs,
+) -> Result<HistoryRebaselineSuccessReport, FailureReport> {
+    let outcome = history_rebaseline_lifecycle::run(HistoryRebaselineLifecycleRequest {
+        runtime_config: &args.runtime_config,
+        request_file: &args.request_file,
+    })
+    .map_err(history_rebaseline_lifecycle_failure)?;
+    Ok(HistoryRebaselineSuccessReport {
+        ok: true,
+        command: "history rebaseline",
+        outcome,
+    })
+}
+
+fn history_rebaseline_lifecycle_failure(error: HistoryRebaselineLifecycleError) -> FailureReport {
+    let error = match error {
+        HistoryRebaselineLifecycleError::RuntimeConfig(error) => {
+            return runtime_config_failure("history rebaseline", "history.rebaseline", error);
+        }
+        error => error,
+    };
+    let (code, path, message, artifact, action) = match error {
+        HistoryRebaselineLifecycleError::RuntimeConfigPath => (
+            "history.rebaseline.runtime_config.path_invalid",
+            "runtimeConfig",
+            "the runtime configuration path must be absolute",
+            DiagnosticArtifact::RuntimeConfiguration,
+            SuggestedAction::CorrectRuntimeConfiguration,
+        ),
+        HistoryRebaselineLifecycleError::RequestFile => (
+            "history.rebaseline.request_file.refused",
+            "requestFile",
+            "the history rebaseline request file must be absolute, owner-only, and bounded",
+            DiagnosticArtifact::HistoryRebaseline,
+            SuggestedAction::PrepareHistoryRebaselineRequest,
+        ),
+        HistoryRebaselineLifecycleError::RequestDocument => (
+            "history.rebaseline.request.refused",
+            "requestFile",
+            "the history rebaseline request document was refused",
+            DiagnosticArtifact::HistoryRebaseline,
+            SuggestedAction::PrepareHistoryRebaselineRequest,
+        ),
+        HistoryRebaselineLifecycleError::RuntimeConfig(_) => unreachable!("handled before match"),
+        HistoryRebaselineLifecycleError::Package(error) => {
+            let action = match error {
+                PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
+                PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
+                PackageError::Signature => SuggestedAction::VerifyPackageTrust,
+                PackageError::Binding => SuggestedAction::VerifyPackageBinding,
+                _ => SuggestedAction::VerifyPackageIntegrity,
+            };
+            (
+                "history.rebaseline.package.refused",
+                "package",
+                "the active runtime package was refused",
+                DiagnosticArtifact::VerifiedPackage,
+                action,
+            )
+        }
+        HistoryRebaselineLifecycleError::DatabaseConfiguration
+        | HistoryRebaselineLifecycleError::TimeoutConfiguration => (
+            "history.rebaseline.database_configuration.refused",
+            "database",
+            "the migration database configuration was refused",
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::VerifyMigrationAuthority,
+        ),
+        HistoryRebaselineLifecycleError::Runtime => (
+            "history.rebaseline.runtime.unavailable",
+            "runtime",
+            "the history rebaseline runtime is unavailable",
+            DiagnosticArtifact::HistoryRebaseline,
+            SuggestedAction::VerifyMigrationAuthority,
+        ),
+        HistoryRebaselineLifecycleError::Rebaseline(error) => match error {
+            registry_server::history_rebaseline::HistoryRebaselineError::InvalidInput => (
+                "history.rebaseline.request.refused",
+                "requestFile",
+                "the history rebaseline request document was refused",
+                DiagnosticArtifact::HistoryRebaseline,
+                SuggestedAction::PrepareHistoryRebaselineRequest,
+            ),
+            registry_server::history_rebaseline::HistoryRebaselineError::MigrationAuthority => (
+                "history.rebaseline.migration_authority.refused",
+                "database",
+                "history rebaseline requires the configured migration authority",
+                DiagnosticArtifact::DatabaseMigration,
+                SuggestedAction::VerifyMigrationAuthority,
+            ),
+            registry_server::history_rebaseline::HistoryRebaselineError::CoverageComplete => (
+                "history.rebaseline.coverage.complete",
+                "history",
+                "snapshot coverage is already complete, so there is nothing to rebaseline",
+                DiagnosticArtifact::HistoryRebaseline,
+                SuggestedAction::PrepareHistoryRebaselineRequest,
+            ),
+            registry_server::history_rebaseline::HistoryRebaselineError::UnindexedRevisions => (
+                "history.rebaseline.revisions.unindexed",
+                "history",
+                "history rebaseline requires every retained revision to be indexed by a commit",
+                DiagnosticArtifact::HistoryRebaseline,
+                SuggestedAction::VerifyMigrationAuthority,
+            ),
+            registry_server::history_rebaseline::HistoryRebaselineError::LiveHistoryMismatch => (
+                "history.rebaseline.live_rows.unverified",
+                "history",
+                "history rebaseline requires the retained journal head to reproduce every live row",
+                DiagnosticArtifact::HistoryRebaseline,
+                SuggestedAction::VerifyMigrationAuthority,
+            ),
+            registry_server::history_rebaseline::HistoryRebaselineError::LiveRowBudgetExceeded => (
+                "history.rebaseline.live_rows.budget_exceeded",
+                "history",
+                "history rebaseline exceeds the supported live-row budget",
+                DiagnosticArtifact::HistoryRebaseline,
+                SuggestedAction::VerifyMigrationAuthority,
+            ),
+            registry_server::history_rebaseline::HistoryRebaselineError::HistoryNotReady
+            | registry_server::history_rebaseline::HistoryRebaselineError::Unavailable => (
+                "history.rebaseline.unavailable",
+                "history",
+                "history rebaseline storage is unavailable",
+                DiagnosticArtifact::HistoryRebaseline,
+                SuggestedAction::VerifyMigrationAuthority,
+            ),
+        },
+    };
+    FailureReport {
+        ok: false,
+        command: "history rebaseline",
         diagnostics: vec![tool_diagnostic(
             diagnostic(code, path, message),
             artifact,
@@ -6853,6 +7029,58 @@ fn write_history_erase_success(
     write_result(result, stderr)
 }
 
+fn write_history_rebaseline_success(
+    report: &HistoryRebaselineSuccessReport,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format == OutputFormat::Json {
+        serde_json::to_writer_pretty(&mut *stdout, report)
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout))
+    } else {
+        writeln!(stdout, "history rebaseline succeeded").and_then(|()| {
+            writeln!(
+                stdout,
+                "package revision: {}",
+                report.outcome.package_revision
+            )?;
+            writeln!(
+                stdout,
+                "coverage baseline position: {}",
+                report.outcome.baseline_position
+            )?;
+            writeln!(
+                stdout,
+                "verified entities: {}",
+                report.outcome.verified_entity_count
+            )?;
+            writeln!(
+                stdout,
+                "verified records: {}",
+                report.outcome.verified_record_count
+            )?;
+            writeln!(
+                stdout,
+                "previous coverage baseline position: {}",
+                report.outcome.previous_coverage_baseline_position
+            )?;
+            match report.outcome.previous_unavailable_after_position {
+                Some(position) => {
+                    writeln!(stdout, "previous unavailable after position: {position}")?
+                }
+                None => writeln!(stdout, "previous unavailable after position: none")?,
+            }
+            writeln!(
+                stdout,
+                "snapshot references before the new baseline remain unavailable"
+            )
+        })
+    };
+    write_result(result, stderr)
+}
+
 fn write_data_validate_success(
     report: &DataValidateSuccessReport,
     format: OutputFormat,
@@ -7885,6 +8113,38 @@ mod tests {
     }
 
     #[test]
+    fn history_rebaseline_takes_only_the_runtime_config_and_request_file() {
+        let parsed = Cli::try_parse_from([
+            "registry-serverctl",
+            "history",
+            "rebaseline",
+            "--runtime-config",
+            "/tmp/runtime.yaml",
+            "--request-file",
+            "/tmp/request.json",
+        ])
+        .expect("history rebaseline parses");
+        let Command::History(args) = parsed.command else {
+            panic!("history command parsed");
+        };
+        let HistoryCommand::Rebaseline(args) = args.command else {
+            panic!("history rebaseline command parsed");
+        };
+        assert_eq!(args.runtime_config, PathBuf::from("/tmp/runtime.yaml"));
+        assert_eq!(args.request_file, PathBuf::from("/tmp/request.json"));
+        assert!(Cli::try_parse_from([
+            "registry-serverctl",
+            "history",
+            "rebaseline",
+            "--runtime-config",
+            "/tmp/runtime.yaml",
+            "--record-id",
+            "018feaa0-68f9-4a45-b9e3-58436df07af7",
+        ])
+        .is_err());
+    }
+
+    #[test]
     fn history_erase_requires_request_file_not_inline_target_values() {
         let parsed = Cli::try_parse_from([
             "registry-serverctl",
@@ -7899,7 +8159,9 @@ mod tests {
         let Command::History(args) = parsed.command else {
             panic!("history command parsed");
         };
-        let HistoryCommand::Erase(args) = args.command;
+        let HistoryCommand::Erase(args) = args.command else {
+            panic!("history erase command parsed");
+        };
         assert_eq!(args.runtime_config, PathBuf::from("/tmp/runtime.yaml"));
         assert_eq!(args.request_file, PathBuf::from("/tmp/request.json"));
         assert!(Cli::try_parse_from([

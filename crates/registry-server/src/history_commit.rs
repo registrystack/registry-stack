@@ -4,6 +4,8 @@
 
 use uuid::Uuid;
 
+#[cfg(feature = "runtime")]
+use crate::history_context::ValidatedCommitOrigin;
 use crate::history_context::{ChangeContext, ChangeContextError, CommitOrigin};
 use crate::history_reference::SnapshotReference;
 
@@ -345,18 +347,57 @@ pub(crate) async fn allocate_revision_commit(
     validate_allocation(&allocation)?;
     let origin = allocation.origin.validate()?;
     let head = lock_history_head(transaction).await?;
+    append_commit(
+        transaction,
+        &head,
+        allocation.package_revision,
+        &origin,
+        allocation.change_context,
+        allocation.members,
+    )
+    .await
+}
+
+/// Append the baseline commit a coverage rebaseline installs at the head, over
+/// a commit-head row the caller already locked.
+///
+/// A retained revision belongs to exactly one commit, and the rebaseline runs
+/// only when every retained revision is already indexed, so this commit carries
+/// no member of its own. It exists to be the covered position reconstruction
+/// starts from; the members earlier commits hold still reproduce the live rows.
+#[cfg(feature = "runtime")]
+pub(crate) async fn allocate_coverage_baseline_commit(
+    transaction: &Transaction<'_>,
+    head: &HistoryHead,
+    package_revision: &str,
+    system_origin: &str,
+) -> Result<CommittedPosition, HistoryCommitError> {
+    validate_package_revision(package_revision)?;
+    let origin = CommitOrigin::Baseline {
+        system_origin,
+        baseline_reference: None,
+    }
+    .validate()?;
+    append_commit(transaction, head, package_revision, &origin, None, &[]).await
+}
+
+#[cfg(feature = "runtime")]
+async fn append_commit(
+    transaction: &Transaction<'_>,
+    head: &HistoryHead,
+    package_revision: &str,
+    origin: &ValidatedCommitOrigin<'_>,
+    change_context: Option<&ChangeContext>,
+    members: &[RevisionCommitMember<'_>],
+) -> Result<CommittedPosition, HistoryCommitError> {
     let next_position = head
         .latest_position
         .checked_add(1)
         .ok_or(HistoryCommitError::InvalidInput)?;
     let change_id = Uuid::new_v4();
     let reference = SnapshotReference::new_random();
-    let context_bytes = allocation
-        .change_context
-        .map(ChangeContext::canonical_bytes);
-    let context_digest = allocation
-        .change_context
-        .map(|context| context.digest().to_vec());
+    let context_bytes = change_context.map(ChangeContext::canonical_bytes);
+    let context_digest = change_context.map(|context| context.digest().to_vec());
     transaction
         .execute(
             "INSERT INTO registry_internal.registry_revision_commits
@@ -371,7 +412,7 @@ pub(crate) async fn allocate_revision_commit(
                 &change_id,
                 &reference.uuid(),
                 &head.history_lineage,
-                &allocation.package_revision,
+                &package_revision,
                 &origin.kind,
                 &origin.actor_reference,
                 &origin.request_reference,
@@ -385,7 +426,7 @@ pub(crate) async fn allocate_revision_commit(
         )
         .await
         .map_err(|_| HistoryCommitError::Unavailable)?;
-    for (index, member) in allocation.members.iter().enumerate() {
+    for (index, member) in members.iter().enumerate() {
         let member_index = i32::try_from(index).map_err(|_| HistoryCommitError::InvalidInput)?;
         transaction
             .execute(

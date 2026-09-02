@@ -19,6 +19,7 @@ mod postgres {
     pub use registry_server::postgres::SqlIdentifier;
 }
 #[path = "../src/history_commit.rs"]
+#[allow(dead_code)]
 mod history_commit;
 #[path = "support/postgres_harness.rs"]
 #[allow(dead_code)]

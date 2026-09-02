@@ -37,7 +37,11 @@ pub mod history_context;
 #[cfg(feature = "runtime")]
 pub mod history_erasure;
 #[cfg(feature = "runtime")]
+pub mod history_maintenance;
+#[cfg(feature = "runtime")]
 pub(crate) mod history_migration;
+#[cfg(feature = "runtime")]
+pub mod history_rebaseline;
 pub(crate) mod history_reference;
 pub mod history_schema;
 #[cfg(feature = "runtime")]

@@ -1539,7 +1539,12 @@ async fn execute_boolean_assertion(
     Ok(())
 }
 
-async fn set_force_row_security(
+/// Toggle `FORCE ROW LEVEL SECURITY` on entity tables for the duration of one
+/// maintenance transaction, so the migration authority that owns the tables can
+/// read and write the rows it must reconcile. Non-owner roles keep every policy
+/// either way, and the `ALTER TABLE` holds the table exclusively until the
+/// caller commits or rolls back.
+pub(crate) async fn set_force_row_security(
     transaction: &impl GenericClient,
     tables: &[String],
     forced: bool,

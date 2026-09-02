@@ -13,27 +13,30 @@
 //! records that responsibility in the maintenance audit record; it does not
 //! claim automatic deletion outside this database.
 
-use std::{fmt, time::Duration};
+use std::fmt;
 
-use registry_platform_audit::{AuditChainHasher, AuditEnvelope, AuditKeyHasher, AuditProfile};
-use registry_platform_canonical_json::canonicalize_json;
-use serde_json::{json, Value};
+use registry_platform_audit::AuditProfile;
+use serde_json::json;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
 use crate::history_commit::{lock_history_head, HistoryCommitError};
+use crate::history_maintenance::{
+    append_audit_envelope, profile_is_keyed, set_local_timeouts, verify_ready_identity,
+    HistoryMaintenanceError,
+};
 use crate::idempotency::{tombstone_erased_cached_responses, IdempotencyError};
 use crate::postgres::{
     verify_migration_role, ConnectionConfig, ExpectedRegistryIdentity, PostgresKernelError,
     RegistryLockKey, SqlIdentifier,
 };
 
+pub use crate::history_maintenance::HistoryMaintenanceTimeouts as HistoryErasureTimeouts;
+
 const MAX_ENTITY_ID_BYTES: usize = 256;
 const MAX_OPERATOR_REFERENCE_BYTES: usize = 512;
 const MAX_REASON_BYTES: usize = 1024;
 const MAX_ERASURE_REVISIONS: i64 = 10_000;
-const MAX_LOCK_TIMEOUT: Duration = Duration::from_secs(300);
-const MAX_STATEMENT_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const AUDIT_OPERATION_ID: &str = "history-erasure-maintenance";
 
 #[derive(Clone, Eq, PartialEq)]
@@ -62,25 +65,6 @@ impl<'a> RecordHistoryErasureTarget<'a> {
             record_id,
             erase_through_revision,
         }
-    }
-}
-
-#[derive(Clone, Copy)]
-pub struct HistoryErasureTimeouts {
-    lock: Duration,
-    statement: Duration,
-}
-
-impl HistoryErasureTimeouts {
-    pub fn new(lock: Duration, statement: Duration) -> Result<Self, HistoryErasureError> {
-        if lock.is_zero()
-            || lock > MAX_LOCK_TIMEOUT
-            || statement.is_zero()
-            || statement > MAX_STATEMENT_TIMEOUT
-        {
-            return Err(HistoryErasureError::InvalidInput);
-        }
-        Ok(Self { lock, statement })
     }
 }
 
@@ -137,14 +121,16 @@ impl From<HistoryCommitError> for HistoryErasureError {
 
 impl From<PostgresKernelError> for HistoryErasureError {
     fn from(error: PostgresKernelError) -> Self {
+        Self::from(HistoryMaintenanceError::from(error))
+    }
+}
+
+impl From<HistoryMaintenanceError> for HistoryErasureError {
+    fn from(error: HistoryMaintenanceError) -> Self {
         match error {
-            PostgresKernelError::RoleInvariant(_) => Self::MigrationAuthority,
-            PostgresKernelError::Configuration(_) => Self::InvalidInput,
-            PostgresKernelError::Connection
-            | PostgresKernelError::Pool
-            | PostgresKernelError::PoolBuild
-            | PostgresKernelError::CatalogInvariant(_)
-            | PostgresKernelError::RegistryUnavailable => Self::Unavailable,
+            HistoryMaintenanceError::InvalidInput => Self::InvalidInput,
+            HistoryMaintenanceError::MigrationAuthority => Self::MigrationAuthority,
+            HistoryMaintenanceError::Unavailable => Self::Unavailable,
         }
     }
 }
@@ -478,38 +464,6 @@ async fn update_coverage(
     Ok(())
 }
 
-async fn verify_ready_identity(
-    transaction: &tokio_postgres::Transaction<'_>,
-    expected: &ExpectedRegistryIdentity,
-) -> Result<(), HistoryErasureError> {
-    expected.validate()?;
-    let row = transaction
-        .query_opt(
-            "SELECT package_id, environment, instance_id, database_id,
-                    active_package_revision, schema_fingerprint, package_sequence,
-                    maintenance_status
-               FROM registry_internal.registry_state
-              WHERE singleton
-              FOR UPDATE",
-            &[],
-        )
-        .await
-        .map_err(|_| HistoryErasureError::Unavailable)?
-        .ok_or(HistoryErasureError::Unavailable)?;
-    let ready = row.get::<_, String>(7) == "ready"
-        && row.get::<_, String>(0) == expected.package_id
-        && row.get::<_, String>(1) == expected.environment
-        && row.get::<_, String>(2) == expected.instance_id
-        && row.get::<_, String>(3) == expected.database_id
-        && row.get::<_, String>(4) == expected.package_revision
-        && row.get::<_, String>(5) == expected.schema_fingerprint
-        && row.get::<_, i64>(6) == expected.package_sequence;
-    if !ready {
-        return Err(HistoryErasureError::Unavailable);
-    }
-    Ok(())
-}
-
 async fn append_history_erasure_audit(
     transaction: &tokio_postgres::Transaction<'_>,
     request: &HistoryErasureRequest<'_>,
@@ -570,93 +524,7 @@ async fn append_history_erasure_audit(
             "stubPolicy": "commit_position_and_minimized_origin_retained_context_removed",
         }),
     )
-    .await
-}
-
-async fn append_audit_envelope(
-    transaction: &tokio_postgres::Transaction<'_>,
-    profile: &AuditProfile,
-    record: Value,
-) -> Result<(), HistoryErasureError> {
-    transaction
-        .execute(
-            "INSERT INTO registry_internal.registry_audit_head (singleton, last_hash)
-             VALUES (true, NULL)
-             ON CONFLICT (singleton) DO NOTHING",
-            &[],
-        )
-        .await
-        .map_err(|_| HistoryErasureError::Unavailable)?;
-    let row = transaction
-        .query_one(
-            "SELECT last_hash
-               FROM registry_internal.registry_audit_head
-              WHERE singleton
-              FOR UPDATE",
-            &[],
-        )
-        .await
-        .map_err(|_| HistoryErasureError::Unavailable)?;
-    let previous = row
-        .get::<_, Option<Vec<u8>>>(0)
-        .map(|bytes| <[u8; 32]>::try_from(bytes).map_err(|_| HistoryErasureError::Unavailable))
-        .transpose()?;
-    let envelope = AuditEnvelope::new_with_hasher(record, previous, &profile.chain_hasher())
-        .map_err(|_| HistoryErasureError::Unavailable)?;
-    let envelope_value =
-        serde_json::to_value(&envelope).map_err(|_| HistoryErasureError::Unavailable)?;
-    let envelope_bytes =
-        canonicalize_json(&envelope_value).map_err(|_| HistoryErasureError::Unavailable)?;
-    let changed = transaction
-        .execute(
-            "INSERT INTO registry_internal.registry_audit
-                 (envelope_id, record_hash, envelope)
-             VALUES ($1, $2, $3)",
-            &[
-                &envelope.envelope_id,
-                &envelope.record_hash.as_slice(),
-                &envelope_bytes,
-            ],
-        )
-        .await
-        .map_err(|_| HistoryErasureError::Unavailable)?;
-    if changed != 1 {
-        return Err(HistoryErasureError::Unavailable);
-    }
-    let changed = transaction
-        .execute(
-            "UPDATE registry_internal.registry_audit_head
-                SET last_hash = $1
-              WHERE singleton",
-            &[&envelope.record_hash.as_slice()],
-        )
-        .await
-        .map_err(|_| HistoryErasureError::Unavailable)?;
-    if changed != 1 {
-        return Err(HistoryErasureError::Unavailable);
-    }
-    Ok(())
-}
-
-async fn set_local_timeouts(
-    transaction: &tokio_postgres::Transaction<'_>,
-    timeouts: HistoryErasureTimeouts,
-) -> Result<(), HistoryErasureError> {
-    let lock_millis =
-        u64::try_from(timeouts.lock.as_millis()).map_err(|_| HistoryErasureError::InvalidInput)?;
-    let statement_millis = u64::try_from(timeouts.statement.as_millis())
-        .map_err(|_| HistoryErasureError::InvalidInput)?;
-    transaction
-        .execute(
-            "SELECT set_config('lock_timeout', $1::text, true),
-                    set_config('statement_timeout', $2::text, true)",
-            &[
-                &format!("{lock_millis}ms"),
-                &format!("{statement_millis}ms"),
-            ],
-        )
-        .await
-        .map_err(|_| HistoryErasureError::Unavailable)?;
+    .await?;
     Ok(())
 }
 
@@ -677,9 +545,4 @@ fn validate_request(request: &HistoryErasureRequest<'_>) -> Result<(), HistoryEr
         return Err(HistoryErasureError::InvalidInput);
     }
     Ok(())
-}
-
-fn profile_is_keyed(profile: &AuditProfile) -> bool {
-    matches!(profile.chain_hasher(), AuditChainHasher::Keyed(_))
-        && matches!(profile.key_hasher(), AuditKeyHasher::Keyed(_))
 }

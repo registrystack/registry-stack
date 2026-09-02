@@ -26,6 +26,9 @@ use sha2::{Digest, Sha256};
 
 static TEMPORARY_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+#[path = "cli/history_rebaseline.rs"]
+mod history_rebaseline_tests;
+
 #[path = "cli/reviewed_migrations.rs"]
 mod reviewed_migration_tests;
 
