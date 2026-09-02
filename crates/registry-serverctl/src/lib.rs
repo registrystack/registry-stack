@@ -8992,4 +8992,13 @@ accessProfiles:
                     .starts_with(".registry-serverctl-stage-")
             }));
     }
+
+    #[test]
+    fn initialized_runtime_example_parses_as_a_runtime_configuration() {
+        // No command reads runtime.example.yaml, so this is what holds the
+        // example to the grammar the runtime accepts.
+        let raw = std::str::from_utf8(INIT_RUNTIME_EXAMPLE).expect("the example is UTF-8");
+        registry_server::runtime_config::parse_runtime_config_with_env(raw, |_| None)
+            .expect("the initialized runtime example parses");
+    }
 }
