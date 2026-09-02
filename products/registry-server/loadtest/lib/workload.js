@@ -9,7 +9,10 @@
 import http from 'k6/http';
 import { check } from 'k6';
 import { SharedArray } from 'k6/data';
+import { Counter } from 'k6/metrics';
 import { driverToken } from './token.js';
+
+export const cursorPagesFollowed = new Counter('cursor_pages_followed');
 
 export const establishmentIds = new SharedArray('establishmentIds', function () {
   return sharedLines(__ENV.ESTABLISHMENT_IDS_FILE, 'id');
@@ -45,14 +48,25 @@ export class Workload {
     this.clientId = clientId;
     this.clientSecret = clientSecret;
     this.createCounter = 0;
+    this.randomState = 0;
   }
 
   token() {
     return driverToken(this.tokenUrl, this.clientId, this.clientSecret);
   }
 
+  random() {
+    if (this.randomState === 0) {
+      const configuredSeed = Number(__ENV.RANDOM_SEED || 20260902) >>> 0;
+      this.randomState = (configuredSeed ^ Math.imul(__VU || 1, 0x9e3779b1)) >>> 0;
+      if (this.randomState === 0) this.randomState = 1;
+    }
+    this.randomState = (Math.imul(this.randomState, 1664525) + 1013904223) >>> 0;
+    return this.randomState / 0x100000000;
+  }
+
   lookupByCode(token) {
-    const code = establishmentCodes[Math.floor(Math.random() * establishmentCodes.length)];
+    const code = establishmentCodes[Math.floor(this.random() * establishmentCodes.length)];
     // The de-duplication search shape: find one record by its unique code.
     const filter = encodeURIComponent(`establishmentCode eq '${code}'`);
     const response = http.get(
@@ -64,7 +78,7 @@ export class Workload {
   }
 
   getEstablishment(token) {
-    const id = establishmentIds[Math.floor(Math.random() * establishmentIds.length)];
+    const id = establishmentIds[Math.floor(this.random() * establishmentIds.length)];
     const response = http.get(
       `${this.baseUrl}/v1/records/establishments/${id}?accessProfile=business-operator`,
       { headers: headers(token), tags: { name: 'get_establishment' } }
@@ -75,7 +89,7 @@ export class Workload {
 
   filteredList(token) {
     // The monitoring shape: a filtered, sorted collection page.
-    const kind = ['production', 'warehouse', 'office'][Math.floor(Math.random() * 3)];
+    const kind = ['production', 'warehouse', 'office'][Math.floor(this.random() * 3)];
     const filter = encodeURIComponent(`establishmentKind eq '${kind}'`);
     const response = http.get(
       `${this.baseUrl}/v1/records/establishments?accessProfile=business-operator&$filter=${filter}&$orderby=establishmentCode&$top=50`,
@@ -84,10 +98,12 @@ export class Workload {
     check(response, { 'list status 200': (r) => r.status === 200 });
     if (response.status === 200 && __ENV.FOLLOW_CURSOR === '1') {
       const body = response.json();
-      const next = body && (body.next || (body.links && body.links.next));
-      if (next) {
+      const cursor = body && body.pageInfo && body.pageInfo.nextCursor;
+      if (cursor) {
+        const next = `${this.baseUrl}/v1/records/establishments?accessProfile=business-operator&$skiptoken=${encodeURIComponent(cursor)}`;
         const follow = http.get(next, { headers: headers(token), tags: { name: 'filtered_list_page2' } });
         check(follow, { 'page-2 status 200': (r) => r.status === 200 });
+        if (follow.status === 200) cursorPagesFollowed.add(1);
       }
     }
     return response;
@@ -121,7 +137,7 @@ export class Workload {
   }
 
   patchEstablishment(token) {
-    const id = establishmentIds[Math.floor(Math.random() * establishmentIds.length)];
+    const id = establishmentIds[Math.floor(this.random() * establishmentIds.length)];
     const fetched = http.get(
       `${this.baseUrl}/v1/records/establishments/${id}?accessProfile=business-operator`,
       { headers: headers(token), tags: { name: 'patch_prefetch' } }
@@ -153,7 +169,7 @@ export class Workload {
   }
 
   step(token, weights) {
-    const roll = Math.random() * 100;
+    const roll = this.random() * 100;
     let cumulative = 0;
     for (const [weight, action] of weights) {
       cumulative += weight;

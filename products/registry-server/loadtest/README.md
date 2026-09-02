@@ -1,10 +1,8 @@
 # Registry Server load-test environment
 
-A self-contained local stack for load-testing Registry Server: pinned
-PostgreSQL 17 (TLS, `pg_stat_statements`), Registry Mint with one
-private-key operator client and one client-secret driver client, and
-Registry Server serving the `business-establishments` acceptance fixture
-with the opt-in metrics listener enabled. Everything disposable lives under
+A self-contained local stack for measuring Registry Server with pinned
+PostgreSQL 17, Registry Mint, the `business-establishments` acceptance fixture,
+and the opt-in private metrics listener. Everything disposable lives under
 `loadtest/.run` and is never committed.
 
 All seeded data is synthetic and deterministically generated from a fixed
@@ -12,103 +10,141 @@ seed. No real business, person, or identifier is involved.
 
 ## Prerequisites
 
-- `cargo`, `docker`, `openssl`, `python3`, `uv` (same set as the quickstart)
+- `cargo`, `docker`, `openssl`, `python3`, `uv`
 - `k6` (`brew install k6`)
 
 ## Quick start
 
 ```bash
-products/registry-server/loadtest/up.sh                     # build + start the stack
-products/registry-server/loadtest/seed.py --count 100000    # synthetic records
-products/registry-server/loadtest/run.sh --profile steady   # 50 TPS mixed, 10 min
-products/registry-server/loadtest/dbstats.sh                # DB-side sampling
-products/registry-server/loadtest/down.sh                   # tear down
+products/registry-server/loadtest/up.sh
+products/registry-server/loadtest/seed.py --count 100000
+products/registry-server/loadtest/run.sh --profile cursor-smoke
+products/registry-server/loadtest/run.sh --profile steady
+products/registry-server/loadtest/run.sh --profile sweep
+products/registry-server/loadtest/down.sh
 ```
 
-`up.sh --pool-max N` sizes the server's PostgreSQL pool (default 32, bound
-1..128). `seed.py --workers N` bounds concurrent batch requests (default 4);
-`--count 500000` is the documented full-scale seed and takes minutes.
+`up.sh --pool-max N` sizes the PostgreSQL pool (default 32, bound 1..128).
+`seed.py --workers N` bounds concurrent batch requests (default 4). Seeds of
+100,000 records or more run PostgreSQL `ANALYZE` after import. The documented
+full-scale seed is 500,000 records.
 
-## Why these profiles
+## Operations are not HTTP requests
 
-Registries of this shape (civil registration, facility and business
-registries, point-of-care verification) have a consistent load signature:
+Rate settings are operations per second (`OPS`), not HTTP TPS. A workload
+operation can issue more than one request:
 
-- **Reads dominate at 100:1 or more.** Writes are registration events; reads
-  are every downstream check (deduplication searches, point-of-care lookups,
-  monitoring collections).
-- **Institutional clients, not humans**: tens to low hundreds of
-  integrators with pooled connections and cached tokens, so realistic
-  concurrency is 50-500 connections.
-- **Diurnal shape**: business-hours peaks run 3-5x the daily mean; campaign
-  days (drives, month-end reporting) spike 5-10x for hours.
+- a paginated list follows page two when a cursor is present;
+- a patch first fetches the current ETag;
+- a virtual user may refresh its cached access token.
 
-A sustained mixed 50 TPS with documented behavior through 5x bursts
-comfortably covers a large national registry; the sweep finds where the
-server's actual ceiling sits.
+Every result therefore reports offered operations/s, achieved operations/s,
+and actual HTTP requests/s separately.
 
-| Profile | Shape | Question it answers |
+## Profiles
+
+| Profile | Default shape | Question it answers |
 |---|---|---|
-| `steady` | 50 TPS constant arrival, mixed workload (40% code lookup, 30% point get, 20% filtered list, 7% create, 3% patch), 10 min (pass `DURATION=8h` for a soak) | Does p99 stay under 250ms with zero failed requests? |
-| `sweep` | Read-only ramp 10 -> 600 TPS in 10 stages | Where is the throughput knee? |
-| `burst` | 250 TPS plateau with 2x spikes | Is degradation under campaign bursts graceful? |
-| `herd` | 200 VUs minting tokens simultaneously | Does a coordinated client restart sink Mint or the server? |
+| `cursor-smoke` | one filtered page plus its continuation | Did the harness really execute page two with the Registry Server cursor contract? |
+| `steady` | 50 operations/s, mixed workload, 10 min | Does the target rate hold without drops or failures and with p99 below 250 ms? |
+| `sweep` | excluded warmup at 50 operations/s, then independent 2 min holds at 50, 75, 100, 125, and 150 | At which held rate do drops, errors, or tail-latency failure begin? |
+| `burst` | 50 operations/s baseline, 30 s ramp to 250, 30 s hold, 30 s ramp down, 3 min recovery | Is a 5x campaign burst graceful, and does the service return to its baseline SLO? |
+| `herd` | 200 VUs, one token and one protected read each | Does a coordinated client restart overload Mint or Registry Server? |
+| `token-soak` | ramp to 200 VUs for 1 min | How does sustained token minting behave? This is intentionally separate from the one-shot herd. |
 
-Each run scrapes the metrics listener before and after into
-`.run/logs/metrics-{before,after}-<profile>-<stamp>.txt`.
+The steady mix is 40% code lookup, 30% point get, 20% filtered list, 7%
+create, and 3% preconditioned patch. Sweep and burst are read-only. Workload
+selection uses a deterministic per-VU PRNG (`RANDOM_SEED=20260902` by default).
 
-## Tuning knobs
+## Tuning
 
-`run.sh` accepts `--profile`, `--tps`, and `--duration`; anything else is
-passed through to k6. Profile-specific tuning is environment variables:
+`run.sh` accepts `--profile`, `--ops`, and `--duration`; other non-sensitive
+arguments pass through to k6. HTTP debug and system-tag overrides are refused
+because they can expose credentials, cursors, URLs, or record identifiers.
+Profile-specific environment variables are:
 
-- `steady`: `TPS` (default 50), `DURATION` (default 10m), `FOLLOW_CURSOR` (default 1)
-- `sweep`: `START_TPS` (10), `MAX_TPS` (600), `STAGES` (10), `STAGE_DURATION` (1m)
-- `burst`: `TPS` plateau (250), `SPIKE_MULTIPLIER` (2), `SPIKE_SECONDS` (30)
-- `herd`: `VUS` (200), `DURATION` (1m)
+- `steady`: `OPS=50`, `DURATION=10m`, `FOLLOW_CURSOR=1`
+- `sweep`: `RATES=50,75,100,125,150`, `HOLD=2m`, `WARMUP_OPS=50`, `WARMUP_DURATION=2m`
+- `burst`: `OPS=50`, `PEAK_OPS=250`, `BASELINE_DURATION=2m`, `RAMP_DURATION=30s`, `PEAK_DURATION=30s`, `RECOVERY_DURATION=3m`
+- `herd`: `VUS=200`, `DURATION=30s` (maximum completion time)
+- `token-soak`: `VUS=200`, `DURATION=1m`
+- all workload profiles: `RANDOM_SEED`, `FOLLOW_CURSOR`
 
-Example: `MAX_TPS=100 STAGES=3 STAGE_DURATION=10s run.sh --profile sweep`.
+Examples:
 
-## How to read results
+```bash
+products/registry-server/loadtest/run.sh --profile steady --ops 75 --duration 15m
+RATES=50,60,70,80,90 HOLD=3m products/registry-server/loadtest/run.sh --profile sweep
+PEAK_OPS=300 products/registry-server/loadtest/run.sh --profile burst
+```
 
-The expected bottleneck is the audit chain: every audited request appends a
-hash-chained envelope under `SELECT ... FOR UPDATE` on the singleton
-`registry_audit_head` row, and one GET costs three PostgreSQL transactions
-(read plus two audit appends). Read the run against that model:
+## Evidence
 
-- `registry_server_http_request_duration_seconds` p99 rising while
-  `registry_server_pool_connections{state="waiting"}` stays near zero means
-  time is spent inside transactions — audit-chain serialization or query
-  time. Confirm with `dbstats.sh` lock waits and `pg_stat_statements`.
-- `waiting` climbing with flat p99 until a knee means pool exhaustion;
-  compare runs at different `--pool-max`.
-- 504s with problem code `request.timeout` are the saturation signal: the
-  10s HTTP timeout fires while work is still queued.
-- Soaks should watch audit table growth and dead tuples (`dbstats.sh`).
+Each measured run gets an owner-only directory under `.run/results/` with:
 
-## Notes and caveats
+- `manifest.json`: Git revision and dirty state, non-secret host/tool versions,
+  pool size, seed counts, exact profile parameters, and timestamps;
+- `k6-summary.json` and `k6-samples.json`: threshold data and raw metric
+  samples with the system tag set restricted to status, method, operation name,
+  scenario, and expected-response status;
+- `telemetry.jsonl`: one-second Registry Server metrics plus local server and
+  Mint CPU/RSS samples;
+- `db-before.json`, `db-waits.jsonl`, and `db-after.json`: per-run-reset
+  statement timing by safe category/query id, continuous wait counts, table
+  sizes, and audit-chain length;
+- `result.json`: the mechanically generated throughput, errors, drops, 504s,
+  p50/p95/p99 by operation and phase, telemetry peaks, DB wait peaks, and SLO
+  verdict;
+- `safety.json`: evidence scan proving configured secrets, seeded record-id
+  canaries, compact JWTs, unsafe k6 tags, SQL text, and response bodies were not
+  persisted.
 
-- **macOS Docker numbers are directional, not citable.** The Docker network
-  and CPU overhead distorts tails; use a Linux host for published figures.
-- The seeder drives the public batch HTTP contract directly (the same
-  surface `registry-serverctl data import` uses) with bounded parallelism
-  and captures returned record ids for reference fields and the k6 id pool.
-  `data import` remains the sequential, checkpointed path for auditable
-  one-off imports.
-- Tokens come from a real local Mint via `client_secret_post`; the herd
-  profile deliberately hammers that endpoint. For steady-state runs the
-  harness caches each token until shortly before expiry, matching how a
-  well-behaved institutional client behaves.
-- The server's metrics listener is loopback-only and opt-in
-  (`metricsListener` in the runtime config); `up.sh` reserves an ephemeral
-  port for it and records it in `.run/env.json`.
+The sweep also creates `sweep-result.json`, including the first held rate that
+failed its thresholds. The warmup is deliberately excluded from measurement,
+and PostgreSQL statement statistics are reset before every held rate.
 
-## Files
+The harness never saves bearer tokens, client secrets, cursors, source records,
+raw principals, request/response bodies, audit payloads, SQL text, or bound SQL
+values. It passes secrets to k6 through the process environment, not command
+arguments.
 
-- `up.sh` / `down.sh` — environment lifecycle
-- `support/loadenv.py` — helpers (ports, config generation, tokens, scraping)
-- `seed.py` — deterministic synthetic seeder over the batch API
-- `run.sh` — k6 wrapper (env wiring, before/after metric scrapes)
-- `dbstats.sh` — pg_stat_statements, audit lock waits, table sizes
-- `lib/token.js`, `lib/workload.js` — token handling and the weighted mix
-- `profiles/` — steady, sweep, burst, herd
+## Database diagnostics
+
+The run wrapper captures DB diagnostics automatically. These commands are also
+available for focused investigation:
+
+```bash
+products/registry-server/loadtest/dbstats.sh reset
+products/registry-server/loadtest/dbstats.sh snapshot
+products/registry-server/loadtest/dbstats.sh sample 1
+products/registry-server/loadtest/dbstats.sh analyze
+```
+
+`pg_stat_statements` is cumulative until reset. A point-in-time snapshot alone
+cannot attribute time to a profile or establish peak lock/pool pressure, which
+is why measured runs reset it and sample waits continuously.
+
+## Interpreting results
+
+- The audit chain is a strong bottleneck hypothesis because audited requests
+  serialize updates to a singleton chain head, but the harness should prove
+  it per run using audit wait peaks and post-reset statement timing.
+- Rising latency with low pool waiters points toward transaction/query work.
+  Rising pool waiters indicates pool pressure.
+- 504 `request.timeout` responses are saturation, not successful throughput.
+- Capacity is the highest held rate that meets its full thresholds, not a rate
+  merely touched during a ramp.
+- Recovery is a separate burst scenario. Do not average it together with the
+  overloaded phase.
+- macOS Docker figures are directional. Re-run candidate capacity claims on a
+  representative Linux host before citing them.
+
+## Verification
+
+```bash
+python3 -m unittest products/registry-server/loadtest/support/test_evidence.py -v
+bash -n products/registry-server/loadtest/run.sh products/registry-server/loadtest/dbstats.sh
+```
+
+Use `k6 inspect` on each profile for a local syntax/configuration check. The
+live `cursor-smoke` is the end-to-end proof that continuation actually occurs.

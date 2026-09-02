@@ -1,39 +1,31 @@
-// Ceiling-sweep profile: find the throughput knee.
-//
-// Steps the arrival rate from START_TPS (default 10) to MAX_TPS (default
-// 600) in equal stages over the ramp, read-only so repeated runs have no
-// write side effects. The knee is where p99 departs from its plateau and
-// 504 request.timeout responses first appear; thresholds are advisory
-// (abort-on-failure is deliberately off).
+// One held read-only rate. run.sh executes this profile once per RATES entry
+// so every rate has isolated DB statistics and an independently useful result.
 
-import { sleep } from 'k6';
+import { SAFE_SYSTEM_TAGS, SUMMARY_TREND_STATS, positiveNumber } from '../lib/config.js';
+import { writeSummary } from '../lib/summary.js';
 import { Workload, READ_MIX } from '../lib/workload.js';
 
-const startTps = Number(__ENV.START_TPS || 10);
-const maxTps = Number(__ENV.MAX_TPS || 600);
-const stages = Number(__ENV.STAGES || 10);
-const stageDuration = __ENV.STAGE_DURATION || '1m';
-
-const stageStep = Math.max(1, Math.ceil((maxTps - startTps) / stages));
-const rampStages = [];
-for (let rate = startTps; rate <= maxTps; rate += stageStep) {
-  rampStages.push({ duration: stageDuration, target: rate });
-}
+const ops = positiveNumber('OPS', __ENV.OPS, 50);
+const duration = __ENV.DURATION || '2m';
 
 export const options = {
   scenarios: {
-    sweep: {
-      executor: 'ramping-arrival-rate',
-      startRate: startTps,
+    held_rate: {
+      executor: 'constant-arrival-rate',
+      rate: ops,
       timeUnit: '1s',
-      preAllocatedVUs: Math.min(500, Math.max(20, Math.ceil(maxTps))),
-      maxVUs: Math.max(1000, Math.ceil(maxTps * 2)),
-      stages: rampStages,
+      duration,
+      preAllocatedVUs: Math.min(500, Math.max(20, Math.ceil(ops))),
+      maxVUs: Math.max(1000, Math.ceil(ops * 12)),
     },
   },
   thresholds: {
+    dropped_iterations: ['count==0'],
     http_req_failed: ['rate<0.01'],
+    http_req_duration: ['p(99)<1000'],
   },
+  systemTags: SAFE_SYSTEM_TAGS,
+  summaryTrendStats: SUMMARY_TREND_STATS,
   noConnectionReuse: false,
 };
 
@@ -41,5 +33,6 @@ const workload = new Workload(__ENV.SERVER_URL, __ENV.TOKEN_URL, __ENV.CLIENT_ID
 
 export default function () {
   workload.step(workload.token(), READ_MIX);
-  sleep(0.05);
 }
+
+export const handleSummary = writeSummary;

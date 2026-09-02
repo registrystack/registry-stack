@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import subprocess
 import sys
 import threading
 import time
@@ -266,6 +267,8 @@ def main() -> int:
     tokens = TokenSource(environment["token_url"], environment["driver_client_id"], secret)
     seed_dir = arguments.run_dir / "seed"
     seed_dir.mkdir(parents=True, exist_ok=True)
+    seed_summary = seed_dir / "seed-summary.json"
+    seed_summary.unlink(missing_ok=True)
     rng = random.Random(arguments.seed)
 
     business_count = max(8, arguments.count // 50)
@@ -298,7 +301,17 @@ def main() -> int:
         "".join(f"{identifier} {record['businessCode']}\n" for identifier, record in zip(business_ids, businesses)),
         encoding="utf-8",
     )
-    (seed_dir / "seed-summary.json").write_text(
+    if arguments.count >= 100_000:
+        print("Refreshing PostgreSQL planner statistics after the full-scale seed")
+        try:
+            subprocess.run(
+                [str(Path(__file__).resolve().parent / "dbstats.sh"), "analyze"],
+                check=True,
+            )
+        except (OSError, subprocess.CalledProcessError) as error:
+            print(f"seeding completed, but ANALYZE failed: {error}", file=sys.stderr)
+            return 1
+    seed_summary.write_text(
         json.dumps(
             {
                 "seed": arguments.seed,
