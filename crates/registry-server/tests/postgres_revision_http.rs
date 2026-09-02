@@ -277,10 +277,7 @@ async fn real_postgres_revision_http_is_bounded_authorized_atomic_and_audit_gate
         StatusCode::SERVICE_UNAVAILABLE,
         "a revision statement that outruns the database budget refuses the read"
     );
-    assert_eq!(
-        body_json(outrun_budget).await["code"],
-        "source.unavailable"
-    );
+    assert_eq!(body_json(outrun_budget).await["code"], "source.unavailable");
 
     let before_fault = audit_count(&database).await;
     let faulting = revision_router(

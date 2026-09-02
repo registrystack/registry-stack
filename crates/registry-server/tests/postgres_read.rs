@@ -749,14 +749,7 @@ async fn real_postgres_reads_do_not_depend_on_the_database_time_zone() {
     seed_records(&database, &pool, lock_key, &identity, &compiled, true).await;
     let profile = AuditProfile::production_from_secret_bytes(vec![0x6d; 32].into())
         .expect("test owns a strongly keyed audit profile");
-    let app = read_router(
-        pool,
-        compiled.clone(),
-        identity,
-        lock_key,
-        profile,
-        None,
-    );
+    let app = read_router(pool, compiled.clone(), identity, lock_key, profile, None);
 
     let current = send(
         &app,
