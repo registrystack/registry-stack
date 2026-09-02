@@ -45,7 +45,8 @@ pub use interlock::DedicatedApplyConnection;
 pub use interlock::RegistryLockKey;
 pub(crate) use interlock::{
     set_force_row_security, DedicatedApplyConnection as VerifiedPackageApplyConnection,
-    PackageDdlStatement, ReviewedExecutionOutcome, ReviewedPackageExecutionRequest,
+    MaintenanceAuditRecord, MaintenanceSnapshot, MaintenanceTransition, PackageDdlStatement,
+    ReviewedExecutionOutcome, ReviewedMigrationProgress, ReviewedPackageExecutionRequest,
 };
 pub(crate) use migration_ledger::{
     statement_checksum, MigrationArtifactBinding, MigrationLedgerEntry, MigrationLedgerStep,

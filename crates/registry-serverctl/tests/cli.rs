@@ -3807,6 +3807,111 @@ fn apply_verifies_package_intent_before_database_authority_and_stays_value_free(
 }
 
 #[test]
+fn migration_reconcile_verifies_intent_before_database_authority_and_stays_value_free() {
+    let relative = registry_serverctl(&[
+        "--format",
+        "json",
+        "migration",
+        "reconcile",
+        "--runtime-config",
+        PACKAGE_VALUE_CANARY,
+        "--package",
+        PACKAGE_VALUE_CANARY,
+        "--operator-reference",
+        "change-1",
+    ]);
+    assert_eq!(relative.status.code(), Some(1), "{relative:?}");
+    assert_eq!(
+        json_stdout(&relative)["diagnostics"][0]["code"],
+        "migration.reconcile.runtime_config.path_invalid"
+    );
+    assert!(!String::from_utf8_lossy(&relative.stdout).contains(PACKAGE_VALUE_CANARY));
+
+    let fixture = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
+    let relative_package = registry_serverctl(&[
+        "--format",
+        "json",
+        "migration",
+        "reconcile",
+        "--runtime-config",
+        path(&fixture.runtime_config),
+        "--package",
+        PACKAGE_VALUE_CANARY,
+        "--operator-reference",
+        "change-1",
+    ]);
+    assert_eq!(
+        relative_package.status.code(),
+        Some(1),
+        "{relative_package:?}"
+    );
+    assert_eq!(
+        json_stdout(&relative_package)["diagnostics"][0]["code"],
+        "migration.reconcile.package.path_invalid"
+    );
+
+    let empty_reference = registry_serverctl(&[
+        "--format",
+        "json",
+        "migration",
+        "reconcile",
+        "--runtime-config",
+        path(&fixture.runtime_config),
+        "--package",
+        path(&fixture.package),
+        "--operator-reference",
+        "",
+    ]);
+    assert_eq!(
+        empty_reference.status.code(),
+        Some(1),
+        "{empty_reference:?}"
+    );
+    assert_eq!(
+        json_stdout(&empty_reference)["diagnostics"][0]["code"],
+        "migration.reconcile.operator_reference.refused"
+    );
+
+    // The active package is never its own successor, so the pinned target is
+    // refused before any database secret is resolved.
+    let output = registry_serverctl(&[
+        "--format",
+        "json",
+        "migration",
+        "reconcile",
+        "--runtime-config",
+        path(&fixture.runtime_config),
+        "--package",
+        path(&fixture.package),
+        "--operator-reference",
+        "change-1",
+        "--execute",
+    ]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let report = json_stdout(&output);
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "migration.reconcile.package.refused"
+    );
+    assert_tool_diagnostic(
+        &report["diagnostics"][0],
+        "verified_package",
+        "verify_package_binding",
+    );
+    let rendered = String::from_utf8(output.stdout).expect("reconcile refusal is UTF-8");
+    for forbidden in [
+        path(&fixture.runtime_config),
+        path(&fixture.package),
+        path(&fixture.anchor),
+        PACKAGE_VALUE_CANARY,
+        "VERIFY_DATABASE_SECRET_IS_NOT_OPENED",
+    ] {
+        assert!(!rendered.contains(forbidden));
+    }
+}
+
+#[test]
 fn verify_is_runtime_bound_deterministic_and_listener_free() {
     let occupied = TcpListener::bind("127.0.0.1:0").expect("listener proof binds one local port");
     let fixture = RuntimePackageFixture::production(
@@ -3968,6 +4073,7 @@ fn lifecycle_parser_surfaces_are_exact_and_value_free() {
     for arguments in [
         vec!["verify", "--help"],
         vec!["migration", "explain", "--help"],
+        vec!["migration", "reconcile", "--help"],
         vec!["data", "validate", "--help"],
         vec!["data", "import", "--help"],
         vec!["data", "export", "--help"],
@@ -3985,9 +4091,22 @@ fn lifecycle_parser_surfaces_are_exact_and_value_free() {
     }
     let migration_help = registry_serverctl(&["migration", "--help"]);
     let migration_help = String::from_utf8(migration_help.stdout).expect("migration help is UTF-8");
-    assert!(migration_help
-        .lines()
-        .any(|line| line.trim_start().starts_with("explain")));
+    for available in ["explain", "reconcile"] {
+        assert!(migration_help
+            .lines()
+            .any(|line| line.trim_start().starts_with(available)));
+    }
+    let reconcile_help = registry_serverctl(&["migration", "reconcile", "--help"]);
+    let reconcile_help =
+        String::from_utf8(reconcile_help.stdout).expect("migration reconcile help is UTF-8");
+    for required in [
+        "--runtime-config <ABSOLUTE_FILE>",
+        "--package <ABSOLUTE_DIRECTORY>",
+        "--operator-reference <REFERENCE>",
+        "--execute",
+    ] {
+        assert!(reconcile_help.contains(required));
+    }
     let package_help = registry_serverctl(&["package", "--help"]);
     let package_help = String::from_utf8(package_help.stdout).expect("package help is UTF-8");
     for required in [
@@ -4030,6 +4149,14 @@ fn lifecycle_parser_surfaces_are_exact_and_value_free() {
             PACKAGE_VALUE_CANARY,
         ],
         vec!["--format", "json", "migration"],
+        vec![
+            "--format",
+            "json",
+            "migration",
+            "reconcile",
+            "--runtime-config",
+            PACKAGE_VALUE_CANARY,
+        ],
         vec![
             "--format",
             "json",

@@ -44,6 +44,7 @@ mod history_rebaseline_lifecycle;
 mod package_inspection;
 mod package_lifecycle;
 mod project_migration;
+mod reconcile_lifecycle;
 mod request_retention;
 mod reviewed_migrations;
 mod test_lifecycle;
@@ -64,7 +65,11 @@ use package_inspection::{
     inspect_runtime_package, inspect_runtime_predecessor_package, RuntimePackageInspectionError,
 };
 use package_lifecycle::{PackageLifecycleError, PackageLifecycleState};
+use reconcile_lifecycle::{
+    ReconcileLifecycleError, ReconcileLifecycleOutcome, ReconcileLifecycleRequest,
+};
 use registry_server::data::DataError;
+use registry_server::migration_reconcile::{ReconcileError, ReconcileOutcome};
 use request_retention::{
     RequestRetentionCliError, RequestRetentionDryRunOutcome, RequestRetentionEraseOutcome,
     RequestRetentionListOutcome,
@@ -614,6 +619,9 @@ impl From<DataOperationArg> for registry_server::data::DataImportOperation {
 enum MigrationCommand {
     /// Explain the verified package's closed migration plan without executing it.
     Explain(MigrationExplainArgs),
+
+    /// Assess a Registry pinned by a failed activation, and execute only the safe transition it names.
+    Reconcile(MigrationReconcileArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -630,6 +638,25 @@ struct MigrationExplainArgs {
     /// Absolute Registry Server runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct MigrationReconcileArgs {
+    /// Absolute Registry Server runtime configuration file.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
+
+    /// Absolute directory of the verified package the failed activation pinned.
+    #[arg(long, value_name = "ABSOLUTE_DIRECTORY")]
+    package: PathBuf,
+
+    /// Operator change reference recorded as a keyed hash beside an executed transition.
+    #[arg(long, value_name = "REFERENCE")]
+    operator_reference: String,
+
+    /// Perform the single safe transition the assessment names.
+    #[arg(long)]
+    execute: bool,
 }
 
 #[derive(Debug, Args)]
@@ -882,6 +909,7 @@ enum SuggestedAction {
     SupplyExternalSignatures,
     VerifyMigrationAuthority,
     ReconcileFailedMigration,
+    RestorePreActivationBackup,
     ResolveActiveRequestProposals,
     VerifyStartupDependencies,
     CorrectDataBinding,
@@ -921,6 +949,16 @@ struct MigrationExplainSuccessReport {
     assurance: BaselineAssurance,
     package_revision: String,
     plan: MigrationInspectionSummary,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MigrationReconcileSuccessReport {
+    ok: bool,
+    command: &'static str,
+    assurance: BaselineAssurance,
+    #[serde(flatten)]
+    outcome: ReconcileLifecycleOutcome,
 }
 
 #[derive(Serialize)]
@@ -1417,6 +1455,14 @@ where
             MigrationCommand::Explain(args) => {
                 return match migration_explain(&args) {
                     Ok(report) => write_migration_explain_success(&report, format, stdout, stderr),
+                    Err(failure) => write_failure(&failure, format, stdout, stderr),
+                };
+            }
+            MigrationCommand::Reconcile(args) => {
+                return match migration_reconcile(&args) {
+                    Ok(report) => {
+                        write_migration_reconcile_success(&report, format, stdout, stderr)
+                    }
                     Err(failure) => write_failure(&failure, format, stdout, stderr),
                 };
             }
@@ -2969,6 +3015,155 @@ fn migration_explain(
         package_revision: inspected.package_revision().to_owned(),
         plan: inspected.migration_summary().clone(),
     })
+}
+
+fn migration_reconcile(
+    args: &MigrationReconcileArgs,
+) -> Result<MigrationReconcileSuccessReport, FailureReport> {
+    let outcome = reconcile_lifecycle::run(ReconcileLifecycleRequest {
+        runtime_config: &args.runtime_config,
+        package: &args.package,
+        operator_reference: &args.operator_reference,
+        execute: args.execute,
+    })
+    .map_err(reconcile_lifecycle_failure)?;
+    Ok(MigrationReconcileSuccessReport {
+        ok: true,
+        command: "migration reconcile",
+        assurance: BaselineAssurance::RuntimeBound,
+        outcome,
+    })
+}
+
+fn reconcile_lifecycle_failure(error: ReconcileLifecycleError) -> FailureReport {
+    let error = match error {
+        ReconcileLifecycleError::RuntimeConfig(error) => {
+            return runtime_config_failure("migration reconcile", "migration.reconcile", error);
+        }
+        error => error,
+    };
+    let (code, path, message, artifact, action) = match error {
+        ReconcileLifecycleError::RuntimeConfigPath => (
+            "migration.reconcile.runtime_config.path_invalid",
+            "runtimeConfig",
+            "the runtime configuration path must be absolute",
+            DiagnosticArtifact::RuntimeConfiguration,
+            SuggestedAction::CorrectRuntimeConfiguration,
+        ),
+        ReconcileLifecycleError::RuntimeConfig(_) => unreachable!("handled before match"),
+        ReconcileLifecycleError::TargetPackagePath => (
+            "migration.reconcile.package.path_invalid",
+            "package",
+            "the pinned target package path must be absolute",
+            DiagnosticArtifact::VerifiedPackage,
+            SuggestedAction::VerifyPackagePath,
+        ),
+        ReconcileLifecycleError::OperatorReference => (
+            "migration.reconcile.operator_reference.refused",
+            "operatorReference",
+            "the operator reference must be present, bounded, and free of control characters",
+            DiagnosticArtifact::CommandArguments,
+            SuggestedAction::CorrectCommandUsage,
+        ),
+        ReconcileLifecycleError::ActivePackage(error)
+        | ReconcileLifecycleError::TargetPackage(error) => {
+            let action = match error {
+                PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
+                PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
+                PackageError::Signature => SuggestedAction::VerifyPackageTrust,
+                PackageError::Binding => SuggestedAction::VerifyPackageBinding,
+                _ => SuggestedAction::VerifyPackageIntegrity,
+            };
+            (
+                "migration.reconcile.package.refused",
+                "package",
+                "the reconciled activation package was refused",
+                DiagnosticArtifact::VerifiedPackage,
+                action,
+            )
+        }
+        ReconcileLifecycleError::DatabaseConfiguration
+        | ReconcileLifecycleError::TimeoutConfiguration => (
+            "migration.reconcile.database_configuration.refused",
+            "database",
+            "the migration database configuration was refused",
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::VerifyMigrationAuthority,
+        ),
+        ReconcileLifecycleError::Runtime => (
+            "migration.reconcile.runtime.unavailable",
+            "runtime",
+            "the migration reconciliation runtime is unavailable",
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::VerifyMigrationAuthority,
+        ),
+        ReconcileLifecycleError::Reconcile(error) => match error {
+            ReconcileError::InvalidInput => (
+                "migration.reconcile.request.refused",
+                "runtimeConfig",
+                "the reconciliation requires a keyed audit profile and a bound active package",
+                DiagnosticArtifact::RuntimeConfiguration,
+                SuggestedAction::CorrectRuntimeConfiguration,
+            ),
+            ReconcileError::MigrationAuthority => (
+                "migration.reconcile.migration_authority.refused",
+                "database",
+                "migration reconciliation requires the configured migration authority",
+                DiagnosticArtifact::DatabaseMigration,
+                SuggestedAction::VerifyMigrationAuthority,
+            ),
+            ReconcileError::PackageBinding => (
+                "migration.reconcile.package.refused",
+                "package",
+                "the presented package is not a verified successor of the active package",
+                DiagnosticArtifact::VerifiedPackage,
+                SuggestedAction::VerifyPackageBinding,
+            ),
+            ReconcileError::NotExecutable(outcome) => match outcome {
+                ReconcileOutcome::Ready => (
+                    "migration.reconcile.outcome.ready",
+                    "database",
+                    "no failed activation is pinned, so there is no transition to execute",
+                    DiagnosticArtifact::DatabaseMigration,
+                    SuggestedAction::CorrectCommandUsage,
+                ),
+                ReconcileOutcome::InProgress => (
+                    "migration.reconcile.outcome.in_progress",
+                    "database",
+                    "another session holds the exclusive migration lock; reconcile once it releases",
+                    DiagnosticArtifact::DatabaseMigration,
+                    SuggestedAction::ReconcileFailedMigration,
+                ),
+                // Completable and Revertible are the outcomes an execution
+                // performs, so a refusal only ever names an unresolved one.
+                ReconcileOutcome::Unresolvable
+                | ReconcileOutcome::Completable
+                | ReconcileOutcome::Revertible => (
+                    "migration.reconcile.outcome.unresolvable",
+                    "database",
+                    "neither completing nor abandoning the pinned target is provably safe",
+                    DiagnosticArtifact::DatabaseMigration,
+                    SuggestedAction::RestorePreActivationBackup,
+                ),
+            },
+            ReconcileError::Unavailable => (
+                "migration.reconcile.unavailable",
+                "database",
+                "the Registry migration state is unavailable",
+                DiagnosticArtifact::DatabaseMigration,
+                SuggestedAction::VerifyMigrationAuthority,
+            ),
+        },
+    };
+    FailureReport {
+        ok: false,
+        command: "migration reconcile",
+        diagnostics: vec![tool_diagnostic(
+            diagnostic(code, path, message),
+            artifact,
+            action,
+        )],
+    }
 }
 
 fn inspection_failure(
@@ -6964,6 +7159,91 @@ fn write_migration_explain_success(
             let _ = writeln!(stderr, "registry-serverctl: output could not be written");
             ExitCode::from(OPERATIONAL_FAILURE_EXIT)
         }
+    }
+}
+
+fn write_migration_reconcile_success(
+    report: &MigrationReconcileSuccessReport,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format == OutputFormat::Json {
+        serde_json::to_writer_pretty(&mut *stdout, report)
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout))
+    } else {
+        write_migration_reconcile_human(report, stdout)
+    };
+    write_result(result, stderr)
+}
+
+fn write_migration_reconcile_human(
+    report: &MigrationReconcileSuccessReport,
+    stdout: &mut dyn Write,
+) -> io::Result<()> {
+    let outcome = &report.outcome;
+    writeln!(stdout, "migration reconcile succeeded")?;
+    writeln!(stdout, "outcome: {}", outcome.outcome)?;
+    writeln!(stdout, "executed: {}", outcome.executed)?;
+    writeln!(
+        stdout,
+        "maintenance status: {}",
+        optional(outcome.maintenance_status.as_deref())
+    )?;
+    writeln!(
+        stdout,
+        "pinned target revision: {}",
+        optional(outcome.maintenance_target_revision.as_deref())
+    )?;
+    writeln!(
+        stdout,
+        "active package revision: {}",
+        optional(outcome.active_package_revision.as_deref())
+    )?;
+    writeln!(
+        stdout,
+        "presented target revision: {}",
+        outcome.target_package_revision
+    )?;
+    writeln!(
+        stdout,
+        "target catalog finding: {}",
+        optional(outcome.target_catalog_finding)
+    )?;
+    writeln!(
+        stdout,
+        "active catalog finding: {}",
+        optional(outcome.active_catalog_finding)
+    )?;
+    writeln!(
+        stdout,
+        "unresolvable reason: {}",
+        optional(outcome.unresolvable_reason)
+    )?;
+    writeln!(stdout, "plan kind: {}", outcome.plan_kind)?;
+    writeln!(stdout, "migration steps: {}", outcome.migration_step_count)?;
+    writeln!(
+        stdout,
+        "reviewed plan closed: {}",
+        optional_flag(outcome.reviewed_plan_closed)
+    )?;
+    writeln!(
+        stdout,
+        "durable step progress: {}",
+        optional_flag(outcome.durable_step_progress)
+    )
+}
+
+fn optional(value: Option<&str>) -> &str {
+    value.unwrap_or("none")
+}
+
+fn optional_flag(value: Option<bool>) -> &'static str {
+    match value {
+        Some(true) => "true",
+        Some(false) => "false",
+        None => "none",
     }
 }
 

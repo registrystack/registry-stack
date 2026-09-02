@@ -18,7 +18,7 @@ pub(crate) enum MigrationPlanKind {
 }
 
 impl MigrationPlanKind {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::CompiledAdditive => "compiled_additive",
             Self::MetadataOnly => "metadata_only",
@@ -41,7 +41,7 @@ pub(crate) enum MigrationLedgerStepKind {
 }
 
 impl MigrationLedgerStepKind {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::CompilerDdl => "compiler_ddl",
             Self::TransactionalSql => "transactional_sql",

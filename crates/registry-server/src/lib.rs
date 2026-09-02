@@ -57,6 +57,8 @@ pub mod metrics;
 pub mod migration;
 #[cfg(feature = "runtime")]
 pub mod migration_plan;
+#[cfg(feature = "runtime")]
+pub mod migration_reconcile;
 pub mod model;
 #[cfg(feature = "runtime")]
 pub mod mutation;

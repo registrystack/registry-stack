@@ -670,7 +670,9 @@ pub(crate) async fn append_read_terminal_audit(
     append_envelope(transaction, profile, Value::Object(terminal)).await
 }
 
-async fn append_envelope(
+/// Appends one canonical record to the chained Registry audit journal, linking
+/// it to the durable head under the same transaction as the change it records.
+pub(crate) async fn append_envelope(
     transaction: &Transaction<'_>,
     profile: &AuditProfile,
     record: Value,

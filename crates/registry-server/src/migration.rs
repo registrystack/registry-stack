@@ -24,9 +24,10 @@ use crate::package::{
 };
 use crate::postgres::{
     statement_checksum, ConnectionConfig, ExpectedManagedCatalog, ExpectedRegistryIdentity,
-    MigrationArtifactBinding, MigrationLedgerEntry, MigrationLedgerStep, MigrationLedgerStepKind,
-    MigrationPlanKind, PackageDdlStatement, RegistryLockKey, ReviewedExecutionOutcome,
-    ReviewedPackageExecutionRequest, SqlIdentifier, VerifiedPackageApplyConnection,
+    MaintenanceTransition, MigrationArtifactBinding, MigrationLedgerEntry, MigrationLedgerStep,
+    MigrationLedgerStepKind, MigrationPlanKind, PackageDdlStatement, RegistryLockKey,
+    ReviewedExecutionOutcome, ReviewedPackageExecutionRequest, SqlIdentifier,
+    VerifiedPackageApplyConnection,
 };
 
 const MAX_LOCK_TIMEOUT: Duration = Duration::from_secs(300);
@@ -58,6 +59,91 @@ fn verified_metadata_only_plan(plan: &MigrationPlan) -> bool {
             .changes
             .iter()
             .all(|change| change.class == CompiledRegistryChangeClass::AccessOrDisclosureChange)
+}
+
+/// The exact registry identity one verified package activates to.
+pub(crate) fn target_package_identity(
+    package: &VerifiedPackage,
+) -> Result<ExpectedRegistryIdentity> {
+    let manifest = package.manifest();
+    Ok(ExpectedRegistryIdentity {
+        package_id: manifest.package_id.clone(),
+        environment: manifest.environment.clone(),
+        instance_id: manifest.instance_id.clone(),
+        database_id: manifest.database_id.clone(),
+        package_revision: manifest.package_revision.clone(),
+        schema_fingerprint: manifest.schema_fingerprint.clone(),
+        package_sequence: i64::try_from(manifest.sequence)
+            .map_err(|_| MigrationError::PackageBinding)?,
+    })
+}
+
+/// Confirms a verified package is the exact activation successor of one active
+/// identity, so no other package can be presented as that identity's target.
+pub(crate) fn verify_successor_package_binding(
+    package: &VerifiedPackage,
+    current: &ExpectedRegistryIdentity,
+    target: &ExpectedRegistryIdentity,
+) -> Result<()> {
+    current
+        .validate()
+        .map_err(|_| MigrationError::PackageBinding)?;
+    let manifest = package.manifest();
+    let active_sequence =
+        u64::try_from(current.package_sequence).map_err(|_| MigrationError::PackageBinding)?;
+    if !package.verified_for_activation(&current.package_revision, active_sequence)
+        || manifest.environment != current.environment
+        || manifest.package_id != current.package_id
+        || manifest.instance_id != current.instance_id
+        || manifest.database_id != current.database_id
+        || manifest.prior_revision.as_deref() != Some(current.package_revision.as_str())
+        || manifest.migration_plan.from_revision.as_deref()
+            != Some(current.package_revision.as_str())
+        || target.package_sequence <= current.package_sequence
+    {
+        return Err(MigrationError::PackageBinding);
+    }
+    Ok(())
+}
+
+/// The checksums of the compiler-owned DDL statements, in manifest order.
+pub(crate) fn compiler_statement_checksums(package: &VerifiedPackage) -> Vec<String> {
+    package
+        .manifest()
+        .migration_plan
+        .statements
+        .iter()
+        .map(|statement| statement_checksum(&statement.sql))
+        .collect()
+}
+
+/// The durable ledger entry one verified package binds for its activation.
+pub(crate) fn package_ledger_entry(
+    package: &VerifiedPackage,
+    current: Option<&ExpectedRegistryIdentity>,
+    target: &ExpectedRegistryIdentity,
+    compiler_checksums: &[String],
+) -> Result<MigrationLedgerEntry> {
+    if let Some(plan) = package.reviewed_migration_plan() {
+        return reviewed_ledger(
+            package,
+            current.ok_or(MigrationError::PackageBinding)?,
+            plan,
+        );
+    }
+    Ok(MigrationLedgerEntry {
+        source_revision: current.map(|identity| identity.package_revision.clone()),
+        target_revision: target.package_revision.clone(),
+        package_sequence: target.package_sequence,
+        plan_kind: if verified_metadata_only_plan(&package.manifest().migration_plan) {
+            MigrationPlanKind::MetadataOnly
+        } else {
+            MigrationPlanKind::CompiledAdditive
+        },
+        statement_checksums: compiler_checksums.to_vec(),
+        artifact_bindings: Vec::new(),
+        steps: Vec::new(),
+    })
 }
 
 /// Exact durable precondition under which a verified package may be applied.
@@ -240,17 +326,7 @@ pub async fn apply_verified_package(
     request: ApplyVerifiedPackageRequest<'_>,
 ) -> Result<ExpectedRegistryIdentity> {
     let manifest = request.package.manifest();
-    let target_sequence =
-        i64::try_from(manifest.sequence).map_err(|_| MigrationError::PackageBinding)?;
-    let target = ExpectedRegistryIdentity {
-        package_id: manifest.package_id.clone(),
-        environment: manifest.environment.clone(),
-        instance_id: manifest.instance_id.clone(),
-        database_id: manifest.database_id.clone(),
-        package_revision: manifest.package_revision.clone(),
-        schema_fingerprint: manifest.schema_fingerprint.clone(),
-        package_sequence: target_sequence,
-    };
+    let target = target_package_identity(request.package)?;
     let current = match request.precondition {
         ApplyPrecondition::InitialActivation => {
             if !request.package.verified_for_initial_activation()
@@ -263,25 +339,7 @@ pub async fn apply_verified_package(
             None
         }
         ApplyPrecondition::Successor { current } => {
-            current
-                .validate()
-                .map_err(|_| MigrationError::PackageBinding)?;
-            let active_sequence = u64::try_from(current.package_sequence)
-                .map_err(|_| MigrationError::PackageBinding)?;
-            if !request
-                .package
-                .verified_for_activation(&current.package_revision, active_sequence)
-                || manifest.environment != current.environment
-                || manifest.package_id != current.package_id
-                || manifest.instance_id != current.instance_id
-                || manifest.database_id != current.database_id
-                || manifest.prior_revision.as_deref() != Some(current.package_revision.as_str())
-                || manifest.migration_plan.from_revision.as_deref()
-                    != Some(current.package_revision.as_str())
-                || target_sequence <= current.package_sequence
-            {
-                return Err(MigrationError::PackageBinding);
-            }
+            verify_successor_package_binding(request.package, current, &target)?;
             Some(current)
         }
     };
@@ -317,34 +375,8 @@ pub async fn apply_verified_package(
         return Err(MigrationError::EmptyPlan);
     }
 
-    let metadata_only_plan = verified_metadata_only_plan(&manifest.migration_plan);
-    let compiler_checksums = manifest
-        .migration_plan
-        .statements
-        .iter()
-        .map(|statement| statement_checksum(&statement.sql))
-        .collect::<Vec<_>>();
-    let ledger = if let Some(plan) = reviewed_plan {
-        reviewed_ledger(
-            request.package,
-            current.ok_or(MigrationError::PackageBinding)?,
-            plan,
-        )?
-    } else {
-        MigrationLedgerEntry {
-            source_revision: current.map(|identity| identity.package_revision.clone()),
-            target_revision: target.package_revision.clone(),
-            package_sequence: target.package_sequence,
-            plan_kind: if metadata_only_plan {
-                MigrationPlanKind::MetadataOnly
-            } else {
-                MigrationPlanKind::CompiledAdditive
-            },
-            statement_checksums: compiler_checksums.clone(),
-            artifact_bindings: Vec::new(),
-            steps: Vec::new(),
-        }
-    };
+    let compiler_checksums = compiler_statement_checksums(request.package);
+    let ledger = package_ledger_entry(request.package, current, &target, &compiler_checksums)?;
     let statements = manifest
         .migration_plan
         .statements
@@ -506,10 +538,13 @@ pub async fn apply_verified_package(
             .activate_verified_package(
                 current,
                 &target,
-                &ledger,
-                &expected_catalog,
-                request.roles.migration,
-                request.roles.runtime,
+                MaintenanceTransition {
+                    ledger: &ledger,
+                    expected_catalog: &expected_catalog,
+                    migration_role: request.roles.migration,
+                    runtime_role: request.roles.runtime,
+                },
+                None,
             )
             .await
             .is_err()
@@ -531,10 +566,13 @@ pub async fn apply_verified_package(
             .activate_verified_package(
                 current,
                 &target,
-                &ledger,
-                &expected_catalog,
-                request.roles.migration,
-                request.roles.runtime,
+                MaintenanceTransition {
+                    ledger: &ledger,
+                    expected_catalog: &expected_catalog,
+                    migration_role: request.roles.migration,
+                    runtime_role: request.roles.runtime,
+                },
+                None,
             )
             .await
             .is_ok()
@@ -578,10 +616,13 @@ pub async fn apply_verified_package(
         .activate_verified_package(
             current,
             &target,
-            &ledger,
-            &expected_catalog,
-            request.roles.migration,
-            request.roles.runtime,
+            MaintenanceTransition {
+                ledger: &ledger,
+                expected_catalog: &expected_catalog,
+                migration_role: request.roles.migration,
+                runtime_role: request.roles.runtime,
+            },
+            None,
         )
         .await;
     if activation_result.is_err() {

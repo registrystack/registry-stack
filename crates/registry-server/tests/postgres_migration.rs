@@ -8,6 +8,7 @@ mod postgres_harness;
 use std::{fs, os::unix::fs::PermissionsExt as _, time::Duration};
 
 use postgres_harness::TestDatabase;
+use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::canonicalize_json;
 use registry_server::compiler::{compile_project, module_digest, CompileProfile};
 use registry_server::contract::{parse_module_yaml, parse_project_yaml};
@@ -22,6 +23,10 @@ use registry_server::migration_plan::{
     ReviewedMigrationAssertionDescriptor, ReviewedMigrationDescriptor, ReviewedMigrationFile,
     ReviewedMigrationObject, ReviewedMigrationObjectKind, ReviewedMigrationRecovery,
     ReviewedMigrationSource, ReviewedMigrationStepDescriptor,
+};
+use registry_server::migration_reconcile::{
+    reconcile_failed_migration, ReconcileError, ReconcileOutcome, ReconcileReport,
+    ReconcileRequest, ReconcileTimeouts, UNRESOLVABLE_CATALOG_UNMATCHED,
 };
 use registry_server::package::{
     compiled_registry_change_set, load_package, prepare_package, CompiledRegistryChangeClass,
@@ -42,6 +47,7 @@ use uuid::Uuid;
 const INSTANCE: &str = "migration-instance";
 const DATABASE: &str = "migration-database";
 const SOURCE_REVISION: &str = "migration-source-revision";
+const RECONCILE_OPERATOR_CANARY: &str = "operator secret must not enter reconciliation audit";
 const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: registry.registrystack.org/server-journeys/v1
 journeys:
   - id: asset-list
@@ -494,6 +500,278 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
     false_assertion_refusals_are_closed().await;
     row_count_mismatch_is_closed().await;
     lock_timeout_is_bounded().await;
+}
+
+/// A failed activation pins its target, and fixing forward is not always
+/// available. Reconciliation must say which of the two packages the live
+/// managed catalog actually is, execute only the transition that reading
+/// proves safe, and refuse everything else without changing the database.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_reconciliation_completes_reverts_or_refuses_a_pinned_target() {
+    reconciliation_completes_a_target_the_catalog_already_reached().await;
+    reconciliation_reverts_a_target_that_reached_no_durable_step().await;
+    reconciliation_assessment_writes_nothing().await;
+}
+
+/// A reviewed apply whose every durable step closed, failing only because an
+/// administrator left an unmanaged object behind. While the object is there
+/// the reconciliation is unresolvable and refuses to execute; once it is gone
+/// the same reconciliation completes the activation exactly as an apply would.
+async fn reconciliation_completes_a_target_the_catalog_already_reached() {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs extension");
+    let base = compile_variant(Variant::Base, 1);
+    let fingerprint = initial_fingerprint(&database, &base).await;
+    let initial = prepare_and_load_initial(&base, &fingerprint);
+    let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("reconciliation scenario initial package activates");
+    seed_backfill_rows(&database, &base, 5).await;
+    let required = compile_variant(Variant::RankRequired, 2);
+    let target_fingerprint = required_target_fingerprint(&database, &required).await;
+    let package = prepare_and_load_reviewed(
+        2,
+        &active,
+        &base,
+        Variant::RankRequired,
+        &target_fingerprint,
+        backfill_source(BackfillSourceRequest {
+            id: "reconcile-completable",
+            current: &active,
+            prior: &base,
+            candidate: &required,
+            final_fingerprint: &target_fingerprint,
+            pre: AssertionMode::True,
+            post: AssertionMode::True,
+            rehearsed_rows: 5,
+        }),
+    );
+
+    database
+        .admin
+        .batch_execute(
+            "CREATE TABLE registry_data.reconcile_unmanaged_object (id integer PRIMARY KEY)",
+        )
+        .await
+        .expect("administrator leaves an unmanaged object in a managed schema");
+    let refused = apply(
+        &database,
+        &package,
+        ApplyPrecondition::Successor { current: &active },
+    )
+    .await;
+    assert_value_free(refused.err(), MigrationError::ApplyFailed);
+    assert_non_ready_target(&database, &active, &package, "failed").await;
+    assert_eq!(
+        step_snapshot(&database, &package, "backfill-rank").await.0,
+        "completed"
+    );
+
+    let unresolvable = reconcile(&database, &package, &active, &base, false)
+        .await
+        .expect("an unresolvable catalog is reported, not refused");
+    assert_eq!(unresolvable.outcome, ReconcileOutcome::Unresolvable);
+    assert_eq!(
+        unresolvable.unresolvable_reason,
+        Some(UNRESOLVABLE_CATALOG_UNMATCHED)
+    );
+    assert!(unresolvable.target_catalog_finding.is_some());
+    assert!(unresolvable.active_catalog_finding.is_some());
+    assert!(!unresolvable.executed);
+    assert_eq!(
+        reconcile(&database, &package, &active, &base, true)
+            .await
+            .expect_err("an unresolvable outcome is never executed"),
+        ReconcileError::NotExecutable(ReconcileOutcome::Unresolvable)
+    );
+    assert_non_ready_target(&database, &active, &package, "failed").await;
+
+    database
+        .admin
+        .batch_execute("DROP TABLE registry_data.reconcile_unmanaged_object")
+        .await
+        .expect("administrator removes the unmanaged object");
+    let completable = reconcile(&database, &package, &active, &base, false)
+        .await
+        .expect("the catalog is now exactly the pinned target's");
+    assert_eq!(completable.outcome, ReconcileOutcome::Completable);
+    assert_eq!(completable.target_catalog_finding, None);
+    assert_eq!(completable.reviewed_plan_closed, Some(true));
+    assert!(!completable.executed);
+
+    let completed = reconcile(&database, &package, &active, &base, true)
+        .await
+        .expect("the missing activation transition completes");
+    assert_eq!(completed.outcome, ReconcileOutcome::Completable);
+    assert!(completed.executed);
+    let target = target_identity(&package);
+    assert_ready_target(&database, &target).await;
+    assert_eq!(
+        ledger_snapshot(&database)
+            .await
+            .iter()
+            .filter(|entry| entry.2 == "applied")
+            .count(),
+        2
+    );
+    assert_all_ranks(&database, &required, 1).await;
+    assert_reconcile_audit_is_minimized(&database, "completed").await;
+    database.cleanup().await;
+}
+
+/// A reviewed apply refused by its own pre-assertion changes nothing durable.
+/// Reconciliation must abandon that target so a different successor can be
+/// applied, without moving the active identity.
+async fn reconciliation_reverts_a_target_that_reached_no_durable_step() {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs extension");
+    let base = compile_variant(Variant::Base, 1);
+    let fingerprint = initial_fingerprint(&database, &base).await;
+    let initial = prepare_and_load_initial(&base, &fingerprint);
+    let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("revert scenario initial package activates");
+    seed_backfill_rows(&database, &base, 5).await;
+    let required = compile_variant(Variant::RankRequired, 2);
+    let target_fingerprint = required_target_fingerprint(&database, &required).await;
+    let abandoned = prepare_and_load_reviewed(
+        2,
+        &active,
+        &base,
+        Variant::RankRequired,
+        &target_fingerprint,
+        backfill_source(BackfillSourceRequest {
+            id: "reconcile-abandoned",
+            current: &active,
+            prior: &base,
+            candidate: &required,
+            final_fingerprint: &target_fingerprint,
+            pre: AssertionMode::False,
+            post: AssertionMode::True,
+            rehearsed_rows: 5,
+        }),
+    );
+    let refused = apply(
+        &database,
+        &abandoned,
+        ApplyPrecondition::Successor { current: &active },
+    )
+    .await;
+    assert_value_free(refused.err(), MigrationError::ApplyFailed);
+    assert_non_ready_target(&database, &active, &abandoned, "failed").await;
+
+    let revertible = reconcile(&database, &abandoned, &active, &base, false)
+        .await
+        .expect("a target that reached no durable step is assessed");
+    assert_eq!(revertible.outcome, ReconcileOutcome::Revertible);
+    assert_eq!(revertible.active_catalog_finding, None);
+    assert!(revertible.target_catalog_finding.is_some());
+    assert_eq!(revertible.durable_step_progress, Some(false));
+    assert!(!revertible.executed);
+
+    let reverted = reconcile(&database, &abandoned, &active, &base, true)
+        .await
+        .expect("the pinned target is abandoned");
+    assert!(reverted.executed);
+    assert_ready_target(&database, &active).await;
+    assert_eq!(
+        ledger_snapshot(&database)
+            .await
+            .iter()
+            .find(|entry| entry.0 == abandoned.manifest().package_revision)
+            .map(|entry| entry.2.clone()),
+        Some("failed".to_owned())
+    );
+    assert_reconcile_audit_is_minimized(&database, "reverted").await;
+
+    let successor = prepare_and_load_reviewed(
+        2,
+        &active,
+        &base,
+        Variant::RankRequired,
+        &target_fingerprint,
+        backfill_source(BackfillSourceRequest {
+            id: "reconcile-successor",
+            current: &active,
+            prior: &base,
+            candidate: &required,
+            final_fingerprint: &target_fingerprint,
+            pre: AssertionMode::True,
+            post: AssertionMode::True,
+            rehearsed_rows: 5,
+        }),
+    );
+    let activated = apply(
+        &database,
+        &successor,
+        ApplyPrecondition::Successor { current: &active },
+    )
+    .await
+    .expect("a different successor applies once the abandoned target is released");
+    assert_ready_target(&database, &activated).await;
+    assert_all_ranks(&database, &required, 1).await;
+    database.cleanup().await;
+}
+
+/// Assessment is the default, and it must leave the maintenance state, the
+/// migration ledger, and the audit journal exactly as it found them.
+async fn reconciliation_assessment_writes_nothing() {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs extension");
+    let base = compile_variant(Variant::Base, 1);
+    let fingerprint = initial_fingerprint(&database, &base).await;
+    let initial = prepare_and_load_initial(&base, &fingerprint);
+    let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("assessment scenario initial package activates");
+    seed_backfill_rows(&database, &base, 5).await;
+    let required = compile_variant(Variant::RankRequired, 2);
+    let target_fingerprint = required_target_fingerprint(&database, &required).await;
+    let package = prepare_and_load_reviewed(
+        2,
+        &active,
+        &base,
+        Variant::RankRequired,
+        &target_fingerprint,
+        backfill_source(BackfillSourceRequest {
+            id: "reconcile-assessment",
+            current: &active,
+            prior: &base,
+            candidate: &required,
+            final_fingerprint: &target_fingerprint,
+            pre: AssertionMode::False,
+            post: AssertionMode::True,
+            rehearsed_rows: 5,
+        }),
+    );
+    let refused = apply(
+        &database,
+        &package,
+        ApplyPrecondition::Successor { current: &active },
+    )
+    .await;
+    assert_value_free(refused.err(), MigrationError::ApplyFailed);
+
+    let before = durable_snapshot(&database).await;
+    let assessed = reconcile(&database, &package, &active, &base, false)
+        .await
+        .expect("assessment reads the pinned target");
+    assert_eq!(assessed.outcome, ReconcileOutcome::Revertible);
+    assert!(!assessed.executed);
+    assert_eq!(durable_snapshot(&database).await, before);
+    database.cleanup().await;
 }
 
 /// A field added with `required: true` reaches an entity that already holds
@@ -1954,6 +2232,116 @@ async fn assert_all_ranks(database: &TestDatabase, registry: &CompiledRegistry, 
         .expect("backfilled values read");
     assert_eq!(rows.len(), 5);
     assert!(rows.iter().all(|row| row.get::<_, i64>(0) == expected));
+}
+
+async fn reconcile(
+    database: &TestDatabase,
+    package: &VerifiedPackage,
+    current: &ExpectedRegistryIdentity,
+    current_registry: &CompiledRegistry,
+    execute: bool,
+) -> Result<ReconcileReport, ReconcileError> {
+    let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x63; 32].into())
+        .expect("test owns a keyed audit profile");
+    reconcile_failed_migration(ReconcileRequest {
+        config: &database.migration_config,
+        target_package: package,
+        current,
+        current_registry,
+        migration_role: &database.migration_role,
+        runtime_role: &database.runtime_role,
+        timeouts: ReconcileTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
+            .expect("test timeouts are bounded"),
+        audit_profile: &audit_profile,
+        operator_reference: RECONCILE_OPERATOR_CANARY,
+        execute,
+    })
+    .await
+}
+
+fn target_identity(package: &VerifiedPackage) -> ExpectedRegistryIdentity {
+    let manifest = package.manifest();
+    ExpectedRegistryIdentity {
+        package_id: manifest.package_id.clone(),
+        environment: manifest.environment.clone(),
+        instance_id: manifest.instance_id.clone(),
+        database_id: manifest.database_id.clone(),
+        package_revision: manifest.package_revision.clone(),
+        schema_fingerprint: manifest.schema_fingerprint.clone(),
+        package_sequence: i64::try_from(manifest.sequence).expect("test sequence is bounded"),
+    }
+}
+
+/// The whole durable maintenance record an assessment must leave untouched:
+/// the state row, every ledger row and step, and the audit journal.
+async fn durable_snapshot(
+    database: &TestDatabase,
+) -> (
+    Vec<(String, String, String)>,
+    Vec<(String, Option<Uuid>, i64)>,
+    Vec<Vec<u8>>,
+    (String, String, Option<String>),
+) {
+    let steps = database
+        .admin
+        .query(
+            "SELECT outcome, checkpoint_record_id, affected_rows
+             FROM registry_internal.registry_migration_steps
+             ORDER BY target_package_revision, step_ordinal",
+            &[],
+        )
+        .await
+        .expect("step states read")
+        .into_iter()
+        .map(|row| (row.get(0), row.get(1), row.get(2)))
+        .collect();
+    let audit = database
+        .admin
+        .query(
+            "SELECT record_hash FROM registry_internal.registry_audit ORDER BY record_hash",
+            &[],
+        )
+        .await
+        .expect("audit journal reads")
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect();
+    let state = database
+        .admin
+        .query_one(
+            "SELECT active_package_revision, maintenance_status, maintenance_target_revision
+             FROM registry_internal.registry_state WHERE singleton",
+            &[],
+        )
+        .await
+        .expect("maintenance state reads");
+    (
+        ledger_snapshot(database).await,
+        steps,
+        audit,
+        (state.get(0), state.get(1), state.get(2)),
+    )
+}
+
+/// The reconciliation audit record carries identities, the plan shape, and
+/// counts. The operator's own reference must reach it only as a keyed hash.
+async fn assert_reconcile_audit_is_minimized(database: &TestDatabase, action: &str) {
+    let envelopes = database
+        .admin
+        .query("SELECT envelope FROM registry_internal.registry_audit", &[])
+        .await
+        .expect("audit journal reads");
+    let mut matched = 0;
+    for row in &envelopes {
+        let bytes: Vec<u8> = row.get(0);
+        let text = String::from_utf8(bytes).expect("audit envelopes are UTF-8");
+        assert!(!text.contains(RECONCILE_OPERATOR_CANARY));
+        if text.contains("registry-server-migration-reconcile-audit/v1") {
+            assert!(text.contains(&format!("\"action\":\"{action}\"")));
+            matched += 1;
+        }
+    }
+    assert_eq!(matched, 1);
 }
 
 fn assert_value_free(actual: Option<MigrationError>, expected: MigrationError) {

@@ -2,6 +2,8 @@
 
 use std::{collections::BTreeSet, time::Duration};
 
+use registry_platform_audit::AuditProfile;
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::task::JoinHandle;
 #[cfg(feature = "postgres-test")]
@@ -9,6 +11,7 @@ use tokio_postgres::NoTls;
 use tokio_postgres::{Client, GenericClient};
 use uuid::Uuid;
 
+use crate::audit::append_envelope;
 use crate::event_destination::EventDestinationCompatibilityInventory;
 use crate::generated_ddl::DdlStatementKind;
 use crate::history_commit::{install_empty_history_baseline, install_history_commit_schema};
@@ -49,6 +52,47 @@ use super::{
 const MAX_VERIFIED_DDL_STATEMENTS: usize = 1024;
 const MAX_VERIFIED_DDL_STATEMENT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_VERIFIED_DDL_STATEMENT_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+
+/// The finding reported when the live managed schema fingerprint differs from
+/// the one an expected package binds. Activation verification signals that
+/// mismatch as an unavailable Registry, which carries no wording of its own.
+const SCHEMA_FINGERPRINT_FINDING: &str =
+    "managed schema fingerprint differs from the expected package";
+
+/// One chained audit record appended inside the same transaction as the
+/// maintenance transition it records, so a committed transition can never be
+/// missing from the journal.
+pub(crate) struct MaintenanceAuditRecord<'a> {
+    pub profile: &'a AuditProfile,
+    pub record: Value,
+}
+
+/// The durable ledger row one maintenance transition records, together with
+/// the exact catalog and roles it verifies in the same transaction.
+pub(crate) struct MaintenanceTransition<'a> {
+    pub ledger: &'a MigrationLedgerEntry,
+    pub expected_catalog: &'a ExpectedManagedCatalog,
+    pub migration_role: &'a SqlIdentifier,
+    pub runtime_role: &'a SqlIdentifier,
+}
+
+/// The durable maintenance state of the singleton Registry state row, read
+/// under the exclusive apply lock.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MaintenanceSnapshot {
+    pub identity: ExpectedRegistryIdentity,
+    pub maintenance_status: String,
+    pub maintenance_target_revision: Option<String>,
+}
+
+/// How far a reviewed plan durably progressed for one pinned target.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ReviewedMigrationProgress {
+    /// Every precondition, step, and postcondition the ledger binds completed.
+    pub closed: bool,
+    /// At least one step committed rows, a checkpoint, or its completion.
+    pub durable_step_progress: bool,
+}
 
 pub(crate) struct PackageDdlStatement<'a> {
     pub sql: &'a str,
@@ -1151,11 +1195,15 @@ impl DedicatedApplyConnection {
         &mut self,
         current: Option<&ExpectedRegistryIdentity>,
         target: &ExpectedRegistryIdentity,
-        ledger: &MigrationLedgerEntry,
-        expected_catalog: &ExpectedManagedCatalog,
-        migration_role: &SqlIdentifier,
-        runtime_role: &SqlIdentifier,
+        transition: MaintenanceTransition<'_>,
+        audit: Option<MaintenanceAuditRecord<'_>>,
     ) -> Result<()> {
+        let MaintenanceTransition {
+            ledger,
+            expected_catalog,
+            migration_role,
+            runtime_role,
+        } = transition;
         ensure_verified_package_session(self.locked, self.verified_migration_role)?;
         target.validate()?;
         ledger.validate()?;
@@ -1235,6 +1283,11 @@ impl DedicatedApplyConnection {
         };
         if changed != 1 {
             return Err(PostgresKernelError::RegistryUnavailable);
+        }
+        if let Some(audit) = audit {
+            append_envelope(&transaction, audit.profile, audit.record)
+                .await
+                .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
         }
         transaction.commit().await?;
         Ok(())
@@ -1351,6 +1404,174 @@ impl DedicatedApplyConnection {
             return Err(PostgresKernelError::RegistryUnavailable);
         }
         record_failed(&transaction, ledger).await?;
+        transaction.commit().await?;
+        Ok(())
+    }
+
+    /// Reads the durable maintenance state while this session holds the
+    /// exclusive apply lock, so a reconciling operator can be told what the
+    /// database actually records rather than inferring it from a failure.
+    pub(crate) async fn maintenance_snapshot(&mut self) -> Result<MaintenanceSnapshot> {
+        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
+        let row = self
+            .client
+            .query_opt(
+                "SELECT package_id, environment, instance_id, database_id,
+                        active_package_revision, schema_fingerprint, package_sequence,
+                        maintenance_status, maintenance_target_revision
+                 FROM registry_internal.registry_state
+                 WHERE singleton",
+                &[],
+            )
+            .await?
+            .ok_or(PostgresKernelError::RegistryUnavailable)?;
+        Ok(MaintenanceSnapshot {
+            identity: ExpectedRegistryIdentity {
+                package_id: row.try_get(0)?,
+                environment: row.try_get(1)?,
+                instance_id: row.try_get(2)?,
+                database_id: row.try_get(3)?,
+                package_revision: row.try_get(4)?,
+                schema_fingerprint: row.try_get(5)?,
+                package_sequence: row.try_get(6)?,
+            },
+            maintenance_status: row.try_get(7)?,
+            maintenance_target_revision: row.try_get(8)?,
+        })
+    }
+
+    /// Compares the live managed catalog with one expected package catalog
+    /// using the exact activation verification, and reports the invariant that
+    /// differs instead of activating. The comparison transaction is always
+    /// rolled back, so an assessment changes nothing.
+    pub(crate) async fn managed_catalog_finding(
+        &mut self,
+        expected: &ExpectedRegistryIdentity,
+        expected_catalog: &ExpectedManagedCatalog,
+        migration_role: &SqlIdentifier,
+        runtime_role: &SqlIdentifier,
+    ) -> Result<Option<&'static str>> {
+        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
+        expected.validate()?;
+        let transaction = self.client.transaction().await?;
+        let finding = match verify_managed_catalog(
+            &transaction,
+            expected,
+            expected_catalog,
+            migration_role,
+            runtime_role,
+        )
+        .await
+        {
+            Ok(()) => None,
+            Err(PostgresKernelError::CatalogInvariant(finding)) => Some(finding),
+            Err(PostgresKernelError::RegistryUnavailable) => Some(SCHEMA_FINGERPRINT_FINDING),
+            Err(error) => return Err(error),
+        };
+        transaction.rollback().await?;
+        Ok(finding)
+    }
+
+    /// Reads how far a reviewed plan durably progressed. Chunked backfills and
+    /// transactional steps change records without changing the catalog, so a
+    /// reverting decision needs this in addition to the catalog comparison.
+    pub(crate) async fn reviewed_migration_progress(
+        &mut self,
+        ledger: &MigrationLedgerEntry,
+    ) -> Result<ReviewedMigrationProgress> {
+        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
+        ledger.validate()?;
+        let transaction = self.client.transaction().await?;
+        let phase = migration_phase_state(&transaction, ledger).await?;
+        let mut progress = ReviewedMigrationProgress {
+            closed: phase.preconditions_complete && phase.postconditions_complete,
+            durable_step_progress: false,
+        };
+        for step in &ledger.steps {
+            let state = step_progress(&transaction, ledger, step).await?;
+            if state.complete || state.checkpoint_record_id.is_some() || state.affected_rows > 0 {
+                progress.durable_step_progress = true;
+            }
+            if !state.complete {
+                progress.closed = false;
+            }
+        }
+        transaction.rollback().await?;
+        Ok(progress)
+    }
+
+    /// Abandons a pinned maintenance target, after proving in the same
+    /// transaction that the live managed catalog is still exactly the active
+    /// package's. The active identity is left unchanged and the target's
+    /// ledger row stays durably failed, so an abandoned revision is never
+    /// activated later under the same identity.
+    pub(crate) async fn revert_failed_package(
+        &mut self,
+        current: &ExpectedRegistryIdentity,
+        target_revision: &str,
+        transition: MaintenanceTransition<'_>,
+        audit: MaintenanceAuditRecord<'_>,
+    ) -> Result<()> {
+        let MaintenanceTransition {
+            ledger,
+            expected_catalog,
+            migration_role,
+            runtime_role,
+        } = transition;
+        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
+        validate_failed_resume_request(self.locked, current, target_revision)?;
+        ledger.validate()?;
+        if ledger.target_revision != target_revision
+            || ledger.source_revision.as_deref() != Some(current.package_revision.as_str())
+        {
+            return Err(PostgresKernelError::Configuration(
+                "abandoned target and migration ledger differ",
+            ));
+        }
+        let transaction = self.client.transaction().await?;
+        verify_managed_catalog(
+            &transaction,
+            current,
+            expected_catalog,
+            migration_role,
+            runtime_role,
+        )
+        .await?;
+        let changed = transaction
+            .execute(
+                "UPDATE registry_internal.registry_state
+                 SET maintenance_status = 'ready',
+                     maintenance_target_revision = NULL,
+                     updated_at = transaction_timestamp()
+                 WHERE singleton
+                   AND package_id = $1
+                   AND environment = $2
+                   AND instance_id = $3
+                   AND database_id = $4
+                   AND active_package_revision = $5
+                   AND schema_fingerprint = $6
+                   AND package_sequence = $7
+                   AND maintenance_status IN ('applying', 'failed')
+                   AND maintenance_target_revision = $8",
+                &[
+                    &current.package_id,
+                    &current.environment,
+                    &current.instance_id,
+                    &current.database_id,
+                    &current.package_revision,
+                    &current.schema_fingerprint,
+                    &current.package_sequence,
+                    &target_revision,
+                ],
+            )
+            .await?;
+        if changed != 1 {
+            return Err(PostgresKernelError::RegistryUnavailable);
+        }
+        record_failed(&transaction, ledger).await?;
+        append_envelope(&transaction, audit.profile, audit.record)
+            .await
+            .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
         transaction.commit().await?;
         Ok(())
     }
@@ -1763,8 +1984,6 @@ fn validate_runtime_acl_reconciliation_request(lock_held: bool) -> Result<()> {
     ensure_apply_lock(lock_held)
 }
 
-#[cfg(any(test, feature = "postgres-test"))]
-#[allow(dead_code)]
 fn validate_failed_resume_request(
     lock_held: bool,
     current: &ExpectedRegistryIdentity,
