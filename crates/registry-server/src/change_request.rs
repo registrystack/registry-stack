@@ -99,7 +99,8 @@ fn compile_application(
     let queue_allowed = source
         .allowed_dispositions
         .contains(&ChangeRequestDispositionSource::Queue);
-    if queue_allowed != !source.queue_reasons.is_empty() {
+    // A queue disposition and a non-empty queue-reason catalogue go together.
+    if queue_allowed == source.queue_reasons.is_empty() {
         errors.push(Diagnostic::error(
             "change_request.application.queue_reasons_invalid",
             queue_reasons_path.as_str(),
