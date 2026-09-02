@@ -17,7 +17,7 @@ standards_referenced:
 
 Registry Server is the Registry Stack product for data an institution does not hold yet.
 You describe the registry in a few YAML files, and the server compiles them into a PostgreSQL schema, a REST API, per-profile permissions, an audit trail, revision history, and outbound events.
-The other two patterns start from data that already exists: Registry Relay exposes read-only APIs over existing sources, and Registry Evidence answers fixed questions with signed assertions.
+The other two patterns start from data that already exists: Registry Relay exposes read-only APIs over existing sources, and Evidence Gateway answers fixed questions with signed assertions.
 Use [Choose a Registry Stack product](../../start/when-to-use/) if you are still deciding.
 
 {/* Evidence: crates/registry-server/src/compiler.rs; crates/registry-server/src/api/mod.rs; products/registry-server/README.md. */}
@@ -146,7 +146,7 @@ Failed deliveries retry with backoff, and an operator can list and replay them.
 ## Related products
 
 - **Registry Relay** exposes existing data read-only. A Relay deployment can sit in front of a Registry Server API when a partner needs a narrower view than any profile offers.
-- **Registry Evidence** answers fixed questions with signed assertions and can use a Registry Server route as one of its fixed HTTP sources.
+- **Evidence Gateway** answers fixed questions with signed assertions and can use a Registry Server route as one of its fixed HTTP sources.
 - **Registry Mint** issues the short-lived access tokens a Registry Server accepts when a deployment has no identity provider.
 
 ## Next
