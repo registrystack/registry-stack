@@ -46,6 +46,7 @@ It then compiles the project and reports three findings that every new project c
 | `manifest_projection.missing` | No Registry Manifest projection is declared. | Before a production package. |
 | `package.identity.missing` | No package identity is declared. | Before a production package. |
 
+The [findings table](#findings) lists every finding the compiler can report.
 Findings that need review do not fail `check` by default.
 `check --deny-findings` fails on any of them, and `check --production` enforces the production closure rules as well.
 
@@ -602,6 +603,32 @@ Output is deterministic, so a second run over the same project produces identica
 The running server publishes the same OpenAPI document at `/openapi.json` and the same schemas under `/v1/schemas/`.
 
 Add `--production` to any of these commands to apply the production closure rules: package identity, manifest projection, and pinned module digests must all be present.
+
+### Findings
+
+`check` reports findings as advisories and names the document path each one applies to.
+`check --deny-findings` turns every finding into a failure.
+These are all the findings the compiler can report:
+
+| Finding | Meaning | What to do |
+|---|---|---|
+| `access.profile.anonymous_collection` | `list` is granted to unauthenticated callers, so every row the profile can read is public and no claim narrows it. | Confirm the whole collection is meant to be public. |
+| `access.profile.data_export` | Bulk export is enabled, and disabling it later cannot recall downloaded data. | Review the readable fields and row boundaries first. |
+| `access.profile.higher_classification` | A readable field is more sensitive than its entity's classification. | Verify the profile's scope and purpose before disclosing it. |
+| `access.profile.no_required_scope` | No scope restricts who may select the profile; any authenticated principal satisfying its purpose and row claims qualifies. | Add a required scope unless that is intended. |
+| `access.profile.no_writable_fields` | The profile grants `create` or `patch` and names no writable field, so every write naming a field is refused. | List the fields the profile may write, or remove the write operations. |
+| `access.profile.related_disclosure` | A read path discloses related records under the root profile rather than the target entity's own profiles. | Review its fields and the target entity's access requirements. |
+| `access.profile.revision_history` | History can disclose earlier values of readable fields, including values removed from the current record. | Review historical disclosure separately. |
+| `access.profile.snapshot_history` | Snapshot reads reproduce retained historical rows under current authorization. | Review stored-field projection, filters, and row boundaries separately. |
+| `access.profile.unrestricted_collection` | The profile can list every row, subject only to query bounds; caller filters are not authorization. | Add a claim-bound row boundary, or accept a registry-wide role knowingly. |
+| `access.profile.writable_row_boundary` | `patch` can change a field a row boundary depends on, within the caller's allowed values. | Remove it from the writable fields unless moving records is intended. |
+| `manifest_projection.missing` | No Registry Manifest projection is declared. | Declare one before a production package. |
+| `module.lock.digest_missing` | A module lock entry has no production digest. | Run `project lock` before a production package. |
+| `module.lock.missing` | A module source has no lock entry. | Run `project lock`. |
+| `module.source.missing` | A lock entry names a module whose source is not loaded. | Restore the module file or remove the lock entry. |
+| `package.identity.missing` | No package identity is declared. | Declare one before a production package. |
+
+{/* Evidence: crates/registry-server/src/access.rs; crates/registry-server/src/compiler.rs. */}
 
 ## Troubleshooting
 

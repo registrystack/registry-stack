@@ -256,14 +256,14 @@ A journey failure reports the journey and step without record values.
 ```sh
 target/debug/registry-serverctl --format json package ./my-registry \
   --database-id civil-registry-db-1 \
-  --schema-fingerprint "<schemaFingerprint from the test report>" \
   --test-receipt /srv/registry/schema-test-receipt.json \
   --signature-threshold 1 --signature-key-id registry-signer-2026 \
   --output /srv/registry/build-1
 ```
 
-The report's `state` is `awaiting_signatures` and `build-1/signing-input.json` holds the exact
-bytes to sign. The command never accepts a private key. Your signer produces a detached Ed25519
+The schema fingerprint comes from the test receipt; `--schema-fingerprint` states it explicitly
+when you want the command to fail on any other value. The report's `state` is
+`awaiting_signatures` and `build-1/signing-input.json` holds the exact bytes to sign. The command never accepts a private key. Your signer produces a detached Ed25519
 signature over those bytes, for example with OpenSSL, and returns a signature document:
 
 ```sh
