@@ -23,9 +23,11 @@ Useful offline checks:
 
 ```bash
 cargo run --locked -p registry-serverctl -- project lock products/registry-server/acceptance/spatial-service-sites --check
-cargo run --locked -p registry-serverctl -- check products/registry-server/acceptance/spatial-service-sites --production --deny-findings
+cargo run --locked -p registry-serverctl -- check products/registry-server/acceptance/spatial-service-sites --production
 mkdir -p out
 cargo run --locked -p registry-serverctl -- generate openapi products/registry-server/acceptance/spatial-service-sites --production --output out/spatial-service-sites-openapi
 ```
+
+`check` reports `access.profile.anonymous_collection` for `directory-reader` and `map-reader`. Both profiles grant `list` to unauthenticated callers on purpose, so every service site is public; `--deny-findings` would turn those two findings into failures.
 
 The offline commands validate authored source and generated contracts. They do not exercise QGIS, Mint renewal or database execution; use the quickstart and the product's PostgreSQL tests for those paths.
