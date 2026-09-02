@@ -36,8 +36,13 @@ def prepare_root(root: Path) -> None:
         "  - id: generic-smoke\n"
         "    steps:\n"
         "      - id: create-record\n"
+        "        accessProfile: operator\n"
         "      - id: get-record\n"
-        "      - id: list-records\n",
+        "        accessProfile: operator\n"
+        "      - id: read-within-the-claim\n"
+        "        accessProfile: record-reader\n"
+        "      - id: list-records\n"
+        "        accessProfile: operator\n",
         encoding="utf-8",
     )
     (root / "secrets/database-password").write_text("abcdef0123456789", encoding="ascii")
@@ -87,7 +92,11 @@ class RegistryServerQuickstartTests(unittest.TestCase):
     def test_readme_keeps_local_and_production_paths_separate(self) -> None:
         readme = (QUICKSTART / "README.md").read_text(encoding="utf-8")
         self.assertIn("registry-serverctl init", readme)
-        self.assertIn("adds only local package identity", readme)
+        # The launcher's claim is checked against unwrapped prose so a reflow of
+        # the paragraph does not read as a change of behaviour.
+        unwrapped = " ".join(readme.split())
+        self.assertIn("replaces only the initialized project's package identity", unwrapped)
+        self.assertIn("adds no model, profile, or catalogue metadata of its own", unwrapped)
         self.assertIn("quickstart/.run/secrets/operator-token", readme)
         self.assertIn("does not put the token on the command line", readme)
         self.assertIn("unsigned", readme)
@@ -104,7 +113,17 @@ class RegistryServerQuickstartTests(unittest.TestCase):
             generic_runtime = (generic_root / "runtime-test.yaml").read_text(encoding="utf-8")
             generic_bootstrap = (generic_root / "database/bootstrap.sql").read_text(encoding="utf-8")
             generic_initialize = (generic_root / "database/initialize.sql").read_text(encoding="utf-8")
-            self.assertIn("allowedClients: [generic-quickstart]", generic_runtime)
+            generic_credentials = (generic_root / "schema-test-credentials.yaml").read_text(encoding="utf-8")
+            self.assertIn("allowedClients: [generic-quickstart, record-reader-quickstart]", generic_runtime)
+            self.assertIn("tokenRef: secret:file/schema-test-token}}", generic_credentials)
+            self.assertIn(
+                "stepId: read-within-the-claim, credential: {type: bearer, tokenRef: secret:file/reader-schema-test-token}}",
+                generic_credentials,
+            )
+            reader_client = (generic_root / "mint/clients/record-reader-quickstart.yaml").read_text(encoding="utf-8")
+            self.assertIn('scopes: ["registry:generic:read"]', reader_client)
+            self.assertIn("registry_purpose: \"registry-reporting\"", reader_client)
+            self.assertIn("registry_record_status: \"active\"", reader_client)
             self.assertNotIn("publicOrigin", generic_runtime)
             self.assertNotIn("qgis-installation-central", generic_runtime)
             self.assertNotIn("registry_spatial_ext", generic_initialize)

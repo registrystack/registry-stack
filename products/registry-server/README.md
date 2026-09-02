@@ -44,8 +44,8 @@ products/registry-server/quickstart/run.sh
 ```
 
 The quickstart uses `registry-serverctl init` to create a small generic
-Registry project, adds only local package identity for the disposable package,
-checks it, starts disposable PostgreSQL and Registry Mint on loopback, activates
+Registry project, replaces its package identity with a local one for the
+disposable package, checks it, starts disposable PostgreSQL and Registry Mint on loopback, activates
 an unsigned local package, obtains a short-lived Mint token, POSTs one record,
 and GETs that record back. Generated configuration, keys, tokens, package
 artifacts, logs, and database URLs stay under

@@ -240,6 +240,13 @@ python3 "$support" wait-http --url "http://127.0.0.1:${mint_port}/ready" --timeo
   --client-id generic-quickstart \
   --key "$run_dir/keys/operator/signing-p256-private-jwk" |
   python3 "$support" store-token --out "$run_dir/secrets/schema-test-token"
+if [[ "$spatial" != true ]]; then
+  "$mint" token \
+    --url "http://127.0.0.1:${mint_port}/token" \
+    --client-id record-reader-quickstart \
+    --key "$run_dir/keys/operator/signing-p256-private-jwk" |
+    python3 "$support" store-token --out "$run_dir/secrets/reader-schema-test-token"
+fi
 if [[ "$spatial" == true ]]; then
   python3 "$support" mint-client-secret-token \
     --url "http://127.0.0.1:${mint_port}/token" \

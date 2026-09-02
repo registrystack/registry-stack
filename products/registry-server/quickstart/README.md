@@ -5,9 +5,10 @@ domain-neutral registry from `registry-serverctl init`, checks it, runs
 disposable PostgreSQL and Registry Mint on loopback, obtains a short-lived Mint
 token, posts one record, and reads that record back from Registry Server.
 
-The launcher adds only local package identity to the initialized project before
-`check`, `test`, and `package`. It does not add a manifest projection or a
-domain model.
+The launcher replaces only the initialized project's package identity, with a
+local one, before `check`, `test`, and `package`. It adds no model, profile, or
+catalogue metadata of its own; everything else the registry exposes comes from
+the initialized project.
 
 Prerequisites are Docker, Cargo, OpenSSL, Python 3, and `uv`.
 

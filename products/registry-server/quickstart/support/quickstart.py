@@ -21,6 +21,7 @@ from typing import Any
 
 AUDIENCE = "urn:registry-server:quickstart"
 CLIENT_ID = "generic-quickstart"
+READER_CLIENT_ID = "record-reader-quickstart"
 DIRECTORY_CLIENT_ID = "directory-reader-quickstart"
 SITE_READER_CLIENT_ID = "site-reader-quickstart"
 QGIS_CLIENT_ID = "qgis-installation-central"
@@ -33,11 +34,21 @@ RUNTIME_ROLE = "registry_quickstart_runtime"
 SPATIAL_BBOX_ROLE = "registry_quickstart_runtime__spatial_bbox"
 SOURCE_REVISION = "quickstart-source"
 OPERATOR_PURPOSE = "registry-operations"
+READER_PURPOSE = "registry-reporting"
+READER_ROW_BOUNDARY_STATUS = "active"
 SPATIAL_OPERATOR_PURPOSE = "service-site-administration"
 SPATIAL_MAP_PURPOSE = "service-site-map"
 SPATIAL_DIRECTORY_PURPOSE = "service-site-directory"
 GENERIC_TOKEN_LIFETIME_SECONDS = 300
 SPATIAL_TOKEN_LIFETIME_SECONDS = 60
+
+
+# The generic project's journeys use one access profile per step, and each
+# profile needs its own credential because their scopes and purposes differ.
+GENERIC_PROFILE_TOKENS = {
+    "operator": "schema-test-token",
+    "record-reader": "reader-schema-test-token",
+}
 
 
 class QuickstartError(RuntimeError):
@@ -138,6 +149,19 @@ def _mint_client(public_key: dict[str, Any], spatial: bool) -> str:
     )
 
 
+def _generic_reader_client(public_key: dict[str, Any]) -> str:
+    return _mint_private_key_client(
+        READER_CLIENT_ID,
+        public_key,
+        ["registry:generic:read"],
+        {
+            "registry_principal": "generic-registry-reader",
+            "registry_purpose": READER_PURPOSE,
+            "registry_record_status": READER_ROW_BOUNDARY_STATUS,
+        },
+    )
+
+
 def _spatial_reader_clients(public_key: dict[str, Any]) -> dict[str, str]:
     return {
         DIRECTORY_CLIENT_ID: _mint_private_key_client(
@@ -194,6 +218,8 @@ def _template_text(root: Path, revision: str, package_root: Path, runtime_databa
     allowed_clients = [CLIENT_ID]
     if spatial:
         allowed_clients.extend([QGIS_CLIENT_ID, DIRECTORY_CLIENT_ID, SITE_READER_CLIENT_ID])
+    else:
+        allowed_clients.append(READER_CLIENT_ID)
     allowed_clients_yaml = ", ".join(allowed_clients)
     return f"""apiVersion: registry.registrystack.org/server-runtime/v1alpha1
 kind: RegistryServerRuntimeConfig
@@ -248,22 +274,34 @@ eventDestinations: {{}}
 """
 
 
-def _journey_credentials(root: Path, token_name: str) -> str:
+def _journey_credentials(root: Path, profile_tokens: dict[str, str]) -> str:
     path = root / "project/tests/journeys.yaml"
     source = path.read_text(encoding="utf-8")
     journey = None
-    steps: list[str] = []
+    steps: list[tuple[str, str]] = []
+    pending: str | None = None
     for line in source.splitlines():
         stripped = line.strip()
         if stripped.startswith("- id: ") and journey is None:
             journey = stripped.removeprefix("- id: ").strip()
-        elif stripped.startswith("- id: ") and journey is not None:
-            steps.append(stripped.removeprefix("- id: ").strip())
-    if not journey or not {"create-record", "get-record", "list-records"}.issubset(set(steps)):
+        elif stripped.startswith("- id: "):
+            pending = stripped.removeprefix("- id: ").strip()
+        elif stripped.startswith("accessProfile: ") and pending is not None:
+            steps.append((pending, stripped.removeprefix("accessProfile: ").strip()))
+            pending = None
+    named = {step for step, _ in steps}
+    if not journey or not {"create-record", "get-record", "list-records"}.issubset(named):
         raise QuickstartError("registry-serverctl init changed its generic journey shape")
+    if pending is not None or len(named) != len(steps):
+        raise QuickstartError("registry-serverctl init emitted a journey step without one access profile")
+    unbound = sorted({profile for _, profile in steps} - set(profile_tokens))
+    if unbound:
+        raise QuickstartError(
+            f"registry-serverctl init added access profiles the quickstart has no client for: {', '.join(unbound)}"
+        )
     bindings = "\n".join(
-        f"  - {{journeyId: {journey}, stepId: {step}, credential: {{type: bearer, tokenRef: secret:file/{token_name}}}}}"
-        for step in steps
+        f"  - {{journeyId: {journey}, stepId: {step}, credential: {{type: bearer, tokenRef: secret:file/{profile_tokens[profile]}}}}}"
+        for step, profile in steps
     )
     return (
         "apiVersion: registry.registrystack.org/server-schema-test-credentials/v1\n"
@@ -360,6 +398,11 @@ def prepare(
     _write_json(root / "secrets/mint-jwks", {"keys": [mint_public]}, 0o600)
     _write_json(root / f"mint/public-keys/{kid}.jwk.json", mint_public)
     _write_new(root / f"mint/clients/{CLIENT_ID}.yaml", _mint_client(operator_public, spatial))
+    if not spatial:
+        _write_new(
+            root / f"mint/clients/{READER_CLIENT_ID}.yaml",
+            _generic_reader_client(operator_public),
+        )
     if spatial:
         assert qgis_client_secret_fingerprint is not None
         _write_new(root / f"mint/clients/{QGIS_CLIENT_ID}.yaml", _mint_client_secret_client(qgis_client_secret_fingerprint))
@@ -441,7 +484,7 @@ GRANT {SPATIAL_BBOX_ROLE} TO {MIGRATION_ROLE} WITH INHERIT FALSE, SET TRUE, ADMI
         root / "runtime-test.yaml",
         _template_text(root, "sha256:" + "1" * 64, root / "empty-package", False, spatial),
     )
-    credentials = _spatial_journey_credentials() if spatial else _journey_credentials(root, "schema-test-token")
+    credentials = _spatial_journey_credentials() if spatial else _journey_credentials(root, GENERIC_PROFILE_TOKENS)
     _write_new(root / "schema-test-credentials.yaml", credentials)
 
 
@@ -460,6 +503,10 @@ def assert_canonical_project(project: Path) -> None:
         raise QuickstartError("registry-serverctl init output is missing requiredScopes")
     if "        operations: [create, get, list, patch]\n" not in source:
         raise QuickstartError("registry-serverctl init output is missing grant operations")
+    if "    requiredScopes: [registry:generic:read]\n" not in source:
+        raise QuickstartError("registry-serverctl init output is missing the reader scope")
+    if "    requiredPurposes: [registry-reporting]\n" not in source:
+        raise QuickstartError("registry-serverctl init output is missing the reader purpose")
 
 
 def enrich_local_package(project: Path) -> None:
@@ -467,13 +514,18 @@ def enrich_local_package(project: Path) -> None:
         raise QuickstartError("project must be an ordinary directory")
     path = project / "registry.yaml"
     source = path.read_text(encoding="utf-8")
-    if "\npackage:\n" in f"\n{source}":
-        raise QuickstartError("registry-serverctl init output already has package identity")
-    if "\nmanifestProjection:\n" in f"\n{source}":
-        raise QuickstartError("registry-serverctl init output must not include manifestProjection")
-    marker = "kind: RegistryProject\n"
-    if source.count(marker) != 1:
-        raise QuickstartError("registry-serverctl init output has an unexpected document header")
+    if "\nmanifestProjection:\n" not in f"\n{source}":
+        raise QuickstartError("registry-serverctl init output is missing manifestProjection")
+    lines = source.splitlines(keepends=True)
+    starts = [index for index, line in enumerate(lines) if line.rstrip("\n") == "package:"]
+    if len(starts) != 1:
+        raise QuickstartError("registry-serverctl init output has no single package identity block")
+    start = starts[0]
+    end = start + 1
+    while end < len(lines) and lines[end].startswith(" "):
+        end += 1
+    if not any(line.strip().startswith("sourceRevision:") for line in lines[start:end]):
+        raise QuickstartError("registry-serverctl init package identity has no source revision")
     package = (
         "package:\n"
         "  environment: local\n"
@@ -481,7 +533,7 @@ def enrich_local_package(project: Path) -> None:
         "  sequence: 1\n"
         f"  sourceRevision: {SOURCE_REVISION}\n"
     )
-    path.write_text(source.replace(marker, marker + package, 1), encoding="utf-8")
+    path.write_text("".join(lines[:start]) + package + "".join(lines[end:]), encoding="utf-8")
 
 
 def prepare_spatial_project(fixture: Path, project: Path) -> None:

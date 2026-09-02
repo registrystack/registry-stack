@@ -52,10 +52,12 @@
   edges. First-class portable cross-dataset relationships are deferred until
   Registry Manifest defines and validates that representation; the omission
   does not weaken or invalidate the operational relationship.
-- `registry-serverctl init` emits one small inline entity and no empty module.
-  Module locks are discovered and refreshed explicitly with `project lock`;
-  lock digests still bind every module source and declared SQL asset before a
-  production package is compiled.
+- `registry-serverctl init` emits a working example project rather than a blank
+  one: package identity, a manifest projection, a closed vocabulary, two inline
+  entities, two access profiles, one module extending an entity, and that
+  module's lock computed as the project is written. Module locks are refreshed
+  explicitly with `project lock`; lock digests still bind every module source
+  and declared SQL asset before a production package is compiled.
 - Evidence and Relay integrations use their published protocol surfaces and
   platform primitives. Registry Server does not depend on their product crates
   or duplicate their policy, disclosure, credential, or publication engines.
