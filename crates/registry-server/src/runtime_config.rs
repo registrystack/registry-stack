@@ -5,7 +5,7 @@ use std::{
     collections::HashSet,
     fmt, fs,
     io::Read,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     path::{Component, Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -124,6 +124,8 @@ pub enum RuntimeConfigError {
     InvalidBinding,
     #[error("runtime configuration contains an invalid listener binding")]
     InvalidListener,
+    #[error("runtime configuration contains an invalid metrics listener binding")]
+    InvalidMetricsListener,
     #[error("runtime configuration contains an invalid secret provider binding")]
     InvalidSecretProvider,
     #[error("the configured file secret provider root is missing or is not a readable directory")]
@@ -198,6 +200,7 @@ impl RuntimeConfigError {
             Self::GovernedMember => "runtime_config.governed_member",
             Self::InvalidBinding => "runtime_config.invalid_binding",
             Self::InvalidListener => "runtime_config.invalid_listener",
+            Self::InvalidMetricsListener => "runtime_config.invalid_metrics_listener",
             Self::InvalidSecretProvider => "runtime_config.invalid_secret_provider",
             Self::SecretProviderRootUnavailable => {
                 "runtime_config.secret_provider_root_unavailable"
@@ -233,6 +236,7 @@ impl RuntimeConfigError {
             Self::InvalidApiVersion => "/apiVersion",
             Self::InvalidKind => "/kind",
             Self::InvalidListener => "/listener",
+            Self::InvalidMetricsListener => "/metricsListener",
             Self::InvalidSecretProvider => "/secretProviders",
             Self::SecretProviderRootUnavailable | Self::UnsafeSecretProviderRoot => {
                 "/secretProviders/file/root"
@@ -370,6 +374,7 @@ pub struct RuntimeConfig {
     event_destinations: EventDestinationConfigs,
     event_delivery: EventDeliveryConfig,
     operational_timeouts: OperationalTimeouts,
+    metrics_listener: Option<MetricsListenerConfig>,
 }
 
 impl RuntimeConfig {
@@ -392,6 +397,13 @@ impl RuntimeConfig {
             .map_err(|_| RuntimeConfigError::InvalidEventDestination)?;
         let event_delivery = EventDeliveryConfig::from_raw(raw.event_delivery)?;
         let operational_timeouts = OperationalTimeouts::from_raw(raw.operational_timeouts)?;
+        let metrics_listener = raw
+            .metrics_listener
+            .map(MetricsListenerConfig::from_raw)
+            .transpose()?;
+        if let Some(metrics) = &metrics_listener {
+            metrics.validate_separate_binding(&listener)?;
+        }
         Ok(Self {
             listener,
             identity,
@@ -404,6 +416,7 @@ impl RuntimeConfig {
             event_destinations,
             event_delivery,
             operational_timeouts,
+            metrics_listener,
         })
     }
 
@@ -465,6 +478,11 @@ impl RuntimeConfig {
 
     pub fn operational_timeouts(&self) -> &OperationalTimeouts {
         &self.operational_timeouts
+    }
+
+    /// The operator-private metrics listener binding, when one is configured.
+    pub fn metrics_listener(&self) -> Option<&MetricsListenerConfig> {
+        self.metrics_listener.as_ref()
     }
 
     pub fn secret_resolver(&self) -> Result<SecretResolver> {
@@ -586,6 +604,7 @@ impl fmt::Debug for RuntimeConfig {
             .field("event_destinations", &self.event_destinations)
             .field("event_delivery", &self.event_delivery)
             .field("operational_timeouts", &self.operational_timeouts)
+            .field("metrics_listener", &self.metrics_listener)
             .finish()
     }
 }
@@ -636,6 +655,81 @@ impl fmt::Debug for ListenerConfig {
             .field("public_origin", &self.public_origin)
             .finish()
     }
+}
+
+/// Operator-only metrics listener binding.
+///
+/// It is a separate binding rather than a route on the Registry listener so
+/// that reaching the counters requires reaching a different socket. Only
+/// loopback or private addresses on a named port are accepted: the counters
+/// are operator material and the public Registry contract never describes
+/// them.
+#[derive(Clone, Eq, PartialEq)]
+pub struct MetricsListenerConfig {
+    bind: SocketAddr,
+}
+
+impl MetricsListenerConfig {
+    fn from_raw(raw: RawMetricsListenerConfig) -> Result<Self> {
+        let bind = raw
+            .bind
+            .parse::<SocketAddr>()
+            .map_err(|_| RuntimeConfigError::InvalidMetricsListener)?;
+        if bind.port() == 0 {
+            return Err(RuntimeConfigError::InvalidMetricsListener);
+        }
+        let address = bind.ip();
+        let private = match address {
+            IpAddr::V4(address) => address.is_loopback() || address.is_private(),
+            IpAddr::V6(address) => address.is_loopback() || is_unique_local_ipv6(address),
+        };
+        if !private || address.is_unspecified() || address.is_multicast() {
+            return Err(RuntimeConfigError::InvalidMetricsListener);
+        }
+        Ok(Self { bind })
+    }
+
+    /// Sharing the Registry binding would publish the counters on the
+    /// listener the public contract describes, which is the separation this
+    /// binding exists to enforce.
+    fn validate_separate_binding(&self, listener: &ListenerConfig) -> Result<()> {
+        let metrics_address = self.bind.ip();
+        let listener_address = listener.bind().ip();
+        // Linux commonly creates an IPv6 wildcard socket as dual-stack, so
+        // `[::]:port` can also occupy the corresponding IPv4 port.
+        // Configuration validation must be portable across the hosts on
+        // which the process can run, so treat the IPv6 wildcard as covering
+        // both families; the IPv4 wildcard covers only IPv4.
+        let wildcard_covers_metrics = match listener_address {
+            IpAddr::V4(address) => address.is_unspecified() && metrics_address.is_ipv4(),
+            IpAddr::V6(address) => address.is_unspecified(),
+        };
+        if (metrics_address == listener_address || wildcard_covers_metrics)
+            && self.bind.port() == listener.bind().port()
+        {
+            return Err(RuntimeConfigError::InvalidMetricsListener);
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn bind(&self) -> SocketAddr {
+        self.bind
+    }
+}
+
+impl fmt::Debug for MetricsListenerConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MetricsListenerConfig")
+            .field("bind", &"<redacted>")
+            .finish()
+    }
+}
+
+/// RFC 4193 unique-local IPv6 address check for the metrics listener binding.
+fn is_unique_local_ipv6(address: std::net::Ipv6Addr) -> bool {
+    (address.segments()[0] & 0xfe00) == 0xfc00
 }
 
 /// Operator-configured origin for authenticated absolute discovery and paging
@@ -1636,6 +1730,10 @@ struct RawRuntimeConfig {
     /// Optional operational request, shutdown, locking, and migration timeout tuning.
     #[serde(default)]
     operational_timeouts: RawOperationalTimeouts,
+    /// Optional operator-private metrics listener. Absent by default, which
+    /// serves no metrics surface at all.
+    #[serde(default)]
+    metrics_listener: Option<RawMetricsListenerConfig>,
 }
 
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
@@ -1648,6 +1746,15 @@ struct RawListenerConfig {
     /// discovery and pagination. Required when the registry exposes GIS collections.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     public_origin: Option<String>,
+}
+
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawMetricsListenerConfig {
+    /// Operator-private loopback or private numeric address and named port,
+    /// for example `127.0.0.1:9100`.
+    bind: String,
 }
 
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]

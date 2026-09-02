@@ -24,6 +24,7 @@ use crate::api::{
     authenticated_router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture,
 };
 use crate::auth::RegistryAuthenticator;
+use crate::metrics::{self, Metrics};
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 use crate::model::CompiledRegistry;
 use crate::package::{load_package, PackageIntent, PackageLoadContext, VerifiedPackage};
@@ -298,8 +299,16 @@ pub struct PreparedServer {
     app: Router,
     shutdown_grace: Duration,
     webhook_worker: Option<WebhookWorker>,
+    metrics: Option<PreparedMetricsListener>,
     #[cfg(all(feature = "postgres-test", feature = "tooling"))]
     fixture_pool: Option<RuntimePool>,
+}
+
+/// The operator-private metrics listener assembled by the verified startup
+/// path, served on its own binding beside the Registry listener.
+pub struct PreparedMetricsListener {
+    bind: SocketAddr,
+    app: Router,
 }
 
 impl PreparedServer {
@@ -332,6 +341,7 @@ impl PreparedServer {
             app,
             shutdown_grace,
             webhook_worker: None,
+            metrics: None,
             #[cfg(feature = "tooling")]
             fixture_pool: None,
         }
@@ -351,6 +361,7 @@ impl PreparedServer {
             app,
             shutdown_grace,
             webhook_worker: Some(webhook_worker),
+            metrics: None,
             #[cfg(feature = "tooling")]
             fixture_pool: None,
         }
@@ -636,6 +647,9 @@ async fn finish_prepared_server(
     }
     #[cfg(all(feature = "postgres-test", feature = "tooling"))]
     let fixture_pool = pool.clone();
+    // Captured before `pool` moves into the mutation service, so the metrics
+    // listener can sample live pool gauges at scrape time.
+    let telemetry_pool = pool.clone();
     let event_destinations = Arc::new(
         config
             .activate_event_destinations(&registry)
@@ -729,15 +743,30 @@ async fn finish_prepared_server(
         service = service.with_public_origin(origin.clone());
     }
     let service = Arc::new(service);
+    // The metrics registry exists only when the operator configured the
+    // separate metrics listener; when absent, no series are recorded and no
+    // metrics surface is served at all.
+    let telemetry_metrics = config
+        .metrics_listener()
+        .map(|_| Arc::new(Metrics::new(telemetry_pool)));
     let app = with_request_timeout(
         authenticated_router(service, authenticator),
         config.operational_timeouts().http_request,
+        telemetry_metrics.clone(),
     );
+    let metrics = config
+        .metrics_listener()
+        .zip(telemetry_metrics)
+        .map(|(listener, registry)| PreparedMetricsListener {
+            bind: listener.bind(),
+            app: metrics::metrics_app(registry),
+        });
     Ok(PreparedServer {
         bind: config.listener().bind(),
         app,
         shutdown_grace: config.operational_timeouts().shutdown_grace,
         webhook_worker,
+        metrics,
         #[cfg(all(feature = "postgres-test", feature = "tooling"))]
         fixture_pool: Some(fixture_pool),
     })
@@ -748,6 +777,7 @@ fn map_runtime_config_error(error: RuntimeConfigError) -> StartupError {
         RuntimeConfigError::InvalidDatabase | RuntimeConfigError::Secret => {
             StartupError::DatabaseConnection
         }
+        RuntimeConfigError::InvalidMetricsListener => StartupError::Listener,
         RuntimeConfigError::InvalidAudit => StartupError::Audit,
         RuntimeConfigError::InvalidCursor => StartupError::Cursor,
         RuntimeConfigError::InvalidOidc => StartupError::Oidc,
@@ -757,30 +787,58 @@ fn map_runtime_config_error(error: RuntimeConfigError) -> StartupError {
 
 #[doc(hidden)]
 pub fn with_request_timeout_for_test(app: Router, timeout: Duration) -> Router {
-    with_request_timeout(app, timeout)
+    with_request_timeout(app, timeout, None)
 }
 
-fn with_request_timeout(app: Router, timeout: Duration) -> Router {
-    app.layer(middleware::from_fn_with_state(timeout, request_timeout))
+#[doc(hidden)]
+pub fn with_request_timeout_and_metrics_for_test(
+    app: Router,
+    timeout: Duration,
+    metrics: Option<Arc<Metrics>>,
+) -> Router {
+    with_request_timeout(app, timeout, metrics)
+}
+
+/// State of the request-timeout boundary: the HTTP deadline plus the metrics
+/// registry, which exists only when the operator configured the metrics
+/// listener.
+#[derive(Clone)]
+struct RequestTelemetry {
+    timeout: Duration,
+    metrics: Option<Arc<Metrics>>,
+}
+
+fn with_request_timeout(app: Router, timeout: Duration, metrics: Option<Arc<Metrics>>) -> Router {
+    app.layer(middleware::from_fn_with_state(
+        RequestTelemetry { timeout, metrics },
+        request_timeout,
+    ))
 }
 
 async fn request_timeout(
-    axum::extract::State(timeout): axum::extract::State<Duration>,
+    axum::extract::State(telemetry): axum::extract::State<RequestTelemetry>,
     mut request: Request<Body>,
     next: Next,
 ) -> Response {
     let method = crate::correlation::method_name(request.method());
+    let route = metrics::route_template(&request).to_owned();
     let started = std::time::Instant::now();
     let (correlation, owns_boundary) = crate::correlation::begin_request(&mut request);
-    let response = match tokio::time::timeout(timeout, next.run(request)).await {
+    let response = match tokio::time::timeout(telemetry.timeout, next.run(request)).await {
         Ok(response) => response,
         Err(_) => timeout_problem(),
     };
-    if owns_boundary {
+    let status = crate::correlation::status_class(response.status());
+    let elapsed = started.elapsed();
+    let response = if owns_boundary {
         crate::correlation::finish_response(response, &correlation, method, started)
     } else {
         response
+    };
+    if let Some(metrics) = &telemetry.metrics {
+        metrics.record_http(&route, method, status, elapsed);
     }
+    response
 }
 
 fn timeout_problem() -> Response {
@@ -809,17 +867,44 @@ pub async fn serve_until_shutdown(
     prepared: PreparedServer,
     shutdown: impl Future<Output = Result<()>>,
 ) -> Result<()> {
-    let listener = TcpListener::bind(prepared.bind)
+    let PreparedServer {
+        bind,
+        app,
+        shutdown_grace,
+        webhook_worker,
+        metrics,
+        ..
+    } = prepared;
+    let listener = TcpListener::bind(bind)
         .await
         .map_err(|_| StartupError::Listener)?;
+    // Bound before the listening event so a configured metrics listener is
+    // either serving or startup has already refused.
+    let metrics = match metrics {
+        Some(metrics) => {
+            let listener = TcpListener::bind(metrics.bind)
+                .await
+                .map_err(|_| StartupError::Listener)?;
+            Some((metrics.app, listener))
+        }
+        None => None,
+    };
     OperationalEvent::Listening.emit();
     let (worker_shutdown_tx, worker_shutdown_rx) = watch::channel(false);
-    let mut worker = prepared
-        .webhook_worker
-        .map(|worker| tokio::spawn(worker.run(worker_shutdown_rx)));
+    let mut worker = webhook_worker.map(|worker| tokio::spawn(worker.run(worker_shutdown_rx)));
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let (metrics_shutdown_tx, metrics_shutdown_rx) = oneshot::channel::<()>();
+    let mut metrics_server = metrics.map(|(metrics_app, metrics_listener)| {
+        tokio::spawn(async move {
+            axum::serve(metrics_listener, metrics_app)
+                .with_graceful_shutdown(async move {
+                    let _ = metrics_shutdown_rx.await;
+                })
+                .await
+        })
+    });
     let mut server = tokio::spawn(async move {
-        axum::serve(listener, prepared.app)
+        axum::serve(listener, app)
             .with_graceful_shutdown(async move {
                 let _ = shutdown_rx.await;
             })
@@ -832,6 +917,7 @@ pub async fn serve_until_shutdown(
     let mut server_joined = matches!(exit, ServeExit::Server(_));
     let _ = worker_shutdown_tx.send(true);
     let _ = shutdown_tx.send(());
+    let _ = metrics_shutdown_tx.send(());
     let graceful = async {
         let result = match exit {
             ServeExit::Server(result) => map_server_result(result),
@@ -844,14 +930,21 @@ pub async fn serve_until_shutdown(
         if let Some(worker) = worker.as_mut() {
             let _ = worker.await;
         }
+        if let Some(metrics_server) = metrics_server.as_mut() {
+            let _ = metrics_server.await;
+        }
         result
     };
-    match tokio::time::timeout(prepared.shutdown_grace, graceful).await {
+    match tokio::time::timeout(shutdown_grace, graceful).await {
         Ok(result) => result,
         Err(_) => {
             if !server_joined {
                 server.abort();
                 let _ = (&mut server).await;
+            }
+            if let Some(metrics_server) = metrics_server.as_mut() {
+                metrics_server.abort();
+                let _ = metrics_server.await;
             }
             if let Some(worker) = worker.as_mut() {
                 worker.abort();

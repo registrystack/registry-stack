@@ -466,6 +466,19 @@
       ],
       "type": "object"
     },
+    "RawMetricsListenerConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "bind": {
+          "description": "Operator-private loopback or private numeric address and named port,\nfor example `127.0.0.1:9100`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "bind"
+      ],
+      "type": "object"
+    },
     "RawOidcJwksSource": {
       "oneOf": [
         {
@@ -836,6 +849,18 @@
     },
     "listener": {
       "$ref": "#/$defs/RawListenerConfig"
+    },
+    "metricsListener": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RawMetricsListenerConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional operator-private metrics listener. Absent by default, which\nserves no metrics surface at all."
     },
     "operationalTimeouts": {
       "$ref": "#/$defs/RawOperationalTimeouts",

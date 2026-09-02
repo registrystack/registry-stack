@@ -48,6 +48,8 @@ pub mod immediate_actions;
 pub mod logical_names;
 pub mod manifest_adapter;
 #[cfg(feature = "runtime")]
+pub mod metrics;
+#[cfg(feature = "runtime")]
 pub mod migration;
 #[cfg(feature = "runtime")]
 pub mod migration_plan;

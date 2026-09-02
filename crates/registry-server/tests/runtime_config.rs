@@ -680,6 +680,108 @@ fn governed_unknown_keys_are_refused_before_they_become_runtime() {
 }
 
 #[test]
+fn metrics_listener_is_absent_by_default_and_optional() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+    let config = parse_runtime_config_with_env(&base, env_lookup).expect("baseline runtime parses");
+    assert!(
+        config.metrics_listener().is_none(),
+        "no metrics surface exists unless the operator names one"
+    );
+
+    let configured = format!("{base}metricsListener:\n  bind: 127.0.0.1:9100\n");
+    let config =
+        parse_runtime_config_with_env(&configured, env_lookup).expect("private metrics listener");
+    let listener = config.metrics_listener().expect("listener is configured");
+    assert_eq!(listener.bind(), "127.0.0.1:9100".parse().unwrap());
+    assert!(
+        !format!("{listener:?}").contains("9100"),
+        "bind stays redacted"
+    );
+}
+
+#[test]
+fn metrics_listener_refuses_public_unspecified_and_ephemeral_bindings() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+    for bind in [
+        "0.0.0.0:9100",
+        "8.8.8.8:9100",
+        "\"[::]:9100\"",
+        "127.0.0.1:0",
+        "localhost:9100",
+        "127.0.0.1",
+    ] {
+        let configured = format!("{base}metricsListener:\n  bind: {bind}\n");
+        let error = parse_runtime_config_with_env(&configured, env_lookup)
+            .expect_err("non-private metrics binding is refused");
+        assert_eq!(
+            error,
+            RuntimeConfigError::InvalidMetricsListener,
+            "binding {bind} refused"
+        );
+        assert_eq!(error.metadata().path(), "/metricsListener");
+        assert_eq!(
+            error.metadata().code(),
+            "runtime_config.invalid_metrics_listener"
+        );
+    }
+}
+
+#[test]
+fn metrics_listener_refuses_shared_registry_binding() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+    // Same address as the Registry listener itself, and the dual-stack
+    // wildcard equivalent of it.
+    for bind in ["127.0.0.1:8080", "\"[::]:8080\""] {
+        let configured = format!("{base}metricsListener:\n  bind: {bind}\n");
+        assert_eq!(
+            parse_runtime_config_with_env(&configured, env_lookup)
+                .expect_err("shared binding is refused"),
+            RuntimeConfigError::InvalidMetricsListener
+        );
+    }
+    // An IPv6 wildcard Registry listener also covers the IPv4 metrics port
+    // on hosts that create dual-stack sockets.
+    let wildcard = base.replace("bind: 127.0.0.1:8080", "bind: \"[::]:8080\"");
+    let configured = format!("{wildcard}metricsListener:\n  bind: 127.0.0.1:8080\n");
+    assert_eq!(
+        parse_runtime_config_with_env(&configured, env_lookup)
+            .expect_err("dual-stack overlap is refused"),
+        RuntimeConfigError::InvalidMetricsListener
+    );
+}
+
+#[test]
+fn metrics_listener_refuses_unknown_members() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+    let configured = format!("{base}metricsListener:\n  bind: 127.0.0.1:9100\n  labels: none\n");
+    assert_eq!(
+        parse_runtime_config_with_env(&configured, env_lookup)
+            .expect_err("unknown metrics member is refused"),
+        RuntimeConfigError::Document
+    );
+}
+
+#[test]
 fn raw_database_urls_inline_secrets_and_plaintext_posture_are_refused() {
     let fixture = RuntimeFixture::new();
     for replacement in [
