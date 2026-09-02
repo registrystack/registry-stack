@@ -231,7 +231,7 @@ pub(crate) fn method_name(method: &axum::http::Method) -> &'static str {
     }
 }
 
-fn status_class(status: StatusCode) -> &'static str {
+pub(crate) fn status_class(status: StatusCode) -> &'static str {
     if status.is_server_error() {
         "server_error"
     } else if status.is_client_error() {

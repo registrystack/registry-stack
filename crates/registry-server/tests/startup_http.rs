@@ -21,10 +21,12 @@ use registry_server::api::{
 };
 use registry_server::auth::{AuthorityClaimConfig, RegistryAuthenticator};
 use registry_server::cursor::CursorCodec;
+use registry_server::metrics::{self, Metrics};
 use registry_server::runtime_config::{parse_runtime_config_with_env, RuntimeConfigError};
 use registry_server::startup::{
-    operational_log_level, with_request_timeout_for_test, OperationalEvent, OperationalLogLevel,
-    StartupError, WebhookStateTransitionCode,
+    operational_log_level, with_request_timeout_and_metrics_for_test,
+    with_request_timeout_for_test, OperationalEvent, OperationalLogLevel, StartupError,
+    WebhookStateTransitionCode,
 };
 use registry_server::{compile_project, parse_project_yaml, CompileProfile, CompiledRegistry};
 use serde_json::{json, Value};
@@ -904,6 +906,105 @@ async fn provenance_operational_logs_metrics_and_traces_are_separate_closed_and_
             .collect::<BTreeSet<_>>(),
         BTreeSet::from(["error", "message"])
     );
+}
+
+/// The production recording path: the timeout boundary records every served
+/// request into the metrics registry, a scrape renders it, and no request
+/// value reaches a label even when the request carried canary material.
+#[tokio::test]
+async fn configured_metrics_record_served_requests_with_closed_value_free_labels() {
+    let _request_logs = captured_request_logs();
+    let registry = compiled_registry();
+    let service = Arc::new(HttpService::new(
+        Arc::clone(&registry),
+        ReadRuntimeIdentity {
+            package_revision: "package-startup-http".to_owned(),
+            schema_fingerprint: "schema-startup-http".to_owned(),
+        },
+        Arc::new(NoopRecords::default()),
+        Arc::new(SlowReadiness),
+        Arc::new(
+            CursorCodec::new(Zeroizing::new(vec![0x45; 32]), Duration::from_secs(300))
+                .expect("test cursor key is valid"),
+        ),
+    ));
+    let authenticator = Arc::new(
+        RegistryAuthenticator::new(
+            &registry,
+            TokenVerifierConfig::access_token_profile(
+                "https://issuer.example",
+                vec!["urn:registry-server:test".to_owned()],
+                vec![Algorithm::EdDSA],
+                vec!["at+jwt".to_owned()],
+            ),
+            Arc::new(JwksFetcher::new_static(
+                JwkSet { keys: Vec::new() },
+                JwksFetcherConfig::defaults(),
+            )),
+            AuthorityClaimConfig::new("registry_principal", None),
+        )
+        .expect("anonymous Registry has a valid production authenticator"),
+    );
+    let metrics = Arc::new(Metrics::without_pool_for_test());
+    let app = with_request_timeout_and_metrics_for_test(
+        authenticated_router(service, authenticator),
+        Duration::from_secs(10),
+        Some(Arc::clone(&metrics)),
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .expect("health request builds"),
+        )
+        .await
+        .expect("health request responds");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // An invalid presented credential on a registered record route: served
+    // as a client error, recorded under the registered route template.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/records/public-records?filter=label:equals:{QUERY_VALUE_CANARY}"
+                ))
+                .header("authorization", format!("Bearer {TOKEN_CANARY}"))
+                .body(Body::empty())
+                .expect("canary request builds"),
+        )
+        .await
+        .expect("canary request responds");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    let scrape = metrics::metrics_app(Arc::clone(&metrics))
+        .oneshot(
+            Request::builder()
+                .uri("/metrics")
+                .body(Body::empty())
+                .expect("scrape request builds"),
+        )
+        .await
+        .expect("scrape request responds");
+    assert_eq!(scrape.status(), StatusCode::OK);
+    let body = to_bytes(scrape.into_body(), 1024 * 1024)
+        .await
+        .expect("scrape body reads");
+    let body = std::str::from_utf8(&body).expect("scrape body is UTF-8");
+    assert!(body.contains(
+        "registry_server_http_requests_total{route=\"/health\",method=\"GET\",status=\"success\"} 1\n"
+    ));
+    assert!(
+        body.contains(
+            "registry_server_http_requests_total{route=\"/v1/records/public-records\",method=\"GET\",status=\"client_error\"} 1\n"
+        ),
+        "the refusal is recorded under its registered route template"
+    );
+    assert_forbidden_values_absent(body);
 }
 
 struct TestDirectory {
