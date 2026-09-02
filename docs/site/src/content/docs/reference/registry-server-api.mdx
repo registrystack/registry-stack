@@ -317,8 +317,8 @@ snapshot at or after the earliest erased commit unavailable, including later one
 ## Change requests
 
 A change request is a record of an entity that declares `changeRequest`. Creating it stores a
-proposal; a proposal changes its targets only when an applier runs `apply`. The record moves
-through seven server states:
+proposal; a proposal changes its targets only when it is applied. The record moves through seven
+server states:
 
 ```text
 draft ──submit──▶ submitted ──approve (every stage)──▶ approved ──apply──▶ applied
@@ -327,6 +327,13 @@ draft ──submit──▶ submitted ──approve (every stage)──▶ appro
   └── cancel from any state except applied and canceled ──▶ canceled
 ```
 
+Two declarations shorten the path. With `review: {mode: none}` there are no stages, and `submit`
+moves the request straight to `approved`. When the proposal's disposition is `apply`, from
+`application.mode: automatic` or from a planner that chose `apply`, the submit or the final
+approval also applies the request in the same transaction. That action is offered only to a
+profile holding `apply_request` and `applyTargets` for every target; another profile does not see
+it in `actions`, and calling it regardless is refused with `precondition.failed`.
+
 A read of the request record adds `data.request`:
 
 ```json
@@ -334,6 +341,7 @@ A read of the request record adds `data.request`:
   "serverState": "submitted",
   "proposalVersion": 2,
   "effectDigest": "sha256:9f2c…",
+  "proposal": {"reviewMode": "staged", "applicationDisposition": "queue"},
   "actions": [
     {"operation": "approve_request", "stage": "review", "href": "/v1/records/placement-corrections/2d7e…/actions/stages/review/approve", "ifMatch": "\"rs-hmac-sha256:…\""}
   ]
@@ -342,6 +350,10 @@ A read of the request record adds `data.request`:
 
 `actions` lists only what the caller's profile may do in the current state, with the exact
 `href` and the `ifMatch` value to send. Follow those links rather than composing routes.
+
+`proposal` appears once the request has been submitted and describes the frozen proposal's policy:
+`reviewMode` is `staged` or `none`, `applicationDisposition` is `apply` or `queue`, and a queued
+plan adds `queueReason` with its `code` and `label`.
 
 <ApiReferenceTable id="request-actions" />
 
@@ -372,12 +384,17 @@ The response of an action is not a Registry Record envelope:
 request; a later read then shows `request.detailErased: true` and the provenance stub stays
 while target revisions reference the request.
 
+`GET /v1/registry` describes each request entity's `changeRequest` capability: the planner kind
+(`declarative`, or `rhai` with its ABI, limits, and possible write count), the review mode, and
+the application policy with its allowed dispositions and queue reasons.
+
 {/* Evidence: crates/registry-server/src/request_workflow.rs, RequestState;
     crates/registry-server/src/api/mod.rs, request_action_dispatch();
-    crates/registry-server/src/artifacts.rs, request_action_response_schema();
+    crates/registry-server/src/artifacts.rs, request_action_response_schema() and request_capability_metadata();
     crates/registry-server/src/fixtures.rs, assert_request_action_shape();
     crates/registry-server/src/postgres/request_read.rs;
-    products/registry-server/acceptance/asset-site-placement-change-requests/registry.yaml. */}
+    products/registry-server/acceptance/asset-site-placement-change-requests/registry.yaml;
+    products/registry-server/acceptance/person-name-change-rhai/registry.yaml. */}
 
 ## Immediate actions
 

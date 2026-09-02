@@ -387,8 +387,9 @@ entities:
 ```
 
 - **`changeControl.requiredFor`** lists the operations on the target that must go through a request. With `[patch]`, a direct patch of a placement is refused even for a profile that holds `patch`.
-- **`effects`** describe what applying the request writes. `target` names the record from a reference field, `operation` is `create` or `patch`, `set` maps target fields to request fields, and `clear` lists target fields to null.
-- **`review.stages`** run in order. Each stage needs `approvals` distinct approvers, and `excludeSubmitter` keeps the submitter out of that stage.
+- **`effects`** describe what applying the request writes. `target` names the record from a reference field, `operation` is `create` or `patch`, `set` maps target fields to request fields, and `clear` lists target fields to null. A request entity declares either `effects` or a `planner` ([below](#plan-effects-with-a-rhai-script)), never both.
+- **`review.stages`** run in order. Each stage needs `approvals` distinct approvers, and `excludeSubmitter` keeps the submitter out of that stage. A request that needs no review declares `review: {mode: none}` instead of stages; submitting it moves it straight to `approved`.
+- **`application.mode`** decides who applies. The default, `manual`, waits for an applier. `automatic` applies the request inside the submit, or inside the final approval when stages exist; the acting profile must then hold `apply_request` and `applyTargets` for every target, and the action is offered only to such a profile. `planner` leaves the choice to a Rhai script: `allowedDispositions` lists which of `apply` and `queue` the script may return, and a queued request names one of `queueReasons`.
 - **`retention.mode`** is `retain` or `operator_erase`. With `operator_erase`, an operator can erase the proposal detail of an applied or canceled request while the record and its state remain.
 
 Profiles then split the roles:
@@ -442,6 +443,109 @@ target/debug/registry-serverctl explain change-requests ./my-registry
 ```
 
 {/* Evidence: products/registry-server/acceptance/asset-site-placement-change-requests/registry.yaml; crates/registry-server/src/request_workflow.rs; crates/registry-server/src/access.rs. */}
+
+### Plan effects with a Rhai script
+
+When the effects depend on the request's content, a request entity declares a `planner` instead of `effects`.
+The YAML still owns the ceiling: which request fields the script may read, which targets and fields it may write, and which outcomes it may choose.
+The script only fills in values within that ceiling.
+
+```yaml
+entities:
+  - id: person-name-change-request
+    primaryDataset: person-registry
+    route: person-name-change-requests
+    mutationMode: mutable
+    fields:
+      - {id: person, type: reference, target: person, required: true, classification: internal}
+      - {id: given-name, type: string, required: true, maxLength: 80, classification: internal}
+      - {id: family-name, type: string, required: true, maxLength: 80, classification: internal}
+      - {id: handling, type: vocabulary-code, vocabulary: name-change-handling, required: true, classification: internal}
+    changeRequest:
+      planner:
+        kind: rhai
+        script: scripts/person-name-change.rhai
+        abi: registry.change-request-plan/v1
+        requestFields: [person, given-name, family-name, handling]
+        writes:
+          - target: {fromField: person}
+            operation: patch
+            fields: [display-name]
+      review:
+        mode: none
+      application:
+        mode: planner
+        allowedDispositions: [apply, queue]
+        queueReasons:
+          assisted-review: Assisted review requested by the submitter.
+      retention:
+        mode: operator_erase
+```
+
+The script at `scripts/person-name-change.rhai` builds the display name and picks the outcome:
+
+```rust
+fn plan(ctx) {
+    let given = ctx.request["given-name"];
+    given.trim();
+    let family = ctx.request["family-name"];
+    family.trim();
+    let effect = #{
+        target: #{fromField: "person"},
+        operation: "patch",
+        set: #{"display-name": given + " " + family}
+    };
+    if ctx.request["handling"] == "routine" {
+        return #{effects: [effect], disposition: "apply"};
+    }
+    #{effects: [effect], disposition: "queue", reasonCode: "assisted-review"}
+}
+```
+
+- **`requestFields`** lists the request fields the script receives as `ctx.request`, keyed by their authored ids. Nothing else reaches the script: no target record, no caller identity, no other request.
+- **`writes`** lists every target the script may touch, with the operation and the fields it may set or clear. `target` is `{fromField: <reference field>}` for an existing record or `{entity: <id>}` for a record the script creates.
+- **`script`** is a path relative to the document that declares it, the project root or a module directory, ending in `.rhai`. The compiler reads it at `check` and `package` time, and its digest is part of the compiled contract, so editing the script changes the contract fingerprint.
+- **`abi`** names the planner contract and must be `registry.change-request-plan/v1`.
+
+The script defines `fn plan(ctx)` and returns a map whose `effects` is a non-empty list within the declared `writes`.
+Each effect carries `target`, `operation`, and `set`, plus `clear` for a patch; a `create` effect also needs an `id`, and a later effect refers to the created record with `{fromEffect: <id>}`.
+A reference field in `set` takes `{fromField: ...}` or `{fromEffect: ...}`, never a literal identifier; other values are checked against the target field's type.
+Under `application.mode: planner` the map also carries `disposition`, `apply` or `queue`, and a queued plan names its `reasonCode`.
+Under `manual` or `automatic` the YAML decides, and a script that returns a disposition is refused.
+
+The server runs the script once, when the request is submitted, and freezes its effects, its disposition, and the script digest in the proposal.
+Review, retry, and apply never rerun it, so a later package with an edited script leaves an already frozen proposal untouched.
+The engine is closed: the script cannot import modules, evaluate strings, print, or reach a file, the database, or the network, and it runs within fixed bounds (64 KiB of source, 100,000 operations, and bounded call depth, strings, arrays, and maps).
+A script that fails, leaves the ceiling, or breaks a bound refuses the submit with `request.invalid`.
+`check` reports a planner block, review mode, or application policy that disagree with each other as `change_request.*` errors; it does not run the script.
+
+Evaluate the script offline, with no database and no credentials, from a JSON file of request field values:
+
+```sh
+target/debug/registry-serverctl project planner-test ./my-registry \
+  --entity person-name-change-request --request ./routine-request.json
+```
+
+```text
+project planner-test succeeded
+compiled revision: sha256:…
+request entity: person-name-change-request
+planner kind: rhai
+planner ABI: registry.change-request-plan/v1
+planner script SHA-256: sha256:…
+disposition: apply
+effect effect-1: target=existing, operation=patch, fields=display-name, dependencies=
+counts: effects=1, field mutations=1, dependencies=0
+```
+
+The report names the planner identity, the disposition, and each effect's target kind, operation, and fields; it never repeats the request values.
+The PostgreSQL journey remains the proof for authorization, freezing, and application.
+
+{/* Evidence: products/registry-server/acceptance/person-name-change-rhai/registry.yaml;
+    products/registry-server/acceptance/person-name-change-rhai/scripts/person-name-change.rhai;
+    crates/registry-server/src/rhai_planner.rs;
+    crates/registry-server/src/change_request.rs;
+    crates/registry-serverctl/src/lib.rs, planner_test(). */}
 
 ## Immediate actions
 
@@ -636,6 +740,7 @@ These are all the findings the compiler can report:
 - **`check` passes but `check --deny-findings` fails.** A finding that needs review is present. Read it and either change the project or accept the finding knowingly; the production gate will ask again.
 - **A module digest does not match.** Run `project lock` after editing a module, then review the digest change together with the module diff.
 - **A profile grants a field the entity does not have.** Field ids in grants are the authored kebab-case ids, not the camelCase API names.
+- **`check` reports a `change_request.*` error.** The planner block, the review mode, and the application policy must agree: `effects` and `planner` are exclusive, `review.mode: none` excludes stages, dispositions and queue reasons belong to `application.mode: planner` only, and a policy that applies on submit or final approval needs one profile holding both that action and complete apply authority. `check` does not run the script; evaluate it with `project planner-test`.
 - **A journey step fails with 404 where you expected data.** The profile's row boundary or purpose excluded the caller. Compare the step's `claims` with the grant, and use `explain access --scenario` to see which admission rule refused it.
 
 ## Next

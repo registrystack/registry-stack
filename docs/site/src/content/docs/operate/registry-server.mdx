@@ -96,9 +96,9 @@ local container, so its generated `database/` directory is a working reference.
 
 ## Write the runtime configuration
 
-The runtime file binds one package to one database, one token issuer, and one listener. It is a
-deployment artifact: keep it with the operator, outside the authoring project, and never put a
-credential in it. Values such as `secret:file/<name>` resolve to owner-only files under the file
+The runtime file binds one package to one database, one token issuer, and one listener, plus an
+optional private metrics listener. It is a deployment artifact: keep it with the operator, outside
+the authoring project, and never put a credential in it. Values such as `secret:file/<name>` resolve to owner-only files under the file
 provider root; `secret:env/<NAME>` reads an environment variable when `secretProviders.environment`
 is declared.
 
@@ -166,6 +166,7 @@ eventDestinations: {}
 | `audit` and `cursor` | The key that chains the audit journal and the secret that signs pagination cursors. Loss of either key invalidates existing chains or cursors. |
 | `eventDestinations` and `eventDelivery` | One binding per webhook destination the package declares, and payload retention. |
 | `operationalTimeouts` | Optional HTTP request, record lock, migration lock, migration statement, and shutdown grace bounds. |
+| `metricsListener` | Optional second binding, private to the operator, that serves `GET /metrics`; see [Scrape metrics](#scrape-metrics). |
 
 `leewayMilliseconds` must be a whole number of seconds and at most 300000. Static keys under
 `jwksSource: {kind: static, documentRef: ...}` load at startup; rotate them through a
@@ -344,6 +345,38 @@ runtime file for each activation. Store secrets separately.
     crates/registry-serverctl/src/doctor.rs;
     crates/registry-serverctl/src/lib.rs, VerifyArgs and verify();
     crates/registry-server/src/api/mod.rs;
+    crates/registry-server/src/startup.rs. */}
+
+## Scrape metrics
+
+The Registry listener never serves metrics. To expose them, add a second listener that only the
+operator's network can reach:
+
+```yaml
+metricsListener:
+  bind: 127.0.0.1:9464
+```
+
+The address must be a loopback or private address (an IPv4 private range, or IPv6 unique-local)
+with a non-zero port, and it must differ from `listener.bind`; the runtime file is otherwise
+refused with `runtime_config.invalid_metrics_listener`. The listener answers `GET /metrics` in the
+Prometheus text format and nothing else, and it carries no authentication, so keep it behind the
+scraper's network boundary rather than a public one.
+
+| Series | Type | Labels |
+| --- | --- | --- |
+| `registry_server_http_requests_total` | counter | `route`, `method`, `status` |
+| `registry_server_http_request_duration_seconds` | histogram | `route`, `method`, `status` |
+| `registry_server_pool_connections` | gauge | `state`: `max_size`, `size`, `available`, `waiting` |
+
+`route` is the matched route template, such as `/v1/records/placements/{record_id}`, or
+`unmatched`; it never carries a record identifier. `status` is `success`, `client_error`, or
+`server_error` rather than the exact code. The label sets are closed, so a scrape cannot grow
+without bound, and no label carries a principal, a token, or a record value. Pool states are read
+from the connection pool at scrape time.
+
+{/* Evidence: crates/registry-server/src/metrics.rs;
+    crates/registry-server/src/runtime_config.rs, MetricsListenerConfig;
     crates/registry-server/src/startup.rs. */}
 
 ## Change an active registry
@@ -656,6 +689,7 @@ and `--max-pages` bound one operator run.
 | `apply --initial` reports a binding error | The runtime file must already name the target package's revision and sequence one. |
 | `apply` fails after maintenance begins | Read the report, fix the cause, and retry the same target, or restore the pre-activation backup. Nothing clears the state. |
 | `doctor` reports `startup.oidc.refused` | Check the issuer, discovery reachability or the static JWKS document, the algorithm, and the leeway bound. |
+| The runtime file is refused with `runtime_config.invalid_metrics_listener` | `metricsListener.bind` must be a loopback or private address with a non-zero port, distinct from `listener.bind`. |
 | Every token is refused | Compare the token's header and claims with the token table; a list-valued `aud` or a missing principal claim refuses the token. |
 | A webhook never fires | Confirm the destination is bound, the receiver returns `2xx`, and the event's condition matched; use `webhook list` for dead letters. |
 | Replay is refused | Refresh the list and check the generation, `replayEligible`, payload expiry, and the destination binding. |

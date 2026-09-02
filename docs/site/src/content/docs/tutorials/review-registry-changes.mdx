@@ -108,7 +108,7 @@ request_revision final-approval Idempotency-Key,If-Match,proposalVersion,effectD
 The example requires one approval at each of two stages.
 Every action needs an `Idempotency-Key` and an `If-Match`; a decision or an apply also binds to
 the `proposalVersion` and `effectDigest` the caller read.
-The JSON file also lists the compiled effects, the grants of each role, and the request bounds.
+The JSON file also lists the compiled effects, the planner and application policy, the grants of each role, and the request bounds.
 
 {/* Evidence: crates/registry-serverctl/src/lib.rs, explain_change_requests;
     products/registry-server/acceptance/asset-site-placement-change-requests/registry.yaml. */}

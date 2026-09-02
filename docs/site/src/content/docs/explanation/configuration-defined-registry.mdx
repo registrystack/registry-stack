@@ -86,7 +86,9 @@ Batch operations carry a change context that records why the change happened: a 
 **Change requests.** A change-request entity holds a proposed change as a record of its own.
 A submitter creates it, edits it, and submits it.
 Reviewers approve or reject it stage by stage, or send it back for revision.
-Once every stage is satisfied, an applier applies it, and the server writes the declared effects to the target records in one transaction.
+Once every stage is satisfied, an applier applies it, and the server writes the effects to the target records in one transaction.
+The effects are declared in YAML, or planned by a bounded Rhai script that sees only the request's fields and may write only what the YAML declares.
+A request type may also skip review, or apply on submit or final approval when the acting profile holds apply authority.
 The request record keeps its state, its proposal version, and a digest of the effects, and the server tells each caller which actions its profile may take next.
 Retention rules decide what remains of the request detail after it is applied or canceled.
 
@@ -95,7 +97,7 @@ Actions suit operations that must be atomic, such as registering an asset togeth
 
 Every write path produces revisions, audit records, and events in the same way.
 
-{/* Evidence: crates/registry-server/src/request_workflow.rs; crates/registry-server/src/mutation/action.rs; crates/registry-server/src/api/mod.rs, exact_mutation(). */}
+{/* Evidence: crates/registry-server/src/request_workflow.rs; crates/registry-server/src/rhai_planner.rs; crates/registry-server/src/mutation/action.rs; crates/registry-server/src/api/mod.rs, exact_mutation(). */}
 
 ## History, time, and erasure
 

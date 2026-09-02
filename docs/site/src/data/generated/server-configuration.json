@@ -8,7 +8,7 @@
       "file": "products/registry-server/generated/authoring/registry-project.schema.json",
       "status": "beta",
       "reference": "docs/site/src/content/docs/configure/registry-server.mdx",
-      "field_count": 428,
+      "field_count": 449,
       "fields": [
         {
           "key_path": "accessProfiles",
@@ -2283,6 +2283,99 @@
           "runtime_validation": null
         },
         {
+          "key_path": "entities[].changeRequest.application",
+          "kind": "property",
+          "type": "object",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "{\"mode\":\"manual\"}"
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.application.allowedDispositions",
+          "kind": "property",
+          "type": "array",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "uniqueItems: true"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.application.allowedDispositions[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": "conditional",
+          "values": [
+            "apply",
+            "queue"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.application.mode",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": [
+            "automatic",
+            "manual",
+            "planner"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "\"manual\""
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.application.queueReasons",
+          "kind": "property",
+          "type": "object",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.application.queueReasons.*",
+          "kind": "map_value",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
           "key_path": "entities[].changeRequest.effects",
           "kind": "property",
           "type": "array",
@@ -2480,6 +2573,214 @@
           "runtime_validation": null
         },
         {
+          "key_path": "entities[].changeRequest.planner",
+          "kind": "property",
+          "type": "null | object",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.planner.abi",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.planner.kind",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": [
+            "rhai"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.planner.requestFields",
+          "kind": "property",
+          "type": "array",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "[]"
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.planner.requestFields[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.planner.script",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.planner.writes",
+          "kind": "property",
+          "type": "array",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "[]"
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.planner.writes[]",
+          "kind": "array_item",
+          "type": "object",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.planner.writes[].fields",
+          "kind": "property",
+          "type": "array",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "[]"
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.planner.writes[].fields[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.planner.writes[].operation",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": [
+            "apply_request",
+            "approve_request",
+            "batch",
+            "cancel_request",
+            "create",
+            "get",
+            "invoke",
+            "list",
+            "lookup",
+            "patch",
+            "reject_request",
+            "request_revision",
+            "revise_request",
+            "revisions",
+            "snapshot",
+            "submit_request",
+            "tombstone"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.planner.writes[].target",
+          "kind": "property",
+          "type": "object",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.planner.writes[].target.entity",
+          "kind": "property",
+          "type": "null | string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.planner.writes[].target.fromField",
+          "kind": "property",
+          "type": "null | string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
           "key_path": "entities[].changeRequest.retention",
           "kind": "property",
           "type": "object",
@@ -2518,6 +2819,21 @@
           "type": "object",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.review.mode",
+          "kind": "property",
+          "type": "null | string",
+          "required": "conditional",
+          "values": [
+            "none"
+          ],
           "values_conditional": false,
           "constraints": [],
           "conditional_constraints": [],
@@ -6194,7 +6510,7 @@
       "file": "products/registry-server/generated/authoring/registry-module.schema.json",
       "status": "beta",
       "reference": "docs/site/src/content/docs/configure/registry-server.mdx",
-      "field_count": 365,
+      "field_count": 407,
       "fields": [
         {
           "key_path": "actions",
@@ -7132,6 +7448,99 @@
           "runtime_validation": null
         },
         {
+          "key_path": "entities[].changeRequest.application",
+          "kind": "property",
+          "type": "object",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "{\"mode\":\"manual\"}"
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.application.allowedDispositions",
+          "kind": "property",
+          "type": "array",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "uniqueItems: true"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.application.allowedDispositions[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": "conditional",
+          "values": [
+            "apply",
+            "queue"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.application.mode",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": [
+            "automatic",
+            "manual",
+            "planner"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "\"manual\""
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.application.queueReasons",
+          "kind": "property",
+          "type": "object",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.application.queueReasons.*",
+          "kind": "map_value",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
           "key_path": "entities[].changeRequest.effects",
           "kind": "property",
           "type": "array",
@@ -7329,6 +7738,214 @@
           "runtime_validation": null
         },
         {
+          "key_path": "entities[].changeRequest.planner",
+          "kind": "property",
+          "type": "null | object",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.planner.abi",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.planner.kind",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": [
+            "rhai"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.planner.requestFields",
+          "kind": "property",
+          "type": "array",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "[]"
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.planner.requestFields[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.planner.script",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.planner.writes",
+          "kind": "property",
+          "type": "array",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "[]"
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.planner.writes[]",
+          "kind": "array_item",
+          "type": "object",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.planner.writes[].fields",
+          "kind": "property",
+          "type": "array",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "[]"
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.planner.writes[].fields[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.planner.writes[].operation",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": [
+            "apply_request",
+            "approve_request",
+            "batch",
+            "cancel_request",
+            "create",
+            "get",
+            "invoke",
+            "list",
+            "lookup",
+            "patch",
+            "reject_request",
+            "request_revision",
+            "revise_request",
+            "revisions",
+            "snapshot",
+            "submit_request",
+            "tombstone"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.planner.writes[].target",
+          "kind": "property",
+          "type": "object",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.planner.writes[].target.entity",
+          "kind": "property",
+          "type": "null | string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.planner.writes[].target.fromField",
+          "kind": "property",
+          "type": "null | string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
           "key_path": "entities[].changeRequest.retention",
           "kind": "property",
           "type": "object",
@@ -7367,6 +7984,21 @@
           "type": "object",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.review.mode",
+          "kind": "property",
+          "type": "null | string",
+          "required": "conditional",
+          "values": [
+            "none"
+          ],
           "values_conditional": false,
           "constraints": [],
           "conditional_constraints": [],
@@ -9572,6 +10204,99 @@
           "runtime_validation": null
         },
         {
+          "key_path": "extendEntities[].changeRequest.application",
+          "kind": "property",
+          "type": "object",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "{\"mode\":\"manual\"}"
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "extendEntities[].changeRequest.application.allowedDispositions",
+          "kind": "property",
+          "type": "array",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "uniqueItems: true"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "extendEntities[].changeRequest.application.allowedDispositions[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": "conditional",
+          "values": [
+            "apply",
+            "queue"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "extendEntities[].changeRequest.application.mode",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": [
+            "automatic",
+            "manual",
+            "planner"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "\"manual\""
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "extendEntities[].changeRequest.application.queueReasons",
+          "kind": "property",
+          "type": "object",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "extendEntities[].changeRequest.application.queueReasons.*",
+          "kind": "map_value",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
           "key_path": "extendEntities[].changeRequest.effects",
           "kind": "property",
           "type": "array",
@@ -9769,6 +10494,214 @@
           "runtime_validation": null
         },
         {
+          "key_path": "extendEntities[].changeRequest.planner",
+          "kind": "property",
+          "type": "null | object",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "extendEntities[].changeRequest.planner.abi",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "extendEntities[].changeRequest.planner.kind",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": [
+            "rhai"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "extendEntities[].changeRequest.planner.requestFields",
+          "kind": "property",
+          "type": "array",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "[]"
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "extendEntities[].changeRequest.planner.requestFields[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "extendEntities[].changeRequest.planner.script",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "extendEntities[].changeRequest.planner.writes",
+          "kind": "property",
+          "type": "array",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "[]"
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "extendEntities[].changeRequest.planner.writes[]",
+          "kind": "array_item",
+          "type": "object",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "extendEntities[].changeRequest.planner.writes[].fields",
+          "kind": "property",
+          "type": "array",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "[]"
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "extendEntities[].changeRequest.planner.writes[].fields[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "extendEntities[].changeRequest.planner.writes[].operation",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": [
+            "apply_request",
+            "approve_request",
+            "batch",
+            "cancel_request",
+            "create",
+            "get",
+            "invoke",
+            "list",
+            "lookup",
+            "patch",
+            "reject_request",
+            "request_revision",
+            "revise_request",
+            "revisions",
+            "snapshot",
+            "submit_request",
+            "tombstone"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "extendEntities[].changeRequest.planner.writes[].target",
+          "kind": "property",
+          "type": "object",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "extendEntities[].changeRequest.planner.writes[].target.entity",
+          "kind": "property",
+          "type": "null | string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "extendEntities[].changeRequest.planner.writes[].target.fromField",
+          "kind": "property",
+          "type": "null | string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
           "key_path": "extendEntities[].changeRequest.retention",
           "kind": "property",
           "type": "object",
@@ -9807,6 +10740,21 @@
           "type": "object",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "extendEntities[].changeRequest.review.mode",
+          "kind": "property",
+          "type": "null | string",
+          "required": "conditional",
+          "values": [
+            "none"
+          ],
           "values_conditional": false,
           "constraints": [],
           "conditional_constraints": [],
@@ -11651,7 +12599,7 @@
       "file": "products/registry-server/generated/runtime/runtime.schema.json",
       "status": "beta",
       "reference": "docs/site/src/content/docs/configure/registry-server.mdx",
-      "field_count": 88,
+      "field_count": 90,
       "fields": [
         {
           "key_path": "apiVersion",
@@ -12914,6 +13862,34 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "metricsListener",
+          "kind": "property",
+          "type": "null | object",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": "Optional operator-private metrics listener. Absent by default, which\nserves no metrics surface at all.",
+          "defaults": [
+            "null"
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "metricsListener.bind",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": "Operator-private loopback or private numeric address and named port,\nfor example `127.0.0.1:9100`.",
           "defaults": [],
           "runtime_validation": null
         },

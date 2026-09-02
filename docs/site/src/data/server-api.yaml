@@ -2,7 +2,7 @@
   title: Registry Server HTTP routes
   columns: [Route, Operation, Available when, Response]
   rows:
-    - ['`GET /v1/registry`', 'metadata', 'The caller reaches at least one route', 'Entity inventory filtered to the caller: route, dataset identifier, the operations each entity exposes with the profile that grants each, and the schema path. A caller with no visible route gets the concealed 404.']
+    - ['`GET /v1/registry`', 'metadata', 'The caller reaches at least one route', 'Entity inventory filtered to the caller: route, dataset identifier, the operations each entity exposes with the profile that grants each, the schema path, and for a request entity its `changeRequest` capability (planner kind, review mode, application policy). A caller with no visible route gets the concealed 404.']
     - ['`GET /v1/schemas/{entity}`', 'metadata', 'The caller reaches the entity', 'JSON Schema for the entity record, the target of the `describedby` link.']
     - ['`GET /openapi.json`', 'metadata', 'The caller reaches at least one route', 'The compiled OpenAPI document, filtered to the caller''s routes.']
     - ['`GET /health` and `GET /healthz`', 'liveness', 'Always', '`{"status":"alive"}`.']
@@ -63,8 +63,8 @@
   title: Change request actions
   columns: [Action, Route suffix, Body, Accepted from]
   rows:
-    - ['`submit`', '`/actions/submit`', '`{}`', '`draft`']
-    - ['`approve`', '`/actions/stages/{stage}/approve`', '`{"proposalVersion", "effectDigest"}`', '`submitted`; the request reaches `approved` once every stage is satisfied']
+    - ['`submit`', '`/actions/submit`', '`{}`', '`draft`; the request reaches `approved` when `review.mode` is `none`, and `applied` when the disposition is `apply`']
+    - ['`approve`', '`/actions/stages/{stage}/approve`', '`{"proposalVersion", "effectDigest"}`', '`submitted`; the request reaches `approved` once every stage is satisfied, and `applied` when the disposition is `apply`']
     - ['`reject`', '`/actions/stages/{stage}/reject`', '`{"proposalVersion", "effectDigest"}`', '`submitted`']
     - ['`request-revision`', '`/actions/stages/{stage}/request-revision`', '`{"proposalVersion", "effectDigest"}`', '`submitted`']
     - ['`revise`', '`/actions/revise`', '`{"rebase": false}`', '`needs_changes`, `rejected`']

@@ -3318,6 +3318,69 @@
               ],
               "constraints": [],
               "subcommands": []
+            },
+            {
+              "name": "planner-test",
+              "invocation": "registry-serverctl project planner-test",
+              "about": "Run one captured Rhai request planner with bounded synthetic JSON",
+              "long_about": null,
+              "usage": "registry-serverctl project planner-test [OPTIONS] --entity <ENTITY> --request <JSON_FILE> <PROJECT>",
+              "arguments": [
+                {
+                  "display": "<PROJECT>",
+                  "description": "Registry Server project directory",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--entity <ENTITY>",
+                  "description": "Compiled change-request entity whose Rhai planner will run",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--request <JSON_FILE>",
+                  "description": "Bounded strict JSON object containing synthetic request fields",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
             }
           ]
         },

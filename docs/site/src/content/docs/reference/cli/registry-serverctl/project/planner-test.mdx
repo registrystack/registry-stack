@@ -1,6 +1,6 @@
 ---
-title: "registry-serverctl webhook replay command reference"
-description: "Generated syntax and options for registry-serverctl webhook replay."
+title: "registry-serverctl project planner-test command reference"
+description: "Generated syntax and options for registry-serverctl project planner-test."
 status: draft
 draft: true
 owner: registry-docs
@@ -14,7 +14,7 @@ standards_referenced: []
 
 {/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}
 
-Replay one eligible retained dead-letter using optimistic generation binding.
+Run one captured Rhai request planner with bounded synthetic JSON.
 
 ## Contract status
 
@@ -23,17 +23,21 @@ This page is generated from the public Clap command tree for Registry Stack sour
 ## Usage
 
 ```text
-registry-serverctl webhook replay [OPTIONS] --runtime-config <ABSOLUTE_FILE> --event-id <UUID> --delivery-id <ID> --expected-generation <NUMBER>
+registry-serverctl project planner-test [OPTIONS] --entity <ENTITY> --request <JSON_FILE> <PROJECT>
 ```
+
+## Arguments
+
+| Argument | Always required | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- |
+| `<PROJECT>` | Yes | n/a | n/a | n/a | Registry Server project directory |
 
 ## Options
 
 | Option | Always required | Default | Values | Environment | Description |
 | --- | --- | --- | --- | --- | --- |
-| `--runtime-config <ABSOLUTE_FILE>` | Yes | n/a | n/a | n/a | Absolute Registry Server runtime configuration file |
-| `--event-id <UUID>` | Yes | n/a | n/a | n/a | Stable event UUID shown by `webhook list` |
-| `--delivery-id <ID>` | Yes | n/a | n/a | n/a | Compiled delivery identifier shown by `webhook list` |
-| `--expected-generation <NUMBER>` | Yes | n/a | n/a | n/a | Current generation shown by `webhook list` |
+| `--entity <ENTITY>` | Yes | n/a | n/a | n/a | Compiled change-request entity whose Rhai planner will run |
+| `--request <JSON_FILE>` | Yes | n/a | n/a | n/a | Bounded strict JSON object containing synthetic request fields |
 | `--format <FORMAT>` | No | `human` | `human`, `json` | n/a | Emit the selected command's report in this format |
 | `-h, --help` | No | n/a | n/a | n/a | Print help |
 
