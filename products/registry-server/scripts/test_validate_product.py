@@ -55,6 +55,27 @@ class RegistryServerProductCatalogTests(unittest.TestCase):
                 self.assertIn("path", invariant["negativeTest"])
                 self.assertIn("name", invariant["negativeTest"])
 
+    def test_security_range_is_closed_through_rhai_planner_invariants(self) -> None:
+        matrix = VALIDATOR.load_yaml(
+            VALIDATOR.CONTRACTS / "security-invariant-matrix.yaml"
+        )
+        self.assertEqual(
+            list(VALIDATOR.SECURITY_INVARIANT_IDS),
+            [invariant["id"] for invariant in matrix["invariants"]],
+        )
+        planner_rows = matrix["invariants"][-7:]
+        self.assertEqual(
+            [f"RS-NEG-{index:02d}" for index in range(25, 32)],
+            [invariant["negativeId"] for invariant in planner_rows],
+        )
+        for invariant in planner_rows:
+            with self.subTest(invariant=invariant["id"]):
+                self.assertEqual("enforced", invariant["state"])
+                self.assertTrue(invariant["threat"])
+                self.assertTrue(invariant["enforcementPoint"])
+                self.assertTrue(invariant["refusal"])
+                self.assertIn("negativeTest", invariant)
+
     def test_w0_crate_boundary_is_two_crates_with_opt_in_runtime(self) -> None:
         root = tomllib.loads((VALIDATOR.REPOSITORY_ROOT / "Cargo.toml").read_text(encoding="utf-8"))
         members = root["workspace"]["members"]
@@ -158,6 +179,18 @@ class RegistryServerProductCatalogTests(unittest.TestCase):
         errors: list[str] = []
         VALIDATOR.validate_postgres_entrypoint(errors)
         self.assertEqual([], errors)
+
+    def test_postgres_rhai_planner_follows_the_existing_pilot_acceptance_gate(self) -> None:
+        commands = list(VALIDATOR.POSTGRES_TEST_COMMANDS)
+        pilot = (
+            "cargo test --locked -p registry-server --features postgres-test "
+            "--test postgres_pilot_acceptance"
+        )
+        rhai = (
+            "cargo test --locked -p registry-server --features postgres-test "
+            "--test postgres_rhai_planner"
+        )
+        self.assertEqual(commands.index(pilot) + 1, commands.index(rhai))
 
     def test_postgres_constraint_races_follow_partial_unique_in_the_owned_gate(self) -> None:
         commands = list(VALIDATOR.POSTGRES_TEST_COMMANDS)
@@ -309,6 +342,25 @@ class RegistryServerProductCatalogTests(unittest.TestCase):
         with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_with_duplicate):
             VALIDATOR.validate_security({"W0", "W1", "W2", "W3", "W4", "W5"}, errors)
         self.assertTrue(any("duplicate identifier" in error for error in errors), errors)
+
+    def test_closed_security_range_rejects_a_missing_rhai_invariant(self) -> None:
+        original = VALIDATOR.load_yaml
+
+        def load_without_final_invariant(path: Path):
+            value = copy.deepcopy(original(path))
+            if path.name == "security-invariant-matrix.yaml":
+                value["invariants"] = value["invariants"][:-1]
+            elif path.name == "security-test-traceability.yaml":
+                value["traceability"] = value["traceability"][:-1]
+            return value
+
+        errors: list[str] = []
+        with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_without_final_invariant):
+            VALIDATOR.validate_security({"W0", "W1", "W2", "W3", "W4", "W5"}, errors)
+        self.assertIn(
+            "security matrix: must contain the complete closed product invariant identifiers",
+            errors,
+        )
 
     def test_enforced_invariant_must_bind_one_resolving_test(self) -> None:
         original = VALIDATOR.load_yaml

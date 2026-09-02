@@ -704,12 +704,12 @@ document = json.load(open(sys.argv[1], encoding="utf-8"))
 subject, expected_group, expected_valid_from, expected_valid_to, expected_valid_at = sys.argv[2:]
 items = [
     item for item in document.get("items", [])
-    if item.get("data", {}).get("subject") == subject
+    if item.get("domainData", {}).get("subject") == subject
 ]
 if len(items) != 1:
     raise SystemExit(f"expected one historical item for {subject}, got {len(items)}")
 item = items[0]
-data = item["data"]
+data = item["domainData"]
 if data.get("group") != expected_group:
     raise SystemExit(f"expected group {expected_group}, got {data.get('group')}")
 if data.get("validFrom") != expected_valid_from:
@@ -719,7 +719,7 @@ if expected_valid_to == "null":
         raise SystemExit(f"expected open end, got {data.get('validTo')}")
 elif data.get("validTo") != expected_valid_to:
     raise SystemExit(f"expected validTo {expected_valid_to}, got {data.get('validTo')}")
-if not isinstance(item.get("revision"), int) or item["revision"] < 1:
+if not isinstance(item.get("revisionIdentifier"), str) or not item["revisionIdentifier"].isdigit() or int(item["revisionIdentifier"]) < 1:
     raise SystemExit("historical item did not include its actual revision")
 if document.get("validAt") != expected_valid_at:
     raise SystemExit(f"validAt was not normalized: {document.get('validAt')}")
@@ -738,9 +738,9 @@ def decision(document, decision_id):
     item = document["items"][0]
     return {
         "decisionId": decision_id,
-        "subject": item["data"]["subject"],
-        "resultGroup": item["data"]["group"],
-        "inputRevision": item["revision"],
+        "subject": item["domainData"]["subject"],
+        "resultGroup": item["domainData"]["group"],
+        "inputRevision": item["revisionIdentifier"],
         "snapshot": document["snapshot"],
         "effectiveDate": document["validAt"],
         "rulePackageRevision": package_revision,
@@ -860,8 +860,8 @@ http_json POST "$server_url" "$temporary_root/secrets/operator-token" \
   "/v1/records/memberships?accessProfile=registry-operator" initial-a application/json \
   "$temporary_root/create-a.json" "$temporary_root/create-a-response.json"
 assert_status "$temporary_root/create-a-response.json" 201
-assert_snapshot_reference "$temporary_root/create-a-response.json" snapshot
-a_id=$(json_field "$temporary_root/create-a-response.json" id)
+assert_snapshot_reference "$temporary_root/create-a-response.json" data.snapshot
+a_id=$(json_field "$temporary_root/create-a-response.json" data.recordIdentifier)
 a_etag=$(response_header_literal "$temporary_root/create-a-response.json" ETag)
 
 cat >"$temporary_root/move-june.json" <<EOF
@@ -944,7 +944,7 @@ http_json POST "$server_url" "$temporary_root/secrets/operator-token" \
   "/v1/records/memberships?accessProfile=registry-operator" second-initial-a application/json \
   "$temporary_root/create-second-a.json" "$temporary_root/create-second-a-response.json"
 assert_status "$temporary_root/create-second-a-response.json" 201
-second_a_id=$(json_field "$temporary_root/create-second-a-response.json" id)
+second_a_id=$(json_field "$temporary_root/create-second-a-response.json" data.recordIdentifier)
 second_a_etag=$(response_header_literal "$temporary_root/create-second-a-response.json" ETag)
 cat >"$temporary_root/second-move-june.json" <<EOF
 {"items":[
@@ -1034,8 +1034,8 @@ http_json POST "$server_url" "$temporary_root/secrets/operator-token" \
   "/v1/records/memberships?accessProfile=registry-operator" post-upgrade-create application/json \
   "$temporary_root/create-after-upgrade.json" "$temporary_root/create-after-upgrade-response.json"
 assert_status "$temporary_root/create-after-upgrade-response.json" 201
-assert_snapshot_reference "$temporary_root/create-after-upgrade-response.json" snapshot
-post_upgrade_snapshot=$(json_field "$temporary_root/create-after-upgrade-response.json" snapshot)
+assert_snapshot_reference "$temporary_root/create-after-upgrade-response.json" data.snapshot
+post_upgrade_snapshot=$(json_field "$temporary_root/create-after-upgrade-response.json" data.snapshot)
 http_json GET "$server_url" "$temporary_root/secrets/consumer-token" \
   "/v1/records/memberships:snapshot?accessProfile=eligibility-consumer&snapshot=$post_upgrade_snapshot&validAt=2026-07-20" "" "" "" \
   "$temporary_root/consumer-post-upgrade-snapshot.json"

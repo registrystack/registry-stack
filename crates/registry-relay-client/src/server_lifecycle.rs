@@ -106,6 +106,97 @@ pub enum RegistryServerRequestState {
     Applied,
 }
 
+/// Closed review policy frozen into a visible change-request proposal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RegistryServerRequestReviewMode {
+    None,
+    Staged,
+}
+
+impl RegistryServerRequestReviewMode {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "none" => Some(Self::None),
+            "staged" => Some(Self::Staged),
+            _ => None,
+        }
+    }
+}
+
+/// Closed application disposition frozen into a visible proposal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RegistryServerRequestApplicationDisposition {
+    Apply,
+    Queue,
+}
+
+impl RegistryServerRequestApplicationDisposition {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "apply" => Some(Self::Apply),
+            "queue" => Some(Self::Queue),
+            _ => None,
+        }
+    }
+}
+
+/// A finite, compiled queue reason carried by a visible proposal.
+#[derive(Clone, Eq, PartialEq)]
+pub struct RegistryServerRequestQueueReason {
+    code: String,
+    label: String,
+}
+
+impl RegistryServerRequestQueueReason {
+    #[must_use]
+    pub fn code(&self) -> &str {
+        &self.code
+    }
+
+    #[must_use]
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+}
+
+impl fmt::Debug for RegistryServerRequestQueueReason {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RegistryServerRequestQueueReason")
+            .field("code", &self.code)
+            .field("label", &"<redacted>")
+            .finish()
+    }
+}
+
+/// Frozen, caller-visible planning policy for the current proposal.
+///
+/// This is descriptive only. It cannot grant a lifecycle action or cause the
+/// client to infer that an automatic application is authorized.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RegistryServerRequestProposal {
+    review_mode: RegistryServerRequestReviewMode,
+    application_disposition: RegistryServerRequestApplicationDisposition,
+    queue_reason: Option<RegistryServerRequestQueueReason>,
+}
+
+impl RegistryServerRequestProposal {
+    #[must_use]
+    pub const fn review_mode(&self) -> RegistryServerRequestReviewMode {
+        self.review_mode
+    }
+
+    #[must_use]
+    pub const fn application_disposition(&self) -> RegistryServerRequestApplicationDisposition {
+        self.application_disposition
+    }
+
+    #[must_use]
+    pub fn queue_reason(&self) -> Option<&RegistryServerRequestQueueReason> {
+        self.queue_reason.as_ref()
+    }
+}
+
 impl RegistryServerRequestState {
     fn parse(value: &str) -> Option<Self> {
         match value {
@@ -406,6 +497,7 @@ pub struct RegistryServerRequestMetadata {
     server_state: RegistryServerRequestState,
     proposal_version: RegistryServerProposalVersion,
     effect_digest: Option<RegistryServerEffectDigest>,
+    proposal: Option<RegistryServerRequestProposal>,
     editable: bool,
     detail_erased: bool,
     actions: Vec<InertRegistryServerLifecycleAction>,
@@ -448,6 +540,7 @@ impl RegistryServerRequestMetadata {
             &["serverState", "proposalVersion", "editable"],
             &[
                 "effectDigest",
+                "proposal",
                 "detailErased",
                 "actions",
                 "application",
@@ -469,6 +562,10 @@ impl RegistryServerRequestMetadata {
             .and_then(|value| value.as_bool())
             .ok_or(RegistryServerLifecycleDecodeError::Profile)?;
         let effect_digest = take_optional_digest(&mut object, "effectDigest")?;
+        let proposal = match object.remove("proposal") {
+            None | Some(Value::Null) => None,
+            Some(value) => Some(decode_proposal(value)?),
+        };
         let detail_erased = match object.remove("detailErased") {
             None => false,
             Some(Value::Bool(true)) => true,
@@ -512,6 +609,7 @@ impl RegistryServerRequestMetadata {
             server_state,
             proposal_version,
             effect_digest,
+            proposal,
             editable,
             detail_erased,
             actions,
@@ -533,6 +631,12 @@ impl RegistryServerRequestMetadata {
     #[must_use]
     pub fn effect_digest(&self) -> Option<&RegistryServerEffectDigest> {
         self.effect_digest.as_ref()
+    }
+
+    /// Returns the frozen current-proposal policy, if this request has one.
+    #[must_use]
+    pub fn proposal(&self) -> Option<&RegistryServerRequestProposal> {
+        self.proposal.as_ref()
     }
 
     #[must_use]
@@ -607,6 +711,7 @@ impl fmt::Debug for RegistryServerRequestMetadata {
                 "effect_digest",
                 &self.effect_digest.as_ref().map(|_| "<redacted>"),
             )
+            .field("proposal", &self.proposal)
             .field("editable", &self.editable)
             .field("detail_erased", &self.detail_erased)
             .field("action_count", &self.actions.len())
@@ -1412,6 +1517,7 @@ pub struct RegistryServerLifecycleReceiptRequest {
     server_state: RegistryServerRequestState,
     proposal_version: Option<RegistryServerProposalVersion>,
     effect_digest: Option<RegistryServerEffectDigest>,
+    proposal: Option<RegistryServerRequestProposal>,
     application: Option<RegistryServerLifecycleReceiptApplication>,
 }
 
@@ -1432,6 +1538,11 @@ impl RegistryServerLifecycleReceiptRequest {
     }
 
     #[must_use]
+    pub fn proposal(&self) -> Option<&RegistryServerRequestProposal> {
+        self.proposal.as_ref()
+    }
+
+    #[must_use]
     pub fn application(&self) -> Option<&RegistryServerLifecycleReceiptApplication> {
         self.application.as_ref()
     }
@@ -1447,6 +1558,7 @@ impl fmt::Debug for RegistryServerLifecycleReceiptRequest {
                 "effect_digest",
                 &self.effect_digest.as_ref().map(|_| "<redacted>"),
             )
+            .field("proposal", &self.proposal)
             .field("application", &self.application)
             .finish()
     }
@@ -1484,6 +1596,53 @@ fn decode_review(
         _ => return Err(RegistryServerLifecycleDecodeError::Profile),
     };
     Ok(RegistryServerRequestReview { targets })
+}
+
+fn decode_proposal(
+    value: Value,
+) -> Result<RegistryServerRequestProposal, RegistryServerLifecycleDecodeError> {
+    let mut object = exact_object(
+        value,
+        &["reviewMode", "applicationDisposition"],
+        &["queueReason"],
+    )?;
+    let review_mode =
+        RegistryServerRequestReviewMode::parse(&take_string(&mut object, "reviewMode")?)
+            .ok_or(RegistryServerLifecycleDecodeError::Profile)?;
+    let application_disposition = RegistryServerRequestApplicationDisposition::parse(&take_string(
+        &mut object,
+        "applicationDisposition",
+    )?)
+    .ok_or(RegistryServerLifecycleDecodeError::Profile)?;
+    let queue_reason = match object.remove("queueReason") {
+        None => None,
+        Some(value) => Some(decode_queue_reason(value)?),
+    };
+    if matches!(
+        application_disposition,
+        RegistryServerRequestApplicationDisposition::Apply
+    ) && queue_reason.is_some()
+    {
+        return Err(RegistryServerLifecycleDecodeError::Profile);
+    }
+    Ok(RegistryServerRequestProposal {
+        review_mode,
+        application_disposition,
+        queue_reason,
+    })
+}
+
+fn decode_queue_reason(
+    value: Value,
+) -> Result<RegistryServerRequestQueueReason, RegistryServerLifecycleDecodeError> {
+    let mut object = exact_object(value, &["code", "label"], &[])?;
+    let code = take_string(&mut object, "code")?;
+    validate_identifier(&code)?;
+    let label = take_string(&mut object, "label")?;
+    if label.is_empty() || label.len() > MAX_IDENTIFIER_BYTES {
+        return Err(RegistryServerLifecycleDecodeError::Profile);
+    }
+    Ok(RegistryServerRequestQueueReason { code, label })
 }
 
 fn decode_review_target(
@@ -1636,12 +1795,17 @@ fn decode_receipt_request(
             "effectDigest",
             "application",
         ],
-        &[],
+        &["proposal"],
     )?;
     let server_state = RegistryServerRequestState::parse(&take_string(&mut object, "serverState")?)
         .ok_or(RegistryServerLifecycleDecodeError::Profile)?;
     let proposal_version = take_optional_proposal_version(&mut object, "proposalVersion")?;
     let effect_digest = take_optional_digest(&mut object, "effectDigest")?;
+    let proposal = match object.remove("proposal") {
+        None => None,
+        Some(Value::Null) => None,
+        Some(value) => Some(decode_proposal(value)?),
+    };
     let application = match object.remove("application") {
         Some(Value::Null) => None,
         Some(value) => Some(decode_receipt_application(value)?),
@@ -1651,6 +1815,7 @@ fn decode_receipt_request(
         server_state,
         proposal_version,
         effect_digest,
+        proposal,
         application,
     })
 }

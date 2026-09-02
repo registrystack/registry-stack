@@ -448,6 +448,7 @@ async fn prepare_runner(
                 path: "sources/project.yaml",
                 bytes: &package.project,
             },
+            project_assets: &[],
             modules: &modules,
             migration_plan: FixtureSourceFile {
                 path: "database/migration-plan.json",

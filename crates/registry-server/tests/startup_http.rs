@@ -814,8 +814,9 @@ async fn provenance_operational_logs_metrics_and_traces_are_separate_closed_and_
             RuntimeConfigError::GovernedMember,
         ),
     ] {
-        let error = parse_runtime_config_with_env(&(valid_runtime.clone() + &member), |_| None)
-            .expect_err("runtime telemetry authority is absent");
+        let error =
+            parse_runtime_config_with_env(&(valid_runtime.clone() + member.as_str()), |_| None)
+                .expect_err("runtime telemetry authority is absent");
         assert_eq!(error, expected);
         assert_forbidden_values_absent(&format!("{error:?} {error}"));
     }

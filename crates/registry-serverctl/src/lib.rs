@@ -12,9 +12,10 @@ use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use clap::{ArgGroup, Args, CommandFactory, Parser, Subcommand, ValueEnum};
-use registry_platform_canonical_json::parse_json_strict;
+use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use registry_server::compiler::module_digest_with_assets;
 use registry_server::contract::{FieldTypeSource, ModuleAssetSource, ModuleLockSource};
 use registry_server::migration_plan::ReviewedMigrationRecovery;
@@ -22,7 +23,8 @@ use registry_server::package::{
     inspect_package_integrity, CompiledRegistryChangeClass, MigrationInspectionPlanKind,
     MigrationInspectionSummary, PackageBuildRequest, PackageError, PackageMigrationPlanInput,
     PackageModuleSource, PackageSourceFile, PreparedPackage, SignaturePolicy,
-    FIXTURE_JOURNEYS_PATH, MAX_PACKAGE_SOURCE_FILE_BYTES,
+    FIXTURE_JOURNEYS_PATH, MAX_PACKAGE_SOURCE_FILE_BYTES, MAX_RHAI_PLANNER_PATH_BYTES,
+    MAX_RHAI_PLANNER_SOURCE_BYTES,
 };
 use registry_server::runtime_config::RuntimeConfigError;
 use registry_server::tooling::{classify_registry_diff, CompiledRegistryDiff, DiffClassification};
@@ -76,6 +78,8 @@ const OPERATIONAL_FAILURE_EXIT: u8 = 3;
 // limits still apply to fixture journeys and generated package artifacts.
 const AUTHORED_SOURCE_REDERIVATION_MAX_BYTES: u64 = 1024 * 1024;
 const MAX_DERIVED_SQL_ASSET_BYTES: u64 = 256 * 1024;
+const MAX_PLANNER_TEST_REQUEST_BYTES: u64 = 64 * 1024;
+const PLANNER_TEST_DEADLINE: Duration = Duration::from_secs(1);
 static STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Parser)]
@@ -162,6 +166,8 @@ enum ProjectCommand {
     Lock(ProjectLockArgs),
     /// Migrate the retired singular Manifest projection to the plural resource model.
     Migrate(ProjectMigrateArgs),
+    /// Run one captured Rhai request planner with bounded synthetic JSON.
+    PlannerTest(ProjectPlannerTestArgs),
 }
 
 #[derive(Debug, Args)]
@@ -184,6 +190,21 @@ struct ProjectMigrateArgs {
     /// Write the reviewed migration. Without this flag, only a diff is emitted.
     #[arg(long)]
     write: bool,
+}
+
+#[derive(Debug, Args)]
+struct ProjectPlannerTestArgs {
+    /// Registry Server project directory.
+    #[arg(value_name = "PROJECT")]
+    project: PathBuf,
+
+    /// Compiled change-request entity whose Rhai planner will run.
+    #[arg(long, value_name = "ENTITY")]
+    entity: String,
+
+    /// Bounded strict JSON object containing synthetic request fields.
+    #[arg(long, value_name = "JSON_FILE")]
+    request: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -705,6 +726,54 @@ struct SuccessReport {
     explanation: Option<Value>,
 }
 
+#[derive(Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PlannerTestSuccessReport {
+    ok: bool,
+    command: &'static str,
+    compiled_revision: String,
+    request_entity: String,
+    planner: PlannerTestIdentityReport,
+    disposition: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    queue_reason: Option<PlannerTestQueueReasonReport>,
+    effects: Vec<PlannerTestEffectReport>,
+    counts: PlannerTestCountReport,
+}
+
+#[derive(Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PlannerTestIdentityReport {
+    kind: &'static str,
+    abi: String,
+    script_sha256: String,
+}
+
+#[derive(Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PlannerTestQueueReasonReport {
+    code: String,
+    label: String,
+}
+
+#[derive(Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PlannerTestEffectReport {
+    id: String,
+    target_kind: &'static str,
+    operation: &'static str,
+    fields: Vec<String>,
+    depends_on: Vec<String>,
+}
+
+#[derive(Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PlannerTestCountReport {
+    effects: usize,
+    field_mutations: usize,
+    dependencies: usize,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct FailureReport {
@@ -759,6 +828,7 @@ enum DiagnosticArtifact {
     WebhookOperations,
     RequestRetentionOperation,
     HistoryErasure,
+    PlannerTest,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -801,6 +871,7 @@ enum SuggestedAction {
     VerifyWebhookOperation,
     VerifyRequestRetentionOperation,
     PrepareHistoryErasureRequest,
+    CorrectPlannerTestInput,
 }
 
 #[derive(Serialize)]
@@ -1052,6 +1123,7 @@ struct ProjectMigrateSuccessReport {
 struct CapturedProjectSource {
     project: RegistryProject,
     project_bytes: Vec<u8>,
+    project_assets: Vec<CapturedModuleAssetSource>,
     modules: Vec<CapturedModuleSource>,
 }
 
@@ -1080,6 +1152,7 @@ struct CapturedPackageCandidate {
     prior_revision: Option<String>,
     signature_policy: SignaturePolicy,
     project: PackageSourceFile,
+    project_assets: Vec<PackageSourceFile>,
     modules: Vec<PackageModuleSource>,
     fixture_journeys: PackageSourceFile,
     migration_plan: PackageMigrationPlanInput,
@@ -1138,20 +1211,23 @@ impl CapturedPackageCandidate {
     }
 
     fn prepare(self, schema_fingerprint: String) -> Result<PreparedPackage, PackageError> {
-        registry_server::package::prepare_package(PackageBuildRequest {
-            environment: self.environment,
-            instance_id: self.instance_id,
-            database_id: self.database_id,
-            sequence: self.sequence,
-            prior_revision: self.prior_revision,
-            compiler_source_revision: self.compiler_source_revision,
-            schema_fingerprint,
-            signature_policy: self.signature_policy,
-            project: self.project,
-            modules: self.modules,
-            fixture_journeys: self.fixture_journeys,
-            migration_plan: self.migration_plan,
-        })
+        registry_server::package::prepare_package_with_project_assets(
+            PackageBuildRequest {
+                environment: self.environment,
+                instance_id: self.instance_id,
+                database_id: self.database_id,
+                sequence: self.sequence,
+                prior_revision: self.prior_revision,
+                compiler_source_revision: self.compiler_source_revision,
+                schema_fingerprint,
+                signature_policy: self.signature_policy,
+                project: self.project,
+                modules: self.modules,
+                fixture_journeys: self.fixture_journeys,
+                migration_plan: self.migration_plan,
+            },
+            self.project_assets,
+        )
     }
 }
 
@@ -1232,6 +1308,12 @@ where
             ProjectCommand::Migrate(args) => {
                 return match project_migrate(&args.project, args.write) {
                     Ok(report) => write_project_migrate_success(&report, format, stdout, stderr),
+                    Err(failure) => write_failure(&failure, format, stdout, stderr),
+                };
+            }
+            ProjectCommand::PlannerTest(args) => {
+                return match planner_test(&args) {
+                    Ok(report) => write_planner_test_success(&report, format, stdout, stderr),
                     Err(failure) => write_failure(&failure, format, stdout, stderr),
                 };
             }
@@ -2016,6 +2098,14 @@ fn capture_candidate(
     let sequence = identity.sequence;
     let compiler_source_revision = identity.source_revision.clone();
     let project_bytes = source.project_bytes;
+    let project_assets = source
+        .project_assets
+        .into_iter()
+        .map(|asset| PackageSourceFile {
+            path: asset.path,
+            bytes: asset.bytes,
+        })
+        .collect();
     let modules = source
         .modules
         .into_iter()
@@ -2148,6 +2238,7 @@ fn capture_candidate(
             path: "source/registry.yaml".to_owned(),
             bytes: project_bytes,
         },
+        project_assets,
         modules,
         fixture_journeys: PackageSourceFile {
             path: FIXTURE_JOURNEYS_PATH.to_owned(),
@@ -3157,6 +3248,235 @@ fn generate(
     })
 }
 
+fn planner_test(args: &ProjectPlannerTestArgs) -> Result<PlannerTestSuccessReport, FailureReport> {
+    const COMMAND: &str = "project planner-test";
+    let compiled = compile(&args.project, ProfileArg::Authoring, COMMAND)?;
+    let entity = compiled.entities().get(&args.entity).ok_or_else(|| {
+        planner_test_failure(
+            "planner_test.entity.not_found",
+            "entity",
+            "select one compiled entity",
+        )
+    })?;
+    let request = entity.change_request.as_ref().ok_or_else(|| {
+        planner_test_failure(
+            "planner_test.entity.not_request",
+            "entity",
+            "select a compiled change-request entity",
+        )
+    })?;
+    let planner = request.planner.as_ref().ok_or_else(|| {
+        planner_test_failure(
+            "planner_test.planner.declarative",
+            "entity",
+            "the local planner test accepts only Rhai-backed request entities",
+        )
+    })?;
+
+    let input_bytes = read_bounded_regular_file(
+        &args.request,
+        "planner_test.request.unavailable",
+        MAX_PLANNER_TEST_REQUEST_BYTES,
+    )
+    .map_err(|diagnostic| {
+        let (code, message) = if diagnostic.code == "source.file.bounds" {
+            (
+                "planner_test.request.bounds",
+                "the synthetic request exceeds its fixed size bound",
+            )
+        } else {
+            (
+                "planner_test.request.unavailable",
+                "the synthetic request must be a readable regular file without symbolic links",
+            )
+        };
+        planner_test_failure(code, "request", message)
+    })?;
+    let input = parse_json_strict(&input_bytes).map_err(|_| {
+        planner_test_failure(
+            "planner_test.request.invalid",
+            "request",
+            "the synthetic request must be strict JSON",
+        )
+    })?;
+    let input = input.as_object().ok_or_else(|| {
+        planner_test_failure(
+            "planner_test.request.invalid",
+            "request",
+            "the synthetic request must be one JSON object",
+        )
+    })?;
+    if !bounded_planner_test_value(&Value::Object(input.clone()), 0) {
+        return Err(planner_test_failure(
+            "planner_test.request.bounds",
+            "request",
+            "the synthetic request exceeds the closed planner value bounds",
+        ));
+    }
+    let declared_fields = planner.request_fields.iter().collect::<BTreeSet<_>>();
+    if input.keys().any(|field| !declared_fields.contains(field)) {
+        return Err(planner_test_failure(
+            "planner_test.request.fields",
+            "request",
+            "the synthetic request may contain only planner-declared request fields",
+        ));
+    }
+
+    let candidate = registry_server::rhai_planner::plan_change_request_effects(
+        request,
+        input,
+        Instant::now() + PLANNER_TEST_DEADLINE,
+    )
+    .map_err(|error| {
+        planner_test_failure(
+            error.code(),
+            "planner",
+            "the closed Rhai planner refused the synthetic request",
+        )
+    })?;
+    if candidate.planner_binding.kind != "rhai"
+        || candidate.planner_binding.abi_identifier != planner.abi
+        || candidate.planner_binding.script_sha256.as_deref()
+            != Some(planner.script_sha256.as_str())
+    {
+        return Err(planner_test_failure(
+            "planner_test.planner.binding",
+            "planner",
+            "the planner result did not preserve its compiled identity",
+        ));
+    }
+
+    let mut field_mutations = 0usize;
+    let mut dependency_count = 0usize;
+    let effect_aliases = candidate
+        .effects
+        .iter()
+        .enumerate()
+        .map(|(index, effect)| (effect.id.as_str(), format!("effect-{}", index + 1)))
+        .collect::<BTreeMap<_, _>>();
+    let effects = candidate
+        .effects
+        .iter()
+        .enumerate()
+        .map(|(index, effect)| {
+            let mut fields = effect
+                .mutations
+                .iter()
+                .map(|mutation| match mutation {
+                    registry_server::rhai_planner::CandidateChangeRequestMutation::Set {
+                        field,
+                        ..
+                    }
+                    | registry_server::rhai_planner::CandidateChangeRequestMutation::Clear {
+                        field,
+                    } => field.clone(),
+                })
+                .collect::<Vec<_>>();
+            fields.sort();
+            fields.dedup();
+            field_mutations += effect.mutations.len();
+            dependency_count += effect.depends_on.len();
+            let mut depends_on = effect
+                .depends_on
+                .iter()
+                .map(|dependency| {
+                    effect_aliases
+                        .get(dependency.as_str())
+                        .cloned()
+                        .ok_or_else(|| {
+                            planner_test_failure(
+                                "planner_test.planner.binding",
+                                "planner",
+                                "the planner result contains an unresolved effect dependency",
+                            )
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            depends_on.sort();
+            Ok(PlannerTestEffectReport {
+                id: format!("effect-{}", index + 1),
+                target_kind: match effect.target.binding {
+                    registry_server::rhai_planner::CandidateChangeRequestTargetBinding::Existing {
+                        ..
+                    } => "existing",
+                    registry_server::rhai_planner::CandidateChangeRequestTargetBinding::ReservedCreate {
+                        ..
+                    } => "reserved_create",
+                },
+                operation: operation_wire_name(effect.operation),
+                fields,
+                depends_on,
+            })
+        })
+        .collect::<Result<Vec<_>, FailureReport>>()?;
+    let disposition = match candidate.disposition {
+        registry_server::model::CompiledChangeRequestDisposition::Apply => "apply",
+        registry_server::model::CompiledChangeRequestDisposition::Queue => "queue",
+    };
+    let queue_reason = candidate
+        .queue_reason
+        .map(|reason| PlannerTestQueueReasonReport {
+            code: reason.code,
+            label: reason.label,
+        });
+    Ok(PlannerTestSuccessReport {
+        ok: true,
+        command: COMMAND,
+        compiled_revision: compiled.revision().to_owned(),
+        request_entity: entity.id.clone(),
+        planner: PlannerTestIdentityReport {
+            kind: "rhai",
+            abi: planner.abi.clone(),
+            script_sha256: planner.script_sha256.clone(),
+        },
+        disposition,
+        queue_reason,
+        counts: PlannerTestCountReport {
+            effects: effects.len(),
+            field_mutations,
+            dependencies: dependency_count,
+        },
+        effects,
+    })
+}
+
+fn bounded_planner_test_value(value: &Value, depth: usize) -> bool {
+    use registry_server::rhai_planner::{
+        MAXIMUM_ARRAY_ITEMS, MAXIMUM_MAP_ENTRIES, MAXIMUM_STRING_BYTES, MAXIMUM_VALUE_DEPTH,
+    };
+
+    if depth > MAXIMUM_VALUE_DEPTH {
+        return false;
+    }
+    match value {
+        Value::Null | Value::Bool(_) => true,
+        Value::Number(number) => number.as_i64().is_some(),
+        Value::String(value) => value.len() <= MAXIMUM_STRING_BYTES,
+        Value::Array(values) => {
+            values.len() <= MAXIMUM_ARRAY_ITEMS
+                && values
+                    .iter()
+                    .all(|value| bounded_planner_test_value(value, depth + 1))
+        }
+        Value::Object(values) => {
+            values.len() <= MAXIMUM_MAP_ENTRIES
+                && values.iter().all(|(key, value)| {
+                    key.len() <= MAXIMUM_STRING_BYTES
+                        && bounded_planner_test_value(value, depth + 1)
+                })
+        }
+    }
+}
+
+fn planner_test_failure(code: &str, path: &str, message: &str) -> FailureReport {
+    source_failure(
+        "project planner-test",
+        diagnostic(code, path, message),
+        DiagnosticArtifact::PlannerTest,
+        SuggestedAction::CorrectPlannerTestInput,
+    )
+}
+
 fn explain(
     subject: ExplainSubject,
     project_path: &Path,
@@ -3261,15 +3581,20 @@ fn compile_captured_project(
         .map(|module| module.module.clone())
         .collect::<Vec<_>>();
     let assets = source
-        .modules
+        .project_assets
         .iter()
-        .flat_map(|module| {
+        .map(|asset| ModuleAssetSource {
+            module: None,
+            path: asset.path.clone(),
+            bytes: asset.bytes.clone(),
+        })
+        .chain(source.modules.iter().flat_map(|module| {
             module.assets.iter().map(|asset| ModuleAssetSource {
                 module: Some(module.id.clone()),
                 path: asset.path.clone(),
                 bytes: asset.bytes.clone(),
             })
-        })
+        }))
         .collect::<Vec<_>>();
     compile_project_with_assets(&source.project, &modules, &assets, profile.into()).map_err(
         |failure| FailureReport {
@@ -3327,6 +3652,7 @@ fn capture_project_source(project_path: &Path) -> Result<CapturedProjectSource, 
         AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
     )?;
     let project = parse_project_yaml(&project_bytes).map_err(first_diagnostic)?;
+    let project_assets = load_project_planner_asset_files(project_path, &project)?;
     let modules = load_module_files(project_path, &project)?
         .into_iter()
         .map(|(id, bytes)| {
@@ -3343,6 +3669,7 @@ fn capture_project_source(project_path: &Path) -> Result<CapturedProjectSource, 
     Ok(CapturedProjectSource {
         project,
         project_bytes,
+        project_assets,
         modules,
     })
 }
@@ -3357,6 +3684,7 @@ fn capture_project_source_for_lock(
         AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
     )?;
     let project = parse_project_yaml(&project_bytes).map_err(first_diagnostic)?;
+    let project_assets = load_project_planner_asset_files(project_path, &project)?;
     let mut locked = BTreeSet::new();
     for lock in &project.modules {
         if !locked.insert(lock.id.as_str()) {
@@ -3401,6 +3729,7 @@ fn capture_project_source_for_lock(
     Ok(CapturedProjectSource {
         project,
         project_bytes,
+        project_assets,
         modules,
     })
 }
@@ -3560,6 +3889,24 @@ fn discover_module_files(project_path: &Path) -> Result<Vec<(String, Vec<u8>)>, 
         .collect()
 }
 
+fn load_project_planner_asset_files(
+    project_path: &Path,
+    project: &RegistryProject,
+) -> Result<Vec<CapturedModuleAssetSource>, Diagnostic> {
+    let paths = project
+        .entities
+        .iter()
+        .filter_map(|entity| {
+            entity
+                .change_request
+                .as_ref()
+                .and_then(|request| request.planner.as_ref())
+                .map(|planner| planner.script.clone())
+        })
+        .collect::<BTreeSet<_>>();
+    load_planner_asset_files(project_path, "registry.yaml", paths)
+}
+
 fn load_module_asset_files(
     project_path: &Path,
     module_id: &str,
@@ -3590,7 +3937,7 @@ fn load_module_asset_files(
             }
         }
     }
-    paths
+    let mut assets = paths
         .into_iter()
         .map(|path| {
             let bytes = read_bounded_regular_file(
@@ -3607,7 +3954,101 @@ fn load_module_asset_files(
             }
             Ok(CapturedModuleAssetSource { path, bytes })
         })
+        .collect::<Result<Vec<_>, _>>()?;
+    let planner_paths = module
+        .entities
+        .iter()
+        .filter_map(|entity| {
+            entity
+                .change_request
+                .as_ref()
+                .and_then(|request| request.planner.as_ref())
+                .map(|planner| planner.script.clone())
+        })
+        .chain(module.extend_entities.iter().filter_map(|extension| {
+            extension
+                .change_request
+                .as_ref()
+                .and_then(|request| request.planner.as_ref())
+                .map(|planner| planner.script.clone())
+        }))
+        .collect::<BTreeSet<_>>();
+    assets.extend(load_planner_asset_files(
+        &project_path.join("modules").join(module_id),
+        &format!("modules/{module_id}/module.yaml"),
+        planner_paths,
+    )?);
+    assets.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(assets)
+}
+
+fn load_planner_asset_files(
+    origin: &Path,
+    declaring_path: &str,
+    paths: BTreeSet<String>,
+) -> Result<Vec<CapturedModuleAssetSource>, Diagnostic> {
+    paths
+        .into_iter()
+        .map(|path| {
+            validate_rhai_planner_asset_path(declaring_path, &path)?;
+            let bytes = read_bounded_regular_file(
+                &origin.join(&path),
+                "source.planner_asset.missing",
+                MAX_RHAI_PLANNER_SOURCE_BYTES,
+            )?;
+            if bytes.is_empty() {
+                return Err(diagnostic(
+                    "source.planner_asset.bounds",
+                    declaring_path,
+                    "Rhai planner scripts must be non-empty bounded regular files",
+                ));
+            }
+            Ok(CapturedModuleAssetSource { path, bytes })
+        })
         .collect()
+}
+
+fn validate_rhai_planner_asset_path(
+    declaring_path: &str,
+    asset_path: &str,
+) -> Result<(), Diagnostic> {
+    if asset_path.is_empty()
+        || asset_path.len() > MAX_RHAI_PLANNER_PATH_BYTES
+        || asset_path.contains('\\')
+        || asset_path.ends_with('/')
+        || !asset_path.ends_with(".rhai")
+    {
+        return Err(planner_asset_path_diagnostic(declaring_path));
+    }
+    let path = Path::new(asset_path);
+    let components = path.components().collect::<Vec<_>>();
+    if path.is_absolute()
+        || components.len() > 12
+        || components
+            .iter()
+            .any(|component| !matches!(component, Component::Normal(_)))
+        || path.to_str() != Some(asset_path)
+        || components
+            .iter()
+            .filter_map(|component| match component {
+                Component::Normal(component) => component.to_str(),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("/")
+            != asset_path
+    {
+        return Err(planner_asset_path_diagnostic(declaring_path));
+    }
+    Ok(())
+}
+
+fn planner_asset_path_diagnostic(declaring_path: &str) -> Diagnostic {
+    diagnostic(
+        "source.planner_asset.path_unsafe",
+        declaring_path,
+        "Rhai planner scripts must use bounded declaring-origin-relative .rhai paths",
+    )
 }
 
 fn validate_module_sql_asset_path(module_id: &str, asset_path: &str) -> Result<(), Diagnostic> {
@@ -4316,6 +4757,12 @@ fn explain_change_requests(compiled: &CompiledRegistry) -> serde_json::Result<Va
                     "maximumFieldMutations": request.maximum_field_mutations,
                     "maximumSnapshotBytes": request.maximum_snapshot_bytes,
                 },
+                "planner": explain_change_request_planner(compiled, entity, request),
+                "reviewMode": match request.review_mode {
+                    registry_server::model::CompiledChangeRequestReviewMode::None => "none",
+                    registry_server::model::CompiledChangeRequestReviewMode::Stages => "staged",
+                },
+                "application": explain_change_request_application(&request.application),
                 "stages": request.stages.iter().map(|stage| json!({
                     "id": stage.id,
                     "approvals": stage.approvals,
@@ -4396,16 +4843,23 @@ fn explain_change_requests(compiled: &CompiledRegistry) -> serde_json::Result<Va
         .values()
         .filter_map(|entity| {
             let control = entity.change_control.as_ref()?;
-            let eligible = requests
+            let eligible = compiled
+                .entities()
                 .iter()
-                .filter(|request| {
-                    request["effects"]
-                        .as_array()
-                        .is_some_and(|effects| effects.iter().any(|effect| {
-                            effect["target"]["entity"].as_str() == Some(entity.id.as_str())
-                        }))
+                .filter_map(|(request_entity_id, request_entity)| {
+                    let request = request_entity.change_request.as_ref()?;
+                    let declarative = request
+                        .effects
+                        .iter()
+                        .any(|effect| effect.target.entity_id == entity.id);
+                    let planned = request.planner.as_ref().is_some_and(|planner| {
+                        planner
+                            .writes
+                            .iter()
+                            .any(|write| write.target_entity_id == entity.id)
+                    });
+                    (declarative || planned).then_some(request_entity_id.clone())
                 })
-                .map(|request| request["requestEntity"].clone())
                 .collect::<Vec<_>>();
             Some(json!({
                 "entity": entity.id,
@@ -4420,6 +4874,94 @@ fn explain_change_requests(compiled: &CompiledRegistry) -> serde_json::Result<Va
         "requests": requests,
         "controlledWrites": controlled_writes,
     }))
+}
+
+fn explain_change_request_planner(
+    compiled: &CompiledRegistry,
+    request_entity: &registry_server::model::CompiledEntity,
+    request: &registry_server::model::CompiledChangeRequest,
+) -> Value {
+    let Some(planner) = request.planner.as_ref() else {
+        return json!({
+            "kind": "declarative",
+            "abi": registry_server::contract::CHANGE_REQUEST_PLAN_ABI_V1,
+        });
+    };
+    json!({
+        "kind": "rhai",
+        "abi": planner.abi,
+        "rhaiVersion": planner.rhai_version,
+        "scriptSha256": planner.script_sha256,
+        "declaringOrigin": match &planner.source_module {
+            Some(module) => json!({"kind": "module", "id": module}),
+            None => json!({"kind": "project"}),
+        },
+        "requestFields": planner.request_fields.iter()
+            .map(|field| field_summary(request_entity, field))
+            .collect::<Vec<_>>(),
+        "limits": {
+            "maximumTargets": request.maximum_targets,
+            "maximumFieldMutations": request.maximum_field_mutations,
+            "maximumSnapshotBytes": request.maximum_snapshot_bytes,
+            "maximumSourceBytes": planner.limits.maximum_source_bytes,
+            "maximumOperations": planner.limits.maximum_operations,
+            "maximumCallDepth": planner.limits.maximum_call_depth,
+            "maximumExpressionDepth": planner.limits.maximum_expression_depth,
+            "maximumStringBytes": planner.limits.maximum_string_bytes,
+            "maximumArrayItems": planner.limits.maximum_array_items,
+            "maximumMapEntries": planner.limits.maximum_map_entries,
+            "maximumModules": planner.limits.maximum_modules,
+        },
+        "possibleWrites": planner.writes.iter().map(|write| {
+            let target = compiled.entities().get(&write.target_entity_id);
+            json!({
+                "target": match &write.target_from_field {
+                    Some(field) => json!({
+                        "kind": "existing",
+                        "entity": write.target_entity_id,
+                        "fromField": field_summary(request_entity, field),
+                    }),
+                    None => json!({
+                        "kind": "reserved_create",
+                        "entity": write.target_entity_id,
+                    }),
+                },
+                "operation": operation_wire_name(write.operation),
+                "fields": write.fields.iter()
+                    .map(|field| field_summary_optional(target, field))
+                    .collect::<Vec<_>>(),
+            })
+        }).collect::<Vec<_>>(),
+    })
+}
+
+fn explain_change_request_application(
+    application: &registry_server::model::CompiledChangeRequestApplication,
+) -> Value {
+    let mode = match application.mode {
+        registry_server::model::CompiledChangeRequestApplicationMode::Manual => "manual",
+        registry_server::model::CompiledChangeRequestApplicationMode::Automatic => "automatic",
+        registry_server::model::CompiledChangeRequestApplicationMode::Planner => "planner",
+    };
+    let allowed_dispositions = match application.mode {
+        registry_server::model::CompiledChangeRequestApplicationMode::Manual => vec!["queue"],
+        registry_server::model::CompiledChangeRequestApplicationMode::Automatic => vec!["apply"],
+        registry_server::model::CompiledChangeRequestApplicationMode::Planner => application
+            .allowed_dispositions
+            .iter()
+            .map(|disposition| match disposition {
+                registry_server::model::CompiledChangeRequestDisposition::Apply => "apply",
+                registry_server::model::CompiledChangeRequestDisposition::Queue => "queue",
+            })
+            .collect::<Vec<_>>(),
+    };
+    json!({
+        "mode": mode,
+        "allowedDispositions": allowed_dispositions,
+        "queueReasons": application.queue_reasons.iter()
+            .map(|(code, label)| json!({"code": code, "label": label}))
+            .collect::<Vec<_>>(),
+    })
 }
 
 fn explain_routes(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
@@ -5619,6 +6161,69 @@ fn write_project_migrate_success(
     }
 }
 
+fn write_planner_test_success(
+    report: &PlannerTestSuccessReport,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format == OutputFormat::Json {
+        serde_json::to_value(report)
+            .map_err(io::Error::other)
+            .and_then(|value| canonicalize_json(&value).map_err(io::Error::other))
+            .and_then(|bytes| stdout.write_all(&bytes))
+            .and_then(|()| writeln!(stdout))
+    } else {
+        writeln!(stdout, "project planner-test succeeded")
+            .and_then(|()| writeln!(stdout, "compiled revision: {}", report.compiled_revision))
+            .and_then(|()| writeln!(stdout, "request entity: {}", report.request_entity))
+            .and_then(|()| writeln!(stdout, "planner kind: {}", report.planner.kind))
+            .and_then(|()| writeln!(stdout, "planner ABI: {}", report.planner.abi))
+            .and_then(|()| {
+                writeln!(
+                    stdout,
+                    "planner script SHA-256: {}",
+                    report.planner.script_sha256
+                )
+            })
+            .and_then(|()| writeln!(stdout, "disposition: {}", report.disposition))
+            .and_then(|()| {
+                if let Some(reason) = &report.queue_reason {
+                    writeln!(stdout, "queue reason: {} ({})", reason.code, reason.label)
+                } else {
+                    Ok(())
+                }
+            })
+            .and_then(|()| {
+                for effect in &report.effects {
+                    writeln!(
+                        stdout,
+                        "effect {}: target={}, operation={}, fields={}, dependencies={}",
+                        effect.id,
+                        effect.target_kind,
+                        effect.operation,
+                        effect.fields.join(","),
+                        effect.depends_on.join(",")
+                    )?;
+                }
+                writeln!(
+                    stdout,
+                    "counts: effects={}, field mutations={}, dependencies={}",
+                    report.counts.effects,
+                    report.counts.field_mutations,
+                    report.counts.dependencies
+                )
+            })
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(_) => {
+            let _ = writeln!(stderr, "registry-serverctl: output could not be written");
+            ExitCode::from(OPERATIONAL_FAILURE_EXIT)
+        }
+    }
+}
+
 fn write_access_explanation(explanation: &Value, stdout: &mut dyn Write) -> io::Result<()> {
     if explanation.get("mode").and_then(Value::as_str) == Some("offline_synthetic") {
         let admitted = explanation["admitted"].as_bool() == Some(true);
@@ -6514,6 +7119,355 @@ mod tests {
                 fs::remove_dir_all(&self.path).expect("test directory is removed");
             }
         }
+    }
+
+    #[test]
+    fn rhai_planner_capture_enforces_normalized_relative_paths_and_source_bound() {
+        let directory = TestDirectory::create();
+        fs::create_dir_all(directory.path.join("planners")).unwrap();
+        fs::write(
+            directory.path.join("planners/request.rhai"),
+            b"fn plan(ctx) { #{ disposition: \"apply\", effects: [] } }\n",
+        )
+        .unwrap();
+        let captured = load_planner_asset_files(
+            &directory.path,
+            "registry.yaml",
+            BTreeSet::from(["planners/request.rhai".to_owned()]),
+        )
+        .expect("safe project-relative planner is captured");
+        assert_eq!(captured[0].path, "planners/request.rhai");
+
+        for path in [
+            "../request.rhai",
+            "/request.rhai",
+            "planners//request.rhai",
+            "planners/request.sql",
+            "planners\\request.rhai",
+        ] {
+            assert_eq!(
+                validate_rhai_planner_asset_path("registry.yaml", path)
+                    .unwrap_err()
+                    .code,
+                "source.planner_asset.path_unsafe"
+            );
+        }
+
+        fs::write(
+            directory.path.join("planners/oversized.rhai"),
+            vec![b'x'; MAX_RHAI_PLANNER_SOURCE_BYTES as usize + 1],
+        )
+        .unwrap();
+        let oversized = load_planner_asset_files(
+            &directory.path,
+            "registry.yaml",
+            BTreeSet::from(["planners/oversized.rhai".to_owned()]),
+        )
+        .unwrap_err();
+        assert_eq!(oversized.code, "source.file.bounds");
+    }
+
+    #[test]
+    fn project_planner_test_parser_requires_entity_and_request_file() {
+        let parsed = Cli::try_parse_from([
+            "registry-serverctl",
+            "project",
+            "planner-test",
+            "project",
+            "--entity",
+            "request",
+            "--request",
+            "request.json",
+        ])
+        .expect("planner test parses");
+        let Command::Project(project) = parsed.command else {
+            panic!("project command parsed");
+        };
+        let ProjectCommand::PlannerTest(args) = project.command else {
+            panic!("planner-test command parsed");
+        };
+        assert_eq!(args.project, PathBuf::from("project"));
+        assert_eq!(args.entity, "request");
+        assert_eq!(args.request, PathBuf::from("request.json"));
+        assert!(Cli::try_parse_from([
+            "registry-serverctl",
+            "project",
+            "planner-test",
+            "project",
+            "--entity",
+            "request",
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn change_request_explain_reports_source_free_rhai_contract_and_authority() {
+        let compiled = match compile(&planner_acceptance_root(), ProfileArg::Authoring, "explain") {
+            Ok(compiled) => compiled,
+            Err(failure) => panic!(
+                "Rhai fixture did not compile for explanation: {}",
+                failure.diagnostics[0].code
+            ),
+        };
+        let explanation = explain_change_requests(&compiled).expect("explanation renders");
+        let request = explanation["requests"]
+            .as_array()
+            .and_then(|requests| {
+                requests.iter().find(|request| {
+                    request["requestEntity"].as_str() == Some("person-name-change-request")
+                })
+            })
+            .expect("Rhai request is explained");
+        assert_eq!(request["planner"]["kind"], "rhai");
+        assert_eq!(
+            request["planner"]["abi"],
+            registry_server::contract::CHANGE_REQUEST_PLAN_ABI_V1
+        );
+        assert_eq!(
+            request["planner"]["rhaiVersion"],
+            registry_server::change_request::CHANGE_REQUEST_PLANNER_RHAI_VERSION
+        );
+        assert!(request["planner"]["scriptSha256"]
+            .as_str()
+            .is_some_and(|digest| digest.starts_with("sha256:")));
+        assert_eq!(
+            request["planner"]["declaringOrigin"],
+            json!({"kind": "project"})
+        );
+        assert_eq!(request["planner"]["limits"]["maximumOperations"], 100_000);
+        assert_eq!(request["planner"]["limits"]["maximumModules"], 0);
+        assert_eq!(
+            request["planner"]["possibleWrites"][0]["operation"],
+            "patch"
+        );
+        assert_eq!(request["reviewMode"], "none");
+        assert_eq!(request["application"]["mode"], "planner");
+        assert_eq!(
+            request["application"]["allowedDispositions"],
+            json!(["apply", "queue"])
+        );
+        assert!(explanation["controlledWrites"]
+            .as_array()
+            .and_then(|writes| writes.iter().find(|write| write["entity"] == "person"))
+            .and_then(|write| write["eligibleRequestTypes"].as_array())
+            .is_some_and(|requests| requests
+                .iter()
+                .any(|request| { request.as_str() == Some("person-name-change-request") })));
+
+        let rendered = serde_json::to_string(&explanation).expect("explanation serializes");
+        for forbidden in [
+            "person-name-change.rhai",
+            "scripts/",
+            "fn plan",
+            "let display_name",
+        ] {
+            assert!(
+                !rendered.contains(forbidden),
+                "explanation leaked {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn project_planner_test_output_is_canonical_and_value_free() {
+        let directory = TestDirectory::create();
+        let request_path = directory.path.join("request.json");
+        let record_id = "550e8400-e29b-41d4-a716-446655440000";
+        let given_name = "given-name-secret-canary";
+        let family_name = "family-name-secret-canary";
+        fs::write(
+            &request_path,
+            serde_json::to_vec(&json!({
+                "person": record_id,
+                "given-name": given_name,
+                "family-name": family_name,
+                "handling": "assisted",
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let project = planner_acceptance_root();
+        let arguments = vec![
+            OsString::from("registry-serverctl"),
+            OsString::from("--format"),
+            OsString::from("json"),
+            OsString::from("project"),
+            OsString::from("planner-test"),
+            project.into_os_string(),
+            OsString::from("--entity"),
+            OsString::from("person-name-change-request"),
+            OsString::from("--request"),
+            request_path.clone().into_os_string(),
+        ];
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        assert_eq!(
+            run_from(arguments, &mut stdout, &mut stderr),
+            ExitCode::SUCCESS
+        );
+        assert!(stderr.is_empty());
+        let rendered = String::from_utf8(stdout).expect("planner summary is UTF-8");
+        let value: Value = serde_json::from_str(rendered.trim_end()).expect("summary is JSON");
+        let mut canonical = canonicalize_json(&value).expect("summary canonicalizes");
+        canonical.push(b'\n');
+        assert_eq!(rendered.as_bytes(), canonical);
+        assert_eq!(value["planner"]["kind"], "rhai");
+        assert_eq!(value["planner"]["abi"], "registry.change-request-plan/v1");
+        assert!(value["planner"]["scriptSha256"]
+            .as_str()
+            .is_some_and(|digest| digest.starts_with("sha256:")));
+        assert_eq!(value["disposition"], "queue");
+        assert_eq!(value["queueReason"]["code"], "assisted-review");
+        assert_eq!(value["effects"][0]["id"], "effect-1");
+        assert_eq!(value["effects"][0]["targetKind"], "existing");
+        assert_eq!(value["effects"][0]["operation"], "patch");
+        assert_eq!(value["effects"][0]["fields"], json!(["display-name"]));
+        assert_eq!(value["effects"][0]["dependsOn"], json!([]));
+        assert_eq!(value["counts"]["effects"], 1);
+        assert_eq!(value["counts"]["fieldMutations"], 1);
+        for redacted in [
+            record_id,
+            given_name,
+            family_name,
+            "person-name-change.rhai",
+            "scripts/",
+            "let display_name",
+        ] {
+            assert!(!rendered.contains(redacted), "leaked {redacted}");
+        }
+
+        let dynamic_project = directory.path.join("dynamic-project");
+        fs::create_dir_all(dynamic_project.join("scripts")).unwrap();
+        fs::copy(
+            planner_acceptance_root().join("registry.yaml"),
+            dynamic_project.join("registry.yaml"),
+        )
+        .unwrap();
+        fs::write(
+            dynamic_project.join("scripts/person-name-change.rhai"),
+            br#"fn plan(ctx) {
+                #{
+                    effects: [#{
+                        id: ctx.request["given-name"],
+                        target: #{fromField: "person"},
+                        operation: "patch",
+                        set: #{"display-name": ctx.request["family-name"]}
+                    }],
+                    disposition: "apply"
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        let dynamic = match planner_test(&ProjectPlannerTestArgs {
+            project: dynamic_project,
+            entity: "person-name-change-request".to_owned(),
+            request: request_path,
+        }) {
+            Ok(report) => report,
+            Err(failure) => panic!(
+                "dynamic planner was refused with {}",
+                failure.diagnostics[0].code
+            ),
+        };
+        assert_eq!(dynamic.effects[0].id, "effect-1");
+        let dynamic = serde_json::to_string(&dynamic).expect("dynamic summary renders");
+        for redacted in [record_id, given_name, family_name] {
+            assert!(!dynamic.contains(redacted), "leaked {redacted}");
+        }
+    }
+
+    #[test]
+    fn project_planner_test_refusals_are_stable_and_value_free() {
+        let directory = TestDirectory::create();
+        let request_path = directory.path.join("request.json");
+        let project = planner_acceptance_root();
+
+        fs::write(&request_path, b"{").unwrap();
+        assert_planner_test_failure(
+            &project,
+            "person-name-change-request",
+            &request_path,
+            "planner_test.request.invalid",
+        );
+
+        let canary = "unbounded-secret-canary".repeat(900);
+        fs::write(
+            &request_path,
+            serde_json::to_vec(&json!({"given-name": canary})).unwrap(),
+        )
+        .unwrap();
+        assert_planner_test_failure(
+            &project,
+            "person-name-change-request",
+            &request_path,
+            "planner_test.request.bounds",
+        );
+
+        fs::write(&request_path, br#"{"undeclared-secret":"canary"}"#).unwrap();
+        assert_planner_test_failure(
+            &project,
+            "person-name-change-request",
+            &request_path,
+            "planner_test.request.fields",
+        );
+
+        fs::write(&request_path, b"{}").unwrap();
+        assert_planner_test_failure(
+            &project,
+            "person",
+            &request_path,
+            "planner_test.entity.not_request",
+        );
+        assert_planner_test_failure(
+            &project,
+            "person-name-change-request",
+            &request_path,
+            "change_request.planner.execution",
+        );
+
+        let declarative = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/registry-server/acceptance/asset-site-placement-change-requests")
+            .canonicalize()
+            .expect("declarative fixture canonicalizes");
+        assert_planner_test_failure(
+            &declarative,
+            "placement-correction-request",
+            &request_path,
+            "planner_test.planner.declarative",
+        );
+    }
+
+    fn assert_planner_test_failure(
+        project: &Path,
+        entity: &str,
+        request: &Path,
+        expected_code: &str,
+    ) {
+        let failure = planner_test(&ProjectPlannerTestArgs {
+            project: project.to_owned(),
+            entity: entity.to_owned(),
+            request: request.to_owned(),
+        })
+        .expect_err("planner test is refused");
+        assert_eq!(failure.diagnostics.len(), 1);
+        assert_eq!(failure.diagnostics[0].code, expected_code);
+        let rendered = serde_json::to_string(&failure).expect("failure renders");
+        for redacted in [
+            "unbounded-secret-canary",
+            "undeclared-secret",
+            "person-name-change.rhai",
+            "scripts/",
+        ] {
+            assert!(!rendered.contains(redacted), "leaked {redacted}");
+        }
+    }
+
+    fn planner_acceptance_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/registry-server/acceptance/person-name-change-rhai")
+            .canonicalize()
+            .expect("planner fixture canonicalizes")
     }
 
     fn migration_transaction_fixture(

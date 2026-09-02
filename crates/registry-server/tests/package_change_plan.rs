@@ -20,9 +20,10 @@ use registry_server::migration_plan::{
     ReviewedMigrationSource, ReviewedMigrationStepDescriptor,
 };
 use registry_server::package::{
-    change_set_to_applicable_migration_plan, compiled_registry_change_set,
-    CompiledRegistryChangeClass, CompiledRegistryChangeCode, PackageBuildRequest,
-    PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile, SignaturePolicy,
+    change_set_to_applicable_migration_plan, compiled_registry_change_set, derive_package_revision,
+    prepare_package_with_project_assets, CompiledRegistryChangeClass, CompiledRegistryChangeCode,
+    PackageBuildRequest, PackageEnvelope, PackageError, PackageFileRole, PackageMigrationPlanInput,
+    PackageModuleSource, PackageSourceFile, SignaturePolicy, MAX_RHAI_PLANNER_SOURCE_BYTES,
 };
 #[cfg(feature = "tooling")]
 use registry_server::package::{inspect_package_integrity, prepare_package, PreparedPackage};
@@ -60,6 +61,216 @@ const FINAL_FINGERPRINT: &str =
 const SUMMARY_CANARY: &str = "summary-canary";
 #[cfg(feature = "tooling")]
 const SQL_CANARY: &str = "summary-sql-canary";
+const RHAI_PLANNER_CANARY: &str = "rhai-package-source-canary";
+
+#[cfg(feature = "tooling")]
+#[test]
+fn project_rhai_planner_package_is_deterministic_and_rederives_exact_source() {
+    let request = project_planner_build_request();
+    let asset = PackageSourceFile {
+        path: "planners/request.rhai".to_owned(),
+        bytes: project_planner_script().to_vec(),
+    };
+    let first = prepare_package_with_project_assets(request.clone(), vec![asset.clone()])
+        .expect("declared project planner packages");
+    let second = prepare_package_with_project_assets(request.clone(), vec![asset.clone()])
+        .expect("the same planner package rederives deterministically");
+    assert_eq!(first.package_revision(), second.package_revision());
+    assert_eq!(
+        first.canonical_signed_bytes(),
+        second.canonical_signed_bytes()
+    );
+    assert_eq!(
+        first.manifest().sources.project_assets,
+        ["source/project/planners/request.rhai"]
+    );
+    let planner_entry = first
+        .manifest()
+        .files
+        .iter()
+        .find(|entry| entry.path == "source/project/planners/request.rhai")
+        .expect("planner source is in the signed closure");
+    assert_eq!(
+        planner_entry.role,
+        PackageFileRole::SourceProjectPlannerScript
+    );
+    assert!(!String::from_utf8_lossy(first.canonical_signed_bytes()).contains(RHAI_PLANNER_CANARY));
+
+    let compiled_planner = first.registry().entities()["request"]
+        .change_request
+        .as_ref()
+        .and_then(|request| request.planner.as_ref())
+        .expect("compiled planner exists");
+    assert_eq!(compiled_planner.source_module, None);
+    assert_eq!(compiled_planner.script_path, "planners/request.rhai");
+    assert_eq!(
+        compiled_planner.rhai_version,
+        registry_server::change_request::CHANGE_REQUEST_PLANNER_RHAI_VERSION
+    );
+    assert_eq!(compiled_planner.script_bytes, project_planner_script());
+    let expected_digest = digest(project_planner_script());
+    assert_eq!(compiled_planner.script_sha256, expected_digest);
+    let rendered_model = first
+        .registry()
+        .artifacts()
+        .get("compiled/effective-model.json")
+        .expect("compiled model artifact exists")
+        .bytes
+        .as_slice();
+    let rendered_model = String::from_utf8_lossy(rendered_model);
+    assert!(!rendered_model.contains(RHAI_PLANNER_CANARY));
+    assert!(!rendered_model.contains("planners/request.rhai"));
+    assert!(rendered_model.contains(&format!(
+        "\"rhaiVersion\":\"{}\"",
+        registry_server::change_request::CHANGE_REQUEST_PLANNER_RHAI_VERSION
+    )));
+
+    let mut revised_asset = asset.clone();
+    revised_asset.bytes = project_planner_script()
+        .iter()
+        .copied()
+        .chain(b"// reviewed revision\n".iter().copied())
+        .collect();
+    let revised = prepare_package_with_project_assets(request.clone(), vec![revised_asset])
+        .expect("a revised valid planner packages");
+    let changes =
+        compiled_registry_change_set(first.registry(), revised.registry(), PRIOR_REVISION);
+    assert_change(
+        &changes,
+        CompiledRegistryChangeClass::AccessOrDisclosureChange,
+        CompiledRegistryChangeCode::ChangeRequestContractChanged,
+    );
+    assert_eq!(changes.changes.len(), 1);
+    assert!(change_set_to_applicable_migration_plan(&changes)
+        .expect("a request-contract-only change has no database migration")
+        .statements
+        .is_empty());
+
+    let inspected = inspect_prepared(&first);
+    let rederived = inspected.registry().entities()["request"]
+        .change_request
+        .as_ref()
+        .and_then(|request| request.planner.as_ref())
+        .expect("package inspection rederives the planner");
+    assert_eq!(rederived.script_sha256, compiled_planner.script_sha256);
+    assert_eq!(rederived.script_bytes, project_planner_script());
+
+    let tamper_root = tempfile::Builder::new()
+        .prefix("registry-planner-package-tamper-")
+        .tempdir_in(std::env::temp_dir().canonicalize().unwrap())
+        .unwrap();
+    let tampered_package = tamper_root.path().join("package");
+    first
+        .publish_to_directory(&tampered_package, Vec::new())
+        .unwrap();
+    fs::write(
+        tampered_package.join("source/project/planners/request.rhai"),
+        b"fn plan(ctx) { #{ disposition: \"apply\", effects: [] } }\n",
+    )
+    .unwrap();
+    assert_eq!(
+        inspect_package_integrity(&tampered_package)
+            .err()
+            .expect("tampered package is refused"),
+        PackageError::Integrity
+    );
+
+    let role_root = tempfile::Builder::new()
+        .prefix("registry-planner-package-role-")
+        .tempdir_in(std::env::temp_dir().canonicalize().unwrap())
+        .unwrap();
+    let role_swapped_package = role_root.path().join("package");
+    first
+        .publish_to_directory(&role_swapped_package, Vec::new())
+        .unwrap();
+    let manifest_path = role_swapped_package.join("package.json");
+    let mut envelope: PackageEnvelope =
+        serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    envelope
+        .signed
+        .files
+        .iter_mut()
+        .find(|entry| entry.path == "source/project/planners/request.rhai")
+        .unwrap()
+        .role = PackageFileRole::SourceModulePlannerScript;
+    envelope.signed.package_revision = derive_package_revision(&envelope.signed).unwrap();
+    fs::write(&manifest_path, canonical(&envelope)).unwrap();
+    assert_eq!(
+        inspect_package_integrity(&role_swapped_package)
+            .err()
+            .expect("role-swapped package is refused"),
+        PackageError::Derivation
+    );
+
+    assert_eq!(
+        prepare_package_with_project_assets(request.clone(), Vec::new()).unwrap_err(),
+        PackageError::Derivation
+    );
+    let mut extra = asset.clone();
+    extra.path = "planners/extra.rhai".to_owned();
+    assert_eq!(
+        prepare_package_with_project_assets(request.clone(), vec![asset.clone(), extra])
+            .unwrap_err(),
+        PackageError::Derivation
+    );
+    for unsafe_path in ["../request.rhai", "/request.rhai"] {
+        let mut unsafe_asset = asset.clone();
+        unsafe_asset.path = unsafe_path.to_owned();
+        assert!(prepare_package_with_project_assets(request.clone(), vec![unsafe_asset]).is_err());
+    }
+    let oversized = PackageSourceFile {
+        path: asset.path,
+        bytes: vec![b'x'; MAX_RHAI_PLANNER_SOURCE_BYTES as usize + 1],
+    };
+    assert_eq!(
+        prepare_package_with_project_assets(request, vec![oversized]).unwrap_err(),
+        PackageError::Derivation
+    );
+}
+
+#[cfg(feature = "tooling")]
+#[test]
+fn module_rhai_planner_uses_module_origin_role_and_refuses_origin_swaps() {
+    let request = module_planner_build_request();
+    let prepared = prepare_package(request.clone()).expect("module planner packages");
+    let entry = prepared
+        .manifest()
+        .files
+        .iter()
+        .find(|entry| entry.path == "source/modules/core/planners/request.rhai")
+        .expect("module planner is in the signed closure");
+    assert_eq!(entry.role, PackageFileRole::SourceModulePlannerScript);
+    assert!(prepared.manifest().sources.project_assets.is_empty());
+    assert_eq!(
+        prepared.manifest().sources.modules[0].assets,
+        ["planners/request.rhai"]
+    );
+    let compiled = prepared.registry().entities()["request"]
+        .change_request
+        .as_ref()
+        .and_then(|request| request.planner.as_ref())
+        .expect("compiled module planner exists");
+    assert_eq!(compiled.source_module.as_deref(), Some("core"));
+    assert_eq!(compiled.script_bytes, project_planner_script());
+    let inspected = inspect_prepared(&prepared);
+    assert_eq!(
+        inspected.registry().entities()["request"]
+            .change_request
+            .as_ref()
+            .and_then(|request| request.planner.as_ref())
+            .unwrap()
+            .script_sha256,
+        compiled.script_sha256
+    );
+
+    let script = request.modules[0].assets[0].clone();
+    let mut swapped = request;
+    swapped.modules[0].assets.clear();
+    assert_eq!(
+        prepare_package_with_project_assets(swapped, vec![script]).unwrap_err(),
+        PackageError::Derivation
+    );
+}
 
 #[test]
 fn geojson_binding_changes_are_classified_as_disclosure_even_for_get_only_profiles() {
@@ -1547,6 +1758,154 @@ fn build_request(
         },
         migration_plan,
     }
+}
+
+#[cfg(feature = "tooling")]
+fn project_planner_build_request() -> PackageBuildRequest {
+    let project = format!(
+        r#"{{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{{"id":"planner-package","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},
+          "package":{{"environment":"local","instanceId":"{INSTANCE}","sequence":1,"sourceRevision":"{SOURCE_REVISION}"}},
+          "entities":[{{
+            "id":"target","primaryDataset":"planner-package","route":"targets","mutationMode":"mutable","changeControl":{{"requiredFor":["patch"]}},
+            "fields":[{{"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"}}]
+          }},{{
+            "id":"request","primaryDataset":"planner-package","route":"requests","mutationMode":"mutable",
+            "fields":[
+              {{"id":"target","type":"reference","target":"target","required":true,"classification":"internal"}},
+              {{"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"}}
+            ],
+            "changeRequest":{{
+              "planner":{{"kind":"rhai","script":"planners/request.rhai","abi":"registry.change-request-plan/v1","requestFields":["target","label"],"writes":[{{"target":{{"fromField":"target"}},"operation":"patch","fields":["label"]}}]}},
+              "review":{{"stages":[{{"id":"review","approvals":1}}]}},
+              "application":{{"mode":"planner","allowedDispositions":["apply"]}}
+            }}
+          }}],
+          "accessProfiles":[{{
+            "id":"operator","default":true,"principalClaim":"principal","grants":[
+              {{"entity":"target","operations":["get","list"],"readableFields":["label"]}},
+              {{"entity":"request","operations":["create","patch","get","list","submit_request","revise_request","cancel_request","approve_request","reject_request","request_revision","apply_request"],"readableFields":["target","label"],"writableFields":["target","label"],
+                "reviewStages":[{{"stage":"review","targets":[{{"entity":"target","readableFields":["label"]}}]}}],
+                "applyTargets":[{{"entity":"target"}}]
+              }}
+            ]
+          }}]
+        }}"#
+    )
+    .into_bytes();
+    PackageBuildRequest {
+        environment: "local".to_owned(),
+        instance_id: INSTANCE.to_owned(),
+        database_id: DATABASE.to_owned(),
+        sequence: 1,
+        prior_revision: None,
+        compiler_source_revision: SOURCE_REVISION.to_owned(),
+        schema_fingerprint:
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222".to_owned(),
+        signature_policy: SignaturePolicy {
+            threshold: 0,
+            key_ids: Vec::new(),
+        },
+        project: PackageSourceFile {
+            path: "source/registry.yaml".to_owned(),
+            bytes: project,
+        },
+        modules: Vec::new(),
+        fixture_journeys: PackageSourceFile {
+            path: "tests/journeys.yaml".to_owned(),
+            bytes: b"apiVersion: registry.registrystack.org/server-journeys/v1\njourneys: []\n"
+                .to_vec(),
+        },
+        migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
+    }
+}
+
+#[cfg(feature = "tooling")]
+fn module_planner_build_request() -> PackageBuildRequest {
+    let module_bytes = br#"{
+      "id":"core","version":"1","entities":[{
+        "id":"target","primaryDataset":"planner-package","route":"targets","mutationMode":"mutable","changeControl":{"requiredFor":["patch"]},
+        "fields":[{"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"}],
+        "accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["label"]}]
+      },{
+        "id":"request","primaryDataset":"planner-package","route":"requests","mutationMode":"mutable",
+        "fields":[
+          {"id":"target","type":"reference","target":"target","required":true,"classification":"internal"},
+          {"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"}
+        ],
+        "changeRequest":{
+          "planner":{"kind":"rhai","script":"planners/request.rhai","abi":"registry.change-request-plan/v1","requestFields":["target","label"],"writes":[{"target":{"fromField":"target"},"operation":"patch","fields":["label"]}]},
+          "review":{"stages":[{"id":"review","approvals":1}]},
+          "application":{"mode":"planner","allowedDispositions":["apply"]}
+        },
+        "accessProfiles":[{"id":"operator","principalClaim":"principal","operations":["create","patch","get","list","submit_request","revise_request","cancel_request","approve_request","reject_request","request_revision","apply_request"],"readableFields":["target","label"],"writableFields":["target","label"],
+          "reviewStages":[{"stage":"review","targets":[{"entity":"target","readableFields":["label"]}]}],
+          "applyTargets":[{"entity":"target"}]
+        }]
+      }]
+    }"#
+    .to_vec();
+    let module = parse_module_yaml(&module_bytes).expect("planner module parses");
+    let module_asset = ModuleAssetSource {
+        module: Some("core".to_owned()),
+        path: "planners/request.rhai".to_owned(),
+        bytes: project_planner_script().to_vec(),
+    };
+    let module_digest = module_digest_with_assets(&module, &[module_asset]);
+    let project = format!(
+        r#"{{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{{"id":"planner-package","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},
+          "package":{{"environment":"local","instanceId":"{INSTANCE}","sequence":1,"sourceRevision":"{SOURCE_REVISION}"}},
+          "modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]
+        }}"#
+    )
+    .into_bytes();
+    PackageBuildRequest {
+        environment: "local".to_owned(),
+        instance_id: INSTANCE.to_owned(),
+        database_id: DATABASE.to_owned(),
+        sequence: 1,
+        prior_revision: None,
+        compiler_source_revision: SOURCE_REVISION.to_owned(),
+        schema_fingerprint:
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222".to_owned(),
+        signature_policy: SignaturePolicy {
+            threshold: 0,
+            key_ids: Vec::new(),
+        },
+        project: PackageSourceFile {
+            path: "source/registry.yaml".to_owned(),
+            bytes: project,
+        },
+        modules: vec![PackageModuleSource {
+            id: "core".to_owned(),
+            path: "source/modules/core/module.yaml".to_owned(),
+            bytes: module_bytes,
+            assets: vec![PackageSourceFile {
+                path: "planners/request.rhai".to_owned(),
+                bytes: project_planner_script().to_vec(),
+            }],
+        }],
+        fixture_journeys: PackageSourceFile {
+            path: "tests/journeys.yaml".to_owned(),
+            bytes: b"apiVersion: registry.registrystack.org/server-journeys/v1\njourneys: []\n"
+                .to_vec(),
+        },
+        migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
+    }
+}
+
+#[cfg(feature = "tooling")]
+fn project_planner_script() -> &'static [u8] {
+    br#"// rhai-package-source-canary
+fn plan(ctx) {
+    #{ disposition: "apply", effects: [] }
+}
+"#
 }
 
 #[cfg(feature = "tooling")]

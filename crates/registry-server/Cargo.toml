@@ -225,6 +225,7 @@ registry-platform-httputil = { workspace = true, optional = true }
 registry-platform-oidc = { workspace = true, optional = true }
 jsonschema.workspace = true
 pg_query.workspace = true
+rhai.workspace = true
 rustls = { workspace = true, optional = true }
 rustix = { workspace = true, optional = true }
 schemars = { workspace = true, optional = true }

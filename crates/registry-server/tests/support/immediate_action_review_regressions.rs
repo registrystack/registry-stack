@@ -68,7 +68,7 @@ async fn replay_authorizes_only_disclosed_result_subset_after_hidden_results_cha
         "shadow profile receives only its granted nonempty result subset"
     );
     assert_eq!(first.body["results"]["household"]["entity"], "household");
-    assert_eq!(first.body["results"]["household"]["id"], HOUSEHOLD_ID);
+    assert_eq!(first.body["results"]["household"]["recordId"], HOUSEHOLD_ID);
     assert!(first.body["results"].get("person").is_none());
     assert!(first.body["results"].get("membership").is_none());
 
@@ -279,7 +279,7 @@ async fn late_known_abort_retry_reuses_reserved_create_and_application_ids() {
         "known-abort retry reuses the original reserved application id"
     );
     assert_eq!(
-        response.body["results"]["person-only"]["id"]
+        response.body["results"]["person-only"]["recordId"]
             .as_str()
             .and_then(|id| Uuid::parse_str(id).ok()),
         Some(captured_person_id),
@@ -841,7 +841,7 @@ async fn await_lock_order_response(
 fn assert_lock_order_result(body: &Value, expected_id: &str) {
     assert_eq!(body["action"], "cross-link-lock-record");
     assert_eq!(body["results"]["link-write"]["entity"], "lock-record");
-    assert_eq!(body["results"]["link-write"]["id"], expected_id);
+    assert_eq!(body["results"]["link-write"]["recordId"], expected_id);
     assert_eq!(body["results"]["link-write"]["revision"], 2);
 }
 
@@ -1058,7 +1058,7 @@ fn assert_wide_results_share_one_record_revision(body: &Value) {
         let effect = wide_effect_id(index);
         let result = results.get(&effect).expect("wide effect has result");
         assert_eq!(result["entity"], "wide-record");
-        assert_eq!(result["id"], WIDE_RECORD_ID);
+        assert_eq!(result["recordId"], WIDE_RECORD_ID);
         let current = result["revision"].as_i64().expect("result revision");
         assert_eq!(current, 2);
         match revision {

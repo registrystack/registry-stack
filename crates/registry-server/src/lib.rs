@@ -76,6 +76,7 @@ mod request_store;
 pub mod request_workflow;
 #[cfg(feature = "runtime")]
 pub mod revision;
+pub mod rhai_planner;
 #[cfg(feature = "runtime")]
 pub mod runtime_config;
 #[cfg(feature = "schema")]

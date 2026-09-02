@@ -14,6 +14,47 @@ Both examples set `changeRequest.retention.mode: operator_erase`. That mode does
 not create a TTL or scheduler. It means retained request detail can be erased
 only through the explicit operator retention command path.
 
+## Rhai planner adopter comparison
+
+`acceptance/person-name-change-rhai` is the compact synthetic counterpart for
+an adopter whose proposal value needs bounded computation. Its YAML declares
+the entire authority boundary: the Rhai ABI, four request fields, one existing
+`person` target, one `display-name` patch field, `review.mode: none`, planner
+application outcomes (`apply` or `queue`), and the closed `assisted-review`
+queue-reason catalogue. Its `scripts/person-name-change.rhai` only trims and
+joins the supplied name parts, then selects one of those declared outcomes.
+
+The selected `name-change-submitter` has both `apply_request` and the same
+selected-profile `applyTargets` grant, because the planner's disposition is not
+known until submission. A `routine` request freezes and applies atomically on
+submit. An `assisted` request instead produces a frozen queued proposal. A
+separate authorized assisted applier later invokes the ordinary `apply_request`
+action using the proposal metadata returned by GET; it does not rerun Rhai.
+This keeps static policy, authorization, and write ceilings in YAML while using
+Rhai only for deterministic proposal construction.
+
+The existing asset-placement correction remains declarative because it copies a
+selected reference field without computation. Adding Rhai there would expand
+the executable surface without adding adopter value.
+
+```bash
+CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
+  cargo run --locked -p registry-serverctl -- \
+  check products/registry-server/acceptance/person-name-change-rhai
+
+CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
+  cargo run --locked -p registry-serverctl -- \
+  project planner-test products/registry-server/acceptance/person-name-change-rhai \
+  --entity person-name-change-request \
+  --request products/registry-server/acceptance/person-name-change-rhai/examples/routine-request.json
+```
+
+The planner test is offline and value-free outside its input file. It reports
+the compiled ABI and script digest, disposition and declared queue reason,
+ordinal effect aliases, target kinds, operations, field names, dependencies,
+and counts. It never reads a target row and therefore does not replace the
+PostgreSQL lifecycle journey.
+
 ## Run the asset example with Registry Workspace
 
 The Registry Server demo can leave the asset correction fixture running and
@@ -102,7 +143,7 @@ If you already ran the repository PostgreSQL TLS proof, copy its
 and copy its generated CA PEM path into `REGISTRY_SERVER_TEST_TLS_CA_PEM_PATH`.
 The CR example script sets `SSL_CERT_FILE` from that PEM path, creates per-run
 roles and databases, writes runtime URL and JWT secrets into an owner-only temp
-directory, runs the public `registry-serverctl test` command for both examples,
+directory, runs the public `registry-serverctl test` command for all three examples,
 and cleans only the temp resources it created.
 
 ```bash
@@ -117,6 +158,8 @@ running change-request fixture: asset-site-placement-change-requests
 change-request fixture passed: asset-site-placement-change-requests
 running change-request fixture: publicschema-household-change-requests
 change-request fixture passed: publicschema-household-change-requests
+running change-request fixture: person-name-change-rhai
+change-request fixture passed: person-name-change-rhai
 ```
 
 The script requires Python 3 with PyYAML. It does not print bearer tokens or
@@ -154,7 +197,8 @@ products/registry-server/scripts/test-change-request-examples.sh \
   --asset-project "$work_dir/asset-site-placement-change-requests"
 ```
 
-The same pattern works for the household fixture with `--household-project`. A
+The same pattern works for the household fixture with `--household-project` and
+the Rhai fixture with `--rhai-project`. A
 real adopter starting from one review stage must make the same three changes in
 their own project: add the second stage under `changeRequest.review.stages`, add
 a grant whose `reviewStages` names that stage, and add a GET plus action step in
@@ -318,9 +362,24 @@ expiry or background request deletion.
 
 ## Generated baselines
 
-The generated OpenAPI and schema baselines for both examples are committed under
-`products/registry-server/generated/*-change-requests` and checked by:
+The generated OpenAPI, schema, metadata, manifest, and SQL baselines are
+committed under `products/registry-server/generated`, including
+`person-name-change-rhai`, and checked by:
 
 ```bash
 products/registry-server/scripts/check-generated.sh
+```
+
+When generating an individual artifact for review, choose a new child directory
+whose real parent already exists. The command intentionally refuses an existing
+destination, a missing parent, parent-directory components, or symlinked path
+components. A repository-owned temporary parent is portable on macOS:
+
+```bash
+repository_root=$(pwd -P)
+artifact_parent=$(mktemp -d "$repository_root/.registry-server-generated.XXXXXX")
+
+cargo run --locked -p registry-serverctl -- \
+  generate openapi products/registry-server/acceptance/person-name-change-rhai \
+  --output "$artifact_parent/openapi"
 ```

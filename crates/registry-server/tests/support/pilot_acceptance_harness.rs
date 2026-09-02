@@ -20,9 +20,10 @@ use registry_server::contract::{
     parse_module_yaml, parse_project_yaml, ModuleAssetSource, Operation, RegistryProject,
 };
 use registry_server::package::{
-    load_package, PackageBuildRequest, PackageIntent, PackageLoadContext,
-    PackageMigrationPlanInput, PackageModuleSource, PackageSignature, PackageSourceFile,
-    PackageTrustAnchor, SignaturePolicy, TrustAnchorKey, TRUST_ANCHOR_API_VERSION,
+    load_package, prepare_package_with_project_assets, PackageBuildRequest, PackageIntent,
+    PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource, PackageSignature,
+    PackageSourceFile, PackageTrustAnchor, SignaturePolicy, TrustAnchorKey,
+    TRUST_ANCHOR_API_VERSION,
 };
 use registry_server::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema,
@@ -383,6 +384,25 @@ impl FixtureSources {
         let mut modules = Vec::new();
         let mut parsed_modules = Vec::new();
         let mut module_assets = Vec::new();
+        let project_planners = project
+            .entities
+            .iter()
+            .filter_map(|entity| {
+                entity
+                    .change_request
+                    .as_ref()
+                    .and_then(|request| request.planner.as_ref())
+                    .map(|planner| planner.script.clone())
+            })
+            .collect::<BTreeSet<_>>();
+        for asset_path in project_planners {
+            module_assets.push(ModuleAssetSource {
+                module: None,
+                bytes: fs::read(root.join(&asset_path))
+                    .expect("every declared project planner asset is committed and readable"),
+                path: asset_path,
+            });
+        }
         for locked in &project.modules {
             let module_root = root.join("modules").join(&locked.id);
             let bytes = fs::read(module_root.join("module.yaml"))
@@ -450,7 +470,7 @@ impl PublishedPackage {
             .as_ref()
             .expect("Production pilot identity exists");
         let key_id = signing.public().kid.expect("generated signing key has kid");
-        let prepared = registry_server::package::prepare_package(PackageBuildRequest {
+        let request = PackageBuildRequest {
             environment: identity.environment.clone(),
             instance_id: identity.instance_id.clone(),
             database_id: database_id.to_owned(),
@@ -489,8 +509,18 @@ impl PublishedPackage {
                 bytes: fixture_journey_bytes(&sources.compiled),
             },
             migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
-        })
-        .expect("exact pilot sources prepare as a Production package");
+        };
+        let project_assets = sources
+            .module_assets
+            .iter()
+            .filter(|asset| asset.module.is_none())
+            .map(|asset| PackageSourceFile {
+                path: asset.path.clone(),
+                bytes: asset.bytes.clone(),
+            })
+            .collect();
+        let prepared = prepare_package_with_project_assets(request, project_assets)
+            .expect("exact pilot sources prepare as a Production package");
         let signature = sign(prepared.canonical_signed_bytes(), signing)
             .expect("pilot package signature succeeds");
         let root = parent.join(format!("package-{label}"));

@@ -973,12 +973,16 @@ impl ChangeRequestTargetContext {
         if plan.contract_fingerprint != binding.contract_fingerprint {
             return Err(invalid_context());
         }
-        let effect = plan
-            .effects
-            .iter()
-            .find(|effect| effect.id == binding.effect_id)
-            .ok_or_else(invalid_context)?;
-        validate_effect_binding(effect, &binding, &phase)?;
+        if let Some(planner) = &plan.planner {
+            validate_planner_effect_binding(planner, &binding, &phase)?;
+        } else {
+            let effect = plan
+                .effects
+                .iter()
+                .find(|effect| effect.id == binding.effect_id)
+                .ok_or_else(invalid_context)?;
+            validate_effect_binding(effect, &binding, &phase)?;
+        }
 
         match &phase {
             ChangeRequestTargetPhase::Preparation => {
@@ -1770,6 +1774,31 @@ fn validate_effect_binding(
         _ => return Err(invalid_context()),
     }
     Ok(())
+}
+
+fn validate_planner_effect_binding(
+    planner: &crate::model::CompiledChangeRequestPlanner,
+    binding: &ChangeRequestTargetBinding,
+    phase: &ChangeRequestTargetPhase,
+) -> Result<()> {
+    let ceiling = planner.writes.iter().any(|write| {
+        write.target_entity_id == binding.target_entity_id
+            && write.operation == binding.operation
+            && binding.fields.is_subset(&write.fields)
+    });
+    if !ceiling {
+        return Err(invalid_context());
+    }
+    match (binding.operation, binding.expected_revision) {
+        (Operation::Create, None) => Ok(()),
+        (Operation::Patch, None) if matches!(phase, ChangeRequestTargetPhase::Preparation) => {
+            Ok(())
+        }
+        (Operation::Patch, Some(_)) if !matches!(phase, ChangeRequestTargetPhase::Preparation) => {
+            Ok(())
+        }
+        _ => Err(invalid_context()),
+    }
 }
 
 fn validate_target_boundaries(

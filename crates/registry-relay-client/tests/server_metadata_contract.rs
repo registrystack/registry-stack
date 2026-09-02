@@ -19,6 +19,8 @@ pub use server_lifecycle::*;
 mod server_metadata;
 
 use server_metadata::{
+    RegistryServerChangeRequestApplicationMode, RegistryServerChangeRequestDisposition,
+    RegistryServerChangeRequestPlannerKind, RegistryServerChangeRequestReviewMode,
     RegistryServerDirectWrite, RegistryServerMetadata, RegistryServerMetadataErrorKind,
     RegistryServerMetadataSelectionErrorKind, RegistryServerOperationKind,
 };
@@ -290,6 +292,123 @@ fn runtime_v1_promotes_only_exact_direct_create_and_patch_contracts() {
         error.kind(),
         RegistryServerMetadataSelectionErrorKind::UnsupportedOperation
     );
+}
+
+#[test]
+fn change_request_capability_is_strict_typed_and_never_creates_authority() {
+    let capability = json!({
+        "planner": {
+            "kind": "rhai",
+            "abi": "registry.change-request-plan/v1",
+            "limits": {
+                "maximumTargets": 16,
+                "maximumFieldMutations": 128,
+                "maximumSnapshotBytes": 2_097_152,
+                "maximumSourceBytes": 65_536,
+                "maximumOperations": 100_000,
+                "maximumCallDepth": 32,
+                "maximumExpressionDepth": 64,
+                "maximumStringBytes": 16_384,
+                "maximumArrayItems": 256,
+                "maximumMapEntries": 256,
+                "maximumModules": 0
+            },
+            "possibleWriteCount": 1,
+            "possibleWriteOperations": ["patch"]
+        },
+        "reviewMode": "none",
+        "application": {
+            "mode": "planner",
+            "allowedDispositions": ["apply", "queue"],
+            "queueReasons": [{"code": "manual-check", "label": "Manual check"}]
+        }
+    });
+    let mut value = fixture();
+    value["entities"][0]["changeRequest"] = capability.clone();
+    let metadata = parse(&value);
+    let change_request = metadata
+        .change_request_capability("company")
+        .expect("visible request capability is typed");
+    assert_eq!(
+        change_request.planner().kind(),
+        RegistryServerChangeRequestPlannerKind::Rhai
+    );
+    assert_eq!(
+        change_request.planner().abi(),
+        Some("registry.change-request-plan/v1")
+    );
+    let limits = change_request
+        .planner()
+        .limits()
+        .expect("Rhai limits exist");
+    assert_eq!(limits.maximum_targets(), 16);
+    assert_eq!(limits.maximum_field_mutations(), 128);
+    assert_eq!(limits.maximum_snapshot_bytes(), 2_097_152);
+    assert_eq!(limits.maximum_source_bytes(), 65_536);
+    assert_eq!(limits.maximum_operations(), 100_000);
+    assert_eq!(limits.maximum_call_depth(), 32);
+    assert_eq!(limits.maximum_expression_depth(), 64);
+    assert_eq!(limits.maximum_string_bytes(), 16_384);
+    assert_eq!(limits.maximum_array_items(), 256);
+    assert_eq!(limits.maximum_map_entries(), 256);
+    assert_eq!(limits.maximum_modules(), 0);
+    assert_eq!(change_request.planner().possible_write_count(), Some(1));
+    assert!(matches!(
+        change_request.planner().possible_write_operations(),
+        [RegistryServerOperationKind::Patch]
+    ));
+    assert_eq!(
+        change_request.review_mode(),
+        RegistryServerChangeRequestReviewMode::None
+    );
+    assert_eq!(
+        change_request.application().mode(),
+        RegistryServerChangeRequestApplicationMode::Planner
+    );
+    assert_eq!(
+        change_request.application().allowed_dispositions(),
+        [
+            RegistryServerChangeRequestDisposition::Apply,
+            RegistryServerChangeRequestDisposition::Queue
+        ]
+    );
+    assert_eq!(
+        change_request.application().queue_reasons()[0].code(),
+        "manual-check"
+    );
+    assert_eq!(
+        change_request.application().queue_reasons()[0].label(),
+        "Manual check"
+    );
+    assert!(!format!("{change_request:?}").contains("Manual check"));
+    assert!(matches!(
+        metadata
+            .select_direct_write("records.company.patch", "company-writer")
+            .expect("descriptive capability does not alter direct-write authority"),
+        RegistryServerDirectWrite::Patch(_)
+    ));
+
+    for malformed in [
+        {
+            let mut malformed = capability.clone();
+            malformed["planner"]["source"] = json!("scripts/private.rhai");
+            malformed
+        },
+        {
+            let mut malformed = capability.clone();
+            malformed["planner"]["limits"]["maximumModules"] = json!(1);
+            malformed
+        },
+        {
+            let mut malformed = capability;
+            malformed["planner"]["possibleWriteOperations"] = json!(["patch", "patch"]);
+            malformed
+        },
+    ] {
+        let mut value = fixture();
+        value["entities"][0]["changeRequest"] = malformed;
+        assert!(RegistryServerMetadata::from_slice(&serde_json::to_vec(&value).unwrap()).is_err());
+    }
 }
 
 #[test]

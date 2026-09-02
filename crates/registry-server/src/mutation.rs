@@ -2056,6 +2056,7 @@ async fn apply_current_row(
     }
     match request.plan.route.operation {
         Operation::Create => {
+            let authored_fields = request.body.submitted_fields()?;
             let record_id = Uuid::new_v4().to_string();
             let row = apply_create_row(transaction, request, &record_id).await?;
             if request.plan.entity.change_request.is_some() {
@@ -2065,6 +2066,13 @@ async fn apply_current_row(
                     &request.plan.entity.id,
                     row.record_uuid,
                     &owner,
+                )
+                .await?;
+                crate::request_store::record_authored_intake_fields(
+                    transaction,
+                    &request.plan.entity.id,
+                    row.record_uuid,
+                    authored_fields.iter().map(String::as_str),
                 )
                 .await?;
             }
@@ -2107,6 +2115,16 @@ async fn apply_current_row(
             let data = apply_patch_document(request, &current.data)?;
             let mut row =
                 apply_patch_row(transaction, request, current.record_revision, data).await?;
+            if request.plan.entity.change_request.is_some() {
+                let authored_fields = request.body.submitted_fields()?;
+                crate::request_store::record_authored_intake_fields(
+                    transaction,
+                    &request.plan.entity.id,
+                    row.record_uuid,
+                    authored_fields.iter().map(String::as_str),
+                )
+                .await?;
+            }
             row.predecessor_revision = Some(current.record_revision);
             row.before_data = Some(before_data);
             Ok(row)

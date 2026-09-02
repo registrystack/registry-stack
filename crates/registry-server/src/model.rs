@@ -109,6 +109,12 @@ pub struct CompiledChangeRequest {
     pub request_entity_id: String,
     pub contract_fingerprint: String,
     pub retention_mode: CompiledChangeRequestRetentionMode,
+    #[serde(default, skip_serializing_if = "is_staged_review")]
+    pub review_mode: CompiledChangeRequestReviewMode,
+    #[serde(default, skip_serializing_if = "is_manual_application")]
+    pub application: CompiledChangeRequestApplication,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub planner: Option<CompiledChangeRequestPlanner>,
     pub effects: Vec<CompiledChangeRequestEffect>,
     pub stages: Vec<CompiledChangeRequestStage>,
     pub actions: Vec<CompiledChangeRequestActionRoute>,
@@ -119,6 +125,103 @@ pub struct CompiledChangeRequest {
     pub maximum_targets: u16,
     pub maximum_field_mutations: u16,
     pub maximum_snapshot_bytes: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompiledChangeRequestReviewMode {
+    None,
+    #[default]
+    Stages,
+}
+
+fn is_staged_review(mode: &CompiledChangeRequestReviewMode) -> bool {
+    *mode == CompiledChangeRequestReviewMode::Stages
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledChangeRequestApplication {
+    pub mode: CompiledChangeRequestApplicationMode,
+    pub allowed_dispositions: BTreeSet<CompiledChangeRequestDisposition>,
+    pub queue_reasons: BTreeMap<String, String>,
+}
+
+fn is_manual_application(application: &CompiledChangeRequestApplication) -> bool {
+    application.mode == CompiledChangeRequestApplicationMode::Manual
+        && application.allowed_dispositions.is_empty()
+        && application.queue_reasons.is_empty()
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompiledChangeRequestApplicationMode {
+    #[default]
+    Manual,
+    Automatic,
+    Planner,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompiledChangeRequestDisposition {
+    Apply,
+    Queue,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledChangeRequestPlanner {
+    pub kind: CompiledChangeRequestPlannerKind,
+    pub source_module: Option<String>,
+    #[serde(skip)]
+    pub script_path: String,
+    pub abi: String,
+    pub rhai_version: String,
+    pub script_sha256: String,
+    #[serde(skip)]
+    pub script_bytes: Vec<u8>,
+    pub limits: CompiledChangeRequestPlannerLimits,
+    pub request_fields: Vec<String>,
+    pub writes: Vec<CompiledChangeRequestPlannerWrite>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompiledChangeRequestPlannerKind {
+    Rhai,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledChangeRequestPlannerWrite {
+    pub target_entity_id: String,
+    pub target_from_field: Option<String>,
+    pub operation: Operation,
+    pub fields: BTreeSet<String>,
+    pub field_types: BTreeMap<String, FieldTypeSource>,
+    pub required_fields: BTreeSet<String>,
+    pub reference_sources: BTreeMap<String, CompiledChangeRequestReferenceSources>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledChangeRequestReferenceSources {
+    pub request_fields: BTreeSet<String>,
+    pub create_entities: BTreeSet<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledChangeRequestPlannerLimits {
+    pub maximum_source_bytes: u32,
+    pub maximum_operations: u64,
+    pub maximum_call_depth: u16,
+    pub maximum_expression_depth: u16,
+    pub maximum_string_bytes: u32,
+    pub maximum_array_items: u16,
+    pub maximum_map_entries: u16,
+    pub maximum_modules: u16,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]

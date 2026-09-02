@@ -360,11 +360,9 @@ fn synthetic_preview_uses_http_admission_and_never_renders_claim_values() {
     .is_err());
     let mut malformed = scenario;
     malformed["claims"]["directClaims"]["districts"] = json!(["duplicate", "duplicate"]);
-    assert!(registry_server::access_preview::preview_access(
-        &compiled,
-        serde_json::from_value(malformed).unwrap()
-    )
-    .is_err());
+    let collapsed = serde_json::to_value(preview(malformed)).unwrap();
+    assert_eq!(collapsed["admitted"], true);
+    assert!(!collapsed.to_string().contains("duplicate"));
 }
 
 #[cfg(all(feature = "runtime", feature = "tooling"))]

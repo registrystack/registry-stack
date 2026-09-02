@@ -1177,6 +1177,9 @@ async fn erase_current_intake_row(
         )
         .await
         .map_err(map_retention_error)?;
+    crate::request_store::erase_authored_intake_fields(transaction, &entity.id, request_id)
+        .await
+        .map_err(|_| RequestRetentionError::Unavailable)?;
     Ok(Some(ErasedCurrentRevision {
         entity_id: entity.id.clone(),
         record_id: request_id,

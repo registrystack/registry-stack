@@ -455,9 +455,85 @@ pub struct ChangeControlSource {
 pub struct ChangeRequestSource {
     #[serde(default)]
     pub effects: Vec<ChangeRequestEffectSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planner: Option<ChangeRequestPlannerSource>,
     pub review: ChangeRequestReviewSource,
     #[serde(default)]
+    pub application: ChangeRequestApplicationSource,
+    #[serde(default)]
     pub retention: ChangeRequestRetentionSource,
+}
+
+pub const CHANGE_REQUEST_PLAN_ABI_V1: &str = "registry.change-request-plan/v1";
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ChangeRequestPlannerSource {
+    pub kind: ChangeRequestPlannerKindSource,
+    pub script: String,
+    pub abi: String,
+    #[serde(default)]
+    pub request_fields: Vec<String>,
+    #[serde(default)]
+    pub writes: Vec<ChangeRequestPlannerWriteSource>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChangeRequestPlannerKindSource {
+    Rhai,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ChangeRequestPlannerWriteSource {
+    pub target: ChangeRequestPlannerTargetSource,
+    pub operation: Operation,
+    #[serde(default)]
+    pub fields: Vec<String>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ChangeRequestPlannerTargetSource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_field: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entity: Option<String>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ChangeRequestApplicationSource {
+    #[serde(default)]
+    pub mode: ChangeRequestApplicationModeSource,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub allowed_dispositions: BTreeSet<ChangeRequestDispositionSource>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub queue_reasons: BTreeMap<String, String>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChangeRequestApplicationModeSource {
+    #[default]
+    Manual,
+    Automatic,
+    Planner,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChangeRequestDispositionSource {
+    Apply,
+    Queue,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -596,8 +672,17 @@ pub struct ActionValueSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ChangeRequestReviewSource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<ChangeRequestReviewModeSource>,
     #[serde(default)]
     pub stages: Vec<ChangeRequestReviewStageSource>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChangeRequestReviewModeSource {
+    None,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

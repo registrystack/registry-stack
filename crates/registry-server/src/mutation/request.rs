@@ -4,7 +4,6 @@ use super::*;
 use crate::api::{
     RequestActionBody, RequestActionInput, RowBoundaryOperator as ApiBoundaryOperator,
 };
-use crate::model::{CompiledChangeRequestEffect, CompiledChangeRequestMutation};
 use crate::postgres::{
     ChangeRequestActionContext, ChangeRequestTargetBinding, ChangeRequestTargetContext,
     RowBoundaryContext,
@@ -16,9 +15,23 @@ use crate::request_workflow::{
     RequestWorkflow, ReviewDecisionKind, TrustedActorRef, TrustedTimestamp,
     TrustedTransitionContext,
 };
+use crate::rhai_planner::{CandidateChangeRequestEffect, CandidateChangeRequestMutation};
 
 pub(crate) const REQUEST_ACTION_TIMEOUT: Duration = Duration::from_secs(30);
 const REQUEST_ACTION_STATEMENT_TIMEOUT_HEADROOM: Duration = Duration::from_millis(500);
+
+struct SubmissionCandidate {
+    request_record_revision: i64,
+    workflow_revision: u64,
+    intake: Map<String, Value>,
+    resolved: crate::request_prepare::ResolvedRequestTargets,
+}
+
+struct AppliedRequest {
+    workflow: RequestWorkflow,
+    result_count: u16,
+    result_revisions: Vec<(String, Uuid, i64)>,
+}
 
 /// A conditional action is bound to its exact selected operation and authority,
 /// not to the ETag of a record page or a work-queue/list response.
@@ -33,6 +46,7 @@ pub(crate) fn request_action_etag(
     workflow: &RequestWorkflow,
     response_fields: &BTreeSet<String>,
     target_authority: &[crate::api::RequestActionTargetAuthority],
+    automatic_apply_authority: Option<&[crate::api::RequestActionTargetAuthority]>,
 ) -> Result<String, MutationError> {
     request_action_etag_for_revisions(
         profile,
@@ -45,6 +59,7 @@ pub(crate) fn request_action_etag(
         workflow,
         response_fields,
         target_authority,
+        automatic_apply_authority,
     )
 }
 
@@ -60,6 +75,7 @@ fn request_action_etag_for_revisions(
     workflow: &RequestWorkflow,
     response_fields: &BTreeSet<String>,
     target_authority: &[crate::api::RequestActionTargetAuthority],
+    automatic_apply_authority: Option<&[crate::api::RequestActionTargetAuthority]>,
 ) -> Result<String, MutationError> {
     if record_revision <= 0 || workflow_revision == 0 {
         return Err(MutationError::PreconditionFailed);
@@ -73,6 +89,7 @@ fn request_action_etag_for_revisions(
         "effectDigest": workflow.current_proposal().map(|proposal| proposal.effect_digest().as_str()),
         "responseFields": response_fields,
         "targetAuthority": target_authority_binding(target_authority),
+        "automaticApplyAuthority": automatic_apply_authority.map(target_authority_binding),
     });
     let canonical = canonicalize_json(&binding).map_err(|_| MutationError::Unavailable)?;
     let digest = profile
@@ -144,17 +161,37 @@ impl MutationCoordinator {
         )
         .await?;
         let deadline = tokio::time::Instant::now() + REQUEST_ACTION_TIMEOUT;
-        // Reserve once for this action, outside the transaction retry loop.
-        // A known-abort retry cannot change references in the prepared proposal.
-        let reserved_create_ids = entity
-            .change_request
-            .as_ref()
-            .ok_or(MutationError::InvalidRequest)?
-            .effects
-            .iter()
-            .filter(|effect| effect.operation == Operation::Create)
-            .map(|effect| (effect.id.clone(), Uuid::new_v4()))
-            .collect::<BTreeMap<_, _>>();
+        // Capture the exact intake under request RLS, close that transaction,
+        // then run the bounded planner exactly once outside retry and target
+        // locks. The resulting candidate and reserved identities are reused by
+        // every positively identified transaction retry.
+        let submission = if matches!(input.action, RequestActionBody::Submit) {
+            match self
+                .plan_submission_candidate(
+                    client, registry, &input, claims, route, entity, deadline,
+                )
+                .await
+            {
+                Ok(candidate) => candidate,
+                Err(error) => {
+                    if !fault.is_enabled() {
+                        record_pre_io_audit(
+                            client,
+                            self.lock_key,
+                            self.lock_timeout,
+                            &self.expected,
+                            claims,
+                            &self.audit_profile,
+                            audit(PreIoAuditKind::Refusal),
+                        )
+                        .await?;
+                    }
+                    return Err(error);
+                }
+            }
+        } else {
+            None
+        };
         let mut result = Err(MutationError::Unavailable);
         for attempt in 0..3 {
             result = self
@@ -165,7 +202,7 @@ impl MutationCoordinator {
                     claims,
                     route,
                     entity,
-                    &reserved_create_ids,
+                    submission.as_ref(),
                     request_action_statement_timeout(deadline),
                     fault,
                 )
@@ -202,6 +239,161 @@ impl MutationCoordinator {
     }
 
     #[allow(clippy::too_many_arguments)]
+    async fn plan_submission_candidate(
+        &self,
+        client: &mut Client,
+        registry: &CompiledRegistry,
+        input: &RequestActionInput<'_>,
+        claims: &ClaimContext,
+        route: &CompiledRoute,
+        entity: &CompiledEntity,
+        deadline: tokio::time::Instant,
+    ) -> Result<Option<SubmissionCandidate>, MutationError> {
+        let body = action_binding_json(input)?;
+        let digest: [u8; 32] =
+            Sha256::digest(canonicalize_json(&body).map_err(|_| MutationError::InvalidRequest)?)
+                .into();
+        let binding = resolve_binding(
+            &self.audit_profile,
+            &IdempotencyBinding {
+                key: input.idempotency_key,
+                context: claims,
+                method: route.method,
+                route: &route.path,
+                target_record: Some(input.record_id),
+                package_revision: &self.expected.package_revision,
+                response_fields: &input.response_fields,
+                canonical_request_digest: digest,
+            },
+        )?;
+        let transaction = begin_record_transaction(
+            client,
+            self.lock_key,
+            self.lock_timeout,
+            &self.expected,
+            claims,
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+        set_transaction_statement_timeout(
+            transaction.transaction(),
+            request_action_statement_timeout(deadline),
+        )
+        .await?;
+        let request_id =
+            Uuid::parse_str(input.record_id).map_err(|_| MutationError::InvalidRequest)?;
+        let actor_reference =
+            request_actor_reference(&self.audit_profile, &self.expected.database_id, claims)?;
+        let header = transaction
+            .transaction()
+            .query_opt(
+                "SELECT proposal_version FROM registry_internal.registry_request_state
+                  WHERE request_entity_id = $1 AND request_id = $2",
+                &[&entity.id, &request_id],
+            )
+            .await
+            .map_err(|_| MutationError::Unavailable)?
+            .ok_or(MutationError::PreconditionFailed)?;
+        let action_context = ChangeRequestActionContext::for_route(
+            registry,
+            claims,
+            &route.id,
+            request_id,
+            header.get::<_, i64>(0),
+            &actor_reference,
+            &self.expected.package_revision,
+        )
+        .map_err(|_| MutationError::PreconditionFailed)?;
+        transaction
+            .install_change_request_action_context(&action_context)
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+        let receipt_exists = transaction
+            .transaction()
+            .query_opt(
+                "SELECT 1 FROM registry_internal.registry_idempotency WHERE key_reference = $1",
+                &[&binding.key_reference],
+            )
+            .await
+            .map_err(|_| MutationError::Unavailable)?
+            .is_some();
+        if receipt_exists {
+            transaction
+                .commit()
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+            return Ok(None);
+        }
+        let current = load_row(transaction.transaction(), entity, input.record_id, false).await?;
+        let workflow =
+            crate::request_store::load(transaction.transaction(), &entity.id, request_id, false)
+                .await?;
+        let etag = request_action_etag(
+            &self.audit_profile,
+            claims,
+            &self.expected.package_revision,
+            route,
+            input.record_id,
+            current.record_revision,
+            &workflow,
+            &input.response_fields,
+            &input.target_authority,
+            input.automatic_apply_authority.as_deref(),
+        )?;
+        if etag.as_bytes().ct_eq(input.if_match.as_bytes()).unwrap_u8() != 1
+            || workflow.owner().as_str() != actor_reference
+            || workflow.state() != RequestState::Draft
+        {
+            return Err(MutationError::PreconditionFailed);
+        }
+        let intake = crate::request_store::load_authored_intake(
+            transaction.transaction(),
+            &entity.id,
+            request_id,
+            &current.data,
+        )
+        .await?;
+        let workflow_revision = workflow.workflow_revision().get();
+        let request_record_revision = current.record_revision;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+
+        let plan = entity
+            .change_request
+            .as_ref()
+            .ok_or(MutationError::InvalidRequest)?;
+        let candidate =
+            crate::rhai_planner::plan_change_request_effects(plan, &intake, deadline.into_std())
+                .map_err(|error| match error {
+                    crate::rhai_planner::ChangeRequestPlannerError::Deadline => {
+                        MutationError::Unavailable
+                    }
+                    _ => MutationError::InvalidRequest,
+                })?;
+        let reserved_create_ids = candidate
+            .effects
+            .iter()
+            .filter(|effect| effect.operation == Operation::Create)
+            .map(|effect| (effect.id.clone(), Uuid::new_v4()))
+            .collect::<BTreeMap<_, _>>();
+        let resolved = request_prepare::resolve_targets(
+            registry,
+            entity,
+            &intake,
+            candidate,
+            &reserved_create_ids,
+        )?;
+        Ok(Some(SubmissionCandidate {
+            request_record_revision,
+            workflow_revision,
+            intake,
+            resolved,
+        }))
+    }
+
+    #[allow(clippy::too_many_arguments)]
     async fn execute_request_action_transaction(
         &self,
         client: &mut Client,
@@ -210,7 +402,7 @@ impl MutationCoordinator {
         claims: &ClaimContext,
         route: &CompiledRoute,
         entity: &CompiledEntity,
-        reserved_create_ids: &BTreeMap<String, Uuid>,
+        submission: Option<&SubmissionCandidate>,
         statement_timeout: Duration,
         fault: FaultControl,
     ) -> Result<MutationOutcome, MutationError> {
@@ -303,6 +495,7 @@ impl MutationCoordinator {
                     &preview_workflow,
                     &input.response_fields,
                     &input.target_authority,
+                    input.automatic_apply_authority.as_deref(),
                 )?;
                 if preview_etag
                     .as_bytes()
@@ -324,7 +517,7 @@ impl MutationCoordinator {
                         &preview_workflow,
                         claims,
                         &actor_reference,
-                        reserved_create_ids,
+                        submission.ok_or(MutationError::Unavailable)?,
                     )
                     .await?;
                 Some((
@@ -336,6 +529,43 @@ impl MutationCoordinator {
                 None
             };
         let stored = lock_and_load(transaction.transaction(), &binding).await?;
+        if stored.as_ref().is_some_and(|stored| {
+            matches!(&stored.metadata, StoredResultMetadata::Application { .. })
+                && !matches!(input.action, RequestActionBody::Apply { .. })
+        }) {
+            // An automatically applied submit/approval is recovered under the
+            // same selected profile's real ApplyRequest route. This changes
+            // only the transaction-local request-row RLS phase; the stored
+            // idempotency binding and terminal audit remain bound to the
+            // caller's original action.
+            input
+                .automatic_apply_authority
+                .as_ref()
+                .ok_or(MutationError::PreconditionFailed)?;
+            let apply_route = registry
+                .routes()
+                .routes
+                .iter()
+                .find(|candidate| {
+                    candidate.entity_id == entity.id
+                        && candidate.operation == Operation::ApplyRequest
+                })
+                .ok_or(MutationError::PreconditionFailed)?;
+            let recovery_context = ChangeRequestActionContext::for_route(
+                registry,
+                claims,
+                &apply_route.id,
+                request_id,
+                header.get::<_, i64>(0),
+                &actor_reference,
+                &self.expected.package_revision,
+            )
+            .map_err(|_| MutationError::PreconditionFailed)?;
+            transaction
+                .install_change_request_action_context(&recovery_context)
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+        }
         // Request state serializes every lifecycle operation and draft edit.
         // Read the request row after that lock without demanding UPDATE rights:
         // an applied request remains readable for authorized receipt recovery.
@@ -368,6 +598,53 @@ impl MutationCoordinator {
                     &targets,
                     &actor_reference,
                 )?;
+                // A replay of an automatically applied submit or approval
+                // must re-prove the independent ApplyRequest grant. The
+                // ordinary action authority above remains the review/submit
+                // proof and is never substituted with this apply proof.
+                if workflow.state() == RequestState::Applied
+                    && !matches!(input.action, RequestActionBody::Apply { .. })
+                    && workflow
+                        .current_proposal()
+                        .and_then(|proposal| proposal.planning_binding())
+                        .is_some_and(|planning| {
+                            planning.disposition()
+                                == crate::request_workflow::FrozenPlannerDisposition::Apply
+                        })
+                {
+                    let proposal = workflow
+                        .current_proposal()
+                        .ok_or(MutationError::Unavailable)?;
+                    let apply_authority = input
+                        .automatic_apply_authority
+                        .clone()
+                        .ok_or(MutationError::PreconditionFailed)?;
+                    let automatic_input = RequestActionInput {
+                        route_id: input.route_id,
+                        idempotency_key: input.idempotency_key,
+                        if_match: input.if_match,
+                        context: input.context,
+                        entity_id: input.entity_id,
+                        record_id: input.record_id,
+                        action: RequestActionBody::Apply {
+                            proposal_version: proposal.version().get(),
+                            effect_digest: proposal.effect_digest().as_str().to_owned(),
+                        },
+                        response_fields: input.response_fields.clone(),
+                        target_authority: apply_authority,
+                        automatic_apply_authority: None,
+                        correlation: input.correlation,
+                    };
+                    self.authorize_targets(
+                        registry,
+                        &automatic_input,
+                        claims,
+                        entity,
+                        &workflow,
+                        &targets,
+                        &actor_reference,
+                    )?;
+                }
             }
             append_terminal_audit(
                 transaction.transaction(),
@@ -426,6 +703,7 @@ impl MutationCoordinator {
                     &workflow,
                     &input.response_fields,
                     &input.target_authority,
+                    input.automatic_apply_authority.as_deref(),
                 )?;
                 if input
                     .if_match
@@ -518,6 +796,7 @@ impl MutationCoordinator {
             &workflow,
             &input.response_fields,
             &input.target_authority,
+            input.automatic_apply_authority.as_deref(),
         )?;
         if etag.as_bytes().ct_eq(input.if_match.as_bytes()).unwrap_u8() != 1 {
             return Err(MutationError::PreconditionFailed);
@@ -531,6 +810,7 @@ impl MutationCoordinator {
         }
         let previous_revision = i64::try_from(workflow.workflow_revision().get())
             .map_err(|_| MutationError::Unavailable)?;
+        let mut save_previous_revision = previous_revision;
         let previous_state = workflow.state();
         let trusted = TrustedTransitionContext::from_verified_context(
             TrustedActorRef::from_verified_context(&actor_reference)
@@ -538,9 +818,11 @@ impl MutationCoordinator {
             request_timestamp(time::OffsetDateTime::now_utc())?,
         );
         let mut prepared_targets = None;
+        let mut prepared_targets_saved = false;
+        let mut request_revision_advanced = false;
         let mut application_count = None;
         let mut application_result_revisions = Vec::new();
-        let next = match &input.action {
+        let mut next = match &input.action {
             RequestActionBody::Submit => {
                 let (record_revision, workflow_revision, prepared) = prepared_submission
                     .take()
@@ -552,7 +834,7 @@ impl MutationCoordinator {
                 }
                 prepared_targets = Some(prepared.targets);
                 workflow
-                    .submit(trusted, prepared.proposal)
+                    .submit(trusted.clone(), prepared.proposal)
                     .map_err(workflow_error)?
                     .into_workflow()
             }
@@ -591,7 +873,7 @@ impl MutationCoordinator {
                 };
                 workflow
                     .decide(
-                        trusted,
+                        trusted.clone(),
                         route
                             .request_stage
                             .as_deref()
@@ -604,173 +886,131 @@ impl MutationCoordinator {
                     .into_workflow()
             }
             RequestActionBody::Revise { rebase } => if *rebase {
-                workflow.rebase(trusted)
+                workflow.rebase(trusted.clone())
             } else {
-                workflow.revise(trusted)
+                workflow.revise(trusted.clone())
             }
             .map_err(workflow_error)?
             .into_workflow(),
             RequestActionBody::Cancel => workflow
-                .cancel(trusted)
+                .cancel(trusted.clone())
                 .map_err(workflow_error)?
                 .into_workflow(),
             RequestActionBody::Apply {
                 proposal_version,
                 effect_digest,
             } => {
-                if workflow.state() != RequestState::Approved {
-                    return Err(MutationError::Conflict);
-                }
-                let proposal = workflow.current_proposal().ok_or(MutationError::Conflict)?;
-                let plan = entity
-                    .change_request
-                    .as_ref()
-                    .ok_or(MutationError::InvalidRequest)?;
-                if proposal.contract_fingerprint().as_str() != plan.contract_fingerprint
-                    || proposal.version().get() != *proposal_version
-                    || proposal.effect_digest().as_str() != effect_digest
-                {
-                    return Err(MutationError::PreconditionFailed);
-                }
-                let targets = crate::request_store::load_targets(
+                let applied = self
+                    .apply_approved_request(
+                        &transaction,
+                        registry,
+                        input,
+                        claims,
+                        route,
+                        entity,
+                        workflow,
+                        &actor_reference,
+                        trusted.clone(),
+                        *proposal_version,
+                        effect_digest,
+                        None,
+                        &binding,
+                        fault,
+                    )
+                    .await?;
+                application_count = Some(applied.result_count);
+                application_result_revisions = applied.result_revisions;
+                applied.workflow
+            }
+        };
+        if !matches!(input.action, RequestActionBody::Apply { .. })
+            && next.state() == RequestState::Approved
+            && next
+                .current_proposal()
+                .and_then(|proposal| proposal.planning_binding())
+                .is_some_and(|binding| {
+                    binding.disposition()
+                        == crate::request_workflow::FrozenPlannerDisposition::Apply
+                })
+        {
+            let proposal = next.current_proposal().ok_or(MutationError::Conflict)?;
+            let proposal_version = proposal.version().get();
+            let effect_digest = proposal.effect_digest().as_str().to_owned();
+            let apply_authority = input
+                .automatic_apply_authority
+                .clone()
+                .ok_or(MutationError::PreconditionFailed)?;
+            // The submit/approve action policy authorizes the request-row
+            // revision while the durable workflow still has its source state.
+            // Advance that row before transaction-local materialization of the
+            // approved state; target application still follows afterward and
+            // the whole composition rolls back together on any failure.
+            current = advance_request_revision(transaction.transaction(), entity, &current).await?;
+            request_revision_advanced = true;
+            // Materialize the approved proposal, final decision (if any), and
+            // frozen targets inside this transaction before entering the
+            // existing application RLS path. No intermediate state is
+            // externally visible, and any application failure rolls all of it
+            // back with the target writes.
+            crate::request_store::save(
+                transaction.transaction(),
+                &entity.id,
+                record_uuid,
+                save_previous_revision,
+                &next,
+            )
+            .await?;
+            save_previous_revision = i64::try_from(next.workflow_revision().get())
+                .map_err(|_| MutationError::Unavailable)?;
+            if let Some(targets) = prepared_targets.as_deref() {
+                crate::request_store::save_targets(
                     transaction.transaction(),
                     &entity.id,
                     record_uuid,
-                    i64::from(*proposal_version),
+                    i64::from(next.current_version().get()),
+                    targets,
                 )
                 .await?;
-                let contexts = self.authorize_targets(
-                    registry,
-                    input,
-                    claims,
-                    entity,
-                    &workflow,
-                    &targets,
-                    &actor_reference,
-                )?;
-                let mut observed = Vec::new();
-                // The stored target loader sorts by entity and UUID. Lock every
-                // existing row before issuing writes in dependency order.
-                for target in &targets {
-                    let context = contexts
-                        .get(&(target.entity_id.clone(), target.record_id))
-                        .ok_or(MutationError::InvalidRequest)?;
-                    transaction
-                        .install_change_request_target_context(context)
-                        .await
-                        .map_err(|_| MutationError::Unavailable)?;
-                    if let Some(expected) = target.expected_revision {
-                        let actual = load_row(
-                            transaction.transaction(),
-                            &registry.entities()[&target.entity_id],
-                            &target.record_id.to_string(),
-                            true,
-                        )
-                        .await?;
-                        if actual.record_revision != expected {
-                            return Err(MutationError::PreconditionFailed);
-                        }
-                        observed.push(ObservedTarget::existing(
-                            EntityId::new(&target.entity_id).map_err(workflow_error)?,
-                            RecordId::new(target.record_id.to_string()).map_err(workflow_error)?,
-                            RecordRevision::new(expected).map_err(workflow_error)?,
-                        ));
-                    } else {
-                        observed.push(ObservedTarget::reserved_create(
-                            EntityId::new(&target.entity_id).map_err(workflow_error)?,
-                            RecordId::new(target.record_id.to_string()).map_err(workflow_error)?,
-                        ));
-                    }
-                }
-                let mut written = BTreeSet::new();
-                let mut links = Vec::new();
-                for effect in proposal.effects() {
-                    let target_id = effect
-                        .target()
-                        .existing_record_id()
-                        .or_else(|| effect.target().reserved_record_id())
-                        .ok_or(MutationError::InvalidRequest)?;
-                    let target_uuid = Uuid::parse_str(target_id.as_str())
-                        .map_err(|_| MutationError::InvalidRequest)?;
-                    let key = (effect.target().entity_id().as_str().to_owned(), target_uuid);
-                    if !written.insert(key.clone()) {
-                        continue;
-                    }
-                    let target = targets
-                        .iter()
-                        .find(|target| target.entity_id == key.0 && target.record_id == key.1)
-                        .ok_or(MutationError::InvalidRequest)?;
-                    transaction
-                        .install_change_request_target_context(&contexts[&key])
-                        .await
-                        .map_err(|_| MutationError::Unavailable)?;
-                    fault.fail_at(MutationFaultPoint::BeforeCurrentRow)?;
-                    let approved_fields = proposal
-                        .effects()
-                        .iter()
-                        .filter(|candidate| {
-                            candidate.target().entity_id().as_str() == target.entity_id
-                                && candidate
-                                    .target()
-                                    .existing_record_id()
-                                    .or_else(|| candidate.target().reserved_record_id())
-                                    .is_some_and(|id| id.as_str() == target.record_id.to_string())
-                        })
-                        .flat_map(|candidate| {
-                            candidate
-                                .field_changes()
-                                .iter()
-                                .map(|change| change.field().as_str().to_owned())
-                        })
-                        .collect::<BTreeSet<_>>();
-                    let result = self
-                        .apply_request_target(
-                            transaction.transaction(),
-                            registry,
-                            input,
-                            claims,
-                            route,
-                            target,
-                            &approved_fields,
-                            &binding,
-                            fault,
-                        )
-                        .await?;
-                    application_result_revisions.push((
-                        target.entity_id.clone(),
-                        result.record_uuid,
-                        result.record_revision,
-                    ));
-                    links.push(ApplicationResultLink::new(
-                        EntityId::new(&target.entity_id).map_err(workflow_error)?,
-                        RecordId::new(target.record_id.to_string()).map_err(workflow_error)?,
-                        RecordRevision::new(result.record_revision).map_err(workflow_error)?,
-                    ));
-                    if written.len() == 1 {
-                        fault.fail_at(MutationFaultPoint::AfterFirstBatchItem)?;
-                    }
-                }
-                application_count =
-                    Some(u16::try_from(links.len()).map_err(|_| MutationError::Unavailable)?);
-                workflow
-                    .apply(
-                        trusted,
-                        ProposalVersion::new(*proposal_version).map_err(workflow_error)?,
-                        &ProposalDigest::new(effect_digest).map_err(workflow_error)?,
-                        &ContractFingerprint::new(&plan.contract_fingerprint)
-                            .map_err(workflow_error)?,
-                        observed,
-                        PreparedApplication::new(
-                            ApplicationId::new(Uuid::new_v4().to_string())
-                                .map_err(workflow_error)?,
-                            links,
-                        )
-                        .map_err(workflow_error)?,
-                    )
-                    .map_err(workflow_error)?
-                    .into_workflow()
+                prepared_targets_saved = true;
             }
-        };
+            let automatic_input = RequestActionInput {
+                route_id: input.route_id,
+                idempotency_key: input.idempotency_key,
+                if_match: input.if_match,
+                context: input.context,
+                entity_id: input.entity_id,
+                record_id: input.record_id,
+                action: RequestActionBody::Apply {
+                    proposal_version,
+                    effect_digest: effect_digest.clone(),
+                },
+                response_fields: input.response_fields.clone(),
+                target_authority: apply_authority,
+                automatic_apply_authority: None,
+                correlation: input.correlation,
+            };
+            let applied = self
+                .apply_approved_request(
+                    &transaction,
+                    registry,
+                    &automatic_input,
+                    claims,
+                    route,
+                    entity,
+                    next,
+                    &actor_reference,
+                    trusted.clone(),
+                    proposal_version,
+                    &effect_digest,
+                    prepared_targets.as_deref(),
+                    &binding,
+                    fault,
+                )
+                .await?;
+            application_count = Some(applied.result_count);
+            application_result_revisions = applied.result_revisions;
+            next = applied.workflow;
+        }
         // Restore the ordinary request context before advancing its revision.
         transaction
             .transaction()
@@ -780,7 +1020,9 @@ impl MutationCoordinator {
             )
             .await
             .map_err(|_| MutationError::Unavailable)?;
-        current = advance_request_revision(transaction.transaction(), entity, &current).await?;
+        if !request_revision_advanced {
+            current = advance_request_revision(transaction.transaction(), entity, &current).await?;
+        }
         let request_reference = record_reference(
             &self.audit_profile,
             &self.expected.package_revision,
@@ -800,7 +1042,7 @@ impl MutationCoordinator {
             transaction.transaction(),
             &entity.id,
             record_uuid,
-            previous_revision,
+            save_previous_revision,
             &next,
         )
         .await?;
@@ -815,7 +1057,7 @@ impl MutationCoordinator {
             "request_lifecycle",
         )
         .await?;
-        if let Some(targets) = prepared_targets {
+        if let Some(targets) = prepared_targets.filter(|_| !prepared_targets_saved) {
             crate::request_store::save_targets(
                 transaction.transaction(),
                 &entity.id,
@@ -956,22 +1198,32 @@ impl MutationCoordinator {
         workflow: &RequestWorkflow,
         claims: &ClaimContext,
         actor_reference: &str,
-        reserved_create_ids: &BTreeMap<String, Uuid>,
+        submission: &SubmissionCandidate,
     ) -> Result<crate::request_prepare::PreparedRequest, MutationError> {
-        if workflow.state() != RequestState::Draft {
-            return Err(MutationError::Conflict);
+        if workflow.state() != RequestState::Draft
+            || current.record_revision != submission.request_record_revision
+            || workflow.workflow_revision().get() != submission.workflow_revision
+        {
+            return Err(MutationError::PreconditionFailed);
         }
-        let resolved =
-            request_prepare::resolve_targets(entity, &current.data, reserved_create_ids)?;
+        let authored = crate::request_store::load_authored_intake(
+            transaction.transaction(),
+            &entity.id,
+            current.record_uuid,
+            &current.data,
+        )
+        .await?;
+        if authored != submission.intake {
+            return Err(MutationError::PreconditionFailed);
+        }
+        let resolved = &submission.resolved;
         let mut bases = BTreeMap::new();
         for ((target_entity_id, target_record_id), operation) in &resolved.records {
             if *operation != Operation::Patch {
                 continue;
             }
-            let effect = entity
-                .change_request
-                .as_ref()
-                .ok_or(MutationError::InvalidRequest)?
+            let effect = resolved
+                .candidate
                 .effects
                 .iter()
                 .find(|effect| {
@@ -1011,13 +1263,192 @@ impl MutationCoordinator {
         let prepared = request_prepare::prepare(
             registry,
             entity,
-            &current.data,
+            &submission.intake,
             current.record_revision,
             &self.expected.package_revision,
-            &resolved,
+            resolved,
             bases,
         )?;
         Ok(prepared)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn apply_approved_request(
+        &self,
+        transaction: &crate::postgres::GuardedTransaction<'_>,
+        registry: &CompiledRegistry,
+        input: &RequestActionInput<'_>,
+        claims: &ClaimContext,
+        route: &CompiledRoute,
+        entity: &CompiledEntity,
+        workflow: RequestWorkflow,
+        actor_reference: &str,
+        trusted: TrustedTransitionContext,
+        proposal_version: u32,
+        effect_digest: &str,
+        targets_override: Option<&[RequestTargetSnapshot]>,
+        binding: &crate::idempotency::ResolvedIdempotencyBinding,
+        fault: FaultControl,
+    ) -> Result<AppliedRequest, MutationError> {
+        if workflow.state() != RequestState::Approved {
+            return Err(MutationError::Conflict);
+        }
+        let proposal = workflow.current_proposal().ok_or(MutationError::Conflict)?;
+        let plan = entity
+            .change_request
+            .as_ref()
+            .ok_or(MutationError::InvalidRequest)?;
+        if proposal.contract_fingerprint().as_str() != plan.contract_fingerprint
+            || proposal.version().get() != proposal_version
+            || proposal.effect_digest().as_str() != effect_digest
+        {
+            return Err(MutationError::PreconditionFailed);
+        }
+        let loaded_targets;
+        let targets = if let Some(targets) = targets_override {
+            targets
+        } else {
+            loaded_targets = crate::request_store::load_targets(
+                transaction.transaction(),
+                &entity.id,
+                Uuid::parse_str(workflow.request().record_id().as_str())
+                    .map_err(|_| MutationError::InvalidRequest)?,
+                i64::from(proposal_version),
+            )
+            .await?;
+            &loaded_targets
+        };
+        let contexts = self.authorize_targets(
+            registry,
+            input,
+            claims,
+            entity,
+            &workflow,
+            targets,
+            actor_reference,
+        )?;
+        let mut observed = Vec::new();
+        for target in targets {
+            let context = contexts
+                .get(&(target.entity_id.clone(), target.record_id))
+                .ok_or(MutationError::InvalidRequest)?;
+            transaction
+                .install_change_request_target_context(context)
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+            if let Some(expected) = target.expected_revision {
+                let actual = load_row(
+                    transaction.transaction(),
+                    &registry.entities()[&target.entity_id],
+                    &target.record_id.to_string(),
+                    true,
+                )
+                .await?;
+                if actual.record_revision != expected {
+                    return Err(MutationError::PreconditionFailed);
+                }
+                observed.push(ObservedTarget::existing(
+                    EntityId::new(&target.entity_id).map_err(workflow_error)?,
+                    RecordId::new(target.record_id.to_string()).map_err(workflow_error)?,
+                    RecordRevision::new(expected).map_err(workflow_error)?,
+                ));
+            } else {
+                observed.push(ObservedTarget::reserved_create(
+                    EntityId::new(&target.entity_id).map_err(workflow_error)?,
+                    RecordId::new(target.record_id.to_string()).map_err(workflow_error)?,
+                ));
+            }
+        }
+        let mut written = BTreeSet::new();
+        let mut links = Vec::new();
+        let mut result_revisions = Vec::new();
+        for effect in proposal.effects() {
+            let target_id = effect
+                .target()
+                .existing_record_id()
+                .or_else(|| effect.target().reserved_record_id())
+                .ok_or(MutationError::InvalidRequest)?;
+            let target_uuid =
+                Uuid::parse_str(target_id.as_str()).map_err(|_| MutationError::InvalidRequest)?;
+            let key = (effect.target().entity_id().as_str().to_owned(), target_uuid);
+            if !written.insert(key.clone()) {
+                continue;
+            }
+            let target = targets
+                .iter()
+                .find(|target| target.entity_id == key.0 && target.record_id == key.1)
+                .ok_or(MutationError::InvalidRequest)?;
+            transaction
+                .install_change_request_target_context(&contexts[&key])
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+            fault.fail_at(MutationFaultPoint::BeforeCurrentRow)?;
+            let approved_fields = proposal
+                .effects()
+                .iter()
+                .filter(|candidate| {
+                    candidate.target().entity_id().as_str() == target.entity_id
+                        && candidate
+                            .target()
+                            .existing_record_id()
+                            .or_else(|| candidate.target().reserved_record_id())
+                            .is_some_and(|id| id.as_str() == target.record_id.to_string())
+                })
+                .flat_map(|candidate| {
+                    candidate
+                        .field_changes()
+                        .iter()
+                        .map(|change| change.field().as_str().to_owned())
+                })
+                .collect::<BTreeSet<_>>();
+            let result = self
+                .apply_request_target(
+                    transaction.transaction(),
+                    registry,
+                    input,
+                    claims,
+                    route,
+                    target,
+                    &approved_fields,
+                    binding,
+                    fault,
+                )
+                .await?;
+            result_revisions.push((
+                target.entity_id.clone(),
+                result.record_uuid,
+                result.record_revision,
+            ));
+            links.push(ApplicationResultLink::new(
+                EntityId::new(&target.entity_id).map_err(workflow_error)?,
+                RecordId::new(target.record_id.to_string()).map_err(workflow_error)?,
+                RecordRevision::new(result.record_revision).map_err(workflow_error)?,
+            ));
+            if written.len() == 1 {
+                fault.fail_at(MutationFaultPoint::AfterFirstBatchItem)?;
+            }
+        }
+        let result_count = u16::try_from(links.len()).map_err(|_| MutationError::Unavailable)?;
+        let workflow = workflow
+            .apply(
+                trusted,
+                ProposalVersion::new(proposal_version).map_err(workflow_error)?,
+                &ProposalDigest::new(effect_digest).map_err(workflow_error)?,
+                &ContractFingerprint::new(&plan.contract_fingerprint).map_err(workflow_error)?,
+                observed,
+                PreparedApplication::new(
+                    ApplicationId::new(Uuid::new_v4().to_string()).map_err(workflow_error)?,
+                    links,
+                )
+                .map_err(workflow_error)?,
+            )
+            .map_err(workflow_error)?
+            .into_workflow();
+        Ok(AppliedRequest {
+            workflow,
+            result_count,
+            result_revisions,
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1057,11 +1488,6 @@ impl MutationCoordinator {
             .find(|route| route.id == input.route_id)
             .ok_or(MutationError::InvalidRequest)?;
         for effect in proposal.effects() {
-            let effect_plan = plan
-                .effects
-                .iter()
-                .find(|candidate| candidate.id == effect.id().as_str())
-                .ok_or(MutationError::PreconditionFailed)?;
             let record = effect
                 .target()
                 .existing_record_id()
@@ -1072,7 +1498,8 @@ impl MutationCoordinator {
             let target = targets
                 .iter()
                 .find(|target| {
-                    target.entity_id == effect_plan.target.entity_id && target.record_id == uuid
+                    target.entity_id == effect.target().entity_id().as_str()
+                        && target.record_id == uuid
                 })
                 .ok_or(MutationError::PreconditionFailed)?;
             let authority = input
@@ -1102,10 +1529,10 @@ impl MutationCoordinator {
                     _ => Err(MutationError::InvalidRequest),
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            let binding = target_binding(
+            let binding = frozen_target_binding(
                 entity,
                 workflow,
-                effect_plan,
+                effect,
                 uuid,
                 target.expected_revision,
                 &self.expected.package_revision,
@@ -1360,7 +1787,7 @@ async fn set_transaction_statement_timeout(
 fn target_binding(
     entity: &CompiledEntity,
     workflow: &RequestWorkflow,
-    effect: &CompiledChangeRequestEffect,
+    effect: &CandidateChangeRequestEffect,
     target_record_id: Uuid,
     expected_revision: Option<i64>,
     package_revision: &str,
@@ -1395,9 +1822,50 @@ fn target_binding(
             .mutations
             .iter()
             .map(|mutation| match mutation {
-                CompiledChangeRequestMutation::Set { field, .. }
-                | CompiledChangeRequestMutation::Clear { field } => field.clone(),
+                CandidateChangeRequestMutation::Set { field, .. }
+                | CandidateChangeRequestMutation::Clear { field } => field.clone(),
             })
+            .collect(),
+    })
+}
+
+fn frozen_target_binding(
+    entity: &CompiledEntity,
+    workflow: &RequestWorkflow,
+    effect: &crate::request_workflow::PreparedEffect,
+    target_record_id: Uuid,
+    expected_revision: Option<i64>,
+    package_revision: &str,
+    actor: &str,
+) -> Result<ChangeRequestTargetBinding, MutationError> {
+    Ok(ChangeRequestTargetBinding {
+        request_entity_id: entity.id.clone(),
+        request_id: Uuid::parse_str(workflow.request().record_id().as_str())
+            .map_err(|_| MutationError::InvalidRequest)?,
+        proposal_version: i64::from(workflow.current_version().get()),
+        contract_fingerprint: workflow
+            .current_proposal()
+            .ok_or(MutationError::Conflict)?
+            .contract_fingerprint()
+            .as_str()
+            .to_owned(),
+        effect_digest: workflow
+            .current_proposal()
+            .ok_or(MutationError::Conflict)?
+            .effect_digest()
+            .as_str()
+            .to_owned(),
+        active_package_revision: package_revision.to_owned(),
+        actor_reference: actor.to_owned(),
+        effect_id: effect.id().as_str().to_owned(),
+        target_entity_id: effect.target().entity_id().as_str().to_owned(),
+        target_record_id,
+        operation: effect.operation(),
+        expected_revision,
+        fields: effect
+            .field_changes()
+            .iter()
+            .map(|change| change.field().as_str().to_owned())
             .collect(),
     })
 }
@@ -1469,9 +1937,9 @@ fn action_binding_json(input: &RequestActionInput<'_>) -> Result<Value, Mutation
             "operation": action_operation(&input.action), "proposalVersion": proposal_version, "effectDigest": effect_digest,
         }),
     };
-    Ok(
-        json!({"action": action, "ifMatch": input.if_match, "targetAuthority": target_authority_binding(&input.target_authority)}),
-    )
+    Ok(json!({"action": action, "ifMatch": input.if_match,
+            "targetAuthority": target_authority_binding(&input.target_authority),
+            "automaticApplyAuthority": input.automatic_apply_authority.as_deref().map(target_authority_binding)}))
 }
 
 fn target_authority_binding(authority: &[crate::api::RequestActionTargetAuthority]) -> Value {
@@ -1503,18 +1971,52 @@ fn request_action_response(
     snapshot_reference: String,
     workflow: &RequestWorkflow,
 ) -> Result<HeldResponse, MutationError> {
-    HeldResponse::from_json(200, &json!({
-        "id": record_id, "revision": record_revision, "snapshot": snapshot_reference,
-        "request": {"serverState": workflow.state(), "proposalVersion": workflow.current_version().get(),
-            "effectDigest": workflow.current_proposal().map(|proposal| proposal.effect_digest().as_str()),
-            "application": workflow.application().map(|receipt| json!({
-                "applicationId": receipt.application_id().as_str(),
-                "proposalVersion": receipt.version().get(),
-                "effectDigest": receipt.effect_digest().as_str(),
-                "appliedAt": receipt.applied_at().as_str(),
-            }))},
-    }), BTreeMap::from([(PermittedResponseHeader::ContentType, b"application/json".to_vec())]))
-        .map_err(MutationError::from)
+    let mut request = json!({
+        "serverState": workflow.state(),
+        "proposalVersion": workflow.current_version().get(),
+        "effectDigest": workflow.current_proposal().map(|proposal| proposal.effect_digest().as_str()),
+        "application": workflow.application().map(|receipt| json!({
+            "applicationId": receipt.application_id().as_str(),
+            "proposalVersion": receipt.version().get(),
+            "effectDigest": receipt.effect_digest().as_str(),
+            "appliedAt": receipt.applied_at().as_str(),
+        })),
+    });
+    if let Some(public) = workflow.current_proposal().and_then(|proposal| {
+        let planning = proposal.planning_binding()?;
+        let mut public = json!({
+            "reviewMode": match proposal.review_policy() {
+                crate::request_workflow::FrozenReviewPolicy::None => "none",
+                crate::request_workflow::FrozenReviewPolicy::Stages => "staged",
+            },
+            "applicationDisposition": match planning.disposition() {
+                crate::request_workflow::FrozenPlannerDisposition::Apply => "apply",
+                crate::request_workflow::FrozenPlannerDisposition::Queue => "queue",
+            },
+        });
+        if let Some(reason) = planning.queue_reason() {
+            public["queueReason"] = json!({
+                "code": reason.code(), "label": reason.label(),
+            });
+        }
+        Some(public)
+    }) {
+        request["proposal"] = public;
+    }
+    HeldResponse::from_json(
+        200,
+        &json!({
+            "id": record_id,
+            "revision": record_revision,
+            "snapshot": snapshot_reference,
+            "request": request,
+        }),
+        BTreeMap::from([(
+            PermittedResponseHeader::ContentType,
+            b"application/json".to_vec(),
+        )]),
+    )
+    .map_err(MutationError::from)
 }
 
 async fn request_revision_snapshot_reference(

@@ -8,6 +8,7 @@ fixtures=(
   acceptance/business-establishments
   acceptance/asset-site-placement-change-requests
   acceptance/publicschema-household-change-requests
+  acceptance/person-name-change-rhai
   fixtures/asset-registration-actions
   fixtures/household-contact-actions
 )

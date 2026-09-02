@@ -24,6 +24,10 @@ use crate::request_workflow::{
 
 pub(crate) const REQUEST_TABLES: &[(&str, &[&str])] = &[
     ("registry_request_state", &["INSERT", "SELECT", "UPDATE"]),
+    (
+        "registry_request_intake_presence",
+        &["DELETE", "INSERT", "SELECT"],
+    ),
     ("registry_request_proposals", &["INSERT", "SELECT"]),
     ("registry_request_targets", &["INSERT", "SELECT"]),
     ("registry_request_decisions", &["INSERT", "SELECT"]),
@@ -59,6 +63,15 @@ pub(crate) async fn install(
              ADD CONSTRAINT registry_request_state_detail_erasure_terminal CHECK (
                  detail_erased_at IS NULL OR state IN ('rejected','canceled','applied')
              );
+         CREATE TABLE IF NOT EXISTS registry_internal.registry_request_intake_presence (
+             request_entity_id text NOT NULL CHECK (request_entity_id <> ''),
+             request_id uuid NOT NULL,
+             field_id text NOT NULL CHECK (field_id <> ''),
+             PRIMARY KEY (request_entity_id, request_id, field_id),
+             FOREIGN KEY (request_entity_id, request_id)
+                 REFERENCES registry_internal.registry_request_state
+                 ON DELETE CASCADE
+         );
          CREATE TABLE IF NOT EXISTS registry_internal.registry_request_proposals (
              request_entity_id text NOT NULL,
              request_id uuid NOT NULL,
@@ -226,6 +239,90 @@ pub(crate) async fn initialize_draft(
         .await
         .map_err(|_| MutationError::Unavailable)?;
     Ok(())
+}
+
+/// Retains only authored field identifiers, never their values. Create and
+/// draft-patch callers invoke this in the same transaction as the typed row
+/// mutation so planner input can preserve JSON missing separately from null.
+pub(crate) async fn record_authored_intake_fields<'a>(
+    transaction: &Transaction<'_>,
+    entity_id: &str,
+    record_id: Uuid,
+    field_ids: impl IntoIterator<Item = &'a str>,
+) -> Result<(), MutationError> {
+    if entity_id.is_empty() {
+        return Err(MutationError::InvalidRequest);
+    }
+    let mut unique = BTreeSet::new();
+    for field_id in field_ids {
+        if field_id.is_empty() || field_id.len() > 512 || field_id.chars().any(char::is_control) {
+            return Err(MutationError::InvalidRequest);
+        }
+        unique.insert(field_id);
+    }
+    if unique.len() > 1024 {
+        return Err(MutationError::InvalidRequest);
+    }
+    for field_id in unique {
+        transaction
+            .execute(
+                "INSERT INTO registry_internal.registry_request_intake_presence
+                     (request_entity_id, request_id, field_id)
+                 VALUES ($1, $2, $3)
+                 ON CONFLICT DO NOTHING",
+                &[&entity_id, &record_id, &field_id],
+            )
+            .await
+            .map_err(map_store_error)?;
+    }
+    Ok(())
+}
+
+pub(crate) async fn load_authored_intake(
+    transaction: &Transaction<'_>,
+    entity_id: &str,
+    record_id: Uuid,
+    materialized: &Map<String, Value>,
+) -> Result<Map<String, Value>, MutationError> {
+    let rows = transaction
+        .query(
+            "SELECT field_id
+               FROM registry_internal.registry_request_intake_presence
+              WHERE request_entity_id = $1 AND request_id = $2
+              ORDER BY field_id
+              LIMIT 1025",
+            &[&entity_id, &record_id],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    if rows.len() > 1024 {
+        return Err(MutationError::Unavailable);
+    }
+    let mut authored = Map::new();
+    for row in rows {
+        let field_id = row.get::<_, String>(0);
+        let value = materialized
+            .get(&field_id)
+            .ok_or(MutationError::Unavailable)?;
+        authored.insert(field_id, value.clone());
+    }
+    Ok(authored)
+}
+
+pub(crate) async fn erase_authored_intake_fields(
+    transaction: &impl GenericClient,
+    entity_id: &str,
+    record_id: Uuid,
+) -> Result<u64, MutationError> {
+    transaction
+        .execute(
+            "DELETE FROM registry_internal.registry_request_intake_presence
+              WHERE request_entity_id = $1
+                AND request_id = $2",
+            &[&entity_id, &record_id],
+        )
+        .await
+        .map_err(map_store_error)
 }
 
 /// The request row is locked before calling this guard. Sharing the guard with
@@ -1258,6 +1355,66 @@ mod tests {
                 assert!(allowed, "declared runtime table privilege is granted");
             }
         }
+        migration_task.abort();
+        database.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn authored_intake_presence_preserves_missing_separately_from_null_and_erases() {
+        let (database, mut migration, migration_task) = install_schema().await;
+        let request_id = Uuid::new_v4();
+        let transaction = migration.transaction().await.expect("draft transaction");
+        initialize_draft(&transaction, REQUEST_ENTITY, request_id, "submitter")
+            .await
+            .expect("draft initializes");
+        record_authored_intake_fields(
+            &transaction,
+            REQUEST_ENTITY,
+            request_id,
+            ["explicit-null", "value"],
+        )
+        .await
+        .expect("authored presence saves");
+        let materialized = Map::from_iter([
+            ("explicit-null".to_owned(), Value::Null),
+            ("missing-default-null".to_owned(), Value::Null),
+            ("value".to_owned(), json!("present")),
+        ]);
+        let authored =
+            load_authored_intake(&transaction, REQUEST_ENTITY, request_id, &materialized)
+                .await
+                .expect("authored intake loads");
+        assert_eq!(
+            authored,
+            Map::from_iter([
+                ("explicit-null".to_owned(), Value::Null),
+                ("value".to_owned(), json!("present")),
+            ])
+        );
+        transaction.commit().await.expect("presence commits");
+
+        migration
+            .execute(
+                "UPDATE registry_internal.registry_request_state
+                    SET state = 'canceled', detail_erased_at = transaction_timestamp()
+                  WHERE request_entity_id = $1 AND request_id = $2",
+                &[&REQUEST_ENTITY, &request_id],
+            )
+            .await
+            .expect("detail erases");
+        erase_authored_intake_fields(&migration, REQUEST_ENTITY, request_id)
+            .await
+            .expect("authored intake presence erases with request detail");
+        let retained = migration
+            .query_one(
+                "SELECT count(*) FROM registry_internal.registry_request_intake_presence
+                  WHERE request_entity_id = $1 AND request_id = $2",
+                &[&REQUEST_ENTITY, &request_id],
+            )
+            .await
+            .expect("presence count")
+            .get::<_, i64>(0);
+        assert_eq!(retained, 0);
         migration_task.abort();
         database.cleanup().await;
     }

@@ -10,15 +10,16 @@ created_roles=()
 mode="change-request"
 asset_project=""
 household_project=""
+rhai_project=""
 
 usage() {
   cat >&2 <<'USAGE'
-usage: products/registry-server/scripts/test-change-request-examples.sh [--env FILE] [--asset-project DIR] [--household-project DIR] [--mode change-request|immediate-actions]
+usage: products/registry-server/scripts/test-change-request-examples.sh [--env FILE] [--asset-project DIR] [--household-project DIR] [--rhai-project DIR] [--mode change-request|immediate-actions]
 
-Runs both Registry Server change-request example fixtures through registry-serverctl test.
+Runs the Registry Server change-request example fixtures through registry-serverctl test.
 Use --mode immediate-actions to run the immediate-action fixtures through the same closed harness.
 Set REGISTRY_SERVER_TEST_DATABASE_URL and REGISTRY_SERVER_TEST_TLS_CA_PEM_PATH, or pass --env FILE.
-Requires Python 3 with PyYAML. Use --asset-project or --household-project to run a disposable edited copy instead of the committed fixture.
+Requires Python 3 with PyYAML. Use a project override to run a disposable edited copy instead of the committed fixture.
 USAGE
 }
 
@@ -46,6 +47,14 @@ while [[ $# -gt 0 ]]; do
         exit 2
       fi
       household_project=$2
+      shift 2
+      ;;
+    --rhai-project)
+      if [[ $# -lt 2 ]]; then
+        usage
+        exit 2
+      fi
+      rhai_project=$2
       shift 2
       ;;
     --mode)
@@ -82,8 +91,13 @@ case "$mode" in
     role_slug="cr"
     default_asset_project="$repository_root/products/registry-server/acceptance/asset-site-placement-change-requests"
     default_household_project="$repository_root/products/registry-server/acceptance/publicschema-household-change-requests"
+    default_rhai_project="$repository_root/products/registry-server/acceptance/person-name-change-rhai"
     ;;
   immediate-actions)
+    if [[ -n "$rhai_project" ]]; then
+      usage
+      exit 2
+    fi
     run_label="immediate-action"
     temp_slug="ia"
     role_slug="ia"
@@ -94,6 +108,9 @@ esac
 
 asset_project="${asset_project:-$default_asset_project}"
 household_project="${household_project:-$default_household_project}"
+if [[ "$mode" == "change-request" ]]; then
+  rhai_project="${rhai_project:-$default_rhai_project}"
+fi
 
 if [[ -n "${env_file:-}" ]]; then
   if [[ ! -f "$env_file" || -L "$env_file" ]]; then
@@ -658,6 +675,9 @@ require_tool psql
 require_tool python3
 asset_project=$(normalize_project asset "$asset_project")
 household_project=$(normalize_project household "$household_project")
+if [[ "$mode" == "change-request" ]]; then
+  rhai_project=$(normalize_project rhai "$rhai_project")
+fi
 
 export CARGO_INCREMENTAL=0
 export CARGO_PROFILE_DEV_DEBUG=0
@@ -722,20 +742,31 @@ write_jwt "$temporary_root/oidc-signer.pem" "change-request-example-oidc-key" "h
 write_jwt "$temporary_root/oidc-signer.pem" "change-request-example-oidc-key" "household-contact-applier" "household-contact-apply" "registry:household-contact:apply" "$temporary_root/secrets/household-contact-applier-token"
 case "$mode" in
   change-request)
+    write_jwt "$temporary_root/oidc-signer.pem" "change-request-example-oidc-key" "synthetic-person-operator" "person-maintenance" "" "$temporary_root/secrets/person-operator-token"
+    write_jwt "$temporary_root/oidc-signer.pem" "change-request-example-oidc-key" "synthetic-name-change-submitter" "person-name-change" "registry:person-name:submit" "$temporary_root/secrets/name-change-submitter-token"
+    write_jwt "$temporary_root/oidc-signer.pem" "change-request-example-oidc-key" "synthetic-assisted-applier" "person-name-apply" "registry:person-name:apply-assisted" "$temporary_root/secrets/assisted-applier-token"
+    write_jwt "$temporary_root/oidc-signer.pem" "change-request-example-oidc-key" "synthetic-unauthorized-applier" "person-name-apply" "" "$temporary_root/secrets/unauthorized-assisted-applier-token"
     asset_fixture_name=asset-site-placement-change-requests
     household_fixture_name=publicschema-household-change-requests
+    rhai_fixture_name=person-name-change-rhai
     asset_database="rs_cr_asset_$suffix"
     household_database="rs_cr_household_$suffix"
+    rhai_database="rs_cr_rhai_$suffix"
     asset_database_id=asset-site-placement-change-requests-local-db
     household_database_id=publicschema-household-change-requests-local-db
+    rhai_database_id=person-name-change-rhai-local-db
     asset_runtime_secret=asset-runtime-url
     asset_migration_secret=asset-migration-url
     household_runtime_secret=household-runtime-url
     household_migration_secret=household-migration-url
+    rhai_runtime_secret=rhai-runtime-url
+    rhai_migration_secret=rhai-migration-url
     asset_expected_journeys=placement-correction-request-flow
     household_expected_journeys=household-contact-registration-request-flow
+    rhai_expected_journeys=person-name-change-rhai-flow
     asset_credentials="$temporary_root/asset-site-placement-change-requests-credentials.yaml"
     household_credentials="$temporary_root/publicschema-household-change-requests-credentials.yaml"
+    rhai_credentials="$temporary_root/person-name-change-rhai-credentials.yaml"
     write_credentials_from_project "$asset_project" "$asset_credentials" \
       asset-operator=asset-operator-token \
       correction-submitter=correction-submitter-token \
@@ -748,6 +779,11 @@ case "$mode" in
       household-contact-reviewer=household-contact-reviewer-token \
       household-contact-supervisor=household-contact-supervisor-token \
       household-contact-applier=household-contact-applier-token
+    write_credentials_from_project "$rhai_project" "$rhai_credentials" \
+      person-operator=person-operator-token \
+      name-change-submitter=name-change-submitter-token \
+      assisted-applier=assisted-applier-token \
+      person-name-change-rhai-flow.caller-without-apply-scope-cannot-list-work-queue=unauthorized-assisted-applier-token
     ;;
   immediate-actions)
     write_jwt "$temporary_root/oidc-signer.pem" "change-request-example-oidc-key" "synthetic-asset-registrar" "asset-registration" "registry:asset:register" "$temporary_root/secrets/asset-action-registrar-token" '{"jurisdiction":"north-district"}'
@@ -780,6 +816,9 @@ case "$mode" in
 esac
 asset_package_identity=$(read_project_package_identity "$asset_project")
 household_package_identity=$(read_project_package_identity "$household_project")
+if [[ "$mode" == "change-request" ]]; then
+  rhai_package_identity=$(read_project_package_identity "$rhai_project")
+fi
 asset_package_environment=$(printf '%s\n' "$asset_package_identity" | sed -n '1p')
 asset_instance_id=$(printf '%s\n' "$asset_package_identity" | sed -n '2p')
 asset_source_revision=$(printf '%s\n' "$asset_package_identity" | sed -n '3p')
@@ -787,6 +826,12 @@ household_package_environment=$(printf '%s\n' "$household_package_identity" | se
 household_instance_id=$(printf '%s\n' "$household_package_identity" | sed -n '2p')
 household_source_revision=$(printf '%s\n' "$household_package_identity" | sed -n '3p')
 chmod 600 "$asset_credentials" "$household_credentials"
+if [[ "$mode" == "change-request" ]]; then
+  rhai_package_environment=$(printf '%s\n' "$rhai_package_identity" | sed -n '1p')
+  rhai_instance_id=$(printf '%s\n' "$rhai_package_identity" | sed -n '2p')
+  rhai_source_revision=$(printf '%s\n' "$rhai_package_identity" | sed -n '3p')
+  chmod 600 "$rhai_credentials"
+fi
 
 cargo build --manifest-path "$repository_root/Cargo.toml" --locked \
   -p registry-serverctl \
@@ -818,3 +863,18 @@ run_fixture \
   "$household_instance_id" \
   "$household_credentials" \
   "$household_expected_journeys"
+
+if [[ "$mode" == "change-request" ]]; then
+  run_fixture \
+    "$rhai_fixture_name" \
+    "$rhai_project" \
+    "$rhai_database" \
+    "$rhai_database_id" \
+    "$rhai_runtime_secret" \
+    "$rhai_migration_secret" \
+    "$rhai_package_environment" \
+    "$rhai_source_revision" \
+    "$rhai_instance_id" \
+    "$rhai_credentials" \
+    "$rhai_expected_journeys"
+fi

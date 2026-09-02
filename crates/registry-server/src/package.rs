@@ -56,6 +56,9 @@ pub const TRUST_ANCHOR_API_VERSION: &str = "registry.registrystack.org/package-t
 pub const COMPILER_ID: &str = "registry-server";
 pub const FIXTURE_JOURNEYS_PATH: &str = "tests/journeys.yaml";
 pub const MAX_PACKAGE_SOURCE_FILE_BYTES: u64 = 16 * 1024 * 1024;
+pub const MAX_RHAI_PLANNER_SOURCE_BYTES: u64 =
+    crate::change_request::MAX_CHANGE_REQUEST_PLANNER_SOURCE_BYTES as u64;
+pub const MAX_RHAI_PLANNER_PATH_BYTES: usize = 256;
 
 const MANIFEST_PATH: &str = "package.json";
 const MAX_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
@@ -126,6 +129,8 @@ pub struct PackageSignature {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CapturedSources {
     pub project: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub project_assets: Vec<String>,
     pub modules: Vec<CapturedModule>,
     pub fixture_journeys: String,
 }
@@ -152,8 +157,10 @@ pub struct PackageFile {
 #[serde(rename_all = "snake_case")]
 pub enum PackageFileRole {
     SourceProject,
+    SourceProjectPlannerScript,
     SourceModule,
     SourceModuleAsset,
+    SourceModulePlannerScript,
     FixtureJourneys,
     GovernedModel,
     PhysicalNameInventory,
@@ -267,6 +274,7 @@ pub enum CompiledRegistryChangeCode {
     EntityAccessRequirementsChanged,
     EntityGeoJsonChanged,
     EntityTemporalChanged,
+    ChangeRequestContractChanged,
     FieldAddedOptional,
     FieldAddedRequired,
     FieldRemoved,
@@ -315,6 +323,7 @@ pub struct CompiledRegistryChangeTarget {
 pub enum CompiledRegistryChangeTargetKind {
     Registry,
     Entity,
+    ChangeRequest,
     Field,
     DerivedRelation,
     Constraint,
@@ -1130,6 +1139,26 @@ fn compare_entities(
                 CompiledRegistryChangeCode::EntityTemporalChanged,
                 target(
                     CompiledRegistryChangeTargetKind::Entity,
+                    Some(entity_id.as_str()),
+                    None,
+                ),
+            );
+        }
+        if previous_entity
+            .change_request
+            .as_ref()
+            .map(|request| request.contract_fingerprint.as_str())
+            != candidate_entity
+                .change_request
+                .as_ref()
+                .map(|request| request.contract_fingerprint.as_str())
+        {
+            push_change(
+                changes,
+                CompiledRegistryChangeClass::AccessOrDisclosureChange,
+                CompiledRegistryChangeCode::ChangeRequestContractChanged,
+                target(
+                    CompiledRegistryChangeTargetKind::ChangeRequest,
                     Some(entity_id.as_str()),
                     None,
                 ),
@@ -2121,10 +2150,21 @@ fn target(
     }
 }
 
-pub fn prepare_package(mut request: PackageBuildRequest) -> Result<PreparedPackage> {
+pub fn prepare_package(request: PackageBuildRequest) -> Result<PreparedPackage> {
+    prepare_package_with_project_assets(request, Vec::new())
+}
+
+/// Prepare a package whose project-level governed source declares Rhai planner
+/// scripts. The separate argument preserves the existing package build request
+/// API while keeping script bytes inside the sealed source closure.
+pub fn prepare_package_with_project_assets(
+    mut request: PackageBuildRequest,
+    mut project_assets: Vec<PackageSourceFile>,
+) -> Result<PreparedPackage> {
     request
         .modules
         .sort_by(|left, right| left.id.cmp(&right.id));
+    project_assets.sort_by(|left, right| left.path.cmp(&right.path));
     for module in &mut request.modules {
         module
             .assets
@@ -2155,7 +2195,8 @@ pub fn prepare_package(mut request: PackageBuildRequest) -> Result<PreparedPacka
             Ok(module)
         })
         .collect::<Result<Vec<_>>>()?;
-    let module_assets = package_module_assets(&request.modules)?;
+    validate_declared_package_assets(&project, &modules, &project_assets, &request.modules)?;
+    let module_assets = package_compiler_assets(&project_assets, &request.modules)?;
     let compiled = compile_project_with_assets(
         &project,
         &modules,
@@ -2255,6 +2296,12 @@ pub fn prepare_package(mut request: PackageBuildRequest) -> Result<PreparedPacka
 
     let mut files = BTreeMap::new();
     files.insert(request.project.path.clone(), request.project.bytes.clone());
+    for asset in &project_assets {
+        let path = package_project_asset_path(&asset.path)?;
+        if files.insert(path, asset.bytes.clone()).is_some() {
+            return Err(PackageError::Closure);
+        }
+    }
     for module in &request.modules {
         if files
             .insert(module.path.clone(), module.bytes.clone())
@@ -2292,6 +2339,14 @@ pub fn prepare_package(mut request: PackageBuildRequest) -> Result<PreparedPacka
         PackageFileRole::SourceProject,
         &request.project.bytes,
     )?);
+    for asset in &project_assets {
+        let path = package_project_asset_path(&asset.path)?;
+        entries.push(file_entry(
+            &path,
+            PackageFileRole::SourceProjectPlannerScript,
+            &asset.bytes,
+        )?);
+    }
     for module in &request.modules {
         entries.push(file_entry(
             &module.path,
@@ -2302,7 +2357,7 @@ pub fn prepare_package(mut request: PackageBuildRequest) -> Result<PreparedPacka
             let path = package_module_asset_path(&module.id, &asset.path)?;
             entries.push(file_entry(
                 &path,
-                PackageFileRole::SourceModuleAsset,
+                package_module_asset_role(&asset.path)?,
                 &asset.bytes,
             )?);
         }
@@ -2315,6 +2370,9 @@ pub fn prepare_package(mut request: PackageBuildRequest) -> Result<PreparedPacka
     for (path, bytes) in &files {
         if path == &request.project.path
             || path == &request.fixture_journeys.path
+            || project_assets.iter().any(|asset| {
+                package_project_asset_path(&asset.path).is_ok_and(|asset_path| asset_path == *path)
+            })
             || request.modules.iter().any(|module| module.path == *path)
             || request.modules.iter().any(|module| {
                 module.assets.iter().any(|asset| {
@@ -2347,6 +2405,10 @@ pub fn prepare_package(mut request: PackageBuildRequest) -> Result<PreparedPacka
         signature_policy: request.signature_policy,
         sources: CapturedSources {
             project: request.project.path,
+            project_assets: project_assets
+                .into_iter()
+                .map(|asset| package_project_asset_path(&asset.path))
+                .collect::<Result<Vec<_>>>()?,
             modules: request
                 .modules
                 .into_iter()
@@ -2424,19 +2486,29 @@ fn reviewed_successor_inputs(
     ))
 }
 
-fn package_module_assets(modules: &[PackageModuleSource]) -> Result<Vec<ModuleAssetSource>> {
+fn package_compiler_assets(
+    project_assets: &[PackageSourceFile],
+    modules: &[PackageModuleSource],
+) -> Result<Vec<ModuleAssetSource>> {
     let mut assets = Vec::new();
     let mut paths = BTreeSet::new();
+    for asset in project_assets {
+        validate_planner_asset(&asset.path, &asset.bytes)?;
+        if !paths.insert((None, asset.path.as_str())) {
+            return Err(PackageError::Derivation);
+        }
+        assets.push(ModuleAssetSource {
+            module: None,
+            path: asset.path.clone(),
+            bytes: asset.bytes.clone(),
+        });
+    }
     for module in modules {
         validate_relative(&module.id)?;
         for asset in &module.assets {
             validate_relative(&asset.path)?;
-            if !asset.path.ends_with(".sql")
-                || asset.path == "module.yaml"
-                || asset.bytes.is_empty()
-                || asset.bytes.len() > MAX_DERIVED_SQL_BYTES
-                || !paths.insert((module.id.as_str(), asset.path.as_str()))
-            {
+            validate_module_asset(&asset.path, &asset.bytes)?;
+            if !paths.insert((Some(module.id.as_str()), asset.path.as_str())) {
                 return Err(PackageError::Derivation);
             }
             assets.push(ModuleAssetSource {
@@ -2449,15 +2521,154 @@ fn package_module_assets(modules: &[PackageModuleSource]) -> Result<Vec<ModuleAs
     Ok(assets)
 }
 
+fn validate_declared_package_assets(
+    project: &RegistryProject,
+    modules: &[RegistryModule],
+    project_assets: &[PackageSourceFile],
+    module_sources: &[PackageModuleSource],
+) -> Result<()> {
+    let declared_project = project
+        .entities
+        .iter()
+        .filter_map(|entity| {
+            entity
+                .change_request
+                .as_ref()
+                .and_then(|request| request.planner.as_ref())
+                .map(|planner| planner.script.as_str())
+        })
+        .collect::<BTreeSet<_>>();
+    let supplied_project = project_assets
+        .iter()
+        .map(|asset| asset.path.as_str())
+        .collect::<BTreeSet<_>>();
+    if declared_project != supplied_project || supplied_project.len() != project_assets.len() {
+        return Err(PackageError::Derivation);
+    }
+
+    let sources_by_id = module_sources
+        .iter()
+        .map(|module| (module.id.as_str(), module))
+        .collect::<BTreeMap<_, _>>();
+    for module in modules {
+        let source = sources_by_id
+            .get(module.id.as_str())
+            .ok_or(PackageError::Derivation)?;
+        let mut declared = BTreeSet::new();
+        for entity in &module.entities {
+            declared.extend(entity.derived.iter().map(|derived| derived.sql.as_str()));
+            if let Some(script) = entity
+                .change_request
+                .as_ref()
+                .and_then(|request| request.planner.as_ref())
+                .map(|planner| planner.script.as_str())
+            {
+                declared.insert(script);
+            }
+        }
+        for extension in &module.extend_entities {
+            declared.extend(extension.derived.iter().map(|derived| derived.sql.as_str()));
+            if let Some(script) = extension
+                .change_request
+                .as_ref()
+                .and_then(|request| request.planner.as_ref())
+                .map(|planner| planner.script.as_str())
+            {
+                declared.insert(script);
+            }
+        }
+        let supplied = source
+            .assets
+            .iter()
+            .map(|asset| asset.path.as_str())
+            .collect::<BTreeSet<_>>();
+        if declared != supplied || supplied.len() != source.assets.len() {
+            return Err(PackageError::Derivation);
+        }
+    }
+    if sources_by_id.len() != modules.len() {
+        return Err(PackageError::Derivation);
+    }
+    Ok(())
+}
+
+fn validate_planner_asset(path: &str, bytes: &[u8]) -> Result<()> {
+    validate_relative(path)?;
+    if path.len() > MAX_RHAI_PLANNER_PATH_BYTES
+        || !path.ends_with(".rhai")
+        || path == "registry.yaml"
+        || bytes.is_empty()
+        || bytes.len() as u64 > MAX_RHAI_PLANNER_SOURCE_BYTES
+    {
+        return Err(PackageError::Derivation);
+    }
+    Ok(())
+}
+
+fn validate_module_asset(path: &str, bytes: &[u8]) -> Result<()> {
+    validate_relative(path)?;
+    match Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+    {
+        Some("sql")
+            if path != "module.yaml"
+                && !bytes.is_empty()
+                && bytes.len() <= MAX_DERIVED_SQL_BYTES =>
+        {
+            Ok(())
+        }
+        Some("rhai")
+            if path != "module.yaml" && bytes.len() as u64 <= MAX_RHAI_PLANNER_SOURCE_BYTES =>
+        {
+            validate_planner_asset(path, bytes)
+        }
+        _ => Err(PackageError::Derivation),
+    }
+}
+
+fn package_project_asset_path(asset_path: &str) -> Result<String> {
+    validate_relative(asset_path)?;
+    if !asset_path.ends_with(".rhai") || asset_path == "registry.yaml" {
+        return Err(PackageError::Derivation);
+    }
+    let path = format!("source/project/{asset_path}");
+    validate_relative(&path)?;
+    Ok(path)
+}
+
+fn project_asset_source_path(package_path: &str) -> Result<&str> {
+    validate_relative(package_path)?;
+    let source_path = package_path
+        .strip_prefix("source/project/")
+        .ok_or(PackageError::Derivation)?;
+    if package_project_asset_path(source_path)? != package_path {
+        return Err(PackageError::Derivation);
+    }
+    Ok(source_path)
+}
+
 fn package_module_asset_path(module_id: &str, asset_path: &str) -> Result<String> {
     validate_relative(module_id)?;
     validate_relative(asset_path)?;
-    if !asset_path.ends_with(".sql") || asset_path == "module.yaml" {
+    if (!asset_path.ends_with(".sql") && !asset_path.ends_with(".rhai"))
+        || asset_path == "module.yaml"
+    {
         return Err(PackageError::Derivation);
     }
     let path = format!("source/modules/{module_id}/{asset_path}");
     validate_relative(&path)?;
     Ok(path)
+}
+
+fn package_module_asset_role(asset_path: &str) -> Result<PackageFileRole> {
+    if asset_path.ends_with(".sql") {
+        Ok(PackageFileRole::SourceModuleAsset)
+    } else if asset_path.ends_with(".rhai") {
+        Ok(PackageFileRole::SourceModulePlannerScript)
+    } else {
+        Err(PackageError::Derivation)
+    }
 }
 
 /// Return the exact canonical bytes signed by every package signer.
@@ -2605,11 +2816,20 @@ fn package_role_for_path(path: &str) -> Result<PackageFileRole> {
     }
     Ok(match path {
         FIXTURE_JOURNEYS_PATH => PackageFileRole::FixtureJourneys,
+        path if path.starts_with("source/project/") && path.ends_with(".rhai") => {
+            PackageFileRole::SourceProjectPlannerScript
+        }
         path if path.starts_with("source/modules/")
             && path.ends_with(".sql")
             && !path.ends_with("/module.yaml") =>
         {
             PackageFileRole::SourceModuleAsset
+        }
+        path if path.starts_with("source/modules/")
+            && path.ends_with(".rhai")
+            && !path.ends_with("/module.yaml") =>
+        {
+            PackageFileRole::SourceModulePlannerScript
         }
         "effective-model.json" => PackageFileRole::GovernedModel,
         "inventories/physical-names.json" => PackageFileRole::PhysicalNameInventory,
@@ -3829,7 +4049,34 @@ fn rederive(
                 .and_then(|bytes| parse_module_yaml(bytes).map_err(|_| PackageError::Derivation))
         })
         .collect::<Result<Vec<RegistryModule>>>()?;
-    let module_assets = captured_module_assets(manifest, loaded)?;
+    let module_assets = captured_compiler_assets(manifest, loaded)?;
+    let project_assets = module_assets
+        .iter()
+        .filter(|asset| asset.module.is_none())
+        .map(|asset| PackageSourceFile {
+            path: asset.path.clone(),
+            bytes: asset.bytes.clone(),
+        })
+        .collect::<Vec<_>>();
+    let module_sources = manifest
+        .sources
+        .modules
+        .iter()
+        .map(|source| PackageModuleSource {
+            id: source.id.clone(),
+            path: source.path.clone(),
+            bytes: Vec::new(),
+            assets: module_assets
+                .iter()
+                .filter(|asset| asset.module.as_deref() == Some(source.id.as_str()))
+                .map(|asset| PackageSourceFile {
+                    path: asset.path.clone(),
+                    bytes: asset.bytes.clone(),
+                })
+                .collect(),
+        })
+        .collect::<Vec<_>>();
+    validate_declared_package_assets(&project, &modules, &project_assets, &module_sources)?;
     validate_captured_bindings(manifest, &project, &modules)?;
     let compiled = compile_project_with_assets(
         &project,
@@ -3850,8 +4097,10 @@ fn rederive(
             !matches!(
                 entry.role,
                 PackageFileRole::SourceProject
+                    | PackageFileRole::SourceProjectPlannerScript
                     | PackageFileRole::SourceModule
                     | PackageFileRole::SourceModuleAsset
+                    | PackageFileRole::SourceModulePlannerScript
                     | PackageFileRole::FixtureJourneys
             ) && !reviewed_package_role(entry.role)
         })
@@ -3875,11 +4124,24 @@ fn rederive(
     Ok((compiled, reviewed_migration_plan))
 }
 
-fn captured_module_assets(
+fn captured_compiler_assets(
     manifest: &PackageManifest,
     loaded: &BTreeMap<String, Vec<u8>>,
 ) -> Result<Vec<ModuleAssetSource>> {
     let mut assets = Vec::new();
+    for package_path in &manifest.sources.project_assets {
+        let asset_path = project_asset_source_path(package_path)?;
+        let bytes = loaded
+            .get(package_path)
+            .ok_or(PackageError::Derivation)?
+            .clone();
+        validate_planner_asset(asset_path, &bytes)?;
+        assets.push(ModuleAssetSource {
+            module: None,
+            path: asset_path.to_owned(),
+            bytes,
+        });
+    }
     for module in &manifest.sources.modules {
         for asset_path in &module.assets {
             let package_path = package_module_asset_path(&module.id, asset_path)?;
@@ -3887,9 +4149,7 @@ fn captured_module_assets(
                 .get(&package_path)
                 .ok_or(PackageError::Derivation)?
                 .clone();
-            if bytes.is_empty() || bytes.len() > MAX_DERIVED_SQL_BYTES {
-                return Err(PackageError::Derivation);
-            }
+            validate_module_asset(asset_path, &bytes)?;
             assets.push(ModuleAssetSource {
                 module: Some(module.id.clone()),
                 path: asset_path.clone(),
@@ -3994,6 +4254,26 @@ fn validate_source_inventory(manifest: &PackageManifest) -> Result<()> {
     if project_entries.len() != 1 || project_entries[0].path != manifest.sources.project {
         return Err(PackageError::Derivation);
     }
+    let mut project_asset_paths = BTreeSet::new();
+    let mut prior_project_asset = None;
+    for asset in &manifest.sources.project_assets {
+        project_asset_source_path(asset)?;
+        if prior_project_asset.is_some_and(|prior: &str| prior >= asset.as_str())
+            || !project_asset_paths.insert(asset.clone())
+        {
+            return Err(PackageError::Derivation);
+        }
+        prior_project_asset = Some(asset.as_str());
+    }
+    let file_project_asset_paths = manifest
+        .files
+        .iter()
+        .filter(|entry| entry.role == PackageFileRole::SourceProjectPlannerScript)
+        .map(|entry| entry.path.clone())
+        .collect::<BTreeSet<_>>();
+    if project_asset_paths != file_project_asset_paths {
+        return Err(PackageError::Derivation);
+    }
     if manifest.sources.fixture_journeys != FIXTURE_JOURNEYS_PATH {
         return Err(PackageError::Derivation);
     }
@@ -4048,18 +4328,40 @@ fn validate_source_inventory(manifest: &PackageManifest) -> Result<()> {
     let file_asset_paths = manifest
         .files
         .iter()
-        .filter(|entry| entry.role == PackageFileRole::SourceModuleAsset)
+        .filter(|entry| {
+            matches!(
+                entry.role,
+                PackageFileRole::SourceModuleAsset | PackageFileRole::SourceModulePlannerScript
+            )
+        })
         .map(|entry| entry.path.clone())
         .collect::<BTreeSet<_>>();
     if asset_paths != file_asset_paths {
         return Err(PackageError::Derivation);
     }
+    for module in &manifest.sources.modules {
+        for asset in &module.assets {
+            let package_path = package_module_asset_path(&module.id, asset)?;
+            let expected_role = package_module_asset_role(asset)?;
+            if manifest
+                .files
+                .iter()
+                .filter(|entry| entry.path == package_path && entry.role == expected_role)
+                .count()
+                != 1
+            {
+                return Err(PackageError::Derivation);
+            }
+        }
+    }
     for entry in &manifest.files {
         if matches!(
             entry.role,
             PackageFileRole::SourceProject
+                | PackageFileRole::SourceProjectPlannerScript
                 | PackageFileRole::SourceModule
                 | PackageFileRole::SourceModuleAsset
+                | PackageFileRole::SourceModulePlannerScript
                 | PackageFileRole::FixtureJourneys
         ) {
             continue;

@@ -482,6 +482,44 @@
       },
       "type": "object"
     },
+    "ChangeRequestApplicationModeSource": {
+      "enum": [
+        "manual",
+        "automatic",
+        "planner"
+      ],
+      "type": "string"
+    },
+    "ChangeRequestApplicationSource": {
+      "additionalProperties": false,
+      "properties": {
+        "allowedDispositions": {
+          "items": {
+            "$ref": "#/$defs/ChangeRequestDispositionSource"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "mode": {
+          "$ref": "#/$defs/ChangeRequestApplicationModeSource",
+          "default": "manual"
+        },
+        "queueReasons": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "ChangeRequestDispositionSource": {
+      "enum": [
+        "apply",
+        "queue"
+      ],
+      "type": "string"
+    },
     "ChangeRequestEffectSource": {
       "additionalProperties": false,
       "properties": {
@@ -519,6 +557,87 @@
       ],
       "type": "object"
     },
+    "ChangeRequestPlannerKindSource": {
+      "enum": [
+        "rhai"
+      ],
+      "type": "string"
+    },
+    "ChangeRequestPlannerSource": {
+      "additionalProperties": false,
+      "properties": {
+        "abi": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ChangeRequestPlannerKindSource"
+        },
+        "requestFields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "script": {
+          "type": "string"
+        },
+        "writes": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ChangeRequestPlannerWriteSource"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "script",
+        "abi"
+      ],
+      "type": "object"
+    },
+    "ChangeRequestPlannerTargetSource": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fromField": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ChangeRequestPlannerWriteSource": {
+      "additionalProperties": false,
+      "properties": {
+        "fields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "operation": {
+          "$ref": "#/$defs/Operation"
+        },
+        "target": {
+          "$ref": "#/$defs/ChangeRequestPlannerTargetSource"
+        }
+      },
+      "required": [
+        "target",
+        "operation"
+      ],
+      "type": "object"
+    },
     "ChangeRequestRetentionModeSource": {
       "enum": [
         "retain",
@@ -536,9 +655,25 @@
       },
       "type": "object"
     },
+    "ChangeRequestReviewModeSource": {
+      "enum": [
+        "none"
+      ],
+      "type": "string"
+    },
     "ChangeRequestReviewSource": {
       "additionalProperties": false,
       "properties": {
+        "mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChangeRequestReviewModeSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "stages": {
           "default": [],
           "items": {
@@ -575,12 +710,28 @@
     "ChangeRequestSource": {
       "additionalProperties": false,
       "properties": {
+        "application": {
+          "$ref": "#/$defs/ChangeRequestApplicationSource",
+          "default": {
+            "mode": "manual"
+          }
+        },
         "effects": {
           "default": [],
           "items": {
             "$ref": "#/$defs/ChangeRequestEffectSource"
           },
           "type": "array"
+        },
+        "planner": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChangeRequestPlannerSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "retention": {
           "$ref": "#/$defs/ChangeRequestRetentionSource",
