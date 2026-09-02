@@ -51,6 +51,7 @@ const PACKAGE_REVISION: &str =
     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const TENANT: &str = "tenant-a";
 const SUBMITTER: &str = "submitter-principal";
+const OTHER_SUBMITTER: &str = "other-submitter-principal";
 const REVIEWER: &str = "reviewer-principal";
 const APPLIER: &str = "applier-principal";
 
@@ -2316,6 +2317,155 @@ async fn real_postgres_http_change_request_two_stage_stale_rebase_and_cancel_are
     .await;
     assert_eq!(cancel["request"]["serverState"], "canceled");
     database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_http_change_request_cancel_belongs_to_the_request_owner() {
+    let database = TestDatabase::create(8).await;
+    let registry = Arc::new(two_stage_registry());
+    let identity = install_registry(&database, &registry, "two-stage-change-request", true).await;
+    let app = change_request_router(
+        &database,
+        registry.clone(),
+        identity,
+        "two-stage-change-request",
+        None,
+    );
+    let steward = claims("steward", "two-stage-steward", None);
+    let owner = claims("submitter", SUBMITTER, None);
+    let other = claims("submitter", OTHER_SUBMITTER, None);
+
+    let old_site = create_record(
+        &app,
+        "/v1/records/sites?accessProfile=steward",
+        steward.clone(),
+        "owner-cancel-old-site",
+        json!({"tenant": TENANT, "name": "owner-cancel-old"}),
+    )
+    .await;
+    let new_site = create_record(
+        &app,
+        "/v1/records/sites?accessProfile=steward",
+        steward.clone(),
+        "owner-cancel-new-site",
+        json!({"tenant": TENANT, "name": "owner-cancel-new"}),
+    )
+    .await;
+    let placement = create_record(
+        &app,
+        "/v1/records/placements?accessProfile=steward",
+        steward,
+        "owner-cancel-placement",
+        json!({"tenant": TENANT, "site": old_site.id}),
+    )
+    .await;
+    let request = create_record(
+        &app,
+        "/v1/records/correction-requests?accessProfile=submitter",
+        owner.clone(),
+        "owner-cancel-correction-request",
+        json!({
+            "tenant": TENANT,
+            "placement": placement.id,
+            "proposedSite": new_site.id,
+            "reason": "owner-only cancel"
+        }),
+    )
+    .await;
+    let uri = format!(
+        "/v1/records/correction-requests/{}?accessProfile=submitter",
+        request.id
+    );
+
+    let owner_draft = get_record(&app, &uri, owner.clone()).await;
+    let draft_cancel = action(&owner_draft.body, "cancel_request", None);
+
+    let other_draft = get_record(&app, &uri, other.clone()).await;
+    assert_eq!(
+        other_draft.body["request"]["serverState"], "draft",
+        "the second submitter shares the tenant boundary and reads the request"
+    );
+    assert_cancel_is_not_offered(&other_draft.body);
+
+    let refused_draft = send_action(
+        &app,
+        &draft_cancel,
+        "owner-cancel-other-principal-draft",
+        other.clone(),
+        json!({}),
+    )
+    .await;
+    assert_eq!(refused_draft.status, StatusCode::PRECONDITION_FAILED);
+    assert_eq!(refused_draft.body["code"], "precondition.failed");
+
+    let still_draft = get_record(&app, &uri, owner.clone()).await;
+    assert_eq!(still_draft.body["request"]["serverState"], "draft");
+    assert_eq!(
+        action(&still_draft.body, "cancel_request", None).if_match,
+        draft_cancel.if_match,
+        "a refused cancel leaves the record and workflow revisions where they were"
+    );
+
+    let submitted = run_action(
+        &app,
+        &request.id,
+        "correction-requests",
+        "submitter",
+        owner.clone(),
+        "owner-cancel-submit",
+        "submit_request",
+        None,
+        |_| json!({}),
+    )
+    .await;
+    assert_eq!(submitted["request"]["serverState"], "submitted");
+
+    let owner_submitted = get_record(&app, &uri, owner.clone()).await;
+    let submitted_cancel = action(&owner_submitted.body, "cancel_request", None);
+
+    let other_submitted = get_record(&app, &uri, other.clone()).await;
+    assert_cancel_is_not_offered(&other_submitted.body);
+
+    let refused_submitted = send_action(
+        &app,
+        &submitted_cancel,
+        "owner-cancel-other-principal-submitted",
+        other,
+        json!({}),
+    )
+    .await;
+    assert_eq!(refused_submitted.status, StatusCode::PRECONDITION_FAILED);
+    assert_eq!(refused_submitted.body["code"], "precondition.failed");
+
+    let still_submitted = get_record(&app, &uri, owner.clone()).await;
+    assert_eq!(still_submitted.body["request"]["serverState"], "submitted");
+    assert_eq!(
+        action(&still_submitted.body, "cancel_request", None).if_match,
+        submitted_cancel.if_match,
+        "a refused cancel leaves the record and workflow revisions where they were"
+    );
+
+    let canceled = action_response(
+        &app,
+        &submitted_cancel.href,
+        "owner-cancel-own-request",
+        &submitted_cancel.if_match,
+        owner,
+        json!({}),
+    )
+    .await;
+    assert_eq!(canceled["request"]["serverState"], "canceled");
+    database.cleanup().await;
+}
+
+fn assert_cancel_is_not_offered(body: &Value) {
+    let actions = body["request"]["actions"].clone();
+    assert!(
+        actions.as_array().is_none_or(|actions| actions
+            .iter()
+            .all(|action| action["operation"] != "cancel_request")),
+        "cancel is the owner's withdrawal and must not be offered to another principal: {actions}"
+    );
 }
 
 struct ChangeRequestClientHttpServer {

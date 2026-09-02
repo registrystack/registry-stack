@@ -294,8 +294,11 @@ impl RequestWorkflow {
 
     pub fn cancel(
         mut self,
-        _context: TrustedTransitionContext,
+        context: TrustedTransitionContext,
     ) -> Result<WorkflowTransition, WorkflowError> {
+        if context.actor != self.owner {
+            return Err(WorkflowError::NotOwner);
+        }
         if matches!(self.state, RequestState::Applied | RequestState::Canceled) {
             return Err(WorkflowError::InvalidTransition);
         }
@@ -2369,6 +2372,8 @@ pub enum WorkflowError {
     StageOutOfOrder,
     #[error("submitter cannot approve this stage")]
     SubmitterExcluded,
+    #[error("only the request owner can take this transition")]
+    NotOwner,
     #[error("actor already decided this stage for this proposal")]
     DuplicateDecision,
     #[error("proposal version overflow")]
@@ -3159,10 +3164,37 @@ mod tests {
         assert!(applied.application().is_some());
         assert_eq!(
             applied
-                .cancel(context("applier", 7))
+                .cancel(context("submitter", 7))
                 .expect_err("applied cannot cancel"),
             WorkflowError::InvalidTransition
         );
+    }
+
+    #[test]
+    fn only_the_request_owner_can_cancel() {
+        let draft = workflow();
+        assert_eq!(
+            draft
+                .clone()
+                .cancel(context("reviewer-a", 2))
+                .expect_err("non-owner cannot cancel a draft"),
+            WorkflowError::NotOwner
+        );
+
+        let submitted = submitted_one_stage();
+        assert_eq!(
+            submitted
+                .clone()
+                .cancel(context("reviewer-a", 3))
+                .expect_err("non-owner cannot cancel a submitted request"),
+            WorkflowError::NotOwner
+        );
+
+        let canceled = submitted
+            .cancel(context("submitter", 4))
+            .expect("owner cancels")
+            .into_workflow();
+        assert_eq!(canceled.state(), RequestState::Canceled);
     }
 
     #[test]

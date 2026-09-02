@@ -801,10 +801,8 @@ impl MutationCoordinator {
         if etag.as_bytes().ct_eq(input.if_match.as_bytes()).unwrap_u8() != 1 {
             return Err(MutationError::PreconditionFailed);
         }
-        if matches!(
-            input.action,
-            RequestActionBody::Submit | RequestActionBody::Revise { .. }
-        ) && workflow.owner().as_str() != actor_reference
+        if action_requires_request_owner(&input.action)
+            && workflow.owner().as_str() != actor_reference
         {
             return Err(MutationError::PreconditionFailed);
         }
@@ -2046,6 +2044,21 @@ fn workflow_error(_: crate::request_workflow::WorkflowError) -> MutationError {
     MutationError::Conflict
 }
 
+/// Actions only the request owner may take. Submit and revise move the
+/// owner's own draft; cancel is the owner's withdrawal. Reviewers reject a
+/// request, they do not cancel it.
+fn action_requires_request_owner(action: &RequestActionBody) -> bool {
+    match action {
+        RequestActionBody::Submit
+        | RequestActionBody::Revise { .. }
+        | RequestActionBody::Cancel => true,
+        RequestActionBody::Approve { .. }
+        | RequestActionBody::Reject { .. }
+        | RequestActionBody::RequestRevision { .. }
+        | RequestActionBody::Apply { .. } => false,
+    }
+}
+
 fn request_state_name(state: RequestState) -> &'static str {
     match state {
         RequestState::Draft => "draft",
@@ -2055,6 +2068,50 @@ fn request_state_name(state: RequestState) -> &'static str {
         RequestState::Rejected => "rejected",
         RequestState::Canceled => "canceled",
         RequestState::Applied => "applied",
+    }
+}
+
+#[cfg(test)]
+mod owner_gate_tests {
+    use super::{action_requires_request_owner, RequestActionBody};
+
+    #[test]
+    fn only_the_owner_submits_revises_or_cancels() {
+        for action in [
+            RequestActionBody::Submit,
+            RequestActionBody::Revise { rebase: false },
+            RequestActionBody::Revise { rebase: true },
+            RequestActionBody::Cancel,
+        ] {
+            assert!(
+                action_requires_request_owner(&action),
+                "{action:?} is an owner-only action"
+            );
+        }
+
+        for action in [
+            RequestActionBody::Approve {
+                proposal_version: 1,
+                effect_digest: String::new(),
+            },
+            RequestActionBody::Reject {
+                proposal_version: 1,
+                effect_digest: String::new(),
+            },
+            RequestActionBody::RequestRevision {
+                proposal_version: 1,
+                effect_digest: String::new(),
+            },
+            RequestActionBody::Apply {
+                proposal_version: 1,
+                effect_digest: String::new(),
+            },
+        ] {
+            assert!(
+                !action_requires_request_owner(&action),
+                "{action:?} is a reviewer action"
+            );
+        }
     }
 }
 

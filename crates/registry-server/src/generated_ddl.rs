@@ -1551,6 +1551,16 @@ fn change_request_action_state_exists_expression(
     .map(quote_literal)
     .collect::<Vec<_>>()
     .join(", ");
+    // Cancel is the owner's withdrawal of their own request, so the database
+    // holds the same rule the mutation layer holds: the acting principal must
+    // be the owner recorded on the request state row.
+    let owner_predicate = match operation {
+        Operation::CancelRequest => format!(
+            "
+               AND cr_state.owner_reference = ({context} ->> 'actorReference')"
+        ),
+        _ => String::new(),
+    };
     format!(
         "EXISTS (
             SELECT 1
@@ -1558,7 +1568,7 @@ fn change_request_action_state_exists_expression(
              WHERE cr_state.request_entity_id = ({context} ->> 'requestEntityId')
                AND cr_state.request_id = ({context} ->> 'requestId')::uuid
                AND cr_state.proposal_version = ({context} ->> 'proposalVersion')::bigint
-               AND cr_state.state IN ({states})
+               AND cr_state.state IN ({states}){owner_predicate}
         )"
     )
 }
@@ -3867,6 +3877,49 @@ mod tests {
             .contains(&format!(
                 "DROP FUNCTION IF EXISTS registry_context.{SPATIAL_BBOX_FUNCTION_NAME}()"
             )));
+    }
+
+    #[test]
+    fn only_the_owner_may_cancel_under_the_generated_action_policy() {
+        use crate::contract::Operation;
+        use crate::generated_ddl::{change_request_action_state_exists_expression, PolicyCommand};
+
+        let owner_binding =
+            "cr_state.owner_reference = (NULLIF(current_setting('registry.change_request_action_context', true), '')::jsonb ->> 'actorReference')";
+
+        let cancel = change_request_action_state_exists_expression(
+            Operation::CancelRequest,
+            PolicyCommand::Update,
+        );
+        assert!(
+            cancel.contains(owner_binding),
+            "the cancel transition must be bound to the request owner in the database:\n{cancel}"
+        );
+
+        for operation in [
+            Operation::SubmitRequest,
+            Operation::ApproveRequest,
+            Operation::RejectRequest,
+            Operation::RequestRevision,
+            Operation::ReviseRequest,
+            Operation::ApplyRequest,
+        ] {
+            let expression =
+                change_request_action_state_exists_expression(operation, PolicyCommand::Update);
+            assert!(
+                !expression.contains(owner_binding),
+                "{operation:?} keeps the owner binding it had before"
+            );
+        }
+
+        let visibility = change_request_action_state_exists_expression(
+            Operation::CancelRequest,
+            PolicyCommand::Select,
+        );
+        assert!(
+            !visibility.contains(owner_binding),
+            "reading a request is not the cancel write and stays as it was"
+        );
     }
 
     fn compile_spatial_registry() -> crate::CompiledRegistry {

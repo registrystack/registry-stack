@@ -453,10 +453,12 @@ fn action_is_available(
             revise_rebase_available(action, workflow).is_some()
                 && actor_reference.is_some_and(|actor| workflow.owner().as_str() == actor)
         }
-        Operation::CancelRequest => !matches!(
-            workflow.state(),
-            RequestState::Canceled | RequestState::Applied
-        ),
+        Operation::CancelRequest => {
+            !matches!(
+                workflow.state(),
+                RequestState::Canceled | RequestState::Applied
+            ) && actor_reference.is_some_and(|actor| workflow.owner().as_str() == actor)
+        }
         Operation::ApproveRequest | Operation::RejectRequest | Operation::RequestRevision => {
             review_decision_available(action, workflow, actor_reference)
                 && (!action.requires_automatic_apply_if_ready()
@@ -1163,6 +1165,37 @@ mod tests {
         let approved = decide(submitted, "reviewer-ref", ReviewDecisionKind::Approve);
         assert_eq!(revise_rebase_available(&revise, &approved), Some(true));
         assert!(action_is_available(&revise, &approved, Some("owner-ref")));
+    }
+
+    #[test]
+    fn cancel_action_is_offered_to_the_request_owner_only() {
+        let cancel = action(Operation::CancelRequest, None);
+        let draft = RequestWorkflow::new_draft(
+            RequestKey::new(
+                EntityId::new("request").expect("entity id"),
+                RecordId::new("00000000-0000-4000-8000-000000000001").expect("record id"),
+            ),
+            actor("owner-ref"),
+            StateRevision::new(1).expect("state revision"),
+        );
+        assert!(action_is_available(&cancel, &draft, Some("owner-ref")));
+        assert!(!action_is_available(&cancel, &draft, Some("reviewer-ref")));
+        assert!(!action_is_available(&cancel, &draft, None));
+
+        let submitted = submitted_workflow(1, false);
+        assert!(action_is_available(&cancel, &submitted, Some("owner-ref")));
+        assert!(!action_is_available(
+            &cancel,
+            &submitted,
+            Some("reviewer-ref")
+        ));
+
+        let canceled = submitted
+            .clone()
+            .cancel(context("owner-ref", 3))
+            .expect("owner cancels")
+            .into_workflow();
+        assert!(!action_is_available(&cancel, &canceled, Some("owner-ref")));
     }
 
     #[test]
