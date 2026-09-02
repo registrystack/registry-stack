@@ -741,7 +741,7 @@ import json
 import sys
 document = json.load(open(sys.argv[1], encoding="utf-8"))
 items = document.get("items", [])
-if not any(item.get("data", {}).get("assetCode") == "ASSET-PUBLIC-001" for item in items):
+if not any(item.get("domainData", {}).get("assetCode") == "ASSET-PUBLIC-001" for item in items):
     raise SystemExit("authorized public data read did not include the created record")
 PY
 
@@ -939,10 +939,10 @@ python3 - "$temporary_root/assets-list-v2.json" <<'PY'
 import json
 import sys
 document = json.load(open(sys.argv[1], encoding="utf-8"))
-matching = [item for item in document.get("items", []) if item.get("data", {}).get("assetCode") == "ASSET-PUBLIC-001"]
+matching = [item for item in document.get("items", []) if item.get("domainData", {}).get("assetCode") == "ASSET-PUBLIC-001"]
 if not matching:
     raise SystemExit("created record did not survive successor activation")
-if any("placementReviewNote" in item.get("data", {}) for item in matching):
+if any("placementReviewNote" in item.get("domainData", {}) for item in matching):
     raise SystemExit("restricted successor field was disclosed")
 PY
 
@@ -1123,16 +1123,16 @@ python3 - "$temporary_root/assets-operator-v3.json" "$temporary_root/assets-plan
 import json
 import sys
 operator, planner = [json.load(open(path, encoding="utf-8"))["items"] for path in sys.argv[1:]]
-records = {item["data"]["assetCode"]: item["data"] for item in operator}
+records = {item["domainData"]["assetCode"]: item["domainData"] for item in operator}
 if "ASSET-PUBLIC-001" not in records:
     raise SystemExit("existing record did not survive the reviewed upgrade")
 if records.get("ASSET-PUBLIC-002", {}).get("maintenanceNote") != "Synthetic maintenance note":
     raise SystemExit("authorized profile could not round-trip the reviewed field")
-if not any(item["data"]["assetCode"] == "ASSET-PUBLIC-002" for item in planner):
+if not any(item["domainData"]["assetCode"] == "ASSET-PUBLIC-002" for item in planner):
     raise SystemExit("planner disclosure test did not observe the new record")
-if any("maintenanceNote" in item["data"] for item in planner):
+if any("maintenanceNote" in item["domainData"] for item in planner):
     raise SystemExit("reviewed field leaked to the profile without its grant")
-if any("placementReviewNote" in item["data"] for item in operator + planner):
+if any("placementReviewNote" in item["domainData"] for item in operator + planner):
     raise SystemExit("restricted field was disclosed after the reviewed upgrade")
 PY
 

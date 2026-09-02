@@ -111,6 +111,7 @@ fn classify_change(
         | Code::AccessProfileAdded
         | Code::AccessProfileRemoved
         | Code::EntityAccessRequirementsChanged
+        | Code::ChangeRequestContractChanged
         | Code::RouteAdded
         | Code::RouteRemoved
         | Code::RouteChanged => DiffClassification::AccessChange,

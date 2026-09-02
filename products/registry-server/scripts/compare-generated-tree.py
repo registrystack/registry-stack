@@ -45,6 +45,15 @@ ASSET_SITE_PLACEMENT_CHANGE_REQUEST_PATHS = ASSET_SITE_PLACEMENT_PATHS + (
 PUBLICSCHEMA_HOUSEHOLD_CHANGE_REQUEST_PATHS = PUBLICSCHEMA_HOUSEHOLD_PATHS + (
     "generated/schemas/register-household-contact-request.schema.json",
 )
+PERSON_NAME_CHANGE_RHAI_PATHS = (
+    "generated/manifest/registry-manifest.json",
+    "generated/manifest/dcat.jsonld",
+    "generated/metadata/registry.json",
+    "generated/openapi.json",
+    "generated/postgres/schema.sql",
+    "generated/schemas/person.schema.json",
+    "generated/schemas/person-name-change-request.schema.json",
+)
 ASSET_REGISTRATION_ACTIONS_PATHS = (
     "compiled/actions.json",
     "generated/action-schemas/register-asset-with-inspection.invoke.input.schema.json",
@@ -79,6 +88,7 @@ EXPECTED_PATHS_BY_BASELINE = {
     "business-establishments": BUSINESS_ESTABLISHMENTS_PATHS,
     "asset-site-placement-change-requests": ASSET_SITE_PLACEMENT_CHANGE_REQUEST_PATHS,
     "publicschema-household-change-requests": PUBLICSCHEMA_HOUSEHOLD_CHANGE_REQUEST_PATHS,
+    "person-name-change-rhai": PERSON_NAME_CHANGE_RHAI_PATHS,
     "asset-registration-actions": ASSET_REGISTRATION_ACTIONS_PATHS,
     "household-contact-actions": HOUSEHOLD_CONTACT_ACTIONS_PATHS,
 }

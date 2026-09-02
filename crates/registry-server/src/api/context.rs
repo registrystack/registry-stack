@@ -369,6 +369,28 @@ pub struct VerifiedRequestAction {
     review_stage: Option<String>,
     response_fields: BTreeSet<String>,
     target_authority: Vec<VerifiedRequestTargetAuthority>,
+    automatic_apply_authority: Option<Vec<VerifiedRequestTargetAuthority>>,
+    requires_automatic_apply_if_ready: bool,
+}
+
+pub(crate) struct VerifiedRequestActionAuthority {
+    target: Vec<VerifiedRequestTargetAuthority>,
+    automatic_apply: Option<Vec<VerifiedRequestTargetAuthority>>,
+    requires_automatic_apply_if_ready: bool,
+}
+
+impl VerifiedRequestActionAuthority {
+    pub(crate) const fn new(
+        target: Vec<VerifiedRequestTargetAuthority>,
+        automatic_apply: Option<Vec<VerifiedRequestTargetAuthority>>,
+        requires_automatic_apply_if_ready: bool,
+    ) -> Self {
+        Self {
+            target,
+            automatic_apply,
+            requires_automatic_apply_if_ready,
+        }
+    }
 }
 
 impl VerifiedRequestAction {
@@ -379,7 +401,7 @@ impl VerifiedRequestAction {
         operation: Operation,
         review_stage: Option<String>,
         response_fields: BTreeSet<String>,
-        target_authority: Vec<VerifiedRequestTargetAuthority>,
+        authority: VerifiedRequestActionAuthority,
     ) -> Self {
         Self {
             route_id,
@@ -388,7 +410,9 @@ impl VerifiedRequestAction {
             operation,
             review_stage,
             response_fields,
-            target_authority,
+            target_authority: authority.target,
+            automatic_apply_authority: authority.automatic_apply,
+            requires_automatic_apply_if_ready: authority.requires_automatic_apply_if_ready,
         }
     }
 
@@ -425,6 +449,16 @@ impl VerifiedRequestAction {
     #[must_use]
     pub fn target_authority(&self) -> &[VerifiedRequestTargetAuthority] {
         &self.target_authority
+    }
+
+    #[must_use]
+    pub fn automatic_apply_authority(&self) -> Option<&[VerifiedRequestTargetAuthority]> {
+        self.automatic_apply_authority.as_deref()
+    }
+
+    #[must_use]
+    pub const fn requires_automatic_apply_if_ready(&self) -> bool {
+        self.requires_automatic_apply_if_ready
     }
 }
 

@@ -28,6 +28,7 @@ use registry_platform_httpsec::{security_headers, CspBuilder};
 use serde_json::{json, Map, Value};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
+pub(crate) use context::VerifiedRequestActionAuthority;
 pub use context::{
     AuthorizedActionContext, AuthorizedRequestContext, RowBoundaryOperator, VerifiedClaimValue,
     VerifiedContextError, VerifiedRequestAction, VerifiedRequestClaims, VerifiedRequestPresence,
@@ -58,10 +59,11 @@ use crate::cursor::{
 };
 use crate::idempotency::{HeldResponse, PermittedResponseHeader};
 use crate::model::{
-    request_query_field_id_for_api, request_query_field_type, CompiledEntity,
-    CompiledMetadataEntity, CompiledMetadataEntry, CompiledQueryKind, CompiledQueryOperation,
-    CompiledQuerySortDirection, CompiledReadPath, CompiledRevisionKind, CompiledRoute,
-    MAX_REVISION_HISTORY_RECORDS,
+    request_query_field_id_for_api, request_query_field_type, CompiledChangeRequest,
+    CompiledChangeRequestApplicationMode, CompiledChangeRequestDisposition,
+    CompiledChangeRequestReviewMode, CompiledEntity, CompiledMetadataEntity, CompiledMetadataEntry,
+    CompiledQueryKind, CompiledQueryOperation, CompiledQuerySortDirection, CompiledReadPath,
+    CompiledRevisionKind, CompiledRoute, MAX_REVISION_HISTORY_RECORDS,
 };
 use crate::mutation::{parse_json_patch_document, BatchMutationItem, MutationError};
 use crate::query as strict_query;
@@ -385,6 +387,9 @@ async fn registry_metadata(
                 change_control: response_entity.change_control.as_ref().map(|_| {
                     metadata_change_control(&service, response_entity, &permitted_requests)
                 }),
+                change_request: response_entity.change_request.as_ref().map(|request| {
+                    crate::artifacts::request_capability_metadata(request, &entry.readable_fields)
+                }),
             });
     }
     let entities = entities
@@ -403,6 +408,9 @@ async fn registry_metadata(
             });
             if let Some(change_control) = entity.change_control {
                 metadata["changeControl"] = change_control;
+            }
+            if let Some(change_request) = entity.change_request {
+                metadata["changeRequest"] = change_request;
             }
             metadata
         })
@@ -1910,6 +1918,9 @@ async fn request_action_dispatch(
         )
         .await;
     };
+    let automatic_apply_authority = surface.entity.change_request.as_ref().and_then(|plan| {
+        request_automatic_apply_authority(plan, surface.context.selected_profile(), &claims)
+    });
     match mutations
         .request_action(RequestActionInput {
             route_id: &route.id,
@@ -1921,6 +1932,7 @@ async fn request_action_dispatch(
             action,
             response_fields: surface.readable_fields,
             target_authority,
+            automatic_apply_authority,
             correlation: &correlation,
         })
         .await
@@ -1993,6 +2005,55 @@ fn request_action_target_authority(
     }
 }
 
+fn request_automatic_apply_authority(
+    plan: &crate::model::CompiledChangeRequest,
+    selected_profile: &str,
+    claims: &VerifiedRequestClaims,
+) -> Option<Vec<RequestActionTargetAuthority>> {
+    plan.target_entities
+        .iter()
+        .map(|target_entity_id| {
+            let grant = plan.apply_grants.iter().find(|grant| {
+                grant.profile_id == selected_profile && grant.target_entity_id == *target_entity_id
+            })?;
+            Some(RequestActionTargetAuthority {
+                target_entity_id: target_entity_id.clone(),
+                readable_fields: BTreeSet::new(),
+                row_boundaries: verified_row_boundaries_from_sources(
+                    &grant.row_boundaries,
+                    claims,
+                )?,
+            })
+        })
+        .collect()
+}
+
+fn request_action_requires_automatic_apply_if_ready(
+    plan: &CompiledChangeRequest,
+    route: &CompiledRoute,
+) -> bool {
+    let may_apply = match plan.application.mode {
+        CompiledChangeRequestApplicationMode::Automatic => true,
+        CompiledChangeRequestApplicationMode::Planner => plan
+            .application
+            .allowed_dispositions
+            .contains(&CompiledChangeRequestDisposition::Apply),
+        CompiledChangeRequestApplicationMode::Manual => false,
+    };
+    if !may_apply {
+        return false;
+    }
+    match route.operation {
+        Operation::SubmitRequest => plan.review_mode == CompiledChangeRequestReviewMode::None,
+        Operation::ApproveRequest => {
+            plan.review_mode == CompiledChangeRequestReviewMode::Stages
+                && route.request_stage.as_deref()
+                    == plan.stages.last().map(|stage| stage.id.as_str())
+        }
+        _ => false,
+    }
+}
+
 fn request_visibility_authority(
     service: &HttpService,
     entity: &CompiledEntity,
@@ -2024,6 +2085,22 @@ fn request_visibility_authority(
                         )
                     })
                     .collect();
+                let automatic_apply_authority = entity.change_request.as_ref().and_then(|plan| {
+                    request_automatic_apply_authority(plan, selected_profile, claims).map(
+                        |authority| {
+                            authority
+                                .into_iter()
+                                .map(|authority| {
+                                    VerifiedRequestTargetAuthority::new(
+                                        authority.target_entity_id,
+                                        authority.readable_fields,
+                                        authority.row_boundaries,
+                                    )
+                                })
+                                .collect()
+                        },
+                    )
+                });
                 Some(VerifiedRequestAction::new(
                     route.id.clone(),
                     route.method,
@@ -2031,7 +2108,17 @@ fn request_visibility_authority(
                     route.operation,
                     route.request_stage.clone(),
                     surface.readable_fields,
-                    target_authority,
+                    VerifiedRequestActionAuthority::new(
+                        target_authority,
+                        automatic_apply_authority,
+                        request_action_requires_automatic_apply_if_ready(
+                            entity
+                                .change_request
+                                .as_ref()
+                                .expect("change request checked"),
+                            route,
+                        ),
+                    ),
                 ))
             })
             .collect()
@@ -4093,6 +4180,7 @@ struct MetadataEntity {
     readable_fields: BTreeSet<String>,
     schema_path: String,
     change_control: Option<Value>,
+    change_request: Option<Value>,
 }
 
 struct QueryOptions {

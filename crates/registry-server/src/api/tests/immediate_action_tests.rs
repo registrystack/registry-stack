@@ -319,15 +319,14 @@ async fn action_only_discovery_is_profile_filtered_without_entity_read_access() 
         false,
     );
 
-    let body = response_json(
-        super::super::registry_metadata(
-            State(service.clone()),
-            Some(Extension(registrar)),
-            RawQuery(None),
-        )
-        .await,
+    let response = super::super::registry_metadata(
+        State(service.clone()),
+        Some(Extension(registrar)),
+        RawQuery(None),
     )
     .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
     assert_eq!(body["entities"], json!([]));
     assert_eq!(body["actions"][0]["id"], "rename-case");
     assert_eq!(
@@ -337,15 +336,14 @@ async fn action_only_discovery_is_profile_filtered_without_entity_read_access() 
     assert!(!body.to_string().contains("registry_principal"));
     assert!(!body.to_string().contains("rowBoundaries"));
 
-    let body = response_json(
-        super::super::openapi(
-            State(service.clone()),
-            Some(Extension(supervisor)),
-            RawQuery(Some("accessProfile=supervisor".to_owned())),
-        )
-        .await,
+    let response = super::super::openapi(
+        State(service.clone()),
+        Some(Extension(supervisor)),
+        RawQuery(Some("accessProfile=supervisor".to_owned())),
     )
     .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
     assert!(body["paths"]["/v1/actions/rename-case"]["post"].is_object());
     assert!(body["paths"]["/v1/actions/rename-case/target-conditions"]["post"].is_object());
     assert!(body["paths"]

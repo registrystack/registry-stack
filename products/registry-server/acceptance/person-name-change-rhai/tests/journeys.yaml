@@ -1,0 +1,118 @@
+apiVersion: registry.registrystack.org/server-journeys/v1
+journeys:
+  - id: person-name-change-rhai-flow
+    steps:
+      - id: create-routine-person
+        entity: person
+        accessProfile: person-operator
+        claims: &operator_claims
+          principal: synthetic-person-operator
+          purpose: person-maintenance
+        request:
+          operation: create
+          data: {person-code: SYNTH-ROUTINE-001, display-name: Before Routine}
+        expect: {outcome: success, status: 201, fields: {person-code: SYNTH-ROUTINE-001, display-name: Before Routine}}
+        capture: routine-person
+      - id: create-routine-request
+        entity: person-name-change-request
+        accessProfile: name-change-submitter
+        claims: &submitter_claims
+          principal: synthetic-name-change-submitter
+          scopes: ["registry:person-name:submit"]
+          purpose: person-name-change
+        request:
+          operation: create
+          data: {person: {recordRef: routine-person}, given-name: "  Ada  ", family-name: "  Lovelace  ", handling: routine}
+        expect: {outcome: success, status: 201, fields: {given-name: "  Ada  ", family-name: "  Lovelace  ", handling: routine}}
+        capture: routine-request
+      - id: get-routine-before-submit
+        entity: person-name-change-request
+        accessProfile: name-change-submitter
+        claims: *submitter_claims
+        request: {operation: get, recordRef: routine-request}
+        expect: {outcome: success, status: 200}
+        capture: routine-before-submit
+      - id: submit-routine-and-apply
+        entity: person-name-change-request
+        accessProfile: name-change-submitter
+        claims: *submitter_claims
+        request: {operation: submit_request, recordRef: routine-before-submit, etagRef: routine-before-submit}
+        expect: {outcome: success, status: 200}
+      - id: get-routine-person-after-atomic-apply
+        entity: person
+        accessProfile: person-operator
+        claims: *operator_claims
+        request: {operation: get, recordRef: routine-person}
+        expect: {outcome: success, status: 200, fields: {person-code: SYNTH-ROUTINE-001, display-name: Ada Lovelace}}
+      - id: create-assisted-person
+        entity: person
+        accessProfile: person-operator
+        claims: *operator_claims
+        request:
+          operation: create
+          data: {person-code: SYNTH-ASSISTED-001, display-name: Before Assisted}
+        expect: {outcome: success, status: 201, fields: {person-code: SYNTH-ASSISTED-001, display-name: Before Assisted}}
+        capture: assisted-person
+      - id: create-assisted-request
+        entity: person-name-change-request
+        accessProfile: name-change-submitter
+        claims: *submitter_claims
+        request:
+          operation: create
+          data: {person: {recordRef: assisted-person}, given-name: "  Grace  ", family-name: "  Hopper  ", handling: assisted}
+        expect: {outcome: success, status: 201, fields: {given-name: "  Grace  ", family-name: "  Hopper  ", handling: assisted}}
+        capture: assisted-request
+      - id: get-assisted-before-submit
+        entity: person-name-change-request
+        accessProfile: name-change-submitter
+        claims: *submitter_claims
+        request: {operation: get, recordRef: assisted-request}
+        expect: {outcome: success, status: 200}
+        capture: assisted-before-submit
+      - id: submit-assisted-and-queue
+        entity: person-name-change-request
+        accessProfile: name-change-submitter
+        claims: *submitter_claims
+        request: {operation: submit_request, recordRef: assisted-before-submit, etagRef: assisted-before-submit}
+        expect: {outcome: success, status: 200}
+      - id: assisted-applier-lists-request-work-queue
+        entity: person-name-change-request
+        accessProfile: assisted-applier
+        claims: &assisted_applier_claims
+          principal: synthetic-assisted-applier
+          scopes: ["registry:person-name:apply-assisted"]
+          purpose: person-name-apply
+        request: {operation: list}
+        expect: {outcome: success, status: 200, count: 2}
+      - id: caller-without-apply-scope-cannot-list-work-queue
+        entity: person-name-change-request
+        accessProfile: assisted-applier
+        claims:
+          principal: synthetic-unauthorized-applier
+          purpose: person-name-apply
+        request: {operation: list}
+        expect: {outcome: refusal, status: 404, problemCode: resource.not_found}
+      - id: get-assisted-before-later-apply
+        entity: person-name-change-request
+        accessProfile: assisted-applier
+        claims: *assisted_applier_claims
+        request: {operation: get, recordRef: assisted-request}
+        expect: {outcome: success, status: 200}
+        capture: assisted-before-apply
+      - id: apply-assisted-without-rerun
+        entity: person-name-change-request
+        accessProfile: assisted-applier
+        claims: *assisted_applier_claims
+        request:
+          operation: apply_request
+          recordRef: assisted-before-apply
+          etagRef: assisted-before-apply
+          proposalVersionRef: assisted-before-apply
+          effectDigestRef: assisted-before-apply
+        expect: {outcome: success, status: 200}
+      - id: get-assisted-person-after-later-apply
+        entity: person
+        accessProfile: person-operator
+        claims: *operator_claims
+        request: {operation: get, recordRef: assisted-person}
+        expect: {outcome: success, status: 200, fields: {person-code: SYNTH-ASSISTED-001, display-name: Grace Hopper}}

@@ -19,7 +19,7 @@ use crate::contract::{
     RegistryProject, SpatialBboxGrantSource, SpatialQueryGrantSource, UniqueWhenPredicate,
     ValidTimeRole, WebhookAuthenticationProfile, WebhookDeadLetterMode, MAX_STRUCTURED_VALUE_BYTES,
 };
-use crate::derived_sql::{validate_derived_sql, MAX_DERIVED_SQL_BYTES};
+use crate::derived_sql::validate_derived_sql;
 use crate::diagnostics::{CompileFailure, Diagnostic};
 use crate::generated_ddl::generate_ddl_with_actions;
 use crate::immediate_actions::{compile_immediate_actions, CollectedActionSource};
@@ -72,6 +72,7 @@ pub const WEBHOOK_BACKOFF_MULTIPLIER: u8 = 2;
 type CollectedEntities = (
     BTreeMap<String, EntitySource>,
     DerivedOriginMap,
+    ChangeRequestOriginMap,
     BTreeMap<String, CollectedActionSource>,
 );
 
@@ -110,12 +111,13 @@ pub fn compile_project_with_assets(
         &mut findings,
     );
     let (module_order, module_map) = order_modules(project, modules, &mut diagnostics);
-    let (mut sources, mut derived_origins, mut action_sources) =
+    let (mut sources, mut derived_origins, mut change_request_origins, mut action_sources) =
         collect_entities(project, &module_order, &module_map, &mut diagnostics);
     apply_temporal_roles(&mut sources, &mut diagnostics);
     apply_extensions(
         &mut sources,
         &mut derived_origins,
+        &mut change_request_origins,
         &module_order,
         &module_map,
         &mut diagnostics,
@@ -132,8 +134,13 @@ pub fn compile_project_with_assets(
     }
 
     let (mut entities, physical_names) = compile_entities(&sources, &derived_origins, assets)?;
-    crate::change_request::compile_change_requests(&sources, &mut entities)
-        .map_err(CompileFailure::from_errors)?;
+    crate::change_request::compile_change_requests(
+        &sources,
+        &change_request_origins,
+        assets,
+        &mut entities,
+    )
+    .map_err(CompileFailure::from_errors)?;
     let action_inventory =
         compile_immediate_actions(&action_sources, &entities, &project.access_profiles)
             .map_err(CompileFailure::from_errors)?;
@@ -1149,6 +1156,7 @@ pub fn module_digest_with_assets(module: &RegistryModule, assets: &[ModuleAssetS
 }
 
 type DerivedOriginMap = BTreeMap<(String, String), Option<String>>;
+type ChangeRequestOriginMap = BTreeMap<String, Option<String>>;
 
 fn collect_entities(
     project: &RegistryProject,
@@ -1158,11 +1166,13 @@ fn collect_entities(
 ) -> CollectedEntities {
     let mut entities = BTreeMap::new();
     let mut derived_origins = BTreeMap::new();
+    let mut change_request_origins = BTreeMap::new();
     let mut actions = BTreeMap::new();
     for entity in &project.entities {
         insert_entity(
             &mut entities,
             &mut derived_origins,
+            &mut change_request_origins,
             entity,
             None,
             "project.entities[].id",
@@ -1178,6 +1188,7 @@ fn collect_entities(
                 insert_entity(
                     &mut entities,
                     &mut derived_origins,
+                    &mut change_request_origins,
                     entity,
                     Some(module.id.clone()),
                     "modules[].entities[].id",
@@ -1195,12 +1206,13 @@ fn collect_entities(
             }
         }
     }
-    (entities, derived_origins, actions)
+    (entities, derived_origins, change_request_origins, actions)
 }
 
 fn insert_entity(
     entities: &mut BTreeMap<String, EntitySource>,
     derived_origins: &mut BTreeMap<(String, String), Option<String>>,
+    change_request_origins: &mut ChangeRequestOriginMap,
     entity: &EntitySource,
     module: Option<String>,
     path: &str,
@@ -1216,6 +1228,9 @@ fn insert_entity(
     }
     for derived in &entity.derived {
         derived_origins.insert((entity.id.clone(), derived.id.clone()), module.clone());
+    }
+    if entity.change_request.is_some() {
+        change_request_origins.insert(entity.id.clone(), module);
     }
 }
 
@@ -1283,6 +1298,7 @@ fn apply_temporal_roles(
 fn apply_extensions(
     entities: &mut BTreeMap<String, EntitySource>,
     derived_origins: &mut BTreeMap<(String, String), Option<String>>,
+    change_request_origins: &mut ChangeRequestOriginMap,
     module_order: &[String],
     modules: &BTreeMap<String, RegistryModule>,
     errors: &mut Vec<Diagnostic>,
@@ -1307,6 +1323,7 @@ fn apply_extensions(
                 extension,
                 Some(module.id.clone()),
                 derived_origins,
+                change_request_origins,
                 errors,
             );
         }
@@ -1318,6 +1335,7 @@ fn merge_extension(
     extension: &EntityExtensionSource,
     module: Option<String>,
     derived_origins: &mut BTreeMap<(String, String), Option<String>>,
+    change_request_origins: &mut ChangeRequestOriginMap,
     errors: &mut Vec<Diagnostic>,
 ) {
     if let Some(geojson) = &extension.geojson {
@@ -1419,6 +1437,7 @@ fn merge_extension(
         "a change-control capability is contributed more than once",
         errors,
     );
+    let had_change_request = entity.change_request.is_some();
     merge_optional_capability(
         &mut entity.change_request,
         &extension.change_request,
@@ -1427,6 +1446,9 @@ fn merge_extension(
         "a change-request capability is contributed more than once",
         errors,
     );
+    if !had_change_request && entity.change_request.is_some() {
+        change_request_origins.insert(entity.id.clone(), module);
+    }
 
     let mut known: BTreeSet<String> = entity
         .constraints
@@ -4039,14 +4061,14 @@ fn asset_map<'a>(
     let mut map = BTreeMap::new();
     for asset in assets {
         if asset.module.as_deref().is_some_and(str::is_empty)
-            || !valid_relative_sql_path(&asset.path)
+            || !valid_relative_asset_path(&asset.path)
             || asset.bytes.is_empty()
-            || asset.bytes.len() > MAX_DERIVED_SQL_BYTES
+            || asset.bytes.len() > usize::try_from(MAX_STRUCTURED_VALUE_BYTES).unwrap_or(usize::MAX)
         {
             errors.push(Diagnostic::error(
                 "module.asset.invalid",
                 "modules[].assets[]",
-                "module assets must be bounded module-relative SQL files",
+                "module assets must be bounded relative SQL or Rhai files",
             ));
             continue;
         }
@@ -4065,6 +4087,17 @@ fn asset_map<'a>(
         }
     }
     map
+}
+
+fn valid_relative_asset_path(path: &str) -> bool {
+    !path.is_empty()
+        && path.len() <= 256
+        && (path.ends_with(".sql") || path.ends_with(".rhai"))
+        && !path.starts_with('/')
+        && !path.contains('\\')
+        && path
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..")
 }
 
 fn webhook_retry_delays(initial_ms: u32, maximum_ms: u32, maximum_attempts: u8) -> Vec<u32> {

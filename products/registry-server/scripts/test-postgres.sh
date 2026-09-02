@@ -50,6 +50,7 @@ cargo test --locked -p registry-server --features postgres-test --test postgres_
 cargo test --locked -p registry-server --features postgres-test --test postgres_request_read_retention
 cargo test --locked -p registry-server --features postgres-test,tooling --test postgres_request_activation
 cargo test --locked -p registry-server --features postgres-test --test postgres_pilot_acceptance
+cargo test --locked -p registry-server --features postgres-test --test postgres_rhai_planner
 cargo test --locked -p registry-server --features postgres-test --test postgres_tombstone_revision
 cargo test --locked -p registry-server --features postgres-test,tooling --test postgres_package
 cargo test --locked -p registry-server --features postgres-test,tooling --test postgres_migration

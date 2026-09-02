@@ -42,6 +42,7 @@ use crate::model::{CompiledQueryKind, CompiledQueryOperation, CompiledRegistry, 
 use crate::package::{canonical_signed_bytes as package_canonical_signed_bytes, VerifiedPackage};
 use crate::package::{
     PackageCompileProfile, PackageFileRole, PreparedPackage, FIXTURE_JOURNEYS_PATH,
+    MAX_RHAI_PLANNER_SOURCE_BYTES,
 };
 use crate::postgres::{
     PostgresRecordMutationService, PostgresRecordReadService, PostgresRevisionReadService,
@@ -4010,7 +4011,7 @@ fn assert_request_action_shape(value: &Value) -> Result<(), FixtureError> {
     if request.keys().any(|key| {
         !matches!(
             key.as_str(),
-            "serverState" | "proposalVersion" | "effectDigest" | "application"
+            "serverState" | "proposalVersion" | "effectDigest" | "proposal" | "application"
         )
     }) || !["serverState", "proposalVersion", "effectDigest"]
         .iter()
@@ -4025,12 +4026,64 @@ fn assert_request_action_shape(value: &Value) -> Result<(), FixtureError> {
             .get("effectDigest")
             .ok_or(FixtureError::ResponseShapeRefused)?,
     )?;
+    if let Some(proposal) = request.get("proposal") {
+        assert_request_proposal_shape(proposal)?;
+    }
     if let Some(application) = request.get("application") {
         if !application.is_null() {
             assert_request_application_shape(application)?;
         }
     }
     Ok(())
+}
+
+fn assert_request_proposal_shape(value: &Value) -> Result<(), FixtureError> {
+    if value.is_null() {
+        return Ok(());
+    }
+    let proposal = value
+        .as_object()
+        .ok_or(FixtureError::ResponseShapeRefused)?;
+    if proposal.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "reviewMode" | "applicationDisposition" | "queueReason"
+        )
+    }) || !["reviewMode", "applicationDisposition"]
+        .iter()
+        .all(|key| proposal.contains_key(*key))
+        || !matches!(
+            proposal.get("reviewMode").and_then(Value::as_str),
+            Some("none" | "staged")
+        )
+    {
+        return Err(FixtureError::ResponseShapeRefused);
+    }
+    match proposal
+        .get("applicationDisposition")
+        .and_then(Value::as_str)
+    {
+        Some("apply") if !proposal.contains_key("queueReason") => Ok(()),
+        Some("queue") => {
+            let Some(reason) = proposal.get("queueReason") else {
+                return Ok(());
+            };
+            let reason = exact_object(reason, &["code", "label"])?;
+            let code = reason
+                .get("code")
+                .and_then(Value::as_str)
+                .ok_or(FixtureError::ResponseShapeRefused)?;
+            let label = reason
+                .get("label")
+                .and_then(Value::as_str)
+                .ok_or(FixtureError::ResponseShapeRefused)?;
+            if code.len() > 128 || label.is_empty() || label.len() > 160 {
+                return Err(FixtureError::ResponseShapeRefused);
+            }
+            Ok(())
+        }
+        _ => Err(FixtureError::ResponseShapeRefused),
+    }
 }
 
 fn exact_object<'a>(
@@ -4190,6 +4243,7 @@ fn assert_request_record_metadata_shape(value: &Value) -> Result<(), FixtureErro
             "serverState"
                 | "proposalVersion"
                 | "effectDigest"
+                | "proposal"
                 | "editable"
                 | "actions"
                 | "history"
@@ -4205,6 +4259,9 @@ fn assert_request_record_metadata_shape(value: &Value) -> Result<(), FixtureErro
     assert_optional_proposal_version(request.get("proposalVersion"))?;
     if let Some(digest) = request.get("effectDigest") {
         assert_optional_effect_digest(digest)?;
+    }
+    if let Some(proposal) = request.get("proposal") {
+        assert_request_proposal_shape(proposal)?;
     }
     if let Some(editable) = request.get("editable") {
         if !editable.is_boolean() {
@@ -4439,6 +4496,13 @@ pub struct FixtureSourceFile<'a> {
     pub bytes: &'a [u8],
 }
 
+/// One exact project-owned planner asset in declaring-origin-relative order.
+#[cfg(any(test, feature = "postgres-test"))]
+pub struct FixtureProjectAssetSource<'a> {
+    pub path: &'a str,
+    pub bytes: &'a [u8],
+}
+
 /// One exact module source in package closure order.
 #[cfg(any(test, feature = "postgres-test"))]
 pub struct FixtureModuleSource<'a> {
@@ -4461,6 +4525,7 @@ pub struct FixtureModuleAssetSource<'a> {
 #[cfg(any(test, feature = "postgres-test"))]
 pub struct SchemaTestSources<'a> {
     pub project: FixtureSourceFile<'a>,
+    pub project_assets: &'a [FixtureProjectAssetSource<'a>],
     pub modules: &'a [FixtureModuleSource<'a>],
     pub migration_plan: FixtureSourceFile<'a>,
 }
@@ -4740,7 +4805,7 @@ fn validate_schema_test_candidate(
     }
     validate_manifest_source_asset_inventory(manifest)?;
     let mut modules = Vec::with_capacity(sources.modules.len());
-    let mut module_assets = Vec::new();
+    let mut module_assets = validate_source_project_assets(manifest, sources.project_assets)?;
     for ((captured, locked), source) in manifest
         .sources
         .modules
@@ -4890,7 +4955,7 @@ fn derive_prepared_schema_test_candidate(
     }
     validate_manifest_source_asset_inventory(manifest)?;
     let mut modules = Vec::with_capacity(manifest.sources.modules.len());
-    let mut module_assets = Vec::new();
+    let mut module_assets = prepared_project_assets(manifest, files)?;
     for (locked, captured) in project.modules.iter().zip(&manifest.sources.modules) {
         if locked.id != captured.id {
             return Err(FixtureError::CandidateBindingRefused);
@@ -4901,7 +4966,7 @@ fn derive_prepared_schema_test_candidate(
         if module_bytes.is_empty() || module_bytes.len() > MAX_SOURCE_BYTES {
             return Err(FixtureError::CandidateBindingRefused);
         }
-        let assets = prepared_module_assets(captured, files)?;
+        let assets = prepared_module_assets(manifest, captured, files)?;
         let module =
             parse_module_yaml(module_bytes).map_err(|_| FixtureError::CandidateBindingRefused)?;
         if module.id != captured.id
@@ -4996,6 +5061,27 @@ fn prepared_files_match_manifest(package: &PreparedPackage) -> bool {
 fn validate_manifest_source_asset_inventory(
     manifest: &crate::package::PackageManifest,
 ) -> Result<(), FixtureError> {
+    let mut project_paths = BTreeSet::new();
+    let mut prior_project_asset = None;
+    for asset in &manifest.sources.project_assets {
+        source_project_asset_path(asset)?;
+        if prior_project_asset.is_some_and(|prior: &str| prior >= asset.as_str())
+            || !project_paths.insert(asset.clone())
+        {
+            return Err(FixtureError::CandidateBindingRefused);
+        }
+        prior_project_asset = Some(asset.as_str());
+    }
+    let file_project_paths = manifest
+        .files
+        .iter()
+        .filter(|file| file.role == PackageFileRole::SourceProjectPlannerScript)
+        .map(|file| file.path.clone())
+        .collect::<BTreeSet<_>>();
+    if project_paths != file_project_paths {
+        return Err(FixtureError::CandidateBindingRefused);
+    }
+
     let mut declared_paths = BTreeSet::new();
     for module in &manifest.sources.modules {
         let mut prior_asset = None;
@@ -5012,13 +5098,69 @@ fn validate_manifest_source_asset_inventory(
     let file_paths = manifest
         .files
         .iter()
-        .filter(|file| file.role == PackageFileRole::SourceModuleAsset)
+        .filter(|file| {
+            matches!(
+                file.role,
+                PackageFileRole::SourceModuleAsset | PackageFileRole::SourceModulePlannerScript
+            )
+        })
         .map(|file| file.path.clone())
         .collect::<BTreeSet<_>>();
     if declared_paths != file_paths {
         return Err(FixtureError::CandidateBindingRefused);
     }
+    for module in &manifest.sources.modules {
+        for asset in &module.assets {
+            let path = source_module_asset_package_path(&module.id, asset)?;
+            let (role, _) = source_module_asset_policy(asset)?;
+            if manifest
+                .files
+                .iter()
+                .filter(|file| file.path == path && file.role == role)
+                .count()
+                != 1
+            {
+                return Err(FixtureError::CandidateBindingRefused);
+            }
+        }
+    }
     Ok(())
+}
+
+#[cfg(any(test, feature = "postgres-test"))]
+fn validate_source_project_assets(
+    manifest: &crate::package::PackageManifest,
+    sources: &[FixtureProjectAssetSource<'_>],
+) -> Result<Vec<ModuleAssetSource>, FixtureError> {
+    if sources.len() != manifest.sources.project_assets.len() {
+        return Err(FixtureError::CandidateBindingRefused);
+    }
+    manifest
+        .sources
+        .project_assets
+        .iter()
+        .zip(sources)
+        .map(|(expected_package_path, source)| {
+            let expected_source_path = source_project_asset_path(expected_package_path)?;
+            if source.path != expected_source_path
+                || source.bytes.is_empty()
+                || source.bytes.len() as u64 > MAX_RHAI_PLANNER_SOURCE_BYTES
+                || !manifest_file_matches(
+                    manifest,
+                    PackageFileRole::SourceProjectPlannerScript,
+                    expected_package_path,
+                    source.bytes,
+                )
+            {
+                return Err(FixtureError::CandidateBindingRefused);
+            }
+            Ok(ModuleAssetSource {
+                module: None,
+                path: source.path.to_owned(),
+                bytes: source.bytes.to_vec(),
+            })
+        })
+        .collect()
 }
 
 #[cfg(any(test, feature = "postgres-test"))]
@@ -5034,16 +5176,12 @@ fn validate_source_module_assets(
     let mut seen = BTreeSet::new();
     for (expected, asset) in captured.assets.iter().zip(source.assets) {
         let package_path = source_module_asset_package_path(&captured.id, asset.path)?;
+        let (role, maximum_bytes) = source_module_asset_policy(asset.path)?;
         if asset.path != expected
             || asset.bytes.is_empty()
-            || asset.bytes.len() > MAX_DERIVED_SQL_BYTES
+            || asset.bytes.len() > maximum_bytes
             || !seen.insert(asset.path)
-            || !manifest_file_matches(
-                manifest,
-                PackageFileRole::SourceModuleAsset,
-                &package_path,
-                asset.bytes,
-            )
+            || !manifest_file_matches(manifest, role, &package_path, asset.bytes)
         {
             return Err(FixtureError::CandidateBindingRefused);
         }
@@ -5056,7 +5194,41 @@ fn validate_source_module_assets(
     Ok(assets)
 }
 
+fn prepared_project_assets(
+    manifest: &crate::package::PackageManifest,
+    files: &BTreeMap<String, Vec<u8>>,
+) -> Result<Vec<ModuleAssetSource>, FixtureError> {
+    manifest
+        .sources
+        .project_assets
+        .iter()
+        .map(|package_path| {
+            let source_path = source_project_asset_path(package_path)?;
+            let bytes = files
+                .get(package_path)
+                .ok_or(FixtureError::CandidateBindingRefused)?;
+            if bytes.is_empty()
+                || bytes.len() as u64 > MAX_RHAI_PLANNER_SOURCE_BYTES
+                || !manifest_file_matches(
+                    manifest,
+                    PackageFileRole::SourceProjectPlannerScript,
+                    package_path,
+                    bytes,
+                )
+            {
+                return Err(FixtureError::CandidateBindingRefused);
+            }
+            Ok(ModuleAssetSource {
+                module: None,
+                path: source_path.to_owned(),
+                bytes: bytes.clone(),
+            })
+        })
+        .collect()
+}
+
 fn prepared_module_assets(
+    manifest: &crate::package::PackageManifest,
     captured: &crate::package::CapturedModule,
     files: &BTreeMap<String, Vec<u8>>,
 ) -> Result<Vec<ModuleAssetSource>, FixtureError> {
@@ -5066,7 +5238,11 @@ fn prepared_module_assets(
         let bytes = files
             .get(&package_path)
             .ok_or(FixtureError::CandidateBindingRefused)?;
-        if bytes.is_empty() || bytes.len() > MAX_DERIVED_SQL_BYTES {
+        let (role, maximum_bytes) = source_module_asset_policy(asset)?;
+        if bytes.is_empty()
+            || bytes.len() > maximum_bytes
+            || !manifest_file_matches(manifest, role, &package_path, bytes)
+        {
             return Err(FixtureError::CandidateBindingRefused);
         }
         assets.push(ModuleAssetSource {
@@ -5088,7 +5264,7 @@ fn source_module_asset_package_path(
         || asset_path.contains('\\')
         || asset_path.starts_with('/')
         || asset_path.ends_with('/')
-        || !asset_path.ends_with(".sql")
+        || (!asset_path.ends_with(".sql") && !asset_path.ends_with(".rhai"))
         || asset_path == "module.yaml"
     {
         return Err(FixtureError::CandidateBindingRefused);
@@ -5104,6 +5280,45 @@ fn source_module_asset_package_path(
         return Err(FixtureError::CandidateBindingRefused);
     }
     Ok(format!("source/modules/{module_id}/{asset_path}"))
+}
+
+fn source_module_asset_policy(asset_path: &str) -> Result<(PackageFileRole, usize), FixtureError> {
+    if asset_path.ends_with(".sql") {
+        Ok((PackageFileRole::SourceModuleAsset, MAX_DERIVED_SQL_BYTES))
+    } else if asset_path.ends_with(".rhai") {
+        Ok((
+            PackageFileRole::SourceModulePlannerScript,
+            MAX_RHAI_PLANNER_SOURCE_BYTES as usize,
+        ))
+    } else {
+        Err(FixtureError::CandidateBindingRefused)
+    }
+}
+
+fn source_project_asset_path(package_path: &str) -> Result<&str, FixtureError> {
+    let source_path = package_path
+        .strip_prefix("source/project/")
+        .ok_or(FixtureError::CandidateBindingRefused)?;
+    if source_path.is_empty()
+        || source_path.len() > 256
+        || source_path.contains('\\')
+        || source_path.starts_with('/')
+        || source_path.ends_with('/')
+        || !source_path.ends_with(".rhai")
+    {
+        return Err(FixtureError::CandidateBindingRefused);
+    }
+    let mut components = 0usize;
+    for component in source_path.split('/') {
+        components += 1;
+        if component.is_empty() || component == "." || component == ".." {
+            return Err(FixtureError::CandidateBindingRefused);
+        }
+    }
+    if components > 12 || format!("source/project/{source_path}") != package_path {
+        return Err(FixtureError::CandidateBindingRefused);
+    }
+    Ok(source_path)
 }
 
 fn manifest_file_matches(
@@ -5132,6 +5347,10 @@ fn source_closure_sha256(
         sources.project.path.as_bytes(),
         sources.project.bytes,
     );
+    for asset in sources.project_assets {
+        let path = format!("source/project/{}", asset.path);
+        digest_part(&mut digest, path.as_bytes(), asset.bytes);
+    }
     for source in sources.modules {
         digest_part(&mut digest, source.id.as_bytes(), source.path.as_bytes());
         digest_part(&mut digest, source.path.as_bytes(), source.bytes);
@@ -5161,6 +5380,12 @@ fn source_closure_sha256_from_package(package: &PreparedPackage) -> Result<Strin
         manifest.sources.project.as_bytes(),
         project_bytes,
     );
+    for asset in &manifest.sources.project_assets {
+        let bytes = files
+            .get(asset)
+            .ok_or(FixtureError::CandidateBindingRefused)?;
+        digest_part(&mut digest, asset.as_bytes(), bytes);
+    }
     for module in &manifest.sources.modules {
         let bytes = files
             .get(&module.path)
@@ -5281,8 +5506,9 @@ mod tests {
 
     use crate::compiler::module_digest;
     use crate::package::{
-        load_package, prepare_package, PackageBuildRequest, PackageIntent, PackageLoadContext,
-        PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile, SignaturePolicy,
+        load_package, prepare_package, prepare_package_with_project_assets, PackageBuildRequest,
+        PackageIntent, PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource,
+        PackageSourceFile, SignaturePolicy,
     };
 
     const PROJECT_TEMPLATE: &[u8] =
@@ -5295,6 +5521,17 @@ mod tests {
         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const DIGEST_B: &str =
         "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const RHAI_JOURNEYS: &[u8] = br#"apiVersion: registry.registrystack.org/server-journeys/v1
+journeys:
+  - id: list-people
+    steps:
+      - id: list-people
+        entity: person
+        accessProfile: person-operator
+        claims: {principal: fixture-operator, purpose: person-maintenance}
+        request: {operation: list}
+        expect: {outcome: success, status: 200, count: 0}
+"#;
 
     #[tokio::test]
     async fn fixture_test_receipt_is_deterministic_and_bound_to_the_exact_candidate() {
@@ -5460,6 +5697,214 @@ mod tests {
         );
     }
 
+    #[test]
+    fn project_rhai_asset_survives_prepared_and_verified_schema_test_rederivation() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/registry-server/acceptance/person-name-change-rhai");
+        let project = String::from_utf8(
+            std::fs::read(root.join("registry.yaml")).expect("planner project reads"),
+        )
+        .expect("planner project is UTF-8")
+        .replace("environment: acceptance", "environment: local")
+        .replace(
+            "instanceId: person-name-change-rhai-acceptance",
+            "instanceId: fixture-instance",
+        )
+        .replace(
+            "sourceRevision: person-name-change-rhai-acceptance-0.1.0",
+            "sourceRevision: fixture-project-source",
+        )
+        .into_bytes();
+        let script = std::fs::read(root.join("scripts/person-name-change.rhai"))
+            .expect("planner script reads");
+        let prepared = prepare_package_with_project_assets(
+            PackageBuildRequest {
+                environment: "local".to_owned(),
+                instance_id: "fixture-instance".to_owned(),
+                database_id: DATABASE_ID.to_owned(),
+                sequence: 1,
+                prior_revision: None,
+                compiler_source_revision: COMPILER_SOURCE_REVISION.to_owned(),
+                schema_fingerprint: DIGEST_A.to_owned(),
+                signature_policy: SignaturePolicy {
+                    threshold: 0,
+                    key_ids: Vec::new(),
+                },
+                project: PackageSourceFile {
+                    path: "source/registry.yaml".to_owned(),
+                    bytes: project.clone(),
+                },
+                modules: Vec::new(),
+                fixture_journeys: PackageSourceFile {
+                    path: FIXTURE_JOURNEYS_PATH.to_owned(),
+                    bytes: RHAI_JOURNEYS.to_vec(),
+                },
+                migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
+            },
+            vec![PackageSourceFile {
+                path: "scripts/person-name-change.rhai".to_owned(),
+                bytes: script.clone(),
+            }],
+        )
+        .expect("planner package prepares");
+        let suite = validate_fixture_journeys(RHAI_JOURNEYS, prepared.registry())
+            .expect("planner journey suite validates");
+        let (prepared_candidate, prepared_registry) =
+            derive_prepared_schema_test_candidate(&prepared, &suite, 16)
+                .expect("prepared package rederives its project planner asset");
+        assert_eq!(prepared_registry, *prepared.registry());
+
+        let migration_plan = prepared.file_bytes()["database/migration-plan.json"].clone();
+        let temporary = tempfile::tempdir().expect("temporary root creates");
+        let package_root = temporary
+            .path()
+            .canonicalize()
+            .expect("temporary root canonicalizes")
+            .join("package");
+        prepared
+            .publish_to_directory(&package_root, Vec::new())
+            .expect("planner package publishes");
+        let package = load_package(
+            &package_root,
+            &PackageLoadContext {
+                environment: "local",
+                instance_id: "fixture-instance",
+                database_id: DATABASE_ID,
+                database_initialization_environment: "local",
+                compiler_source_revision: COMPILER_SOURCE_REVISION,
+                trust_anchor: None,
+                intent: PackageIntent::InitialActivation,
+            },
+        )
+        .expect("planner package verifies");
+        let project_assets = [FixtureProjectAssetSource {
+            path: "scripts/person-name-change.rhai",
+            bytes: &script,
+        }];
+        let sources = SchemaTestSources {
+            project: FixtureSourceFile {
+                path: "source/registry.yaml",
+                bytes: &project,
+            },
+            project_assets: &project_assets,
+            modules: &[],
+            migration_plan: FixtureSourceFile {
+                path: "database/migration-plan.json",
+                bytes: &migration_plan,
+            },
+        };
+        let execution = execution_facts(&package, DIGEST_A, 16);
+        let verified_candidate =
+            validate_schema_test_candidate(&package, &sources, &execution, &suite)
+                .expect("verified package binds the exact project planner asset");
+        assert_eq!(
+            verified_candidate.source_closure_sha256,
+            prepared_candidate.source_closure_sha256
+        );
+
+        let changed_script = [script.as_slice(), b"\n// changed\n"].concat();
+        let changed_assets = [FixtureProjectAssetSource {
+            path: "scripts/person-name-change.rhai",
+            bytes: &changed_script,
+        }];
+        let changed_sources = SchemaTestSources {
+            project_assets: &changed_assets,
+            ..sources
+        };
+        assert!(matches!(
+            validate_schema_test_candidate(&package, &changed_sources, &execution, &suite),
+            Err(FixtureError::CandidateBindingRefused)
+        ));
+    }
+
+    #[test]
+    fn module_rhai_asset_role_survives_prepared_schema_test_rederivation() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/registry-server/acceptance/person-name-change-rhai");
+        let authored_project = String::from_utf8(
+            std::fs::read(root.join("registry.yaml")).expect("planner project reads"),
+        )
+        .expect("planner project is UTF-8")
+        .replace("environment: acceptance", "environment: local")
+        .replace(
+            "instanceId: person-name-change-rhai-acceptance",
+            "instanceId: fixture-instance",
+        )
+        .replace(
+            "sourceRevision: person-name-change-rhai-acceptance-0.1.0",
+            "sourceRevision: fixture-project-source",
+        )
+        .into_bytes();
+        let script = std::fs::read(root.join("scripts/person-name-change.rhai"))
+            .expect("planner script reads");
+        let mut project_value: Value =
+            serde_norway::from_slice(&authored_project).expect("planner project converts");
+        let entities = project_value
+            .as_object_mut()
+            .and_then(|project| project.remove("entities"))
+            .expect("planner project has entities");
+        let module_value = json!({
+            "id": "person-module",
+            "version": "0.1.0",
+            "entities": entities,
+        });
+        let module_bytes = serde_json::to_vec(&module_value).expect("module serializes");
+        let module = parse_module_yaml(&module_bytes).expect("planner module parses");
+        let compiler_asset = ModuleAssetSource {
+            module: Some("person-module".to_owned()),
+            path: "scripts/person-name-change.rhai".to_owned(),
+            bytes: script.clone(),
+        };
+        let digest = module_digest_with_assets(&module, &[compiler_asset]);
+        project_value["modules"] = json!([{
+            "id": "person-module",
+            "version": "0.1.0",
+            "digest": digest,
+        }]);
+        let project = serde_json::to_vec(&project_value).expect("shell project serializes");
+        let prepared = prepare_package(PackageBuildRequest {
+            environment: "local".to_owned(),
+            instance_id: "fixture-instance".to_owned(),
+            database_id: DATABASE_ID.to_owned(),
+            sequence: 1,
+            prior_revision: None,
+            compiler_source_revision: COMPILER_SOURCE_REVISION.to_owned(),
+            schema_fingerprint: DIGEST_A.to_owned(),
+            signature_policy: SignaturePolicy {
+                threshold: 0,
+                key_ids: Vec::new(),
+            },
+            project: PackageSourceFile {
+                path: "source/registry.yaml".to_owned(),
+                bytes: project,
+            },
+            modules: vec![PackageModuleSource {
+                id: "person-module".to_owned(),
+                path: "source/modules/person-module/module.yaml".to_owned(),
+                bytes: module_bytes,
+                assets: vec![PackageSourceFile {
+                    path: "scripts/person-name-change.rhai".to_owned(),
+                    bytes: script,
+                }],
+            }],
+            fixture_journeys: PackageSourceFile {
+                path: FIXTURE_JOURNEYS_PATH.to_owned(),
+                bytes: RHAI_JOURNEYS.to_vec(),
+            },
+            migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
+        })
+        .expect("module planner package prepares");
+        assert!(prepared.manifest().files.iter().any(|file| {
+            file.path == "source/modules/person-module/scripts/person-name-change.rhai"
+                && file.role == PackageFileRole::SourceModulePlannerScript
+        }));
+        let suite = validate_fixture_journeys(RHAI_JOURNEYS, prepared.registry())
+            .expect("module planner journey suite validates");
+        let (_, rederived) = derive_prepared_schema_test_candidate(&prepared, &suite, 16)
+            .expect("schema test rederives the exact module planner asset");
+        assert_eq!(rederived, *prepared.registry());
+    }
+
     fn protected_credential_bindings(
         suite: &ValidatedFixtureJourneys,
     ) -> Vec<SchemaTestCredentialBinding> {
@@ -5573,6 +6018,7 @@ mod tests {
                 path: "sources/project.yaml",
                 bytes: &changed_project,
             },
+            project_assets: &[],
             modules: &modules,
             migration_plan: FixtureSourceFile {
                 path: "database/migration-plan.json",
@@ -5601,6 +6047,7 @@ mod tests {
                 path: "sources/project.yaml",
                 bytes: &fixture.project,
             },
+            project_assets: &[],
             modules: &changed_modules,
             migration_plan: FixtureSourceFile {
                 path: "database/migration-plan.json",
@@ -5630,6 +6077,7 @@ mod tests {
                 path: "sources/project.yaml",
                 bytes: &changed_digest_project,
             },
+            project_assets: &[],
             modules: &modules,
             migration_plan: FixtureSourceFile {
                 path: "database/migration-plan.json",
@@ -5658,6 +6106,7 @@ mod tests {
                 path: "sources/project.yaml",
                 bytes: &fixture.project,
             },
+            project_assets: &[],
             modules: &modules,
             migration_plan: FixtureSourceFile {
                 path: "database/migration-plan.json",
@@ -5891,6 +6340,7 @@ mod tests {
                     path: "sources/project.yaml",
                     bytes: &fixture.project,
                 },
+                project_assets: &[],
                 modules: &modules,
                 migration_plan: FixtureSourceFile {
                     path: "database/migration-plan.json",

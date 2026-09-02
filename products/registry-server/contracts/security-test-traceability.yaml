@@ -25,3 +25,10 @@ traceability:
   - {id: RS-SEC-22, state: enforced, negativeId: RS-NEG-22, negativeTest: {path: crates/registry-server/tests/access_configuration.rs, name: requirements_are_mandatory_not_grants_and_cannot_be_weakened_by_profiles}}
   - {id: RS-SEC-23, state: enforced, negativeId: RS-NEG-23, negativeTest: {path: crates/registry-server/tests/http_read_only.rs, name: bbox_reaches_record_service_only_with_declared_spatial_grant}}
   - {id: RS-SEC-24, state: enforced, negativeId: RS-NEG-24, negativeTest: {path: crates/registry-server/tests/postgres_spatial_storage.rs, name: real_postgres_postgis_prerequisites_are_role_bound_and_shadow_resistant}}
+  - {id: RS-SEC-25, state: enforced, negativeId: RS-NEG-25, negativeTest: {path: crates/registry-server/src/request_prepare/tests.rs, name: rhai_planner_refuses_authority_ceiling_escape_before_target_locks}}
+  - {id: RS-SEC-26, state: enforced, negativeId: RS-NEG-26, negativeTest: {path: crates/registry-server/src/request_workflow.rs, name: rhai_planner_review_policy_cannot_be_forged_or_bypassed}}
+  - {id: RS-SEC-27, state: enforced, negativeId: RS-NEG-27, negativeTest: {path: crates/registry-server/src/request_workflow.rs, name: rhai_planner_package_and_frozen_proposal_bind_exact_script}}
+  - {id: RS-SEC-28, state: enforced, negativeId: RS-NEG-28, negativeTest: {path: crates/registry-server/tests/compiler_rhai_planner.rs, name: rhai_planner_input_and_engine_capabilities_are_closed}}
+  - {id: RS-SEC-29, state: enforced, negativeId: RS-NEG-29, negativeTest: {path: crates/registry-server/tests/compiler_rhai_planner.rs, name: rhai_planner_resource_limits_and_deadline_leave_runtime_healthy}}
+  - {id: RS-SEC-30, state: enforced, negativeId: RS-NEG-30, negativeTest: {path: crates/registry-server/tests/compiler_rhai_planner.rs, name: rhai_planner_errors_and_queue_reasons_are_value_free}}
+  - {id: RS-SEC-31, state: enforced, negativeId: RS-NEG-31, negativeTest: {path: crates/registry-server/tests/postgres_rhai_planner.rs, name: rhai_planner_automatic_transition_requires_same_profile_and_is_atomic}}

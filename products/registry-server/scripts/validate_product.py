@@ -28,6 +28,7 @@ PLACEHOLDER = re.compile(r"\b(?:TODO|TBD|FIXME|placeholder)\b", re.IGNORECASE)
 CONTRACT_STATES = {"enforced", "partial", "planned"}
 V1_REQUIREMENT_IDS = tuple(f"RS-V1-{index:02d}" for index in range(1, 45))
 ACCEPTANCE_JOURNEY_IDS = tuple(f"RS-J{index:02d}" for index in range(1, 20))
+SECURITY_INVARIANT_IDS = tuple(f"RS-SEC-{index:02d}" for index in range(1, 32))
 ACCEPTANCE_FIXTURES = {
     "RS-J01": ("asset-site-placement", "acceptance/asset-site-placement"),
     "RS-J02": ("asset-site-placement", "acceptance/asset-site-placement"),
@@ -111,6 +112,7 @@ POSTGRES_TEST_COMMANDS = (
     "cargo test --locked -p registry-server --features postgres-test --test postgres_request_read_retention",
     "cargo test --locked -p registry-server --features postgres-test,tooling --test postgres_request_activation",
     "cargo test --locked -p registry-server --features postgres-test --test postgres_pilot_acceptance",
+    "cargo test --locked -p registry-server --features postgres-test --test postgres_rhai_planner",
     "cargo test --locked -p registry-server --features postgres-test --test postgres_tombstone_revision",
     "cargo test --locked -p registry-server --features postgres-test,tooling --test postgres_package",
     "cargo test --locked -p registry-server --features postgres-test,tooling --test postgres_migration",
@@ -541,7 +543,7 @@ def validate_security(waves: set[str], errors: list[str]) -> None:
     invariants = as_list(matrix.get("invariants"), "security matrix.invariants", errors)
     rows = {row.get("id"): row for row in invariants if isinstance(row, dict) and isinstance(row.get("id"), str)}
     unique_ids(invariants, "security matrix.invariants", errors)
-    if set(rows) != {f"RS-SEC-{index:02d}" for index in range(1, 25)}:
+    if tuple(row.get("id") for row in invariants if isinstance(row, dict)) != SECURITY_INVARIANT_IDS:
         errors.append("security matrix: must contain the complete closed product invariant identifiers")
     negatives: set[str] = set()
     for index, raw in enumerate(invariants):

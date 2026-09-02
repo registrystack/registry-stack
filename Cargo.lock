@@ -4186,6 +4186,7 @@ dependencies = [
  "registry-platform-oidc",
  "registry-platform-testing",
  "registry-relay-client",
+ "rhai",
  "rustix 1.1.4",
  "rustls",
  "schemars",

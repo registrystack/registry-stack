@@ -131,14 +131,20 @@ impl RequestWorkflow {
         let version = self.current_version;
         let proposal = proposal.freeze(&self.request, version, context)?;
         let effect_digest = proposal.effect_digest.clone();
+        let review_policy = proposal.review_policy();
         self.proposals.insert(version, proposal);
-        self.state = RequestState::Submitted;
+        self.state = if review_policy == FrozenReviewPolicy::None {
+            RequestState::Approved
+        } else {
+            RequestState::Submitted
+        };
         self.workflow_revision = self.workflow_revision.next()?;
         Ok(WorkflowTransition {
             workflow: self,
             effect: TransitionEffect::Submitted {
                 version,
                 effect_digest,
+                review_policy,
             },
         })
     }
@@ -587,6 +593,129 @@ impl RequestWorkflow {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FrozenReviewPolicy {
+    None,
+    Stages,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FrozenPlannerKind {
+    Declarative,
+    Rhai,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FrozenPlannerDisposition {
+    Apply,
+    Queue,
+}
+
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct FrozenQueueReason {
+    code: String,
+    label: String,
+}
+
+impl FrozenQueueReason {
+    pub fn new(code: impl Into<String>, label: impl Into<String>) -> Result<Self, WorkflowError> {
+        let reason = Self {
+            code: code.into(),
+            label: label.into(),
+        };
+        reason.validate()?;
+        Ok(reason)
+    }
+
+    pub fn code(&self) -> &str {
+        &self.code
+    }
+
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
+    fn validate(&self) -> Result<(), WorkflowError> {
+        ValidatedToken::new(self.code.clone(), TokenKind::Planner)?;
+        ValidatedToken::new(self.label.clone(), TokenKind::Planner)?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct FrozenPlanningBinding {
+    kind: FrozenPlannerKind,
+    abi_identifier: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    script_digest: Option<ProposalDigest>,
+    disposition: FrozenPlannerDisposition,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    queue_reason: Option<FrozenQueueReason>,
+}
+
+impl FrozenPlanningBinding {
+    pub fn new(
+        kind: FrozenPlannerKind,
+        abi_identifier: impl Into<String>,
+        script_digest: Option<ProposalDigest>,
+        disposition: FrozenPlannerDisposition,
+        queue_reason: Option<FrozenQueueReason>,
+    ) -> Result<Self, WorkflowError> {
+        let binding = Self {
+            kind,
+            abi_identifier: abi_identifier.into(),
+            script_digest,
+            disposition,
+            queue_reason,
+        };
+        binding.validate()?;
+        Ok(binding)
+    }
+
+    pub fn kind(&self) -> FrozenPlannerKind {
+        self.kind
+    }
+
+    pub fn abi_identifier(&self) -> &str {
+        &self.abi_identifier
+    }
+
+    pub fn script_digest(&self) -> Option<&ProposalDigest> {
+        self.script_digest.as_ref()
+    }
+
+    pub fn disposition(&self) -> FrozenPlannerDisposition {
+        self.disposition
+    }
+
+    pub fn queue_reason(&self) -> Option<&FrozenQueueReason> {
+        self.queue_reason.as_ref()
+    }
+
+    fn validate(&self) -> Result<(), WorkflowError> {
+        if self.abi_identifier != "registry.change-request-plan/v1"
+            || matches!(self.kind, FrozenPlannerKind::Rhai) != self.script_digest.is_some()
+            || (matches!(self.kind, FrozenPlannerKind::Declarative) && self.queue_reason.is_some())
+            || (matches!(self.disposition, FrozenPlannerDisposition::Apply)
+                && self.queue_reason.is_some())
+        {
+            return Err(WorkflowError::InvalidPlanningBinding);
+        }
+        if let Some(digest) = &self.script_digest {
+            digest.validate()?;
+        }
+        if let Some(reason) = &self.queue_reason {
+            reason.validate()?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct PreparedProposal {
@@ -596,6 +725,10 @@ pub struct PreparedProposal {
     stages: Vec<CompiledChangeRequestStage>,
     effects: Vec<PreparedEffect>,
     combined_snapshot_bytes: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    planning_binding: Option<FrozenPlanningBinding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    review_policy: Option<FrozenReviewPolicy>,
 }
 
 impl PreparedProposal {
@@ -616,6 +749,38 @@ impl PreparedProposal {
             stages,
             effects,
             combined_snapshot_bytes,
+            planning_binding: None,
+            review_policy: None,
+        })
+    }
+
+    /// Constructs the canonical Version 2 proposal used by every newly
+    /// prepared declarative or scripted candidate. The legacy constructor is
+    /// retained only so persisted Version 1 proposals can be restored and
+    /// verified under their original digest schema.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_binding(
+        request_record_revision: RecordRevision,
+        contract_fingerprint: ContractFingerprint,
+        originating_package: PackageFingerprint,
+        review_policy: FrozenReviewPolicy,
+        planning_binding: FrozenPlanningBinding,
+        stages: Vec<CompiledChangeRequestStage>,
+        effects: Vec<PreparedEffect>,
+        combined_snapshot_bytes: usize,
+    ) -> Result<Self, WorkflowError> {
+        validate_review_policy(review_policy, &stages)?;
+        planning_binding.validate()?;
+        validate_effects(&effects, combined_snapshot_bytes)?;
+        Ok(Self {
+            request_record_revision,
+            contract_fingerprint,
+            originating_package,
+            stages,
+            effects,
+            combined_snapshot_bytes,
+            planning_binding: Some(planning_binding),
+            review_policy: Some(review_policy),
         })
     }
 
@@ -643,21 +808,31 @@ impl PreparedProposal {
         self.combined_snapshot_bytes
     }
 
+    pub fn planning_binding(&self) -> Option<&FrozenPlanningBinding> {
+        self.planning_binding.as_ref()
+    }
+
+    pub fn review_policy(&self) -> FrozenReviewPolicy {
+        self.review_policy.unwrap_or(FrozenReviewPolicy::Stages)
+    }
+
     fn freeze(
         self,
         request: &RequestKey,
         version: ProposalVersion,
         context: TrustedTransitionContext,
     ) -> Result<ProposalSnapshot, WorkflowError> {
-        let effect_digest = proposal_digest(
+        let effect_digest = proposal_digest(ProposalDigestInput {
             request,
             version,
-            self.request_record_revision,
-            &self.contract_fingerprint,
-            &self.originating_package,
-            &self.stages,
-            &self.effects,
-        )?;
+            request_record_revision: self.request_record_revision,
+            contract_fingerprint: &self.contract_fingerprint,
+            originating_package: &self.originating_package,
+            stages: &self.stages,
+            effects: &self.effects,
+            planning_binding: self.planning_binding.as_ref(),
+            review_policy: self.review_policy,
+        })?;
         Ok(ProposalSnapshot {
             version,
             request_record_revision: self.request_record_revision,
@@ -666,6 +841,8 @@ impl PreparedProposal {
             stages: self.stages,
             effects: self.effects,
             combined_snapshot_bytes: self.combined_snapshot_bytes,
+            planning_binding: self.planning_binding,
+            review_policy: self.review_policy,
             effect_digest,
             submitted_by: context.actor,
             submitted_at: context.now,
@@ -683,6 +860,10 @@ pub struct ProposalSnapshot {
     stages: Vec<CompiledChangeRequestStage>,
     effects: Vec<PreparedEffect>,
     combined_snapshot_bytes: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    planning_binding: Option<FrozenPlanningBinding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    review_policy: Option<FrozenReviewPolicy>,
     effect_digest: ProposalDigest,
     submitted_by: TrustedActorRef,
     submitted_at: TrustedTimestamp,
@@ -721,6 +902,14 @@ impl ProposalSnapshot {
         self.combined_snapshot_bytes
     }
 
+    pub fn planning_binding(&self) -> Option<&FrozenPlanningBinding> {
+        self.planning_binding.as_ref()
+    }
+
+    pub fn review_policy(&self) -> FrozenReviewPolicy {
+        self.review_policy.unwrap_or(FrozenReviewPolicy::Stages)
+    }
+
     pub fn submitted_by(&self) -> &TrustedActorRef {
         &self.submitted_by
     }
@@ -730,15 +919,17 @@ impl ProposalSnapshot {
     }
 
     pub fn verify_digest(&self, request: &RequestKey) -> Result<(), WorkflowError> {
-        let actual = proposal_digest(
+        let actual = proposal_digest(ProposalDigestInput {
             request,
-            self.version,
-            self.request_record_revision,
-            &self.contract_fingerprint,
-            &self.originating_package,
-            &self.stages,
-            &self.effects,
-        )?;
+            version: self.version,
+            request_record_revision: self.request_record_revision,
+            contract_fingerprint: &self.contract_fingerprint,
+            originating_package: &self.originating_package,
+            stages: &self.stages,
+            effects: &self.effects,
+            planning_binding: self.planning_binding.as_ref(),
+            review_policy: self.review_policy,
+        })?;
         if actual.matches(&self.effect_digest) {
             Ok(())
         } else {
@@ -751,7 +942,14 @@ impl ProposalSnapshot {
         self.request_record_revision.validate()?;
         self.contract_fingerprint.validate()?;
         self.originating_package.validate()?;
-        validate_stages(&self.stages)?;
+        match (self.planning_binding.as_ref(), self.review_policy) {
+            (None, None) => validate_stages(&self.stages)?,
+            (Some(binding), Some(review_policy)) => {
+                binding.validate()?;
+                validate_review_policy(review_policy, &self.stages)?;
+            }
+            _ => return Err(WorkflowError::InvalidRestoredState),
+        }
         validate_effects(&self.effects, self.combined_snapshot_bytes)?;
         self.effect_digest.validate()?;
         self.submitted_by.validate()?;
@@ -1362,6 +1560,7 @@ pub enum TransitionEffect {
     Submitted {
         version: ProposalVersion,
         effect_digest: ProposalDigest,
+        review_policy: FrozenReviewPolicy,
     },
     DecisionRecorded(ReviewDecision),
     DraftVersionStarted {
@@ -1845,6 +2044,7 @@ enum TokenKind {
     Effect,
     Entity,
     Field,
+    Planner,
     Record,
     Stage,
     Timestamp,
@@ -2203,6 +2403,8 @@ pub enum WorkflowError {
     SnapshotTooLarge,
     #[error("proposal canonicalization failed")]
     Canonicalization,
+    #[error("proposal planning binding is invalid")]
+    InvalidPlanningBinding,
     #[error("set values cannot be JSON null")]
     NullSetValue,
     #[error("target binding does not match the frozen proposal")]
@@ -2237,6 +2439,17 @@ fn validate_stages(stages: &[CompiledChangeRequestStage]) -> Result<(), Workflow
         }
     }
     Ok(())
+}
+
+fn validate_review_policy(
+    review_policy: FrozenReviewPolicy,
+    stages: &[CompiledChangeRequestStage],
+) -> Result<(), WorkflowError> {
+    match review_policy {
+        FrozenReviewPolicy::None if stages.is_empty() => Ok(()),
+        FrozenReviewPolicy::Stages => validate_stages(stages),
+        FrozenReviewPolicy::None => Err(WorkflowError::InvalidRestoredState),
+    }
 }
 
 fn validate_effects(
@@ -2283,25 +2496,55 @@ fn validate_effects(
     Ok(())
 }
 
-fn proposal_digest(
-    request: &RequestKey,
+struct ProposalDigestInput<'a> {
+    request: &'a RequestKey,
     version: ProposalVersion,
     request_record_revision: RecordRevision,
-    contract_fingerprint: &ContractFingerprint,
-    originating_package: &PackageFingerprint,
-    stages: &[CompiledChangeRequestStage],
-    effects: &[PreparedEffect],
-) -> Result<ProposalDigest, WorkflowError> {
-    let value = json!({
-        "schema": "registry-server.change-request.proposal.v1",
-        "request": request,
-        "version": version,
-        "requestRecordRevision": request_record_revision,
-        "contractFingerprint": contract_fingerprint,
-        "originatingPackage": originating_package,
-        "stages": stages,
-        "effects": effects,
-    });
+    contract_fingerprint: &'a ContractFingerprint,
+    originating_package: &'a PackageFingerprint,
+    stages: &'a [CompiledChangeRequestStage],
+    effects: &'a [PreparedEffect],
+    planning_binding: Option<&'a FrozenPlanningBinding>,
+    review_policy: Option<FrozenReviewPolicy>,
+}
+
+fn proposal_digest(input: ProposalDigestInput<'_>) -> Result<ProposalDigest, WorkflowError> {
+    let ProposalDigestInput {
+        request,
+        version,
+        request_record_revision,
+        contract_fingerprint,
+        originating_package,
+        stages,
+        effects,
+        planning_binding,
+        review_policy,
+    } = input;
+    let value = match (planning_binding, review_policy) {
+        (None, None) => json!({
+            "schema": "registry-server.change-request.proposal.v1",
+            "request": request,
+            "version": version,
+            "requestRecordRevision": request_record_revision,
+            "contractFingerprint": contract_fingerprint,
+            "originatingPackage": originating_package,
+            "stages": stages,
+            "effects": effects,
+        }),
+        (Some(planning_binding), Some(review_policy)) => json!({
+            "schema": "registry-server.change-request.proposal.v2",
+            "request": request,
+            "version": version,
+            "requestRecordRevision": request_record_revision,
+            "contractFingerprint": contract_fingerprint,
+            "originatingPackage": originating_package,
+            "reviewPolicy": review_policy,
+            "planningBinding": planning_binding,
+            "stages": stages,
+            "effects": effects,
+        }),
+        _ => return Err(WorkflowError::InvalidPlanningBinding),
+    };
     let canonical = canonicalize_json(&value).map_err(|_| WorkflowError::Canonicalization)?;
     ProposalDigest::new(format!("sha256:{}", hex_lower(&Sha256::digest(canonical))))
 }
@@ -2441,6 +2684,36 @@ mod tests {
         .expect("proposal")
     }
 
+    fn v2_proposal(
+        effects: Vec<PreparedEffect>,
+        review_policy: FrozenReviewPolicy,
+        stages: Vec<CompiledChangeRequestStage>,
+        script_digest: &str,
+    ) -> PreparedProposal {
+        let canonical_len =
+            canonicalize_json(&serde_json::to_value(&effects).expect("effects serialize"))
+                .expect("effects canonicalize")
+                .len();
+        PreparedProposal::new_with_binding(
+            revision(7),
+            ContractFingerprint::new("sha256:contract").expect("contract fingerprint"),
+            PackageFingerprint::new("sha256:package").expect("package fingerprint"),
+            review_policy,
+            FrozenPlanningBinding::new(
+                FrozenPlannerKind::Rhai,
+                "registry.change-request-plan/v1",
+                Some(ProposalDigest::new(script_digest).expect("script digest")),
+                FrozenPlannerDisposition::Queue,
+                Some(FrozenQueueReason::new("manual-check", "Manual check").expect("reason")),
+            )
+            .expect("planning binding"),
+            stages,
+            effects,
+            canonical_len,
+        )
+        .expect("v2 proposal")
+    }
+
     fn submitted_one_stage() -> RequestWorkflow {
         workflow()
             .submit(
@@ -2500,6 +2773,135 @@ mod tests {
         );
         assert_eq!(
             refused.expect_err("digest mismatch"),
+            WorkflowError::DigestMismatch
+        );
+    }
+
+    #[test]
+    fn rhai_planner_review_policy_cannot_be_forged_or_bypassed() {
+        let effect = patch_effect("site-b", 3);
+        assert_eq!(
+            PreparedProposal::new_with_binding(
+                revision(7),
+                ContractFingerprint::new("sha256:contract").unwrap(),
+                PackageFingerprint::new("sha256:package").unwrap(),
+                FrozenReviewPolicy::None,
+                FrozenPlanningBinding::new(
+                    FrozenPlannerKind::Declarative,
+                    "registry.change-request-plan/v1",
+                    None,
+                    FrozenPlannerDisposition::Queue,
+                    None,
+                )
+                .unwrap(),
+                one_stage(),
+                vec![effect.clone()],
+                MAX_REQUEST_SNAPSHOT_BYTES,
+            )
+            .expect_err("review.none cannot retain review stages"),
+            WorkflowError::InvalidRestoredState
+        );
+        assert_eq!(
+            PreparedProposal::new_with_binding(
+                revision(7),
+                ContractFingerprint::new("sha256:contract").unwrap(),
+                PackageFingerprint::new("sha256:package").unwrap(),
+                FrozenReviewPolicy::Stages,
+                FrozenPlanningBinding::new(
+                    FrozenPlannerKind::Declarative,
+                    "registry.change-request-plan/v1",
+                    None,
+                    FrozenPlannerDisposition::Queue,
+                    None,
+                )
+                .unwrap(),
+                Vec::new(),
+                vec![effect.clone()],
+                MAX_REQUEST_SNAPSHOT_BYTES,
+            )
+            .expect_err("staged review cannot omit stages"),
+            WorkflowError::NoReviewStages
+        );
+
+        let approved = workflow()
+            .submit(
+                context("submitter", 1),
+                v2_proposal(
+                    vec![effect],
+                    FrozenReviewPolicy::None,
+                    Vec::new(),
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                ),
+            )
+            .expect("explicit no-review submission")
+            .into_workflow();
+        assert_eq!(approved.state(), RequestState::Approved);
+        assert!(approved.decisions().is_empty());
+        let proposal = approved.current_proposal().expect("proposal");
+        assert_eq!(proposal.review_policy(), FrozenReviewPolicy::None);
+        assert_eq!(
+            approved
+                .clone()
+                .decide(
+                    context("reviewer", 2),
+                    "review",
+                    proposal.version(),
+                    proposal.effect_digest(),
+                    ReviewDecisionKind::Approve,
+                )
+                .expect_err("no-review proposal has no decision transition"),
+            WorkflowError::InvalidTransition
+        );
+        approved
+            .validate_restored_invariants()
+            .expect("no-review approved workflow restores without a synthetic decision");
+    }
+
+    #[test]
+    fn rhai_planner_package_and_frozen_proposal_bind_exact_script() {
+        let first = workflow()
+            .submit(
+                context("submitter", 1),
+                v2_proposal(
+                    vec![patch_effect("site-b", 3)],
+                    FrozenReviewPolicy::Stages,
+                    one_stage(),
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                ),
+            )
+            .expect("first submit")
+            .into_workflow();
+        let second = workflow()
+            .submit(
+                context("submitter", 1),
+                v2_proposal(
+                    vec![patch_effect("site-b", 3)],
+                    FrozenReviewPolicy::Stages,
+                    one_stage(),
+                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                ),
+            )
+            .expect("second submit")
+            .into_workflow();
+        assert_ne!(
+            first.current_proposal().unwrap().effect_digest(),
+            second.current_proposal().unwrap().effect_digest()
+        );
+
+        let mut encoded = serde_json::to_value(&first).expect("workflow serializes");
+        let proposal = encoded["proposals"]
+            .as_object_mut()
+            .unwrap()
+            .values_mut()
+            .next()
+            .unwrap();
+        proposal["planningBinding"]["scriptDigest"] =
+            json!("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        let restored = serde_json::from_value::<RequestWorkflow>(encoded)
+            .expect("tampered shape deserializes")
+            .validate_restored();
+        assert_eq!(
+            restored.expect_err("script digest tampering is refused"),
             WorkflowError::DigestMismatch
         );
     }

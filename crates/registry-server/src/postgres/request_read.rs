@@ -27,7 +27,10 @@ use crate::request_prepare::{validate_frozen_targets, RequestTargetSnapshot};
 use crate::request_retention::{
     RetainedHistoryQuery, RetainedRequestProposal, RetainedRequestResultLink,
 };
-use crate::request_workflow::{RequestState, RequestWorkflow, ReviewDecisionKind};
+use crate::request_workflow::{
+    FrozenPlannerDisposition, FrozenReviewPolicy, ProposalSnapshot, RequestState, RequestWorkflow,
+    ReviewDecisionKind,
+};
 
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn annotate_records(
@@ -222,6 +225,12 @@ async fn annotate_request_records(
                     .map(|proposal| json!(proposal.effect_digest().as_str()))
                     .unwrap_or(Value::Null),
             );
+            if let Some(proposal) = workflow
+                .current_proposal()
+                .and_then(request_proposal_metadata)
+            {
+                metadata.insert("proposal".to_owned(), proposal);
+            }
         }
         metadata.insert("editable".to_owned(), json!(editable));
         if !actions.is_empty() {
@@ -244,6 +253,33 @@ async fn annotate_request_records(
         record.request = Some(Value::Object(metadata));
     }
     Ok(())
+}
+
+/// Caller-filtered public projection of the frozen planning binding. The
+/// source digest, ABI provenance, script identity and evaluated effects remain
+/// inside the proposal snapshot and review/action-specific projections.
+fn request_proposal_metadata(proposal: &ProposalSnapshot) -> Option<Value> {
+    let planning = proposal.planning_binding()?;
+    let review_mode = match proposal.review_policy() {
+        FrozenReviewPolicy::None => "none",
+        FrozenReviewPolicy::Stages => "staged",
+    };
+    match planning.disposition() {
+        FrozenPlannerDisposition::Apply => Some(json!({
+            "reviewMode": review_mode,
+            "applicationDisposition": "apply",
+        })),
+        FrozenPlannerDisposition::Queue => {
+            let mut value = json!({
+                "reviewMode": review_mode,
+                "applicationDisposition": "queue",
+            });
+            if let Some(reason) = planning.queue_reason() {
+                value["queueReason"] = json!({"code": reason.code(), "label": reason.label()});
+            }
+            Some(value)
+        }
+    }
 }
 
 fn erased_terminal_request_metadata(
@@ -307,6 +343,12 @@ fn action_links(
             .iter()
             .map(RequestActionTargetAuthority::from)
             .collect::<Vec<_>>();
+        let automatic_apply_authority = action.automatic_apply_authority().map(|authority| {
+            authority
+                .iter()
+                .map(RequestActionTargetAuthority::from)
+                .collect::<Vec<_>>()
+        });
         let precondition = request_action_etag(
             audit_profile,
             claims,
@@ -317,6 +359,7 @@ fn action_links(
             workflow,
             action.response_fields(),
             &target_authority,
+            automatic_apply_authority.as_deref(),
         )
         .map_err(|_| ReadServiceError::Unavailable)?;
         let mut value = json!({
@@ -403,6 +446,8 @@ fn action_is_available(
         Operation::SubmitRequest => {
             workflow.state() == RequestState::Draft
                 && actor_reference.is_some_and(|actor| workflow.owner().as_str() == actor)
+                && (!action.requires_automatic_apply_if_ready()
+                    || action.automatic_apply_authority().is_some())
         }
         Operation::ReviseRequest => {
             revise_rebase_available(action, workflow).is_some()
@@ -414,6 +459,13 @@ fn action_is_available(
         ),
         Operation::ApproveRequest | Operation::RejectRequest | Operation::RequestRevision => {
             review_decision_available(action, workflow, actor_reference)
+                && (!action.requires_automatic_apply_if_ready()
+                    || !workflow.current_proposal().is_some_and(|proposal| {
+                        proposal.planning_binding().is_some_and(|binding| {
+                            binding.disposition() == FrozenPlannerDisposition::Apply
+                        })
+                    })
+                    || action.automatic_apply_authority().is_some())
         }
         Operation::ApplyRequest => workflow.state() == RequestState::Approved,
         _ => false,
@@ -1114,6 +1166,36 @@ mod tests {
     }
 
     #[test]
+    fn no_review_submit_requires_the_separate_apply_proof_only_when_apply_is_possible() {
+        let draft = RequestWorkflow::new_draft(
+            RequestKey::new(
+                EntityId::new("request").expect("entity id"),
+                RecordId::new("00000000-0000-4000-8000-000000000001").expect("record id"),
+            ),
+            actor("owner-ref"),
+            StateRevision::new(1).expect("state revision"),
+        );
+        let ordinary = action(Operation::SubmitRequest, None);
+        assert!(action_is_available(&ordinary, &draft, Some("owner-ref")));
+
+        let required_without_proof =
+            action_with_automatic_apply(Operation::SubmitRequest, None, None, true);
+        assert!(!action_is_available(
+            &required_without_proof,
+            &draft,
+            Some("owner-ref")
+        ));
+
+        let required_with_proof =
+            action_with_automatic_apply(Operation::SubmitRequest, None, Some(Vec::new()), true);
+        assert!(action_is_available(
+            &required_with_proof,
+            &draft,
+            Some("owner-ref")
+        ));
+    }
+
+    #[test]
     fn revise_action_marks_rebase_false_for_revision_drafts() {
         let revise = action(Operation::ReviseRequest, None);
         let submitted = submitted_workflow(1, false);
@@ -1376,6 +1458,15 @@ mod tests {
         assert!(value.get("hiddenField").is_none());
     }
     fn action(operation: Operation, stage: Option<&str>) -> VerifiedRequestAction {
+        action_with_automatic_apply(operation, stage, None, false)
+    }
+
+    fn action_with_automatic_apply(
+        operation: Operation,
+        stage: Option<&str>,
+        automatic_apply_authority: Option<Vec<crate::api::VerifiedRequestTargetAuthority>>,
+        requires_automatic_apply_if_ready: bool,
+    ) -> VerifiedRequestAction {
         VerifiedRequestAction::new(
             "records.request.action".to_owned(),
             HttpMethod::Post,
@@ -1383,7 +1474,11 @@ mod tests {
             operation,
             stage.map(str::to_owned),
             BTreeSet::new(),
-            Vec::new(),
+            crate::api::VerifiedRequestActionAuthority::new(
+                Vec::new(),
+                automatic_apply_authority,
+                requires_automatic_apply_if_ready,
+            ),
         )
     }
 

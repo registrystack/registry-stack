@@ -159,6 +159,225 @@ impl fmt::Debug for RegistryServerOperationKind {
     }
 }
 
+/// Planner implementation described by caller-filtered change-request metadata.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RegistryServerChangeRequestPlannerKind {
+    Declarative,
+    Rhai,
+}
+
+/// Fixed resource and proposal ceilings for a visible Rhai planner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RegistryServerChangeRequestPlannerLimits {
+    maximum_targets: u64,
+    maximum_field_mutations: u64,
+    maximum_snapshot_bytes: u64,
+    maximum_source_bytes: u64,
+    maximum_operations: u64,
+    maximum_call_depth: u64,
+    maximum_expression_depth: u64,
+    maximum_string_bytes: u64,
+    maximum_array_items: u64,
+    maximum_map_entries: u64,
+    maximum_modules: u64,
+}
+
+impl RegistryServerChangeRequestPlannerLimits {
+    #[must_use]
+    pub const fn maximum_targets(self) -> u64 {
+        self.maximum_targets
+    }
+
+    #[must_use]
+    pub const fn maximum_field_mutations(self) -> u64 {
+        self.maximum_field_mutations
+    }
+
+    #[must_use]
+    pub const fn maximum_snapshot_bytes(self) -> u64 {
+        self.maximum_snapshot_bytes
+    }
+
+    #[must_use]
+    pub const fn maximum_source_bytes(self) -> u64 {
+        self.maximum_source_bytes
+    }
+
+    #[must_use]
+    pub const fn maximum_operations(self) -> u64 {
+        self.maximum_operations
+    }
+
+    #[must_use]
+    pub const fn maximum_call_depth(self) -> u64 {
+        self.maximum_call_depth
+    }
+
+    #[must_use]
+    pub const fn maximum_expression_depth(self) -> u64 {
+        self.maximum_expression_depth
+    }
+
+    #[must_use]
+    pub const fn maximum_string_bytes(self) -> u64 {
+        self.maximum_string_bytes
+    }
+
+    #[must_use]
+    pub const fn maximum_array_items(self) -> u64 {
+        self.maximum_array_items
+    }
+
+    #[must_use]
+    pub const fn maximum_map_entries(self) -> u64 {
+        self.maximum_map_entries
+    }
+
+    #[must_use]
+    pub const fn maximum_modules(self) -> u64 {
+        self.maximum_modules
+    }
+}
+
+/// Source-free planner capability. This value is descriptive and cannot
+/// create lifecycle or target-write authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RegistryServerChangeRequestPlannerCapability {
+    kind: RegistryServerChangeRequestPlannerKind,
+    abi: Option<String>,
+    limits: Option<RegistryServerChangeRequestPlannerLimits>,
+    possible_write_count: Option<u64>,
+    possible_write_operations: Vec<RegistryServerOperationKind>,
+}
+
+impl RegistryServerChangeRequestPlannerCapability {
+    #[must_use]
+    pub const fn kind(&self) -> RegistryServerChangeRequestPlannerKind {
+        self.kind
+    }
+
+    #[must_use]
+    pub fn abi(&self) -> Option<&str> {
+        self.abi.as_deref()
+    }
+
+    #[must_use]
+    pub const fn limits(&self) -> Option<RegistryServerChangeRequestPlannerLimits> {
+        self.limits
+    }
+
+    #[must_use]
+    pub const fn possible_write_count(&self) -> Option<u64> {
+        self.possible_write_count
+    }
+
+    #[must_use]
+    pub fn possible_write_operations(&self) -> &[RegistryServerOperationKind] {
+        &self.possible_write_operations
+    }
+}
+
+/// Static review policy for one visible request type.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RegistryServerChangeRequestReviewMode {
+    None,
+    Staged,
+}
+
+/// Application policy selected by the governed request type.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RegistryServerChangeRequestApplicationMode {
+    Manual,
+    Automatic,
+    Planner,
+}
+
+/// An application result permitted by the governed application policy.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum RegistryServerChangeRequestDisposition {
+    Apply,
+    Queue,
+}
+
+/// One finite package-authored reason for a planner-selected queue outcome.
+#[derive(Clone, Eq, PartialEq)]
+pub struct RegistryServerChangeRequestQueueReason {
+    code: String,
+    label: String,
+}
+
+impl RegistryServerChangeRequestQueueReason {
+    #[must_use]
+    pub fn code(&self) -> &str {
+        &self.code
+    }
+
+    #[must_use]
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+}
+
+impl fmt::Debug for RegistryServerChangeRequestQueueReason {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RegistryServerChangeRequestQueueReason")
+            .field("code", &self.code)
+            .field("label", &"<redacted>")
+            .finish()
+    }
+}
+
+/// Source-free application capability for one visible request type.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RegistryServerChangeRequestApplicationCapability {
+    mode: RegistryServerChangeRequestApplicationMode,
+    allowed_dispositions: Vec<RegistryServerChangeRequestDisposition>,
+    queue_reasons: Vec<RegistryServerChangeRequestQueueReason>,
+}
+
+impl RegistryServerChangeRequestApplicationCapability {
+    #[must_use]
+    pub const fn mode(&self) -> RegistryServerChangeRequestApplicationMode {
+        self.mode
+    }
+
+    #[must_use]
+    pub fn allowed_dispositions(&self) -> &[RegistryServerChangeRequestDisposition] {
+        &self.allowed_dispositions
+    }
+
+    #[must_use]
+    pub fn queue_reasons(&self) -> &[RegistryServerChangeRequestQueueReason] {
+        &self.queue_reasons
+    }
+}
+
+/// Caller-filtered, descriptive change-request capability for one entity.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RegistryServerChangeRequestCapability {
+    planner: RegistryServerChangeRequestPlannerCapability,
+    review_mode: RegistryServerChangeRequestReviewMode,
+    application: RegistryServerChangeRequestApplicationCapability,
+}
+
+impl RegistryServerChangeRequestCapability {
+    #[must_use]
+    pub const fn planner(&self) -> &RegistryServerChangeRequestPlannerCapability {
+        &self.planner
+    }
+
+    #[must_use]
+    pub const fn review_mode(&self) -> RegistryServerChangeRequestReviewMode {
+        self.review_mode
+    }
+
+    #[must_use]
+    pub const fn application(&self) -> &RegistryServerChangeRequestApplicationCapability {
+        &self.application
+    }
+}
+
 /// One caller-visible field on an authoritative runtime operation.
 #[derive(Clone, PartialEq)]
 pub struct RegistryServerMetadataField {
@@ -423,6 +642,7 @@ struct RegistryServerMetadataEntity {
     operations: Vec<(RegistryServerOperationKind, String)>,
     readable_fields: Vec<String>,
     change_control: Option<Value>,
+    change_request: Option<RegistryServerChangeRequestCapability>,
 }
 
 /// Validated Registry Server runtime metadata v1 for one caller projection.
@@ -477,6 +697,19 @@ impl RegistryServerMetadata {
         self.operations
             .iter()
             .find(|operation| operation.id == operation_identifier)
+    }
+
+    /// Returns caller-filtered descriptive change-request capability metadata.
+    /// Executable authority still comes only from [`Self::select_lifecycle`].
+    #[must_use]
+    pub fn change_request_capability(
+        &self,
+        entity_identifier: &str,
+    ) -> Option<&RegistryServerChangeRequestCapability> {
+        self.entities
+            .iter()
+            .find(|entity| entity.id == entity_identifier)
+            .and_then(|entity| entity.change_request.as_ref())
     }
 
     /// Returns caller-filtered immediate-action metadata as a bounded inert
@@ -1101,6 +1334,10 @@ fn parse_entity(value: Value) -> Result<RegistryServerMetadataEntity, RegistrySe
     if let Some(value) = &change_control {
         validate_change_control(value)?;
     }
+    let change_request = entity
+        .remove("changeRequest")
+        .map(parse_change_request_capability)
+        .transpose()?;
     finish(entity)?;
     Ok(RegistryServerMetadataEntity {
         id,
@@ -1110,6 +1347,177 @@ fn parse_entity(value: Value) -> Result<RegistryServerMetadataEntity, RegistrySe
         operations,
         readable_fields,
         change_control,
+        change_request,
+    })
+}
+
+fn parse_change_request_capability(
+    value: Value,
+) -> Result<RegistryServerChangeRequestCapability, RegistryServerMetadataError> {
+    let mut capability = object(value)?;
+    let planner = parse_change_request_planner(required(&mut capability, "planner")?)?;
+    let review_mode = match identifier(required(&mut capability, "reviewMode")?)?.as_str() {
+        "none" => RegistryServerChangeRequestReviewMode::None,
+        "staged" => RegistryServerChangeRequestReviewMode::Staged,
+        _ => return Err(metadata_error(RegistryServerMetadataErrorKind::Shape)),
+    };
+    let application = parse_change_request_application(required(&mut capability, "application")?)?;
+    finish(capability)?;
+    Ok(RegistryServerChangeRequestCapability {
+        planner,
+        review_mode,
+        application,
+    })
+}
+
+fn parse_change_request_planner(
+    value: Value,
+) -> Result<RegistryServerChangeRequestPlannerCapability, RegistryServerMetadataError> {
+    let mut planner = object(value)?;
+    match identifier(required(&mut planner, "kind")?)?.as_str() {
+        "declarative" => {
+            finish(planner)?;
+            Ok(RegistryServerChangeRequestPlannerCapability {
+                kind: RegistryServerChangeRequestPlannerKind::Declarative,
+                abi: None,
+                limits: None,
+                possible_write_count: None,
+                possible_write_operations: Vec::new(),
+            })
+        }
+        "rhai" => {
+            let abi = bounded_short_text(required(&mut planner, "abi")?)?;
+            if abi != "registry.change-request-plan/v1" {
+                return Err(metadata_error(RegistryServerMetadataErrorKind::Shape));
+            }
+            let limits = parse_change_request_planner_limits(required(&mut planner, "limits")?)?;
+            let possible_write_count =
+                positive_integer(required(&mut planner, "possibleWriteCount")?)?;
+            let possible_write_operations =
+                identifier_array(required(&mut planner, "possibleWriteOperations")?)?
+                    .into_iter()
+                    .map(|operation| match operation.as_str() {
+                        "create" => Ok(RegistryServerOperationKind::Create),
+                        "patch" => Ok(RegistryServerOperationKind::Patch),
+                        _ => Err(metadata_error(RegistryServerMetadataErrorKind::Shape)),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+            if possible_write_operations.is_empty()
+                || u64::try_from(possible_write_operations.len())
+                    .map_or(true, |count| count > possible_write_count)
+            {
+                return Err(metadata_error(RegistryServerMetadataErrorKind::Shape));
+            }
+            ensure_unique(
+                possible_write_operations
+                    .iter()
+                    .map(RegistryServerOperationKind::as_str),
+            )?;
+            finish(planner)?;
+            Ok(RegistryServerChangeRequestPlannerCapability {
+                kind: RegistryServerChangeRequestPlannerKind::Rhai,
+                abi: Some(abi),
+                limits: Some(limits),
+                possible_write_count: Some(possible_write_count),
+                possible_write_operations,
+            })
+        }
+        _ => Err(metadata_error(RegistryServerMetadataErrorKind::Shape)),
+    }
+}
+
+fn parse_change_request_planner_limits(
+    value: Value,
+) -> Result<RegistryServerChangeRequestPlannerLimits, RegistryServerMetadataError> {
+    let mut limits = object(value)?;
+    let parsed = RegistryServerChangeRequestPlannerLimits {
+        maximum_targets: positive_integer(required(&mut limits, "maximumTargets")?)?,
+        maximum_field_mutations: positive_integer(required(&mut limits, "maximumFieldMutations")?)?,
+        maximum_snapshot_bytes: positive_integer(required(&mut limits, "maximumSnapshotBytes")?)?,
+        maximum_source_bytes: positive_integer(required(&mut limits, "maximumSourceBytes")?)?,
+        maximum_operations: positive_integer(required(&mut limits, "maximumOperations")?)?,
+        maximum_call_depth: positive_integer(required(&mut limits, "maximumCallDepth")?)?,
+        maximum_expression_depth: positive_integer(required(
+            &mut limits,
+            "maximumExpressionDepth",
+        )?)?,
+        maximum_string_bytes: positive_integer(required(&mut limits, "maximumStringBytes")?)?,
+        maximum_array_items: positive_integer(required(&mut limits, "maximumArrayItems")?)?,
+        maximum_map_entries: positive_integer(required(&mut limits, "maximumMapEntries")?)?,
+        maximum_modules: required(&mut limits, "maximumModules")?
+            .as_u64()
+            .filter(|value| *value == 0)
+            .ok_or_else(|| metadata_error(RegistryServerMetadataErrorKind::Shape))?,
+    };
+    finish(limits)?;
+    Ok(parsed)
+}
+
+fn parse_change_request_application(
+    value: Value,
+) -> Result<RegistryServerChangeRequestApplicationCapability, RegistryServerMetadataError> {
+    let mut application = object(value)?;
+    let mode = match identifier(required(&mut application, "mode")?)?.as_str() {
+        "manual" => RegistryServerChangeRequestApplicationMode::Manual,
+        "automatic" => RegistryServerChangeRequestApplicationMode::Automatic,
+        "planner" => RegistryServerChangeRequestApplicationMode::Planner,
+        _ => return Err(metadata_error(RegistryServerMetadataErrorKind::Shape)),
+    };
+    let allowed_dispositions =
+        identifier_array(required(&mut application, "allowedDispositions")?)?
+            .into_iter()
+            .map(|disposition| match disposition.as_str() {
+                "apply" => Ok(RegistryServerChangeRequestDisposition::Apply),
+                "queue" => Ok(RegistryServerChangeRequestDisposition::Queue),
+                _ => Err(metadata_error(RegistryServerMetadataErrorKind::Shape)),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+    let unique_dispositions = allowed_dispositions
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    if allowed_dispositions.is_empty() || unique_dispositions.len() != allowed_dispositions.len() {
+        return Err(metadata_error(
+            RegistryServerMetadataErrorKind::DuplicateIdentifier,
+        ));
+    }
+    let static_dispositions_are_exact = match mode {
+        RegistryServerChangeRequestApplicationMode::Manual => {
+            allowed_dispositions == [RegistryServerChangeRequestDisposition::Queue]
+        }
+        RegistryServerChangeRequestApplicationMode::Automatic => {
+            allowed_dispositions == [RegistryServerChangeRequestDisposition::Apply]
+        }
+        RegistryServerChangeRequestApplicationMode::Planner => true,
+    };
+    if !static_dispositions_are_exact {
+        return Err(metadata_error(RegistryServerMetadataErrorKind::Shape));
+    }
+    let queue_reasons = array(required(&mut application, "queueReasons")?)?
+        .into_iter()
+        .map(|reason| {
+            let mut reason = object(reason)?;
+            let code = identifier(required(&mut reason, "code")?)?;
+            let label = bounded_short_text(required(&mut reason, "label")?)?;
+            if label.is_empty() {
+                return Err(metadata_error(RegistryServerMetadataErrorKind::Shape));
+            }
+            finish(reason)?;
+            Ok(RegistryServerChangeRequestQueueReason { code, label })
+        })
+        .collect::<Result<Vec<_>, RegistryServerMetadataError>>()?;
+    ensure_unique(queue_reasons.iter().map(|reason| reason.code.as_str()))?;
+    if (mode != RegistryServerChangeRequestApplicationMode::Planner && !queue_reasons.is_empty())
+        || (!queue_reasons.is_empty()
+            && !unique_dispositions.contains(&RegistryServerChangeRequestDisposition::Queue))
+    {
+        return Err(metadata_error(RegistryServerMetadataErrorKind::Shape));
+    }
+    finish(application)?;
+    Ok(RegistryServerChangeRequestApplicationCapability {
+        mode,
+        allowed_dispositions,
+        queue_reasons,
     })
 }
 

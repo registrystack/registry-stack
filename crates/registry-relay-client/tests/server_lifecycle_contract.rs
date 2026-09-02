@@ -283,6 +283,50 @@ fn proposal_digest_stage_review_and_rebase_are_operation_bound() {
 }
 
 #[test]
+fn proposal_policy_is_strict_and_never_creates_action_authority() {
+    let mut queued = request_metadata(Vec::new());
+    queued["proposal"] = json!({
+        "reviewMode": "none",
+        "applicationDisposition": "queue",
+        "queueReason": {"code": "manual-check", "label": "Manual check"}
+    });
+    let metadata = RegistryServerRequestMetadata::from_value(queued, false)
+        .expect("the closed queued proposal policy is inert metadata");
+    let proposal = metadata.proposal().expect("proposal is present");
+    assert_eq!(
+        proposal.review_mode(),
+        RegistryServerRequestReviewMode::None
+    );
+    assert_eq!(
+        proposal.application_disposition(),
+        RegistryServerRequestApplicationDisposition::Queue
+    );
+    assert_eq!(proposal.queue_reason().unwrap().code(), "manual-check");
+    assert!(metadata.advertised_operations().next().is_none());
+
+    let mut missing_reason = request_metadata(Vec::new());
+    missing_reason["proposal"] = json!({
+        "reviewMode": "staged",
+        "applicationDisposition": "queue"
+    });
+    let metadata = RegistryServerRequestMetadata::from_value(missing_reason, false)
+        .expect("a manual queued proposal may not have a queue reason");
+    assert!(metadata
+        .proposal()
+        .expect("proposal is present")
+        .queue_reason()
+        .is_none());
+
+    let mut excess_reason = request_metadata(Vec::new());
+    excess_reason["proposal"] = json!({
+        "reviewMode": "none",
+        "applicationDisposition": "apply",
+        "queueReason": {"code": "manual-check", "label": "Manual check"}
+    });
+    assert!(RegistryServerRequestMetadata::from_value(excess_reason, false).is_err());
+}
+
+#[test]
 fn review_previews_enforce_target_and_object_bounds() {
     let review_action = action(
         RegistryServerLifecycleOperation::ApproveRequest,

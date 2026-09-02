@@ -1,0 +1,110 @@
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: person-name-change-rhai
+  canonicalBaseIri: "https://person-name-change-rhai.example.gov"
+  version: 0.1.0
+  defaultLanguage: en
+package:
+  environment: acceptance
+  instanceId: person-name-change-rhai-acceptance
+  sequence: 1
+  sourceRevision: person-name-change-rhai-acceptance-0.1.0
+manifestProjection:
+  accessProfile: person-operator
+  classificationCeiling: internal
+  catalog:
+    baseUrl: https://person-name-change-rhai.example.gov
+    title: Synthetic Person Name Change Catalog
+    description: Synthetic acceptance fixture for bounded Rhai change-request planning.
+    publisher:
+      id: person-name-change-rhai-authority
+      name: Synthetic Person Name Change Authority
+      iri: https://person-name-change-rhai.example.gov/authority
+  datasets:
+    - id: person-name-change-rhai
+      title: Synthetic Person Name Change Registry
+      description: Synthetic people used only to exercise the Rhai planner contract.
+      owner: Synthetic Person Name Change Authority
+      status: active
+  dataServices:
+    - id: person-name-change-rhai-data-service
+      title: Synthetic Person Name Change Service
+      endpointUrl: https://person-name-change-rhai.example.gov
+      servesDatasets: [person-name-change-rhai]
+  publicService:
+    id: person-name-change-rhai-service
+    title: Synthetic Person Name Change Service
+  distributions: []
+entities:
+  - id: person
+    primaryDataset: person-name-change-rhai
+    route: persons
+    mutationMode: mutable
+    changeControl:
+      requiredFor: [patch]
+    fields:
+      - {id: person-code, type: string, required: true, maxLength: 64, classification: internal}
+      - {id: display-name, type: string, required: true, maxLength: 160, classification: internal}
+    constraints:
+      - {kind: unique, fields: [person-code]}
+  - id: person-name-change-request
+    primaryDataset: person-name-change-rhai
+    route: person-name-change-requests
+    mutationMode: mutable
+    classification: internal
+    fields:
+      - {id: person, type: reference, target: person, required: true, classification: internal}
+      - {id: given-name, type: string, required: true, maxLength: 80, classification: internal}
+      - {id: family-name, type: string, required: true, maxLength: 80, classification: internal}
+      - {id: handling, type: vocabulary-code, vocabulary: name-change-handling, required: true, classification: internal}
+    changeRequest:
+      planner:
+        kind: rhai
+        script: scripts/person-name-change.rhai
+        abi: registry.change-request-plan/v1
+        requestFields: [person, given-name, family-name, handling]
+        writes:
+          - target: {fromField: person}
+            operation: patch
+            fields: [display-name]
+      review:
+        mode: none
+      application:
+        mode: planner
+        allowedDispositions: [apply, queue]
+        queueReasons:
+          assisted-review: Assisted review requested by synthetic handling.
+      retention:
+        mode: operator_erase
+accessProfiles:
+  - id: person-operator
+    default: true
+    principalClaim: registry_principal
+    requiredPurposes: [person-maintenance]
+    grants:
+      - {entity: person, operations: [create, get, list], readableFields: [person-code, display-name], writableFields: [person-code, display-name]}
+  - id: name-change-submitter
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: ["registry:person-name:submit"]
+    requiredPurposes: [person-name-change]
+    grants:
+      - entity: person-name-change-request
+        operations: [create, get, submit_request, apply_request]
+        readableFields: [person, given-name, family-name, handling]
+        writableFields: [person, given-name, family-name, handling]
+        applyTargets:
+          - {entity: person, rowBoundaries: []}
+  - id: assisted-applier
+    principalClaim: registry_principal
+    requiredScopes: ["registry:person-name:apply-assisted"]
+    requiredPurposes: [person-name-apply]
+    grants:
+      - entity: person-name-change-request
+        operations: [get, list, apply_request]
+        readableFields: [person, given-name, family-name, handling]
+        applyTargets:
+          - {entity: person, rowBoundaries: []}
+vocabularies:
+  - {id: name-change-handling, values: [routine, assisted]}

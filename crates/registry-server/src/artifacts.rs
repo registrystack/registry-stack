@@ -17,7 +17,9 @@ use crate::manifest_adapter::project_manifest_artifacts;
 use crate::model::{
     ActionRouteKind, CompiledAccessInventory, CompiledAction, CompiledActionInput,
     CompiledActionInventory, CompiledActionRoute, CompiledActionTargetUseSource,
-    CompiledChangeRequestMutation, CompiledChangeRequestRetentionMode,
+    CompiledChangeRequestApplication, CompiledChangeRequestApplicationMode,
+    CompiledChangeRequestDisposition, CompiledChangeRequestMutation, CompiledChangeRequestPlanner,
+    CompiledChangeRequestRetentionMode, CompiledChangeRequestReviewMode,
     CompiledChangeRequestTargetBinding, CompiledChangeRequestValue, CompiledEntity,
     CompiledEventDeliveryInventory, CompiledManifestProjection, CompiledMetadataInventory,
     CompiledModuleIdentity, CompiledQueryInventory, CompiledQueryKind, CompiledQueryOperation,
@@ -107,24 +109,25 @@ pub(crate) fn generate_artifacts(
     ddl: &DdlInventory,
 ) -> Result<GeneratedArtifacts, Diagnostic> {
     let mut artifacts = BTreeMap::new();
-    insert_json(
+    let effective_model = EffectiveModel {
+        registry_id,
+        version,
+        default_language,
+        package,
+        manifest_projection,
+        module_order,
+        module_closure,
+        entities,
+        physical_names,
+        action_inventory: actions,
+        metadata_inventory: metadata,
+        query_inventory: query,
+        event_delivery_inventory: event_deliveries,
+    };
+    insert_json_value(
         &mut artifacts,
         "compiled/effective-model.json",
-        &EffectiveModel {
-            registry_id,
-            version,
-            default_language,
-            package,
-            manifest_projection,
-            module_order,
-            module_closure,
-            entities,
-            physical_names,
-            action_inventory: actions,
-            metadata_inventory: metadata,
-            query_inventory: query,
-            event_delivery_inventory: event_deliveries,
-        },
+        &sanitized_effective_model(&effective_model)?,
     )?;
     insert_json(&mut artifacts, "compiled/modules.json", &module_closure)?;
     if !actions.is_empty() {
@@ -238,6 +241,45 @@ pub(crate) fn generate_artifacts(
         );
     }
     Ok(GeneratedArtifacts { artifacts })
+}
+
+/// The effective model is a generated operator artifact, not planner runtime
+/// input. Planner executable bytes and relative storage location remain inside
+/// the sealed package capture. The artifact retains a source-safe digest and
+/// coarse declaring origin for operator explanation.
+fn sanitized_effective_model(model: &EffectiveModel<'_>) -> Result<Value, Diagnostic> {
+    let mut value = serde_json::to_value(model).map_err(|_| canonicalization_error())?;
+    sanitize_effective_model_planners(&mut value);
+    Ok(value)
+}
+
+fn sanitize_effective_model_planners(value: &mut Value) {
+    let Some(entities) = value
+        .as_object_mut()
+        .and_then(|model| model.get_mut("entities"))
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    for entity in entities.values_mut() {
+        let Some(planner) = entity
+            .as_object_mut()
+            .and_then(|entity| entity.get_mut("changeRequest"))
+            .and_then(Value::as_object_mut)
+            .and_then(|request| request.get_mut("planner"))
+            .and_then(Value::as_object_mut)
+        else {
+            continue;
+        };
+        planner.remove("scriptBytes");
+        planner.remove("scriptPath");
+        let declaring_origin = match planner.remove("sourceModule") {
+            Some(Value::String(identifier)) => json!({"kind": "module", "id": identifier}),
+            Some(Value::Null) | None => json!({"kind": "project"}),
+            Some(_) => return,
+        };
+        planner.insert("declaringOrigin".to_owned(), declaring_origin);
+    }
 }
 
 pub(crate) fn event_data_schema_binding(
@@ -507,6 +549,14 @@ fn render_change_control(
                 .iter()
                 .filter(|effect| effect.target.entity_id == entity.id)
                 .map(|effect| operation_name(effect.operation))
+                .chain(
+                    request
+                        .planner
+                        .iter()
+                        .flat_map(|planner| planner.writes.iter())
+                        .filter(|write| write.target_entity_id == entity.id)
+                        .map(|write| operation_name(write.operation)),
+                )
                 .collect::<BTreeSet<_>>();
             (!operations.is_empty()).then(|| {
                 json!({
@@ -536,6 +586,9 @@ fn render_change_request(
     json!({
         "requestEntity": request.request_entity_id,
         "contractFingerprint": request.contract_fingerprint,
+        "planner": render_request_planner(request.planner.as_ref(), request),
+        "reviewMode": render_request_review_mode(request.review_mode),
+        "application": render_request_application(&request.application),
         "retention": render_request_retention(request.retention_mode),
         "bounds": {
             "maximumTargets": request.maximum_targets,
@@ -576,6 +629,113 @@ fn render_change_request(
         "applyGrants": request.apply_grants,
         "presenceGrants": request.presence_grants,
         "targetEntities": request.target_entities,
+    })
+}
+
+/// Source-free change-request capability projection for caller-filtered
+/// Registry metadata. It intentionally omits effects, grants, targets and all
+/// planner provenance, so this descriptive surface cannot manufacture action
+/// authority or disclose hidden configuration.
+#[allow(dead_code)] // Called by the production /v1/registry metadata route.
+pub(crate) fn request_capability_metadata(
+    request: &crate::model::CompiledChangeRequest,
+    _visible_fields: &BTreeSet<String>,
+) -> Value {
+    let planner = match request.planner.as_ref() {
+        None => json!({"kind": "declarative"}),
+        Some(planner) => {
+            let operations = planner
+                .writes
+                .iter()
+                .map(|write| operation_name(write.operation))
+                .collect::<BTreeSet<_>>();
+            json!({
+                "kind": "rhai",
+                "abi": planner.abi,
+                "limits": render_request_planner(Some(planner), request)["limits"],
+                "possibleWriteCount": planner.writes.len(),
+                "possibleWriteOperations": operations,
+            })
+        }
+    };
+    json!({
+        "planner": planner,
+        "reviewMode": render_request_review_mode(request.review_mode),
+        "application": render_request_application(&request.application),
+    })
+}
+
+fn render_request_planner(
+    planner: Option<&CompiledChangeRequestPlanner>,
+    request: &crate::model::CompiledChangeRequest,
+) -> Value {
+    match planner {
+        None => json!({"kind": "declarative"}),
+        Some(planner) => json!({
+            "kind": "rhai",
+            "abi": planner.abi,
+            "limits": {
+                "maximumTargets": request.maximum_targets,
+                "maximumFieldMutations": request.maximum_field_mutations,
+                "maximumSnapshotBytes": request.maximum_snapshot_bytes,
+                "maximumSourceBytes": planner.limits.maximum_source_bytes,
+                "maximumOperations": planner.limits.maximum_operations,
+                "maximumCallDepth": planner.limits.maximum_call_depth,
+                "maximumExpressionDepth": planner.limits.maximum_expression_depth,
+                "maximumStringBytes": planner.limits.maximum_string_bytes,
+                "maximumArrayItems": planner.limits.maximum_array_items,
+                "maximumMapEntries": planner.limits.maximum_map_entries,
+                "maximumModules": planner.limits.maximum_modules,
+            },
+            "possibleWrites": planner.writes.iter().map(|write| {
+                let target = match &write.target_from_field {
+                    Some(field) => json!({"fromField": field}),
+                    None => json!({"entity": write.target_entity_id}),
+                };
+                json!({
+                    "target": target,
+                    "operation": operation_name(write.operation),
+                    "fields": write.fields,
+                })
+            }).collect::<Vec<_>>(),
+        }),
+    }
+}
+
+fn render_request_review_mode(mode: CompiledChangeRequestReviewMode) -> &'static str {
+    match mode {
+        CompiledChangeRequestReviewMode::None => "none",
+        CompiledChangeRequestReviewMode::Stages => "staged",
+    }
+}
+
+fn render_request_application(application: &CompiledChangeRequestApplication) -> Value {
+    let mode = match application.mode {
+        CompiledChangeRequestApplicationMode::Manual => "manual",
+        CompiledChangeRequestApplicationMode::Automatic => "automatic",
+        CompiledChangeRequestApplicationMode::Planner => "planner",
+    };
+    let allowed_dispositions = match application.mode {
+        CompiledChangeRequestApplicationMode::Manual => vec!["queue"],
+        CompiledChangeRequestApplicationMode::Automatic => vec!["apply"],
+        CompiledChangeRequestApplicationMode::Planner => application
+            .allowed_dispositions
+            .iter()
+            .map(|disposition| match disposition {
+                CompiledChangeRequestDisposition::Apply => "apply",
+                CompiledChangeRequestDisposition::Queue => "queue",
+            })
+            .collect::<Vec<_>>(),
+    };
+    let queue_reasons = application
+        .queue_reasons
+        .iter()
+        .map(|(code, label)| json!({"code": code, "label": label}))
+        .collect::<Vec<_>>();
+    json!({
+        "mode": mode,
+        "allowedDispositions": allowed_dispositions,
+        "queueReasons": queue_reasons,
     })
 }
 
@@ -2763,6 +2923,7 @@ fn request_record_metadata_schema() -> Value {
             "serverState": request_state_schema(),
             "proposalVersion": {"type": "integer", "format": "int64", "minimum": 1, "maximum": u32::MAX},
             "effectDigest": nullable_effect_digest_schema(),
+            "proposal": request_proposal_schema(),
             "editable": {"type": "boolean"},
             "detailErased": {"const": true},
             "actions": {
@@ -3238,10 +3399,46 @@ fn request_action_response_schema() -> Value {
                     "serverState": request_state_schema(),
                     "proposalVersion": {"type": ["integer", "null"], "format": "int64", "minimum": 1, "maximum": u32::MAX},
                     "effectDigest": nullable_effect_digest_schema(),
+                    "proposal": request_proposal_schema(),
                     "application": request_application_metadata_schema(true)
                 }
             }
         }
+    })
+}
+
+fn request_proposal_schema() -> Value {
+    json!({
+        "oneOf": [
+            {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["reviewMode", "applicationDisposition"],
+                "properties": {
+                    "reviewMode": {"type": "string", "enum": ["none", "staged"]},
+                    "applicationDisposition": {"const": "apply"}
+                }
+            },
+            {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["reviewMode", "applicationDisposition"],
+                "properties": {
+                    "reviewMode": {"type": "string", "enum": ["none", "staged"]},
+                    "applicationDisposition": {"const": "queue"},
+                    "queueReason": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["code", "label"],
+                        "properties": {
+                            "code": {"type": "string", "maxLength": 128},
+                            "label": {"type": "string", "minLength": 1, "maxLength": 160}
+                        }
+                    }
+                }
+            },
+            {"type": "null"}
+        ]
     })
 }
 
@@ -4039,5 +4236,51 @@ mod spatial_tests {
             .unwrap()
             .iter()
             .any(|p| p["name"] == "bbox"));
+    }
+
+    #[test]
+    fn effective_model_keeps_only_safe_planner_provenance() {
+        let mut value = json!({
+            "entities": {
+                "request": {
+                    "changeRequest": {
+                        "planner": {
+                            "sourceModule": null,
+                            "scriptPath": "modules/private/plan.rhai",
+                            "scriptBytes": [1, 2, 3],
+                            "scriptSha256": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                            "limits": {"maximumOperations": 100}
+                        }
+                    }
+                },
+                "module-request": {
+                    "changeRequest": {
+                        "planner": {
+                            "sourceModule": "request-module",
+                            "scriptPath": "private.rhai",
+                            "scriptBytes": [4],
+                            "scriptSha256": "sha256:abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+                            "limits": {"maximumOperations": 200}
+                        }
+                    }
+                }
+            }
+        });
+        sanitize_effective_model_planners(&mut value);
+
+        let project = &value["entities"]["request"]["changeRequest"]["planner"];
+        assert_eq!(project["declaringOrigin"], json!({"kind": "project"}));
+        assert!(project.get("scriptPath").is_none());
+        assert!(project.get("scriptBytes").is_none());
+        assert!(project["scriptSha256"].is_string());
+        assert_eq!(project["limits"]["maximumOperations"], 100);
+
+        let module = &value["entities"]["module-request"]["changeRequest"]["planner"];
+        assert_eq!(
+            module["declaringOrigin"],
+            json!({"kind": "module", "id": "request-module"})
+        );
+        assert!(module.get("scriptPath").is_none());
+        assert!(module.get("scriptBytes").is_none());
     }
 }

@@ -8,15 +8,21 @@ use sha2::{Digest, Sha256};
 
 use crate::compiler::operation_id;
 use crate::contract::{
-    AccessProfileSource, ChangeRequestEffectSource, ChangeRequestValueSource, Classification,
-    EntitySource, FieldTypeSource, MutationMode, Operation, RowBoundarySource,
+    AccessProfileSource, ChangeRequestApplicationModeSource, ChangeRequestDispositionSource,
+    ChangeRequestEffectSource, ChangeRequestPlannerSource, ChangeRequestValueSource,
+    Classification, EntitySource, FieldTypeSource, ModuleAssetSource, MutationMode, Operation,
+    RowBoundarySource, CHANGE_REQUEST_PLAN_ABI_V1,
 };
 use crate::diagnostics::Diagnostic;
 use crate::model::{
     ChangeRequestOperation, CompiledChangeRequest, CompiledChangeRequestActionRoute,
-    CompiledChangeRequestApplyGrant, CompiledChangeRequestEffect, CompiledChangeRequestMutation,
-    CompiledChangeRequestPresenceGrant, CompiledChangeRequestRetentionMode,
-    CompiledChangeRequestReviewGrant, CompiledChangeRequestStage, CompiledChangeRequestTarget,
+    CompiledChangeRequestApplication, CompiledChangeRequestApplicationMode,
+    CompiledChangeRequestApplyGrant, CompiledChangeRequestDisposition, CompiledChangeRequestEffect,
+    CompiledChangeRequestMutation, CompiledChangeRequestPlanner, CompiledChangeRequestPlannerKind,
+    CompiledChangeRequestPlannerLimits, CompiledChangeRequestPlannerWrite,
+    CompiledChangeRequestPresenceGrant, CompiledChangeRequestReferenceSources,
+    CompiledChangeRequestRetentionMode, CompiledChangeRequestReviewGrant,
+    CompiledChangeRequestReviewMode, CompiledChangeRequestStage, CompiledChangeRequestTarget,
     CompiledChangeRequestTargetBinding, CompiledChangeRequestValue, CompiledEntity,
 };
 
@@ -54,6 +60,8 @@ pub const MAX_CHANGE_REQUEST_TARGETS: u16 = 16;
 pub const MAX_CHANGE_REQUEST_FIELD_MUTATIONS: u16 = 128;
 pub const MAX_CHANGE_REQUEST_SNAPSHOT_BYTES: u32 = 2_097_152;
 pub const MAX_CHANGE_REQUEST_REVIEW_STAGES: u16 = 32;
+pub const MAX_CHANGE_REQUEST_PLANNER_SOURCE_BYTES: usize = 65_536;
+pub const CHANGE_REQUEST_PLANNER_RHAI_VERSION: &str = "1.25.1";
 
 type CompiledEffectSet = (
     Vec<CompiledChangeRequestEffect>,
@@ -61,11 +69,460 @@ type CompiledEffectSet = (
     BTreeSet<String>,
 );
 
+fn compile_application(
+    request_entity_id: &str,
+    request: &crate::contract::ChangeRequestSource,
+    has_planner: bool,
+    errors: &mut Vec<Diagnostic>,
+) -> CompiledChangeRequestApplication {
+    let source = &request.application;
+    let application_path = format!(
+        "{}.changeRequest.application",
+        entity_path(request_entity_id)
+    );
+    let queue_reasons_path = format!("{application_path}.queueReasons");
+    if source.mode == ChangeRequestApplicationModeSource::Planner {
+        if !has_planner || source.allowed_dispositions.is_empty() {
+            errors.push(Diagnostic::error(
+                "change_request.application.planner_invalid",
+                application_path.as_str(),
+                "planner application requires a Rhai planner and at least one allowed disposition",
+            ));
+        }
+    } else if !source.allowed_dispositions.is_empty() || !source.queue_reasons.is_empty() {
+        errors.push(Diagnostic::error(
+            "change_request.application.policy_forbidden",
+            application_path.as_str(),
+            "only planner application can declare dispositions or queue reasons",
+        ));
+    }
+    let queue_allowed = source
+        .allowed_dispositions
+        .contains(&ChangeRequestDispositionSource::Queue);
+    if queue_allowed != !source.queue_reasons.is_empty() {
+        errors.push(Diagnostic::error(
+            "change_request.application.queue_reasons_invalid",
+            queue_reasons_path.as_str(),
+            "queue disposition and a non-empty closed queue-reason catalogue must be declared together",
+        ));
+    }
+    for (code, label) in &source.queue_reasons {
+        let queue_reason_path = format!("{queue_reasons_path}[code={code}]");
+        validate_id(code, &queue_reason_path, errors);
+        if label.trim().is_empty() || label.len() > 160 {
+            errors.push(Diagnostic::error(
+                "change_request.application.queue_reason_invalid",
+                queue_reason_path,
+                "queue reason labels must be non-empty and bounded",
+            ));
+        }
+    }
+    CompiledChangeRequestApplication {
+        mode: match source.mode {
+            ChangeRequestApplicationModeSource::Manual => {
+                CompiledChangeRequestApplicationMode::Manual
+            }
+            ChangeRequestApplicationModeSource::Automatic => {
+                CompiledChangeRequestApplicationMode::Automatic
+            }
+            ChangeRequestApplicationModeSource::Planner => {
+                CompiledChangeRequestApplicationMode::Planner
+            }
+        },
+        allowed_dispositions: source
+            .allowed_dispositions
+            .iter()
+            .map(|value| match value {
+                ChangeRequestDispositionSource::Apply => CompiledChangeRequestDisposition::Apply,
+                ChangeRequestDispositionSource::Queue => CompiledChangeRequestDisposition::Queue,
+            })
+            .collect(),
+        queue_reasons: source.queue_reasons.clone(),
+    }
+}
+
+fn valid_planner_path(path: &str) -> bool {
+    !path.is_empty()
+        && path.len() <= 256
+        && path.ends_with(".rhai")
+        && !path.starts_with('/')
+        && !path.contains('\\')
+        && path
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..")
+}
+
+struct PlannerCompileInput<'a> {
+    source_entity: &'a EntitySource,
+    request_entity: &'a CompiledEntity,
+    entities: &'a BTreeMap<String, CompiledEntity>,
+    request_entity_ids: &'a BTreeSet<String>,
+    source: &'a ChangeRequestPlannerSource,
+    source_module: Option<String>,
+    assets: &'a [ModuleAssetSource],
+}
+
+struct CompiledPlannerContract {
+    planner: CompiledChangeRequestPlanner,
+    changed_fields: BTreeMap<String, BTreeSet<String>>,
+    target_entities: BTreeSet<String>,
+}
+
+fn compile_planner(
+    input: PlannerCompileInput<'_>,
+    errors: &mut Vec<Diagnostic>,
+) -> Option<CompiledPlannerContract> {
+    let PlannerCompileInput {
+        source_entity,
+        request_entity,
+        entities,
+        request_entity_ids,
+        source,
+        source_module,
+        assets,
+    } = input;
+    let planner_path = format!("{}.changeRequest.planner", entity_path(&request_entity.id));
+    let request_fields_path = format!("{planner_path}.requestFields");
+    let writes_path = format!("{planner_path}.writes");
+    let script_path = format!("{planner_path}.script");
+    if source.abi != CHANGE_REQUEST_PLAN_ABI_V1 {
+        errors.push(Diagnostic::error(
+            "change_request.planner.abi_invalid",
+            format!("{planner_path}.abi"),
+            "the planner ABI is not supported",
+        ));
+    }
+    if !valid_planner_path(&source.script) {
+        errors.push(Diagnostic::error(
+            "change_request.planner.source_invalid",
+            script_path.as_str(),
+            "the planner script must be a bounded relative .rhai path",
+        ));
+    }
+    let mut declared = BTreeSet::new();
+    for field_id in &source.request_fields {
+        let request_field_path = format!("{request_fields_path}[field={field_id}]");
+        if !declared.insert(field_id.clone()) {
+            errors.push(Diagnostic::error(
+                "change_request.planner.request_field_duplicate",
+                request_field_path.as_str(),
+                "planner request fields must be duplicate-free",
+            ));
+        }
+        if !request_entity.fields.contains_key(field_id) {
+            errors.push(Diagnostic::error(
+                "change_request.planner.request_field_unknown",
+                request_field_path,
+                "a planner request field is not declared on the request entity",
+            ));
+        }
+    }
+    if source.writes.is_empty() {
+        errors.push(Diagnostic::error(
+            "change_request.planner.writes_empty",
+            writes_path.as_str(),
+            "a planner must declare a non-empty write ceiling",
+        ));
+    }
+    let input_classification = source
+        .request_fields
+        .iter()
+        .filter_map(|id| {
+            request_entity
+                .fields
+                .get(id)
+                .map(|field| field.classification)
+        })
+        .max()
+        .unwrap_or(Classification::Public);
+    let create_entities = source
+        .writes
+        .iter()
+        .filter(|write| write.operation == Operation::Create)
+        .filter_map(|write| write.target.entity.clone())
+        .collect::<BTreeSet<_>>();
+    let mut writes = Vec::new();
+    let mut changed_fields: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut target_entities = BTreeSet::new();
+    for (write_index, write) in source.writes.iter().enumerate() {
+        let write_path = format!("{writes_path}[{write_index}]");
+        if (write.target.from_field.is_some() as u8 + write.target.entity.is_some() as u8) != 1 {
+            errors.push(Diagnostic::error(
+                "change_request.planner.write_target_invalid",
+                format!("{write_path}.target"),
+                "a planner write target must name exactly one request reference or create entity",
+            ));
+            continue;
+        }
+        let (target_entity_id, target_from_field) = match (
+            &write.target.from_field,
+            &write.target.entity,
+            write.operation,
+        ) {
+            (Some(field_id), None, Operation::Patch) => {
+                let Some(field) = request_entity.fields.get(field_id) else {
+                    errors.push(Diagnostic::error(
+                        "change_request.planner.write_reference_unknown",
+                        format!("{write_path}.target.fromField"),
+                        "a planner write target refers to an unknown request field",
+                    ));
+                    continue;
+                };
+                if !declared.contains(field_id) {
+                    errors.push(Diagnostic::error(
+                        "change_request.planner.write_reference_undeclared",
+                        format!("{write_path}.target.fromField"),
+                        "an existing target reference must be present in planner requestFields",
+                    ));
+                }
+                match &field.field_type {
+                    FieldTypeSource::Reference { target, .. } => {
+                        (target.clone(), Some(field_id.clone()))
+                    }
+                    _ => {
+                        errors.push(Diagnostic::error(
+                            "change_request.planner.write_reference_type",
+                            format!("{write_path}.target.fromField"),
+                            "an existing target must use a typed request reference",
+                        ));
+                        continue;
+                    }
+                }
+            }
+            (None, Some(entity_id), Operation::Create) => (entity_id.clone(), None),
+            _ => {
+                errors.push(Diagnostic::error(
+                    "change_request.planner.write_operation_invalid",
+                    format!("{write_path}.operation"),
+                    "patch writes require fromField and create writes require entity",
+                ));
+                continue;
+            }
+        };
+        let Some(target_entity) = entities.get(&target_entity_id) else {
+            let target_path = if write.target.entity.is_some() {
+                format!("{write_path}.target.entity")
+            } else {
+                format!("{write_path}.target.fromField")
+            };
+            errors.push(Diagnostic::error(
+                "change_request.planner.write_entity_unknown",
+                target_path,
+                "a planner write targets an unknown entity",
+            ));
+            continue;
+        };
+        let synthetic_effect = ChangeRequestEffectSource {
+            id: Some("planner-ceiling".to_owned()),
+            target: crate::contract::ChangeRequestTargetSource {
+                entity: write.target.entity.clone(),
+                from_field: write.target.from_field.clone(),
+            },
+            operation: write.operation,
+            set: BTreeMap::new(),
+            clear: BTreeSet::new(),
+        };
+        if compile_target(
+            source_entity,
+            request_entity,
+            entities,
+            request_entity_ids,
+            "planner-ceiling",
+            &write_path,
+            &synthetic_effect,
+            errors,
+        )
+        .is_none()
+        {
+            continue;
+        }
+        if write.fields.is_empty() {
+            errors.push(Diagnostic::error(
+                "change_request.planner.write_fields_empty",
+                format!("{write_path}.fields"),
+                "a planner write ceiling must name at least one field",
+            ));
+        }
+        let mut fields = BTreeSet::new();
+        let mut field_types = BTreeMap::new();
+        let mut required_fields = BTreeSet::new();
+        let mut reference_sources = BTreeMap::new();
+        for field_id in &write.fields {
+            if !fields.insert(field_id.clone()) {
+                errors.push(Diagnostic::error(
+                    "change_request.planner.write_field_duplicate",
+                    format!("{write_path}.fields[field={field_id}]"),
+                    "planner write fields must be duplicate-free",
+                ));
+            }
+            let Some(field) = target_entity.fields.get(field_id) else {
+                errors.push(Diagnostic::error(
+                    "change_request.planner.write_field_unknown",
+                    format!("{write_path}.fields[field={field_id}]"),
+                    "a planner write field is not declared on its target entity",
+                ));
+                continue;
+            };
+            if input_classification > field.classification {
+                errors.push(Diagnostic::error(
+                    "change_request.planner.classification_ceiling",
+                    format!("{write_path}.fields[field={field_id}]"),
+                    "planner inputs cannot flow to a less classified target field",
+                ));
+            }
+            field_types.insert(field_id.clone(), field.field_type.clone());
+            if field.required {
+                required_fields.insert(field_id.clone());
+            }
+            if let FieldTypeSource::Reference { target, .. } = &field.field_type {
+                let request_fields = source.request_fields.iter().filter(|candidate| request_entity.fields.get(*candidate).is_some_and(|source_field| matches!(&source_field.field_type, FieldTypeSource::Reference { target: source_target, .. } if source_target == target))).cloned().collect();
+                let allowed_creates = create_entities
+                    .iter()
+                    .filter(|entity| *entity == target)
+                    .cloned()
+                    .collect();
+                reference_sources.insert(
+                    field_id.clone(),
+                    CompiledChangeRequestReferenceSources {
+                        request_fields,
+                        create_entities: allowed_creates,
+                    },
+                );
+            }
+        }
+        if write.operation == Operation::Create {
+            let required_target_fields = target_entity
+                .fields
+                .values()
+                .filter(|field| field.required)
+                .map(|field| field.id.clone())
+                .collect::<BTreeSet<_>>();
+            if !required_target_fields.is_subset(&fields) {
+                errors.push(Diagnostic::error(
+                    "change_request.planner.create_fields_incomplete",
+                    format!("{write_path}.fields"),
+                    "a create write ceiling must include every required target field",
+                ));
+            }
+            required_fields = required_target_fields;
+        }
+        changed_fields
+            .entry(target_entity_id.clone())
+            .or_default()
+            .extend(fields.iter().cloned());
+        target_entities.insert(target_entity_id.clone());
+        if writes
+            .iter()
+            .any(|existing: &CompiledChangeRequestPlannerWrite| {
+                existing.operation == write.operation
+                    && existing.target_entity_id == target_entity_id
+                    && existing.target_from_field == target_from_field
+            })
+        {
+            errors.push(Diagnostic::error(
+                "change_request.planner.write_duplicate",
+                write_path.as_str(),
+                "planner write ceilings must be unique by symbolic target and operation",
+            ));
+        }
+        writes.push(CompiledChangeRequestPlannerWrite {
+            target_entity_id,
+            target_from_field,
+            operation: write.operation,
+            fields,
+            field_types,
+            required_fields,
+            reference_sources,
+        });
+    }
+    if writes.len() > usize::from(MAX_CHANGE_REQUEST_TARGETS)
+        || writes.iter().map(|write| write.fields.len()).sum::<usize>()
+            > usize::from(MAX_CHANGE_REQUEST_FIELD_MUTATIONS)
+    {
+        errors.push(Diagnostic::error(
+            "change_request.planner.write_ceiling",
+            writes_path.as_str(),
+            "the planner write ceiling exceeds the supported resource bounds",
+        ));
+    }
+    match maximum_planner_snapshot_bytes(request_entity, &writes) {
+        Some(bytes) if bytes <= u64::from(MAX_CHANGE_REQUEST_SNAPSHOT_BYTES) => {}
+        _ => errors.push(Diagnostic::error(
+            "change_request.planner.snapshot_ceiling",
+            writes_path.as_str(),
+            "the planner write ceiling cannot satisfy the fixed snapshot-size bound",
+        )),
+    }
+    let Some(asset) = assets
+        .iter()
+        .find(|asset| asset.module == source_module && asset.path == source.script)
+    else {
+        errors.push(Diagnostic::error(
+            "change_request.planner.source_missing",
+            script_path.as_str(),
+            "the planner script must be supplied as an owned compilation asset",
+        ));
+        return None;
+    };
+    if asset.bytes.is_empty() || asset.bytes.len() > MAX_CHANGE_REQUEST_PLANNER_SOURCE_BYTES {
+        errors.push(Diagnostic::error(
+            "change_request.planner.source_bound",
+            script_path.as_str(),
+            "the planner source exceeds its fixed byte bound",
+        ));
+        return None;
+    }
+    let Ok(script) = std::str::from_utf8(&asset.bytes) else {
+        errors.push(Diagnostic::error(
+            "change_request.planner.source_encoding",
+            script_path.as_str(),
+            "the planner source must be UTF-8",
+        ));
+        return None;
+    };
+    if crate::rhai_planner::ChangeRequestPlannerRuntime::compile_source(script).is_err() {
+        errors.push(Diagnostic::error(
+            "change_request.planner.entrypoint",
+            script_path.as_str(),
+            "the planner source must compile with exactly one public fn plan(ctx) entry point",
+        ));
+    }
+    let digest = Sha256::digest(&asset.bytes);
+    Some(CompiledPlannerContract {
+        planner: CompiledChangeRequestPlanner {
+            kind: CompiledChangeRequestPlannerKind::Rhai,
+            source_module,
+            script_path: source.script.clone(),
+            abi: source.abi.clone(),
+            rhai_version: CHANGE_REQUEST_PLANNER_RHAI_VERSION.to_owned(),
+            script_sha256: format!("sha256:{}", hex_lower(&digest)),
+            script_bytes: asset.bytes.clone(),
+            limits: CompiledChangeRequestPlannerLimits {
+                maximum_source_bytes: MAX_CHANGE_REQUEST_PLANNER_SOURCE_BYTES as u32,
+                maximum_operations: crate::rhai_planner::MAXIMUM_OPERATIONS,
+                maximum_call_depth: crate::rhai_planner::MAXIMUM_CALL_DEPTH as u16,
+                maximum_expression_depth: crate::rhai_planner::MAXIMUM_EXPRESSION_DEPTH as u16,
+                maximum_string_bytes: crate::rhai_planner::MAXIMUM_STRING_BYTES as u32,
+                maximum_array_items: crate::rhai_planner::MAXIMUM_ARRAY_ITEMS as u16,
+                maximum_map_entries: crate::rhai_planner::MAXIMUM_MAP_ENTRIES as u16,
+                maximum_modules: 0,
+            },
+            request_fields: source.request_fields.clone(),
+            writes,
+        },
+        changed_fields,
+        target_entities,
+    })
+}
+
 pub(crate) fn compile_change_requests(
     sources: &BTreeMap<String, EntitySource>,
+    origins: &BTreeMap<String, Option<String>>,
+    assets: &[ModuleAssetSource],
     entities: &mut BTreeMap<String, CompiledEntity>,
 ) -> Result<(), Vec<Diagnostic>> {
     let mut errors = Vec::new();
+    validate_planner_assets(sources, origins, assets, &mut errors);
     validate_change_controlled_direct_writes(entities, &mut errors);
     let request_entity_ids = sources
         .iter()
@@ -83,6 +540,8 @@ pub(crate) fn compile_change_requests(
                     entity,
                     entities,
                     &request_entity_ids,
+                    origins.get(entity_id).cloned().flatten(),
+                    assets,
                     &mut errors,
                 ) {
                     compiled.insert(entity_id.clone(), plan);
@@ -101,6 +560,42 @@ pub(crate) fn compile_change_requests(
         }
     }
     Ok(())
+}
+
+fn validate_planner_assets(
+    sources: &BTreeMap<String, EntitySource>,
+    origins: &BTreeMap<String, Option<String>>,
+    assets: &[ModuleAssetSource],
+    errors: &mut Vec<Diagnostic>,
+) {
+    let declared = sources
+        .iter()
+        .filter_map(|(entity_id, entity)| {
+            entity
+                .change_request
+                .as_ref()?
+                .planner
+                .as_ref()
+                .map(|planner| {
+                    (
+                        origins.get(entity_id).cloned().flatten(),
+                        planner.script.clone(),
+                    )
+                })
+        })
+        .collect::<BTreeSet<_>>();
+    let supplied = assets
+        .iter()
+        .filter(|asset| asset.path.ends_with(".rhai"))
+        .map(|asset| (asset.module.clone(), asset.path.clone()))
+        .collect::<BTreeSet<_>>();
+    for _ in supplied.difference(&declared) {
+        errors.push(Diagnostic::error(
+            "change_request.planner.asset_undeclared",
+            "modules[].assets[]",
+            "a Rhai asset is not declared by a change-request planner at the same ownership origin",
+        ));
+    }
 }
 
 fn validate_change_controlled_direct_writes(
@@ -153,6 +648,8 @@ fn compile_request_entity(
     request_entity: &CompiledEntity,
     entities: &BTreeMap<String, CompiledEntity>,
     request_entity_ids: &BTreeSet<String>,
+    source_module: Option<String>,
+    assets: &[ModuleAssetSource],
     errors: &mut Vec<Diagnostic>,
 ) -> Option<CompiledChangeRequest> {
     let request = source.change_request.as_ref()?;
@@ -184,34 +681,66 @@ fn compile_request_entity(
             "request entities use cancellation and cannot expose ordinary tombstone access",
         ));
     }
-    if request.effects.is_empty() {
+    if request.effects.is_empty() == request.planner.is_none() {
         errors.push(Diagnostic::error(
-            "change_request.effects.empty",
-            format!("{}.changeRequest.effects", entity_path(&request_entity.id)),
-            "a change-request capability must declare at least one effect",
+            "change_request.plan.exclusive",
+            format!("{}.changeRequest", entity_path(&request_entity.id)),
+            "a change-request capability must declare exactly one of effects or planner",
         ));
     }
-    if request.review.stages.is_empty() {
+    let review_mode = if request.review.mode.is_some() && request.review.stages.is_empty() {
+        CompiledChangeRequestReviewMode::None
+    } else if request.review.mode.is_none() && !request.review.stages.is_empty() {
+        CompiledChangeRequestReviewMode::Stages
+    } else {
         errors.push(Diagnostic::error(
-            "change_request.review.stages_empty",
-            format!(
-                "{}.changeRequest.review.stages",
-                entity_path(&request_entity.id)
-            ),
-            "a change-request capability must declare at least one review stage",
+            "change_request.review.mode_exclusive",
+            format!("{}.changeRequest.review", entity_path(&request_entity.id)),
+            "review must declare exactly one of mode none or a non-empty stage list",
         ));
-    }
+        CompiledChangeRequestReviewMode::Stages
+    };
+
+    let application = compile_application(
+        &request_entity.id,
+        request,
+        request.planner.is_some(),
+        errors,
+    );
 
     let stages = compile_stages(&request_entity.id, request, errors);
-    let (effects, changed_fields, target_entities) = compile_effects(
-        source,
-        request_entity,
-        entities,
-        request_entity_ids,
-        &request.effects,
-        errors,
-    )?;
-    validate_plan_bounds(request_entity, entities, &effects, errors);
+    let (effects, changed_fields, target_entities, planner) =
+        if let Some(planner) = &request.planner {
+            let compiled = compile_planner(
+                PlannerCompileInput {
+                    source_entity: source,
+                    request_entity,
+                    entities,
+                    request_entity_ids,
+                    source: planner,
+                    source_module,
+                    assets,
+                },
+                errors,
+            )?;
+            (
+                Vec::new(),
+                compiled.changed_fields,
+                compiled.target_entities,
+                Some(compiled.planner),
+            )
+        } else {
+            let (effects, changed_fields, target_entities) = compile_effects(
+                source,
+                request_entity,
+                entities,
+                request_entity_ids,
+                &request.effects,
+                errors,
+            )?;
+            validate_plan_bounds(request_entity, entities, &effects, errors);
+            (effects, changed_fields, target_entities, None)
+        };
     let actions = compile_action_routes(&stages);
     let review_grants =
         compile_review_grants(request_entity, &stages, &changed_fields, entities, errors);
@@ -230,20 +759,36 @@ fn compile_request_entity(
             "a change-request type requires at least one submit_request grant",
         ));
     }
-    let contract_fingerprint = contract_fingerprint(
+    validate_automatic_apply_profile(
         request_entity,
-        entities,
-        &effects,
+        review_mode,
+        &application,
         &stages,
         &review_grants,
         &apply_grants,
         &target_entities,
+        errors,
     );
+    let contract_fingerprint = contract_fingerprint(ContractFingerprintInput {
+        request_entity,
+        entities,
+        effects: &effects,
+        stages: &stages,
+        review_grants: &review_grants,
+        apply_grants: &apply_grants,
+        target_entities: &target_entities,
+        review_mode,
+        application: &application,
+        planner: planner.as_ref(),
+    });
 
     Some(CompiledChangeRequest {
         request_entity_id: source.id.clone(),
         contract_fingerprint,
         retention_mode: compile_retention_mode(request.retention.mode),
+        review_mode,
+        application,
+        planner,
         effects,
         stages,
         actions,
@@ -255,6 +800,60 @@ fn compile_request_entity(
         maximum_field_mutations: MAX_CHANGE_REQUEST_FIELD_MUTATIONS,
         maximum_snapshot_bytes: MAX_CHANGE_REQUEST_SNAPSHOT_BYTES,
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_automatic_apply_profile(
+    request_entity: &CompiledEntity,
+    review_mode: CompiledChangeRequestReviewMode,
+    application: &CompiledChangeRequestApplication,
+    stages: &[CompiledChangeRequestStage],
+    review_grants: &[CompiledChangeRequestReviewGrant],
+    apply_grants: &[CompiledChangeRequestApplyGrant],
+    target_entities: &BTreeSet<String>,
+    errors: &mut Vec<Diagnostic>,
+) {
+    let may_apply_when_ready = application.mode == CompiledChangeRequestApplicationMode::Automatic
+        || (application.mode == CompiledChangeRequestApplicationMode::Planner
+            && application
+                .allowed_dispositions
+                .contains(&CompiledChangeRequestDisposition::Apply));
+    if !may_apply_when_ready {
+        return;
+    }
+    let final_stage = stages.last().map(|stage| stage.id.as_str());
+    let covered = request_entity.access_profiles.values().any(|profile| {
+        let can_trigger_ready = match review_mode {
+            CompiledChangeRequestReviewMode::None => {
+                profile.operations.contains(&Operation::SubmitRequest)
+            }
+            CompiledChangeRequestReviewMode::Stages => {
+                profile.operations.contains(&Operation::ApproveRequest)
+                    && final_stage.is_some_and(|stage| {
+                        target_entities.iter().all(|target_entity_id| {
+                            review_grants.iter().any(|grant| {
+                                grant.profile_id == profile.id
+                                    && grant.stage == stage
+                                    && grant.target_entity_id == *target_entity_id
+                            })
+                        })
+                    })
+            }
+        };
+        can_trigger_ready
+            && target_entities.iter().all(|target_entity_id| {
+                apply_grants.iter().any(|grant| {
+                    grant.profile_id == profile.id && grant.target_entity_id == *target_entity_id
+                })
+            })
+    });
+    if !target_entities.is_empty() && !covered {
+        errors.push(Diagnostic::error(
+            "change_request.application.automatic_apply_profile_missing",
+            format!("{}.accessProfiles", entity_path(&request_entity.id)),
+            "an application policy that may apply when ready requires one profile with both readiness-trigger and complete target authority",
+        ));
+    }
 }
 
 fn compile_retention_mode(
@@ -1107,7 +1706,8 @@ fn compile_presence_grants(
                     // Presence processes the request's existence and target
                     // linkage even when no intake values are disclosed.
                     let public_links = plans.get(&grant.request_type).is_some_and(|plan| {
-                        plan.effects
+                        let declarative_links_are_public = plan
+                            .effects
                             .iter()
                             .filter(|effect| effect.target.entity_id == target_entity.id)
                             .all(|effect| match &effect.target.binding {
@@ -1117,7 +1717,24 @@ fn compile_presence_grants(
                                     })
                                 }
                                 CompiledChangeRequestTargetBinding::ReservedCreate { .. } => true,
-                            })
+                            });
+                        let planner_links_are_public =
+                            plan.planner.as_ref().is_none_or(|planner| {
+                                planner
+                                    .writes
+                                    .iter()
+                                    .filter(|write| write.target_entity_id == target_entity.id)
+                                    .all(|write| {
+                                        write.target_from_field.as_ref().is_none_or(|from_field| {
+                                            request_entity.fields.get(from_field).is_some_and(
+                                                |field| {
+                                                    field.classification == Classification::Public
+                                                },
+                                            )
+                                        })
+                                    })
+                            });
+                        declarative_links_are_public && planner_links_are_public
                     });
                     if request_entity.classification != Classification::Public || !public_links {
                         errors.push(Diagnostic::error(
@@ -1272,6 +1889,37 @@ fn maximum_snapshot_bytes(
     Some(total)
 }
 
+fn maximum_planner_snapshot_bytes(
+    request_entity: &CompiledEntity,
+    writes: &[CompiledChangeRequestPlannerWrite],
+) -> Option<u64> {
+    let mut request_bytes = 2_u64;
+    for field in request_entity.fields.values() {
+        let max = maximum_field_json_bytes(&field.field_type)?;
+        request_bytes = request_bytes
+            .checked_add(field.id.len() as u64 + 3)?
+            .checked_add(if field.required { max } else { max.max(4) })?;
+    }
+    let largest_effect = writes
+        .iter()
+        .map(|write| {
+            let mut bytes = (write.target_entity_id.len() + 32) as u64;
+            for (field_id, field_type) in &write.field_types {
+                let max = maximum_field_json_bytes(field_type)?;
+                bytes = bytes
+                    .checked_add(field_id.len() as u64 + 8)?
+                    .checked_add(max.max(4))?
+                    .checked_add(max.max(4))?;
+            }
+            Some(bytes)
+        })
+        .collect::<Option<Vec<_>>>()?
+        .into_iter()
+        .max()
+        .unwrap_or(0);
+    request_bytes.checked_add(largest_effect.checked_mul(u64::from(MAX_CHANGE_REQUEST_TARGETS))?)
+}
+
 fn maximum_field_json_bytes(field_type: &FieldTypeSource) -> Option<u64> {
     match field_type {
         FieldTypeSource::Boolean => Some(5),
@@ -1300,15 +1948,32 @@ fn maximum_field_json_bytes(field_type: &FieldTypeSource) -> Option<u64> {
     }
 }
 
-fn contract_fingerprint(
-    request_entity: &CompiledEntity,
-    entities: &BTreeMap<String, CompiledEntity>,
-    effects: &[CompiledChangeRequestEffect],
-    stages: &[CompiledChangeRequestStage],
-    review_grants: &[CompiledChangeRequestReviewGrant],
-    apply_grants: &[CompiledChangeRequestApplyGrant],
-    target_entities: &BTreeSet<String>,
-) -> String {
+struct ContractFingerprintInput<'a> {
+    request_entity: &'a CompiledEntity,
+    entities: &'a BTreeMap<String, CompiledEntity>,
+    effects: &'a [CompiledChangeRequestEffect],
+    stages: &'a [CompiledChangeRequestStage],
+    review_grants: &'a [CompiledChangeRequestReviewGrant],
+    apply_grants: &'a [CompiledChangeRequestApplyGrant],
+    target_entities: &'a BTreeSet<String>,
+    review_mode: CompiledChangeRequestReviewMode,
+    application: &'a CompiledChangeRequestApplication,
+    planner: Option<&'a CompiledChangeRequestPlanner>,
+}
+
+fn contract_fingerprint(input: ContractFingerprintInput<'_>) -> String {
+    let ContractFingerprintInput {
+        request_entity,
+        entities,
+        effects,
+        stages,
+        review_grants,
+        apply_grants,
+        target_entities,
+        review_mode,
+        application,
+        planner,
+    } = input;
     let target_contracts = target_entities
         .iter()
         .filter_map(|entity_id| {
@@ -1317,7 +1982,7 @@ fn contract_fingerprint(
                 .map(|entity| (entity_id.clone(), entity_contract_payload(entity)))
         })
         .collect::<BTreeMap<_, _>>();
-    let payload = json!({
+    let mut payload = json!({
         "version": 2,
         "requestEntity": entity_contract_payload(request_entity),
         "targetEntities": target_contracts,
@@ -1342,6 +2007,17 @@ fn contract_fingerprint(
             "maximumReviewStages": MAX_CHANGE_REQUEST_REVIEW_STAGES
         }
     });
+    if planner.is_some()
+        || review_mode != CompiledChangeRequestReviewMode::Stages
+        || application.mode != CompiledChangeRequestApplicationMode::Manual
+        || !application.allowed_dispositions.is_empty()
+        || !application.queue_reasons.is_empty()
+    {
+        payload["version"] = json!(3);
+        payload["reviewMode"] = json!(review_mode);
+        payload["application"] = json!(application);
+        payload["planner"] = json!(planner);
+    }
     let bytes =
         canonicalize_json(&payload).expect("compiled change-request contract canonicalizes");
     let digest = Sha256::digest(bytes);

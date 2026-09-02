@@ -203,6 +203,9 @@ pub struct RequestActionInput<'a> {
     pub action: RequestActionBody,
     pub response_fields: BTreeSet<String>,
     pub target_authority: Vec<RequestActionTargetAuthority>,
+    /// Independently verified same-profile ApplyRequest authority. Lifecycle
+    /// execution may consume this only after a frozen proposal selects apply.
+    pub automatic_apply_authority: Option<Vec<RequestActionTargetAuthority>>,
     pub correlation: &'a RequestCorrelation,
 }
 
