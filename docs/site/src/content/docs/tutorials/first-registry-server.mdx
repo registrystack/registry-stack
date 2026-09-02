@@ -1,6 +1,6 @@
 ---
 title: Create and query your first registry
-description: Create and update records over HTTP, try refused requests, and add a field through a configuration module.
+description: Create and update records over HTTP, try refused requests, and extend a project with a configuration module.
 status: draft
 owner: registry-docs
 source_repos:
@@ -19,13 +19,14 @@ standards_referenced:
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 If you are evaluating Registry Server, start with a small business directory.
-You will create a business record, change its label, try requests the server refuses, and add a
-notes field to an editable project. The records use two configured fields, `code` and `label`;
+You will create a business record, change its label, try requests the server refuses, and extend
+an editable project with a configuration module. The records use two required fields, `code` and
+`label`, plus an optional group reference and status;
 business registration is the example you supply, not a built-in server type.
 An optional final exercise sends a signed webhook to a local receiver.
 
 <QuickstartMeta
-  outcome="Records created and updated over HTTP, plus a module and generated API schema for an added field."
+  outcome="Records created and updated over HTTP, plus a changed module and the generated API schema for its field."
   time="About 30 minutes, plus the first Rust build and image download"
   level="Source preview, local development only"
   prerequisites={['Linux or macOS', 'Git and a Bash shell', 'Rust and Cargo', 'Running Docker', 'OpenSSL', 'Python 3.11 or later and uv', 'curl 7.76 or later', 'An editor and two terminals']}
@@ -104,9 +105,14 @@ The `items` array contains one record. Its `data.domainData` object holds the co
 ```json
 {
   "code": "QS-001",
-  "label": "Quickstart example record"
+  "group": null,
+  "label": "Quickstart example record",
+  "status": null
 }
 ```
+
+The launcher set only `code` and `label`. `group` and `status` are optional fields of the same
+entity, so they read as `null` until a record supplies them.
 
 Beside it, `data.recordIdentifier` and `data.revisionIdentifier` identify the record and its
 version, and the response's `meta` object names the registry, dataset, and entity type.
@@ -167,7 +173,9 @@ The server generates the identifier, shown as `<record-id>`:
     "revisionIdentifier": "1",
     "domainData": {
       "code": "DEMO-002",
-      "label": "North Quay Engineering"
+      "group": null,
+      "label": "North Quay Engineering",
+      "status": null
     }
   },
   "meta": {
@@ -204,13 +212,13 @@ Each item's `domainData` now contains only `label`. The identifiers stay in the 
 Change `$select=label` to `$select=code,label` and repeat the request to restore both fields.
 Single quotes prevent the shell from expanding `$select` and `$top`.
 
-Reading a field does not necessarily permit filtering by it. Try a filter on `code`:
+Reading a field does not necessarily permit filtering by it. Try a filter on `label`:
 
 ```sh
 curl --silent --show-error \
   --header @tutorial-work/authorization.header --get \
   --data-urlencode 'accessProfile=operator' \
-  --data-urlencode "\$filter=code eq 'DEMO-002'" \
+  --data-urlencode "\$filter=label eq 'North Quay Engineering'" \
   --output tutorial-work/problem.json --write-out 'HTTP %{http_code}\n' \
   "$registry_url/v1/records/records"
 ```
@@ -221,8 +229,9 @@ HTTP 400
 
 The problem code is `query.invalid`.
 Open `products/registry-server/quickstart/.run/project/registry.yaml` in your editor.
-The operator grant has `readableFields` and `writableFields`, but no `filterableFields`.
-You will add that permission to your own project later in this tutorial.
+The operator grant lists `label` under `readableFields` and `writableFields`, but its
+`filterableFields` names only `code` and `status`. Each list is a separate permission.
+Repeat the request with `code` in place of `label` and it returns the record you created.
 
 {/* Evidence: crates/registry-serverctl/src/lib.rs, init_files();
     crates/registry-server/src/query.rs; crates/registry-server/src/api/mod.rs;
@@ -308,71 +317,66 @@ HTTP 400
 ```
 
 The problem code is `request.invalid`; no record was created.
-In the project's `registry.yaml`, find `required: true` under the `code` field.
+In the project's `registry.yaml`, find `required: true` on the `code` field.
 The same definition supplies the validation rule and generated request schema.
 
 {/* Evidence: crates/registry-serverctl/src/lib.rs, init_files();
     crates/registry-server/src/mutation.rs; crates/registry-server/src/artifacts.rs. */}
 
-## Add a field in a module
+## Change a field in a module
 
 Create an editable project outside the launcher's disposable directory:
 
 ```sh
 target/debug/registry-serverctl init tutorial-work/project
-mkdir -p tutorial-work/project/modules/record-notes
 ```
 
-The command prints `init succeeded` and creates `registry.yaml` and `tests/journeys.yaml`.
-It also reports three findings, none of which blocks authoring:
+The command prints `init succeeded` and writes a working project: `registry.yaml`, one module
+under `modules/`, `tests/journeys.yaml`, a `runtime.example.yaml`, and a `README.md` listing them.
+It reports one finding, which does not block authoring:
 
 - `access.profile.unrestricted_collection`: the operator profile can list every row. That is
-  intended for this tutorial; a production profile adds a claim-bound row restriction.
-- `package.identity.missing`: package identity is needed for deployment, not for authoring.
-- `manifest_projection.missing`: Registry Manifest catalogue metadata is optional.
+  intended for a registry-wide operator; the project's second profile, `record-reader`, shows the
+  claim-bound row restriction that closes it.
 
-Create `tutorial-work/project/modules/record-notes/module.yaml` in your editor:
+Open `tutorial-work/project/modules/record-notes/module.yaml`. The module extends the `record`
+entity the project owns:
 
 ```yaml
-id: record-notes
-version: 0.1.0
 extendEntities:
   - entity: record
     fields:
-      - id: internal-note
-        type: string
-        maxLength: 500
-        classification: internal
+      - {id: internal-note, type: string, maxLength: 500, classification: internal}
 ```
 
-The module adds an optional field to the existing `record` entity; a field without
-`required: true` is optional. Its classification matches the entity's default, `internal`.
-A more sensitive value such as `restricted` adds a fourth finding,
+A field without `required: true` is optional. Its classification matches the entity's default,
+`internal`. A more sensitive value such as `restricted` adds a second finding,
 `access.profile.higher_classification`, once a grant exposes the field; it asks you to confirm
 the profile's scope and purpose first.
-In `tutorial-work/project/registry.yaml`, replace the operator grant's two field lists with these
-three lines, keeping their indentation:
+
+Adding a field to the model does not grant access to it, and no profile lists this one yet.
+In `tutorial-work/project/registry.yaml`, add it to the operator grant for `record`, keeping the
+indentation:
 
 ```yaml
-readableFields: [code, label, internal-note]
-writableFields: [code, label, internal-note]
-filterableFields: [code]
+readableFields: [code, label, group, status, internal-note]
+writableFields: [code, label, group, status, internal-note]
+filterableFields: [code, status]
 ```
 
-The grant permits reading and writing the note, and filtering by code.
-Adding a field to the model alone does not grant access to it.
-
-Lock the module and check the combined project:
+Now change the module itself: raise its `maxLength` to `1000` and its `version` to `0.2.0`.
+Re-pin it and check the combined project:
 
 ```sh
 target/debug/registry-serverctl project lock tutorial-work/project
 target/debug/registry-serverctl check tutorial-work/project
 ```
 
-Look for `project lock succeeded`, a `modules` list showing the module as `added`, and
-`check succeeded`. Both commands repeat the three findings.
-The `modules` entry added to `registry.yaml` records the module's version and content digest.
-After editing a module, rerun `project lock` and review the changed digest with its source.
+Look for `project lock succeeded`, a `modules` list showing the module as `updated`, and
+`check succeeded`. Both commands repeat the one finding.
+The `modules` entry in `registry.yaml` records the module's version and content digest, and
+`project lock` rewrote both. A stale digest is an error, so rerun `project lock` after every
+module edit and review the changed digest with its source.
 
 Inspect the query permissions:
 
@@ -380,8 +384,9 @@ Inspect the query permissions:
 target/debug/registry-serverctl explain queries tutorial-work/project
 ```
 
-The list operation now has a `filterable` entry for `code`, including a `$filter=code eq 'example'`
-example. This describes your edited project; the running quickstart still uses its original package.
+The operator's list operation over `record` has `filterable` entries for `code` and `status`,
+each with examples such as `$filter=code eq 'example'`, and `internalNote` among its `apiFields`.
+This describes your edited project; the running quickstart still uses its original package.
 
 {/* Evidence: crates/registry-server/src/contract.rs, RegistryModule and EntityExtensionSource;
     crates/registry-serverctl/src/lib.rs, init_files(), project_lock(), and ExplainSubject;
@@ -411,7 +416,7 @@ its type in `anyOf`:
   "internalNote": {
     "anyOf": [
       {
-        "maxLength": 500,
+        "maxLength": 1000,
         "minLength": 0,
         "type": "string"
       },
@@ -423,7 +428,8 @@ its type in `anyOf`:
 }
 ```
 
-The authored `internal-note` becomes `internalNote` in JSON.
+The authored `internal-note` becomes `internalNote` in JSON, and the length you raised in the
+module reached the schema.
 The `required` list still contains only `code` and `label`.
 Open `tutorial-work/api/generated/openapi.json` to see the create and PATCH request shapes.
 Generated files are outputs: edit YAML and regenerate into a fresh directory to change them.
@@ -452,7 +458,7 @@ so the header file stays out of commits; keep it out of support messages too.
 
 You created and updated a record, retried a write, narrowed a read, and saw authentication,
 query permissions, version checks, and required fields affect real requests.
-Your separate project adds a field through a module and generates the schema applications will use.
+Your separate project extends the model through a module and generates the schema applications will use.
 
 ## Try a webhook (optional)
 

@@ -3072,13 +3072,13 @@
         {
           "name": "init",
           "invocation": "registry-serverctl init",
-          "about": "Create a minimal domain-neutral authoring project in a new directory",
+          "about": "Create a domain-neutral example authoring project in a new directory",
           "long_about": null,
           "usage": "registry-serverctl init [OPTIONS] <DESTINATION>",
           "arguments": [
             {
               "display": "<DESTINATION>",
-              "description": "New directory that will receive the minimal project closure",
+              "description": "New directory that will receive the example project closure",
               "always_required": true,
               "repeatable": false,
               "default_values": [],

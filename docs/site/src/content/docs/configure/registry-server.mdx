@@ -37,14 +37,24 @@ Every command accepts `--format json` for machine-readable output, and every fin
 target/debug/registry-serverctl init ./my-registry
 ```
 
-The command writes two files: `registry.yaml`, with one `record` entity and one `operator` profile, and `tests/journeys.yaml`, with a journey that creates, reads, and lists a record.
-It then compiles the project and reports three findings that every new project carries:
+The command writes a working example project rather than a blank one:
+
+| File | What it holds |
+|---|---|
+| `registry.yaml` | Registry and package identity, a Registry Manifest projection, one closed vocabulary, two entities, and two access profiles. |
+| `modules/record-notes/module.yaml` | One module adding an optional field to an entity the project owns, pinned by content digest in the project's `modules` list. |
+| `tests/journeys.yaml` | A journey that creates a group and a record, reads it under both profiles, patches it, and lists it. |
+| `runtime.example.yaml` | An example of the runtime configuration an operator supplies. No command reads it; copy it out of the project and replace every value. |
+| `README.md` | What each file holds and which command to run next. |
+
+Every block in those files carries a comment saying what it does and what an adopter changes.
+Replace the placeholder identifiers with your own; they are deliberately generic.
+
+`init` then compiles the project and reports one finding:
 
 | Finding | Meaning | When to act |
 |---|---|---|
-| `access.profile.unrestricted_collection` | The `operator` profile can list every row. | Add a row boundary before the registry holds more than one caller's data, or accept it for a registry-wide operator role. |
-| `manifest_projection.missing` | No Registry Manifest projection is declared. | Before a production package. |
-| `package.identity.missing` | No package identity is declared. | Before a production package. |
+| `access.profile.unrestricted_collection` | The `operator` profile can list every row. | Add a row boundary before the registry holds more than one caller's data, or accept it for a registry-wide operator role. The project's `record-reader` profile carries such a boundary. |
 
 The [findings table](#findings) lists every finding the compiler can report.
 Findings that need review do not fail `check` by default.
