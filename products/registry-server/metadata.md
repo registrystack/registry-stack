@@ -155,8 +155,8 @@ listed in `request.queryParameters`. A null `query` does not advertise a list or
 search capability. Direct GET and Lookup allow `$select` using `readableFields`,
 including request-origin and verified-claim lookups. Lookup selector inputs
 remain in the body and follow the selector contract; projection only reduces
-the response fields. Envelope `id` and `revision` are always present and may be
-selected independently of data fields.
+the response fields. The envelope's record and revision identifiers are always
+present; `$select` names data fields only and refuses envelope member names.
 
 All HTTP responses, including caller-filtered metadata, schemas, OpenAPI,
 protected reads, mutations, authentication refusals, and errors, use
