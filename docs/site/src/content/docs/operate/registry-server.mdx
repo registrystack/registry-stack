@@ -609,13 +609,47 @@ One transaction erases at most 10,000 revisions, scrubs affected correction cont
 outbox payloads, and replaces affected cached idempotency responses with refusal tombstones, so a
 retried mutation key cannot replay an erased body. The result and the audit record carry counts,
 not values. Snapshot references at or after the earliest erased commit become unavailable,
-including every later snapshot; erasing baseline data makes all snapshot coverage unavailable,
-and nothing re-baselines the registry afterwards. Live reads and writes continue.
+including every later snapshot; erasing baseline data makes all snapshot coverage unavailable.
+Nothing re-baselines the registry on its own: run `history rebaseline` when snapshot reads of
+current state must work again. Live reads and writes continue.
 
 {/* Evidence: crates/registry-server/src/history_erasure.rs;
     crates/registry-serverctl/src/history_erasure_lifecycle.rs;
     crates/registry-server/tests/postgres_history_erasure.rs;
     products/registry-server/scripts/test-historical-workflow.sh. */}
+
+## Restore snapshot coverage after an erasure
+
+After an erasure, a snapshot reference for current state is refused until the migration authority
+re-establishes a covered position. `history rebaseline` is that command, and it runs under the
+same interlock as the erasure: the configured migration role, bounded timeouts, the exclusive
+registry lock, a ready registry, and one chained audit record.
+
+Write an owner-only JSON request file (mode `0600`) carrying the operator reference alone:
+
+```json
+{
+  "operatorReference": "approved-maintenance-002"
+}
+```
+
+```sh
+target/debug/registry-serverctl history rebaseline \
+  --runtime-config /etc/registry-server/runtime.yaml \
+  --request-file /srv/registry/private/rebaseline.json
+```
+
+One transaction proves the retained journal head of every live row still reproduces that row,
+installs one baseline commit at the head, and moves the coverage baseline to it. It restores
+nothing that was erased: references taken before the new baseline stay unavailable, because the
+bytes they named are gone. Take a fresh reference afterwards. The command refuses when coverage
+is already complete, when the registry is not ready, when a retained revision is not indexed by a
+commit, and when a live row has no retained journal head that reproduces it. The result and the
+audit record carry counts and positions, not values.
+
+{/* Evidence: crates/registry-server/src/history_rebaseline.rs;
+    crates/registry-serverctl/src/history_rebaseline_lifecycle.rs;
+    crates/registry-server/tests/postgres_history_rebaseline.rs. */}
 
 ## Erase change-request detail
 
@@ -710,6 +744,7 @@ and `--max-pages` bound one operator run.
 | A webhook never fires | Confirm the destination is bound, the receiver returns `2xx`, and the event's condition matched; use `webhook list` for dead letters. |
 | Replay is refused | Refresh the list and check the generation, `replayEligible`, payload expiry, and the destination binding. |
 | A saved snapshot returns `503 source.unavailable` | Retained history no longer covers it, after an erasure or an incompatible successor. Take a fresh reference. |
+| A fresh snapshot reference is refused after an erasure | Coverage ends before the erased commit. Run `history rebaseline` to cover the current state again; earlier references stay unavailable. |
 | `request-retention erase` is refused | The request entity's retention mode is `retain`, or the version is pinned. |
 | An operator command cannot reach PostgreSQL | Check the migration URL secret, the role names, and `SSL_CERT_FILE` for a private authority. |
 

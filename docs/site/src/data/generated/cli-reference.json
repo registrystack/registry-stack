@@ -4211,6 +4211,59 @@
               ],
               "constraints": [],
               "subcommands": []
+            },
+            {
+              "name": "rebaseline",
+              "invocation": "registry-serverctl history rebaseline",
+              "about": "Restore snapshot coverage from the current state using an owner-only JSON request file",
+              "long_about": null,
+              "usage": "registry-serverctl history rebaseline [OPTIONS] --runtime-config <ABSOLUTE_FILE> --request-file <ABSOLUTE_FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Absolute Registry Server runtime configuration file",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--request-file <ABSOLUTE_FILE>",
+                  "description": "Absolute owner-only JSON rebaseline request file",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
             }
           ]
         },
