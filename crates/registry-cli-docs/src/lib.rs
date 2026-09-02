@@ -574,7 +574,10 @@ mod tests {
         }));
         let generate = find_command(&catalog.binaries, "registry-serverctl generate");
         assert!(generate.arguments.iter().any(|argument| {
-            argument.possible_values == ["openapi", "schemas", "manifest", "metadata", "sql"]
+            argument.possible_values
+                == [
+                    "openapi", "schemas", "actions", "manifest", "metadata", "sql",
+                ]
         }));
         for invocation in [
             "registry-serverctl explain",
