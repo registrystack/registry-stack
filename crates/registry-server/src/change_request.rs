@@ -6,6 +6,7 @@ use registry_platform_canonical_json::canonicalize_json;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
+use crate::compiler::operation_id;
 use crate::contract::{
     AccessProfileSource, ChangeRequestEffectSource, ChangeRequestValueSource, Classification,
     EntitySource, FieldTypeSource, MutationMode, Operation, RowBoundarySource,
@@ -18,6 +19,36 @@ use crate::model::{
     CompiledChangeRequestReviewGrant, CompiledChangeRequestStage, CompiledChangeRequestTarget,
     CompiledChangeRequestTargetBinding, CompiledChangeRequestValue, CompiledEntity,
 };
+
+/// Path to an entity, identified so a diagnostic can name which entity it concerns.
+fn entity_path(entity_id: &str) -> String {
+    format!("entities[id={entity_id}]")
+}
+
+/// Path to an access profile declared on an entity.
+fn profile_path(entity_id: &str, profile_id: &str) -> String {
+    format!("{}.accessProfiles[id={profile_id}]", entity_path(entity_id))
+}
+
+/// Path to a declared review stage on a change-request entity.
+fn stage_path(entity_id: &str, stage_id: &str) -> String {
+    format!(
+        "{}.changeRequest.review.stages[id={stage_id}]",
+        entity_path(entity_id)
+    )
+}
+
+/// Path to a declared change-request effect. Effects with an explicit id are
+/// identified by that id; effects without one fall back to their zero-based
+/// position, matching the compiler's own index convention for unidentified
+/// collection members.
+fn effect_path(entity_id: &str, effect_id: Option<&str>, index: usize) -> String {
+    let base = entity_path(entity_id);
+    match effect_id {
+        Some(id) => format!("{base}.changeRequest.effects[id={id}]"),
+        None => format!("{base}.changeRequest.effects[{index}]"),
+    }
+}
 
 pub const MAX_CHANGE_REQUEST_TARGETS: u16 = 16;
 pub const MAX_CHANGE_REQUEST_FIELD_MUTATIONS: u16 = 128;
@@ -78,10 +109,12 @@ fn validate_change_controlled_direct_writes(
 ) {
     for entity in entities.values() {
         if let Some(control) = &entity.change_control {
+            let required_for_path =
+                format!("{}.changeControl.requiredFor", entity_path(&entity.id));
             if control.required_for.is_empty() {
                 errors.push(Diagnostic::error(
                     "change_control.required_for.empty",
-                    "entities[].changeControl.requiredFor",
+                    required_for_path.as_str(),
                     "change control must name at least one controlled mutation operation",
                 ));
             }
@@ -89,7 +122,7 @@ fn validate_change_controlled_direct_writes(
                 if !is_mutation_operation(*operation) {
                     errors.push(Diagnostic::error(
                         "change_control.operation.unsupported",
-                        "entities[].changeControl.requiredFor",
+                        format!("{required_for_path}[value={}]", operation_id(*operation)),
                         "change control can require only finite mutation operations",
                     ));
                 }
@@ -106,7 +139,7 @@ fn validate_change_controlled_direct_writes(
                 if direct {
                     errors.push(Diagnostic::error(
                         "change_control.direct_write_grant",
-                        "entities[].accessProfiles[].operations",
+                        format!("{}.operations", profile_path(&entity.id, &profile.id)),
                         "a controlled mutation operation cannot remain directly granted",
                     ));
                 }
@@ -126,14 +159,14 @@ fn compile_request_entity(
     if source.mutation_mode != MutationMode::Mutable {
         errors.push(Diagnostic::error(
             "change_request.mutation_mode.invalid",
-            "entities[].changeRequest",
+            format!("{}.changeRequest", entity_path(&request_entity.id)),
             "a change-request entity must be mutable so draft revisions can be edited",
         ));
     }
     if source.change_control.is_some() {
         errors.push(Diagnostic::error(
             "change_request.change_control_conflict",
-            "entities[].changeControl",
+            format!("{}.changeControl", entity_path(&request_entity.id)),
             "a change-request entity cannot also declare target change control",
         ));
     }
@@ -144,26 +177,32 @@ fn compile_request_entity(
     {
         errors.push(Diagnostic::error(
             "change_request.tombstone_forbidden",
-            "entities[].accessProfiles[].operations",
+            format!(
+                "{}.accessProfiles[].operations",
+                entity_path(&request_entity.id)
+            ),
             "request entities use cancellation and cannot expose ordinary tombstone access",
         ));
     }
     if request.effects.is_empty() {
         errors.push(Diagnostic::error(
             "change_request.effects.empty",
-            "entities[].changeRequest.effects",
+            format!("{}.changeRequest.effects", entity_path(&request_entity.id)),
             "a change-request capability must declare at least one effect",
         ));
     }
     if request.review.stages.is_empty() {
         errors.push(Diagnostic::error(
             "change_request.review.stages_empty",
-            "entities[].changeRequest.review.stages",
+            format!(
+                "{}.changeRequest.review.stages",
+                entity_path(&request_entity.id)
+            ),
             "a change-request capability must declare at least one review stage",
         ));
     }
 
-    let stages = compile_stages(request, errors);
+    let stages = compile_stages(&request_entity.id, request, errors);
     let (effects, changed_fields, target_entities) = compile_effects(
         source,
         request_entity,
@@ -184,7 +223,10 @@ fn compile_request_entity(
     {
         errors.push(Diagnostic::error(
             "change_request.submit_operation.missing",
-            "entities[].accessProfiles[].operations",
+            format!(
+                "{}.accessProfiles[].operations",
+                entity_path(&request_entity.id)
+            ),
             "a change-request type requires at least one submit_request grant",
         ));
     }
@@ -229,35 +271,33 @@ fn compile_retention_mode(
 }
 
 fn compile_stages(
+    entity_id: &str,
     request: &crate::contract::ChangeRequestSource,
     errors: &mut Vec<Diagnostic>,
 ) -> Vec<CompiledChangeRequestStage> {
     if request.review.stages.len() > usize::from(MAX_CHANGE_REQUEST_REVIEW_STAGES) {
         errors.push(Diagnostic::error(
             "change_request.review.stage_count",
-            "entities[].changeRequest.review.stages",
+            format!("{}.changeRequest.review.stages", entity_path(entity_id)),
             "change-request review stages must stay within the supported finite bound",
         ));
     }
     let mut ids = BTreeSet::new();
     let mut stages = Vec::new();
     for stage in &request.review.stages {
-        validate_id(
-            &stage.id,
-            "entities[].changeRequest.review.stages[].id",
-            errors,
-        );
+        let path = stage_path(entity_id, &stage.id);
+        validate_id(&stage.id, &format!("{path}.id"), errors);
         if !ids.insert(stage.id.as_str()) {
             errors.push(Diagnostic::error(
                 "change_request.review.stage.duplicate",
-                "entities[].changeRequest.review.stages[].id",
+                format!("{path}.id"),
                 "review stage identifiers must be duplicate-free",
             ));
         }
         if stage.approvals == 0 || stage.approvals > 32 {
             errors.push(Diagnostic::error(
                 "change_request.review.stage.approvals_invalid",
-                "entities[].changeRequest.review.stages[].approvals",
+                format!("{path}.approvals"),
                 "review stage approval counts must be within the supported bounds",
             ));
         }
@@ -282,11 +322,12 @@ fn compile_effects(
     let mut create_targets = BTreeMap::new();
     for (index, effect) in effect_sources.iter().enumerate() {
         let id = effect_id(effect, index);
-        validate_id(&id, "entities[].changeRequest.effects[].id", errors);
+        let path = effect_path(&request_entity.id, effect.id.as_deref(), index);
+        validate_id(&id, &format!("{path}.id"), errors);
         if !effect_ids.insert(id.clone()) {
             errors.push(Diagnostic::error(
                 "change_request.effect.id_duplicate",
-                "entities[].changeRequest.effects[].id",
+                format!("{path}.id"),
                 "change-request effect identifiers must be duplicate-free",
             ));
         }
@@ -294,7 +335,7 @@ fn compile_effects(
             if effect.id.is_none() {
                 errors.push(Diagnostic::error(
                     "change_request.effect.create_id_required",
-                    "entities[].changeRequest.effects[].id",
+                    format!("{path}.id"),
                     "create effects require an explicit identifier for reserved-record references",
                 ));
             }
@@ -310,12 +351,14 @@ fn compile_effects(
     let mut writes = BTreeMap::new();
     for (index, effect) in effect_sources.iter().enumerate() {
         let id = effect_id(effect, index);
+        let path = effect_path(&request_entity.id, effect.id.as_deref(), index);
         let Some(target) = compile_target(
             source,
             request_entity,
             entities,
             request_entity_ids,
             &id,
+            &path,
             effect,
             errors,
         ) else {
@@ -327,7 +370,7 @@ fn compile_effects(
         if effect.set.is_empty() && effect.clear.is_empty() {
             errors.push(Diagnostic::error(
                 "change_request.effect.empty",
-                "entities[].changeRequest.effects[]",
+                path.as_str(),
                 "a change-request effect must set or clear at least one field",
             ));
         }
@@ -337,7 +380,7 @@ fn compile_effects(
             let Some(target_field) = target_entity.fields.get(field) else {
                 errors.push(Diagnostic::error(
                     "change_request.effect.field_unknown",
-                    "entities[].changeRequest.effects[].set",
+                    format!("{path}.set[field={field}]"),
                     "a change-request effect writes an unknown stored target field",
                 ));
                 continue;
@@ -349,6 +392,7 @@ fn compile_effects(
                 &target_field.field_type,
                 value,
                 &create_targets,
+                &path,
                 errors,
             ) {
                 if let CompiledChangeRequestValue::FromEffect { effect, .. } = &compiled {
@@ -358,7 +402,14 @@ fn compile_effects(
                     field: field.clone(),
                     value: compiled,
                 });
-                remember_write(&mut writes, &target, field, &id, errors);
+                remember_write(
+                    &mut writes,
+                    &target,
+                    field,
+                    &id,
+                    &format!("{path}.set[field={field}]"),
+                    errors,
+                );
                 changed_fields
                     .entry(target.entity_id.clone())
                     .or_default()
@@ -369,7 +420,7 @@ fn compile_effects(
             let Some(target_field) = target_entity.fields.get(field) else {
                 errors.push(Diagnostic::error(
                     "change_request.effect.field_unknown",
-                    "entities[].changeRequest.effects[].clear",
+                    format!("{path}.clear[field={field}]"),
                     "a change-request effect clears an unknown stored target field",
                 ));
                 continue;
@@ -377,21 +428,28 @@ fn compile_effects(
             if effect.operation == Operation::Create {
                 errors.push(Diagnostic::error(
                     "change_request.effect.clear_on_create",
-                    "entities[].changeRequest.effects[].clear",
+                    format!("{path}.clear[field={field}]"),
                     "create effects cannot clear target fields",
                 ));
             }
             if target_field.required {
                 errors.push(Diagnostic::error(
                     "change_request.effect.clear_required",
-                    "entities[].changeRequest.effects[].clear",
+                    format!("{path}.clear[field={field}]"),
                     "required target fields cannot be cleared",
                 ));
             }
             mutations.push(CompiledChangeRequestMutation::Clear {
                 field: field.clone(),
             });
-            remember_write(&mut writes, &target, field, &id, errors);
+            remember_write(
+                &mut writes,
+                &target,
+                field,
+                &id,
+                &format!("{path}.clear[field={field}]"),
+                errors,
+            );
             changed_fields
                 .entry(target.entity_id.clone())
                 .or_default()
@@ -410,16 +468,18 @@ fn compile_effects(
         );
     }
 
-    let ordered = order_effects(compiled_by_id, errors)?;
+    let ordered = order_effects(&request_entity.id, compiled_by_id, errors)?;
     Some((ordered, changed_fields, target_entities))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compile_target(
     source: &EntitySource,
     request_entity: &CompiledEntity,
     entities: &BTreeMap<String, CompiledEntity>,
     request_entity_ids: &BTreeSet<String>,
     id: &str,
+    path: &str,
     effect: &ChangeRequestEffectSource,
     errors: &mut Vec<Diagnostic>,
 ) -> Option<CompiledChangeRequestTarget> {
@@ -429,7 +489,7 @@ fn compile_target(
     ) {
         errors.push(Diagnostic::error(
             "change_request.effect.target.invalid",
-            "entities[].changeRequest.effects[].target",
+            format!("{path}.target"),
             "effect target must name exactly one entity or request reference field",
         ));
         return None;
@@ -439,7 +499,7 @@ fn compile_target(
             let Some(entity_id) = &effect.target.entity else {
                 errors.push(Diagnostic::error(
                     "change_request.effect.target.invalid",
-                    "entities[].changeRequest.effects[].target",
+                    format!("{path}.target"),
                     "create effects must target a declared entity for reserved identity",
                 ));
                 return None;
@@ -447,7 +507,7 @@ fn compile_target(
             let Some(target_entity) = entities.get(entity_id) else {
                 errors.push(Diagnostic::error(
                     "change_request.effect.target_unknown",
-                    "entities[].changeRequest.effects[].target.entity",
+                    format!("{path}.target.entity"),
                     "a change-request effect targets an unknown entity",
                 ));
                 return None;
@@ -455,7 +515,7 @@ fn compile_target(
             if request_entity_ids.contains(entity_id) {
                 errors.push(Diagnostic::error(
                     "change_request.effect.nested_request_target",
-                    "entities[].changeRequest.effects[].target.entity",
+                    format!("{path}.target.entity"),
                     "change-request effects cannot target another change-request entity",
                 ));
                 return None;
@@ -463,7 +523,7 @@ fn compile_target(
             if !is_change_controlled(target_entity, Operation::Create) {
                 errors.push(Diagnostic::error(
                     "change_request.effect.uncontrolled_target",
-                    "entities[].changeRequest.effects[].operation",
+                    format!("{path}.operation"),
                     "a change-request effect can mutate only a target operation declared in changeControl.requiredFor",
                 ));
             }
@@ -478,7 +538,7 @@ fn compile_target(
             let Some(field_id) = &effect.target.from_field else {
                 errors.push(Diagnostic::error(
                     "change_request.effect.target.invalid",
-                    "entities[].changeRequest.effects[].target.fromField",
+                    format!("{path}.target.fromField"),
                     "patch effects must target a request reference field",
                 ));
                 return None;
@@ -486,7 +546,7 @@ fn compile_target(
             let Some(field) = request_entity.fields.get(field_id) else {
                 errors.push(Diagnostic::error(
                     "change_request.effect.target_field_unknown",
-                    "entities[].changeRequest.effects[].target.fromField",
+                    format!("{path}.target.fromField"),
                     "effect target refers to an unknown request field",
                 ));
                 return None;
@@ -494,7 +554,7 @@ fn compile_target(
             let FieldTypeSource::Reference { target, .. } = &field.field_type else {
                 errors.push(Diagnostic::error(
                     "change_request.effect.target_field_type",
-                    "entities[].changeRequest.effects[].target.fromField",
+                    format!("{path}.target.fromField"),
                     "patch effect targets must come from a typed request reference field",
                 ));
                 return None;
@@ -503,7 +563,7 @@ fn compile_target(
             if request_entity_ids.contains(target) {
                 errors.push(Diagnostic::error(
                     "change_request.effect.nested_request_target",
-                    "entities[].changeRequest.effects[].target.fromField",
+                    format!("{path}.target.fromField"),
                     "change-request effects cannot target another change-request entity",
                 ));
                 return None;
@@ -511,14 +571,14 @@ fn compile_target(
             if target_entity.mutation_mode != MutationMode::Mutable {
                 errors.push(Diagnostic::error(
                     "change_request.effect.operation_unavailable",
-                    "entities[].changeRequest.effects[].operation",
+                    format!("{path}.operation"),
                     "patch effects require a mutable target entity",
                 ));
             }
             if !is_change_controlled(target_entity, Operation::Patch) {
                 errors.push(Diagnostic::error(
                     "change_request.effect.uncontrolled_target",
-                    "entities[].changeRequest.effects[].operation",
+                    format!("{path}.operation"),
                     "a change-request effect can mutate only a target operation declared in changeControl.requiredFor",
                 ));
             }
@@ -533,7 +593,7 @@ fn compile_target(
             let _ = (source, id);
             errors.push(Diagnostic::error(
                 "change_request.effect.operation_unsupported",
-                "entities[].changeRequest.effects[].operation",
+                format!("{path}.operation"),
                 "change-request effects support only create and patch operations",
             ));
             None
@@ -541,6 +601,7 @@ fn compile_target(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compile_value(
     source: &EntitySource,
     request_entity: &CompiledEntity,
@@ -548,12 +609,13 @@ fn compile_value(
     target_type: &FieldTypeSource,
     value: &ChangeRequestValueSource,
     create_targets: &BTreeMap<String, String>,
+    path: &str,
     errors: &mut Vec<Diagnostic>,
 ) -> Option<CompiledChangeRequestValue> {
     if !exactly_one(value.from_field.as_ref(), value.from_effect.as_ref()) {
         errors.push(Diagnostic::error(
             "change_request.effect.value.invalid",
-            "entities[].changeRequest.effects[].set",
+            format!("{path}.set[field={target_field}]"),
             "set values must name exactly one request field or create effect",
         ));
         return None;
@@ -562,7 +624,7 @@ fn compile_value(
         let Some(field) = request_entity.fields.get(field_id) else {
             errors.push(Diagnostic::error(
                 "change_request.effect.value_field_unknown",
-                "entities[].changeRequest.effects[].set",
+                format!("{path}.set[field={target_field}]"),
                 "set value refers to an unknown request field",
             ));
             return None;
@@ -570,14 +632,14 @@ fn compile_value(
         if !field.required {
             errors.push(Diagnostic::error(
                 "change_request.effect.value_nullable",
-                "entities[].changeRequest.effects[].set",
+                format!("{path}.set[field={target_field}]"),
                 "mapped set values must come from required request fields so null cannot mean leave unchanged",
             ));
         }
         if !compatible_field_types(&field.field_type, target_type) {
             errors.push(Diagnostic::error(
                 "change_request.effect.value_type_mismatch",
-                "entities[].changeRequest.effects[].set",
+                format!("{path}.set[field={target_field}]"),
                 "mapped request field type is not compatible with the target field",
             ));
         }
@@ -589,7 +651,7 @@ fn compile_value(
     let Some(target_entity_id) = create_targets.get(effect_id) else {
         errors.push(Diagnostic::error(
             "change_request.effect.value_effect_unknown",
-            "entities[].changeRequest.effects[].set",
+            format!("{path}.set[field={target_field}]"),
             "fromEffect must refer to a declared create effect",
         ));
         return None;
@@ -604,16 +666,16 @@ fn compile_value(
         FieldTypeSource::Reference { .. } => {
             errors.push(Diagnostic::error(
                 "change_request.effect.value_reference_mismatch",
-                "entities[].changeRequest.effects[].set",
+                format!("{path}.set[field={target_field}]"),
                 "fromEffect reserved identity does not match the target reference field",
             ));
             None
         }
         _ => {
-            let _ = (source, target_field);
+            let _ = source;
             errors.push(Diagnostic::error(
                 "change_request.effect.value_reference_required",
-                "entities[].changeRequest.effects[].set",
+                format!("{path}.set[field={target_field}]"),
                 "fromEffect can populate only typed reference fields",
             ));
             None
@@ -626,6 +688,7 @@ fn remember_write(
     target: &CompiledChangeRequestTarget,
     field: &str,
     effect_id: &str,
+    path: &str,
     errors: &mut Vec<Diagnostic>,
 ) {
     let key = (target_binding_key(target), field.to_owned());
@@ -633,13 +696,13 @@ fn remember_write(
         if existing != effect_id {
             errors.push(Diagnostic::error(
                 "change_request.effect.overlapping_write",
-                "entities[].changeRequest.effects[]",
+                path,
                 "change-request effects cannot write the same target field more than once",
             ));
         } else {
             errors.push(Diagnostic::error(
                 "change_request.effect.overlapping_write",
-                "entities[].changeRequest.effects[]",
+                path,
                 "a change-request effect cannot both set and clear the same target field",
             ));
         }
@@ -647,13 +710,14 @@ fn remember_write(
 }
 
 fn order_effects(
+    entity_id: &str,
     effects: BTreeMap<String, CompiledChangeRequestEffect>,
     errors: &mut Vec<Diagnostic>,
 ) -> Option<Vec<CompiledChangeRequestEffect>> {
     let mut state = BTreeMap::<String, VisitState>::new();
     let mut ordered = Vec::new();
     for id in effects.keys() {
-        visit_effect(id, &effects, &mut state, &mut ordered, errors);
+        visit_effect(entity_id, id, &effects, &mut state, &mut ordered, errors);
     }
     if errors
         .iter()
@@ -670,6 +734,7 @@ fn order_effects(
 }
 
 fn visit_effect(
+    entity_id: &str,
     id: &str,
     effects: &BTreeMap<String, CompiledChangeRequestEffect>,
     state: &mut BTreeMap<String, VisitState>,
@@ -681,7 +746,7 @@ fn visit_effect(
         Some(VisitState::Visiting) => {
             errors.push(Diagnostic::error(
                 "change_request.effect.dependency_cycle",
-                "entities[].changeRequest.effects[]",
+                format!("{}.changeRequest.effects[id={id}]", entity_path(entity_id)),
                 "reserved-create references cannot contain dependency cycles",
             ));
             return;
@@ -691,7 +756,7 @@ fn visit_effect(
     state.insert(id.to_owned(), VisitState::Visiting);
     if let Some(effect) = effects.get(id) {
         for dependency in &effect.depends_on {
-            visit_effect(dependency, effects, state, ordered, errors);
+            visit_effect(entity_id, dependency, effects, state, ordered, errors);
         }
     }
     state.insert(id.to_owned(), VisitState::Done);
@@ -710,6 +775,7 @@ fn validate_plan_bounds(
     effects: &[CompiledChangeRequestEffect],
     errors: &mut Vec<Diagnostic>,
 ) {
+    let effects_path = format!("{}.changeRequest.effects", entity_path(&request_entity.id));
     let target_count = effects
         .iter()
         .map(|effect| target_binding_key(&effect.target))
@@ -718,7 +784,7 @@ fn validate_plan_bounds(
     if target_count > usize::from(MAX_CHANGE_REQUEST_TARGETS) {
         errors.push(Diagnostic::error(
             "change_request.bounds.targets",
-            "entities[].changeRequest.effects",
+            effects_path.as_str(),
             "a change-request plan exceeds the supported target-record ceiling",
         ));
     }
@@ -726,7 +792,7 @@ fn validate_plan_bounds(
     if mutation_count > usize::from(MAX_CHANGE_REQUEST_FIELD_MUTATIONS) {
         errors.push(Diagnostic::error(
             "change_request.bounds.field_mutations",
-            "entities[].changeRequest.effects",
+            effects_path.as_str(),
             "a change-request plan exceeds the supported field-mutation ceiling",
         ));
     }
@@ -734,12 +800,12 @@ fn validate_plan_bounds(
         Some(bytes) if bytes <= u64::from(MAX_CHANGE_REQUEST_SNAPSHOT_BYTES) => {}
         Some(_) => errors.push(Diagnostic::error(
             "change_request.bounds.snapshot_bytes",
-            "entities[].changeRequest.effects",
+            effects_path.as_str(),
             "a change-request plan exceeds the supported snapshot-size ceiling",
         )),
         None => errors.push(Diagnostic::error(
             "change_request.bounds.snapshot_unknown",
-            "entities[].changeRequest.effects",
+            effects_path.as_str(),
             "a change-request plan contains a field whose snapshot size cannot be bounded",
         )),
     }
@@ -794,6 +860,7 @@ fn compile_review_grants(
         .collect::<BTreeSet<_>>();
     let mut grants = Vec::new();
     for profile in request_entity.access_profiles.values() {
+        let profile_base = profile_path(&request_entity.id, &profile.id);
         for grant in &profile.review_stages {
             if !profile.operations.iter().any(|operation| {
                 matches!(
@@ -805,23 +872,26 @@ fn compile_review_grants(
             }) {
                 errors.push(Diagnostic::error(
                     "change_request.review_stage.operation_required",
-                    "entities[].accessProfiles[].operations",
+                    format!("{profile_base}.operations"),
                     "review stage grants require approve_request, reject_request, or request_revision authority",
                 ));
             }
+            let stage_grant_path = format!("{profile_base}.reviewStages[stage={}]", grant.stage);
             if !stage_ids.contains(grant.stage.as_str()) {
                 errors.push(Diagnostic::error(
                     "change_request.review_stage.unknown",
-                    "entities[].accessProfiles[].reviewStages[].stage",
+                    format!("{stage_grant_path}.stage"),
                     "a review grant refers to an unknown review stage",
                 ));
                 continue;
             }
             for target in &grant.targets {
+                let target_grant_path =
+                    format!("{stage_grant_path}.targets[entity={}]", target.entity);
                 let Some(target_entity) = entities.get(&target.entity) else {
                     errors.push(Diagnostic::error(
                         "change_request.review_stage.target_unknown",
-                        "entities[].accessProfiles[].reviewStages[].targets[].entity",
+                        format!("{target_grant_path}.entity"),
                         "a review grant targets an unknown entity",
                     ));
                     continue;
@@ -829,27 +899,27 @@ fn compile_review_grants(
                 validate_target_fields(
                     target_entity,
                     &target.readable_fields,
-                    "entities[].accessProfiles[].reviewStages[].targets[].readableFields",
+                    &format!("{target_grant_path}.readableFields"),
                     errors,
                 );
                 validate_row_boundaries(
                     target_entity,
                     &target.row_boundaries,
-                    "entities[].accessProfiles[].reviewStages[].targets[].rowBoundaries",
+                    &format!("{target_grant_path}.rowBoundaries"),
                     errors,
                 );
                 validate_grant_access_requirements(
                     target_entity,
                     profile,
                     &target.row_boundaries,
-                    "entities[].accessProfiles[].reviewStages[].targets",
+                    &target_grant_path,
                     errors,
                 );
                 if let Some(required) = changed_fields.get(&target.entity) {
                     if !required.is_subset(&target.readable_fields) {
                         errors.push(Diagnostic::error(
                             "change_request.review_projection.incomplete",
-                            "entities[].accessProfiles[].reviewStages[].targets[].readableFields",
+                            format!("{target_grant_path}.readableFields"),
                             "review target projections must cover every changed target field",
                         ));
                     }
@@ -890,7 +960,11 @@ fn compile_review_grants(
         if !covered {
             errors.push(Diagnostic::error(
                 "change_request.review_projection.incomplete",
-                "entities[].accessProfiles[].reviewStages",
+                format!(
+                    "{}.accessProfiles[].reviewStages[stage={}]",
+                    entity_path(&request_entity.id),
+                    stage.id
+                ),
                 "each review stage requires at least one profile that can review every target change",
             ));
         }
@@ -913,20 +987,23 @@ fn compile_apply_grants(
 ) -> Vec<CompiledChangeRequestApplyGrant> {
     let mut grants = Vec::new();
     for profile in request_entity.access_profiles.values() {
+        let profile_base = profile_path(&request_entity.id, &profile.id);
         if !profile.apply_targets.is_empty()
             && !profile.operations.contains(&Operation::ApplyRequest)
         {
             errors.push(Diagnostic::error(
                 "change_request.apply_target.operation_required",
-                "entities[].accessProfiles[].operations",
+                format!("{profile_base}.operations"),
                 "apply target grants require apply_request authority",
             ));
         }
         for target in &profile.apply_targets {
+            let target_grant_path =
+                format!("{profile_base}.applyTargets[entity={}]", target.entity);
             let Some(target_entity) = entities.get(&target.entity) else {
                 errors.push(Diagnostic::error(
                     "change_request.apply_target.unknown",
-                    "entities[].accessProfiles[].applyTargets[].entity",
+                    format!("{target_grant_path}.entity"),
                     "an apply grant targets an unknown entity",
                 ));
                 continue;
@@ -934,14 +1011,14 @@ fn compile_apply_grants(
             validate_row_boundaries(
                 target_entity,
                 &target.row_boundaries,
-                "entities[].accessProfiles[].applyTargets[].rowBoundaries",
+                &format!("{target_grant_path}.rowBoundaries"),
                 errors,
             );
             validate_grant_access_requirements(
                 target_entity,
                 profile,
                 &target.row_boundaries,
-                "entities[].accessProfiles[].applyTargets",
+                &target_grant_path,
                 errors,
             );
             grants.push(CompiledChangeRequestApplyGrant {
@@ -963,7 +1040,10 @@ fn compile_apply_grants(
     if !target_entities.is_empty() && !covered {
         errors.push(Diagnostic::error(
             "change_request.apply_targets.incomplete",
-            "entities[].accessProfiles[].applyTargets",
+            format!(
+                "{}.accessProfiles[].applyTargets",
+                entity_path(&request_entity.id)
+            ),
             "at least one profile must be able to apply the complete change-request target set",
         ));
     }
@@ -985,11 +1065,16 @@ fn compile_presence_grants(
         .collect::<BTreeMap<_, _>>();
     for target_entity in entities.values() {
         for profile in target_entity.access_profiles.values() {
+            let profile_base = profile_path(&target_entity.id, &profile.id);
             for grant in &profile.request_presence {
+                let presence_path = format!(
+                    "{profile_base}.requestPresence[requestType={}]",
+                    grant.request_type
+                );
                 let Some(targets) = target_by_request.get(&grant.request_type) else {
                     errors.push(Diagnostic::error(
                         "change_request.presence.request_type_unknown",
-                        "entities[].accessProfiles[].requestPresence[].requestType",
+                        format!("{presence_path}.requestType"),
                         "a request-presence grant refers to an unknown request type",
                     ));
                     continue;
@@ -1000,20 +1085,20 @@ fn compile_presence_grants(
                 validate_row_boundaries(
                     request_entity,
                     &grant.row_boundaries,
-                    "entities[].accessProfiles[].requestPresence[].rowBoundaries",
+                    &format!("{presence_path}.rowBoundaries"),
                     errors,
                 );
                 validate_grant_access_requirements(
                     request_entity,
                     profile,
                     &grant.row_boundaries,
-                    "entities[].accessProfiles[].requestPresence",
+                    &presence_path,
                     errors,
                 );
                 if !targets.contains(&target_entity.id) {
                     errors.push(Diagnostic::error(
                         "change_request.presence.target_unaffected",
-                        "entities[].accessProfiles[].requestPresence[].requestType",
+                        format!("{presence_path}.requestType"),
                         "a request-presence grant must name a request type that can affect the granted target entity",
                     ));
                     continue;
@@ -1037,14 +1122,14 @@ fn compile_presence_grants(
                     if request_entity.classification != Classification::Public || !public_links {
                         errors.push(Diagnostic::error(
                             "change_request.presence.anonymous_non_public",
-                            "entities[].accessProfiles[].requestPresence",
+                            presence_path.as_str(),
                             "anonymous request presence requires a public request type and public target-link fields",
                         ));
                     }
                     if !grant.row_boundaries.is_empty() {
                         errors.push(Diagnostic::error(
                             "change_request.presence.anonymous_claim_boundary",
-                            "entities[].accessProfiles[].requestPresence[].rowBoundaries",
+                            format!("{presence_path}.rowBoundaries"),
                             "anonymous request presence cannot depend on verified claim boundaries",
                         ));
                     }
