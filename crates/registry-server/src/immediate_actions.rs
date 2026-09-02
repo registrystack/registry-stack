@@ -1082,6 +1082,7 @@ fn validate_grant_access_requirements(
             sortable_fields: BTreeSet::new(),
             spatial_queries: None,
             row_boundaries: row_boundaries.to_vec(),
+            request_visibility: None,
             lookups: Vec::new(),
             read_paths: Vec::new(),
             review_stages: Vec::new(),

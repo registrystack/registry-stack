@@ -1166,6 +1166,7 @@ fn action_profile_from_grant(grant: &CompiledActionGrant) -> AccessProfileSource
             .iter()
             .flat_map(|target| target.row_boundaries.iter().cloned())
             .collect(),
+        request_visibility: None,
         lookups: Vec::new(),
         read_paths: Vec::new(),
         review_stages: Vec::new(),

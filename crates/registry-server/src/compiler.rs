@@ -1607,6 +1607,7 @@ fn expand_project_access(
                 sortable_fields: grant.sortable_fields.clone(),
                 spatial_queries: grant.spatial_queries.clone(),
                 row_boundaries: grant.row_boundaries.clone(),
+                request_visibility: grant.request_visibility,
                 lookups: grant.lookups.clone(),
                 read_paths: grant.read_paths.clone(),
                 review_stages: grant.review_stages.clone(),
@@ -2883,6 +2884,20 @@ fn validate_profiles(
                 "access_profile.data_export.invalid",
                 "entities[].accessProfiles[].allowDataExport",
                 "bulk data export requires an authenticated list profile with a readable projection",
+            ));
+        }
+        if access.request_visibility.is_some()
+            && (entity.change_request.is_none()
+                || access.anonymous
+                || !access
+                    .operations
+                    .iter()
+                    .any(|operation| matches!(operation, Operation::Get | Operation::List)))
+        {
+            errors.push(Diagnostic::error(
+                "access_profile.request_visibility.invalid",
+                "entities[].accessProfiles[].requestVisibility",
+                "owner-scoped request visibility requires an authenticated change-request profile with get or list access",
             ));
         }
         validate_spatial_queries(access, entity, &fields, errors);

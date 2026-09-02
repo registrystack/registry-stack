@@ -45,6 +45,7 @@ async fn real_postgres_request_queues_filter_count_and_page_on_server_owned_stat
 
     let steward = claims("steward-principal", None);
     let submitter = claims("submitter-principal", None);
+    let other_submitter = claims("other-submitter-principal", None);
     let reviewer = claims("reviewer-principal", Some("review"));
 
     let first_site = create_record(
@@ -199,7 +200,7 @@ async fn real_postgres_request_queues_filter_count_and_page_on_server_owned_stat
     )
     .await;
     assert_eq!(continuation.status, StatusCode::OK, "{}", continuation.body);
-    assert_eq!(continuation.body["count"], 1);
+    assert_eq!(continuation.body["count"], 2);
     let continuation_items = continuation.body["items"]
         .as_array()
         .expect("cursor returns items");
@@ -228,6 +229,59 @@ async fn real_postgres_request_queues_filter_count_and_page_on_server_owned_stat
     let wrong_profile_text = cursor_wrong_profile.body.to_string();
     assert!(!wrong_profile_text.contains("submitted"));
     assert!(!wrong_profile_text.contains(TENANT));
+
+    let other_draft_request = create_record(
+        &app,
+        "/v1/records/correction-requests?accessProfile=submitter",
+        other_submitter.clone(),
+        "queue-create-other-draft-request",
+        json!({
+            "tenant": TENANT,
+            "placement": first_placement.id,
+            "proposedSite": second_site.id,
+            "reason": "another submitter's draft must stay private"
+        }),
+    )
+    .await;
+    let concealed_other_draft = response_parts(
+        send(
+            &app,
+            Method::GET,
+            &format!(
+                "/v1/records/correction-requests/{}?accessProfile=submitter",
+                other_draft_request.id
+            ),
+            Some(submitter.clone()),
+            &[],
+            Vec::new(),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(concealed_other_draft.status, StatusCode::NOT_FOUND);
+    assert_eq!(concealed_other_draft.body["code"], "resource.not_found");
+    assert!(!concealed_other_draft
+        .body
+        .to_string()
+        .contains(&other_draft_request.id));
+    let other_submitter_page = response_parts(
+        send(
+            &app,
+            Method::GET,
+            "/v1/records/correction-requests?accessProfile=submitter&$count=true",
+            Some(other_submitter),
+            &[],
+            Vec::new(),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(other_submitter_page.status, StatusCode::OK);
+    assert_eq!(other_submitter_page.body["count"], 1);
+    assert_eq!(
+        other_submitter_page.body["items"][0]["recordIdentifier"],
+        other_draft_request.id
+    );
 
     let draft_count = response_parts(
         send(
@@ -586,6 +640,7 @@ fn compiled_registry() -> registry_server::CompiledRegistry {
                 "readableFields":["tenant","placement","proposed-site","reason"],
                 "writableFields":["tenant","placement","proposed-site","reason"],
                 "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
+                "requestVisibility":"owner",
                 "allowCount":true
               }]
             },

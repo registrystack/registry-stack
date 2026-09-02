@@ -334,6 +334,15 @@ impl PostgresRecordReadService {
         )
         .await
         .map_err(|_| ReadServiceError::Unavailable)?;
+        crate::mutation::install_request_visibility_context(
+            transaction.transaction(),
+            &plan.entity,
+            claims,
+            &self.audit_profile,
+            &self.expected.database_id,
+        )
+        .await
+        .map_err(|_| ReadServiceError::Unavailable)?;
         let query = request_query(&request.kind);
         install_evaluation_date(transaction.transaction(), query).await?;
         install_spatial_query_context(transaction.transaction(), query).await?;

@@ -5567,6 +5567,7 @@ fn public_profile_cannot_process_an_internal_field() {
                 claim: "asset_code".to_owned(),
                 operator: BoundaryOperator::Equals,
             }],
+            request_visibility: None,
             lookups: Vec::new(),
             read_paths: Vec::new(),
             review_stages: Vec::new(),

@@ -143,10 +143,20 @@ accessProfiles:
     requiredScopes: [registry:corrections:submit]
     requiredPurposes: [asset-correction]
     grants:
+      - entity: asset-item
+        operations: [get]
+        readableFields: [asset-code, label]
+      - entity: asset-placement
+        operations: [list]
+        readableFields: [asset, valid-from, valid-to]
+      - entity: asset-site
+        operations: [list]
+        readableFields: [site-code]
       - entity: placement-correction-request
-        operations: [create, get, patch, submit_request, revise_request, cancel_request]
+        operations: [create, get, list, patch, submit_request, revise_request, cancel_request]
         readableFields: [placement, proposed-site, reason]
         writableFields: [placement, proposed-site, reason]
+        requestVisibility: owner
   - id: correction-reviewer
     default: true
     principalClaim: registry_principal

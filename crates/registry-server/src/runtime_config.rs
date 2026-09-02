@@ -333,6 +333,7 @@ fn contains_governed_member(value: &serde_norway::Value) -> bool {
         "readableFields",
         "writableFields",
         "rowBoundaries",
+        "requestVisibility",
         "requiredScopes",
         "requiredPurposes",
         "retention",

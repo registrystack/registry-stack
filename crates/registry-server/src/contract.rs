@@ -1788,6 +1788,9 @@ pub struct AccessProfileSource {
     pub spatial_queries: Option<SpatialQueryGrantSource>,
     #[serde(default)]
     pub row_boundaries: Vec<RowBoundarySource>,
+    /// Restricts change-request reads to rows owned by the authenticated principal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_visibility: Option<RequestVisibilitySource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lookups: Vec<LookupGrantSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2007,6 +2010,9 @@ pub struct AccessGrantSource {
     pub spatial_queries: Option<SpatialQueryGrantSource>,
     #[serde(default)]
     pub row_boundaries: Vec<RowBoundarySource>,
+    /// Restricts change-request reads to rows owned by the authenticated principal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_visibility: Option<RequestVisibilitySource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lookups: Vec<LookupGrantSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2074,6 +2080,8 @@ struct EntityAccessGrantSourceSchema {
     spatial_queries: Option<SpatialQueryGrantSource>,
     #[serde(default)]
     row_boundaries: Vec<RowBoundarySource>,
+    #[serde(default)]
+    request_visibility: Option<RequestVisibilitySource>,
     #[serde(default)]
     lookups: Vec<LookupGrantSource>,
     #[serde(default)]
@@ -2190,6 +2198,14 @@ pub struct RequestPresenceGrantSource {
     pub request_type: String,
     #[serde(default)]
     pub row_boundaries: Vec<RowBoundarySource>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestVisibilitySource {
+    /// Expose only requests created by the current authenticated principal.
+    Owner,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

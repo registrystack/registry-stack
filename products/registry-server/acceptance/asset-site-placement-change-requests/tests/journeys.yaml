@@ -52,13 +52,34 @@ journeys:
           status: 201
           fields: {valid-from: "2026-01-01"}
         capture: placement
-      - id: create-correction-request
-        entity: placement-correction-request
+      - id: submitter-lists-placement-options
+        entity: asset-placement
         accessProfile: correction-submitter
         claims: &submitter_claims
           principal: correction-submitter
           scopes: [registry:corrections:submit]
           purpose: asset-correction
+        request: {operation: list}
+        expect: {outcome: success, status: 200, count: 1}
+      - id: submitter-lists-site-options
+        entity: asset-site
+        accessProfile: correction-submitter
+        claims: *submitter_claims
+        request: {operation: list}
+        expect: {outcome: success, status: 200, count: 2}
+      - id: submitter-reads-placement-asset-label
+        entity: asset-item
+        accessProfile: correction-submitter
+        claims: *submitter_claims
+        request: {operation: get, recordRef: asset}
+        expect:
+          outcome: success
+          status: 200
+          fields: {asset-code: pump-001, label: Pump 001}
+      - id: create-correction-request
+        entity: placement-correction-request
+        accessProfile: correction-submitter
+        claims: *submitter_claims
         request:
           operation: create
           data: {placement: {recordRef: placement}, proposed-site: {recordRef: corrected-site}, reason: site correction after field audit}
@@ -67,6 +88,12 @@ journeys:
           status: 201
           fields: {reason: site correction after field audit}
         capture: correction-request
+      - id: submitter-lists-own-requests
+        entity: placement-correction-request
+        accessProfile: correction-submitter
+        claims: *submitter_claims
+        request: {operation: list}
+        expect: {outcome: success, status: 200, count: 1}
       - id: edit-correction-request
         entity: placement-correction-request
         accessProfile: correction-submitter

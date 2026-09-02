@@ -8,7 +8,7 @@
       "file": "products/registry-server/generated/authoring/registry-project.schema.json",
       "status": "beta",
       "reference": "docs/site/src/content/docs/configure/registry-server.mdx",
-      "field_count": 427,
+      "field_count": 428,
       "fields": [
         {
           "key_path": "accessProfiles",
@@ -721,6 +721,23 @@
           "conditional_constraints": [],
           "description": null,
           "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "accessProfiles[].grants[].requestVisibility",
+          "kind": "property",
+          "type": "null | string",
+          "required": "conditional",
+          "values": [
+            "owner"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": "Expose only requests created by the current authenticated principal.",
+          "defaults": [
+            "null"
+          ],
           "runtime_validation": null
         },
         {

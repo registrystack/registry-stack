@@ -88,6 +88,74 @@ async fn real_postgres_workspace_metadata_marks_request_lifecycle_without_direct
             ["mutationSemantics"],
         "direct"
     );
+    let placement_list = operation(&submitter, "records.asset-placement.list");
+    assert_eq!(placement_list["accessProfile"], "correction-submitter");
+    assert_eq!(
+        placement_list["readableFields"],
+        json!(["asset", "valid-from", "valid-to"])
+    );
+    assert_eq!(placement_list["titleFields"], json!([]));
+    let asset_get = operation(&submitter, "records.asset-item.get");
+    assert_eq!(asset_get["accessProfile"], "correction-submitter");
+    assert_eq!(asset_get["readableFields"], json!(["asset-code", "label"]));
+    assert_eq!(asset_get["titleFields"], json!(["asset-code"]));
+    let asset_reference = &placement_list["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|field| field["id"] == "asset")
+        .unwrap()["reference"];
+    assert_eq!(asset_reference["targetEntity"], "asset-item");
+    assert_eq!(
+        asset_reference["operations"],
+        json!([{
+            "accessProfile": "correction-submitter",
+            "labelFields": ["asset-code"],
+            "operationId": "records.asset-item.get"
+        }])
+    );
+    let site_list = operation(&submitter, "records.asset-site.list");
+    assert_eq!(site_list["accessProfile"], "correction-submitter");
+    assert_eq!(site_list["readableFields"], json!(["site-code"]));
+    assert_eq!(site_list["titleFields"], json!(["site-code"]));
+
+    let create = operation(&submitter, "records.placement-correction-request.create");
+    for (field_id, target_entity, target_operation, label_fields) in [
+        (
+            "placement",
+            "asset-placement",
+            "records.asset-placement.list",
+            json!([]),
+        ),
+        (
+            "proposed-site",
+            "asset-site",
+            "records.asset-site.list",
+            json!(["site-code"]),
+        ),
+    ] {
+        let reference = &create["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|field| field["id"] == field_id)
+            .unwrap()["reference"];
+        assert_eq!(reference["targetEntity"], target_entity);
+        assert_eq!(reference["manualEntry"], true);
+        let binding = reference["operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|binding| binding["operationId"] == target_operation)
+            .expect("ordinary list reference binding");
+        assert_eq!(binding["accessProfile"], "correction-submitter");
+        assert_eq!(binding["labelFields"], label_fields);
+        assert!(reference["operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|binding| binding["accessProfile"] == "correction-submitter"));
+    }
     for operation_id in [
         "records.placement-correction-request.request.submit",
         "records.placement-correction-request.request.revise",

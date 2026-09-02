@@ -767,7 +767,7 @@ class DemoProvisioningTests(unittest.TestCase):
         credentials = (self.root / "schema-test-credentials.yaml").read_text(
             encoding="utf-8"
         )
-        self.assertEqual(credentials.count("journeyId: placement-correction-request-flow"), 14)
+        self.assertEqual(credentials.count("journeyId: placement-correction-request-flow"), 18)
         for token_name in (
             "operator-token",
             "submitter-token",

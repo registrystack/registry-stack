@@ -1211,7 +1211,11 @@ bindings:
   - {journeyId: placement-correction-request-flow, stepId: create-original-site, credential: {type: bearer, tokenRef: secret:file/operator-token}}
   - {journeyId: placement-correction-request-flow, stepId: create-corrected-site, credential: {type: bearer, tokenRef: secret:file/operator-token}}
   - {journeyId: placement-correction-request-flow, stepId: create-placement, credential: {type: bearer, tokenRef: secret:file/operator-token}}
+  - {journeyId: placement-correction-request-flow, stepId: submitter-lists-placement-options, credential: {type: bearer, tokenRef: secret:file/submitter-token}}
+  - {journeyId: placement-correction-request-flow, stepId: submitter-lists-site-options, credential: {type: bearer, tokenRef: secret:file/submitter-token}}
+  - {journeyId: placement-correction-request-flow, stepId: submitter-reads-placement-asset-label, credential: {type: bearer, tokenRef: secret:file/submitter-token}}
   - {journeyId: placement-correction-request-flow, stepId: create-correction-request, credential: {type: bearer, tokenRef: secret:file/submitter-token}}
+  - {journeyId: placement-correction-request-flow, stepId: submitter-lists-own-requests, credential: {type: bearer, tokenRef: secret:file/submitter-token}}
   - {journeyId: placement-correction-request-flow, stepId: edit-correction-request, credential: {type: bearer, tokenRef: secret:file/submitter-token}}
   - {journeyId: placement-correction-request-flow, stepId: get-before-submit, credential: {type: bearer, tokenRef: secret:file/submitter-token}}
   - {journeyId: placement-correction-request-flow, stepId: submit-correction-request, credential: {type: bearer, tokenRef: secret:file/submitter-token}}

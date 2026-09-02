@@ -928,9 +928,12 @@ fn policies(
                         String::new()
                     };
                     let lifecycle_expression = request_get_lifecycle_expression(entity, profile);
+                    let visibility_guard = request_visibility_expression(entity, profile)
+                        .map(|expression| format!(" AND ({expression})"))
+                        .unwrap_or_default();
                     (
                         Some(format!(
-                            "({authority}) AND ({lifecycle_expression}){action_context_guard}"
+                            "({authority}) AND ({lifecycle_expression}){visibility_guard}{action_context_guard}"
                         )),
                         None,
                     )
@@ -961,7 +964,8 @@ fn policies(
             });
         }
         if profile.operations.contains(&Operation::Create)
-            && !profile_supports_command(&profile.operations, PolicyCommand::Select)
+            && (!profile_supports_command(&profile.operations, PolicyCommand::Select)
+                || profile.request_visibility.is_some())
         {
             let authority = policy_authority_expression(entity, profile);
             policies.push(DdlPolicy {
@@ -1007,6 +1011,28 @@ fn request_get_lifecycle_expression(
         )
     } else {
         "record_lifecycle = 'active'".to_owned()
+    }
+}
+
+fn request_visibility_expression(
+    entity: &CompiledEntity,
+    profile: &crate::contract::AccessProfileSource,
+) -> Option<String> {
+    if entity.change_request.is_some()
+        && profile.request_visibility == Some(crate::contract::RequestVisibilitySource::Owner)
+    {
+        Some(format!(
+            "EXISTS (
+                SELECT 1
+                  FROM registry_internal.registry_request_state AS cr_visibility
+                 WHERE cr_visibility.request_entity_id = {}
+                   AND cr_visibility.request_id = record_id
+                   AND cr_visibility.owner_reference = NULLIF(current_setting('registry.request_owner_reference', true), '')
+            )",
+            quote_literal(&entity.id)
+        ))
+    } else {
+        None
     }
 }
 

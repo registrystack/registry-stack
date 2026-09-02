@@ -1489,6 +1489,17 @@
           },
           "type": "array"
         },
+        "requestVisibility": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RequestVisibilitySource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "reviewStages": {
           "default": [],
           "items": {
@@ -2894,6 +2905,15 @@
         "requestType"
       ],
       "type": "object"
+    },
+    "RequestVisibilitySource": {
+      "oneOf": [
+        {
+          "const": "owner",
+          "description": "Expose only requests created by the current authenticated principal.",
+          "type": "string"
+        }
+      ]
     },
     "ReviewStageGrantSource": {
       "additionalProperties": false,

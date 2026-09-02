@@ -1280,6 +1280,14 @@ impl MutationCoordinator {
         )
         .await
         .map_err(|_| MutationError::Unavailable)?;
+        install_request_visibility_context(
+            transaction.transaction(),
+            &request.plan.entity,
+            request.claims,
+            &self.audit_profile,
+            &self.expected.database_id,
+        )
+        .await?;
 
         if let Some(stored) = lock_and_load(transaction.transaction(), &binding).await? {
             if !matches!(&stored.metadata, StoredResultMetadata::Record { .. }) {
@@ -3050,6 +3058,33 @@ pub(crate) fn request_actor_reference(
         .key_hasher()
         .audit_reference_hash("registry-server-request-actor-v1", database_id, principal)
         .map_err(|_| MutationError::Unavailable)
+}
+
+pub(crate) async fn install_request_visibility_context(
+    transaction: &Transaction<'_>,
+    entity: &CompiledEntity,
+    claims: &ClaimContext,
+    audit_profile: &AuditProfile,
+    database_id: &str,
+) -> Result<(), MutationError> {
+    let profile = entity
+        .access_profiles
+        .get(claims.access_profile())
+        .ok_or(MutationError::Unavailable)?;
+    if entity.change_request.is_none()
+        || profile.request_visibility != Some(crate::contract::RequestVisibilitySource::Owner)
+    {
+        return Ok(());
+    }
+    let owner_reference = request_actor_reference(audit_profile, database_id, claims)?;
+    transaction
+        .execute(
+            "SELECT set_config('registry.request_owner_reference', $1, true)",
+            &[&owner_reference],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    Ok(())
 }
 
 fn sql_value(value: &Value, field_type: &FieldTypeSource) -> Result<Option<String>, MutationError> {
