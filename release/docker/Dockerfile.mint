@@ -2,7 +2,7 @@
 
 ARG SOURCE_DATE_EPOCH=0
 
-FROM debian:trixie-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258 AS runtime-root
+FROM debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 AS runtime-root
 ARG SOURCE_DATE_EPOCH
 
 RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \
@@ -18,7 +18,7 @@ RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \
     && chmod 0700 /workspace/runtime-root/var/lib/registry-mint/audit \
     && find /workspace/runtime-root -exec touch -h --date="@${SOURCE_DATE_EPOCH}" {} +
 
-FROM gcr.io/distroless/cc-debian13:nonroot@sha256:d97bc0a941b8d4be647dc0ee75b264ddbb772f1ac5ba690a4309c00723b23775 AS runtime
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:c31ff9abcb1910f3ab25c7957bdaf0bfe12a01eb546e8df2282f1c8f682b606c AS runtime
 
 LABEL org.registrystack.runtime.uid="65532" \
       org.registrystack.runtime.gid="65532"
