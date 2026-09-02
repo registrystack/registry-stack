@@ -137,7 +137,7 @@ rand_chacha = { version = "0.9" }
 rand_core = { version = "0.6", features = ["std"] }
 rcgen = { version = "0.13", default-features = false, features = ["ring", "zeroize"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "rustls-tls-native-roots"] }
-rhai = { version = "=1.25.1", features = ["sync", "serde"] }
+rhai = { version = "=1.26.0", features = ["sync", "serde"] }
 # `bundled` vendors the SQLite amalgamation, so a statement source needs no
 # system library. `hooks` carries the authorizer and the progress handler, which
 # are the statement source's safety boundary and its only real cancellation.
