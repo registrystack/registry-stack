@@ -88,6 +88,7 @@ POSTGRES_TEST_COMMANDS = (
     "cargo test --locked -p registry-server --features postgres-test --test postgres_spatial_storage",
     "cargo test --locked -p registry-server --features postgres-test --test postgres_spatial_read",
     "cargo test --locked -p registry-server --features postgres-test --test postgres_revision_http",
+    "cargo test --locked -p registry-server --features postgres-test --test postgres_anonymous_refusals",
     "cargo test --locked -p registry-server --features postgres-test --test postgres_history_commit",
     "cargo test --locked -p registry-server --features postgres-test --test postgres_historical",
     "cargo test --locked -p registry-server --features postgres-test,tooling --test postgres_history_migration",
