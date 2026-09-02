@@ -71,7 +71,8 @@ const RELAY_SEMANTIC_CLASS: &str = "https://business.example.invalid/vocabulary/
 const EVIDENCE_PROFILE: &str = "https://registrystack.org/evidence/profile/v1";
 const EVIDENCE_SIGNED_JWS_PROFILE: &str =
     "https://registrystack.org/evidence/profile/v1/audience-scoped/signed-jws";
-const RELAY_PROFILE: &str = "https://registrystack.org/relay/profile/v2";
+const REGISTRY_RECORD_PROFILE: &str = "https://id.registrystack.org/profiles/registry-record/v1";
+const RELAY_PROFILE: &str = "https://registrystack.org/relay/profile/v3";
 const RELAY_LIST_FAMILY: &str =
     "https://registrystack.org/discovery/operation-family/relay-v2/consultation-list";
 const CONFIGURATION_REVISION: &str =
@@ -359,7 +360,6 @@ fn relay_response(state: ProviderState, request: Request<Body>) -> Response<Body
     );
     let body = serde_json::to_vec(&json!({
         "items": [{
-            "registryIdentifier": "business-registry",
             "recordIdentifier": "BIZ-SYNTH-0001",
             "revisionIdentifier": "revision-1",
             "lifecycleState": "active",
@@ -371,6 +371,9 @@ fn relay_response(state: ProviderState, request: Request<Body>) -> Response<Body
         }],
         "pageInfo": {"nextCursor": null},
         "meta": {
+            "registryIdentifier": "urn:example:registry:registered-businesses",
+            "datasetIdentifier": "legal-entities",
+            "entityTypeIdentifier": "company",
             "operationIdentifier": "registered-business-list",
             "accessProfile": "public",
             "family": "consultation",
@@ -919,7 +922,7 @@ async fn complete_evidence_and_relay_journeys_build_select_trust_and_invoke_nati
         service_id: RELAY_SERVICE,
         endpoint_url: format!("{}/relay/", provider.base_url),
         authority_id: RELAY_AUTHORITY,
-        conforms_to: vec![RELAY_PROFILE.into()],
+        conforms_to: vec![REGISTRY_RECORD_PROFILE.into(), RELAY_PROFILE.into()],
         evidence_type_ids: Vec::new(),
         semantic_class_ids: vec![RELAY_SEMANTIC_CLASS.into()],
         operation_family_ids: vec![RELAY_LIST_FAMILY.into()],
