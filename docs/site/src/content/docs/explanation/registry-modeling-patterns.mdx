@@ -16,6 +16,7 @@ They describe common record structures and the choices you need to make before c
 The YAML examples use Server's current configuration syntax, but are fragments, not installable
 modules or complete projects. Merge their list entries into your own configuration.
 References assume you have defined the target entities and created the referenced records.
+Each fragment names a `primaryDataset`; replace it with a dataset your project declares.
 
 The HTTP examples use those configured routes and field names. Each response is illustrative
 JSON with synthetic records, not a captured server response; it doubles as a sample record.
@@ -24,7 +25,7 @@ Requests omit the deployment's host and bearer token. The
 [example reader profile](#access-for-the-example-queries) supplies the required read permissions;
 selecting its name does not authenticate a caller. Creation and correction need separate write grants.
 
-{/* Evidence: crates/registry-server/src/artifacts.rs, record_response_schema() and list_response_schema();
+{/* Evidence: crates/registry-server/src/artifacts.rs, single_response_schema() and list_response_schema();
     crates/registry-server/src/api/mod.rs, read_dispatch();
     crates/registry-server/src/contract.rs, AccessProfileSource. */}
 
@@ -88,6 +89,7 @@ including its jurisdiction. The unique key prevents reuse even after a replaceme
 entities:
   - id: business-identifier
     route: business-identifiers
+    primaryDataset: business-registry
     mutationMode: create_only
     fields:
       - id: holder
@@ -108,7 +110,6 @@ entities:
       - id: replaces
         type: reference
         target: business-identifier
-        required: false
         classification: internal
     constraints:
       - kind: unique
@@ -126,15 +127,18 @@ Illustrative response:
 ```json
 {
   "items": [{
-    "id": "11111111-1111-4111-8111-111111111111",
-    "revision": 1,
     "data": {
-      "holder": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-      "namespace": "region-a:business",
-      "value": "0017"
+      "recordIdentifier": "11111111-1111-4111-8111-111111111111",
+      "revisionIdentifier": "1",
+      "domainData": {
+        "holder": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "namespace": "region-a:business",
+        "value": "0017"
+      }
     }
   }],
-  "pageInfo": {"nextCursor": null}
+  "pageInfo": {"nextCursor": null},
+  "meta": {"registryIdentifier": "business-registry", "datasetIdentifier": "business-registry", "entityTypeIdentifier": "business-identifier"}
 }
 ```
 
@@ -160,11 +164,12 @@ were allowed at the same time? These are distinct possible policies:
 - A facility has several operators at the same time.
 - A facility has several operators, but one designated primary operator at a time.
 
-Choose the policy before configuring temporal constraints. In Server's temporal configuration,
-`scopeFields` names the tuple within which intervals cannot overlap, and the temporal declaration
-requires a matching non-overlap constraint. Treat that tuple as a business rule, not a label for
-any record that happens to have dates. A role or primary flag alone does not enforce conditional
-exclusivity.
+Choose the policy before configuring temporal constraints. A `temporal` declaration names the
+start and end fields and adds the `:current` and `:as-of` routes; on its own it allows overlapping
+intervals. Exclusivity is a separate `temporal-non-overlap` constraint whose `scopeFields` name
+the tuple within which intervals cannot overlap. Treat that tuple as a business rule, not a label
+for any record that happens to have dates. A role or primary flag alone does not enforce
+conditional exclusivity.
 
 {/* Evidence: crates/registry-server/src/contract.rs, TemporalSource and ConstraintSource;
     crates/registry-server/src/compiler.rs, validate_constraints();
@@ -194,6 +199,7 @@ operator assignments for one establishment, while allowing one business to opera
 entities:
   - id: operator-assignment
     route: operator-assignments
+    primaryDataset: business-registry
     mutationMode: mutable
     fields:
       - id: establishment
@@ -212,12 +218,10 @@ entities:
         classification: internal
       - id: valid-to
         type: date
-        required: false
         classification: internal
     temporal:
       startField: valid-from
       endField: valid-to
-      scopeFields: [establishment]
     constraints:
       - kind: temporal-non-overlap
         scopeFields: [establishment]
@@ -237,16 +241,19 @@ Illustrative response:
 ```json
 {
   "items": [{
-    "id": "22222222-2222-4222-8222-222222222222",
-    "revision": 1,
     "data": {
-      "establishment": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-      "business": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
-      "validFrom": "2026-06-01",
-      "validTo": "2026-07-01"
+      "recordIdentifier": "22222222-2222-4222-8222-222222222222",
+      "revisionIdentifier": "1",
+      "domainData": {
+        "establishment": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "business": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "validFrom": "2026-06-01",
+        "validTo": "2026-07-01"
+      }
     }
   }],
-  "pageInfo": {"nextCursor": null}
+  "pageInfo": {"nextCursor": null},
+  "meta": {"registryIdentifier": "business-registry", "datasetIdentifier": "business-registry", "entityTypeIdentifier": "operator-assignment"}
 }
 ```
 
@@ -255,7 +262,7 @@ A successor starting July 1 is allowed because the end date is exclusive. If the
 incorrectly, correct the original assignment rather than inventing a transfer on today's date.
 A permitted patch needs the current record's `If-Match` value and an `Idempotency-Key`.
 
-{/* Evidence: crates/registry-server/src/query.rs, QueryOptions;
+{/* Evidence: crates/registry-server/src/query.rs, ReadQueryOptions;
     crates/registry-server/src/artifacts.rs;
     crates/registry-server/src/generated_ddl.rs;
     crates/registry-server/src/api/mod.rs, patch_dispatch(). */}
@@ -302,6 +309,7 @@ the decimal quantity is a JSON string, so `"1200.00"` retains its decimal repres
 entities:
   - id: discharge-declaration
     route: discharge-declarations
+    primaryDataset: facility-registry
     mutationMode: create_only
     fields:
       - id: facility
@@ -338,7 +346,6 @@ entities:
       - id: correction-of
         type: reference
         target: discharge-declaration
-        required: false
         classification: internal
 vocabularies:
   - id: discharge-mass-unit
@@ -357,18 +364,21 @@ Illustrative response before a correction:
 ```json
 {
   "items": [{
-    "id": "33333333-3333-4333-8333-333333333333",
-    "revision": 1,
     "data": {
-      "facility": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
-      "reportingPeriod": "2026-06",
-      "substance": "nitrogen",
-      "reporter": "facility-operator-17",
-      "quantity": "1200.00",
-      "unit": "kg"
+      "recordIdentifier": "33333333-3333-4333-8333-333333333333",
+      "revisionIdentifier": "1",
+      "domainData": {
+        "facility": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        "reportingPeriod": "2026-06",
+        "substance": "nitrogen",
+        "reporter": "facility-operator-17",
+        "quantity": "1200.00",
+        "unit": "kg"
+      }
     }
   }],
-  "pageInfo": {"nextCursor": null}
+  "pageInfo": {"nextCursor": null},
+  "meta": {"registryIdentifier": "facility-registry", "datasetIdentifier": "facility-registry", "entityTypeIdentifier": "discharge-declaration"}
 }
 ```
 
@@ -425,6 +435,7 @@ The unique key includes the mapping version so reprocessing can preserve an earl
 entities:
   - id: facility-source-contribution
     route: facility-sources
+    primaryDataset: facility-registry
     mutationMode: create_only
     fields:
       - id: facility
@@ -472,17 +483,20 @@ Illustrative response:
 ```json
 {
   "items": [{
-    "id": "44444444-4444-4444-8444-444444444444",
-    "revision": 1,
     "data": {
-      "facility": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-      "sourceSystem": "inventory-a",
-      "sourceRecordId": "0042",
-      "sourceVersion": "7",
-      "mappingVersion": "inventory-map-2"
+      "recordIdentifier": "44444444-4444-4444-8444-444444444444",
+      "revisionIdentifier": "1",
+      "domainData": {
+        "facility": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "sourceSystem": "inventory-a",
+        "sourceRecordId": "0042",
+        "sourceVersion": "7",
+        "mappingVersion": "inventory-map-2"
+      }
     }
   }],
-  "pageInfo": {"nextCursor": null}
+  "pageInfo": {"nextCursor": null},
+  "meta": {"registryIdentifier": "facility-registry", "datasetIdentifier": "facility-registry", "entityTypeIdentifier": "facility-source-contribution"}
 }
 ```
 
@@ -520,6 +534,7 @@ must guarantee that an object version resolves to immutable bytes.
 entities:
   - id: inspection-document
     route: inspection-documents
+    primaryDataset: inspection-registry
     mutationMode: create_only
     fields:
       - id: inspection
@@ -550,7 +565,6 @@ entities:
       - id: replaces
         type: reference
         target: inspection-document
-        required: false
         classification: internal
 ```
 
@@ -567,17 +581,20 @@ Illustrative response:
 ```json
 {
   "items": [{
-    "id": "55555555-5555-4555-8555-555555555555",
-    "revision": 1,
     "data": {
-      "inspection": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
-      "objectKey": "inspections/inspection-17/report.pdf",
-      "objectVersion": "v3",
-      "mediaType": "application/pdf",
-      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      "recordIdentifier": "55555555-5555-4555-8555-555555555555",
+      "revisionIdentifier": "1",
+      "domainData": {
+        "inspection": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+        "objectKey": "inspections/inspection-17/report.pdf",
+        "objectVersion": "v3",
+        "mediaType": "application/pdf",
+        "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      }
     }
   }],
-  "pageInfo": {"nextCursor": null}
+  "pageInfo": {"nextCursor": null},
+  "meta": {"registryIdentifier": "inspection-registry", "datasetIdentifier": "inspection-registry", "entityTypeIdentifier": "inspection-document"}
 }
 ```
 
@@ -732,6 +749,7 @@ accessProfiles:
 
 ## Next
 
-- [Configure your registry](../../configure/registry-server/) to express your model and permissions.
+- [Author a registry project](../../configure/registry-server/) to express your model and permissions.
+- [Registry Server API](../../reference/registry-server-api/) for the record envelope and query options.
 - [Configuration reference](../../reference/registry-server-configuration/) for the authoring fields.
 - [Create and query your first registry](../../tutorials/first-registry-server/) for a runnable project.
