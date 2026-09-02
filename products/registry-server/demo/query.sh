@@ -34,7 +34,7 @@ if [[ ! -d "$run_dir" || -L "$run_dir" ]]; then
 fi
 
 case "$fixture_kind:$suite" in
-  business-establishments:all|business-establishments:operator|business-establishments:viewer|household:all|household:operator|household:viewer|asset-site:all|asset-site:operator|asset-site:planner|asset-change-request:all|asset-change-request:submitter|asset-change-request:reviewer|asset-change-request:supervisor|asset-change-request:applier|facility:all|facility:operator|inspection:all|inspection:inspector) ;;
+  business-establishments:all|business-establishments:operator|business-establishments:viewer|household:all|household:operator|household:viewer|asset-site:all|asset-site:operator|asset-site:planner|asset-change-request:all|asset-change-request:planner|asset-change-request:submitter|asset-change-request:reviewer|asset-change-request:supervisor|asset-change-request:applier|facility:all|facility:operator|inspection:all|inspection:inspector) ;;
   *)
     printf '%s\n' 'the selected query suite is not available for that fixture.' >&2
     exit 2

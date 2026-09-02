@@ -73,6 +73,7 @@ The corresponding query helper uses the same fixture choice:
 ```bash
 products/registry-server/demo/query.sh --fixture facility operator
 products/registry-server/demo/query.sh --fixture inspection inspector
+products/registry-server/demo/query.sh --fixture asset-change-request planner
 products/registry-server/demo/query.sh --fixture asset-change-request submitter
 ```
 
@@ -80,9 +81,11 @@ products/registry-server/demo/query.sh --fixture asset-change-request submitter
 `asset-site-placement-change-requests` acceptance project. It creates an asset,
 an original and corrected site, the current placement, and one draft placement
 correction request through the authenticated API. Its owner-only handoff exposes
-four separate Workspace personas in the required order: submitter, reviewer,
-supervisor, and applier. It contains an inert deep link to the synthetic request,
-but no bearer token or lifecycle authority. Each actor must still obtain its
+five Workspace personas: the four lifecycle actors plus a site planner that can
+browse assets, sites, and placements through the existing disclosure-limited
+profile. The walkthrough order remains submitter, reviewer, supervisor, then
+applier. The handoff contains an inert deep link to the synthetic request, but
+no bearer token or lifecycle authority. Each actor must still obtain its
 currently permitted action from a fresh request GET.
 
 Generate a handoff for another local client with:

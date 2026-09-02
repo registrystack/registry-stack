@@ -258,7 +258,7 @@ if [[ "$fixture_kind" == asset-site ]]; then
     --private-out "$run_dir/keys/planner-no-purpose/signing-p256-private-jwk" \
     --public-out "$run_dir/keys/planner-no-purpose-public.jwk.json"
 elif [[ "$fixture_kind" == asset-change-request ]]; then
-  for persona in submitter reviewer supervisor applier; do
+  for persona in planner submitter reviewer supervisor applier; do
     uv run --quiet "$mint_key_material" p256 \
       --private-out "$run_dir/keys/$persona/signing-p256-private-jwk" \
       --public-out "$run_dir/keys/$persona-public.jwk.json"
@@ -430,7 +430,7 @@ elif [[ "$fixture_kind" == asset-change-request ]]; then
     --client-id asset-change-demo-operator \
     --key "$run_dir/keys/operator/signing-p256-private-jwk" |
     python3 "$support" store-token --out "$run_dir/secrets/operator-token"
-  for persona in submitter reviewer supervisor applier; do
+  for persona in planner submitter reviewer supervisor applier; do
     "$mint" token \
       --url "http://127.0.0.1:${mint_port}/token" \
       --client-id "asset-change-demo-$persona" \

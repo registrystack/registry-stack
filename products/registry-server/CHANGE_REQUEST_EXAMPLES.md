@@ -25,11 +25,13 @@ products/registry-server/demo/run.sh --fixture asset-change-request \
 ```
 
 The demo seeds one draft correction from North Yard to South Yard. The handoff
-contains separate submitter, reviewer, supervisor, and applier token-file paths,
-plus an inert request-record path. It contains no token bytes and grants no
-action by itself. A client must fetch caller-filtered metadata and the request
-record after every persona change, then use only the action currently advertised
-in `data.request.actions[]`.
+contains separate submitter, reviewer, supervisor, applier, and site-planner
+token-file paths, plus an inert request-record path. The site planner can browse
+the supporting asset, site, and placement collections but is not part of the
+lifecycle sequence. The handoff contains no token bytes and grants no action by
+itself. A client must fetch caller-filtered metadata and the request record after
+every persona change, then use only the action currently advertised in
+`data.request.actions[]`.
 
 Registry Workspace can attach to the generated handoff, or launch this mode
 itself with its documented `asset-change-request` demo command. The interactive

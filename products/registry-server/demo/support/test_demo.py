@@ -711,7 +711,7 @@ class DemoProvisioningTests(unittest.TestCase):
         self.assertEqual(journeys.count("scopes: [registry:facility:operate]"), 2)
 
     def test_prepare_asset_change_request_writes_exact_lifecycle_clients_and_credentials(self) -> None:
-        for name in ("submitter", "reviewer", "supervisor", "applier"):
+        for name in ("planner", "submitter", "reviewer", "supervisor", "applier"):
             (self.root / f"keys/{name}-public.jwk.json").write_text(
                 json.dumps(public_jwk(f"{name}-key")), encoding="utf-8"
             )
@@ -732,16 +732,18 @@ class DemoProvisioningTests(unittest.TestCase):
         self.assertIn(f"sourceRevision: {DEMO.ASSET_CHANGE_SOURCE_REVISION}", project)
         self.assertNotIn("asset-site-placement-change-requests-acceptance", project)
         self.assertIn("requiredScopes: [registry:asset:operate]", project)
+        self.assertIn("requiredScopes: [registry:asset:plan]", project)
         journeys = (self.root / "project/tests/journeys.yaml").read_text(encoding="utf-8")
         self.assertIn("scopes: [registry:asset:operate]", journeys)
 
         runtime = (self.root / "runtime-test.yaml").read_text(encoding="utf-8")
         self.assertIn(f"audience: {DEMO.ASSET_CHANGE_AUDIENCE}", runtime)
         self.assertIn(
-            "allowedClients: [asset-change-demo-operator, asset-change-demo-submitter, asset-change-demo-reviewer, asset-change-demo-supervisor, asset-change-demo-applier]",
+            "allowedClients: [asset-change-demo-operator, asset-change-demo-planner, asset-change-demo-submitter, asset-change-demo-reviewer, asset-change-demo-supervisor, asset-change-demo-applier]",
             runtime,
         )
         expected = {
+            "planner": ("registry:asset:plan", "site-planning"),
             "submitter": ("registry:corrections:submit", "asset-correction"),
             "reviewer": ("registry:corrections:review", "asset-correction-review"),
             "supervisor": ("registry:corrections:supervise", "asset-correction-review"),
@@ -752,7 +754,10 @@ class DemoProvisioningTests(unittest.TestCase):
                 self.root / f"mint/clients/asset-change-demo-{persona}.yaml"
             ).read_text(encoding="utf-8")
             self.assertIn(f'scopes: ["{scope}"]', client)
-            self.assertIn(f'registry_principal: "correction-{persona}"', client)
+            expected_principal = (
+                "synthetic-site-planner" if persona == "planner" else f"correction-{persona}"
+            )
+            self.assertIn(f'registry_principal: "{expected_principal}"', client)
             self.assertIn(f'registry_purpose: "{purpose}"', client)
         operator = (
             self.root / "mint/clients/asset-change-demo-operator.yaml"
@@ -971,6 +976,52 @@ class DemoProvisioningTests(unittest.TestCase):
         )
         self.assertIn("PLACEMENT-CORRECTION", seed_ids["changeRequests"])
 
+    def test_asset_change_request_planner_lists_context_without_operator_only_fields(self) -> None:
+        request_id = str(uuid.uuid4())
+        (self.root / "seed-record-ids.json").write_text(
+            json.dumps({"changeRequests": {"PLACEMENT-CORRECTION": request_id}}),
+            encoding="utf-8",
+        )
+        calls: list[tuple[str, str, str]] = []
+
+        def request(
+            root: Path,
+            method: str,
+            path: str,
+            token_name: str,
+            body: dict[str, object] | None = None,
+            idempotency_key: str | None = None,
+            expected: int = 200,
+        ) -> tuple[dict[str, object], dict[str, str]]:
+            calls.append((method, path, token_name))
+            return profiled_collection([{"label": "visible"}]), {}
+
+        with mock.patch.object(DEMO, "_request", side_effect=request), mock.patch(
+            "builtins.print"
+        ):
+            DEMO.query_asset_change_request(self.root, "planner")
+
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "GET",
+                    "/v1/records/assets?accessProfile=site-planner&$top=20",
+                    "planner-token",
+                ),
+                (
+                    "GET",
+                    "/v1/records/sites?accessProfile=site-planner&$top=20",
+                    "planner-token",
+                ),
+                (
+                    "GET",
+                    "/v1/records/placements?accessProfile=site-planner&$top=20",
+                    "planner-token",
+                ),
+            ],
+        )
+
     def test_seed_inspection_uses_normal_api_routes_and_create_only_records(self) -> None:
         created_ids = {
             "/v1/records/authorities": [str(uuid.uuid4())],
@@ -1096,7 +1147,7 @@ class DemoProvisioningTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
-        for name in ("submitter", "reviewer", "supervisor", "applier"):
+        for name in ("planner", "submitter", "reviewer", "supervisor", "applier"):
             path = self.root / f"secrets/{name}-token"
             path.write_text(compact_jwt(1798761600), encoding="ascii")
             path.chmod(0o600)
@@ -1112,6 +1163,7 @@ class DemoProvisioningTests(unittest.TestCase):
                 "correction-reviewer",
                 "correction-supervisor",
                 "correction-applier",
+                "site-planner",
             ],
         )
         self.assertEqual(

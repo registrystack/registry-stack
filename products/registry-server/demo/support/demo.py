@@ -52,6 +52,7 @@ ASSET_CHANGE_INSTANCE_ID = "asset-site-placement-change-requests-local"
 ASSET_CHANGE_SOURCE_REVISION = "asset-site-placement-change-requests-local-0.1.0"
 ASSET_CHANGE_AUDIENCE = "urn:registry-server:asset-change-request-demo"
 ASSET_CHANGE_OPERATOR_CLIENT = "asset-change-demo-operator"
+ASSET_CHANGE_PLANNER_CLIENT = "asset-change-demo-planner"
 ASSET_CHANGE_SUBMITTER_CLIENT = "asset-change-demo-submitter"
 ASSET_CHANGE_REVIEWER_CLIENT = "asset-change-demo-reviewer"
 ASSET_CHANGE_SUPERVISOR_CLIENT = "asset-change-demo-supervisor"
@@ -248,6 +249,7 @@ FIXTURE_CONFIGS: dict[str, dict[str, Any]] = {
         "replacements": ASSET_CHANGE_PROJECT_REPLACEMENTS,
         "allowed_clients": [
             ASSET_CHANGE_OPERATOR_CLIENT,
+            ASSET_CHANGE_PLANNER_CLIENT,
             ASSET_CHANGE_SUBMITTER_CLIENT,
             ASSET_CHANGE_REVIEWER_CLIENT,
             ASSET_CHANGE_SUPERVISOR_CLIENT,
@@ -278,6 +280,18 @@ FIXTURE_CONFIGS: dict[str, dict[str, Any]] = {
                 "token_name": "applier-token",
                 "access_profile": "correction-applier",
             },
+            {
+                "id": "site-planner",
+                "label": "Site planner",
+                "token_name": "planner-token",
+                "access_profile": "site-planner",
+            },
+        ],
+        "walkthrough_persona_order": [
+            "correction-submitter",
+            "correction-reviewer",
+            "correction-supervisor",
+            "correction-applier",
         ],
     },
     "facility": {
@@ -516,6 +530,13 @@ def _local_project(
             "  - id: asset-operator\n    default: true\n    principalClaim: registry_principal\n"
             f"    requiredScopes: [{ASSET_OPERATOR_SCOPE}]\n    requiredPurposes:",
             "asset change-request fixture no longer has the expected asset-operator access profile",
+        )
+        source = _replace_once(
+            source,
+            "  - id: site-planner\n    principalClaim: registry_principal\n    requiredPurposes:",
+            "  - id: site-planner\n    principalClaim: registry_principal\n"
+            f"    requiredScopes: [{ASSET_PLANNER_SCOPE}]\n    requiredPurposes:",
+            "asset change-request fixture no longer has the expected site-planner access profile",
         )
         journeys_path = target / "tests/journeys.yaml"
         journeys = journeys_path.read_text(encoding="utf-8")
@@ -903,6 +924,7 @@ def prepare(
             ),
         )
     elif fixture_kind == "asset-change-request":
+        planner_public = _read_json_object(root / "keys/planner-public.jwk.json")
         submitter_public = _read_json_object(root / "keys/submitter-public.jwk.json")
         reviewer_public = _read_json_object(root / "keys/reviewer-public.jwk.json")
         supervisor_public = _read_json_object(root / "keys/supervisor-public.jwk.json")
@@ -915,6 +937,15 @@ def prepare(
                 {
                     "registry_principal": "asset-operator",
                     "registry_purpose": "asset-management",
+                },
+            ),
+            (
+                ASSET_CHANGE_PLANNER_CLIENT,
+                planner_public,
+                [ASSET_PLANNER_SCOPE],
+                {
+                    "registry_principal": "synthetic-site-planner",
+                    "registry_purpose": "site-planning",
                 },
             ),
             (
@@ -2580,6 +2611,18 @@ def query_asset_change_request(root: Path, suite: str = "all") -> None:
     ):
         raise DemoError("seed record ids do not contain the correction request")
     request_id = change_requests["PLACEMENT-CORRECTION"]
+    if suite in ("all", "planner"):
+        for label, path in (
+            ("Site planner assets", "/v1/records/assets?accessProfile=site-planner&$top=20"),
+            ("Site planner sites", "/v1/records/sites?accessProfile=site-planner&$top=20"),
+            ("Site planner placements", "/v1/records/placements?accessProfile=site-planner&$top=20"),
+        ):
+            response, _ = _request(root, "GET", path, "planner-token")
+            if "assetClass" in json.dumps(response, sort_keys=True):
+                raise DemoError("site planner response exposed the operator-only asset classification")
+            _print_query(label, response)
+    if suite == "planner":
+        return
     personas = (
         ("submitter", "Correction submitter", "correction-submitter", "submitter-token"),
         ("reviewer", "Correction reviewer", "correction-reviewer", "reviewer-token"),
@@ -2748,7 +2791,7 @@ def write_handoff(root: Path, fixture_kind: str, out: Path) -> None:
         handoff["walkthrough"] = {
             "kind": "asset-placement-correction",
             "entryPath": f"/records/placement-correction-request/{canonical_request_id}",
-            "personaOrder": [persona["id"] for persona in config["personas"]],
+            "personaOrder": config["walkthrough_persona_order"],
         }
     _write_json(out, handoff, 0o600)
 
