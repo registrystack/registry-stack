@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 
+use crate::compiler::operation_id;
 use crate::contract::{
     AccessProfileSource, AccessRequirementsSource, Classification, EntitySource, FieldTypeSource,
     Operation,
@@ -155,6 +156,22 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
             {
                 findings.push(Diagnostic::finding("access.profile.unrestricted_collection", format!("{path}.rowBoundaries"),
                     "this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access"));
+            }
+            if profile.anonymous
+                && profile.operations.contains(&Operation::List)
+                && profile.row_boundaries.is_empty()
+            {
+                findings.push(Diagnostic::finding("access.profile.anonymous_collection", format!("{path}.operations"),
+                    "`list` is granted to unauthenticated callers, so every row this profile can read is world-readable and no claim can narrow it. Confirm the whole collection is meant to be public"));
+            }
+            let write_operations = [Operation::Create, Operation::Patch]
+                .into_iter()
+                .filter(|operation| profile.operations.contains(operation))
+                .map(|operation| format!("`{}`", operation_id(operation)))
+                .collect::<Vec<_>>();
+            if !write_operations.is_empty() && profile.writable_fields.is_empty() {
+                findings.push(Diagnostic::finding("access.profile.no_writable_fields", format!("{path}.writableFields"),
+                    &format!("this profile grants {} and names no writable field, so every write naming a field is refused and a required field can never be supplied. List the fields this profile may write, or remove the write operations", write_operations.join(", "))));
             }
             if profile.operations.contains(&Operation::Patch)
                 && profile

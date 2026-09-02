@@ -2268,11 +2268,14 @@ pub fn parse_module_yaml(bytes: &[u8]) -> Result<RegistryModule, CompileFailure>
 }
 
 fn parse_json<T: DeserializeOwned>(bytes: &[u8], root: &str) -> Result<T, CompileFailure> {
-    let value = parse_json_strict(bytes).map_err(|_| {
+    let value = parse_json_strict(bytes).map_err(|error| {
         CompileFailure::from_one(Diagnostic::error(
             "source.json.invalid",
             root,
-            "the JSON source is structurally invalid",
+            &format!(
+                "the JSON source is structurally invalid: {}",
+                redact_authored_values(&error.to_string())
+            ),
         ))
     })?;
     deserialize_value(value, root)
@@ -2281,16 +2284,13 @@ fn parse_json<T: DeserializeOwned>(bytes: &[u8], root: &str) -> Result<T, Compil
 fn parse_yaml<T: DeserializeOwned>(bytes: &[u8], root: &str) -> Result<T, CompileFailure> {
     let deserializer = serde_norway::Deserializer::from_slice(bytes);
     serde_path_to_error::deserialize(deserializer).map_err(|error| {
-        let suffix = error.path().to_string();
-        let path = if suffix.is_empty() {
-            root.to_owned()
-        } else {
-            format!("{root}.{suffix}")
-        };
         CompileFailure::from_one(Diagnostic::error(
             "source.yaml.invalid",
-            path,
-            "the YAML source is structurally invalid",
+            document_path(root, &error),
+            &format!(
+                "the YAML source is structurally invalid: {}",
+                redact_authored_values(&error.inner().to_string())
+            ),
         ))
     })
 }
@@ -2301,16 +2301,95 @@ fn deserialize_value<T: DeserializeOwned>(
 ) -> Result<T, CompileFailure> {
     let deserializer = value.into_deserializer();
     serde_path_to_error::deserialize(deserializer).map_err(|error| {
-        let suffix = error.path().to_string();
-        let path = if suffix.is_empty() {
-            root.to_owned()
-        } else {
-            format!("{root}.{suffix}")
-        };
         CompileFailure::from_one(Diagnostic::error(
             "source.shape.invalid",
-            path,
-            "the source field is unknown, duplicated, missing, or has the wrong type",
+            document_path(root, &error),
+            &format!(
+                "the source field is unknown, duplicated, missing, or has the wrong type: {}",
+                redact_authored_values(&error.inner().to_string())
+            ),
         ))
     })
+}
+
+/// Join the document root with the member path `serde_path_to_error` recorded.
+pub(crate) fn document_path<E: std::fmt::Display>(
+    root: &str,
+    error: &serde_path_to_error::Error<E>,
+) -> String {
+    let suffix = error.path().to_string();
+    if suffix.is_empty() {
+        root.to_owned()
+    } else {
+        format!("{root}.{suffix}")
+    }
+}
+
+/// Keep the parts of a deserialization message an adopter needs, the member
+/// name, the closed list of alternatives, and the source location, while the
+/// authored value stays out of the diagnostic.
+///
+/// serde reports the offending value inside an `invalid type:` or
+/// `invalid value:` clause. Only the shape word that opens such a clause
+/// survives, so the message still says a string arrived where a sequence was
+/// required without repeating the string.
+pub(crate) fn redact_authored_values(message: &str) -> String {
+    const CLAUSES: [&str; 2] = ["invalid type: ", "invalid value: "];
+    let mut redacted = String::with_capacity(message.len());
+    let mut rest = message;
+    loop {
+        let Some((start, len)) = CLAUSES
+            .iter()
+            .filter_map(|clause| rest.find(clause).map(|start| (start, clause.len())))
+            .min_by_key(|(start, _)| *start)
+        else {
+            redacted.push_str(rest);
+            return redacted;
+        };
+        let opened = start + len;
+        redacted.push_str(&rest[..opened]);
+        let (shape, tail) = split_unexpected_value(&rest[opened..]);
+        redacted.push_str(shape);
+        rest = tail;
+    }
+}
+
+/// Split one serde `Unexpected` rendering into its shape word and the text that
+/// follows the clause, dropping any quoted or backticked authored value.
+fn split_unexpected_value(clause: &str) -> (&str, &str) {
+    let bytes = clause.as_bytes();
+    let mut index = 0;
+    let mut shape_end = None;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'"' => {
+                shape_end.get_or_insert(index);
+                index = skip_quoted(bytes, index, b'"');
+            }
+            b'`' => {
+                shape_end.get_or_insert(index);
+                index = skip_quoted(bytes, index, b'`');
+            }
+            b',' => break,
+            _ => index += 1,
+        }
+    }
+    let shape_end = shape_end.unwrap_or(index);
+    (clause[..shape_end].trim_end(), &clause[index..])
+}
+
+/// Return the offset just past the delimited run that opens at `open`.
+///
+/// serde renders a string value with `Debug`, so a delimiter inside the value
+/// arrives escaped and must not end the run.
+fn skip_quoted(bytes: &[u8], open: usize, delimiter: u8) -> usize {
+    let mut index = open + 1;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => index += 2,
+            byte if byte == delimiter => return index + 1,
+            _ => index += 1,
+        }
+    }
+    bytes.len()
 }

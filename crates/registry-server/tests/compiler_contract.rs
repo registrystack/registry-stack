@@ -2510,6 +2510,33 @@ fn production_refuses_incomplete_authoring_closure() {
     assert!(codes.contains(&"package.identity.required"));
     assert!(codes.contains(&"module.lock.digest_required"));
     assert!(!codes.contains(&"manifest_projection.required"));
+
+    let identity = failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "package.identity.required")
+        .expect("the missing package identity is reported");
+    for key in ["environment", "instanceId", "sequence", "sourceRevision"] {
+        assert!(
+            identity.message.contains(key),
+            "{key} is listed: {identity:?}"
+        );
+    }
+
+    let findings = compile_project(&incomplete, &asset_modules(), CompileProfile::Authoring)
+        .expect("the authoring fixture still compiles for authoring")
+        .findings()
+        .to_vec();
+    let missing = findings
+        .iter()
+        .find(|diagnostic| diagnostic.code == "package.identity.missing")
+        .expect("the absent package identity is a finding under authoring");
+    for key in ["environment", "instanceId", "sequence", "sourceRevision"] {
+        assert!(
+            missing.message.contains(key),
+            "{key} is listed: {missing:?}"
+        );
+    }
 }
 
 #[test]
@@ -3441,6 +3468,89 @@ registry:
     )
     .expect_err("duplicate YAML member is refused");
     assert_eq!(failure.diagnostics()[0].code, "source.yaml.invalid");
+    assert!(failure.diagnostics()[0].message.contains("duplicate"));
+    assert!(failure.diagnostics()[0].message.contains("kind"));
+}
+
+#[test]
+fn source_parse_diagnostics_name_the_member_the_alternatives_and_the_location() {
+    let unknown_yaml_member = parse_project_yaml(
+        br#"
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: neutral
+  version: "1"
+  defaultLanguage: en
+  canonicalBaseIri: https://authoring.example.test
+  secretField: do-not-echo
+"#,
+    )
+    .expect_err("an unknown YAML member is refused");
+    let diagnostic = &unknown_yaml_member.diagnostics()[0];
+    assert_eq!(diagnostic.code, "source.yaml.invalid");
+    assert_eq!(diagnostic.path, "project.registry.secretField");
+    assert!(diagnostic.message.contains("unknown field `secretField`"));
+    assert!(diagnostic.message.contains("expected one of"));
+    assert!(diagnostic.message.contains("canonicalBaseIri"));
+    assert!(diagnostic.message.contains("line 9"));
+    assert!(!diagnostic.message.contains("do-not-echo"));
+
+    let missing_yaml_member = parse_project_yaml(
+        br#"
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: neutral
+  defaultLanguage: en
+  canonicalBaseIri: https://authoring.example.test
+"#,
+    )
+    .expect_err("a missing YAML member is refused");
+    assert!(missing_yaml_member.diagnostics()[0]
+        .message
+        .contains("missing field `version`"));
+
+    let wrong_yaml_type = parse_project_yaml(
+        br#"
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: neutral
+  version: "1"
+  defaultLanguage: en
+  canonicalBaseIri: https://authoring.example.test
+entities: do-not-echo
+"#,
+    )
+    .expect_err("a wrongly typed YAML member is refused");
+    let diagnostic = &wrong_yaml_type.diagnostics()[0];
+    assert_eq!(diagnostic.path, "project.entities");
+    assert!(diagnostic.message.contains("invalid type: string"));
+    assert!(diagnostic.message.contains("expected a sequence"));
+    assert!(!diagnostic.message.contains("do-not-echo"));
+
+    let unknown_enum_value = parse_project_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "entities":[{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"append_only"}]
+        }"#,
+    )
+    .expect_err("an unknown enum value is refused");
+    let diagnostic = &unknown_enum_value.diagnostics()[0];
+    assert_eq!(diagnostic.code, "source.shape.invalid");
+    assert_eq!(diagnostic.path, "project.entities[0].mutationMode");
+    assert!(diagnostic.message.contains("unknown variant `append_only`"));
+    assert!(diagnostic.message.contains("create_only"));
+
+    let malformed_json =
+        parse_project_json(b"{\"apiVersion\":}").expect_err("malformed JSON is refused");
+    let diagnostic = &malformed_json.diagnostics()[0];
+    assert_eq!(diagnostic.code, "source.json.invalid");
+    assert_eq!(diagnostic.path, "project");
+    assert!(diagnostic.message.contains("line 1"));
 }
 
 #[test]
@@ -4771,11 +4881,11 @@ fn anonymous_public_surface_rejects_every_non_public_constraint_field() {
         assert_eq!(diagnostics.len(), 1, "missing exact negative for {case}");
         assert_eq!(
             diagnostics[0].message,
-            "an anonymous profile is a public surface and may process only public constraint fields"
+            format!(
+                "an anonymous profile is a public surface and may process only public constraint fields: field `{field_id}` is classified `restricted`"
+            ),
+            "the refusal names the constraint field for {case}"
         );
-        assert!(!serde_json::to_string(diagnostics[0])
-            .expect("diagnostic serializes")
-            .contains(field_id));
     }
 
     let mut authenticated = base;
@@ -5505,9 +5615,9 @@ fn anonymous_public_profile_cannot_filter_a_non_public_field() {
     assert!(failure.diagnostics().iter().any(|diagnostic| {
         diagnostic.code == "access_profile.public.processing_non_public"
             && diagnostic.path == "entities[].accessProfiles[]"
+            && diagnostic.message
+                == "anonymous profile `public-reader` may process only public fields: field `hidden-filter-canary` is classified `restricted`"
     }));
-    let rendered = serde_json::to_string(&failure).expect("diagnostics serialize");
-    assert!(!rendered.contains("hidden-filter-canary"));
 }
 
 #[test]
@@ -6809,4 +6919,129 @@ fn verified_module_digest_changes_compiled_closure_artifact_and_revision() {
             .bytes
     );
     assert_ne!(first.revision(), second.revision());
+}
+
+fn selector_project(fields: &str) -> Vec<u8> {
+    format!(
+        r#"{{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{{"id":"selector-grammar","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
+          "entities":[{{
+            "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable",
+            "fields":[
+              {{"id":"code","type":"string","maxLength":32,"classification":"internal"}},
+              {{"id":"area","type":"string","maxLength":32,"classification":"internal"}},
+              {{"id":"location","type":"crs84-point","precision":6,"classification":"internal"}}
+            ],
+            "selectorProfiles":[{{"id":"by-code","fields":{fields}}}]
+          }}],
+          "accessProfiles":[{{
+            "id":"operator","default":true,"principalClaim":"sub","grants":[{{
+              "entity":"record","operations":["get"],"readableFields":["code","area"]
+            }}]
+          }}]
+        }}"#
+    )
+    .into_bytes()
+}
+
+#[test]
+fn selector_profile_field_refusals_separate_unknown_names_from_cardinality() {
+    let failure = compile_json(&selector_project(r#"["code","missing-field"]"#))
+        .expect_err("an unknown selector field is refused");
+    let diagnostic = failure
+        .diagnostics()
+        .iter()
+        .find(|item| item.code == "selector_profile.fields.unknown")
+        .unwrap_or_else(|| panic!("the unknown selector field is named: {failure:?}"));
+    assert_eq!(diagnostic.path, "entities[].selectorProfiles[].fields");
+    assert!(
+        diagnostic.message.contains("`missing-field`"),
+        "{diagnostic:?}"
+    );
+    assert!(!diagnostic.message.contains("`code`"), "{diagnostic:?}");
+
+    let failure =
+        compile_json(&selector_project("[]")).expect_err("an empty selector profile is refused");
+    let diagnostic = failure
+        .diagnostics()
+        .iter()
+        .find(|item| item.code == "selector_profile.fields.invalid")
+        .unwrap_or_else(|| panic!("the empty selector profile is reported: {failure:?}"));
+    assert!(
+        diagnostic.message.contains("one to sixteen"),
+        "{diagnostic:?}"
+    );
+
+    let failure = compile_json(&selector_project(r#"["code","code"]"#))
+        .expect_err("a duplicated selector field is refused");
+    let diagnostic = failure
+        .diagnostics()
+        .iter()
+        .find(|item| item.code == "selector_profile.fields.duplicate")
+        .unwrap_or_else(|| panic!("the duplicated selector field is named: {failure:?}"));
+    assert!(diagnostic.message.contains("`code`"), "{diagnostic:?}");
+
+    let failure = compile_json(&selector_project(r#"["location"]"#))
+        .expect_err("a CRS84 point selector field is refused");
+    let diagnostic = failure
+        .diagnostics()
+        .iter()
+        .find(|item| item.code == "selector_profile.field_type_unsupported")
+        .unwrap_or_else(|| panic!("the unsupported selector field is named: {failure:?}"));
+    assert!(diagnostic.message.contains("`location`"), "{diagnostic:?}");
+
+    compile_json(&selector_project(r#"["code","area"]"#))
+        .expect("a selector profile over stored scalar fields compiles");
+}
+
+#[test]
+fn entity_classification_defaults_while_field_classification_stays_explicit() {
+    let compiled = compile_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"classification-defaults","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "entities":[{
+            "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable",
+            "fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"}]
+          }],
+          "accessProfiles":[{
+            "id":"operator","default":true,"principalClaim":"sub","grants":[{
+              "entity":"record","operations":["get"],"readableFields":["code"]
+            }]
+          }]
+        }"#,
+    )
+    .expect("an entity without an explicit classification compiles");
+    let entity = &compiled.entities()["record"];
+    assert_eq!(entity.classification, Classification::Internal);
+    let field = &entity.stored_fields[0];
+    assert_eq!(field.logical.classification, Classification::Internal);
+    assert!(
+        !field.required,
+        "a field without `required` is optional by default"
+    );
+
+    let failure = parse_project_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"classification-defaults","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "entities":[{
+            "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable",
+            "fields":[{"id":"code","type":"string","maxLength":32}]
+          }]
+        }"#,
+    )
+    .expect_err("a field never inherits its classification from the entity");
+    let diagnostic = &failure.diagnostics()[0];
+    assert_eq!(diagnostic.code, "source.shape.invalid");
+    assert!(
+        diagnostic
+            .message
+            .contains("missing field `classification`"),
+        "{diagnostic:?}"
+    );
 }

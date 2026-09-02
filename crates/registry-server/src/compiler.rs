@@ -247,12 +247,18 @@ fn validate_project_header(
         (None, CompileProfile::Authoring) => findings.push(Diagnostic::finding(
             "package.identity.missing",
             "project.package",
-            "production package identity has not been declared",
+            &format!(
+                "production package identity has not been declared; a production package requires {}",
+                quoted_list(&PACKAGE_IDENTITY_KEYS)
+            ),
         )),
         (None, CompileProfile::Production) => errors.push(Diagnostic::error(
             "package.identity.required",
             "project.package",
-            "production compilation requires package identity",
+            &format!(
+                "production compilation requires package identity; declare {}",
+                quoted_list(&PACKAGE_IDENTITY_KEYS)
+            ),
         )),
         (Some(package), _) => {
             validate_id(&package.environment, "project.package.environment", errors);
@@ -2340,18 +2346,19 @@ fn validate_anonymous_temporal_processing(
     {
         return;
     }
-    let processes_non_public = [&temporal.start_field, &temporal.end_field]
-        .into_iter()
-        .any(|field| {
-            fields
-                .get(field.as_str())
-                .is_some_and(|field| field.classification != Classification::Public)
-        });
-    if processes_non_public {
+    let non_public = non_public_field_causes(
+        [&temporal.start_field, &temporal.end_field]
+            .into_iter()
+            .map(String::as_str),
+        fields,
+    );
+    if !non_public.is_empty() {
         errors.push(Diagnostic::error(
             "access_profile.public.processing_non_public",
             "entities[].temporal",
-            "an anonymous temporal surface may process only public boundary fields",
+            &format!(
+                "an anonymous temporal surface may process only public boundary fields: {non_public}"
+            ),
         ));
     }
 }
@@ -2371,20 +2378,20 @@ fn validate_anonymous_constraint_processing(
     {
         return;
     }
-    let processes_non_public = entity
-        .constraints
-        .iter()
-        .flat_map(constraint_processed_fields)
-        .any(|field| {
-            fields
-                .get(field)
-                .is_some_and(|field| field.classification != Classification::Public)
-        });
-    if processes_non_public {
+    let non_public = non_public_field_causes(
+        entity
+            .constraints
+            .iter()
+            .flat_map(constraint_processed_fields),
+        fields,
+    );
+    if !non_public.is_empty() {
         errors.push(Diagnostic::error(
             "access_profile.public.processing_non_public",
             "entities[].constraints[]",
-            "an anonymous profile is a public surface and may process only public constraint fields",
+            &format!(
+                "an anonymous profile is a public surface and may process only public constraint fields: {non_public}"
+            ),
         ));
     }
 }
@@ -2564,40 +2571,93 @@ fn validate_selector_profiles(entity: &EntitySource, errors: &mut Vec<Diagnostic
                 "a selector profile identifier is duplicated",
             ));
         }
-        if selector.fields.is_empty()
-            || selector.fields.len() > 16
-            || has_duplicates(&selector.fields)
-            || selector
-                .fields
-                .iter()
-                .any(|field| !fields.contains_key(field.as_str()))
-        {
+        let mut refused = false;
+        if selector.fields.is_empty() || selector.fields.len() > 16 {
             errors.push(Diagnostic::error(
                 "selector_profile.fields.invalid",
                 "entities[].selectorProfiles[].fields",
-                "a selector profile must name one to sixteen stored fields",
+                &format!(
+                    "selector profile `{}` names {} fields; a selector profile must name one to sixteen stored fields",
+                    selector.id,
+                    selector.fields.len()
+                ),
             ));
+            refused = true;
+        }
+        let duplicates = duplicate_members(&selector.fields);
+        if !duplicates.is_empty() {
+            errors.push(Diagnostic::error(
+                "selector_profile.fields.duplicate",
+                "entities[].selectorProfiles[].fields",
+                &format!(
+                    "selector profile `{}` repeats {}; name each stored field once",
+                    selector.id,
+                    quoted_list(&duplicates)
+                ),
+            ));
+            refused = true;
+        }
+        let unknown: Vec<&str> = selector
+            .fields
+            .iter()
+            .map(String::as_str)
+            .filter(|field| !fields.contains_key(field))
+            .collect();
+        if !unknown.is_empty() {
+            errors.push(Diagnostic::error(
+                "selector_profile.fields.unknown",
+                "entities[].selectorProfiles[].fields",
+                &format!(
+                    "selector profile `{}` names {}, which entity `{}` does not store; a selector profile may name only stored fields",
+                    selector.id,
+                    quoted_list(&unknown),
+                    entity.id
+                ),
+            ));
+            refused = true;
+        }
+        if refused {
             continue;
         }
-        if selector.fields.iter().any(|field| {
-            fields
-                .get(field.as_str())
-                .is_some_and(|field| matches!(field.field_type, FieldTypeSource::Crs84Point { .. }))
-        }) {
+        let spatial: Vec<&str> = selector
+            .fields
+            .iter()
+            .map(String::as_str)
+            .filter(|field| {
+                fields.get(field).is_some_and(|field| {
+                    matches!(field.field_type, FieldTypeSource::Crs84Point { .. })
+                })
+            })
+            .collect();
+        let unsupported: Vec<&str> = selector
+            .fields
+            .iter()
+            .map(String::as_str)
+            .filter(|field| {
+                fields
+                    .get(field)
+                    .is_some_and(|field| !selector_field_supported(&field.field_type))
+            })
+            .collect();
+        if !spatial.is_empty() {
             errors.push(Diagnostic::error(
                 "selector_profile.field_type_unsupported",
                 "entities[].selectorProfiles[].fields",
-                "CRS84 point fields cannot be selector fields; use spatialQueries.bbox for bounded spatial search",
+                &format!(
+                    "CRS84 point fields cannot be selector fields; {} must leave selector profile `{}`, use spatialQueries.bbox for bounded spatial search",
+                    quoted_list(&spatial),
+                    selector.id
+                ),
             ));
-        } else if selector.fields.iter().any(|field| {
-            fields
-                .get(field.as_str())
-                .is_some_and(|field| !selector_field_supported(&field.field_type))
-        }) {
+        } else if !unsupported.is_empty() {
             errors.push(Diagnostic::error(
                 "selector_profile.field_type_unsupported",
                 "entities[].selectorProfiles[].fields",
-                "selector profile fields must use supported scalar stored types",
+                &format!(
+                    "selector profile fields must use supported scalar stored types; {} in selector profile `{}` does not qualify",
+                    quoted_list(&unsupported),
+                    selector.id
+                ),
             ));
         }
     }
@@ -2857,26 +2917,43 @@ fn validate_profiles(
                 "filterable and sortable fields must be readable",
             ));
         }
-        if access.anonymous
-            && (entity.classification != Classification::Public
-                || read_processed.iter().any(|field| {
-                    fields
-                        .get(field.as_str())
-                        .is_some_and(|field| field.classification != Classification::Public)
-                        || derived.contains_key(field.as_str())
-                })
-                || stored_processed.iter().any(|field| {
-                    field != "id"
-                        && fields
-                            .get(field.as_str())
-                            .is_some_and(|field| field.classification != Classification::Public)
-                }))
-        {
-            errors.push(Diagnostic::error(
-                "access_profile.public.processing_non_public",
-                "entities[].accessProfiles[]",
-                "an anonymous profile may process only public fields",
-            ));
+        if access.anonymous {
+            let mut causes = Vec::new();
+            if entity.classification != Classification::Public {
+                causes.push(format!(
+                    "entity `{}` is classified `{}`",
+                    entity.id,
+                    classification_id(entity.classification)
+                ));
+            }
+            for field in read_processed.iter().chain(
+                stored_processed
+                    .iter()
+                    .filter(|field| field.as_str() != "id"),
+            ) {
+                if derived.contains_key(field.as_str()) {
+                    causes.push(format!("field `{field}` is derived"));
+                } else if let Some(stored) = fields.get(field.as_str()) {
+                    if stored.classification != Classification::Public {
+                        causes.push(format!(
+                            "field `{field}` is classified `{}`",
+                            classification_id(stored.classification)
+                        ));
+                    }
+                }
+            }
+            causes.dedup();
+            if !causes.is_empty() {
+                errors.push(Diagnostic::error(
+                    "access_profile.public.processing_non_public",
+                    "entities[].accessProfiles[]",
+                    &format!(
+                        "anonymous profile `{}` may process only public fields: {}",
+                        access.id,
+                        causes.join(", ")
+                    ),
+                ));
+            }
         }
         let mut boundaries = BTreeSet::new();
         for boundary in &access.row_boundaries {
@@ -2934,19 +3011,12 @@ fn validate_profiles(
             .iter()
             .filter(|access| access.operations.contains(&operation))
             .collect();
-        if profiles.is_empty() {
-            continue;
-        }
-        let explicit_defaults = profiles.iter().filter(|access| access.default).count();
-        if profiles.len() > 1 && explicit_defaults != 1
-            || profiles.len() == 1 && explicit_defaults > 1
-        {
-            errors.push(Diagnostic::error(
-                "access_profile.default.invalid",
-                "entities[].accessProfiles[].default",
-                "each exposed operation requires exactly one default profile",
-            ));
-        }
+        validate_single_default(
+            entity,
+            &format!("operation `{}`", operation_id(operation)),
+            &profiles,
+            errors,
+        );
     }
     for path in &entity.read_paths {
         let profiles: Vec<&AccessProfileSource> = entity
@@ -2954,19 +3024,60 @@ fn validate_profiles(
             .iter()
             .filter(|access| access.read_paths.iter().any(|grant| grant.path == path.id))
             .collect();
-        if profiles.is_empty() {
-            continue;
-        }
-        let explicit_defaults = profiles.iter().filter(|access| access.default).count();
-        if profiles.len() > 1 && explicit_defaults != 1
-            || profiles.len() == 1 && explicit_defaults > 1
-        {
-            errors.push(Diagnostic::error(
-                "access_profile.default.invalid",
-                "entities[].accessProfiles[].default",
-                "each exposed read-path route requires exactly one default profile",
-            ));
-        }
+        validate_single_default(
+            entity,
+            &format!("read-path route `{}`", path.id),
+            &profiles,
+            errors,
+        );
+    }
+}
+
+/// Refuse an exposed route that no profile or several profiles claim as the
+/// default, naming the entity, the route, and every profile involved.
+fn validate_single_default(
+    entity: &EntitySource,
+    route: &str,
+    profiles: &[&AccessProfileSource],
+    errors: &mut Vec<Diagnostic>,
+) {
+    if profiles.len() < 2 {
+        return;
+    }
+    let defaults: Vec<&str> = profiles
+        .iter()
+        .filter(|access| access.default)
+        .map(|access| access.id.as_str())
+        .collect();
+    let Some((claimed, duplicates)) = defaults.split_first() else {
+        let candidates = profiles
+            .iter()
+            .map(|access| format!("`{}`", access.id))
+            .collect::<Vec<_>>()
+            .join(", ");
+        errors.push(Diagnostic::error(
+            "access_profile.default.invalid",
+            format!("entities[id={}].accessProfiles[].default", entity.id),
+            &format!(
+                "{route} on entity `{}` is exposed by {} profiles and none sets `default: true`; set it on exactly one of {candidates}",
+                entity.id,
+                profiles.len()
+            ),
+        ));
+        return;
+    };
+    for duplicate in duplicates {
+        errors.push(Diagnostic::error(
+            "access_profile.default.invalid",
+            format!(
+                "entities[id={}].accessProfiles[id={duplicate}].default",
+                entity.id
+            ),
+            &format!(
+                "{route} on entity `{}` accepts one default profile and `{claimed}` already claims it; clear `default: true` on `{duplicate}`",
+                entity.id
+            ),
+        ));
     }
 }
 
@@ -3028,16 +3139,18 @@ fn validate_spatial_queries(
             "bbox spatial queries require readable access to the GeoJSON geometry field",
         ));
     }
-    if access.anonymous
-        && fields
-            .get(geojson.geometry_field.as_str())
-            .is_some_and(|field| field.classification != Classification::Public)
-    {
-        errors.push(Diagnostic::error(
-            "access_profile.public.processing_non_public",
-            "entities[].accessProfiles[].spatialQueries.bbox",
-            "an anonymous bbox query may process only a public GeoJSON geometry field",
-        ));
+    if access.anonymous {
+        let non_public =
+            non_public_field_causes([geojson.geometry_field.as_str()].into_iter(), fields);
+        if !non_public.is_empty() {
+            errors.push(Diagnostic::error(
+                "access_profile.public.processing_non_public",
+                "entities[].accessProfiles[].spatialQueries.bbox",
+                &format!(
+                    "an anonymous bbox query may process only a public GeoJSON geometry field: {non_public}"
+                ),
+            ));
+        }
     }
 }
 
@@ -3095,18 +3208,18 @@ fn validate_lookup_grants(
             ));
             continue;
         };
-        if access.anonymous
-            && selector.fields.iter().any(|field| {
-                fields
-                    .get(field.as_str())
-                    .is_some_and(|field| field.classification != Classification::Public)
-            })
-        {
-            errors.push(Diagnostic::error(
-                "access_profile.public.processing_non_public",
-                "entities[].accessProfiles[].lookups",
-                "an anonymous lookup may process only public selector fields",
-            ));
+        if access.anonymous {
+            let non_public =
+                non_public_field_causes(selector.fields.iter().map(String::as_str), fields);
+            if !non_public.is_empty() {
+                errors.push(Diagnostic::error(
+                    "access_profile.public.processing_non_public",
+                    "entities[].accessProfiles[].lookups",
+                    &format!(
+                        "an anonymous lookup may process only public selector fields: {non_public}"
+                    ),
+                ));
+            }
         }
         match lookup.value_origin {
             LookupValueOrigin::Request if !lookup.claim_mapping.is_empty() => {
@@ -3205,21 +3318,27 @@ fn validate_read_path_grant_fields(
         errors.push(Diagnostic::error(
             "access_profile.public.processing_non_public",
             "entities[].accessProfiles[].readPaths",
-            "an anonymous read path may process only public source and join fields",
+            &format!(
+                "an anonymous read path may process only public source and join fields: entity `{}` is classified `{}`",
+                source.id,
+                classification_id(source.classification)
+            ),
         ));
     }
     if access.anonymous {
         if let Some((source_ref, target_ref)) = infer_read_path_refs(source, through, &path.to) {
             let through_fields = stored_field_map(through);
-            if [source_ref, target_ref].iter().any(|field| {
-                through_fields
-                    .get(field.as_str())
-                    .is_some_and(|field| field.classification != Classification::Public)
-            }) {
+            let non_public = non_public_field_causes(
+                [source_ref, target_ref].iter().map(String::as_str),
+                &through_fields,
+            );
+            if !non_public.is_empty() {
                 errors.push(Diagnostic::error(
                     "access_profile.public.processing_non_public",
                     "entities[].accessProfiles[].readPaths",
-                    "an anonymous read path may process only public join fields",
+                    &format!(
+                        "an anonymous read path may process only public join fields: {non_public}"
+                    ),
                 ));
             }
         }
@@ -3241,20 +3360,32 @@ fn validate_read_path_grant_fields(
             "a read-path grant refers to an unknown target field",
         ));
     }
-    if access.anonymous
-        && processed.iter().any(|field| {
-            target_derived.contains_key(field.as_str())
-                || (field.as_str() != "id"
-                    && target_stored
-                        .get(field.as_str())
-                        .is_some_and(|field| field.classification != Classification::Public))
-        })
-    {
-        errors.push(Diagnostic::error(
-            "access_profile.public.processing_non_public",
-            "entities[].accessProfiles[].readPaths",
-            "an anonymous read path may process only public target fields and no derived fields",
-        ));
+    if access.anonymous {
+        let mut causes: Vec<String> = Vec::new();
+        for field in &processed {
+            if target_derived.contains_key(field.as_str()) {
+                causes.push(format!("field `{field}` is derived"));
+            } else if field.as_str() != "id" {
+                if let Some(stored) = target_stored.get(field.as_str()) {
+                    if stored.classification != Classification::Public {
+                        causes.push(format!(
+                            "field `{field}` is classified `{}`",
+                            classification_id(stored.classification)
+                        ));
+                    }
+                }
+            }
+        }
+        if !causes.is_empty() {
+            errors.push(Diagnostic::error(
+                "access_profile.public.processing_non_public",
+                "entities[].accessProfiles[].readPaths",
+                &format!(
+                    "an anonymous read path may process only public target fields and no derived fields: {}",
+                    causes.join(", ")
+                ),
+            ));
+        }
     }
     if processed.is_empty() && grant.allow_count {
         errors.push(Diagnostic::error(
@@ -3469,7 +3600,10 @@ fn validate_event_condition(
                     errors.push(Diagnostic::error(
                         "event.when.request_lifecycle_transition_unknown",
                         "entities[].events[].when.transitions",
-                        "a request lifecycle event condition refers to an unknown transition",
+                        &format!(
+                            "a request lifecycle event condition refers to an unknown transition `{transition}`; the change request workflow performs {}",
+                            quoted_list(&REQUEST_LIFECYCLE_TRANSITIONS)
+                        ),
                     ));
                 }
             }
@@ -3478,7 +3612,10 @@ fn validate_event_condition(
                     errors.push(Diagnostic::error(
                         "event.when.request_lifecycle_state_unknown",
                         "entities[].events[].when.toStates",
-                        "a request lifecycle event condition refers to an unknown request state",
+                        &format!(
+                            "a request lifecycle event condition refers to an unknown request state `{state}`; a change request rests in {}",
+                            quoted_list(&REQUEST_LIFECYCLE_STATES)
+                        ),
                     ));
                 }
             }
@@ -3490,25 +3627,102 @@ fn validate_event_condition(
     }
 }
 
+/// The `project.package` members a production compilation requires. Authoring
+/// documentation reads this list rather than restating it.
+pub const PACKAGE_IDENTITY_KEYS: [&str; 4] = [
+    "package.environment",
+    "package.instanceId",
+    "package.sequence",
+    "package.sourceRevision",
+];
+
+/// Every change request transition a request lifecycle event may select, in
+/// workflow order. Authoring documentation reads this list rather than
+/// restating it.
+pub const REQUEST_LIFECYCLE_TRANSITIONS: [&str; 8] = [
+    "submit",
+    "approve",
+    "reject",
+    "request_revision",
+    "revise",
+    "rebase",
+    "cancel",
+    "apply",
+];
+
+/// Every change request state a request lifecycle event may select, in
+/// workflow order. Authoring documentation reads this list rather than
+/// restating it.
+pub const REQUEST_LIFECYCLE_STATES: [&str; 7] = [
+    "draft",
+    "submitted",
+    "approved",
+    "needs_changes",
+    "rejected",
+    "canceled",
+    "applied",
+];
+
 fn valid_request_lifecycle_transition(value: &str) -> bool {
-    matches!(
-        value,
-        "submit"
-            | "approve"
-            | "reject"
-            | "request_revision"
-            | "revise"
-            | "rebase"
-            | "cancel"
-            | "apply"
-    )
+    REQUEST_LIFECYCLE_TRANSITIONS.contains(&value)
 }
 
 fn valid_request_lifecycle_state(value: &str) -> bool {
-    matches!(
-        value,
-        "draft" | "submitted" | "approved" | "needs_changes" | "rejected" | "canceled" | "applied"
-    )
+    REQUEST_LIFECYCLE_STATES.contains(&value)
+}
+
+/// Name every field in `candidates` that an anonymous surface may not process,
+/// with the classification that keeps it out. The result is empty when every
+/// candidate is public.
+fn non_public_field_causes<'a>(
+    candidates: impl Iterator<Item = &'a str>,
+    fields: &BTreeMap<&str, &FieldSource>,
+) -> String {
+    let mut causes: Vec<String> = Vec::new();
+    for candidate in candidates {
+        if let Some(field) = fields.get(candidate) {
+            if field.classification != Classification::Public {
+                let cause = format!(
+                    "field `{candidate}` is classified `{}`",
+                    classification_id(field.classification)
+                );
+                if !causes.contains(&cause) {
+                    causes.push(cause);
+                }
+            }
+        }
+    }
+    causes.join(", ")
+}
+
+/// The authored spelling of one classification level.
+fn classification_id(classification: Classification) -> &'static str {
+    match classification {
+        Classification::Public => "public",
+        Classification::Internal => "internal",
+        Classification::Restricted => "restricted",
+    }
+}
+
+/// Every member that appears more than once, in first-seen order.
+fn duplicate_members(values: &[String]) -> Vec<&str> {
+    let mut seen = BTreeSet::new();
+    let mut repeated = Vec::new();
+    for value in values {
+        if !seen.insert(value.as_str()) && !repeated.contains(&value.as_str()) {
+            repeated.push(value.as_str());
+        }
+    }
+    repeated
+}
+
+/// Render one closed list as backticked members an adopter can copy.
+fn quoted_list(values: &[&str]) -> String {
+    values
+        .iter()
+        .map(|value| format!("`{value}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn valid_logical_destination_id(value: &str) -> bool {
@@ -5231,7 +5445,7 @@ fn is_request_operation(operation: Operation) -> bool {
     )
 }
 
-fn operation_id(operation: Operation) -> &'static str {
+pub(crate) fn operation_id(operation: Operation) -> &'static str {
     match operation {
         Operation::Create => "create",
         Operation::Get => "get",

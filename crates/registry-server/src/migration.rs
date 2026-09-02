@@ -2,6 +2,7 @@
 //! Verified package apply coordinator.
 
 use std::{
+    collections::BTreeMap,
     fs::File,
     io::Read as _,
     path::{Path, PathBuf},
@@ -754,6 +755,65 @@ fn predecessor_baselines_match(
         && target.queries == verified.queries
 }
 
+/// The reviewed migrations that require external backup evidence, each paired
+/// with the binding path that names it inside the package.
+fn required_backup_bindings(
+    plan: &ValidatedReviewedMigrationPlan,
+) -> Vec<(&str, &ExternalBackupBinding)> {
+    plan.migrations()
+        .iter()
+        .filter_map(|migration| {
+            migration
+                .descriptor
+                .backup_binding_path
+                .as_deref()
+                .zip(migration.backup_binding.as_ref())
+        })
+        .collect()
+}
+
+/// The package binding paths an apply of this plan requires backup evidence
+/// for, in plan order, so a caller that refuses evidence can name the exact set
+/// an operator has to supply.
+#[must_use]
+pub fn required_backup_binding_paths(plan: &ValidatedReviewedMigrationPlan) -> Vec<&str> {
+    required_backup_bindings(plan)
+        .into_iter()
+        .map(|(binding_path, _)| binding_path)
+        .collect()
+}
+
+/// Pairs every required backup binding with the supplied evidence that names
+/// the same binding path, so the order evidence arrives in carries no meaning.
+/// The supplied binding paths must be exactly the required set, each named
+/// once, and every pair keeps the plan order of the requirement.
+fn pair_backup_evidence<'a>(
+    required: &[(&'a str, &'a ExternalBackupBinding)],
+    evidence: &[DestructiveBackupEvidence<'a>],
+) -> Result<Vec<(&'a ExternalBackupBinding, &'a Path)>> {
+    if required.len() != evidence.len() {
+        return Err(MigrationError::BackupEvidence);
+    }
+    let mut supplied = BTreeMap::new();
+    for entry in evidence {
+        if supplied
+            .insert(entry.binding_path, entry.local_path)
+            .is_some()
+        {
+            return Err(MigrationError::BackupEvidence);
+        }
+    }
+    required
+        .iter()
+        .map(|(binding_path, binding)| {
+            supplied
+                .remove(binding_path)
+                .map(|local_path| (*binding, local_path))
+                .ok_or(MigrationError::BackupEvidence)
+        })
+        .collect()
+}
+
 async fn verify_destructive_backup_evidence(
     plan: Option<&ValidatedReviewedMigrationPlan>,
     current: Option<&ExpectedRegistryIdentity>,
@@ -768,25 +828,11 @@ async fn verify_destructive_backup_evidence(
         };
     };
     let current = current.ok_or(MigrationError::PackageBinding)?;
-    let required = plan
-        .migrations()
-        .iter()
-        .filter_map(|migration| {
-            migration
-                .descriptor
-                .backup_binding_path
-                .as_deref()
-                .zip(migration.backup_binding.as_ref())
-        })
-        .collect::<Vec<_>>();
-    if required.len() != evidence.len() {
-        return Err(MigrationError::BackupEvidence);
-    }
+    let paired = pair_backup_evidence(&required_backup_bindings(plan), evidence)?;
 
-    let mut retained = Vec::with_capacity(required.len());
-    for ((binding_path, binding), supplied) in required.into_iter().zip(evidence) {
-        if supplied.binding_path != binding_path
-            || !supplied.local_path.is_absolute()
+    let mut retained = Vec::with_capacity(paired.len());
+    for (binding, local_path) in paired {
+        if !local_path.is_absolute()
             || binding.database_id != current.database_id
             || binding.prior_revision != current.package_revision
             || binding.prior_schema_fingerprint != current.schema_fingerprint
@@ -805,7 +851,7 @@ async fn verify_destructive_backup_evidence(
         {
             return Err(MigrationError::BackupEvidence);
         }
-        let path = supplied.local_path.to_path_buf();
+        let path = local_path.to_path_buf();
         let binding = binding.clone();
         retained.push(
             tokio::task::spawn_blocking(move || open_bound_backup(path, &binding))
@@ -948,5 +994,66 @@ mod tests {
             bind_predecessor_baseline(Some(&forged), Some(&verified)),
             Err(MigrationError::PackageBinding)
         );
+    }
+
+    fn backup_binding(database_id: &str) -> ExternalBackupBinding {
+        ExternalBackupBinding {
+            database_id: database_id.to_owned(),
+            prior_revision: "package-a".to_owned(),
+            prior_schema_fingerprint: "sha256:00".to_owned(),
+            sha256: "sha256:11".to_owned(),
+            byte_length: 1,
+            created_at: "2026-01-01T00:00:00Z".to_owned(),
+            max_age_seconds: 3600,
+        }
+    }
+
+    #[test]
+    fn backup_evidence_pairs_with_the_binding_path_it_names_in_any_order() {
+        let first = backup_binding("database-first");
+        let second = backup_binding("database-second");
+        let required = [
+            ("migrations/first/backup.json", &first),
+            ("migrations/second/backup.json", &second),
+        ];
+        let first_dump = Path::new("/backups/first.dump");
+        let second_dump = Path::new("/backups/second.dump");
+        let reversed = [
+            DestructiveBackupEvidence::new("migrations/second/backup.json", second_dump),
+            DestructiveBackupEvidence::new("migrations/first/backup.json", first_dump),
+        ];
+        assert_eq!(
+            pair_backup_evidence(&required, &reversed),
+            Ok(vec![(&first, first_dump), (&second, second_dump)])
+        );
+    }
+
+    #[test]
+    fn backup_evidence_naming_an_unrequired_binding_path_is_refused() {
+        let binding = backup_binding("database-first");
+        let required = [("migrations/first/backup.json", &binding)];
+        let misnamed = [DestructiveBackupEvidence::new(
+            "migrations/typo/backup.json",
+            Path::new("/backups/first.dump"),
+        )];
+        assert_eq!(
+            pair_backup_evidence(&required, &misnamed),
+            Err(MigrationError::BackupEvidence)
+        );
+        let duplicated = [
+            DestructiveBackupEvidence::new(
+                "migrations/first/backup.json",
+                Path::new("/backups/first.dump"),
+            ),
+            DestructiveBackupEvidence::new(
+                "migrations/first/backup.json",
+                Path::new("/backups/second.dump"),
+            ),
+        ];
+        assert_eq!(
+            pair_backup_evidence(&required, &duplicated),
+            Err(MigrationError::BackupEvidence)
+        );
+        assert!(pair_backup_evidence(&required, &[]).is_err());
     }
 }

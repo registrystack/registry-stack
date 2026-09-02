@@ -29,7 +29,9 @@ use crate::api::{HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture
 use crate::api::{VerifiedClaimValue, VerifiedRequestClaims};
 use crate::auth::RegistryAuthenticator;
 use crate::compiler::{compile_project_with_assets, module_digest_with_assets, CompileProfile};
-use crate::contract::{parse_module_yaml, parse_project_yaml, ModuleAssetSource};
+use crate::contract::{
+    parse_module_yaml, parse_project_yaml, redact_authored_values, ModuleAssetSource,
+};
 use crate::contract::{AccessProfileSource, LookupValueOrigin, Operation};
 use crate::data::{validate_field_value, FieldValue};
 use crate::derived_sql::MAX_DERIVED_SQL_BYTES;
@@ -89,6 +91,19 @@ pub enum FixtureError {
         expected: u16,
         actual: u16,
     },
+    /// A journeys document that stops matching the grammar, reported with the
+    /// path it stops at. The member, the alternatives the grammar accepts, and
+    /// the source location are carried; authored values are not.
+    JourneyShapeInvalid {
+        path: String,
+        message: String,
+    },
+    /// A refusal that belongs to one journey rather than to one of its steps.
+    JourneyRefused {
+        journey_index: usize,
+        journey_id: String,
+        message: String,
+    },
     StepFailed {
         journey_index: usize,
         step_index: usize,
@@ -115,10 +130,29 @@ impl fmt::Display for FixtureError {
                 "expected HTTP {expected}, received HTTP {actual}"
             );
         }
+        if let Self::JourneyShapeInvalid { path, message } = self {
+            return write!(formatter, "`{path}`: {message}");
+        }
+        if let Self::JourneyRefused {
+            journey_index,
+            journey_id,
+            message,
+        } = self
+        {
+            return write!(
+                formatter,
+                "journeys[{journey_index}] `{journey_id}`: {message}"
+            );
+        }
+        if let Self::JourneyVersionRefused = self {
+            return write!(
+                formatter,
+                "the fixture journeys document must set `apiVersion: {JOURNEY_API_VERSION}`"
+            );
+        }
         formatter.write_str(match self {
             Self::JourneyTooLarge => "the fixture journey exceeded a fixed bound",
             Self::JourneyShapeRefused => "the fixture journey shape was refused",
-            Self::JourneyVersionRefused => "the fixture journey version was refused",
             Self::JourneyBoundsRefused => "the fixture journey inventory was refused",
             Self::DuplicateIdentifier => "the fixture journey contains a duplicate identifier",
             Self::LogicalReferenceRefused => "the fixture logical reference was refused",
@@ -131,7 +165,11 @@ impl fmt::Display for FixtureError {
             Self::CandidateBindingRefused => "the schema test candidate binding was refused",
             Self::ReceiptShapeRefused => "the schema test receipt shape was refused",
             Self::ReceiptBindingRefused => "the schema test receipt binding was refused",
-            Self::ResponseStatusMismatch { .. } | Self::StepFailed { .. } => {
+            Self::ResponseStatusMismatch { .. }
+            | Self::StepFailed { .. }
+            | Self::JourneyShapeInvalid { .. }
+            | Self::JourneyRefused { .. }
+            | Self::JourneyVersionRefused => {
                 unreachable!("handled above")
             }
         })
@@ -510,8 +548,18 @@ pub fn validate_fixture_journeys(
         return Err(FixtureError::JourneyTooLarge);
     }
     let deserializer = serde_norway::Deserializer::from_slice(bytes);
-    let document: JourneyDocument = serde_path_to_error::deserialize(deserializer)
-        .map_err(|_| FixtureError::JourneyShapeRefused)?;
+    let document: JourneyDocument =
+        serde_path_to_error::deserialize(deserializer).map_err(|error| {
+            let path = error.path().to_string();
+            FixtureError::JourneyShapeInvalid {
+                path: if path.is_empty() {
+                    "the journeys document".to_owned()
+                } else {
+                    path
+                },
+                message: redact_authored_values(&error.inner().to_string()),
+            }
+        })?;
     if document.api_version != JOURNEY_API_VERSION {
         return Err(FixtureError::JourneyVersionRefused);
     }
@@ -526,21 +574,38 @@ pub fn validate_fixture_journeys(
         let mut step_ids = BTreeSet::new();
         let mut capture_ids = BTreeSet::new();
         let mut capture_sources = BTreeMap::new();
-        if !valid_stable_id(&journey.id) || !journey_ids.insert(journey.id.clone()) {
-            return Err(if valid_stable_id(&journey.id) {
-                FixtureError::DuplicateIdentifier
-            } else {
-                FixtureError::LogicalReferenceRefused
-            });
+        let journey_refusal = |message: String| FixtureError::JourneyRefused {
+            journey_index,
+            journey_id: journey.id.clone(),
+            message,
+        };
+        if !valid_stable_id(&journey.id) {
+            return Err(journey_refusal(format!(
+                "the journey id is not a stable identifier: it starts with a lower-case letter and holds only lower-case letters, digits, and hyphens, in at most {MAX_IDENTIFIER_BYTES} bytes"
+            )));
+        }
+        if !journey_ids.insert(journey.id.clone()) {
+            return Err(journey_refusal(
+                "an earlier journey already declares this id: journey ids are unique in one document".to_owned(),
+            ));
         }
         if journey.steps.is_empty() || journey.steps.len() > MAX_STEPS_PER_JOURNEY {
-            return Err(FixtureError::JourneyBoundsRefused);
+            return Err(journey_refusal(format!(
+                "the journey declares {} steps: a journey declares at least one step and at most {MAX_STEPS_PER_JOURNEY}",
+                journey.steps.len()
+            )));
         }
         total_steps = total_steps
             .checked_add(journey.steps.len())
-            .ok_or(FixtureError::JourneyBoundsRefused)?;
+            .ok_or_else(|| {
+                journey_refusal(format!(
+                    "the document declares more than {MAX_TOTAL_STEPS} steps in total"
+                ))
+            })?;
         if total_steps > MAX_TOTAL_STEPS {
-            return Err(FixtureError::JourneyBoundsRefused);
+            return Err(journey_refusal(format!(
+                "the document declares {total_steps} steps in total: a document declares at most {MAX_TOTAL_STEPS}"
+            )));
         }
         let mut steps = Vec::with_capacity(journey.steps.len());
         for (step_index, step) in journey.steps.into_iter().enumerate() {

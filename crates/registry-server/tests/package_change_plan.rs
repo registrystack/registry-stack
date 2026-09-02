@@ -1985,3 +1985,121 @@ fn digest(bytes: &[u8]) -> String {
     }
     rendered
 }
+
+#[test]
+fn a_changed_registry_version_is_named_and_explained_in_the_change_set() {
+    let previous = compile_variant(Variant::Base, 1);
+    let mut source = source_for_variant(Variant::Base, 2);
+    source.project_bytes = String::from_utf8(source.project_bytes)
+        .expect("the fixture project is UTF-8")
+        .replace(
+            r#""neutral-registry","version":"1""#,
+            r#""neutral-registry","version":"2""#,
+        )
+        .into_bytes();
+    let candidate = compile_source(&source);
+
+    let change_set = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
+    assert_change(
+        &change_set,
+        CompiledRegistryChangeClass::Unsupported,
+        CompiledRegistryChangeCode::RegistryVersionChanged,
+    );
+    let explanation = CompiledRegistryChangeCode::RegistryVersionChanged
+        .explanation()
+        .expect("the version refusal explains why it cannot migrate");
+    assert!(
+        explanation.contains("registry.version"),
+        "the explanation names the key: {explanation}"
+    );
+    assert!(
+        explanation.contains("bound to the database"),
+        "the explanation says the value is bound for the database lifetime: {explanation}"
+    );
+    assert!(change_set_to_applicable_migration_plan(&change_set).is_err());
+
+    let unchanged = compiled_registry_change_set(
+        &previous,
+        &compile_variant(Variant::Base, 2),
+        PRIOR_REVISION,
+    );
+    assert!(
+        !unchanged
+            .changes
+            .iter()
+            .any(|change| change.code == CompiledRegistryChangeCode::RegistryVersionChanged),
+        "an unchanged registry version reports no version change"
+    );
+    assert_eq!(
+        CompiledRegistryChangeCode::EntityAdded.explanation(),
+        None,
+        "a code that says everything in its name carries no extra sentence"
+    );
+}
+
+#[cfg(feature = "tooling")]
+#[test]
+fn disagreeing_environment_identity_keys_refuse_the_package_and_name_both_values() {
+    let source = source_for_variant(Variant::Base, 1);
+    let prepared = prepare_package(build_request(
+        1,
+        None,
+        source.project_bytes,
+        source.module_bytes,
+        PackageMigrationPlanInput::InitialCompiledDdl,
+    ))
+    .expect("initial package prepares");
+    let root = tempfile::Builder::new()
+        .prefix("registry-package-environment-keys-")
+        .tempdir_in(
+            std::env::temp_dir()
+                .canonicalize()
+                .expect("canonical temporary root"),
+        )
+        .expect("temporary package parent creates");
+    let package = root.path().join("package");
+    prepared
+        .publish_to_directory(&package, Vec::new())
+        .expect("package publishes");
+
+    let matching = registry_server::package::PackageInspectionContext {
+        environment: "local",
+        instance_id: INSTANCE,
+        database_id: DATABASE,
+        database_initialization_environment: "local",
+        compiler_source_revision: SOURCE_REVISION,
+        trust_anchor: None,
+        expected_package_revision: prepared.package_revision(),
+        expected_sequence: 1,
+    };
+    registry_server::package::inspect_package_with_context(&package, &matching)
+        .expect("identical environment keys bind the package");
+
+    let disagreeing = registry_server::package::PackageInspectionContext {
+        database_initialization_environment: "production",
+        ..matching
+    };
+    let error = registry_server::package::inspect_package_with_context(&package, &disagreeing)
+        .err()
+        .expect("disagreeing environment keys cannot bind any package");
+    assert_eq!(error, registry_server::package::PackageError::Binding);
+
+    assert_eq!(
+        registry_server::package::environment_identity_conflict("local", "local"),
+        None,
+        "identical values carry no conflict to report"
+    );
+    assert_eq!(
+        registry_server::package::environment_identity_conflict("local", "production").as_deref(),
+        Some(
+            "`identity.environment` and `identity.databaseInitializationEnvironment` must be identical: `identity.environment` is `local`, `identity.databaseInitializationEnvironment` is `production`"
+        )
+    );
+    assert_eq!(
+        registry_server::package::ENVIRONMENT_IDENTITY_KEYS,
+        [
+            "identity.environment",
+            "identity.databaseInitializationEnvironment"
+        ]
+    );
+}

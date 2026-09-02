@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
-use registry_server::compiler::{compile_project, module_digest, CompileProfile};
+use registry_server::compiler::{
+    compile_project, module_digest, CompileProfile, REQUEST_LIFECYCLE_STATES,
+    REQUEST_LIFECYCLE_TRANSITIONS,
+};
 use registry_server::contract::{
     parse_module_json, parse_project_json, Classification, EventTrigger, ModuleLockSource,
     RegistryModule, RegistryProject, WebhookAuthenticationProfile, WebhookDeadLetterMode,
@@ -327,6 +330,78 @@ fn lifecycle_events_are_request_only_and_use_closed_lifecycle_conditions() {
         &bad_transition,
         "event.when.request_lifecycle_transition_unknown",
     );
+}
+
+#[test]
+fn unknown_lifecycle_predicates_list_the_closed_sets_the_runtime_accepts() {
+    assert_eq!(
+        REQUEST_LIFECYCLE_TRANSITIONS,
+        [
+            "submit",
+            "approve",
+            "reject",
+            "request_revision",
+            "revise",
+            "rebase",
+            "cancel",
+            "apply"
+        ]
+    );
+    assert_eq!(
+        REQUEST_LIFECYCLE_STATES,
+        [
+            "draft",
+            "submitted",
+            "approved",
+            "needs_changes",
+            "rejected",
+            "canceled",
+            "applied"
+        ]
+    );
+
+    let mut lifecycle_condition = change_request_event_project();
+    lifecycle_condition["entities"][2]["events"][0]["when"] = json!({
+        "kind":"request_lifecycle",
+        "transitions":["approve"],
+        "toStates":["approved"],
+        "stages":["review"]
+    });
+
+    let mut bad_transition = lifecycle_condition.clone();
+    bad_transition["entities"][2]["events"][0]["when"]["transitions"] = json!(["callback_granted"]);
+    let failure = compile(&bad_transition).expect_err("an unknown transition is refused");
+    let diagnostic = failure
+        .diagnostics()
+        .iter()
+        .find(|item| item.code == "event.when.request_lifecycle_transition_unknown")
+        .expect("the unknown transition is reported");
+    assert!(
+        diagnostic.message.contains("`callback_granted`"),
+        "{diagnostic:?}"
+    );
+    for transition in REQUEST_LIFECYCLE_TRANSITIONS {
+        assert!(
+            diagnostic.message.contains(transition),
+            "{transition} is listed: {diagnostic:?}"
+        );
+    }
+
+    let mut bad_state = lifecycle_condition;
+    bad_state["entities"][2]["events"][0]["when"]["toStates"] = json!(["escalated"]);
+    let failure = compile(&bad_state).expect_err("an unknown request state is refused");
+    let diagnostic = failure
+        .diagnostics()
+        .iter()
+        .find(|item| item.code == "event.when.request_lifecycle_state_unknown")
+        .expect("the unknown request state is reported");
+    assert!(diagnostic.message.contains("`escalated`"), "{diagnostic:?}");
+    for state in REQUEST_LIFECYCLE_STATES {
+        assert!(
+            diagnostic.message.contains(state),
+            "{state} is listed: {diagnostic:?}"
+        );
+    }
 }
 
 #[test]

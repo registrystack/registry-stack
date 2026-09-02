@@ -258,6 +258,7 @@ pub enum CompiledRegistryChangeClass {
 #[serde(rename_all = "snake_case")]
 pub enum CompiledRegistryChangeCode {
     RegistryIdentityChanged,
+    RegistryVersionChanged,
     EntityAdded,
     EntityRemoved,
     EntityPhysicalNameChanged,
@@ -433,6 +434,33 @@ pub struct PredecessorPackageContext<'a> {
     pub trust_anchor: Option<&'a Path>,
     pub expected_package_revision: &'a str,
     pub expected_sequence: u64,
+}
+
+/// The two deployment identity keys whose values must be identical. A package
+/// binds exactly one environment, so a deployment context that names two
+/// different ones can never be satisfied by any package.
+pub const ENVIRONMENT_IDENTITY_KEYS: [&str; 2] = [
+    "identity.environment",
+    "identity.databaseInitializationEnvironment",
+];
+
+/// The sentence a caller reports when the two environment identity keys of one
+/// deployment configuration disagree, naming both keys and both values. `None`
+/// when they are identical, so a binding refusal has another cause.
+#[must_use]
+pub fn environment_identity_conflict(
+    environment: &str,
+    database_initialization_environment: &str,
+) -> Option<String> {
+    if environment == database_initialization_environment {
+        return None;
+    }
+    let [environment_key, initialization_key] = ENVIRONMENT_IDENTITY_KEYS;
+    Some(format!(
+        "`{environment_key}` and `{initialization_key}` must be identical: \
+         `{environment_key}` is `{environment}`, \
+         `{initialization_key}` is `{database_initialization_environment}`"
+    ))
 }
 
 /// Closed operator-facing migration facts retained only by a fully rederived
@@ -1027,6 +1055,28 @@ fn compare_registry_identity(
             CompiledRegistryChangeCode::RegistryIdentityChanged,
             target(CompiledRegistryChangeTargetKind::Registry, None, None),
         );
+    }
+    if previous.registry_version != candidate.registry_version {
+        push_change(
+            changes,
+            CompiledRegistryChangeClass::Unsupported,
+            CompiledRegistryChangeCode::RegistryVersionChanged,
+            target(CompiledRegistryChangeTargetKind::Registry, None, None),
+        );
+    }
+}
+
+impl CompiledRegistryChangeCode {
+    /// The sentence an adopter needs beyond the code name, for `diff` output and
+    /// for a review refusal that lists the change. `None` when the code name is
+    /// the whole story.
+    pub fn explanation(self) -> Option<&'static str> {
+        match self {
+            Self::RegistryVersionChanged => Some(
+                "registry.version is bound to the database for its lifetime: an installed database keeps the registry identity it was initialized with, so a package that changes the version can only initialize a new database, never migrate this one",
+            ),
+            _ => None,
+        }
     }
 }
 

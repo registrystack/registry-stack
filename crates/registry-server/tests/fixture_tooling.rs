@@ -19,10 +19,10 @@ fn fixture_tooling_strict_parser_refuses_unclosed_authority_and_source_shapes() 
     let unknown_key = String::from_utf8(JOURNEY_SOURCE.to_vec())
         .expect("fixture is UTF-8")
         .replacen("journeys:", "unknownFixtureKey: refused\njourneys:", 1);
-    assert_eq!(
+    assert!(matches!(
         validate_fixture_journeys(unknown_key.as_bytes(), &registry).unwrap_err(),
-        FixtureError::JourneyShapeRefused
-    );
+        FixtureError::JourneyShapeInvalid { .. }
+    ));
 
     let duplicate = String::from_utf8(JOURNEY_SOURCE.to_vec())
         .expect("fixture is UTF-8")
@@ -59,7 +59,9 @@ fn fixture_tooling_strict_parser_refuses_unclosed_authority_and_source_shapes() 
             .expect_err("undeclared logical or physical reference is refused");
         assert!(matches!(
             underlying_fixture_error(&error),
-            FixtureError::JourneyShapeRefused | FixtureError::LogicalReferenceRefused
+            FixtureError::JourneyShapeRefused
+                | FixtureError::JourneyShapeInvalid { .. }
+                | FixtureError::LogicalReferenceRefused
         ));
         assert!(!format!("{error:?}").contains(to));
     }
@@ -265,7 +267,9 @@ journeys:
         assert!(
             matches!(
                 underlying_fixture_error(&error),
-                FixtureError::JourneyShapeRefused | FixtureError::LogicalReferenceRefused
+                FixtureError::JourneyShapeRefused
+                    | FixtureError::JourneyShapeInvalid { .. }
+                    | FixtureError::LogicalReferenceRefused
             ),
             "{label} returned {error:?}"
         );
@@ -399,6 +403,7 @@ journeys:
             matches!(
                 underlying_fixture_error(&error),
                 FixtureError::JourneyShapeRefused
+                    | FixtureError::JourneyShapeInvalid { .. }
                     | FixtureError::LogicalReferenceRefused
                     | FixtureError::AuthorityWideningRefused
             ),
@@ -589,9 +594,14 @@ journeys:
           bbox: {west: "100.0", south: "13.0", east: "100.1", north: "13.1"}
         expect: {outcome: success, status: 200, count: 0}
 "#;
-    assert_eq!(
-        validate_fixture_journeys(list_with_bbox, &registry).unwrap_err(),
-        FixtureError::JourneyShapeRefused
+    let error = validate_fixture_journeys(list_with_bbox, &registry).unwrap_err();
+    let FixtureError::JourneyShapeInvalid { path, message } = &error else {
+        panic!("a list step that declares a bbox reports where: {error}");
+    };
+    assert_eq!(path, "journeys[0].steps[0].request");
+    assert!(
+        message.contains("unknown field `bbox`"),
+        "the refusal names the member the list shape does not accept: {message}"
     );
 
     let read_path_with_bbox = br#"apiVersion: registry.registrystack.org/server-journeys/v1
@@ -609,9 +619,14 @@ journeys:
           bbox: {west: "100.0", south: "13.0", east: "100.1", north: "13.1"}
         expect: {outcome: success, status: 200, count: 0}
 "#;
-    assert_eq!(
-        validate_fixture_journeys(read_path_with_bbox, &registry).unwrap_err(),
-        FixtureError::JourneyShapeRefused
+    let error = validate_fixture_journeys(read_path_with_bbox, &registry).unwrap_err();
+    let FixtureError::JourneyShapeInvalid { path, message } = &error else {
+        panic!("a read_path step that declares a bbox reports where: {error}");
+    };
+    assert_eq!(path, "journeys[0].steps[0].request");
+    assert!(
+        message.contains("unknown field `bbox`"),
+        "the refusal names the member the read_path shape does not accept: {message}"
     );
 }
 
@@ -812,4 +827,118 @@ fn compiled_spatial_fixture() -> registry_server::CompiledRegistry {
     )
     .expect("spatial project parses");
     compile_project(&project, &[], CompileProfile::Production).expect("spatial fixture compiles")
+}
+
+#[test]
+fn fixture_journey_refusals_name_the_document_path_the_journey_and_the_bound() {
+    let registry = compiled_fixture();
+    let source = String::from_utf8(JOURNEY_SOURCE.to_vec()).expect("fixture is UTF-8");
+
+    let unknown_key = source.replacen("journeys:", "unknownFixtureKey: refused\njourneys:", 1);
+    let error = validate_fixture_journeys(unknown_key.as_bytes(), &registry).unwrap_err();
+    let FixtureError::JourneyShapeInvalid { path, message } = &error else {
+        panic!("a document that does not match the grammar reports where: {error}");
+    };
+    assert_eq!(path, "unknownFixtureKey");
+    assert!(
+        message.contains("unknown field `unknownFixtureKey`"),
+        "the refusal names the member: {message}"
+    );
+    assert!(
+        message.contains("expected"),
+        "the refusal lists the members the grammar accepts: {message}"
+    );
+
+    let wrong_type = source.replacen("entity: widget", "entity: [widget]", 1);
+    let error = validate_fixture_journeys(wrong_type.as_bytes(), &registry).unwrap_err();
+    let FixtureError::JourneyShapeInvalid { path, message } = &error else {
+        panic!("a member of the wrong type reports where: {error}");
+    };
+    assert_eq!(path, "journeys[0].steps[0].entity");
+    assert!(
+        message.contains("expected a string"),
+        "the refusal says what the grammar expects: {message}"
+    );
+    assert!(
+        !message.contains("widget"),
+        "the refusal carries no authored value: {message}"
+    );
+
+    let wrong_version = source.replacen(
+        "registry.registrystack.org/server-journeys/v1",
+        "registry.registrystack.org/server-journeys/v2",
+        1,
+    );
+    let error = validate_fixture_journeys(wrong_version.as_bytes(), &registry).unwrap_err();
+    assert_eq!(error, FixtureError::JourneyVersionRefused);
+    assert!(
+        error
+            .to_string()
+            .contains("registry.registrystack.org/server-journeys/v1"),
+        "the version refusal names the one version it accepts: {error}"
+    );
+
+    let unstable_id = source.replacen("- id: widget-lifecycle", "- id: Widget_Lifecycle", 1);
+    let error = validate_fixture_journeys(unstable_id.as_bytes(), &registry).unwrap_err();
+    let FixtureError::JourneyRefused {
+        journey_index,
+        journey_id,
+        message,
+    } = &error
+    else {
+        panic!("a journey refusal names the journey it belongs to: {error}");
+    };
+    assert_eq!(*journey_index, 0);
+    assert_eq!(journey_id, "Widget_Lifecycle");
+    assert!(
+        message.contains("stable identifier"),
+        "the refusal says what an id may contain: {message}"
+    );
+    assert!(
+        error
+            .to_string()
+            .starts_with("journeys[0] `Widget_Lifecycle`"),
+        "the rendered refusal names the journey: {error}"
+    );
+
+    let (_, first_journey) = source
+        .split_once("  - id: widget-lifecycle")
+        .expect("fixture contains a journey");
+    let duplicated_journey = format!("{source}  - id: widget-lifecycle{first_journey}");
+    let error = validate_fixture_journeys(duplicated_journey.as_bytes(), &registry).unwrap_err();
+    let FixtureError::JourneyRefused {
+        journey_index,
+        journey_id,
+        message,
+    } = &error
+    else {
+        panic!("a duplicate journey id names the journey it repeats: {error}");
+    };
+    assert_eq!(*journey_index, 1);
+    assert_eq!(journey_id, "widget-lifecycle");
+    assert!(
+        message.contains("already"),
+        "the refusal says the id is already declared: {message}"
+    );
+
+    let empty = br#"apiVersion: registry.registrystack.org/server-journeys/v1
+journeys:
+  - id: empty-journey
+    steps: []
+"#;
+    let error = validate_fixture_journeys(empty, &registry).unwrap_err();
+    let FixtureError::JourneyRefused {
+        journey_index,
+        journey_id,
+        message,
+    } = &error
+    else {
+        panic!("a journey without steps names the journey: {error}");
+    };
+    assert_eq!(*journey_index, 0);
+    assert_eq!(journey_id, "empty-journey");
+    assert!(
+        message.contains("128"),
+        "the refusal names the bound it enforces: {message}"
+    );
 }

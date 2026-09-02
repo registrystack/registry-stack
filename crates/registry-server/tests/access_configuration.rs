@@ -358,13 +358,15 @@ fn synthetic_preview_uses_http_admission_and_never_renders_claim_values() {
         serde_json::from_value(wrong_shape).unwrap()
     )
     .is_err());
-    let mut malformed = scenario;
-    malformed["claims"]["directClaims"]["districts"] = json!(["duplicate", "duplicate"]);
-    assert!(registry_server::access_preview::preview_access(
-        &compiled,
-        serde_json::from_value(malformed).unwrap()
-    )
-    .is_err());
+    // A value repeated in a multi-valued claim asserts the same authority once,
+    // so HTTP admission collapses it and the preview reports the same answer.
+    let mut repeated = scenario;
+    repeated["claims"]["directClaims"]["districts"] =
+        json!(["private-district-canary", "private-district-canary"]);
+    let collapsed = serde_json::to_value(preview(repeated)).unwrap();
+    assert_eq!(collapsed["admitted"], true);
+    assert_eq!(collapsed, allowed);
+    assert!(!collapsed.to_string().contains("canary"));
 }
 
 #[cfg(all(feature = "runtime", feature = "tooling"))]
@@ -468,4 +470,172 @@ fn access_diffs_show_each_changed_dimension_without_guessing_mixed_authority() {
     assert!(diff.changes.iter().flat_map(|c| &c.access_details).all(|d|
         d.direction == registry_server::tooling::AccessChangeDirection::ReviewRequired),
         "reordering predicates is not evidence of widening or narrowing");
+}
+
+fn second_reader() -> Value {
+    json!({"id":"auditor","principalClaim":"registry_principal","requiredScopes":["entry:read"],
+      "requiredPurposes":["administration"],"grants":[{"entity":"entry","operations":["get","list"],
+        "readableFields":["code","district"],"filterableFields":["district"],
+        "rowBoundaries":[{"field":"district","claim":"districts","operator":"in"}]}]})
+}
+
+fn diagnostic_for<'a>(
+    failure: &'a registry_server::CompileFailure,
+    code: &str,
+    fragment: &str,
+) -> &'a registry_server::Diagnostic {
+    failure
+        .diagnostics()
+        .iter()
+        .find(|item| item.code == code && item.message.contains(fragment))
+        .unwrap_or_else(|| panic!("{code} naming {fragment} is reported: {failure:?}"))
+}
+
+#[test]
+fn default_profile_refusals_name_the_entity_the_operation_and_the_profiles() {
+    let mut without_default = source();
+    without_default["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .push(second_reader());
+    let failure = compile(&without_default).unwrap_err();
+    let diagnostic = diagnostic_for(
+        &failure,
+        "access_profile.default.invalid",
+        "operation `get`",
+    );
+    assert_eq!(
+        diagnostic.path,
+        "entities[id=entry].accessProfiles[].default"
+    );
+    assert!(
+        diagnostic.message.contains("entity `entry`"),
+        "{diagnostic:?}"
+    );
+    assert!(diagnostic.message.contains("`reader`"), "{diagnostic:?}");
+    assert!(diagnostic.message.contains("`auditor`"), "{diagnostic:?}");
+
+    let mut two_defaults = without_default.clone();
+    two_defaults["accessProfiles"][0]["default"] = json!(true);
+    two_defaults["accessProfiles"][1]["default"] = json!(true);
+    let failure = compile(&two_defaults).unwrap_err();
+    let diagnostic = diagnostic_for(
+        &failure,
+        "access_profile.default.invalid",
+        "operation `get`",
+    );
+    assert_eq!(
+        diagnostic.path,
+        "entities[id=entry].accessProfiles[id=auditor].default"
+    );
+    assert!(
+        diagnostic.message.contains("`reader` already"),
+        "{diagnostic:?}"
+    );
+
+    let mut one_default = without_default;
+    one_default["accessProfiles"][0]["default"] = json!(true);
+    compile(&one_default).expect("exactly one default profile per operation compiles");
+}
+
+fn anonymous_source() -> Value {
+    json!({
+        "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
+        "registry":{"id":"public-example","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://public-example.example.test"},
+        "entities":[{"id":"place","primaryDataset":"test-dataset","route":"places","mutationMode":"mutable",
+          "fields":[{"id":"code","type":"string","maxLength":32,"classification":"public"},
+                    {"id":"note","type":"string","maxLength":32,"classification":"internal"}]}],
+        "accessProfiles":[{"id":"public-map","default":true,"anonymous":true,
+          "grants":[{"entity":"place","operations":["list"],"readableFields":["code"]}]}]
+    })
+}
+
+#[test]
+fn anonymous_processing_refusals_name_the_entity_or_field_that_is_not_public() {
+    let failure = compile(&anonymous_source()).unwrap_err();
+    let diagnostic = diagnostic_for(
+        &failure,
+        "access_profile.public.processing_non_public",
+        "entity `place`",
+    );
+    assert!(
+        diagnostic.message.contains("classified `internal`"),
+        "{diagnostic:?}"
+    );
+    assert!(
+        diagnostic.message.contains("`public-map`"),
+        "{diagnostic:?}"
+    );
+
+    let mut public_entity = anonymous_source();
+    public_entity["entities"][0]["classification"] = json!("public");
+    compile(&public_entity).expect("a public entity with public readable fields compiles");
+
+    let mut hidden_field = public_entity;
+    hidden_field["accessProfiles"][0]["grants"][0]["readableFields"] = json!(["code", "note"]);
+    let failure = compile(&hidden_field).unwrap_err();
+    let diagnostic = diagnostic_for(
+        &failure,
+        "access_profile.public.processing_non_public",
+        "field `note`",
+    );
+    assert!(
+        diagnostic.message.contains("classified `internal`"),
+        "{diagnostic:?}"
+    );
+    assert!(!diagnostic.message.contains("`code`"), "{diagnostic:?}");
+}
+
+#[test]
+fn write_grants_without_writable_fields_and_anonymous_collections_are_reported() {
+    let mut value = source();
+    value["accessProfiles"][0]["grants"][0]["operations"] =
+        json!(["get", "list", "create", "patch"]);
+    let compiled = compile(&value).unwrap();
+    let finding = compiled
+        .findings()
+        .iter()
+        .find(|d| d.code == "access.profile.no_writable_fields")
+        .expect("a create or patch grant naming no writable field is reported");
+    assert_eq!(
+        finding.path,
+        "entities[id=entry].accessProfiles[id=reader].writableFields"
+    );
+    assert!(
+        finding.message.contains("`create`") && finding.message.contains("`patch`"),
+        "{finding:?}"
+    );
+    value["accessProfiles"][0]["grants"][0]["writableFields"] = json!(["code"]);
+    assert!(!compile(&value)
+        .unwrap()
+        .findings()
+        .iter()
+        .any(|d| d.code == "access.profile.no_writable_fields"));
+
+    let mut public = anonymous_source();
+    public["entities"][0]["classification"] = json!("public");
+    let compiled = compile(&public).unwrap();
+    let finding = compiled
+        .findings()
+        .iter()
+        .find(|d| d.code == "access.profile.anonymous_collection")
+        .expect("an anonymous list grant is reported");
+    assert_eq!(
+        finding.path,
+        "entities[id=place].accessProfiles[id=public-map].operations"
+    );
+    assert!(finding.message.contains("`list`"), "{finding:?}");
+    assert!(
+        !compiled
+            .findings()
+            .iter()
+            .any(|d| d.code == "access.profile.unrestricted_collection"),
+        "a public entity keeps the authenticated-only collection finding out of the report"
+    );
+    public["accessProfiles"][0]["grants"][0]["operations"] = json!(["get"]);
+    assert!(!compile(&public)
+        .unwrap()
+        .findings()
+        .iter()
+        .any(|d| d.code == "access.profile.anonymous_collection"));
 }
