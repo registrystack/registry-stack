@@ -687,6 +687,60 @@ async fn snapshot_route_requires_its_own_current_authority_and_never_calls_live_
 }
 
 #[tokio::test]
+async fn discovery_conceals_the_registry_from_callers_without_a_visible_surface() {
+    // A project with an anonymous profile keeps its anonymous discovery surface.
+    let anonymous = Harness::new(true);
+    for uri in ["/openapi.json", "/v1/registry"] {
+        let response = anonymous.send(Method::GET, uri, None).await;
+        assert_eq!(response.status(), StatusCode::OK, "{uri}");
+        assert!(
+            body_json(response)
+                .await
+                .to_string()
+                .contains("read-surface"),
+            "{uri}"
+        );
+    }
+
+    // A project without one refuses discovery exactly as it refuses a record route.
+    let (app, records, snapshots) = snapshot_harness(SNAPSHOT_PROJECT, &[]);
+    let record_route = send_to(&app, Method::GET, "/v1/records/assignments:snapshot", None).await;
+    assert_eq!(record_route.status(), StatusCode::NOT_FOUND);
+    let expected = problem_shape(record_route).await;
+    for uri in ["/openapi.json", "/v1/registry", "/v1/schemas/assignment"] {
+        let response = send_to(&app, Method::GET, uri, None).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+        assert_eq!(problem_shape(response).await, expected, "{uri}");
+    }
+
+    // A caller with a visible surface still receives both discovery documents.
+    let claims = Some(caseworker_claims("case-management"));
+    let metadata = send_to(
+        &app,
+        Method::GET,
+        "/v1/registry?accessProfile=history",
+        claims.clone(),
+    )
+    .await;
+    assert_eq!(metadata.status(), StatusCode::OK);
+    assert_eq!(body_json(metadata).await["id"], "snapshot-surface");
+    let openapi = send_to(
+        &app,
+        Method::GET,
+        "/openapi.json?accessProfile=history",
+        claims,
+    )
+    .await;
+    assert_eq!(openapi.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(openapi).await["info"]["title"],
+        "snapshot-surface"
+    );
+    assert_eq!(records.calls.load(Ordering::SeqCst), 0);
+    assert!(snapshots.requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn snapshot_validity_is_typed_optional_and_has_no_clock_default() {
     for (source, accepted, rejected) in [
         (
@@ -1842,12 +1896,33 @@ async fn desc_ordering_and_field_capability_failures_are_value_free() {
 }
 
 #[tokio::test]
-async fn select_id_is_a_noop_and_filter_grouping_reaches_the_plan() {
+async fn select_refuses_envelope_names_and_filter_grouping_reaches_the_plan() {
     let harness = Harness::new(true);
-    let selected_id = harness
-        .send(Method::GET, "/v1/records/cases?$select=id", None)
+    // The record envelope carries recordIdentifier and revisionIdentifier, so
+    // id and revision are not readable API property names.
+    for uri in [
+        "/v1/records/cases?$select=id",
+        "/v1/records/cases?$select=revision",
+        "/v1/records/cases?$select=label,id",
+    ] {
+        let response = harness.send(Method::GET, uri, None).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{uri}");
+        assert_eq!(body_json(response).await["code"], "query.invalid", "{uri}");
+    }
+    let direct = harness
+        .send(
+            Method::GET,
+            "/v1/records/cases/00000000-0000-4000-8000-000000000001?$select=id",
+            None,
+        )
         .await;
-    assert_eq!(selected_id.status(), StatusCode::OK);
+    assert_eq!(direct.status(), StatusCode::NOT_FOUND);
+    assert_eq!(harness.records.calls(), 0);
+
+    let selected_label = harness
+        .send(Method::GET, "/v1/records/cases?$select=label", None)
+        .await;
+    assert_eq!(selected_label.status(), StatusCode::OK);
     assert_eq!(
         harness.records.last_request().selected_fields,
         BTreeSet::from(["label".to_owned()])

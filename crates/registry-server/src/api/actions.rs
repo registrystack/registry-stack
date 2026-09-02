@@ -265,6 +265,16 @@ async fn action_refusal(
     correlation: &RequestCorrelation,
     response: Response,
 ) -> Response {
+    // Only a profile the compiled action route grants may reach the journal, so
+    // an unknown caller-supplied value is recorded as absent.
+    let selected_access_profile = match options.access_profile() {
+        Some(profile) => route
+            .access_profiles
+            .iter()
+            .any(|candidate| candidate == profile)
+            .then_some(profile.as_str()),
+        None => Some(route.default_access_profile.as_str()),
+    };
     match mutations
         .record_action_refusal(
             &route.action_id,
@@ -274,10 +284,7 @@ async fn action_refusal(
                 target_record: None,
                 action_id: None,
                 principal: claims.principal(),
-                selected_access_profile: options
-                    .access_profile()
-                    .map(String::as_str)
-                    .or(Some(route.default_access_profile.as_str())),
+                selected_access_profile,
                 purpose_present: claims.purpose().is_some(),
                 correlation,
             },

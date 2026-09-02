@@ -52,6 +52,7 @@ const RS_SEC_13_IDEMPOTENCY_CANARY: &str = "rs-sec-13-idempotency-key-conflict";
 const RS_SEC_13_ZONE_CANARY: &str = "rs-sec-13-zone-a";
 const RS_SEC_13_LABEL_CANARY: &str = "rs-sec-13-unique-label";
 const RS_SEC_13_QUANTITY_CANARY: &str = "4242";
+const RS_SEC_13_PROFILE_CANARY: &str = "rs-sec-13-access-profile-canary";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable() {
@@ -1863,6 +1864,114 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
     database.cleanup().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn refusal_audit_records_only_compiled_access_profiles() {
+    let database = TestDatabase::create(6).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    let compiled = Arc::new(compiled_registry());
+    install_compiled_schema(&migration, &compiled, &database.runtime_role)
+        .await
+        .expect("migration installs schema");
+    let identity = initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &compiled,
+        RegistryStateTestIdentity {
+            package_id: PACKAGE_ID,
+            environment: "local",
+            instance_id: INSTANCE_ID,
+            database_id: DATABASE_ID,
+            package_revision: "package-refusal-profile-1",
+            package_sequence: 1,
+        },
+    )
+    .await
+    .expect("migration initializes state");
+    migration_task.abort();
+
+    let pool = database.runtime_config.build_pool().expect("pool builds");
+    let profile = AuditProfile::production_from_secret_bytes(vec![0x6b; 32].into())
+        .expect("test owns keyed audit");
+    let lock_key = RegistryLockKey::derive("mutation-registry").expect("lock id is bounded");
+    let app = mutation_router(
+        pool.clone(),
+        compiled.clone(),
+        identity.clone(),
+        lock_key,
+        profile.clone(),
+        None,
+    );
+    let claims = api_claims("case-management", Some("zone-a"));
+
+    // A caller-chosen profile that no compiled route grants is refused, and the
+    // audit journal records no profile rather than the caller's bytes.
+    let unknown = send(
+        &app,
+        Method::POST,
+        &format!("/v1/records/widgets?accessProfile={RS_SEC_13_PROFILE_CANARY}"),
+        Some(claims),
+        &[
+            ("content-type", "application/json"),
+            ("idempotency-key", "refusal-profile-unknown"),
+        ],
+        br#"{"data":{"jurisdiction":"zone-a","label":"unreleased","quantity":1}}"#.to_vec(),
+    )
+    .await;
+    assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+    assert_eq!(body_json(unknown).await["code"], "resource.not_found");
+
+    // A compiled profile the route grants is the profile the refusal was
+    // evaluated under, so the audit keeps it.
+    let compiled_profile = send(
+        &app,
+        Method::POST,
+        "/v1/records/widgets?accessProfile=operator",
+        None,
+        &[
+            ("content-type", "application/json"),
+            ("idempotency-key", "refusal-profile-compiled"),
+        ],
+        br#"{"data":{"jurisdiction":"zone-a","label":"unreleased","quantity":1}}"#.to_vec(),
+    )
+    .await;
+    assert_eq!(compiled_profile.status(), StatusCode::NOT_FOUND);
+
+    // Without a caller-supplied profile the route default is recorded.
+    let defaulted = send(
+        &app,
+        Method::POST,
+        "/v1/records/widgets",
+        None,
+        &[
+            ("content-type", "application/json"),
+            ("idempotency-key", "refusal-profile-default"),
+        ],
+        br#"{"data":{"jurisdiction":"zone-a","label":"unreleased","quantity":1}}"#.to_vec(),
+    )
+    .await;
+    assert_eq!(defaulted.status(), StatusCode::NOT_FOUND);
+
+    let refusals = refusal_audit_envelopes(&database).await;
+    assert_eq!(refusals.len(), 3);
+    let mut selected = refusals
+        .iter()
+        .map(|record| record["selectedAccessProfile"].as_str().map(str::to_owned))
+        .collect::<Vec<_>>();
+    selected.sort();
+    assert_eq!(
+        selected,
+        [
+            None,
+            Some("operator".to_owned()),
+            Some("operator".to_owned())
+        ]
+    );
+    let audit_text = serde_json::to_string(&refusals).expect("refusal audit serializes");
+    assert!(!audit_text.contains(RS_SEC_13_PROFILE_CANARY));
+
+    database.cleanup().await;
+}
+
 fn mutation_refusal_audit_fault_router(
     pool: registry_server::postgres::RuntimePool,
     registry: Arc<registry_server::CompiledRegistry>,
@@ -2516,6 +2625,26 @@ async fn durable_counts(database: &TestDatabase, table: &str) -> DurableCounts {
         commits: row.get(5),
         commit_members: row.get(6),
     }
+}
+
+async fn refusal_audit_envelopes(database: &TestDatabase) -> Vec<Value> {
+    database
+        .admin
+        .query(
+            "SELECT convert_from(envelope, 'UTF8')
+             FROM registry_internal.registry_audit
+             WHERE convert_from(envelope, 'UTF8') LIKE '%\"phase\":\"refusal\"%'",
+            &[],
+        )
+        .await
+        .expect("administrator can inspect minimized refusal audit events")
+        .iter()
+        .map(|row| {
+            serde_json::from_str::<Value>(row.get(0)).expect("audit envelope is platform JSON")
+                ["record"]
+                .clone()
+        })
+        .collect()
 }
 
 async fn refusal_audit_count(database: &TestDatabase) -> i64 {

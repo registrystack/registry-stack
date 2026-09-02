@@ -40,6 +40,7 @@ const INSTANCE_ID: &str = "immediate-action-instance";
 const DATABASE_ID: &str = "immediate-action-database";
 const HOUSEHOLD_ID: &str = "00000000-0000-4000-8000-000000000101";
 const OTHER_HOUSEHOLD_ID: &str = "00000000-0000-4000-8000-000000000202";
+const ACCESS_PROFILE_CANARY: &str = "action-access-profile-canary";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn immediate_action_acquires_conditions_applies_atomically_and_replays_by_normalized_body() {
@@ -1160,6 +1161,110 @@ async fn retryable_abort_keeps_one_receipt_and_deadline_cancels_without_late_com
         "deadline cancellation discards the timed-out connection before a late commit can become visible"
     );
     database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn action_refusal_audit_records_only_compiled_access_profiles() {
+    let (database, registry, identity) = setup_action_registry().await;
+    let app = action_router(&database, registry.clone(), identity);
+
+    // A caller-chosen profile that no compiled action route grants is refused,
+    // and the audit journal records no profile rather than the caller's bytes.
+    let unknown = response_parts(
+        send(
+            &app,
+            Method::POST,
+            &format!(
+                "/v1/actions/register-household-contact?accessProfile={ACCESS_PROFILE_CANARY}"
+            ),
+            Some(action_claims()),
+            &[
+                ("content-type", "application/json"),
+                ("idempotency-key", "action-refusal-unknown-profile"),
+            ],
+            serde_json::to_vec(&json!({"input":{}})).expect("invoke body serializes"),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(unknown.status, StatusCode::NOT_FOUND);
+
+    // A compiled profile the action route grants is the profile the refusal was
+    // evaluated under, so the audit keeps it.
+    let compiled_profile = response_parts(
+        send(
+            &app,
+            Method::POST,
+            "/v1/actions/register-household-contact?accessProfile=contact-shadow",
+            None,
+            &[
+                ("content-type", "application/json"),
+                ("idempotency-key", "action-refusal-compiled-profile"),
+            ],
+            serde_json::to_vec(&json!({"input":{}})).expect("invoke body serializes"),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(compiled_profile.status, StatusCode::NOT_FOUND);
+
+    // Without a caller-supplied profile the route default is recorded.
+    let defaulted = response_parts(
+        send(
+            &app,
+            Method::POST,
+            "/v1/actions/register-household-contact",
+            None,
+            &[
+                ("content-type", "application/json"),
+                ("idempotency-key", "action-refusal-default-profile"),
+            ],
+            serde_json::to_vec(&json!({"input":{}})).expect("invoke body serializes"),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(defaulted.status, StatusCode::NOT_FOUND);
+
+    let refusals = refusal_audit_records(&database).await;
+    assert_eq!(refusals.len(), 3);
+    let mut selected = refusals
+        .iter()
+        .map(|record| record["selectedAccessProfile"].as_str().map(str::to_owned))
+        .collect::<Vec<_>>();
+    selected.sort();
+    assert_eq!(
+        selected,
+        [
+            None,
+            Some("contact-registrar".to_owned()),
+            Some("contact-shadow".to_owned())
+        ]
+    );
+    let audit_text = serde_json::to_string(&refusals).expect("refusal audit serializes");
+    assert!(!audit_text.contains(ACCESS_PROFILE_CANARY));
+
+    database.cleanup().await;
+}
+
+async fn refusal_audit_records(database: &TestDatabase) -> Vec<Value> {
+    database
+        .admin
+        .query(
+            "SELECT convert_from(envelope, 'UTF8')
+               FROM registry_internal.registry_audit
+              WHERE convert_from(envelope, 'UTF8') LIKE '%\"phase\":\"refusal\"%'",
+            &[],
+        )
+        .await
+        .expect("administrator inspects minimized refusal audit events")
+        .iter()
+        .map(|row| {
+            serde_json::from_str::<Value>(row.get(0)).expect("audit envelope is platform JSON")
+                ["record"]
+                .clone()
+        })
+        .collect()
 }
 
 async fn setup_action_registry() -> (

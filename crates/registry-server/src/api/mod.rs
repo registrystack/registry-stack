@@ -244,7 +244,7 @@ async fn openapi(
         .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let visible = visible_surfaces(&service, &claims, &options);
     let visible_actions = actions::visible_actions(&service, &claims, &options);
-    if options.access_profile().is_some() && visible.is_empty() && visible_actions.is_empty() {
+    if visible.is_empty() && visible_actions.is_empty() {
         return concealed();
     }
 
@@ -350,7 +350,7 @@ async fn registry_metadata(
     let operations = metadata::operations(&service, &surfaces);
     let visible = visible_metadata_entries(&service, &claims, &options);
     let visible_actions = actions::visible_actions(&service, &claims, &options);
-    if options.access_profile().is_some() && visible.is_empty() && visible_actions.is_empty() {
+    if visible.is_empty() && visible_actions.is_empty() {
         return concealed();
     }
 
@@ -2102,10 +2102,16 @@ async fn audited_mutation_concealment(
     target_record: Option<&str>,
     correlation: &RequestCorrelation,
 ) -> Response {
-    let selected_profile = options
-        .access_profile()
-        .map(String::as_str)
-        .or(Some(route.default_access_profile.as_str()));
+    // Only a profile the compiled route grants may reach the journal, so an
+    // unknown caller-supplied value is recorded as absent.
+    let selected_profile = match options.access_profile() {
+        Some(profile) => route
+            .access_profiles
+            .iter()
+            .any(|candidate| candidate == profile)
+            .then_some(profile.as_str()),
+        None => Some(route.default_access_profile.as_str()),
+    };
     match mutations
         .record_refusal(crate::audit::HttpRefusalAudit {
             method: route.method,
@@ -2940,16 +2946,11 @@ fn resolve_select(
     };
     let mut fields = BTreeSet::new();
     for field in select.fields() {
-        match field.as_str() {
-            "id" | "revision" => continue,
-            api_name => {
-                let field_id = resolve_data_field_id(entity, api_name).ok_or(())?;
-                if !readable_fields.contains(field_id) {
-                    return Err(());
-                }
-                fields.insert(field_id.to_owned());
-            }
+        let field_id = resolve_data_field_id(entity, field.as_str()).ok_or(())?;
+        if !readable_fields.contains(field_id) {
+            return Err(());
         }
+        fields.insert(field_id.to_owned());
     }
     if fields.is_empty() {
         Ok(None)
