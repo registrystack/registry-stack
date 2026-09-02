@@ -109,7 +109,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Create a minimal domain-neutral authoring project in a new directory.
+    /// Create a domain-neutral example authoring project in a new directory.
     Init(InitArgs),
     /// Validate a Registry Server authoring project without opening a database.
     Check(CheckArgs),
@@ -145,7 +145,7 @@ enum Command {
 
 #[derive(Debug, Args)]
 struct InitArgs {
-    /// New directory that will receive the minimal project closure.
+    /// New directory that will receive the example project closure.
     #[arg(value_name = "DESTINATION")]
     destination: PathBuf,
 }
@@ -3440,7 +3440,7 @@ fn init(destination: &Path) -> Result<SuccessReport, FailureReport> {
         findings: compiler_findings(&compiled),
         artifacts: files
             .iter()
-            .map(|(path, bytes)| artifact_report(path, "text/yaml", bytes))
+            .map(|(path, bytes)| artifact_report(path, init_media_type(path), bytes))
             .collect(),
         explanation: None,
     })
@@ -4663,57 +4663,358 @@ fn module_asset_path_diagnostic(module_id: &str) -> Diagnostic {
     )
 }
 
-fn init_files() -> BTreeMap<String, Vec<u8>> {
-    BTreeMap::from([
-        (
-            "registry.yaml".to_owned(),
-            br#"apiVersion: registry.registrystack.org/v1alpha1
+/// The module digest placeholder the initialized project carries until this
+/// command computes it from the module it writes beside the project.
+const INIT_MODULE_DIGEST_PLACEHOLDER: &str = "<module-digest>";
+
+/// The module the initialized project locks; `modules/record-notes/module.yaml`.
+const INIT_MODULE_PATH: &str = "modules/record-notes/module.yaml";
+
+const INIT_README: &[u8] = br#"# Registry project
+
+`registry-serverctl init` wrote this project. It is a working example, not a
+blank page: every identifier is a placeholder chosen to be obviously synthetic,
+and every file carries comments saying what a block does and what you change.
+
+## Files
+
+| File | What it holds |
+| --- | --- |
+| `registry.yaml` | The registry: its identity and package identity, the catalogue projection, one closed vocabulary, two entities, and two access profiles. Every command reads this file. |
+| `modules/record-notes/module.yaml` | A module: a reusable part of the model, versioned on its own and pinned by content digest in the project's `modules` list. |
+| `tests/journeys.yaml` | The requests `registry-serverctl test` replays over HTTP against a throwaway database before a package is built. |
+| `runtime.example.yaml` | An example of the operator's runtime configuration. No command reads it; copy it out of the project and replace every value. |
+
+## What the example models
+
+Two entities: `record-group` is public reference data, and `record` is the
+internal record that points at a group through a `reference` field and carries a
+`status` drawn from a closed vocabulary. Two access profiles read them: an
+`operator` that runs the whole registry, and a `record-reader` whose rows are
+restricted by a claim on its own credentials.
+
+Replace this model with your own. The names are deliberately generic so that
+nothing here reads as advice about what your registry should contain.
+
+## Next commands
+
+```sh
+registry-serverctl check .
+registry-serverctl explain queries .
+registry-serverctl explain events .
+```
+
+`check` compiles the project and reports problems and findings. It reports one
+finding for this project on purpose: `access.profile.unrestricted_collection`,
+because the `operator` profile can list every record. The comment above that
+profile says how to close it.
+
+`explain` prints what the compiled project exposes, such as the query surface
+each profile gets and the events the package would emit.
+
+Edit `modules/record-notes/module.yaml`, then re-pin it:
+
+```sh
+registry-serverctl project lock .
+```
+
+`registry-serverctl test` replays `tests/journeys.yaml` over HTTP. It needs more
+than the project: an empty PostgreSQL database, a runtime configuration built
+from `runtime.example.yaml`, and one credential per journey step bound in a
+credentials file. The operate documentation below walks through preparing them.
+
+## Documentation
+
+- Configure a registry: <https://docs.registrystack.org/configure/registry-server/>
+- Operate a registry: <https://docs.registrystack.org/operate/registry-server/>
+- Every configuration key: <https://docs.registrystack.org/reference/registry-server-configuration/>
+- `registry-serverctl` commands: <https://docs.registrystack.org/reference/cli/registry-serverctl/>
+"#;
+
+const INIT_REGISTRY_PROJECT: &[u8] =
+    br#"# The registry project: one document that decides the model, the access rules,
+# and the catalogue description of a single registry. Every registry-serverctl
+# command reads it. Replace the identifiers, titles, and URLs below with your
+# own; every value here is a placeholder chosen to be obviously synthetic.
+apiVersion: registry.registrystack.org/v1alpha1
 kind: RegistryProject
+
+# Registry identity. `canonicalBaseIri` is the stable base of the IRIs this
+# registry publishes, so point it at a hostname you control before a production
+# package. Names under `.example.invalid` never resolve.
 registry:
   id: generic-registry
   version: 0.1.0
   defaultLanguage: en
   canonicalBaseIri: https://generic-registry.example.invalid
+
+# Package identity binds a compiled package to one environment, one instance,
+# and one reviewed source revision. Raise `sequence` by one for each package you
+# build; the runtime refuses a package whose identity does not match its
+# configuration file.
+package:
+  environment: development
+  instanceId: generic-registry-1
+  sequence: 1
+  sourceRevision: generic-registry-0.1.0
+
+# The Registry Manifest projection is the catalogue description this registry
+# publishes about itself. `accessProfile` and `classificationCeiling` bound what
+# the projection may describe; they never grant access to a caller.
+manifestProjection:
+  accessProfile: operator
+  classificationCeiling: internal
+  catalog:
+    baseUrl: https://generic-registry.example.invalid
+    title: Generic Registry Catalogue
+    description: Placeholder catalogue description; replace it with your own.
+    publisher:
+      id: generic-registry-authority
+      name: Generic Registry Authority
+      iri: https://generic-registry.example.invalid/authority
+  datasets:
+    - id: generic-registry
+      title: Generic Registry
+      description: Placeholder dataset description; replace it with your own.
+      owner: Generic Registry Authority
+      status: under_development
+  dataServices:
+    - id: generic-registry-api
+      title: Generic Registry API
+      endpointUrl: https://generic-registry.example.invalid
+      servesDatasets: [generic-registry]
+  publicService:
+    id: generic-registry-service
+    title: Generic Registry Service
+
+# A vocabulary is a closed code list. A `vocabulary-code` field accepts only
+# these values, and the compiler refuses any other value at authoring time.
+vocabularies:
+  - id: record-status
+    values: [draft, active, retired]
+
 entities:
+  # Reference data the records point at. It is classified `public` because a
+  # list of group codes discloses nothing on its own; the records themselves
+  # stay `internal`.
+  - id: record-group
+    primaryDataset: generic-registry
+    route: record-groups
+    mutationMode: mutable
+    classification: public
+    fields:
+      - {id: code, type: string, required: true, maxLength: 64, classification: public}
+      - {id: label, type: string, required: true, maxLength: 200, classification: public}
+    constraints:
+      - {kind: unique, fields: [code]}
+
+  # The registry's records. `group` is a reference: the server stores the target
+  # record's identifier and refuses a value that names no `record-group`.
+  # `status` is a vocabulary code drawn from the `record-status` list above.
+  # Neither is `required`, so a create may omit it.
+  #
+  # An entity may also declare `events`, which project chosen fields of a
+  # committed change to a webhook destination the deployment binds by name.
+  # This project declares none: a package refuses to activate until the runtime
+  # configuration binds every destination its events name, so add an event and
+  # its binding together.
   - id: record
     primaryDataset: generic-registry
     route: records
     mutationMode: mutable
+    classification: internal
     fields:
-      - id: code
-        type: string
-        required: true
-        maxLength: 64
-        classification: internal
-      - id: label
-        type: string
-        required: true
-        maxLength: 200
-        classification: internal
+      - {id: code, type: string, required: true, maxLength: 64, classification: internal}
+      - {id: label, type: string, required: true, maxLength: 200, classification: internal}
+      - {id: group, type: reference, target: record-group, classification: internal}
+      - {id: status, type: vocabulary-code, vocabulary: record-status, classification: internal}
     constraints:
-      - kind: unique
-        fields: [code]
+      - {kind: unique, fields: [code]}
+
+# A token selects one profile per request, and that profile decides everything
+# the request may touch. Profiles are never merged, and naming one in a request
+# grants nothing the profile does not already allow.
 accessProfiles:
+  # The registry-wide operator. `readableFields` decide what a response may
+  # carry, `writableFields` what a create or patch may set, and
+  # `filterableFields` which fields a caller may filter and sort a list by.
+  #
+  # `check` reports `access.profile.unrestricted_collection` for this profile:
+  # it can list every record, and a caller-supplied filter is not authorization.
+  # That is intended for a single operations team running the whole registry.
+  # Close it by giving the grant a `rowBoundaries` entry, the way `record-reader`
+  # below does, or by removing `list` from its operations.
   - id: operator
+    default: true
     principalClaim: registry_principal
     requiredScopes: [registry:generic:operate]
     requiredPurposes: [registry-operations]
     grants:
-      - entity: record
-        operations: [create, get, list, patch]
+      - entity: record-group
+        operations: [create, get, list]
         readableFields: [code, label]
         writableFields: [code, label]
-"#
-            .to_vec(),
-        ),
-        (
-            FIXTURE_JOURNEYS_PATH.to_owned(),
-            br#"apiVersion: registry.registrystack.org/server-journeys/v1
+        filterableFields: [code]
+      - entity: record
+        operations: [create, get, list, patch]
+        readableFields: [code, label, group, status]
+        writableFields: [code, label, group, status]
+        filterableFields: [code, status]
+
+  # A row-restricted reader. A row boundary compares a declared field against a
+  # verified claim on the caller's credentials, so this profile reads only the
+  # records whose `status` matches its own claim. `equals` compares against one
+  # claim value; `in` compares against a claim carrying a list of them, which
+  # the authorization server must then issue as a JSON array. Bind the boundary
+  # to whatever field carries your registry's tenancy: an owning office, a
+  # jurisdiction code, a programme. Decide deliberately which profiles may write
+  # that field, because a profile that can patch it moves records in and out of
+  # another caller's rows. Here the operator may, and `tests/journeys.yaml`
+  # shows a record leaving this reader's rows when its status changes.
+  - id: record-reader
+    principalClaim: registry_principal
+    requiredScopes: [registry:generic:read]
+    requiredPurposes: [registry-reporting]
+    grants:
+      - entity: record
+        operations: [get, list]
+        readableFields: [code, label, group, status]
+        filterableFields: [code]
+        rowBoundaries:
+          - {field: status, claim: registry_record_status, operator: equals}
+
+# Modules contribute to the model from their own files under `modules/`.
+# `registry-serverctl project lock` writes the version and content digest below;
+# a stale digest is a compile error, which keeps a reviewed project pinned to the
+# module content it was reviewed with. Re-run `project lock` after every module edit.
+modules:
+  - id: "record-notes"
+    version: "0.1.0"
+    digest: "<module-digest>"
+"#;
+
+const INIT_MODULE: &[u8] =
+    br#"# A module contributes to the model from its own file, so a reusable part of a
+# registry can be reviewed and versioned separately from the project that adopts
+# it. `extendEntities` adds to an entity the module does not own.
+#
+# Raise `version` and re-run `registry-serverctl project lock` after every edit
+# here; the project's `modules` entry pins this file by content digest.
+id: record-notes
+version: 0.1.0
+extendEntities:
+  # An optional field: without `required: true`, existing records stay valid and
+  # a create may omit it. Adding a field to the model grants nobody access to
+  # it; list it in an access profile's `readableFields` and `writableFields`
+  # before a caller can see or set it.
+  - entity: record
+    fields:
+      - {id: internal-note, type: string, maxLength: 500, classification: internal}
+"#;
+
+const INIT_RUNTIME_EXAMPLE: &[u8] =
+    br#"# An example runtime configuration. It is not read by any command: copy it to a
+# file the operator keeps outside this project, then replace every value below.
+# The runtime file is a deployment artifact. It binds one compiled package to
+# one database, one token issuer, and one listener. It never holds a credential:
+# a `secret:file/<name>` reference names an owner-only file under the file
+# provider root, and `secret:env/<NAME>` an environment variable.
+# Every host here is under `.example.invalid`, which never resolves.
+apiVersion: registry.registrystack.org/server-runtime/v1alpha1
+kind: RegistryServerRuntimeConfig
+
+# Where the server listens, and whether it trusts an upstream proxy's client
+# address. `direct` means nothing is in front of it.
+listener:
+  bind: 127.0.0.1:8080
+  trustedProxy: direct
+
+# The environment, instance, and database this file may serve. `environment`
+# and `instanceId` must equal the `package` block in registry.yaml, and
+# `databaseId` the `--database-id` given to `test` and `package`.
+identity:
+  environment: development
+  instanceId: generic-registry-1
+  databaseId: generic-registry-db-1
+  databaseInitializationEnvironment: development
+
+# The directory holding the owner-only files the references below name.
+secretProviders:
+  file:
+    root: /replace/me/secrets
+
+# Two connection URLs and the two PostgreSQL roles the package's policies are
+# written for: one role migrates, the other serves requests.
+database:
+  runtimeUrlRef: secret:file/runtime-database-url
+  migrationUrlRef: secret:file/migration-database-url
+  pool:
+    maxSize: 8
+  roles:
+    migration: registry_migration
+    runtime: registry_runtime
+
+# The activated package directory and the revision it must be.
+# `registry-serverctl package` reports `activeRevision`; `compilerSourceRevision`
+# must equal `package.sourceRevision` in registry.yaml.
+package:
+  root: /replace/me/packages/build-1/package
+  trustAnchorPath: /replace/me/package-trust-anchor.json
+  compilerSourceRevision: generic-registry-0.1.0
+  activeRevision: sha256:replace-me-with-the-revision-package-reported
+  activeSequence: 1
+
+# The token issuer this deployment accepts, and the claim names that carry
+# Registry authority. `authorityClaims` must name the claims the access profiles
+# in registry.yaml read: `principalClaim`, and the claims row boundaries compare.
+authentication:
+  oidc:
+    issuer: https://issuer.example.invalid
+    audience: generic-registry
+    allowedAlgorithm: ES256
+    accessTokenType: at+jwt
+    scopeClaim: scope
+    scopeSeparator: " "
+    allowedClients: [generic-registry-client]
+    deniedKids: []
+    maxTokenLifetimeSeconds: 300
+    leewayMilliseconds: 30000
+    jwksSource:
+      kind: discovery
+  authorityClaims:
+    principal: registry_principal
+    purpose: registry_purpose
+
+# The key that chains the audit journal and the secret that signs pagination
+# cursors. Losing either invalidates existing chains or cursors, so generate
+# them once and keep them.
+audit:
+  hashKeyRef: secret:file/audit-key
+cursor:
+  secretRef: secret:file/cursor-key
+
+# One binding for every webhook destination the package's events declare, and
+# no others: activation refuses a missing binding and an extra one alike. This
+# project declares no event, so the map is empty. A destination's URL, shared
+# HMAC key, and retry ceilings live only here, never in the project.
+eventDestinations: {}
+"#;
+
+const INIT_JOURNEYS: &[u8] =
+    br#"# Project journeys: the requests `registry-serverctl test` replays over real
+# HTTP, with real credentials, against a throwaway database before a package is
+# built. Every entity, profile, field, and claim below is resolved against the
+# compiled project first, so a journey can never reach past what a profile
+# already allows. The claims below are synthetic; credentials never belong here,
+# `registry-serverctl test` binds one per step from its own credentials file.
+apiVersion: registry.registrystack.org/server-journeys/v1
 journeys:
   - id: record-lifecycle
     steps:
-      - id: create-record
-        entity: record
+      # `capture` names the created record so later steps can refer to it, by
+      # `recordRef` for a target and by `{recordRef: ...}` for a reference value.
+      - id: create-record-group
+        entity: record-group
         accessProfile: operator
         claims: &operator_claims
           principal: generic-registry-operator
@@ -4721,11 +5022,27 @@ journeys:
           purpose: registry-operations
         request:
           operation: create
-          data: {code: example, label: Example record}
+          data: {code: group-a, label: Example group}
         expect:
           outcome: success
           status: 201
-          fields: {code: example, label: Example record}
+          fields: {code: group-a, label: Example group}
+        capture: example-group
+      - id: create-record
+        entity: record
+        accessProfile: operator
+        claims: *operator_claims
+        request:
+          operation: create
+          data:
+            code: example
+            label: Example record
+            group: {recordRef: example-group}
+            status: active
+        expect:
+          outcome: success
+          status: 201
+          fields: {code: example, label: Example record, status: active}
         capture: example-record
       - id: get-record
         entity: record
@@ -4735,17 +5052,80 @@ journeys:
         expect:
           outcome: success
           status: 200
-          fields: {code: example, label: Example record}
+          fields: {code: example, label: Example record, status: active}
+      # The row boundary on `record-reader` is authorization, not a filter: the
+      # caller's own claim names the status it may read, and this record carries
+      # it.
+      - id: read-record-within-the-claim
+        entity: record
+        accessProfile: record-reader
+        claims: &reader_claims
+          principal: generic-registry-reader
+          scopes: [registry:generic:read]
+          purpose: registry-reporting
+          directClaims:
+            registry_record_status: active
+        request: {operation: list}
+        expect: {outcome: success, status: 200, count: 1}
+      # `etagRef` sends the captured record's ETag as `If-Match`, so a patch
+      # fails rather than overwriting a concurrent change.
+      - id: retire-record
+        entity: record
+        accessProfile: operator
+        claims: *operator_claims
+        request:
+          operation: patch
+          recordRef: example-record
+          etagRef: example-record
+          changes:
+            - {field: status, value: retired}
+        expect:
+          outcome: success
+          status: 200
+          fields: {code: example, label: Example record, status: retired}
+      # The same request from the same reader now returns nothing: the record
+      # moved outside the rows its claim allows.
+      - id: read-record-outside-the-claim
+        entity: record
+        accessProfile: record-reader
+        claims: *reader_claims
+        request: {operation: list}
+        expect: {outcome: success, status: 200, count: 0}
       - id: list-records
         entity: record
         accessProfile: operator
         claims: *operator_claims
         request: {operation: list}
         expect: {outcome: success, status: 200, count: 1}
-"#
-            .to_vec(),
+"#;
+
+fn init_files() -> BTreeMap<String, Vec<u8>> {
+    let module = parse_module_yaml(INIT_MODULE).expect("the initialized module parses");
+    let registry = String::from_utf8(INIT_REGISTRY_PROJECT.to_vec())
+        .expect("the initialized project is UTF-8")
+        .replace(
+            INIT_MODULE_DIGEST_PLACEHOLDER,
+            &module_digest_with_assets(&module, &[]),
+        );
+    BTreeMap::from([
+        ("README.md".to_owned(), INIT_README.to_vec()),
+        (INIT_MODULE_PATH.to_owned(), INIT_MODULE.to_vec()),
+        ("registry.yaml".to_owned(), registry.into_bytes()),
+        (
+            "runtime.example.yaml".to_owned(),
+            INIT_RUNTIME_EXAMPLE.to_vec(),
         ),
+        (FIXTURE_JOURNEYS_PATH.to_owned(), INIT_JOURNEYS.to_vec()),
     ])
+}
+
+/// The media type an initialized project's file is reported with.
+fn init_media_type(path: &str) -> &'static str {
+    if path.ends_with(".md") {
+        "text/markdown"
+    } else {
+        "text/yaml"
+    }
 }
 
 fn render_project_with_module_locks(

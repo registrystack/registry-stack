@@ -1062,38 +1062,98 @@ fn init_creates_a_domain_neutral_project_that_checks_immediately() {
     ]);
 
     assert!(output.status.success(), "{output:?}");
-    assert!(destination.join("registry.yaml").is_file());
-    assert!(!destination.join("modules").exists());
-    assert!(destination.join("tests/journeys.yaml").is_file());
+    for relative in [
+        "README.md",
+        "modules/record-notes/module.yaml",
+        "registry.yaml",
+        "runtime.example.yaml",
+        "tests/journeys.yaml",
+    ] {
+        assert!(
+            destination.join(relative).is_file(),
+            "init writes {relative}"
+        );
+    }
     let registry =
         fs::read_to_string(destination.join("registry.yaml")).expect("initialized project reads");
-    assert!(!registry.contains("manifestProjection"));
-    assert!(!registry.contains("modules:"));
+    assert!(registry.contains("manifestProjection:"));
+    assert!(registry.contains("modules:"));
+    assert!(registry.contains("vocabularies:"));
     let journeys = fs::read_to_string(destination.join("tests/journeys.yaml"))
         .expect("initialized fixture journeys read");
     assert!(journeys.contains("entity: record"));
     assert!(journeys.contains("accessProfile: operator"));
     assert!(journeys.contains("scopes: [registry:generic:operate]"));
     assert!(journeys.contains("purpose: registry-operations"));
+    assert!(journeys.contains("{recordRef: example-group}"));
+    assert!(journeys.contains("status: active"));
+    assert!(registry.contains("type: reference"));
+    assert!(registry.contains("type: vocabulary-code"));
     assert!(!journeys.contains("token"));
     let initialized_project = parse_project_yaml(
         &fs::read(destination.join("registry.yaml")).expect("initialized project bytes read"),
     )
     .expect("initialized project parses");
-    assert!(initialized_project.manifest_projection.is_none());
-    assert!(initialized_project.modules.is_empty());
-    let compiled = compile_project(&initialized_project, &[], CompileProfile::Authoring)
-        .expect("initialized project compiles");
-    validate_fixture_journeys(journeys.as_bytes(), &compiled)
-        .expect("initialized fixture journeys resolve against the compiled project");
+    assert!(initialized_project.manifest_projection.is_some());
+    assert!(initialized_project.package.is_some());
+    let module = parse_module_yaml(
+        &fs::read(destination.join("modules/record-notes/module.yaml"))
+            .expect("initialized module bytes read"),
+    )
+    .expect("initialized module parses");
+    let locks = &initialized_project.modules;
+    assert_eq!(locks.len(), 1);
+    assert_eq!(locks[0].id, module.id);
+    assert_eq!(locks[0].version, module.version);
+    assert_eq!(
+        locks[0].digest.as_deref(),
+        Some(module_digest(&module).as_str())
+    );
+    for profile in [CompileProfile::Authoring, CompileProfile::Production] {
+        let compiled =
+            compile_project(&initialized_project, std::slice::from_ref(&module), profile)
+                .expect("initialized project compiles");
+        validate_fixture_journeys(journeys.as_bytes(), &compiled)
+            .expect("initialized fixture journeys resolve against the compiled project");
+    }
     let report = json_stdout(&output);
     assert_eq!(report["ok"], true);
     assert_eq!(report["command"], "init");
-    assert!(report["findings"]
+    let findings = report["findings"]
         .as_array()
         .expect("findings is an array")
         .iter()
-        .any(|finding| finding["code"] == "package.identity.missing"));
+        .map(|finding| {
+            finding["code"]
+                .as_str()
+                .expect("code is a string")
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(findings, vec!["access.profile.unrestricted_collection"]);
+    let artifacts = report["artifacts"]
+        .as_array()
+        .expect("artifacts is an array")
+        .iter()
+        .map(|artifact| {
+            (
+                artifact["path"].as_str().expect("path is a string"),
+                artifact["mediaType"]
+                    .as_str()
+                    .expect("media type is a string"),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        artifacts,
+        vec![
+            ("README.md", "text/markdown"),
+            ("modules/record-notes/module.yaml", "text/yaml"),
+            ("registry.yaml", "text/yaml"),
+            ("runtime.example.yaml", "text/yaml"),
+            ("tests/journeys.yaml", "text/yaml"),
+        ]
+    );
 
     let check = registry_serverctl(&[
         "--format",
@@ -1102,7 +1162,30 @@ fn init_creates_a_domain_neutral_project_that_checks_immediately() {
         destination.to_str().expect("path is UTF-8"),
     ]);
     assert!(check.status.success(), "{check:?}");
-    assert_eq!(json_stdout(&check)["ok"], true);
+    let check_report = json_stdout(&check);
+    assert_eq!(check_report["ok"], true);
+    assert_eq!(
+        check_report["findings"]
+            .as_array()
+            .expect("findings is an array")
+            .len(),
+        1
+    );
+
+    let locked = registry_serverctl(&[
+        "--format",
+        "json",
+        "project",
+        "lock",
+        destination.to_str().expect("path is UTF-8"),
+    ]);
+    assert!(locked.status.success(), "{locked:?}");
+    assert_eq!(json_stdout(&locked)["explanation"]["changed"], false);
+    assert_eq!(
+        fs::read_to_string(destination.join("registry.yaml")).expect("project rereads"),
+        registry,
+        "an immediate project lock leaves the initialized project byte-identical"
+    );
 }
 
 #[test]
@@ -1325,11 +1408,18 @@ fn init_writes_a_bare_relative_destination_into_the_working_directory() {
         .expect("registry-serverctl runs");
 
     assert!(output.status.success(), "{output:?}");
-    assert!(project.path().join("initialized/registry.yaml").is_file());
-    assert!(project
-        .path()
-        .join("initialized/tests/journeys.yaml")
-        .is_file());
+    for relative in [
+        "initialized/README.md",
+        "initialized/modules/record-notes/module.yaml",
+        "initialized/registry.yaml",
+        "initialized/runtime.example.yaml",
+        "initialized/tests/journeys.yaml",
+    ] {
+        assert!(
+            project.path().join(relative).is_file(),
+            "init writes {relative}"
+        );
+    }
     assert_eq!(json_stdout(&output)["command"], "init");
 }
 
