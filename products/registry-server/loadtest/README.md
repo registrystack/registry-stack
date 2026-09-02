@@ -143,8 +143,14 @@ is why measured runs reset it and sample waits continuously.
 
 ```bash
 python3 -m unittest products/registry-server/loadtest/support/test_evidence.py -v
-bash -n products/registry-server/loadtest/run.sh products/registry-server/loadtest/dbstats.sh
+bash -n products/registry-server/loadtest/{up,down,run,dbstats}.sh
+for profile in products/registry-server/loadtest/profiles/*.js; do
+  k6 inspect -e \
+    ESTABLISHMENT_IDS_FILE=products/registry-server/loadtest/.run/seed/establishment-ids.txt \
+    "$profile" >/dev/null
+done
 ```
 
-Use `k6 inspect` on each profile for a local syntax/configuration check. The
-live `cursor-smoke` is the end-to-end proof that continuation actually occurs.
+The inspect loop requires the synthetic seed pool because workload profiles
+load it during k6 initialization. The live `cursor-smoke` is the end-to-end
+proof that continuation actually occurs.

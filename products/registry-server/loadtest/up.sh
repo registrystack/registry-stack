@@ -12,6 +12,17 @@ postgres_image='postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973b
 pool_max=32
 keep=false
 
+cleanup_failed_start() {
+  local status=$?
+  if [[ "$status" -ne 0 && -f "$run_dir/env.json" ]]; then
+    printf '%s\n' 'Load-test startup failed; stopping resources started by this environment.' >&2
+    "$loadtest_dir/down.sh" >/dev/null 2>&1 ||
+      printf '%s\n' "Automatic cleanup failed; inspect $run_dir and run down.sh." >&2
+  fi
+  exit "$status"
+}
+trap cleanup_failed_start EXIT
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --pool-max)
@@ -133,8 +144,39 @@ openssl x509 -req -sha256 -days 2 \
 chmod 600 "$run_dir/tls/ca.key" "$run_dir/tls/server.key"
 chmod 644 "$run_dir/tls/ca.pem" "$run_dir/tls/server.crt"
 
+# Record every cleanup target before the first external resource starts. If a
+# later startup step fails, the EXIT trap can safely drive the ordinary
+# teardown path instead of leaving a container or reused PID behind.
+python3 - "$run_dir" "$container" "$database_port" "$mint_port" "$server_port" "$metrics_port" "$pool_max" "$keep" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+run_dir, container, database_port, mint_port, server_port, metrics_port, pool_max, keep = sys.argv[1:]
+environment = {
+    "server_url": f"http://127.0.0.1:{server_port}",
+    "metrics_url": f"http://127.0.0.1:{metrics_port}/metrics",
+    "token_url": f"http://127.0.0.1:{mint_port}/token",
+    "database": {
+        "container": container,
+        "port": database_port,
+        "user": "registry_loadtest_runtime",
+        "database": "business_loadtest",
+        "password_file": str(Path(run_dir) / "secrets/business_loadtest-runtime-database-url"),
+    },
+    "driver_client_id": "loadtest-driver",
+    "driver_secret": str(Path(run_dir) / "secrets/driver-client-secret"),
+    "operator_key": str(Path(run_dir) / "keys/operator/signing-p256-private-jwk"),
+    "pool_max": int(pool_max),
+    "keep": keep == "True" or keep == "true",
+    "run_dir": str(Path(run_dir)),
+}
+(Path(run_dir) / "env.json").write_text(json.dumps(environment, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+
 printf '%s\n' '== Starting disposable PostgreSQL 17 with TLS and pg_stat_statements'
 docker run --detach --name "$container" \
+  --label org.registrystack.loadtest=registry-server \
   --env-file "$run_dir/database/postgres.env" \
   --publish "127.0.0.1:${database_port}:5432" \
   "$postgres_image" \
@@ -232,33 +274,6 @@ echo $! >"$run_dir/server.pid"
 python3 "$support" wait-http --url "http://127.0.0.1:${server_port}/ready" --timeout 30
 python3 "$support" wait-http --url "http://127.0.0.1:${metrics_port}/metrics" --timeout 30
 
-python3 - "$run_dir" "$container" "$database_port" "$mint_port" "$server_port" "$metrics_port" "$pool_max" "$keep" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-run_dir, container, database_port, mint_port, server_port, metrics_port, pool_max, keep = sys.argv[1:]
-environment = {
-    "server_url": f"http://127.0.0.1:{server_port}",
-    "metrics_url": f"http://127.0.0.1:{metrics_port}/metrics",
-    "token_url": f"http://127.0.0.1:{mint_port}/token",
-    "database": {
-        "container": container,
-        "port": database_port,
-        "user": "registry_loadtest_runtime",
-        "database": "business_loadtest",
-        "password_file": str(Path(run_dir) / "secrets/business_loadtest-runtime-database-url"),
-    },
-    "driver_client_id": "loadtest-driver",
-    "driver_secret": str(Path(run_dir) / "secrets/driver-client-secret"),
-    "operator_key": str(Path(run_dir) / "keys/operator/signing-p256-private-jwk"),
-    "pool_max": int(pool_max),
-    "keep": keep == "True" or keep == "true",
-    "run_dir": str(Path(run_dir)),
-}
-(Path(run_dir) / "env.json").write_text(json.dumps(environment, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-PY
-
 printf '\n%s\n' 'Registry Server load-test environment is ready.'
 printf '  Registry Server:  http://127.0.0.1:%s\n' "$server_port"
 printf '  Metrics:          http://127.0.0.1:%s/metrics\n' "$metrics_port"
@@ -273,3 +288,4 @@ printf '  Tear down with:   products/registry-server/loadtest/down.sh\n'
 if [[ "$keep" == true ]]; then
   printf '%s\n' 'Note: --keep only records the environment for down.sh; data is not persisted across down/up cycles.'
 fi
+trap - EXIT

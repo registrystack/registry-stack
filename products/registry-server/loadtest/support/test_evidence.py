@@ -317,9 +317,22 @@ class EvidenceTests(unittest.TestCase):
     def test_shell_entrypoints_parse(self) -> None:
         loadtest = MODULE_PATH.parent.parent
         subprocess.run(
-            ["bash", "-n", str(loadtest / "run.sh"), str(loadtest / "dbstats.sh")],
+            [
+                "bash",
+                "-n",
+                str(loadtest / "up.sh"),
+                str(loadtest / "down.sh"),
+                str(loadtest / "run.sh"),
+                str(loadtest / "dbstats.sh"),
+            ],
             check=True,
         )
+        up = (loadtest / "up.sh").read_text(encoding="utf-8")
+        down = (loadtest / "down.sh").read_text(encoding="utf-8")
+        self.assertIn("trap cleanup_failed_start EXIT", up)
+        self.assertIn("org.registrystack.loadtest=registry-server", up)
+        self.assertIn("^registry-server-loadtest-[0-9]+-[0-9]+$", down)
+        self.assertIn('ps -ww -p "$pid" -o command=', down)
 
 
 if __name__ == "__main__":
