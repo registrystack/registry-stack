@@ -163,7 +163,7 @@ modules:
     digest: sha256:135c466624f333b56dcef709f1cef2e6d31537998b24898b693e047abba46ed1
   - id: business-establishments-core
     version: 0.1.0
-    digest: sha256:69198983e19e59a1adb3fba9cdd2ce3a709157bb970709bca87070daf713e3e1
+    digest: sha256:105de8fd3754b8dbd79ec7fd0e896d9fb5231bfbfd4d3cdc3595eb626af524b6
 
 accessProfiles:
   - id: business-operator
@@ -180,6 +180,7 @@ accessProfiles:
           - get
           - list
           - patch
+          - batch
         readableFields:
           - establishment-code
           - site-name
@@ -209,6 +210,7 @@ accessProfiles:
           - lookup
           - list
           - patch
+          - batch
         readableFields:
           - business-code
           - local-registration-number
@@ -269,6 +271,7 @@ accessProfiles:
           - get
           - list
           - patch
+          - batch
         readableFields:
           - establishment
           - business
