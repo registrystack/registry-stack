@@ -37,11 +37,10 @@ An optional final exercise sends a signed webhook to a local receiver.
 
 ## Get the source
 
-Registry Server is unreleased. Clone its source-preview branch:
+Registry Server is unreleased. Clone the repository; its default branch carries the source preview:
 
 ```sh
-git clone --branch codex/registry-server --single-branch \
-  https://github.com/registrystack/registry-stack.git registry-server-tutorial
+git clone https://github.com/registrystack/registry-stack.git registry-server-tutorial
 cd registry-server-tutorial
 ```
 
@@ -100,7 +99,7 @@ curl --silent --show-error --fail-with-body \
   "$registry_url/v1/records/records?accessProfile=operator" | python3 -m json.tool
 ```
 
-The `items` array contains one record. Its `data` object is:
+The `items` array contains one record. Its `data.domainData` object holds the configured fields:
 
 ```json
 {
@@ -108,6 +107,9 @@ The `items` array contains one record. Its `data` object is:
   "label": "Quickstart example record"
 }
 ```
+
+Beside it, `data.recordIdentifier` and `data.revisionIdentifier` identify the record and its
+version, and the response's `meta` object names the registry, dataset, and entity type.
 
 `/v1/records/` is the API prefix; the second `records` comes from the project's `route: records`.
 The `operator` profile permits these reads when the token has the required scope and purpose.
@@ -156,21 +158,28 @@ Read the response:
 python3 -m json.tool tutorial-work/created.json
 ```
 
-The server generates the ID, shown as `<record-id>`:
+The server generates the identifier, shown as `<record-id>`:
 
 ```json
 {
   "data": {
-    "code": "DEMO-002",
-    "label": "North Quay Engineering"
+    "recordIdentifier": "<record-id>",
+    "revisionIdentifier": "1",
+    "domainData": {
+      "code": "DEMO-002",
+      "label": "North Quay Engineering"
+    }
   },
-  "id": "<record-id>",
-  "revision": 1
+  "meta": {
+    "registryIdentifier": "generic-registry",
+    "datasetIdentifier": "generic-registry",
+    "entityTypeIdentifier": "record"
+  }
 }
 ```
 
 Run the create command again unchanged, then read the response again.
-You get `201` with the same ID and revision, not a second record.
+You get `201` with the same identifier and revision, not a second record.
 `Idempotency-Key` identifies a single write so a client can retry after losing a response.
 Use a different key for a different write.
 
@@ -190,7 +199,8 @@ curl --silent --show-error --fail-with-body \
   "$registry_url/v1/records/records" | python3 -m json.tool
 ```
 
-Each item's `data` now contains only `label`; `id` and `revision` remain outside it.
+Each item's `domainData` now contains only `label`. The identifiers stay in the envelope:
+`$select` names configured fields only and refuses `recordIdentifier`.
 Change `$select=label` to `$select=code,label` and repeat the request to restore both fields.
 Single quotes prevent the shell from expanding `$select` and `$top`.
 
@@ -223,14 +233,14 @@ You will add that permission to your own project later in this tutorial.
 Read the created record and save its HTTP headers:
 
 ```sh
-record_id=$(python3 -c 'import json; print(json.load(open("tutorial-work/created.json"))["id"])')
+record_id=$(python3 -c 'import json; print(json.load(open("tutorial-work/created.json"))["data"]["recordIdentifier"])')
 curl --silent --show-error --fail-with-body \
   --header @tutorial-work/authorization.header \
   --dump-header tutorial-work/record.headers \
   "$registry_url/v1/records/records/$record_id?accessProfile=operator" | python3 -m json.tool
 ```
 
-The response still has `revision: 1`.
+The response still shows `"revisionIdentifier": "1"`.
 Its `ETag` header identifies the version you read. Save the exact value, including its quotes:
 
 ```sh
@@ -250,7 +260,9 @@ curl --silent --show-error --fail-with-body \
   "$registry_url/v1/records/records/$record_id?accessProfile=operator" | python3 -m json.tool
 ```
 
-The response has the same ID, `revision: 2`, and label `North Quay Engineering Ltd`.
+The response has the same identifier, `"revisionIdentifier": "2"`, and label `North Quay Engineering Ltd`.
+Patch paths address the object you send at creation, so `/data/label` names the label; the
+response nests stored fields under `data.domainData`, which is not a patch target.
 Try a different update while still using the old ETag:
 
 ```sh
@@ -312,8 +324,12 @@ mkdir -p tutorial-work/project/modules/record-notes
 ```
 
 The command prints `init succeeded` and creates `registry.yaml` and `tests/journeys.yaml`.
-The findings `package.identity.missing` and `manifest_projection.missing` do not block authoring.
-Package identity is needed for deployment; Manifest catalogue metadata is optional.
+It also reports three findings, none of which blocks authoring:
+
+- `access.profile.unrestricted_collection`: the operator profile can list every row. That is
+  intended for this tutorial; a production profile adds a claim-bound row restriction.
+- `package.identity.missing`: package identity is needed for deployment, not for authoring.
+- `manifest_projection.missing`: Registry Manifest catalogue metadata is optional.
 
 Create `tutorial-work/project/modules/record-notes/module.yaml` in your editor:
 
@@ -325,12 +341,15 @@ extendEntities:
     fields:
       - id: internal-note
         type: string
-        required: false
         maxLength: 500
-        classification: restricted
+        classification: internal
 ```
 
-The module adds an optional field to the existing `record` entity.
+The module adds an optional field to the existing `record` entity; a field without
+`required: true` is optional. Its classification matches the entity's default, `internal`.
+A more sensitive value such as `restricted` adds a fourth finding,
+`access.profile.higher_classification`, once a grant exposes the field; it asks you to confirm
+the profile's scope and purpose first.
 In `tutorial-work/project/registry.yaml`, replace the operator grant's two field lists with these
 three lines, keeping their indentation:
 
@@ -350,7 +369,8 @@ target/debug/registry-serverctl project lock tutorial-work/project
 target/debug/registry-serverctl check tutorial-work/project
 ```
 
-Look for `project lock succeeded` and `check succeeded`.
+Look for `project lock succeeded`, a `modules` list showing the module as `added`, and
+`check succeeded`. Both commands repeat the three findings.
 The `modules` entry added to `registry.yaml` records the module's version and content digest.
 After editing a module, rerun `project lock` and review the changed digest with its source.
 
@@ -383,14 +403,22 @@ Read the record schema:
 python3 -m json.tool tutorial-work/schemas/generated/schemas/record.schema.json
 ```
 
-Find `internalNote` under `properties`. This excerpt shows the added property:
+Find `internalNote` under `properties`. An optional field accepts `null`, so the generator wraps
+its type in `anyOf`:
 
 ```json
 {
   "internalNote": {
-    "maxLength": 500,
-    "minLength": 0,
-    "type": "string"
+    "anyOf": [
+      {
+        "maxLength": 500,
+        "minLength": 0,
+        "type": "string"
+      },
+      {
+        "type": "null"
+      }
+    ]
   }
 }
 ```
@@ -401,7 +429,7 @@ Open `tutorial-work/api/generated/openapi.json` to see the create and PATCH requ
 Generated files are outputs: edit YAML and regenerate into a fresh directory to change them.
 
 You have compiled an extension, not installed it into the running database.
-Testing and activating a changed package is covered in [configure your registry](../../configure/registry-server/).
+Testing and activating a changed package is covered in [deploy and operate a registry](../../operate/registry-server/).
 
 {/* Evidence: crates/registry-server/src/artifacts.rs; crates/registry-server/src/logical_names.rs;
     crates/registry-serverctl/src/lib.rs, generate(). */}
@@ -415,7 +443,8 @@ including the records you created.
 
 Stop the launcher now. The `.run/` files remain until the next launch and contain disposable secrets.
 Your `tutorial-work/project/` directory and generated schemas remain unchanged.
-Keep the project if you plan to continue; do not commit `tutorial-work/authorization.header`.
+Keep the project if you plan to continue. The checkout's `.gitignore` excludes `tutorial-work/`,
+so the header file stays out of commits; keep it out of support messages too.
 
 {/* Evidence: products/registry-server/quickstart/run.sh, cleanup(). */}
 
@@ -464,19 +493,21 @@ target/debug/registry-serverctl explain events "$webhook_run/project"
 
 Find `operating-created-v1`. Open
 `products/registry-server/demo/.run/project/modules/business-establishment-summary/module.yaml`
-and compare its `events` entry with the report:
+and compare its `events` entry with the report. The list sits under the entity extension:
 
 ```yaml
-events:
-  - id: operating-created-v1
-    trigger: created
-    projection: [establishment-code, operating-status]
-    when:
-      kind: fields
-      afterEquals:
-        operating-status: operating
-    webhook:
-      destinationId: business-event-receiver
+extendEntities:
+  - entity: business
+    events:
+      - id: operating-created-v1
+        trigger: created
+        projection: [establishment-code, operating-status]
+        when:
+          kind: fields
+          afterEquals:
+            operating-status: operating
+        webhook:
+          destinationId: business-event-receiver
 ```
 
 The condition selects new operating establishments. The projection sends two fields, not the establishment's name
@@ -573,10 +604,10 @@ a history of successful deliveries. The receiver's report lets you inspect what 
 
 Stop the demo with `Ctrl+C` in the first terminal. Its database is removed; the reports remain
 under `.run/` until the next launch. Do not commit `tutorial-work/webhook-authorization.header`.
-Use [configure webhooks](../../configure/registry-server-webhooks/) to declare your own events,
-bind a receiver, and replay an eligible dead letter.
-Use the [events and webhooks reference](../../reference/registry-server-events/) when implementing
-a receiver's payload validation, signature verification, and deduplication.
+Use [author a registry project](../../configure/registry-server/) to declare your own events, and
+[deploy and operate a registry](../../operate/registry-server/) to bind a receiver and replay an
+eligible dead letter. The [Registry Server API](../../reference/registry-server-api/) reference
+describes the delivery a receiver validates, verifies, and deduplicates.
 
 {/* Evidence: products/registry-server/demo/run.sh;
     products/registry-server/demo/support/demo.py, WEBHOOK_MODULE_SOURCE and WebhookReceiver;
@@ -586,10 +617,10 @@ a receiver's payload validation, signature verification, and deduplication.
 ## Next
 
 - [Review changes before updating records](../review-registry-changes/) to test a configurable approval workflow.
-- [Configure your registry](../../configure/registry-server/) to model relationships and prepare a deployment.
+- [Author a registry project](../../configure/registry-server/) to model relationships and permissions.
+- [Deploy and operate a registry](../../operate/registry-server/) to test, package, and activate your project.
 - [Read the Registry Server overview](../../explanation/configuration-defined-registry/) for storage and integration choices.
 - [Configure Registry Mint](../../configure/mint/) when your deployment needs its own token issuer.
-- [Configuration reference](../../reference/registry-server-configuration/) for project, module, and runtime keys.
 
 ## Troubleshooting
 
@@ -621,6 +652,7 @@ If renewal fails, check that the first terminal is still running and inspect its
 | A prerequisite is missing or Docker cannot start a container | Install the named tool or start Docker, then rerun the launcher. A rerun replaces the previous disposable run. |
 | The first build takes time | Wait for the ready message. The first run compiles Rust and may download the PostgreSQL image. |
 | A service does not become ready | Inspect `.run/logs/` under the quickstart directory. Do not share tokens, keys, or database URL files. |
-| A create request returns `409` | Reuse the exact body and key for a retry. For another record, choose a new code and key; codes are unique in this project. |
+| A create request returns `409` with code `idempotency.conflict` | The key was already used with a different body. Reuse the exact body to retry, or choose a new key for a new write. |
+| A create request returns `409` with code `mutation.conflict` | The code is already taken; codes are unique in this project. Choose a new code and a new key. |
 | Generation refuses an output directory | Choose a directory that does not already exist. |
 | You opened a fresh second terminal | Run the `registry_run` and `registry_url` assignments again. Keep the existing `tutorial-work` directory. |

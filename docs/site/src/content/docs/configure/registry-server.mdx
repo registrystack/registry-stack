@@ -254,7 +254,7 @@ Profile members:
 |---|---|
 | `principalClaim` | The token claim that identifies the caller in audit records. Required unless the profile is `anonymous`. |
 | `requiredScopes`, `requiredPurposes` | Every listed scope, and one of the listed purposes, must be present in the token. |
-| `default: true` | The profile a request gets when it names none. One profile at most. |
+| `default: true` | The profile a request gets when it names none. When several profiles expose the same route, exactly one of them must be the default. |
 | `anonymous: true` | No token needed. Anonymous profiles cannot carry row boundaries, lookups from claims, or write operations. |
 
 Grant members:
