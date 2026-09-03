@@ -18,7 +18,7 @@ RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \
     && chmod 0700 /workspace/runtime-root/var/lib/registry-mint/audit \
     && find /workspace/runtime-root -exec touch -h --date="@${SOURCE_DATE_EPOCH}" {} +
 
-FROM gcr.io/distroless/cc-debian13:nonroot@sha256:d97bc0a941b8d4be647dc0ee75b264ddbb772f1ac5ba690a4309c00723b23775 AS runtime
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:c31ff9abcb1910f3ab25c7957bdaf0bfe12a01eb546e8df2282f1c8f682b606c AS runtime
 
 LABEL org.registrystack.runtime.uid="65532" \
       org.registrystack.runtime.gid="65532"

@@ -78,6 +78,7 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
     def test_apply_deletes_expired_versions_from_all_candidates(self) -> None:
         client = FakeClient(
             {
+                "breg-candidate": [version(7, "2026-07-03T00:00:00Z")],
                 "discovery-candidate": [version(6, "2026-07-03T00:00:00Z")],
                 "evidence-candidate": [version(4, "2026-07-03T00:00:00Z")],
                 "mint-candidate": [version(5, "2026-07-03T00:00:00Z")],
@@ -92,6 +93,7 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
         )
         self.assertEqual(
             [
+                ("breg-candidate", 7),
                 ("discovery-candidate", 6),
                 ("evidence-candidate", 4),
                 ("mint-candidate", 5),
@@ -286,12 +288,9 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
                 self.assertEqual([], client.listed)
                 self.assertEqual([], client.deleted)
 
-    def test_breg_candidate_is_not_yet_allowlisted(self) -> None:
-        # breg-candidate joins CANDIDATE_PACKAGES only once v0.26.0 publishes
-        # the first Base Registry Engine candidate; see release/OPERATIONS.md.
-        self.assertNotIn("breg-candidate", self.module.CANDIDATE_PACKAGES)
-        with self.assertRaises(self.module.CleanupError):
-            self.module.assert_candidate_package("breg-candidate")
+    def test_breg_candidate_is_allowlisted_after_first_candidate(self) -> None:
+        self.assertIn("breg-candidate", self.module.CANDIDATE_PACKAGES)
+        self.module.assert_candidate_package("breg-candidate")
 
     def test_malformed_or_future_timestamp_fails_without_deleting(self) -> None:
         for timestamp in ("not-a-date", "2026-07-25T12:00:01Z"):

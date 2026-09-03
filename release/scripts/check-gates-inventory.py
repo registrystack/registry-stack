@@ -662,7 +662,7 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         "Candidate cleanup exact package allowlist",
         "release/scripts/cleanup-release-candidates.py",
         (
-            'CANDIDATE_PACKAGES = (\n    # Listing an absent package fails closed, so a candidate name joins this\n    # allowlist with the release that first publishes it. breg-candidate\n    # joins once v0.26.0 publishes the first Base Registry Engine candidate.\n    "discovery-candidate",\n    "evidence-candidate",\n    "mint-candidate",\n    "relay-candidate",\n)',
+            'CANDIDATE_PACKAGES = (\n    # Listing an absent package fails closed, so a candidate name joins this\n    # allowlist with the release that first publishes it.\n    "breg-candidate",\n    "discovery-candidate",\n    "evidence-candidate",\n    "mint-candidate",\n    "relay-candidate",\n)',
             'PUBLIC_PACKAGES = (\n    # Retired public names stay denylisted so cleanup can never delete history.',
             '    "discovery",\n',
             '    "evidence",\n',
