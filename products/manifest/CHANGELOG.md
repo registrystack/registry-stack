@@ -7,6 +7,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-09-03
+
 ### Added
 
 - Added optional canonical dataset IRIs and deliberate dataset release versions,

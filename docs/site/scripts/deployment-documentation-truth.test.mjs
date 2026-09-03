@@ -16,7 +16,7 @@ async function readYaml(relative) {
   return YAML.parse(await readRepo(relative));
 }
 
-test('current docs stay under /dev/ while v0.15.2 remains the released archive', async () => {
+test('current docs stay under /dev/ while v0.25.0 remains the released archive', async () => {
   const [docsets, repoDocs, generatedDocsets, readme] = await Promise.all([
     readYaml('docs/site/src/data/docsets.yaml'),
     readYaml('docs/site/src/data/repo-docs.yaml'),
@@ -28,7 +28,7 @@ test('current docs stay under /dev/ while v0.15.2 remains the released archive',
   const released = docsets.docsets.find((docset) => docset.id === docsets.released);
 
   assert.equal(current.id, 'latest');
-  assert.equal(docsets.released, 'v0.15.2');
+  assert.equal(docsets.released, 'v0.25.0');
   assert.equal(docsets.published_archive_limit, 3);
   assert.notEqual(docsets.current, docsets.released);
   assert.equal(current.label, 'Development (unreleased)');
@@ -54,7 +54,7 @@ test('current docs stay under /dev/ while v0.15.2 remains the released archive',
   for (const product of Object.values(current.products)) {
     assert.equal(product.ref, 'HEAD');
     assert.equal(product.version, 'main source (unreleased)');
-    assert.doesNotMatch(product.version, /^v0\.15\.2$/);
+    assert.doesNotMatch(product.version, /^v0\.25\.0$/);
   }
 
   for (const [repoId, repo] of Object.entries(repoDocs.repos)) {
@@ -67,18 +67,18 @@ test('current docs stay under /dev/ while v0.15.2 remains the released archive',
     );
   }
 
-  assert.equal(released.path, '/v/0.15.2/');
+  assert.equal(released.path, '/v/0.25.0/');
   assert.equal(released.status, 'archived');
   assert.equal(released.availability, 'released');
-  assert.equal(released.source, 'registry-stack-v0.15.2');
-  assert.match(released.description, /^Released Registry Stack v0\.15\.2/);
+  assert.equal(released.source, 'registry-stack-v0.25.0');
+  assert.match(released.description, /^Released Registry Stack v0\.25\.0/);
   for (const [productId, product] of Object.entries(released.products)) {
     if (productId === 'crosswalk') continue;
-    assert.equal(product.version, 'v0.15.2');
+    assert.equal(product.version, 'v0.25.0');
     assert.equal(
       product.ref,
-      '5da961bf965cc9bb0e962db8bd3b6055459a0d97',
-      `${productId} v0.15.2 docs must stay on the immutable prepared-source ref`,
+      '6e662d66ab1278b81396c0827538bc58b0abe224',
+      `${productId} v0.25.0 docs must stay on the immutable prepared-source ref`,
     );
   }
 
@@ -96,7 +96,7 @@ test('current docs stay under /dev/ while v0.15.2 remains the released archive',
     }
     assert.equal(docset.status, 'archived', `${docset.id} must expose its release-train status`);
     const expectedAvailability =
-      ['v0.25.0', 'v0.24.0', 'v0.23.0', 'v0.22.0', 'v0.21.0', 'v0.20.1', 'v0.20.0', 'v0.18.0', 'v0.17.0', 'v0.16.3', 'v0.15.1', 'v0.15.0'].includes(docset.id)
+      ['v0.26.0', 'v0.24.0', 'v0.23.0', 'v0.22.0', 'v0.21.0', 'v0.20.1', 'v0.20.0', 'v0.18.0', 'v0.17.0', 'v0.16.3', 'v0.15.1', 'v0.15.0'].includes(docset.id)
         ? 'candidate'
         : docset.id.startsWith('v')
           ? 'released'

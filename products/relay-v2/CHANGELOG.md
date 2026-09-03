@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.26.0 - 2026-09-03
+
 ### BREAKING: adopt Registry Record profile v1
 
 Relay JSON and JSON-LD consultation responses now conform to
