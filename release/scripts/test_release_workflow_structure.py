@@ -758,7 +758,8 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             cache["with"]["key"],
             "registry-stack-release-${{ runner.os }}-"
             "${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', "
-            "'release/scripts/build-release-binaries.sh') }}",
+            "'release/scripts/build-release-binaries.sh', "
+            "'release/docker/Dockerfile.builder') }}",
         )
         self.assertIn("registry-stack-release-${{ runner.os }}-", cache["with"]["restore-keys"])
         self.assertIn('created_at} + 7 days', text)

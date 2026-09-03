@@ -1552,6 +1552,21 @@ class RegistryReleaseTest(TestCase):
             '"bregctl-${tag}-linux-amd64"', recipe
         )
         self.assertIn("image_bin_binaries+=(breg)", recipe)
+        builder = (ROOT / "release/docker/Dockerfile.builder").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("release/docker/Dockerfile.builder", recipe)
+        self.assertIn("20250810T000000Z", builder)
+        self.assertIn("libclang-19-dev=1:19.1.7-3+b1", builder)
+        self.assertIn("protobuf-compiler=3.21.12-11", builder)
+        self.assertIn("snapshot.debian.org/archive/debian/", builder)
+        self.assertIn("RELEASE_BUILDER_READY=1", recipe)
+        self.assertIn(
+            "RELEASE_BUILDER_READY is internal to the canonical builder container",
+            recipe,
+        )
+        self.assertIn('${repo_root}" != "/workspace"', recipe)
+        self.assertIn('--user "$(id -u):$(id -g)"', recipe)
 
     def test_release_packaging_excludes_retired_notary(self) -> None:
         binary_recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(

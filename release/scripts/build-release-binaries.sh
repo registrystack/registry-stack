@@ -23,12 +23,84 @@ include_breg=0
 if ((version_major > 0 || version_minor >= 26)); then
   include_breg=1
 fi
+
+build_payload() {
+  export RUSTFLAGS="${RELEASE_RUSTFLAGS:?RELEASE_RUSTFLAGS is required}"
+
+  cargo build --release --locked \
+    -p registry-manifest-cli
+  cp target/release/registry-manifest "dist/bin/registry-manifest-${RELEASE_TAG}-linux-amd64"
+
+  # Build and stage the production Relay before relayctl enables the separate
+  # authoring-only tooling feature on the Relay library dependency.
+  cargo build --release --locked \
+    -p registry-relay-v2 \
+    --bin relay \
+    --no-default-features
+  cp target/release/relay "dist/bin/relay-${RELEASE_TAG}-linux-amd64"
+  cp target/release/relay dist/image-bin/relay
+
+  cargo build --release --locked \
+    -p registry-relayctl
+  cp target/release/relayctl "dist/bin/relayctl-${RELEASE_TAG}-linux-amd64"
+
+  cargo build --release --locked \
+    -p registry-evidence \
+    -p registry-evidencectl \
+    -p registry-mint \
+    -p registry-evidence-oid4vci
+  cp target/release/evidence "dist/bin/evidence-${RELEASE_TAG}-linux-amd64"
+  cp target/release/evidencectl "dist/bin/evidencectl-${RELEASE_TAG}-linux-amd64"
+  cp target/release/mint "dist/bin/mint-${RELEASE_TAG}-linux-amd64"
+  cp target/release/evidence-oid4vci "dist/bin/evidence-oid4vci-${RELEASE_TAG}-linux-amd64"
+  cp target/release/evidence dist/image-bin/evidence
+  cp target/release/mint dist/image-bin/mint
+
+  if [[ "${include_discovery}" -eq 1 ]]; then
+    cargo build --release --locked \
+      -p registry-discovery \
+      --bin discovery
+    cp target/release/discovery "dist/bin/discovery-${RELEASE_TAG}-linux-amd64"
+    cp target/release/discovery dist/image-bin/discovery
+  fi
+
+  if [[ "${include_breg}" -eq 1 ]]; then
+    cargo build --release --locked \
+      -p registry-breg \
+      --bin breg \
+      --features runtime
+    cargo build --release --locked \
+      -p registry-bregctl
+    cp target/release/breg "dist/bin/breg-${RELEASE_TAG}-linux-amd64"
+    cp target/release/bregctl "dist/bin/bregctl-${RELEASE_TAG}-linux-amd64"
+    cp target/release/breg dist/image-bin/breg
+  fi
+}
+
+# The outer invocation prepares the pinned container. The inner invocation is
+# re-executed inside it as the host uid/gid so mounted release outputs are never
+# owned by root on either GitHub-hosted runners or an operator workstation.
+if [[ "${RELEASE_BUILDER_READY:-0}" -eq 1 ]]; then
+  if [[ "${repo_root}" != "/workspace" ||
+        "${CARGO_HOME:-}" != "/workspace/.cargo-home" ||
+        "${CARGO_TARGET_DIR:-}" != "/workspace/target" ||
+        "${RELEASE_TAG:-}" != "${tag}" ||
+        "${REGISTRY_RELEASE_TAG:-}" != "${tag}" ]]; then
+    printf 'RELEASE_BUILDER_READY is internal to the canonical builder container\n' >&2
+    exit 2
+  fi
+  build_payload
+  exit 0
+fi
+
 default_builder_image="rust:1.95-trixie@sha256:f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3"
 if [[ -n "${RELEASE_BUILDER_IMAGE:-}" && "${RELEASE_BUILDER_IMAGE}" != "${default_builder_image}" ]]; then
   printf 'RELEASE_BUILDER_IMAGE must remain pinned to %s\n' "${default_builder_image}" >&2
   exit 2
 fi
-release_builder_image="${default_builder_image}"
+release_builder_recipe="${repo_root}/release/docker/Dockerfile.builder"
+release_builder_recipe_sha="$(sha256sum "${release_builder_recipe}" | cut -d ' ' -f 1)"
+release_builder_image="registry-stack-release-builder:${release_builder_recipe_sha}"
 release_cargo_home="${RELEASE_CARGO_HOME:-${repo_root}/.cargo-home}"
 release_target_dir="${RELEASE_TARGET_DIR:-${repo_root}/target}"
 
@@ -48,6 +120,12 @@ mkdir -p "${repo_root}/dist/bin" "${repo_root}/dist/image-bin"
 # paths and remap those paths so independent hosts produce identical bytes.
 release_rustflags="--remap-path-prefix=/workspace/.cargo-home=/cargo-home --remap-path-prefix=/workspace=/source"
 
+docker build \
+  --platform linux/amd64 \
+  --file "${release_builder_recipe}" \
+  --tag "${release_builder_image}" \
+  "${repo_root}"
+
 docker run --rm \
   --platform linux/amd64 \
   --user "$(id -u):$(id -g)" \
@@ -65,61 +143,11 @@ docker run --rm \
   --env RELEASE_TAG="${tag}" \
   --env REGISTRY_RELEASE_TAG="${tag}" \
   --env RELEASE_RUSTFLAGS="${release_rustflags}" \
+  --env RELEASE_BUILDER_READY=1 \
   "${release_builder_image}" \
-  bash -c 'set -euo pipefail
-    export RUSTFLAGS="${RELEASE_RUSTFLAGS}"
+  /workspace/release/scripts/build-release-binaries.sh "${version}"
 
-    cargo build --release --locked \
-      -p registry-manifest-cli
-    cp target/release/registry-manifest "dist/bin/registry-manifest-${RELEASE_TAG}-linux-amd64"
-
-    # Build and stage the production Relay before relayctl enables the separate
-    # authoring-only tooling feature on the Relay library dependency.
-    cargo build --release --locked \
-      -p registry-relay-v2 \
-      --bin relay \
-      --no-default-features
-    cp target/release/relay "dist/bin/relay-${RELEASE_TAG}-linux-amd64"
-    cp target/release/relay dist/image-bin/relay
-
-    cargo build --release --locked \
-      -p registry-relayctl
-    cp target/release/relayctl "dist/bin/relayctl-${RELEASE_TAG}-linux-amd64"
-
-    cargo build --release --locked \
-      -p registry-evidence \
-      -p registry-evidencectl \
-      -p registry-mint \
-      -p registry-evidence-oid4vci
-    cp target/release/evidence "dist/bin/evidence-${RELEASE_TAG}-linux-amd64"
-    cp target/release/evidencectl "dist/bin/evidencectl-${RELEASE_TAG}-linux-amd64"
-    cp target/release/mint "dist/bin/mint-${RELEASE_TAG}-linux-amd64"
-    cp target/release/evidence-oid4vci "dist/bin/evidence-oid4vci-${RELEASE_TAG}-linux-amd64"
-    cp target/release/evidence dist/image-bin/evidence
-    cp target/release/mint dist/image-bin/mint
-
-    if [[ "${RELEASE_INCLUDE_DISCOVERY}" -eq 1 ]]; then
-      cargo build --release --locked \
-        -p registry-discovery \
-        --bin discovery
-      cp target/release/discovery "dist/bin/discovery-${RELEASE_TAG}-linux-amd64"
-      cp target/release/discovery dist/image-bin/discovery
-    fi
-
-    if [[ "${RELEASE_INCLUDE_BREG}" -eq 1 ]]; then
-      cargo build --release --locked \
-        -p registry-breg \
-        --bin breg \
-        --features runtime
-      cargo build --release --locked \
-        -p registry-bregctl
-      cp target/release/breg "dist/bin/breg-${RELEASE_TAG}-linux-amd64"
-      cp target/release/bregctl "dist/bin/bregctl-${RELEASE_TAG}-linux-amd64"
-      cp target/release/breg dist/image-bin/breg
-    fi
-  '
-
-printf '%s\n' "${release_builder_image}" >"${repo_root}/dist/image-bin/RELEASE_BUILDER_IMAGE"
+printf '%s\n' "${default_builder_image}" >"${repo_root}/dist/image-bin/RELEASE_BUILDER_IMAGE"
 # The staged asset lists follow the same gate as the build above, so a version
 # that predates an asset neither checksums nor chmods a file it never built.
 bin_assets=()
