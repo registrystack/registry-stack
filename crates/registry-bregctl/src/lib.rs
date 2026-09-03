@@ -37,6 +37,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 mod apply_lifecycle;
+mod audit_lifecycle;
 mod data_lifecycle;
 mod doctor;
 mod history_erasure_lifecycle;
@@ -51,6 +52,7 @@ mod test_lifecycle;
 mod webhook_lifecycle;
 
 use apply_lifecycle::{ApplyLifecycleError, ApplyLifecycleRequest};
+use audit_lifecycle::{AuditCliError, AuditExportOutcome, AuditPruneOutcome, AuditVerifyOutcome};
 use data_lifecycle::{
     DataExportRequest, DataImportRequest, DataLifecycleError, DataValidateRequest,
 };
@@ -141,6 +143,8 @@ enum Command {
     Webhook(WebhookArgs),
     /// Inspect and erase eligible change-request retention detail.
     RequestRetention(RequestRetentionArgs),
+    /// Verify, export, and prune the chained audit journal.
+    Audit(AuditArgs),
 }
 
 #[derive(Debug, Args)]
@@ -445,6 +449,55 @@ struct RequestRetentionExactArgs {
     /// Exact proposal version to inspect or erase.
     #[arg(long, value_name = "VERSION")]
     proposal_version: i64,
+}
+
+#[derive(Debug, Args)]
+struct AuditArgs {
+    #[command(subcommand)]
+    command: AuditCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum AuditCommand {
+    /// Verify the chained audit journal against its recorded head.
+    Verify(AuditVerifyArgs),
+    /// Export the verified audit journal as JSON Lines in chain order.
+    Export(AuditExportArgs),
+    /// Remove the verified journal prefix older than one retention boundary.
+    Prune(AuditPruneArgs),
+}
+
+#[derive(Debug, Args)]
+struct AuditVerifyArgs {
+    /// Absolute Base Registry Engine runtime configuration file.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct AuditExportArgs {
+    /// Absolute Base Registry Engine runtime configuration file.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
+
+    /// Absolute JSON Lines file the export creates.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    output: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct AuditPruneArgs {
+    /// Absolute Base Registry Engine runtime configuration file.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
+
+    /// RFC 3339 instant every removed record must precede.
+    #[arg(long, value_name = "RFC3339")]
+    before: String,
+
+    /// Report what the boundary would remove without removing it.
+    #[arg(long)]
+    dry_run: bool,
 }
 
 #[derive(Debug, Args)]
@@ -874,6 +927,7 @@ enum DiagnosticArtifact {
     WebhookSample,
     WebhookOperations,
     RequestRetentionOperation,
+    AuditJournal,
     HistoryErasure,
     HistoryRebaseline,
     PlannerTest,
@@ -919,6 +973,7 @@ enum SuggestedAction {
     SelectWebhookEvent,
     VerifyWebhookOperation,
     VerifyRequestRetentionOperation,
+    VerifyAuditJournal,
     PrepareHistoryErasureRequest,
     PrepareHistoryRebaselineRequest,
     ReviewRetainedHistory,
@@ -1127,6 +1182,33 @@ struct RequestRetentionEraseSuccessReport {
     command: &'static str,
     #[serde(flatten)]
     outcome: RequestRetentionEraseOutcome,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuditVerifySuccessReport {
+    ok: bool,
+    command: &'static str,
+    #[serde(flatten)]
+    outcome: AuditVerifyOutcome,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuditExportSuccessReport {
+    ok: bool,
+    command: &'static str,
+    #[serde(flatten)]
+    outcome: AuditExportOutcome,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuditPruneSuccessReport {
+    ok: bool,
+    command: &'static str,
+    #[serde(flatten)]
+    outcome: AuditPruneOutcome,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -1540,6 +1622,22 @@ where
                 },
             };
         }
+        Command::Audit(args) => {
+            return match args.command {
+                AuditCommand::Verify(args) => match audit_verify(&args) {
+                    Ok(report) => write_audit_verify_success(&report, format, stdout, stderr),
+                    Err(failure) => write_failure(&failure, format, stdout, stderr),
+                },
+                AuditCommand::Export(args) => match audit_export(&args) {
+                    Ok(report) => write_audit_export_success(&report, format, stdout, stderr),
+                    Err(failure) => write_failure(&failure, format, stdout, stderr),
+                },
+                AuditCommand::Prune(args) => match audit_prune(&args) {
+                    Ok(report) => write_audit_prune_success(&report, format, stdout, stderr),
+                    Err(failure) => write_failure(&failure, format, stdout, stderr),
+                },
+            };
+        }
     };
 
     match result {
@@ -1624,6 +1722,74 @@ fn request_retention_failure(
             diagnostic(code, "requestRetention", message),
             DiagnosticArtifact::RequestRetentionOperation,
             SuggestedAction::VerifyRequestRetentionOperation,
+        )],
+    }
+}
+
+fn audit_verify(args: &AuditVerifyArgs) -> Result<AuditVerifySuccessReport, FailureReport> {
+    let outcome = audit_lifecycle::verify(&args.runtime_config)
+        .map_err(|error| audit_failure("audit verify", error))?;
+    Ok(AuditVerifySuccessReport {
+        ok: true,
+        command: "audit verify",
+        outcome,
+    })
+}
+
+fn audit_export(args: &AuditExportArgs) -> Result<AuditExportSuccessReport, FailureReport> {
+    let outcome = audit_lifecycle::export(&args.runtime_config, &args.output)
+        .map_err(|error| audit_failure("audit export", error))?;
+    Ok(AuditExportSuccessReport {
+        ok: true,
+        command: "audit export",
+        outcome,
+    })
+}
+
+fn audit_prune(args: &AuditPruneArgs) -> Result<AuditPruneSuccessReport, FailureReport> {
+    let outcome = audit_lifecycle::prune(&args.runtime_config, &args.before, args.dry_run)
+        .map_err(|error| audit_failure("audit prune", error))?;
+    Ok(AuditPruneSuccessReport {
+        ok: true,
+        command: "audit prune",
+        outcome,
+    })
+}
+
+fn audit_failure(command: &'static str, error: AuditCliError) -> FailureReport {
+    let (code, message) = match error {
+        AuditCliError::Operator => (
+            "audit.operation.refused",
+            "the audit journal operation was refused",
+        ),
+        AuditCliError::ChainBroken => (
+            "audit.chain.broken",
+            "the audit chain does not link every reachable record",
+        ),
+        AuditCliError::InvalidEnvelope => (
+            "audit.envelope.invalid",
+            "the audit journal holds an unreadable envelope",
+        ),
+        AuditCliError::HeadMismatch => (
+            "audit.head.mismatch",
+            "the audit head does not name the newest reachable record",
+        ),
+        AuditCliError::Unreachable => (
+            "audit.records.unreachable",
+            "the audit journal holds records the head cannot reach",
+        ),
+        AuditCliError::BoundaryInFuture => (
+            "audit.boundary.future",
+            "the audit retention boundary is later than the database transaction time",
+        ),
+    };
+    FailureReport {
+        ok: false,
+        command,
+        diagnostics: vec![tool_diagnostic(
+            diagnostic(code, "audit", message),
+            DiagnosticArtifact::AuditJournal,
+            SuggestedAction::VerifyAuditJournal,
         )],
     }
 }
@@ -8031,6 +8197,85 @@ fn write_request_retention_erase_success(
     write_result(result, stderr)
 }
 
+fn write_audit_verify_success(
+    report: &AuditVerifySuccessReport,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format == OutputFormat::Json {
+        serde_json::to_writer_pretty(&mut *stdout, report)
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout))
+    } else {
+        writeln!(stdout, "audit verify succeeded").and_then(|()| {
+            let verification = &report.outcome.verification;
+            writeln!(stdout, "records: {}", verification.records)?;
+            if let Some(hash) = &verification.start_prev_hash {
+                writeln!(stdout, "start prev hash: {hash}")?;
+            }
+            if let Some(hash) = &verification.last_hash {
+                writeln!(stdout, "last hash: {hash}")?;
+            }
+            if let Some(hash) = &verification.head_hash {
+                writeln!(stdout, "head hash: {hash}")?;
+            }
+            Ok(())
+        })
+    };
+    write_result(result, stderr)
+}
+
+fn write_audit_export_success(
+    report: &AuditExportSuccessReport,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format == OutputFormat::Json {
+        serde_json::to_writer_pretty(&mut *stdout, report)
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout))
+    } else {
+        writeln!(stdout, "audit export succeeded").and_then(|()| {
+            writeln!(stdout, "records: {}", report.outcome.export.records)?;
+            if let Some(hash) = &report.outcome.export.last_hash {
+                writeln!(stdout, "last hash: {hash}")?;
+            }
+            Ok(())
+        })
+    };
+    write_result(result, stderr)
+}
+
+fn write_audit_prune_success(
+    report: &AuditPruneSuccessReport,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format == OutputFormat::Json {
+        serde_json::to_writer_pretty(&mut *stdout, report)
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout))
+    } else {
+        writeln!(stdout, "audit prune succeeded").and_then(|()| {
+            let prune = &report.outcome.prune;
+            writeln!(stdout, "dry run: {}", prune.dry_run)?;
+            writeln!(stdout, "removed records: {}", prune.removed_records)?;
+            writeln!(stdout, "retained records: {}", prune.retained_records)?;
+            if let Some(hash) = &prune.boundary_hash {
+                writeln!(stdout, "boundary hash: {hash}")?;
+            }
+            if let Some(envelope_id) = &prune.first_retained_envelope_id {
+                writeln!(stdout, "first retained envelope: {envelope_id}")?;
+            }
+            Ok(())
+        })
+    };
+    write_result(result, stderr)
+}
+
 fn data_operation_name(operation: DataOperationArg) -> &'static str {
     match operation {
         DataOperationArg::Create => "create",
@@ -8786,7 +9031,8 @@ mod tests {
                 "history",
                 "data",
                 "webhook",
-                "request-retention"
+                "request-retention",
+                "audit"
             ]
         );
     }
