@@ -72,7 +72,7 @@ test('header lookup covers the exact platform event request header inventory', (
 
 test('webhook setup and contract lookup have separate connected pages', () => {
   assert.match(operateGuide, /doc_type: how-to/);
-  assert.match(operateGuide, /target\/debug\/bregctl webhook replay/);
+  assert.match(operateGuide, /bregctl webhook replay/);
   assert.match(operateGuide, /\.\.\/\.\.\/reference\/breg-api\//);
   assert.match(page, /doc_type: reference/);
   assert.match(page, /\.\.\/\.\.\/operate\/breg\//);

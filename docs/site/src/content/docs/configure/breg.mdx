@@ -18,22 +18,25 @@ This guide covers the authoring side of Base Registry Engine: the files you writ
 Database setup, packaging, applying, webhook binding, and erasure belong to [Deploy and operate a registry](../../operate/breg/).
 If you have not run a registry yet, start with [Build your first registry](../../tutorials/first-breg/).
 
-You need the `bregctl` binary.
-From a checkout of `registry-stack`:
+Install `bregctl` with the release installer.
+It places `breg` and `bregctl` together in `~/.local/bin` on Linux amd64, Linux arm64, and macOS on Apple Silicon:
 
 ```sh
-cargo build --locked -p registry-bregctl
-target/debug/bregctl --help
+curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/breg-install.sh | bash
+bregctl --version
 ```
+
+Replace `| bash` with `| less` to read the installer before you run it on a host you operate.
+The checks the installer performs, the release assets it reads, and the container image are recorded in [Deploy and operate a registry](../../operate/breg/#obtain-the-runtime).
 
 Every command accepts `--format json` for machine-readable output, and every finding names the file path and document path that caused it.
 
-{/* Evidence: crates/registry-bregctl/src/lib.rs; crates/registry-breg/src/compiler.rs. */}
+{/* Evidence: crates/registry-breg/install.sh; crates/registry-bregctl/src/lib.rs; crates/registry-breg/src/compiler.rs. */}
 
 ## Create a project
 
 ```sh
-target/debug/bregctl init ./my-registry
+bregctl init ./my-registry
 ```
 
 The command writes a working example project rather than a blank one:
@@ -70,7 +73,7 @@ Findings that need review do not fail `check` by default.
 | `apiVersion`, `kind` | `registry.registrystack.org/v1alpha1` and `RegistryProject`. |
 | `registry` | `id`, `version`, `defaultLanguage`, and `canonicalBaseIri`, the base of every record IRI. |
 | `package` | Production identity: `environment`, `instanceId`, `sequence`, `sourceRevision`. Required for a production package. |
-| `manifestProjection` | The Registry Manifest catalog a deployment publishes: the profile it describes, a classification ceiling, and catalog metadata. Required for a production package. |
+| `manifestProjection` | The Registry Manifest catalog a deployment publishes: the `accessProfile` it describes, a `classificationCeiling`, `catalog` metadata, and the `datasets[]` and `dataServices[]` it lists. Required for a production package. A project that still carries the retired singular `dataset` or `dataService` is refused; `bregctl project migrate <project> --write` rewrites it to the plural shape. |
 | `modules` | Included modules by `id`, `version`, and `digest`. |
 | `entities` | Entities declared in this file. |
 | `accessProfiles` | Every profile a token can select. |
@@ -318,7 +321,7 @@ Put requirements on entities whose data must never leave a jurisdiction or a pur
 To see the result for one profile:
 
 ```sh
-target/debug/bregctl explain access ./my-registry
+bregctl explain access ./my-registry
 ```
 
 The report lists, per profile and entity, the operations, fields, boundaries, lookups, and paths that were compiled, and every warning attached to them.
@@ -343,7 +346,7 @@ Save a scenario file beside the project:
 ```
 
 ```sh
-target/debug/bregctl explain access ./my-registry --scenario ./access-scenario.json
+bregctl explain access ./my-registry --scenario ./access-scenario.json
 ```
 
 The preview runs the same admission function as the HTTP layer and reports whether the claims are admitted and which rule refused them, such as `required_scope_missing`.
@@ -448,7 +451,7 @@ The API reference describes each action, its route, and the states it accepts.
 To see everything the compiler derived, including the routes each profile receives:
 
 ```sh
-target/debug/bregctl explain change-requests ./my-registry
+bregctl explain change-requests ./my-registry
 ```
 
 {/* Evidence: products/breg/acceptance/asset-site-placement-change-requests/registry.yaml; crates/registry-breg/src/request_workflow.rs; crates/registry-breg/src/access.rs. */}
@@ -531,7 +534,7 @@ A script that fails, leaves the ceiling, or breaks a bound refuses the submit wi
 Evaluate the script offline, with no database and no credentials, from a JSON file of request field values:
 
 ```sh
-target/debug/bregctl project planner-test ./my-registry \
+bregctl project planner-test ./my-registry \
   --entity person-name-change-request --request ./routine-request.json
 ```
 
@@ -631,7 +634,7 @@ Field ids in `when` and `projection` are the authored kebab-case ids, and the pa
 Use a new event id when you change the projection in a way receivers must notice.
 
 ```sh
-target/debug/bregctl webhook sample ./my-registry --event record-labelled-v1
+bregctl webhook sample ./my-registry --event record-labelled-v1
 ```
 
 The sample renders the exact HTTP request a receiver will get, with synthetic values, so you can build the receiver before the registry exists.
@@ -702,12 +705,12 @@ Write a refusal step for every boundary you rely on; the compiler cannot prove a
 ## Check, explain, and generate
 
 ```sh
-target/debug/bregctl check ./my-registry --deny-findings
-target/debug/bregctl explain model ./my-registry
-target/debug/bregctl explain routes ./my-registry
-target/debug/bregctl explain queries ./my-registry
-target/debug/bregctl generate openapi ./my-registry --output ./generated/openapi
-target/debug/bregctl generate schemas ./my-registry --output ./generated/schemas
+bregctl check ./my-registry --deny-findings
+bregctl explain model ./my-registry
+bregctl explain routes ./my-registry
+bregctl explain queries ./my-registry
+bregctl generate openapi ./my-registry --output ./generated/openapi
+bregctl generate schemas ./my-registry --output ./generated/schemas
 ```
 
 `explain` takes one subject: `model`, `access`, `routes`, `queries`, `actions`, `change-requests`, or `events`.

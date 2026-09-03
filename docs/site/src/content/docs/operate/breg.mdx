@@ -21,18 +21,53 @@ Write the project first with [Author a registry project](../../configure/breg/).
 Three roles take part. The author prepares a package from the project. A signer approves the exact
 package bytes with a key the deployment trusts. The operator, holding the migration credential,
 activates the signed package and runs the server. One person may hold all three roles on a pilot;
-the commands stay the same. Build the two binaries from one checkout and use that same build for
-testing, packaging, activation, and serving:
-
-```sh
-cargo build --locked -p registry-bregctl -p registry-breg
-```
+the commands stay the same.
 
 Every command reads `--help`. Paths given to `--runtime-config`, `--credentials`, `--output`, and
 `--package` must be absolute.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, TestArgs, PackageArgs, ApplyArgs, and DoctorArgs;
     products/breg/scripts/test-adopter-workflow.sh. */}
+
+## Obtain the runtime
+
+Install `breg` and `bregctl` from the release assets:
+
+```sh
+curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/breg-install.sh | bash
+bregctl --version
+```
+
+The installer supports Linux amd64, Linux arm64, and macOS on Apple Silicon, and refuses any other
+platform rather than guessing. It verifies both downloaded binaries against the release `SHA256SUMS`
+before anything reaches the install directory, and installs both or neither. It does not verify
+release authenticity. The signed checksum chain that does, and the checks behind it, are recorded in
+[OpenSSF and release trust](../../security/openssf-evidence/). Replace `| bash` with `| less` to read
+the installer before you run it on a host you operate. For a higher-assurance installation, follow
+[release verification](https://github.com/registrystack/registry-stack/blob/v0.26.0/release/VERIFY.md)
+for the pinned tag, then rerun the installer with `BREG_ASSET_DIR` pointing at the verified
+directory. `BREG_INSTALL_DIR` selects the install directory; the default is `~/.local/bin`.
+
+Testing, packaging, activation, and serving must use one release: the `bregctl` that packages and
+the `breg` that serves carry the same tag, and `--version` on each prints it. The installer keeps
+the pair together, so reinstalling replaces both.
+
+The release publishes the installer as `breg-v0.26.0-install.sh`, with `breg-install.sh` as the
+movable alias, and the binaries as `breg-v0.26.0-linux-amd64`, `breg-v0.26.0-linux-arm64`,
+`breg-v0.26.0-macos-arm64`, `bregctl-v0.26.0-linux-amd64`, `bregctl-v0.26.0-linux-arm64`, and
+`bregctl-v0.26.0-macos-arm64`.
+
+The container image is `ghcr.io/registrystack/breg:v0.26.0`, built on distroless nonroot. Its
+entrypoint is `/usr/local/bin/breg`, its default arguments are `--config /etc/breg/runtime.yaml`,
+and it exposes port 8080. The image carries no shell, no writable directory, and no healthcheck
+subcommand: the audit journal lives in PostgreSQL, the runtime configuration and the files it names
+are mounted read-only under `/etc/breg`, and the orchestrator probes `GET /health` or
+`GET /healthz` over HTTP for liveness while readiness stays with `GET /ready`, as
+[Activate and serve](#activate-and-serve) records. The release workflow records each promoted
+image digest in the release manifest; pin that digest instead of the movable tag.
+
+{/* Evidence: crates/registry-breg/install.sh; release/docker/Dockerfile.breg;
+    crates/registry-breg/src/api/mod.rs. */}
 
 ## Provision PostgreSQL
 
@@ -235,7 +270,7 @@ bindings:
 Then run the test with the signature policy the package will carry:
 
 ```sh
-target/debug/bregctl --format json test ./my-registry \
+bregctl --format json test ./my-registry \
   --runtime-config /srv/registry/runtime-test.yaml \
   --credentials /srv/registry/schema-test-credentials.yaml \
   --database-id civil-registry-db-1 \
@@ -257,7 +292,7 @@ A journey failure reports the journey and step without record values.
 `package` writes the deployable package directory and stops at the signing boundary:
 
 ```sh
-target/debug/bregctl --format json package ./my-registry \
+bregctl --format json package ./my-registry \
   --database-id civil-registry-db-1 \
   --test-receipt /srv/registry/schema-test-receipt.json \
   --signature-threshold 1 --signature-key-id registry-signer-2026 \
@@ -317,7 +352,7 @@ Write the serving runtime file with `package.root` pointing at `build-1/package`
 with the migration credential:
 
 ```sh
-target/debug/bregctl --format json apply \
+bregctl --format json apply \
   --runtime-config /etc/breg/runtime.yaml \
   --package /srv/registry/build-1/package --initial
 ```
@@ -327,8 +362,8 @@ already name that package. The report carries the activated revision, sequence, 
 fingerprint. Confirm the configuration before starting the process:
 
 ```sh
-target/debug/bregctl verify --runtime-config /etc/breg/runtime.yaml
-target/debug/bregctl doctor --runtime-config /etc/breg/runtime.yaml
+bregctl verify --runtime-config /etc/breg/runtime.yaml
+bregctl doctor --runtime-config /etc/breg/runtime.yaml
 breg --config /etc/breg/runtime.yaml
 ```
 
@@ -409,9 +444,14 @@ A successor package goes through the same test, package, sign, and apply sequenc
 package as its baseline. Start by comparing the edited project with the active package:
 
 ```sh
-target/debug/bregctl --format json diff ./my-registry \
+bregctl --format json diff ./my-registry \
   --runtime-config /etc/breg/runtime.yaml
 ```
+
+`--package <directory>` in place of `--runtime-config` takes a closed package directory as the
+baseline and checks only its integrity, so a signer can review a candidate without runtime
+credentials or activation authority; the report labels that baseline `integrity_only` rather than
+`runtime_bound`.
 
 The diff lists model, access, and route changes with their change codes and, for access changes,
 their direction: a scope, purpose, row-boundary, field, count, history, or export change is marked
@@ -446,7 +486,7 @@ still needs rehearsal evidence. A field added as required is created without its
 reviewed steps backfill it, and the plan constrains the column afterwards.
 
 ```sh
-target/debug/bregctl --format json test ./my-registry \
+bregctl --format json test ./my-registry \
   --baseline-runtime-config /etc/breg/runtime.yaml \
   --reviewed-migrations ./reviewed-migrations \
   --runtime-config /srv/registry/runtime-test.yaml \
@@ -461,7 +501,7 @@ still names the active package; the target comes from `--package`. A destructive
 needs its reviewed backup artifact, bound by its descriptor path:
 
 ```sh
-target/debug/bregctl --format json apply \
+bregctl --format json apply \
   --runtime-config /etc/breg/runtime.yaml \
   --package /srv/registry/build-2/package \
   --backup modules/core/migrations/0002/backup.json=/srv/registry/backups/0002.dump
@@ -578,10 +618,10 @@ Inspect pending, dead-lettered, and expired deliveries, then replay a dead lette
 receiver:
 
 ```sh
-target/debug/bregctl --format json webhook list \
+bregctl --format json webhook list \
   --runtime-config /etc/breg/runtime.yaml --limit 50
 
-target/debug/bregctl webhook replay \
+bregctl webhook replay \
   --runtime-config /etc/breg/runtime.yaml \
   --event-id "<eventId>" --delivery-id "<deliveryId>" \
   --expected-generation "<generation>"
@@ -632,7 +672,7 @@ process arguments:
 ```
 
 ```sh
-target/debug/bregctl history erase \
+bregctl history erase \
   --runtime-config /etc/breg/runtime.yaml \
   --request-file /srv/registry/private/erasure.json
 ```
@@ -666,7 +706,7 @@ Write an owner-only JSON request file (mode `0600`) carrying the operator refere
 ```
 
 ```sh
-target/debug/bregctl history rebaseline \
+bregctl history rebaseline \
   --runtime-config /etc/breg/runtime.yaml \
   --request-file /srv/registry/private/rebaseline.json
 ```
@@ -705,16 +745,16 @@ detail of one proposal version while keeping its value-free lifecycle rows; the 
 mode refuses erasure. List the retained rows, count what one erasure would remove, then erase:
 
 ```sh
-target/debug/bregctl --format json request-retention list \
+bregctl --format json request-retention list \
   --runtime-config /etc/breg/runtime.yaml \
   --request-entity placement-correction-request --limit 50
 
-target/debug/bregctl --format json request-retention dry-run \
+bregctl --format json request-retention dry-run \
   --runtime-config /etc/breg/runtime.yaml \
   --request-entity placement-correction-request \
   --request-id "<requestId>" --proposal-version 3
 
-target/debug/bregctl --format json request-retention erase \
+bregctl --format json request-retention erase \
   --runtime-config /etc/breg/runtime.yaml \
   --request-entity placement-correction-request \
   --request-id "<requestId>" --proposal-version 3
@@ -738,10 +778,10 @@ retention boundary. They read envelope bytes, hashes, envelope identifiers, and 
 so no record value reaches the report or a refusal.
 
 ```sh
-target/debug/bregctl --format json audit verify \
+bregctl --format json audit verify \
   --runtime-config /etc/breg/runtime.yaml
 
-target/debug/bregctl --format json audit export \
+bregctl --format json audit export \
   --runtime-config /etc/breg/runtime.yaml \
   --output /srv/registry/private/audit-journal.jsonl
 ```
@@ -768,11 +808,11 @@ retention policy before running a prune without `--dry-run`, and confirm the app
 :::
 
 ```sh
-target/debug/bregctl --format json audit prune \
+bregctl --format json audit prune \
   --runtime-config /etc/breg/runtime.yaml \
   --before 2026-01-01T00:00:00Z --dry-run
 
-target/debug/bregctl --format json audit prune \
+bregctl --format json audit prune \
   --runtime-config /etc/breg/runtime.yaml \
   --before 2026-01-01T00:00:00Z
 ```
@@ -801,12 +841,12 @@ is one JSON object naming the operation and the record data:
 ```
 
 ```sh
-target/debug/bregctl data validate \
+bregctl data validate \
   --package /srv/registry/build-1/package \
   --entity record --profile operator --operation create \
   --input /srv/registry/import/records.jsonl
 
-target/debug/bregctl data import \
+bregctl data import \
   --package /srv/registry/build-1/package \
   --breg-url https://registry.example.org \
   --access-token-file /srv/registry/private/import-token \
@@ -814,7 +854,7 @@ target/debug/bregctl data import \
   --input /srv/registry/import/records.jsonl \
   --checkpoint /srv/registry/import/records.checkpoint --max-chunks 20
 
-target/debug/bregctl data export \
+bregctl data export \
   --package /srv/registry/build-1/package \
   --breg-url https://registry.example.org \
   --access-token-file /srv/registry/private/export-token \

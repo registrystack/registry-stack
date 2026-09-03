@@ -24,8 +24,7 @@ import { eventConfiguration } from '../../../lib/breg-event-reference.mjs';
 
 Lookup reference for the HTTP API a compiled Base Registry Engine package serves and for the events
 it emits. Every registry serves the same route shapes; the entity routes, fields, profiles, and
-actions come from your project. The contract is a source preview, not a frozen compatibility
-promise.
+actions come from your project. The contract is not a frozen compatibility promise.
 
 For the authoring grammar, use [author a registry project](../../configure/breg/).
 For deployment, receivers, and recovery, use
@@ -39,9 +38,9 @@ the exact ones its package compiled.
 Every request carries `Authorization: Bearer <token>` unless the selected profile sets
 `anonymous: true`. The token is a JWT signed by the configured issuer with the configured
 algorithm. It must carry
-`iss`, `aud`, and `exp`, and its scopes come from the claim named by `scopeClaim` (default
-`scope`, space separated). The principal and purpose claims are the ones named under
-`authorityClaims`.
+`iss`, `aud`, and `exp`, and its scopes come from the claim named by `scopeClaim`, split on
+`scopeSeparator`; both are required settings. The principal and purpose claims are the ones named
+under `authorityClaims`.
 
 Each route has one default access profile. A caller selects another with the `accessProfile`
 query option. A profile grants access when the token satisfies its `requiredScopes`,
@@ -143,8 +142,9 @@ A collection read returns the matching envelopes as `items`, a `pageInfo` object
 ```
 
 `nextCursor` is `null` on the last page. To continue, send the cursor as `$skiptoken` with no
-other query option except `accessProfile`. The cursor is signed with the runtime `cursor.secret`,
-binds the whole original query, and expires after `cursor.maxAgeSeconds`; a cursor that fails
+other query option except `accessProfile`. The cursor is signed with the secret named by the
+runtime `cursor.secretRef`, binds the whole original query, and expires after
+`cursor.maxAgeSeconds`; a cursor that fails
 any of those checks returns `400 query.cursor_invalid`. With `$count`, the response carries the
 matching total beside the page.
 
@@ -175,8 +175,7 @@ Literals must fit the field type. A bounding box is four CRS84 degrees, west, so
 bbox=30.0,-2.1,30.9,-1.8
 ```
 
-{/* Evidence: crates/registry-breg/src/query.rs, parse_filter(), MAX_SELECTED_FIELDS, MAX_IN_VALUES, MAX_FILTER_PREDICATES, MAX_FILTER_DEPTH, MAX_FILTER_NODES, MAX_LITERAL_BYTES, MAX_OPAQUE_VALUE_BYTES, MAX_QUERY_PAYLOAD_BYTES, and MAX_BBOX_PARAMETER_BYTES;
-    crates/registry-breg/src/api/mod.rs, MAX_TOP. */}
+{/* Evidence: crates/registry-breg/src/query.rs, parse_filter(), MAX_SELECTED_FIELDS, MAX_IN_VALUES, MAX_FILTER_PREDICATES, MAX_FILTER_DEPTH, MAX_FILTER_NODES, MAX_LITERAL_BYTES, MAX_OPAQUE_VALUE_BYTES, MAX_QUERY_PAYLOAD_BYTES, MAX_BBOX_PARAMETER_BYTES, and MAX_TOP. */}
 
 ## Mutations
 
