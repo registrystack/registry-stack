@@ -823,9 +823,10 @@ target/debug/bregctl data export \
 `data validate` checks every line against the compiled plan without a network. An import commits
 one bounded chunk at a time and records progress in the checkpoint file beside a sidecar the
 command owns, so a rerun with the same checkpoint resumes after the last committed chunk and never
-re-sends a committed one. An export writes the checkpoint after every page; continuation comes
-from the server's cursor, so editing the checkpoint cannot skip or repeat pages. `--max-chunks`
-and `--max-pages` bound one operator run.
+re-sends a committed one. An export appends one bounded page at a time, then records the output
+length, digest, record count, and server cursor in its checkpoint. A rerun validates the entire
+existing output against that checkpoint before requesting the next server-validated cursor. Do not
+edit either file. `--max-chunks` and `--max-pages` bound one operator run.
 
 {/* Evidence: crates/registry-breg/src/data.rs;
     crates/registry-bregctl/src/data_lifecycle.rs;

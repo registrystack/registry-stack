@@ -639,11 +639,11 @@ struct DataExportArgs {
     #[arg(long = "field", value_name = "ID", required = true)]
     fields: Vec<String>,
 
-    /// New JSON Lines output file.
+    /// JSON Lines output file. Existing output resumes from its checkpoint.
     #[arg(long, value_name = "FILE")]
     output: PathBuf,
 
-    /// New export checkpoint file written after every page.
+    /// Export checkpoint file written after every page.
     #[arg(long, value_name = "FILE")]
     checkpoint: PathBuf,
 

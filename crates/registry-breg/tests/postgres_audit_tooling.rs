@@ -7,6 +7,7 @@
 mod postgres_harness;
 
 use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 
 use postgres_harness::TestDatabase;
 use registry_breg::audit_tooling::{AuditOperatorService, AuditPruneBoundary, AuditToolingError};
@@ -107,6 +108,32 @@ async fn verify_refuses_a_tampered_envelope_a_rewritten_head_and_a_deleted_recor
         fixture.service().verify().await.err(),
         Some(AuditToolingError::Unreachable { records: 1 }),
         "a deleted middle record keeps the head reachable and strands the records before it"
+    );
+
+    fixture.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn verify_reports_a_cyclic_chain_without_waiting_for_the_statement_timeout() {
+    let fixture = Fixture::create().await;
+    fixture.seed(1).await;
+    let chain = fixture.chain().await;
+    let original = fixture.envelope_bytes(&chain[0].envelope_id).await;
+    let mut cyclic: Value = serde_json::from_slice(&original).expect("the envelope is JSON");
+    cyclic["prev_hash"] = Value::String(hex::encode(chain[0].record_hash));
+    fixture
+        .set_envelope_bytes(
+            &chain[0].envelope_id,
+            &serde_json::to_vec(&cyclic).expect("the cyclic envelope serializes"),
+        )
+        .await;
+
+    let result = tokio::time::timeout(Duration::from_secs(5), fixture.service().verify())
+        .await
+        .expect("cycle detection finishes before the database statement timeout");
+    assert_eq!(
+        result.err(),
+        Some(AuditToolingError::ChainBroken { position: 1 })
     );
 
     fixture.cleanup().await;

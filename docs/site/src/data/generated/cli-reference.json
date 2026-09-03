@@ -1653,7 +1653,7 @@
                 },
                 {
                   "display": "--output <FILE>",
-                  "description": "New JSON Lines output file",
+                  "description": "JSON Lines output file. Existing output resumes from its checkpoint",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -1662,7 +1662,7 @@
                 },
                 {
                   "display": "--checkpoint <FILE>",
-                  "description": "New export checkpoint file written after every page",
+                  "description": "Export checkpoint file written after every page",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],

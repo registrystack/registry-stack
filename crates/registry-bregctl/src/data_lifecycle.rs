@@ -15,9 +15,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use registry_breg::data::{
-    execute_export_page, execute_import_chunk, DataError, DataExportCheckpoint, DataExportPlan,
-    DataHttpMethod, DataHttpRequest, DataHttpResponse, DataImportCheckpoint, DataImportOperation,
-    DataImportPlan, MAX_DATA_HTTP_RESPONSE_BYTES, MAX_DATA_IMPORT_INPUT_BYTES,
+    execute_export_page, execute_import_chunk, DataError, DataExportCheckpoint,
+    DataExportOutputState, DataExportPlan, DataHttpMethod, DataHttpRequest, DataHttpResponse,
+    DataImportCheckpoint, DataImportOperation, DataImportPlan, MAX_DATA_HTTP_RESPONSE_BYTES,
+    MAX_DATA_IMPORT_INPUT_BYTES,
 };
 use registry_breg::package::{inspect_package_integrity, PackageEnvelope, PackageError};
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
@@ -291,19 +292,13 @@ pub(crate) fn run_export(
     .map_err(DataLifecycleError::Data)?;
     let breg_url = parse_breg_url(request.breg_url)?;
     let token = read_access_token(request.access_token_file)?;
-    let (mut checkpoint, mut resume_state) = DataExportCheckpoint::start(
-        &plan,
-        &inspected.package_revision,
-        &inspected.schema_fingerprint,
-    )
-    .map_err(DataLifecycleError::Data)?;
+    let (mut checkpoint, mut output_state, mut resume_state) =
+        load_or_start_export(&plan, &inspected, request.output, request.checkpoint)?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|_| DataLifecycleError::Runtime)?;
     let client = build_data_http_client()?;
-    reserve_export_paths(request.output, request.checkpoint)?;
-    let mut output_prefix = Vec::new();
     let mut pages = 0u64;
     let max_pages = request.max_pages.unwrap_or(u64::MAX);
     while !checkpoint.is_complete() && pages < max_pages {
@@ -313,7 +308,7 @@ pub(crate) fn run_export(
                 &mut checkpoint,
                 &inspected.package_revision,
                 &inspected.schema_fingerprint,
-                &output_prefix,
+                &output_state,
                 &resume_state,
                 |data_request| dispatch_http(&client, &breg_url, &token, data_request),
             ))
@@ -321,17 +316,17 @@ pub(crate) fn run_export(
         let Some(progress) = progress else {
             break;
         };
-        let parts = progress.into_parts();
-        output_prefix = parts.0;
-        resume_state = parts.1;
+        let (page_bytes, next_output_state, next_resume_state) = progress.into_parts();
         pages = pages.checked_add(1).ok_or(DataLifecycleError::Checkpoint)?;
-        write_atomic(request.output, &output_prefix)?;
+        append_export_page(request.output, &page_bytes)?;
         write_atomic(
             request.checkpoint,
             &checkpoint
                 .canonical_json()
                 .map_err(DataLifecycleError::Data)?,
         )?;
+        output_state = next_output_state;
+        resume_state = next_resume_state;
     }
     Ok(DataExportOutcome {
         package_revision: inspected.package_revision,
@@ -462,6 +457,57 @@ fn load_or_start_import(
         (false, true) => recover_state_only_import(plan, inspected, checkpoint_path, state_path),
         (true, true) => load_existing_import(plan, inspected, checkpoint_path, state_path),
         (true, false) => Err(DataLifecycleError::Checkpoint),
+    }
+}
+
+fn load_or_start_export(
+    plan: &DataExportPlan,
+    inspected: &InspectedDataPackage,
+    output_path: &Path,
+    checkpoint_path: &Path,
+) -> Result<
+    (
+        DataExportCheckpoint,
+        DataExportOutputState,
+        registry_breg::data::DataExportResumeState,
+    ),
+    DataLifecycleError,
+> {
+    let output_exists = output_path
+        .try_exists()
+        .map_err(|_| DataLifecycleError::Checkpoint)?;
+    let checkpoint_exists = checkpoint_path
+        .try_exists()
+        .map_err(|_| DataLifecycleError::Checkpoint)?;
+    match (output_exists, checkpoint_exists) {
+        (false, false) => {
+            let (checkpoint, resume_state) = DataExportCheckpoint::start(
+                plan,
+                &inspected.package_revision,
+                &inspected.schema_fingerprint,
+            )
+            .map_err(DataLifecycleError::Data)?;
+            let checkpoint_bytes = checkpoint
+                .canonical_json()
+                .map_err(DataLifecycleError::Data)?;
+            reserve_export_paths(output_path, checkpoint_path, &checkpoint_bytes)?;
+            Ok((checkpoint, DataExportOutputState::empty(), resume_state))
+        }
+        (true, true) => {
+            let output_state = read_export_output_state(output_path)?;
+            let checkpoint_bytes = read_bounded_regular(checkpoint_path, MAX_CHECKPOINT_BYTES)
+                .map_err(|_| DataLifecycleError::Checkpoint)?;
+            let (checkpoint, resume_state) = DataExportCheckpoint::resume_from_json(
+                &checkpoint_bytes,
+                plan,
+                &inspected.package_revision,
+                &inspected.schema_fingerprint,
+                &output_state,
+            )
+            .map_err(DataLifecycleError::Data)?;
+            Ok((checkpoint, output_state, resume_state))
+        }
+        (false, true) | (true, false) => Err(DataLifecycleError::Checkpoint),
     }
 }
 
@@ -654,9 +700,56 @@ fn read_bounded_regular(path: &Path, max_bytes: u64) -> Result<Vec<u8>, io::Erro
     fs::read(path)
 }
 
-fn reserve_export_paths(output: &Path, checkpoint: &Path) -> Result<(), DataLifecycleError> {
+fn reserve_export_paths(
+    output: &Path,
+    checkpoint: &Path,
+    checkpoint_bytes: &[u8],
+) -> Result<(), DataLifecycleError> {
     write_atomic_create_new(output, &[])?;
-    write_atomic_create_new(checkpoint, &[])
+    write_atomic_create_new(checkpoint, checkpoint_bytes)
+}
+
+fn read_export_output_state(path: &Path) -> Result<DataExportOutputState, DataLifecycleError> {
+    super::ensure_no_symlink_components(path, "data.output.invalid", "output")
+        .map_err(|_| DataLifecycleError::Output)?;
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(export_file_no_follow_flags());
+    let file = options.open(path).map_err(|_| DataLifecycleError::Output)?;
+    if !file
+        .metadata()
+        .map_err(|_| DataLifecycleError::Output)?
+        .is_file()
+    {
+        return Err(DataLifecycleError::Output);
+    }
+    DataExportOutputState::from_reader(file).map_err(DataLifecycleError::Data)
+}
+
+fn append_export_page(path: &Path, page: &[u8]) -> Result<(), DataLifecycleError> {
+    prepare_atomic_write_path(path, true)?;
+    let mut options = fs::OpenOptions::new();
+    options.append(true);
+    #[cfg(unix)]
+    options.custom_flags(export_file_no_follow_flags());
+    let mut file = options.open(path).map_err(|_| DataLifecycleError::Output)?;
+    if !file
+        .metadata()
+        .map_err(|_| DataLifecycleError::Output)?
+        .is_file()
+    {
+        return Err(DataLifecycleError::Output);
+    }
+    file.write_all(page)
+        .and_then(|()| file.sync_all())
+        .map_err(|_| DataLifecycleError::Output)
+}
+
+#[cfg(unix)]
+fn export_file_no_follow_flags() -> i32 {
+    (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NONBLOCK)
+        .bits() as i32
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), DataLifecycleError> {
@@ -888,6 +981,35 @@ mod tests {
         (plan, inspected)
     }
 
+    fn export_plan_and_inspected() -> (DataExportPlan, InspectedDataPackage) {
+        let registry = compiled();
+        let plan = DataExportPlan::from_compiled(&registry, ENTITY, PROFILE, ["code"]).unwrap();
+        let inspected = InspectedDataPackage {
+            package_revision: PACKAGE.to_owned(),
+            schema_fingerprint: SCHEMA.to_owned(),
+            registry,
+        };
+        (plan, inspected)
+    }
+
+    fn export_response(code: &str, next_cursor: Option<&str>) -> DataHttpResponse {
+        let body = canonicalize_json(&json!({
+            "items": [{
+                "recordIdentifier": "00000000-0000-4000-8000-000000000001",
+                "revisionIdentifier": "1",
+                "domainData": {"code": code}
+            }],
+            "pageInfo": {"nextCursor": next_cursor},
+            "meta": {
+                "registryIdentifier": "ctl-data",
+                "datasetIdentifier": "test-dataset",
+                "entityTypeIdentifier": ENTITY
+            }
+        }))
+        .unwrap();
+        DataHttpResponse::new(200, Some("application/json".to_owned()), body).unwrap()
+    }
+
     #[test]
     fn authenticated_import_transport_uses_the_compiled_batch_request_shape() {
         let input = br#"{"operation":"create","data":{"code":"AA"}}
@@ -1005,7 +1127,7 @@ mod tests {
 
         fs::write(&checkpoint, b"concurrent-checkpoint").unwrap();
         assert!(matches!(
-            reserve_export_paths(&output, &checkpoint),
+            reserve_export_paths(&output, &checkpoint, b"initial-checkpoint"),
             Err(DataLifecycleError::Output)
         ));
         assert_eq!(fs::read(&output).unwrap(), b"");
@@ -1013,9 +1135,73 @@ mod tests {
 
         fs::remove_file(&output).unwrap();
         fs::remove_file(&checkpoint).unwrap();
-        reserve_export_paths(&output, &checkpoint).unwrap();
+        reserve_export_paths(&output, &checkpoint, b"initial-checkpoint").unwrap();
         assert_eq!(fs::read(&output).unwrap(), b"");
-        assert_eq!(fs::read(&checkpoint).unwrap(), b"");
+        assert_eq!(fs::read(&checkpoint).unwrap(), b"initial-checkpoint");
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn export_reloads_the_checkpoint_and_appends_only_the_next_page() {
+        let (plan, inspected) = export_plan_and_inspected();
+        let directory = test_directory("export-resume");
+        let output_path = directory.join("records.jsonl");
+        let checkpoint_path = directory.join("export.checkpoint.json");
+        let (mut checkpoint, output_state, resume_state) =
+            load_or_start_export(&plan, &inspected, &output_path, &checkpoint_path).unwrap();
+
+        let first = test_runtime()
+            .block_on(execute_export_page(
+                &plan,
+                &mut checkpoint,
+                PACKAGE,
+                SCHEMA,
+                &output_state,
+                &resume_state,
+                |_| async { Ok::<_, ()>(export_response("AA", Some("SERVER-CURSOR"))) },
+            ))
+            .unwrap()
+            .unwrap();
+        let (first_page, _, _) = first.into_parts();
+        append_export_page(&output_path, &first_page).unwrap();
+        write_atomic(&checkpoint_path, &checkpoint.canonical_json().unwrap()).unwrap();
+
+        let (mut resumed, resumed_output, resumed_state) =
+            load_or_start_export(&plan, &inspected, &output_path, &checkpoint_path).unwrap();
+        let second = test_runtime()
+            .block_on(execute_export_page(
+                &plan,
+                &mut resumed,
+                PACKAGE,
+                SCHEMA,
+                &resumed_output,
+                &resumed_state,
+                |request| async move {
+                    assert!(request
+                        .path_and_query()
+                        .contains("$skiptoken=SERVER-CURSOR"));
+                    Ok::<_, ()>(export_response("BB", None))
+                },
+            ))
+            .unwrap()
+            .unwrap();
+        let (second_page, _, _) = second.into_parts();
+        append_export_page(&output_path, &second_page).unwrap();
+
+        let output = fs::read(&output_path).unwrap();
+        assert_eq!(output.iter().filter(|byte| **byte == b'\n').count(), 2);
+        DataExportOutputState::from_bytes(&output)
+            .expect("appended output remains canonical JSONL");
+        assert_eq!(resumed.record_count(), 2);
+        assert!(resumed.is_complete());
+
+        write_atomic(&checkpoint_path, &resumed.canonical_json().unwrap()).unwrap();
+        append_export_page(&output_path, b"{\"code\":\"TAMPERED\"}\n").unwrap();
+        assert!(matches!(
+            load_or_start_export(&plan, &inspected, &output_path, &checkpoint_path),
+            Err(DataLifecycleError::Data(DataError::CheckpointMismatch))
+        ));
 
         fs::remove_dir_all(directory).unwrap();
     }

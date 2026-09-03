@@ -21,9 +21,9 @@ use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::cursor::CursorCodec;
 use registry_breg::data::{
-    execute_export_page, execute_import_chunk, DataError, DataExportCheckpoint, DataExportPlan,
-    DataHttpMethod, DataHttpRequest, DataHttpResponse, DataImportCheckpoint, DataImportOperation,
-    DataImportPlan,
+    execute_export_page, execute_import_chunk, DataError, DataExportCheckpoint,
+    DataExportOutputState, DataExportPlan, DataHttpMethod, DataHttpRequest, DataHttpResponse,
+    DataImportCheckpoint, DataImportOperation, DataImportPlan,
 };
 use registry_breg::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema,
@@ -146,12 +146,13 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
         &identity.schema_fingerprint,
     )
     .expect("export checkpoint starts");
+    let initial_output_state = DataExportOutputState::empty();
     let first = execute_export_page(
         &export_plan,
         &mut checkpoint,
         &identity.package_revision,
         &identity.schema_fingerprint,
-        &[],
+        &initial_output_state,
         &initial_resume_state,
         |request| dispatch(&app, Some(&token), request),
     )
@@ -164,7 +165,7 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
         .trusted_next_cursor()
         .expect("bounded first page yields a cursor")
         .to_owned();
-    let (first_output, first_resume_state) = first.into_parts();
+    let (first_output, first_output_state, first_resume_state) = first.into_parts();
     let serialized = checkpoint.canonical_json().expect("checkpoint serializes");
     let partial = parse_json_strict(&serialized).expect("partial checkpoint is strict JSON");
     assert_eq!(partial["nextCursor"], cursor);
@@ -206,7 +207,7 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
         &mut resumed,
         &identity.package_revision,
         &identity.schema_fingerprint,
-        &first_output,
+        &first_output_state,
         &first_resume_state,
         |request| dispatch(&app, Some(&token), request),
     )
@@ -216,7 +217,9 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
     assert_eq!(second.added_record_count(), 1);
     assert!(second.is_complete());
     assert!(second.trusted_next_cursor().is_none());
-    let (output, terminal_resume_state) = second.into_parts();
+    let (second_output, terminal_output_state, terminal_resume_state) = second.into_parts();
+    let mut output = first_output;
+    output.extend_from_slice(&second_output);
     let complete_json = resumed
         .canonical_json()
         .expect("complete checkpoint serializes");
@@ -234,7 +237,7 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
         &mut resumed,
         &identity.package_revision,
         &identity.schema_fingerprint,
-        &output,
+        &terminal_output_state,
         &terminal_resume_state,
         |_| async { Err::<DataHttpResponse, _>(()) },
     )
@@ -278,12 +281,13 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
         &identity.schema_fingerprint,
     )
     .unwrap();
+    let refused_output_state = DataExportOutputState::empty();
     let refused = execute_export_page(
         &export_plan,
         &mut refused_checkpoint,
         &identity.package_revision,
         &identity.schema_fingerprint,
-        &[],
+        &refused_output_state,
         &refused_resume_state,
         |request| dispatch(&app, Some(&wrong_purpose), request),
     )
@@ -299,6 +303,7 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
         &identity.schema_fingerprint,
     )
     .unwrap();
+    let widened_output_state = DataExportOutputState::empty();
     let widened_body = canonicalize_json(&json!({
         "items":[{"recordIdentifier":"00000000-0000-4000-8000-000000000001",
                    "revisionIdentifier":"1",
@@ -313,7 +318,7 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
         &mut widened_checkpoint,
         &identity.package_revision,
         &identity.schema_fingerprint,
-        &[],
+        &widened_output_state,
         &widened_resume_state,
         |_| async {
             Ok::<_, ()>(

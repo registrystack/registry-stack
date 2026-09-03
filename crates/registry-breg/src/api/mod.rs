@@ -4514,6 +4514,7 @@ fn exact_read(response: HeldReadResponse, entity: &CompiledEntity) -> Response {
     let mut builder = Response::builder()
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, response.content_type())
+        .header(CACHE_CONTROL, "no-store")
         .header(VARY, "authorization, accept");
     if matches!(
         response.content_type(),

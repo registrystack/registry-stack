@@ -107,6 +107,7 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
     .await;
     assert_eq!(get.status(), StatusCode::OK);
     assert_eq!(get.headers()["content-type"], "application/json");
+    assert_eq!(get.headers()["cache-control"], "no-store");
     assert_eq!(
         get.headers()["link"],
         "<https://id.registrystack.org/profiles/registry-record/v1>; rel=\"profile\", </v1/schemas/widget>; rel=\"describedby\""

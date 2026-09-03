@@ -9,6 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::future::Future;
+use std::io::{BufRead, BufReader, Read};
 
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use serde::{Deserialize, Serialize};
@@ -1242,50 +1243,94 @@ pub struct DataExportCheckpoint {
     complete: bool,
 }
 
-struct DataExportPage<'a> {
-    prior_output_prefix: &'a [u8],
-    output_prefix: &'a [u8],
-    added_record_count: u64,
-    next_cursor: Option<String>,
+/// Incremental validation and digest state for one export output file.
+///
+/// A resumed operator run constructs this state by streaming the existing
+/// JSONL once. Each subsequent page updates it without retaining or rescanning
+/// the complete export in memory.
+#[derive(Clone)]
+pub struct DataExportOutputState {
+    output_length: u64,
+    record_count: u64,
+    hasher: Sha256,
 }
 
-impl fmt::Debug for DataExportPage<'_> {
+impl fmt::Debug for DataExportOutputState {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("DataExportPage")
-            .field("prior_output_length", &self.prior_output_prefix.len())
-            .field("output_length", &self.output_prefix.len())
-            .field("added_record_count", &self.added_record_count)
-            .field("cursor_present", &self.next_cursor.is_some())
-            .finish()
+            .debug_struct("DataExportOutputState")
+            .field("output_length", &self.output_length)
+            .field("record_count", &self.record_count)
+            .finish_non_exhaustive()
     }
 }
 
-impl<'a> DataExportPage<'a> {
-    fn new(
-        prior_output_prefix: &'a [u8],
-        output_prefix: &'a [u8],
-        added_record_count: u64,
-        next_cursor: Option<String>,
-    ) -> Result<Self, DataError> {
-        let prior_record_count = canonical_jsonl_record_count(prior_output_prefix)?;
-        let output_record_count = canonical_jsonl_record_count(output_prefix)?;
-        if !output_prefix.starts_with(prior_output_prefix)
-            || output_record_count
-                != prior_record_count
-                    .checked_add(added_record_count)
-                    .ok_or(DataError::CheckpointMismatch)?
-            || invalid_cursor(next_cursor.as_deref())
-        {
+impl DataExportOutputState {
+    pub fn empty() -> Self {
+        Self {
+            output_length: 0,
+            record_count: 0,
+            hasher: Sha256::new(),
+        }
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, DataError> {
+        Self::from_reader(bytes)
+    }
+
+    pub fn from_reader(reader: impl Read) -> Result<Self, DataError> {
+        let mut reader = BufReader::new(reader);
+        let mut state = Self::empty();
+        loop {
+            let mut line = Vec::new();
+            let read = (&mut reader)
+                .take((MAX_DATA_HTTP_RESPONSE_BYTES as u64) + 2)
+                .read_until(b'\n', &mut line)
+                .map_err(|_| DataError::CheckpointMismatch)?;
+            if read == 0 {
+                break;
+            }
+            if line.len() > MAX_DATA_HTTP_RESPONSE_BYTES + 1
+                || canonical_jsonl_record_count(&line)? != 1
+            {
+                return Err(DataError::CheckpointMismatch);
+            }
+            state = state.append_page(&line, 1)?;
+        }
+        Ok(state)
+    }
+
+    fn append_page(&self, page: &[u8], added_record_count: u64) -> Result<Self, DataError> {
+        if canonical_jsonl_record_count(page)? != added_record_count {
             return Err(DataError::CheckpointMismatch);
         }
+        let output_length = self
+            .output_length
+            .checked_add(u64::try_from(page.len()).map_err(|_| DataError::CheckpointMismatch)?)
+            .ok_or(DataError::CheckpointMismatch)?;
+        let record_count = self
+            .record_count
+            .checked_add(added_record_count)
+            .ok_or(DataError::CheckpointMismatch)?;
+        let mut hasher = self.hasher.clone();
+        hasher.update(page);
         Ok(Self {
-            prior_output_prefix,
-            output_prefix,
-            added_record_count,
-            next_cursor,
+            output_length,
+            record_count,
+            hasher,
         })
     }
+
+    fn digest(&self) -> String {
+        hex_digest(self.hasher.clone().finalize())
+    }
+}
+
+struct DataExportPage<'a> {
+    prior_output: &'a DataExportOutputState,
+    bytes: &'a [u8],
+    added_record_count: u64,
+    next_cursor: Option<String>,
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -1295,11 +1340,12 @@ enum DataExportContinuation {
     Complete,
 }
 
-/// Executor-held proof of the last HTTP page observed for an export.
+/// Executor-held continuation state for an export.
 ///
-/// Fields and constructors are private. A checkpoint file alone therefore
-/// cannot create continuation or terminal authority by deleting its cursor or
-/// changing `complete`.
+/// A live run advances this only after validating an HTTP page. A later run
+/// may restore it from a checkpoint after the complete output prefix has been
+/// streamed and matched to that checkpoint. The Registry endpoint remains the
+/// authority for accepting the server-issued cursor.
 #[derive(Clone, Eq, PartialEq)]
 pub struct DataExportResumeState {
     package_revision: String,
@@ -1351,8 +1397,7 @@ impl DataExportResumeState {
 
     fn next(
         &self,
-        output_prefix: &[u8],
-        record_count: u64,
+        output: &DataExportOutputState,
         completed_page_count: u64,
         next_cursor: Option<String>,
     ) -> Self {
@@ -1362,9 +1407,9 @@ impl DataExportResumeState {
             entity_id: self.entity_id.clone(),
             profile_id: self.profile_id.clone(),
             requested_fields: self.requested_fields.clone(),
-            output_length: output_prefix.len() as u64,
-            output_prefix_digest: sha256_hex(output_prefix),
-            record_count,
+            output_length: output.output_length,
+            output_prefix_digest: output.digest(),
+            record_count: output.record_count,
             completed_page_count,
             continuation: match next_cursor {
                 Some(cursor) => DataExportContinuation::Next(cursor),
@@ -1382,6 +1427,27 @@ impl DataExportResumeState {
 
     fn is_complete(&self) -> bool {
         self.continuation == DataExportContinuation::Complete
+    }
+
+    fn from_checkpoint(checkpoint: &DataExportCheckpoint) -> Self {
+        Self {
+            package_revision: checkpoint.package_revision.clone(),
+            schema_fingerprint: checkpoint.schema_fingerprint.clone(),
+            entity_id: checkpoint.entity_id.clone(),
+            profile_id: checkpoint.profile_id.clone(),
+            requested_fields: checkpoint.requested_fields.clone(),
+            output_length: checkpoint.output_length,
+            output_prefix_digest: checkpoint.output_prefix_digest.clone(),
+            record_count: checkpoint.record_count,
+            completed_page_count: checkpoint.completed_page_count,
+            continuation: if checkpoint.complete {
+                DataExportContinuation::Complete
+            } else if let Some(cursor) = &checkpoint.next_cursor {
+                DataExportContinuation::Next(cursor.clone())
+            } else {
+                DataExportContinuation::Initial
+            },
+        }
     }
 }
 
@@ -1438,17 +1504,41 @@ impl DataExportCheckpoint {
         output_prefix: &[u8],
         resume_state: &DataExportResumeState,
     ) -> Result<Self, DataError> {
+        let output = DataExportOutputState::from_bytes(output_prefix)?;
         let value = parse_json_strict(bytes).map_err(|_| DataError::CheckpointMismatch)?;
         let checkpoint: Self =
             serde_json::from_value(value).map_err(|_| DataError::CheckpointMismatch)?;
-        checkpoint.validate_resume(
+        checkpoint.validate_resume_state(
             plan,
             package_revision,
             schema_fingerprint,
-            output_prefix,
+            &output,
             resume_state,
         )?;
         Ok(checkpoint)
+    }
+
+    /// Restores an operator checkpoint after streaming and validating the
+    /// output file it describes.
+    pub fn resume_from_json(
+        bytes: &[u8],
+        plan: &DataExportPlan,
+        package_revision: &str,
+        schema_fingerprint: &str,
+        output: &DataExportOutputState,
+    ) -> Result<(Self, DataExportResumeState), DataError> {
+        let value = parse_json_strict(bytes).map_err(|_| DataError::CheckpointMismatch)?;
+        let checkpoint: Self =
+            serde_json::from_value(value).map_err(|_| DataError::CheckpointMismatch)?;
+        let resume_state = DataExportResumeState::from_checkpoint(&checkpoint);
+        checkpoint.validate_resume_state(
+            plan,
+            package_revision,
+            schema_fingerprint,
+            output,
+            &resume_state,
+        )?;
+        Ok((checkpoint, resume_state))
     }
 
     pub fn canonical_json(&self) -> Result<Vec<u8>, DataError> {
@@ -1466,9 +1556,27 @@ impl DataExportCheckpoint {
         output_prefix: &[u8],
         resume_state: &DataExportResumeState,
     ) -> Result<(), DataError> {
+        let output = DataExportOutputState::from_bytes(output_prefix)?;
+        self.validate_resume_state(
+            plan,
+            package_revision,
+            schema_fingerprint,
+            &output,
+            resume_state,
+        )
+    }
+
+    fn validate_resume_state(
+        &self,
+        plan: &DataExportPlan,
+        package_revision: &str,
+        schema_fingerprint: &str,
+        output: &DataExportOutputState,
+        resume_state: &DataExportResumeState,
+    ) -> Result<(), DataError> {
         validate_checkpoint_binding(package_revision, schema_fingerprint)
             .map_err(|_| DataError::CheckpointMismatch)?;
-        let record_count = canonical_jsonl_record_count(output_prefix)?;
+        let output_digest = output.digest();
         if self.api_version != DATA_API_VERSION
             || self.kind != EXPORT_CHECKPOINT_KIND
             || self.package_revision != package_revision
@@ -1477,18 +1585,18 @@ impl DataExportCheckpoint {
             || self.operation != Operation::List
             || self.profile_id != plan.profile_id
             || self.requested_fields != plan.requested_fields
-            || self.output_length != output_prefix.len() as u64
-            || self.output_prefix_digest != sha256_hex(output_prefix)
-            || self.record_count != record_count
+            || self.output_length != output.output_length
+            || self.output_prefix_digest != output_digest
+            || self.record_count != output.record_count
             || self.completed_page_count != resume_state.completed_page_count
             || resume_state.package_revision != package_revision
             || resume_state.schema_fingerprint != schema_fingerprint
             || resume_state.entity_id != plan.entity_id
             || resume_state.profile_id != plan.profile_id
             || resume_state.requested_fields != plan.requested_fields
-            || resume_state.output_length != output_prefix.len() as u64
-            || resume_state.output_prefix_digest != sha256_hex(output_prefix)
-            || resume_state.record_count != record_count
+            || resume_state.output_length != output.output_length
+            || resume_state.output_prefix_digest != output_digest
+            || resume_state.record_count != output.record_count
             || self.next_cursor.as_deref() != resume_state.next_cursor()
             || self.complete != resume_state.is_complete()
             || matches!(&resume_state.continuation, DataExportContinuation::Initial)
@@ -1516,32 +1624,32 @@ impl DataExportCheckpoint {
         schema_fingerprint: &str,
         resume_state: &DataExportResumeState,
         page: DataExportPage<'_>,
-    ) -> Result<DataExportResumeState, DataError> {
-        self.validate_resume(
+    ) -> Result<(DataExportResumeState, DataExportOutputState), DataError> {
+        self.validate_resume_state(
             plan,
             package_revision,
             schema_fingerprint,
-            page.prior_output_prefix,
+            page.prior_output,
             resume_state,
         )?;
-        let record_count = canonical_jsonl_record_count(page.output_prefix)?;
         if self.complete || invalid_cursor(page.next_cursor.as_deref()) {
             return Err(DataError::CheckpointMismatch);
         }
-        self.output_length = page.output_prefix.len() as u64;
-        self.output_prefix_digest = sha256_hex(page.output_prefix);
-        self.record_count = record_count;
+        let output = page
+            .prior_output
+            .append_page(page.bytes, page.added_record_count)?;
+        self.output_length = output.output_length;
+        self.output_prefix_digest = output.digest();
+        self.record_count = output.record_count;
         self.completed_page_count = self
             .completed_page_count
             .checked_add(1)
             .ok_or(DataError::CheckpointMismatch)?;
         self.complete = page.next_cursor.is_none();
         self.next_cursor.clone_from(&page.next_cursor);
-        Ok(resume_state.next(
-            page.output_prefix,
-            record_count,
-            self.completed_page_count,
-            page.next_cursor,
+        Ok((
+            resume_state.next(&output, self.completed_page_count, page.next_cursor),
+            output,
         ))
     }
 
@@ -1559,7 +1667,8 @@ impl DataExportCheckpoint {
 }
 
 pub struct DataExportProgress {
-    output_prefix: Vec<u8>,
+    page_bytes: Vec<u8>,
+    output_state: DataExportOutputState,
     resume_state: DataExportResumeState,
     added_record_count: u64,
     complete: bool,
@@ -1569,7 +1678,8 @@ impl fmt::Debug for DataExportProgress {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("DataExportProgress")
-            .field("output_length", &self.output_prefix.len())
+            .field("page_length", &self.page_bytes.len())
+            .field("output_length", &self.output_state.output_length)
             .field("cursor_present", &self.resume_state.next_cursor().is_some())
             .field("added_record_count", &self.added_record_count)
             .field("complete", &self.complete)
@@ -1578,8 +1688,8 @@ impl fmt::Debug for DataExportProgress {
 }
 
 impl DataExportProgress {
-    pub fn output_prefix(&self) -> &[u8] {
-        &self.output_prefix
+    pub fn page_bytes(&self) -> &[u8] {
+        &self.page_bytes
     }
 
     pub fn trusted_next_cursor(&self) -> Option<&str> {
@@ -1598,20 +1708,20 @@ impl DataExportProgress {
         self.complete
     }
 
-    pub fn into_parts(self) -> (Vec<u8>, DataExportResumeState) {
-        (self.output_prefix, self.resume_state)
+    pub fn into_parts(self) -> (Vec<u8>, DataExportOutputState, DataExportResumeState) {
+        (self.page_bytes, self.output_state, self.resume_state)
     }
 }
 
 /// Execute exactly one bounded export page through the compiled HTTP list
-/// route. Continuation and terminal state come only from the opaque state
-/// produced after the last executor-observed response.
+/// route. The returned bytes contain only the newly observed page so callers
+/// can append them without rebuilding the complete export.
 pub async fn execute_export_page<Dispatch, DispatchFuture, DispatchError>(
     plan: &DataExportPlan,
     checkpoint: &mut DataExportCheckpoint,
     package_revision: &str,
     schema_fingerprint: &str,
-    prior_output_prefix: &[u8],
+    prior_output: &DataExportOutputState,
     resume_state: &DataExportResumeState,
     mut dispatch: Dispatch,
 ) -> Result<Option<DataExportProgress>, DataError>
@@ -1619,11 +1729,11 @@ where
     Dispatch: FnMut(DataHttpRequest) -> DispatchFuture,
     DispatchFuture: Future<Output = Result<DataHttpResponse, DispatchError>>,
 {
-    checkpoint.validate_resume(
+    checkpoint.validate_resume_state(
         plan,
         package_revision,
         schema_fingerprint,
-        prior_output_prefix,
+        prior_output,
         resume_state,
     )?;
     if checkpoint.is_complete() {
@@ -1665,35 +1775,29 @@ where
     {
         return Err(DataError::InvalidResponse);
     }
-    let mut output_prefix = Vec::with_capacity(
-        prior_output_prefix
-            .len()
-            .checked_add(response.body.len())
-            .ok_or(DataError::InvalidResponse)?,
-    );
-    output_prefix.extend_from_slice(prior_output_prefix);
+    let mut page_bytes = Vec::with_capacity(response.body.len());
     for record in &records {
-        output_prefix
+        page_bytes
             .extend_from_slice(&canonicalize_json(record).map_err(|_| DataError::InvalidResponse)?);
-        output_prefix.push(b'\n');
+        page_bytes.push(b'\n');
     }
     let added_record_count =
         u64::try_from(records.len()).map_err(|_| DataError::InvalidResponse)?;
-    let page = DataExportPage::new(
-        prior_output_prefix,
-        &output_prefix,
-        added_record_count,
-        next_cursor.clone(),
-    )?;
-    let resume_state = checkpoint.record_page(
+    let (resume_state, output_state) = checkpoint.record_page(
         plan,
         package_revision,
         schema_fingerprint,
         resume_state,
-        page,
+        DataExportPage {
+            prior_output,
+            bytes: &page_bytes,
+            added_record_count,
+            next_cursor,
+        },
     )?;
     Ok(Some(DataExportProgress {
-        output_prefix,
+        page_bytes,
+        output_state,
         resume_state,
         added_record_count,
         complete: checkpoint.is_complete(),
@@ -1952,7 +2056,10 @@ fn valid_binding(value: &str) -> bool {
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
+    hex_digest(Sha256::digest(bytes))
+}
+
+fn hex_digest(digest: impl IntoIterator<Item = u8>) -> String {
     let mut encoded = String::with_capacity(64);
     for byte in digest {
         use std::fmt::Write as _;

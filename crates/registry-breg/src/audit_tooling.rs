@@ -71,7 +71,7 @@ const CHAIN_CTE: &str = "WITH RECURSIVE chain AS (
            JOIN registry_internal.registry_audit AS previous
              ON previous.record_hash = decode(
                     convert_from(step.envelope, 'UTF8')::jsonb ->> 'prev_hash', 'hex')
-     )";
+     ) CYCLE record_hash SET cycle_detected USING chain_path";
 
 /// Number every chain position from the oldest reachable record, then name the
 /// first position the boundary retains. A boundary no record reaches keeps the
@@ -579,7 +579,7 @@ async fn walk_chain(
             &format!(
                 "DECLARE {CHAIN_CURSOR} NO SCROLL CURSOR FOR
                  {CHAIN_CTE}
-                 SELECT envelope_id, record_hash, envelope
+                 SELECT envelope_id, record_hash, envelope, cycle_detected
                    FROM chain
                   ORDER BY depth DESC"
             ),
@@ -608,6 +608,9 @@ async fn walk_chain(
             let envelope_id: String = row.get(0);
             let record_hash: Vec<u8> = row.get(1);
             let stored: Vec<u8> = row.get(2);
+            if row.get::<_, bool>(3) {
+                return Err(AuditToolingError::ChainBroken { position });
+            }
             let envelope: AuditEnvelope = serde_json::from_slice(&stored)
                 .map_err(|_| AuditToolingError::InvalidEnvelope { position })?;
             if envelope.envelope_id != envelope_id || envelope.record_hash.as_slice() != record_hash
