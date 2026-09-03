@@ -95,6 +95,18 @@ to `PUBLIC_PACKAGES` so cleanup can never reach a released image. Base
 Registry Engine is already on the public denylist; its candidate name joins
 the allowlist after the first private candidate is present.
 
+The daily cleanup tolerates one delete failure: GitHub's 400 stating that
+publicly visible package versions with more than 5000 downloads cannot be
+deleted, a limit no caller can clear. The run records that version in its
+receipt, the `release-candidate-cleanup.json` workflow artifact, with
+`"action": "undeletable"` and GitHub's message under `reason`, then deletes
+the remaining versions and packages as usual. Every other delete failure
+still aborts the run and leaves no receipt, so an aborted run is a failure
+this runbook has not seen. When a receipt names an undeletable version, the
+version stays in the package and every applied run reports it again. GitHub
+documents one route for this limit, a GitHub Support request, so removing
+the version is a decision to file one, not a tooling change.
+
 ### Provision client registries
 
 Registry Stack v0.22.0 promotes the exact candidate Evidence and Relay client
