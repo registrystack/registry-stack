@@ -1296,6 +1296,186 @@ fn project_lock_check_refuses_stale_digest_without_rewriting() {
 }
 
 #[test]
+fn project_lock_keeps_comments_written_inside_the_modules_block() {
+    let project = TestProject::from_registry_source(
+        br#"apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: modular-lock-fixture
+  version: 1
+  defaultLanguage: en
+  canonicalBaseIri: https://modular-lock-fixture.example.test
+modules:
+  # The core module owns the record entity.
+  - id: core
+    version: 1
+    # Refreshed by project lock after every module edit.
+    digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+"#,
+    );
+    let module_directory = project.path().join("modules/core");
+    fs::create_dir_all(&module_directory).expect("module directory creates");
+    fs::write(
+        module_directory.join("module.yaml"),
+        modular_project_module(),
+    )
+    .expect("module source writes");
+    let module = parse_module_yaml(modular_project_module()).expect("module parses");
+    let expected_digest = module_digest(&module);
+
+    let locked = registry_serverctl(&["--format", "json", "project", "lock", path(project.path())]);
+
+    assert!(locked.status.success(), "{locked:?}");
+    let report = json_stdout(&locked);
+    assert_eq!(report["explanation"]["changed"], true);
+    assert_eq!(report["explanation"]["modules"][0]["status"], "updated");
+    let rewritten =
+        fs::read_to_string(project.path().join("registry.yaml")).expect("project reads");
+    assert!(
+        rewritten.contains("  # The core module owns the record entity."),
+        "{rewritten}"
+    );
+    assert!(
+        rewritten.contains("    # Refreshed by project lock after every module edit."),
+        "{rewritten}"
+    );
+    let parsed = parse_project_yaml(rewritten.as_bytes()).expect("locked project parses");
+    assert_eq!(
+        parsed.modules[0].digest.as_deref(),
+        Some(expected_digest.as_str())
+    );
+
+    let check_only = registry_serverctl(&[
+        "--format",
+        "json",
+        "project",
+        "lock",
+        path(project.path()),
+        "--check",
+    ]);
+    assert!(check_only.status.success(), "{check_only:?}");
+    assert_eq!(json_stdout(&check_only)["explanation"]["changed"], false);
+}
+
+#[test]
+fn project_lock_replaces_the_modules_block_when_a_module_is_added() {
+    let project = TestProject::from_registry_source(modular_project_without_locks());
+    let core_directory = project.path().join("modules/core");
+    fs::create_dir_all(&core_directory).expect("module directory creates");
+    fs::write(core_directory.join("module.yaml"), modular_project_module())
+        .expect("module source writes");
+    let locked = registry_serverctl(&["--format", "json", "project", "lock", path(project.path())]);
+    assert!(locked.status.success(), "{locked:?}");
+
+    let extra_directory = project.path().join("modules/extra");
+    fs::create_dir_all(&extra_directory).expect("module directory creates");
+    fs::write(
+        extra_directory.join("module.yaml"),
+        modular_project_extra_module(),
+    )
+    .expect("module source writes");
+
+    let relocked =
+        registry_serverctl(&["--format", "json", "project", "lock", path(project.path())]);
+
+    assert!(relocked.status.success(), "{relocked:?}");
+    let report = json_stdout(&relocked);
+    assert_eq!(report["explanation"]["changed"], true);
+    assert_eq!(report["explanation"]["modules"][0]["id"], "core");
+    assert_eq!(report["explanation"]["modules"][0]["status"], "unchanged");
+    assert_eq!(report["explanation"]["modules"][1]["id"], "extra");
+    assert_eq!(report["explanation"]["modules"][1]["status"], "added");
+    let parsed =
+        parse_project_yaml(&fs::read(project.path().join("registry.yaml")).expect("project reads"))
+            .expect("locked project parses");
+    assert_eq!(
+        parsed
+            .modules
+            .iter()
+            .map(|lock| lock.id.as_str())
+            .collect::<Vec<_>>(),
+        ["core", "extra"]
+    );
+    let core = parse_module_yaml(modular_project_module()).expect("core module parses");
+    let extra = parse_module_yaml(modular_project_extra_module()).expect("extra module parses");
+    assert_eq!(
+        parsed.modules[0].digest.as_deref(),
+        Some(module_digest(&core).as_str())
+    );
+    assert_eq!(
+        parsed.modules[1].digest.as_deref(),
+        Some(module_digest(&extra).as_str())
+    );
+
+    let check_only = registry_serverctl(&[
+        "--format",
+        "json",
+        "project",
+        "lock",
+        path(project.path()),
+        "--check",
+    ]);
+    assert!(check_only.status.success(), "{check_only:?}");
+    assert_eq!(json_stdout(&check_only)["explanation"]["changed"], false);
+}
+
+#[test]
+fn project_lock_sorts_module_locks_authored_out_of_order() {
+    let project = TestProject::from_registry_source(
+        br#"apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: modular-lock-fixture
+  version: 1
+  defaultLanguage: en
+  canonicalBaseIri: https://modular-lock-fixture.example.test
+modules:
+  - id: extra
+    version: 1
+    digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+  - id: core
+    version: 1
+    digest: sha256:2222222222222222222222222222222222222222222222222222222222222222
+"#,
+    );
+    for (id, source) in [
+        ("core", modular_project_module()),
+        ("extra", modular_project_extra_module()),
+    ] {
+        let directory = project.path().join("modules").join(id);
+        fs::create_dir_all(&directory).expect("module directory creates");
+        fs::write(directory.join("module.yaml"), source).expect("module source writes");
+    }
+
+    let locked = registry_serverctl(&["--format", "json", "project", "lock", path(project.path())]);
+
+    assert!(locked.status.success(), "{locked:?}");
+    let parsed =
+        parse_project_yaml(&fs::read(project.path().join("registry.yaml")).expect("project reads"))
+            .expect("locked project parses");
+    assert_eq!(
+        parsed
+            .modules
+            .iter()
+            .map(|lock| lock.id.as_str())
+            .collect::<Vec<_>>(),
+        ["core", "extra"],
+        "a refresh sorts the lock entries so a later check has nothing left to change"
+    );
+
+    let check_only = registry_serverctl(&[
+        "--format",
+        "json",
+        "project",
+        "lock",
+        path(project.path()),
+        "--check",
+    ]);
+    assert!(check_only.status.success(), "{check_only:?}");
+    assert_eq!(json_stdout(&check_only)["explanation"]["changed"], false);
+}
+
+#[test]
 fn check_refuses_a_deleted_or_renamed_module_source_like_the_lock_check() {
     for (case, break_source) in [
         (
@@ -4573,6 +4753,27 @@ registry:
   version: 1
   defaultLanguage: en
   canonicalBaseIri: https://modular-lock-fixture.example.test
+"#
+}
+
+fn modular_project_extra_module() -> &'static [u8] {
+    br#"id: extra
+version: 1
+entities:
+  - id: extra-record
+    primaryDataset: test-dataset
+    route: extra-records
+    mutationMode: create_only
+    fields:
+      - id: code
+        type: string
+        maxLength: 16
+        classification: internal
+    accessProfiles:
+      - id: reader
+        principalClaim: principal
+        operations: [get, list]
+        readableFields: [code]
 "#
 }
 

@@ -3711,17 +3711,20 @@ fn project_lock(project_path: &Path, check_only: bool) -> Result<SuccessReport, 
         });
     }
     let artifacts = if changed {
-        source.project.modules = next_locks;
-        let updated =
-            render_project_with_module_locks(&source.project_bytes, &source.project.modules)
-                .map_err(|diagnostic| {
-                    source_failure(
-                        "project lock",
-                        diagnostic,
-                        DiagnosticArtifact::RegistryProject,
-                        SuggestedAction::UpdateModuleLocks,
-                    )
-                })?;
+        let authored_locks = std::mem::replace(&mut source.project.modules, next_locks);
+        let updated = render_project_module_locks(
+            &source.project_bytes,
+            &authored_locks,
+            &source.project.modules,
+        )
+        .map_err(|diagnostic| {
+            source_failure(
+                "project lock",
+                diagnostic,
+                DiagnosticArtifact::RegistryProject,
+                SuggestedAction::UpdateModuleLocks,
+            )
+        })?;
         write_project_registry(project_path, &source.project_bytes, &updated).map_err(
             |diagnostic| {
                 source_failure(
@@ -5130,6 +5133,32 @@ fn init_media_type(path: &str) -> &'static str {
     } else {
         "text/yaml"
     }
+}
+
+/// Writes `locks` into the authored project source.
+///
+/// When the authored lock entries already name the same module ids in the same order, only the
+/// locked values move, so the version and digest lines are patched where they stand and every
+/// comment an author wrote inside the `modules` block survives. A project that gained or lost a
+/// module, or whose `modules` block is not the ordinary block list the in-place patch understands,
+/// has the whole block rewritten instead: that normalizes the entries a lock refresh has to
+/// reorder, at the cost of the comments between them.
+fn render_project_module_locks(
+    original: &[u8],
+    authored: &[ModuleLockSource],
+    locks: &[ModuleLockSource],
+) -> Result<Vec<u8>, Diagnostic> {
+    let same_modules = authored.len() == locks.len()
+        && authored
+            .iter()
+            .zip(locks)
+            .all(|(authored, lock)| authored.id == lock.id);
+    if same_modules {
+        if let Ok(patched) = project_migration::update_module_locks(original, locks) {
+            return Ok(patched);
+        }
+    }
+    render_project_with_module_locks(original, locks)
 }
 
 fn render_project_with_module_locks(
