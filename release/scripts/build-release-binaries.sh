@@ -119,7 +119,7 @@ docker run --rm \
     fi
   '
 
-printf '%s\n' "${release_builder_image}" > "${repo_root}/dist/image-bin/RELEASE_BUILDER_IMAGE"
+printf '%s\n' "${release_builder_image}" >"${repo_root}/dist/image-bin/RELEASE_BUILDER_IMAGE"
 # The staged asset lists follow the same gate as the build above, so a version
 # that predates an asset neither checksums nor chmods a file it never built.
 bin_assets=()
@@ -155,11 +155,11 @@ done
 
 (
   cd -- "${repo_root}/dist/bin"
-  sha256sum -- "${bin_assets[@]}" > SHA256SUMS
+  sha256sum -- "${bin_assets[@]}" >SHA256SUMS
 )
 (
   cd -- "${repo_root}/dist/image-bin"
-  sha256sum -- RELEASE_BUILDER_IMAGE "${image_bin_binaries[@]}" > SHA256SUMS
+  sha256sum -- RELEASE_BUILDER_IMAGE "${image_bin_binaries[@]}" >SHA256SUMS
 )
 
 printf 'built release binaries for %s with canonical container paths\n' "${tag}"
