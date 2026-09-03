@@ -41,7 +41,8 @@ pub use response::*;
 pub use server::RegistryServerClient;
 pub use server_config::RegistryServerClientConfig;
 pub use server_error::{
-    RegistryServerClientError, RegistryServerProblemCode, RegistryServerProtocolFailure,
+    RegistryServerClientError, RegistryServerPlanRefusal, RegistryServerProblemCode,
+    RegistryServerProtocolFailure,
 };
 pub use server_lifecycle::*;
 pub use server_metadata::*;

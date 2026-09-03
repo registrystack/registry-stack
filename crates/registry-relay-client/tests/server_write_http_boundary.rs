@@ -15,7 +15,7 @@ use registry_relay_client::{
     RegistryRecordRepresentation, RegistryRecordResponse, RegistryServerClient,
     RegistryServerClientConfig, RegistryServerClientError, RegistryServerDirectWrite,
     RegistryServerEtag, RegistryServerIdempotencyKey, RegistryServerLifecycleOperation,
-    RegistryServerMetadataSelectionErrorKind, RegistryServerProblemCode,
+    RegistryServerMetadataSelectionErrorKind, RegistryServerPlanRefusal, RegistryServerProblemCode,
     RegistryServerProtocolFailure, ServerCreateRequest, ServerPatchRequest, ServerRecordFormat,
     ServerRecordOptions, REGISTRY_RECORD_CONTEXT_IDENTIFIER,
 };
@@ -1077,7 +1077,7 @@ fn problem_response(code: RegistryServerProblemCode) -> MockResponse {
             "type": format!("urn:registry-server:problem:{}", code.code()),
             "title": problem_title(code.status()),
             "status": code.status(),
-            "detail": problem_detail(code.code()),
+            "detail": problem_detail(code),
             "code": code.code(),
             "traceId": TRACE_ID
         }),
@@ -1102,24 +1102,56 @@ fn problem_title(status: u16) -> &'static str {
     }
 }
 
-fn problem_detail(code: &str) -> &'static str {
+fn problem_detail(code: RegistryServerProblemCode) -> &'static str {
+    use RegistryServerProblemCode as Code;
+
     match code {
-        "authentication.refused" => "The bearer credential is missing or refused.",
-        "idempotency.conflict" => "The idempotency key is bound to another request.",
-        "lookup.unresolved" => "The lookup did not resolve exactly one record.",
-        "mutation.conflict" => "The mutation conflicts with current state.",
-        "precondition.failed" => "The mutation precondition failed.",
-        "precondition.required" => "The mutation precondition is required.",
-        "query.cursor_invalid" => "The query cursor is invalid.",
-        "query.invalid" => "The query request is invalid.",
-        "request.invalid" => "The request is invalid.",
-        "request.timeout" => "The request timed out.",
-        "resource.not_found" => "The requested resource was not found.",
-        "runtime.not_ready" => "Registry runtime is not ready.",
-        "service.unavailable" => "The Registry mutation service is unavailable.",
-        "source.unavailable" => "The Registry data service is unavailable.",
-        "unsupported.media_type" => "The request media type is not supported.",
+        Code::AuthenticationRefused => "The bearer credential is missing or refused.",
+        Code::IdempotencyConflict => "The idempotency key is bound to another request.",
+        Code::LookupUnresolved => "The lookup did not resolve exactly one record.",
+        Code::MutationConflict => "The mutation conflicts with current state.",
+        Code::PreconditionFailed => "The mutation precondition failed.",
+        Code::PreconditionRequired => "The mutation precondition is required.",
+        Code::QueryCursorInvalid => "The query cursor is invalid.",
+        Code::QueryInvalid => "The query request is invalid.",
+        Code::RequestInvalid => "The request is invalid.",
+        Code::RequestPlanRefused(refusal) => plan_refused_detail(refusal),
+        Code::RequestTimeout => "The request timed out.",
+        Code::ResourceNotFound => "The requested resource was not found.",
+        Code::RuntimeNotReady => "Registry runtime is not ready.",
+        Code::ServiceUnavailable => "The Registry mutation service is unavailable.",
+        Code::SourceUnavailable => "The Registry data service is unavailable.",
+        Code::UnsupportedMediaType => "The request media type is not supported.",
         _ => panic!("unregistered problem code"),
+    }
+}
+
+fn plan_refused_detail(refusal: RegistryServerPlanRefusal) -> &'static str {
+    use RegistryServerPlanRefusal as Refusal;
+
+    match refusal {
+        Refusal::Source => {
+            "The change-request planner refused the submission: change_request.planner.source."
+        }
+        Refusal::Entrypoint => {
+            "The change-request planner refused the submission: change_request.planner.entrypoint."
+        }
+        Refusal::Execution => {
+            "The change-request planner refused the submission: change_request.planner.execution."
+        }
+        Refusal::Result => {
+            "The change-request planner refused the submission: change_request.planner.result."
+        }
+        Refusal::Ceiling => {
+            "The change-request planner refused the submission: change_request.planner.ceiling."
+        }
+        Refusal::Disposition => {
+            "The change-request planner refused the submission: change_request.planner.disposition."
+        }
+        Refusal::Resource => {
+            "The change-request planner refused the submission: change_request.planner.resource."
+        }
+        _ => panic!("unregistered plan refusal"),
     }
 }
 

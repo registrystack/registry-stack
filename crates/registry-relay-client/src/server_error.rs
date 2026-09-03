@@ -4,6 +4,81 @@ use thiserror::Error;
 
 pub use registry_platform_httputil::client::TransportKind;
 
+/// One closed kind of change-request plan refusal named by Registry Server.
+///
+/// The kind is the whole reason the service discloses: it never carries planner
+/// script text, request values, or target data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RegistryServerPlanRefusal {
+    Source,
+    Entrypoint,
+    Execution,
+    Result,
+    Ceiling,
+    Disposition,
+    Resource,
+}
+
+impl RegistryServerPlanRefusal {
+    /// Every refusal kind a submission may be refused for.
+    pub const ALL: [Self; 7] = [
+        Self::Source,
+        Self::Entrypoint,
+        Self::Execution,
+        Self::Result,
+        Self::Ceiling,
+        Self::Disposition,
+        Self::Resource,
+    ];
+
+    /// Returns the exact term Registry Server names this refusal by.
+    #[must_use]
+    pub const fn kind(self) -> &'static str {
+        match self {
+            Self::Source => "change_request.planner.source",
+            Self::Entrypoint => "change_request.planner.entrypoint",
+            Self::Execution => "change_request.planner.execution",
+            Self::Result => "change_request.planner.result",
+            Self::Ceiling => "change_request.planner.ceiling",
+            Self::Disposition => "change_request.planner.disposition",
+            Self::Resource => "change_request.planner.resource",
+        }
+    }
+
+    pub(crate) const fn detail(self) -> &'static str {
+        match self {
+            Self::Source => {
+                "The change-request planner refused the submission: change_request.planner.source."
+            }
+            Self::Entrypoint => {
+                "The change-request planner refused the submission: change_request.planner.entrypoint."
+            }
+            Self::Execution => {
+                "The change-request planner refused the submission: change_request.planner.execution."
+            }
+            Self::Result => {
+                "The change-request planner refused the submission: change_request.planner.result."
+            }
+            Self::Ceiling => {
+                "The change-request planner refused the submission: change_request.planner.ceiling."
+            }
+            Self::Disposition => {
+                "The change-request planner refused the submission: change_request.planner.disposition."
+            }
+            Self::Resource => {
+                "The change-request planner refused the submission: change_request.planner.resource."
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for RegistryServerPlanRefusal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.kind())
+    }
+}
+
 /// One closed Registry Server Problem code accepted by the client.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -17,6 +92,7 @@ pub enum RegistryServerProblemCode {
     QueryCursorInvalid,
     QueryInvalid,
     RequestInvalid,
+    RequestPlanRefused(RegistryServerPlanRefusal),
     RequestTimeout,
     ResourceNotFound,
     RuntimeNotReady,
@@ -26,7 +102,7 @@ pub enum RegistryServerProblemCode {
 }
 
 impl RegistryServerProblemCode {
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 22] = [
         Self::AuthenticationRefused,
         Self::IdempotencyConflict,
         Self::LookupUnresolved,
@@ -36,6 +112,13 @@ impl RegistryServerProblemCode {
         Self::QueryCursorInvalid,
         Self::QueryInvalid,
         Self::RequestInvalid,
+        Self::RequestPlanRefused(RegistryServerPlanRefusal::Source),
+        Self::RequestPlanRefused(RegistryServerPlanRefusal::Entrypoint),
+        Self::RequestPlanRefused(RegistryServerPlanRefusal::Execution),
+        Self::RequestPlanRefused(RegistryServerPlanRefusal::Result),
+        Self::RequestPlanRefused(RegistryServerPlanRefusal::Ceiling),
+        Self::RequestPlanRefused(RegistryServerPlanRefusal::Disposition),
+        Self::RequestPlanRefused(RegistryServerPlanRefusal::Resource),
         Self::RequestTimeout,
         Self::ResourceNotFound,
         Self::RuntimeNotReady,
@@ -56,6 +139,7 @@ impl RegistryServerProblemCode {
             Self::QueryCursorInvalid => "query.cursor_invalid",
             Self::QueryInvalid => "query.invalid",
             Self::RequestInvalid => "request.invalid",
+            Self::RequestPlanRefused(_) => "request.plan_refused",
             Self::RequestTimeout => "request.timeout",
             Self::ResourceNotFound => "resource.not_found",
             Self::RuntimeNotReady => "runtime.not_ready",
@@ -68,7 +152,10 @@ impl RegistryServerProblemCode {
     #[must_use]
     pub const fn status(self) -> u16 {
         match self {
-            Self::QueryCursorInvalid | Self::QueryInvalid | Self::RequestInvalid => 400,
+            Self::QueryCursorInvalid
+            | Self::QueryInvalid
+            | Self::RequestInvalid
+            | Self::RequestPlanRefused(_) => 400,
             Self::AuthenticationRefused => 401,
             Self::LookupUnresolved | Self::ResourceNotFound => 404,
             Self::IdempotencyConflict | Self::MutationConflict => 409,
@@ -106,6 +193,7 @@ impl RegistryServerProblemCode {
             Self::QueryCursorInvalid => "The query cursor is invalid.",
             Self::QueryInvalid => "The query request is invalid.",
             Self::RequestInvalid => "The request is invalid.",
+            Self::RequestPlanRefused(refusal) => refusal.detail(),
             Self::RequestTimeout => "The request timed out.",
             Self::ResourceNotFound => "The requested resource was not found.",
             Self::RuntimeNotReady => "Registry runtime is not ready.",
@@ -249,6 +337,51 @@ impl RegistryServerClientError {
         match self {
             Self::Problem { code, .. } => Some(*code),
             _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RegistryServerPlanRefusal, RegistryServerProblemCode};
+
+    #[test]
+    fn every_planner_refusal_detail_resolves_to_its_kind() {
+        for refusal in RegistryServerPlanRefusal::ALL {
+            let resolved: Vec<_> = RegistryServerProblemCode::ALL
+                .into_iter()
+                .filter(|code| code.detail() == refusal.detail())
+                .collect();
+            assert_eq!(
+                resolved,
+                vec![RegistryServerProblemCode::RequestPlanRefused(refusal)]
+            );
+            assert!(refusal.detail().ends_with(&format!("{}.", refusal.kind())));
+        }
+    }
+
+    #[test]
+    fn a_refused_plan_carries_one_code_under_one_status() {
+        for refusal in RegistryServerPlanRefusal::ALL {
+            let code = RegistryServerProblemCode::RequestPlanRefused(refusal);
+            assert_eq!(code.code(), "request.plan_refused");
+            assert_eq!(code.status(), 400);
+            assert_eq!(code.title(), "Bad Request");
+            assert_eq!(
+                code.type_uri(),
+                "urn:registry-server:problem:request.plan_refused"
+            );
+        }
+    }
+
+    #[test]
+    fn every_registered_problem_carries_its_own_detail() {
+        for code in RegistryServerProblemCode::ALL {
+            let sharing = RegistryServerProblemCode::ALL
+                .into_iter()
+                .filter(|candidate| candidate.detail() == code.detail())
+                .count();
+            assert_eq!(sharing, 1, "{code} shares its detail with another problem");
         }
     }
 }
