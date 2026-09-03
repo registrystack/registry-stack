@@ -13,7 +13,7 @@ import tempfile
 from contextlib import redirect_stderr, redirect_stdout
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
-from unittest import TestCase, main, mock
+from unittest import SkipTest, TestCase, main, mock
 
 import yaml
 
@@ -1038,7 +1038,7 @@ class RegistryReleaseTest(TestCase):
             elif os_name == "Linux" and architecture in {"arm64", "aarch64"}:
                 platform_name = "linux-arm64"
             else:
-                self.skipTest(f"installer has no release asset for {os_name}/{architecture}")
+                raise SkipTest(f"installer has no release asset for {os_name}/{architecture}")
             checksums = []
             for binary in ("breg", "bregctl"):
                 name = f"{binary}-v0.26.0-{platform_name}"
