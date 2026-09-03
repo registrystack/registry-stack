@@ -17,9 +17,10 @@ viewer_client='business-demo-viewer'
 state_dir=""
 handoff_path=""
 token_lifetime_seconds=300
+installed=false
 
 usage() {
-  printf '%s\n' 'usage: products/breg/demo/run.sh [--smoke] [--webhook] [--fixture business-establishments|household|asset-site|asset-change-request|facility|inspection] [--state-dir PATH] [--handoff PATH] [--token-lifetime-seconds 60..900]' >&2
+  printf '%s\n' 'usage: products/breg/demo/run.sh [--installed] [--smoke] [--webhook] [--fixture business-establishments|household|asset-site|asset-change-request|facility|inspection] [--state-dir PATH] [--handoff PATH] [--token-lifetime-seconds 60..900]' >&2
 }
 
 while [[ $# -gt 0 ]]; do
@@ -38,6 +39,14 @@ while [[ $# -gt 0 ]]; do
         exit 2
       fi
       webhook=true
+      shift
+      ;;
+    --installed)
+      if [[ "$installed" == true ]]; then
+        printf '%s\n' 'the --installed option may be supplied only once.' >&2
+        exit 2
+      fi
+      installed=true
       shift
       ;;
     --fixture)
@@ -148,9 +157,30 @@ require_command() {
   fi
 }
 
+resolve_installed_command() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    printf '%s\n' "$1 is required for the Base Registry Engine demo in --installed mode; $2." >&2
+    exit 2
+  fi
+  command -v "$1"
+}
+
 for command in cargo docker openssl python3 uv; do
+  if [[ "$command" == cargo && "$installed" == true ]]; then
+    continue
+  fi
   require_command "$command"
 done
+
+if [[ "$installed" == true ]]; then
+  breg=$(resolve_installed_command breg 'breg-install.sh provides breg and bregctl')
+  bregctl=$(resolve_installed_command bregctl 'breg-install.sh provides breg and bregctl')
+  mint=$(resolve_installed_command mint 'evidencectl-install.sh provides mint')
+  printf '%s\n' '== Using installed breg, bregctl, and mint from PATH'
+  printf '%s\n' "$breg"
+  printf '%s\n' "$bregctl"
+  printf '%s\n' "$mint"
+fi
 
 if [[ -n "$state_dir" ]]; then
   run_dir=$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).expanduser().resolve())' "$state_dir")
@@ -222,33 +252,35 @@ EOF
   receiver_port=""
 fi
 
-export CARGO_INCREMENTAL=0
-export CARGO_PROFILE_DEV_DEBUG=0
-export CARGO_PROFILE_TEST_DEBUG=0
-export RUSTC_WRAPPER="${RUSTC_WRAPPER-}"
-if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
-  cargo_target_dir=$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).expanduser().resolve())' "$CARGO_TARGET_DIR")
-else
-  cargo_target_dir="$repository_root/target"
-fi
-export CARGO_TARGET_DIR="$cargo_target_dir"
-
-printf '%s\n' '== Building Base Registry Engine, its CLI, and Mint'
-cargo build --manifest-path "$repository_root/Cargo.toml" --locked \
-  -p registry-breg --features registry-breg/runtime \
-  -p registry-bregctl \
-  -p registry-mint \
-  --bins >/dev/null
-
-breg="$cargo_target_dir/debug/breg"
-bregctl="$cargo_target_dir/debug/bregctl"
-mint="$cargo_target_dir/debug/mint"
-for binary in "$breg" "$bregctl" "$mint"; do
-  if [[ ! -x "$binary" ]]; then
-    printf '%s\n' "expected demo binary was not built: $binary" >&2
-    exit 1
+if [[ "$installed" != true ]]; then
+  export CARGO_INCREMENTAL=0
+  export CARGO_PROFILE_DEV_DEBUG=0
+  export CARGO_PROFILE_TEST_DEBUG=0
+  export RUSTC_WRAPPER="${RUSTC_WRAPPER-}"
+  if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
+    cargo_target_dir=$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).expanduser().resolve())' "$CARGO_TARGET_DIR")
+  else
+    cargo_target_dir="$repository_root/target"
   fi
-done
+  export CARGO_TARGET_DIR="$cargo_target_dir"
+
+  printf '%s\n' '== Building Base Registry Engine, its CLI, and Mint'
+  cargo build --manifest-path "$repository_root/Cargo.toml" --locked \
+    -p registry-breg --features registry-breg/runtime \
+    -p registry-bregctl \
+    -p registry-mint \
+    --bins >/dev/null
+
+  breg="$cargo_target_dir/debug/breg"
+  bregctl="$cargo_target_dir/debug/bregctl"
+  mint="$cargo_target_dir/debug/mint"
+  for binary in "$breg" "$bregctl" "$mint"; do
+    if [[ ! -x "$binary" ]]; then
+      printf '%s\n' "expected demo binary was not built: $binary" >&2
+      exit 1
+    fi
+  done
+fi
 
 printf '%s\n' '== Generating disposable keys and configuration'
 uv run --quiet "$mint_key_material" p256 \

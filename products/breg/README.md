@@ -43,6 +43,9 @@ For a generic, domain-neutral local path, run:
 products/breg/quickstart/run.sh
 ```
 
+Pass `--installed` to use released `breg`, `bregctl`, and `mint` binaries from
+`PATH` instead of building them from this checkout with Cargo.
+
 The quickstart uses `bregctl init` to create a small generic
 Registry project, replaces its package identity with a local one for the
 disposable package, checks it, starts disposable PostgreSQL and Registry Mint on loopback, activates
@@ -93,8 +96,8 @@ recovery from stale input or a lost response. Mandatory reviewed change control
 still applies to every targeted operation.
 
 The pilot lifecycle uses matching `bregctl` and `breg` executables from the
-same build, whether built from source during the preview or installed from a
-release that includes them. It does not require a Rust change for a new
+same build, whether built from source or installed from a release. It does not
+require a Rust change for a new
 configured domain or a compatible additive schema change.
 
 1. An author runs `bregctl check <project> --production`, generates
