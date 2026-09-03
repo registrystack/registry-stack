@@ -11,9 +11,8 @@ pub use registry_discovery::{
     EvidenceTypeResolveRequest, EvidenceTypeResolveResponse, ResolvedAlternative, ServiceFilters,
     ServiceKind, ServiceRecord, ServiceSearchResponse,
 };
-#[allow(deprecated)]
 pub use selection::{
-    accept_service_selection, renew_unchanged_service_selection, validate_service_selection,
+    accept_service_selection, renew_unchanged_service_selection,
     validate_service_selection_structure, AcceptedServiceSelection, EvidenceResolutionContext,
     EvidenceSelectionRequest, EvidenceServiceSelection, EvidenceTypeResolveSelectionExt,
     MatchedCapability, RelayCapabilityMatch, RelaySelectionRequest, RelayServiceSelection,
