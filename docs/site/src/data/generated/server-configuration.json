@@ -12599,7 +12599,7 @@
       "file": "products/registry-server/generated/runtime/runtime.schema.json",
       "status": "beta",
       "reference": "docs/site/src/content/docs/configure/registry-server.mdx",
-      "field_count": 90,
+      "field_count": 89,
       "fields": [
         {
           "key_path": "apiVersion",
@@ -13846,22 +13846,6 @@
           ],
           "conditional_constraints": [],
           "description": "Canonical HTTPS origin (loopback HTTP for local development) for QGIS\ndiscovery and pagination. Required when the registry exposes GIS collections.",
-          "defaults": [],
-          "runtime_validation": null
-        },
-        {
-          "key_path": "listener.trustedProxy",
-          "kind": "property",
-          "type": "string",
-          "required": "yes",
-          "values": [
-            "direct",
-            "operator-controlled-upstream"
-          ],
-          "values_conditional": false,
-          "constraints": [],
-          "conditional_constraints": [],
-          "description": null,
           "defaults": [],
           "runtime_validation": null
         },
