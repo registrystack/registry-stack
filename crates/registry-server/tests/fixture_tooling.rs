@@ -278,6 +278,71 @@ journeys:
 }
 
 #[test]
+fn fixture_tooling_expects_a_refused_change_request_plan() {
+    let registry = compiled_request_fixture();
+    let valid = br#"apiVersion: registry.registrystack.org/server-journeys/v1
+journeys:
+  - id: refused-plan
+    steps:
+      - id: create-request
+        entity: correction-request
+        accessProfile: submitter
+        claims: &submitter_claims {principal: submitter}
+        request:
+          operation: create
+          data: {target: 11111111-1111-1111-1111-111111111111, value: corrected}
+        expect:
+          outcome: success
+          status: 201
+          fields: {target: 11111111-1111-1111-1111-111111111111, value: corrected}
+        capture: created-request
+      - id: get-before-submit
+        entity: correction-request
+        accessProfile: reviewer
+        claims: {principal: reviewer}
+        request: {operation: get, recordRef: created-request}
+        expect:
+          outcome: success
+          status: 200
+          fields: {target: 11111111-1111-1111-1111-111111111111, value: corrected}
+        capture: before-submit
+      - id: submit-refused-plan
+        entity: correction-request
+        accessProfile: submitter
+        claims: *submitter_claims
+        request: {operation: submit_request, recordRef: before-submit, etagRef: before-submit}
+        expect: {outcome: refusal, status: 400, problemCode: request.plan_refused}
+"#;
+    validate_fixture_journeys(valid, &registry).expect("a refused plan is an expectable outcome");
+
+    for (label, from, to) in [
+        (
+            "unregistered code",
+            "problemCode: request.plan_refused",
+            "problemCode: request.plan_declined",
+        ),
+        (
+            "unregistered status",
+            "status: 400, problemCode: request.plan_refused",
+            "status: 422, problemCode: request.plan_refused",
+        ),
+    ] {
+        let changed = String::from_utf8(valid.to_vec())
+            .expect("fixture is UTF-8")
+            .replacen(from, to, 1);
+        let error = match validate_fixture_journeys(changed.as_bytes(), &registry) {
+            Ok(_) => panic!("{label} was not refused"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            underlying_fixture_error(&error),
+            &FixtureError::JourneyShapeRefused,
+            "{label} returned {error:?}"
+        );
+    }
+}
+
+#[test]
 fn fixture_tooling_immediate_actions_use_action_routes_and_public_input_names() {
     let registry = compiled_action_fixture();
     let valid = br#"apiVersion: registry.registrystack.org/server-journeys/v1

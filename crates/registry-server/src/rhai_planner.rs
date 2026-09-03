@@ -59,6 +59,18 @@ pub enum ChangeRequestPlannerError {
 }
 
 impl ChangeRequestPlannerError {
+    /// The closed kinds a submission is refused for. A planner that exhausted
+    /// its time budget is absent: it is a service outage, not a refusal.
+    pub const PLAN_REFUSALS: [Self; 7] = [
+        Self::Source,
+        Self::Entrypoint,
+        Self::Execution,
+        Self::Result,
+        Self::Ceiling,
+        Self::Disposition,
+        Self::Resource,
+    ];
+
     pub const fn code(self) -> &'static str {
         match self {
             Self::Source => "change_request.planner.source",
@@ -69,6 +81,39 @@ impl ChangeRequestPlannerError {
             Self::Disposition => "change_request.planner.disposition",
             Self::Resource => "change_request.planner.resource",
             Self::Deadline => "change_request.planner.deadline",
+        }
+    }
+
+    /// The exact problem detail the service answers for this failure.
+    ///
+    /// A refusal names the failure kind from the closed vocabulary and nothing
+    /// else: no script text, no request value, no target data. A planner that
+    /// ran out of time is an outage rather than a refusal, so it carries the
+    /// unavailable detail every other timeout carries.
+    pub const fn problem_detail(self) -> &'static str {
+        match self {
+            Self::Source => {
+                "The change-request planner refused the submission: change_request.planner.source."
+            }
+            Self::Entrypoint => {
+                "The change-request planner refused the submission: change_request.planner.entrypoint."
+            }
+            Self::Execution => {
+                "The change-request planner refused the submission: change_request.planner.execution."
+            }
+            Self::Result => {
+                "The change-request planner refused the submission: change_request.planner.result."
+            }
+            Self::Ceiling => {
+                "The change-request planner refused the submission: change_request.planner.ceiling."
+            }
+            Self::Disposition => {
+                "The change-request planner refused the submission: change_request.planner.disposition."
+            }
+            Self::Resource => {
+                "The change-request planner refused the submission: change_request.planner.resource."
+            }
+            Self::Deadline => "The Registry mutation service is unavailable.",
         }
     }
 }

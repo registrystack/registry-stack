@@ -48,6 +48,7 @@ use crate::postgres::{
     PostgresRecordMutationService, PostgresRecordReadService, PostgresRevisionReadService,
     PreparedSchemaTestCatalogVerifier, PreparedSchemaTestDatabase, RuntimePool,
 };
+use crate::rhai_planner::ChangeRequestPlannerError;
 use crate::runtime_config::RuntimeConfig;
 #[cfg(feature = "postgres-test")]
 use crate::startup::PreparedServer;
@@ -3754,7 +3755,7 @@ fn assert_response(
     }
     match step.expect.outcome {
         ExpectedOutcome::Refusal => {
-            let (title, detail) =
+            let (title, details) =
                 problem_contract(step.expect.status, step.expect.problem_code.as_deref())
                     .ok_or(FixtureError::ResponseShapeRefused)?;
             let code = step
@@ -3776,7 +3777,10 @@ fn assert_response(
                 || object.get("title").and_then(Value::as_str) != Some(title)
                 || object.get("status").and_then(Value::as_u64)
                     != Some(u64::from(step.expect.status))
-                || object.get("detail").and_then(Value::as_str) != Some(detail)
+                || !object
+                    .get("detail")
+                    .and_then(Value::as_str)
+                    .is_some_and(|detail| details.contains(&detail))
                 || object.get("code").and_then(Value::as_str) != Some(code)
             {
                 return Err(FixtureError::ExpectationMismatch);
@@ -4452,36 +4456,58 @@ fn assert_request_application_shape(value: &Value) -> Result<(), FixtureError> {
     Ok(())
 }
 
-fn problem_contract(status: u16, code: Option<&str>) -> Option<(&'static str, &'static str)> {
+/// The details a refused change-request plan may carry: one for each closed
+/// planner kind, taken from the planner's own vocabulary.
+static PLAN_REFUSED_DETAILS: [&str; ChangeRequestPlannerError::PLAN_REFUSALS.len()] = {
+    let mut details = [""; ChangeRequestPlannerError::PLAN_REFUSALS.len()];
+    let mut index = 0;
+    while index < details.len() {
+        details[index] = ChangeRequestPlannerError::PLAN_REFUSALS[index].problem_detail();
+        index += 1;
+    }
+    details
+};
+
+/// The title and the admissible details for one expectable problem. Every code
+/// but a refused plan carries exactly one detail; a refused plan carries one
+/// per closed planner kind.
+fn problem_contract(
+    status: u16,
+    code: Option<&str>,
+) -> Option<(&'static str, &'static [&'static str])> {
     match (status, code?) {
-        (400, "query.invalid") => Some(("Bad Request", "The query request is invalid.")),
-        (400, "request.invalid") => Some(("Bad Request", "The request is invalid.")),
-        (404, "resource.not_found") => Some(("Not Found", "The requested resource was not found.")),
+        (400, "query.invalid") => Some(("Bad Request", &["The query request is invalid."])),
+        (400, "request.invalid") => Some(("Bad Request", &["The request is invalid."])),
+        (400, "request.plan_refused") => Some(("Bad Request", &PLAN_REFUSED_DETAILS)),
+        (404, "resource.not_found") => {
+            Some(("Not Found", &["The requested resource was not found."]))
+        }
         (409, "mutation.conflict") => {
-            Some(("Conflict", "The mutation conflicts with current state."))
+            Some(("Conflict", &["The mutation conflicts with current state."]))
         }
         (409, "idempotency.conflict") => Some((
             "Conflict",
-            "The idempotency key is bound to another request.",
+            &["The idempotency key is bound to another request."],
         )),
-        (412, "precondition.failed") => {
-            Some(("Precondition Failed", "The mutation precondition failed."))
-        }
+        (412, "precondition.failed") => Some((
+            "Precondition Failed",
+            &["The mutation precondition failed."],
+        )),
         (415, "unsupported.media_type") => Some((
             "Unsupported Media Type",
-            "The request media type is not supported.",
+            &["The request media type is not supported."],
         )),
         (428, "precondition.required") => Some((
             "Precondition Required",
-            "The mutation precondition is required.",
+            &["The mutation precondition is required."],
         )),
         (503, "source.unavailable") => Some((
             "Service Unavailable",
-            "The Registry data service is unavailable.",
+            &["The Registry data service is unavailable."],
         )),
         (503, "service.unavailable") => Some((
             "Service Unavailable",
-            "The Registry mutation service is unavailable.",
+            &["The Registry mutation service is unavailable."],
         )),
         _ => None,
     }
@@ -6628,6 +6654,121 @@ journeys:
             fixture_request("test-journey", &step, &observations, Some("a.b.c")).unwrap_err(),
             FixtureError::RequestConstructionRefused
         );
+    }
+
+    #[test]
+    fn a_refused_plan_admits_every_closed_planner_detail_and_nothing_else() {
+        let step = plan_refused_step();
+        for kind in ChangeRequestPlannerError::PLAN_REFUSALS {
+            assert_eq!(
+                assert_response(
+                    &step,
+                    StatusCode::BAD_REQUEST,
+                    &plan_refused_document(kind.problem_detail())
+                ),
+                Ok(()),
+                "the journey expects the closed planner kind {kind}"
+            );
+        }
+        for detail in [
+            ChangeRequestPlannerError::Deadline.problem_detail(),
+            "The change-request planner refused the submission.",
+            "The change-request planner refused the submission: change_request.planner.unknown.",
+        ] {
+            assert_eq!(
+                assert_response(
+                    &step,
+                    StatusCode::BAD_REQUEST,
+                    &plan_refused_document(detail)
+                ),
+                Err(FixtureError::ExpectationMismatch),
+                "a detail outside the closed planner vocabulary is refused: {detail}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_refused_plan_carries_more_than_one_expectable_detail() {
+        for (status, code) in [
+            (400, "query.invalid"),
+            (400, "request.invalid"),
+            (404, "resource.not_found"),
+            (409, "mutation.conflict"),
+            (409, "idempotency.conflict"),
+            (412, "precondition.failed"),
+            (415, "unsupported.media_type"),
+            (428, "precondition.required"),
+            (503, "source.unavailable"),
+            (503, "service.unavailable"),
+        ] {
+            let (_, details) = problem_contract(status, Some(code)).expect("registered problem");
+            assert_eq!(details.len(), 1, "{code} carries exactly one detail");
+        }
+        let (title, details) =
+            problem_contract(400, Some("request.plan_refused")).expect("registered problem");
+        assert_eq!(title, "Bad Request");
+        assert_eq!(
+            details.len(),
+            ChangeRequestPlannerError::PLAN_REFUSALS.len()
+        );
+        assert!(problem_contract(400, Some("request.plan_declined")).is_none());
+        assert!(problem_contract(503, Some("request.plan_refused")).is_none());
+    }
+
+    fn plan_refused_step() -> ValidatedStep {
+        let route = CompiledRoute {
+            id: "records.request.request.submit".to_owned(),
+            entity_id: "request".to_owned(),
+            method: HttpMethod::Post,
+            path: "/v1/records/requests/{record_id}/actions/submit".to_owned(),
+            operation: Operation::SubmitRequest,
+            query_kind: None,
+            revision_kind: None,
+            request_stage: None,
+            maximum_records: Some(1),
+            access_profiles: vec!["submitter".to_owned()],
+            default_access_profile: "submitter".to_owned(),
+        };
+        let profile: AccessProfileSource = serde_json::from_value(json!({
+            "id": "submitter",
+            "principalClaim": "principal",
+            "operations": ["submit_request"]
+        }))
+        .expect("test profile parses");
+        ValidatedStep {
+            id: "submit-refused-plan".to_owned(),
+            entity: Some("request".to_owned()),
+            action_id: None,
+            access_profile: "submitter".to_owned(),
+            claims: ClaimsSource::default(),
+            route: FixtureRoute::Entity(route),
+            profile,
+            response_readable_fields: BTreeSet::new(),
+            action: ActionSource::SubmitRequest {
+                record_ref: "before-submit".to_owned(),
+                etag_ref: "before-submit".to_owned(),
+            },
+            expect: ExpectationSource {
+                outcome: ExpectedOutcome::Refusal,
+                status: 400,
+                problem_code: Some("request.plan_refused".to_owned()),
+                fields: Map::new(),
+                count: None,
+            },
+            capture: None,
+            capture_results: BTreeMap::new(),
+        }
+    }
+
+    fn plan_refused_document(detail: &str) -> Value {
+        json!({
+            "type": "urn:registry-server:problem:request.plan_refused",
+            "title": "Bad Request",
+            "status": 400,
+            "detail": detail,
+            "code": "request.plan_refused",
+            "traceId": "11111111111111111111111111111111"
+        })
     }
 
     fn scripted_response(index: usize, mode: ScriptMode) -> Result<Response<Body>, FixtureError> {

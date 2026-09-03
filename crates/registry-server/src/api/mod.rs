@@ -4969,46 +4969,26 @@ fn mutation_problem(error: MutationError) -> Response {
 
 /// The status, problem code, and detail for one bounded planner failure.
 ///
-/// The detail names the failure kind from the planner's closed vocabulary and
-/// nothing else: no script text, no request value, no target data. A planner
-/// that ran out of time is a service outage rather than a refusal, so it keeps
-/// the unavailable mapping every other timeout carries.
+/// The detail is the planner's own, so it names the failure kind from the
+/// closed vocabulary and nothing else. A planner that ran out of time is a
+/// service outage rather than a refusal, so it keeps the unavailable mapping
+/// every other timeout carries.
 const fn planner_failure_problem(
     error: crate::rhai_planner::ChangeRequestPlannerError,
 ) -> (StatusCode, &'static str, &'static str) {
     use crate::rhai_planner::ChangeRequestPlannerError as Kind;
 
-    let detail = match error {
-        Kind::Source => {
-            "The change-request planner refused the submission: change_request.planner.source."
-        }
-        Kind::Entrypoint => {
-            "The change-request planner refused the submission: change_request.planner.entrypoint."
-        }
-        Kind::Execution => {
-            "The change-request planner refused the submission: change_request.planner.execution."
-        }
-        Kind::Result => {
-            "The change-request planner refused the submission: change_request.planner.result."
-        }
-        Kind::Ceiling => {
-            "The change-request planner refused the submission: change_request.planner.ceiling."
-        }
-        Kind::Disposition => {
-            "The change-request planner refused the submission: change_request.planner.disposition."
-        }
-        Kind::Resource => {
-            "The change-request planner refused the submission: change_request.planner.resource."
-        }
-        Kind::Deadline => "The Registry mutation service is unavailable.",
-    };
     match error {
         Kind::Deadline => (
             StatusCode::SERVICE_UNAVAILABLE,
             "service.unavailable",
-            detail,
+            error.problem_detail(),
         ),
-        _ => (StatusCode::BAD_REQUEST, "request.plan_refused", detail),
+        _ => (
+            StatusCode::BAD_REQUEST,
+            "request.plan_refused",
+            error.problem_detail(),
+        ),
     }
 }
 
@@ -5060,15 +5040,7 @@ mod planner_failure_problem_tests {
 
     #[test]
     fn every_planner_refusal_names_its_kind_and_nothing_else() {
-        for error in [
-            ChangeRequestPlannerError::Source,
-            ChangeRequestPlannerError::Entrypoint,
-            ChangeRequestPlannerError::Execution,
-            ChangeRequestPlannerError::Result,
-            ChangeRequestPlannerError::Ceiling,
-            ChangeRequestPlannerError::Disposition,
-            ChangeRequestPlannerError::Resource,
-        ] {
+        for error in ChangeRequestPlannerError::PLAN_REFUSALS {
             let (status, code, detail) = planner_failure_problem(error);
             assert_eq!(status, StatusCode::BAD_REQUEST);
             assert_eq!(code, "request.plan_refused");
