@@ -126,4 +126,60 @@ DOCKER_STUB
 check_supervision_signal_handling "$quickstart_dir/run.sh" "quickstart run.sh"
 check_supervision_signal_handling "$product_dir/demo/run.sh" "demo run.sh" 'webhook=false'
 
+# Proves --installed mode fails before Docker, cargo, or any other setup work
+# when breg, bregctl, or mint are missing from PATH. The stub PATH holds a
+# real dirname, since the launchers use it to locate their own directory
+# before any preflight check runs, plus stub docker, openssl, python3, and uv
+# commands that exit non-zero if ever invoked. A pass here proves the
+# reported failure comes from the missing installed binaries, not from a
+# stub standing in for a tool the preflight also needs.
+check_installed_missing_binaries() {
+  local launcher="$1"
+  local label="$2"
+
+  local stub_bin real_dirname bash_bin
+  stub_bin=$(mktemp -d)
+  real_dirname=$(command -v dirname)
+  bash_bin=$(command -v bash)
+  ln -s "$real_dirname" "$stub_bin/dirname"
+  for tool in docker openssl python3 uv; do
+    cat >"$stub_bin/$tool" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "$tool must not run in this test" >&2
+exit 1
+STUB
+    chmod +x "$stub_bin/$tool"
+  done
+
+  local stderr_file status
+  stderr_file=$(mktemp)
+  status=0
+  PATH="$stub_bin" "$bash_bin" "$launcher" --installed >/dev/null 2>"$stderr_file" || status=$?
+  if [[ "$status" -eq 0 ]]; then
+    printf 'FAIL: %s --installed did not fail with breg, bregctl, and mint absent from PATH\n' "$label" >&2
+    exit 1
+  fi
+  if ! grep -q 'breg' "$stderr_file"; then
+    printf 'FAIL: %s --installed did not name the missing breg binary\n' "$label" >&2
+    cat "$stderr_file" >&2
+    exit 1
+  fi
+  if ! grep -q 'breg-install.sh' "$stderr_file"; then
+    printf 'FAIL: %s --installed did not point to breg-install.sh\n' "$label" >&2
+    cat "$stderr_file" >&2
+    exit 1
+  fi
+  if grep -q 'must not run in this test' "$stderr_file"; then
+    printf 'FAIL: %s --installed invoked a stubbed preflight command before failing\n' "$label" >&2
+    cat "$stderr_file" >&2
+    exit 1
+  fi
+
+  rm -rf "$stub_bin"
+  rm -f "$stderr_file"
+}
+
+check_installed_missing_binaries "$quickstart_dir/run.sh" "quickstart run.sh"
+check_installed_missing_binaries "$product_dir/demo/run.sh" "demo run.sh"
+
 printf '%s\n' 'Base Registry Engine generic quickstart self-test passed'

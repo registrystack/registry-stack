@@ -11,6 +11,7 @@ python3 -m unittest \
   "$script_dir/test_check_source_neutrality.py" \
   "$script_dir/test_generated_gates.py" \
   "$script_dir/test_quickstart.py" \
+  "$script_dir/test_change_request_runner.py" \
   "$script_dir/../demo/support/test_demo.py"
 
 echo "Base Registry Engine product contracts passed"

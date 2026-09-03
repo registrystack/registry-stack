@@ -14,6 +14,7 @@ postgres_platform=()
 spatial_fixture="$product_dir/acceptance/spatial-service-sites"
 spatial=false
 mode=serve
+installed=false
 
 for argument in "$@"; do
   case "$argument" in
@@ -33,8 +34,15 @@ for argument in "$@"; do
       fi
       mode=smoke
       ;;
+    --installed)
+      if [[ "$installed" == true ]]; then
+        printf '%s\n' 'the --installed option may be supplied only once.' >&2
+        exit 2
+      fi
+      installed=true
+      ;;
     *)
-      printf '%s\n' 'usage: products/breg/quickstart/run.sh [--spatial] [--smoke]' >&2
+      printf '%s\n' 'usage: products/breg/quickstart/run.sh [--installed] [--spatial] [--smoke]' >&2
       exit 2
       ;;
   esac
@@ -47,9 +55,30 @@ require_command() {
   fi
 }
 
+resolve_installed_command() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    printf '%s\n' "$1 is required for the Base Registry Engine generic quickstart in --installed mode; $2." >&2
+    exit 2
+  fi
+  command -v "$1"
+}
+
 for command in cargo docker openssl python3 uv; do
+  if [[ "$command" == cargo && "$installed" == true ]]; then
+    continue
+  fi
   require_command "$command"
 done
+
+if [[ "$installed" == true ]]; then
+  breg=$(resolve_installed_command breg 'breg-install.sh provides breg and bregctl')
+  bregctl=$(resolve_installed_command bregctl 'breg-install.sh provides breg and bregctl')
+  mint=$(resolve_installed_command mint 'evidencectl-install.sh provides mint')
+  printf '%s\n' '== Using installed breg, bregctl, and mint from PATH'
+  printf '%s\n' "$breg"
+  printf '%s\n' "$bregctl"
+  printf '%s\n' "$mint"
+fi
 
 case "$run_dir" in
   "$quickstart_dir/.run") ;;
@@ -99,21 +128,23 @@ read -r database_port mint_port breg_port <<EOF
 $ports
 EOF
 
-export CARGO_INCREMENTAL=0
-export CARGO_PROFILE_DEV_DEBUG=0
-export CARGO_PROFILE_TEST_DEBUG=0
-export RUSTC_WRAPPER="${RUSTC_WRAPPER-}"
+if [[ "$installed" != true ]]; then
+  export CARGO_INCREMENTAL=0
+  export CARGO_PROFILE_DEV_DEBUG=0
+  export CARGO_PROFILE_TEST_DEBUG=0
+  export RUSTC_WRAPPER="${RUSTC_WRAPPER-}"
 
-printf '%s\n' '== Building Base Registry Engine, its CLI, and Mint'
-cargo build --manifest-path "$repository_root/Cargo.toml" --locked \
-  -p registry-breg --features registry-breg/runtime \
-  -p registry-bregctl \
-  -p registry-mint \
-  --bins >/dev/null
+  printf '%s\n' '== Building Base Registry Engine, its CLI, and Mint'
+  cargo build --manifest-path "$repository_root/Cargo.toml" --locked \
+    -p registry-breg --features registry-breg/runtime \
+    -p registry-bregctl \
+    -p registry-mint \
+    --bins >/dev/null
 
-breg="$repository_root/target/debug/breg"
-bregctl="$repository_root/target/debug/bregctl"
-mint="$repository_root/target/debug/mint"
+  breg="$repository_root/target/debug/breg"
+  bregctl="$repository_root/target/debug/bregctl"
+  mint="$repository_root/target/debug/mint"
+fi
 
 if [[ "$spatial" == true ]]; then
   printf '%s\n' '== Preparing and checking the spatial service-site Registry project'

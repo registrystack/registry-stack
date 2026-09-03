@@ -10,14 +10,17 @@ local one, before `check`, `test`, and `package`. It adds no model, profile, or
 catalogue metadata of its own; everything else the registry exposes comes from
 the initialized project.
 
-Prerequisites are Docker, Cargo, OpenSSL, Python 3, and `uv`.
+Prerequisites are Docker, OpenSSL, Python 3, and `uv`, plus Cargo unless you
+pass `--installed`.
 
 ```bash
 products/breg/quickstart/run.sh
 ```
 
 The first run builds `breg`, `bregctl`, and `mint`, then
-pulls the pinned PostgreSQL image if Docker does not already have it. When the
+pulls the pinned PostgreSQL image if Docker does not already have it. With
+`--installed`, the launcher skips the build and uses the `breg`, `bregctl`, and
+`mint` found on `PATH`, which is how a released install runs it. When the
 launcher prints `Base Registry Engine generic quickstart is ready`, leave that
 terminal running.
 
@@ -42,7 +45,6 @@ For a non-interactive check of the full local path, run:
 ```bash
 products/breg/quickstart/run.sh --smoke
 ```
-
 
 ## Change-request examples
 
@@ -102,7 +104,7 @@ The QGIS principal is an installation client, not a human user. It is read-only 
 
 The in-process adapter exposes six GIS routes and reuses BReg authorization, read plans and audited GeoJSON output. It advertises an empty OGC API conformance list because it does not implement the full standard. Collection paging reads live data. If a native record request omits the readable geometry with `$select`, GeoJSON represents it as `null`; a profile that cannot read the primary geometry cannot request GeoJSON or bbox.
 
-To check refresh after a BReg write, leave the launcher running and open another terminal at the repository root. This imports one additional synthetic point through the ordinary authenticated batch API. Run it once per disposable quickstart; its checkpoint makes retries resumable.
+To check refresh after a BReg write, leave the launcher running and open another terminal at the repository root. This imports one additional synthetic point through the ordinary authenticated batch API. Run it once per disposable quickstart; its checkpoint makes retries resumable. After a `--installed` run, use the `bregctl` and `mint` on `PATH` in place of the `target/debug/` paths.
 
 ```bash
 spatial_run="$PWD/products/breg/quickstart/.run"

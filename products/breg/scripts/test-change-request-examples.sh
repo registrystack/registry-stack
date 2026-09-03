@@ -11,15 +11,18 @@ mode="change-request"
 asset_project=""
 household_project=""
 rhai_project=""
+installed=false
 
 usage() {
   cat >&2 <<'USAGE'
-usage: products/breg/scripts/test-change-request-examples.sh [--env FILE] [--asset-project DIR] [--household-project DIR] [--rhai-project DIR] [--mode change-request|immediate-actions]
+usage: products/breg/scripts/test-change-request-examples.sh [--installed] [--env FILE] [--asset-project DIR] [--household-project DIR] [--rhai-project DIR] [--mode change-request|immediate-actions]
 
 Runs the Base Registry Engine change-request example fixtures through bregctl test.
 Use --mode immediate-actions to run the immediate-action fixtures through the same closed harness.
 Set BREG_TEST_DATABASE_URL and BREG_TEST_TLS_CA_PEM_PATH, or pass --env FILE.
 Requires Python 3 with PyYAML. Use a project override to run a disposable edited copy instead of the committed fixture.
+With --installed, the runner uses the breg and bregctl found on PATH instead of building them,
+which is how a released install runs it.
 USAGE
 }
 
@@ -72,6 +75,14 @@ while [[ $# -gt 0 ]]; do
           ;;
       esac
       shift 2
+      ;;
+    --installed)
+      if [[ "$installed" == true ]]; then
+        printf '%s\n' 'the --installed option may be supplied only once.' >&2
+        exit 2
+      fi
+      installed=true
+      shift
       ;;
     -h|--help)
       usage
@@ -160,6 +171,14 @@ require_tool() {
     printf '%s\n' "$1 is required for $run_label example tests." >&2
     exit 1
   fi
+}
+
+resolve_installed_command() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    printf '%s\n' "$1 is required for $run_label example tests in --installed mode; $2." >&2
+    exit 2
+  fi
+  command -v "$1"
 }
 
 psql_admin() {
@@ -668,7 +687,15 @@ PY
   printf '%s fixture passed: %s\n' "$run_label" "$fixture_name"
 }
 
-require_tool cargo
+if [[ "$installed" == true ]]; then
+  breg=$(resolve_installed_command breg 'breg-install.sh provides breg and bregctl')
+  bregctl=$(resolve_installed_command bregctl 'breg-install.sh provides breg and bregctl')
+  printf '%s\n' '== Using installed breg and bregctl from PATH'
+  printf '%s\n' "$breg"
+  printf '%s\n' "$bregctl"
+else
+  require_tool cargo
+fi
 require_tool openssl
 require_tool psql
 require_tool python3
@@ -678,10 +705,12 @@ if [[ "$mode" == "change-request" ]]; then
   rhai_project=$(normalize_project rhai "$rhai_project")
 fi
 
-export CARGO_INCREMENTAL=0
-export CARGO_PROFILE_DEV_DEBUG=0
-export CARGO_PROFILE_TEST_DEBUG=0
-export RUSTC_WRAPPER="${RUSTC_WRAPPER-}"
+if [[ "$installed" != true ]]; then
+  export CARGO_INCREMENTAL=0
+  export CARGO_PROFILE_DEV_DEBUG=0
+  export CARGO_PROFILE_TEST_DEBUG=0
+  export RUSTC_WRAPPER="${RUSTC_WRAPPER-}"
+fi
 export SSL_CERT_FILE="$BREG_TEST_TLS_CA_PEM_PATH"
 
 temporary_root=$(mktemp -d "$repository_root/.breg-$temp_slug-examples.XXXXXX")
@@ -832,10 +861,12 @@ if [[ "$mode" == "change-request" ]]; then
   chmod 600 "$rhai_credentials"
 fi
 
-cargo build --manifest-path "$repository_root/Cargo.toml" --locked \
-  -p registry-bregctl \
-  -p registry-breg \
-  --features registry-breg/runtime >/dev/null
+if [[ "$installed" != true ]]; then
+  cargo build --manifest-path "$repository_root/Cargo.toml" --locked \
+    -p registry-bregctl \
+    -p registry-breg \
+    --features registry-breg/runtime >/dev/null
+fi
 
 run_fixture \
   "$asset_fixture_name" \
