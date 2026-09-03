@@ -19,8 +19,11 @@ relevant product pages on this site rather than duplicating release notes.
 ## Unreleased
 
 - Clarified that Discovery selection validation checks closed structure and
-  capability binding, not trust or currentness, and documented the compatibility
-  aliases for existing Node.js, Python, and Rust adopters.
+  capability binding, not trust or currentness, and kept the compatibility
+  aliases for existing Node.js and Python adopters. The Rust crate renamed
+  `validate_service_selection` to `validate_service_selection_structure` with
+  no alias, because the crate is unpublished and exempt from the
+  [compatibility promise](../reference/api-stability/).
 - Added the adopter-owned accepted-service handoff and explicit online renewal
   workflow. Credentials and native Evidence or Relay input and output remain
   outside Discovery and follow local acceptance.
