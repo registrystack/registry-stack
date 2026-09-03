@@ -293,7 +293,6 @@ apiVersion: registry.registrystack.org/server-runtime/v1alpha1
 kind: RegistryServerRuntimeConfig
 listener:
   bind: $listener
-  trustedProxy: direct
 identity:
   environment: acceptance
   instanceId: household-history-acceptance

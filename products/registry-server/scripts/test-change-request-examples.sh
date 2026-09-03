@@ -448,7 +448,6 @@ apiVersion: registry.registrystack.org/server-runtime/v1alpha1
 kind: RegistryServerRuntimeConfig
 listener:
   bind: 127.0.0.1:0
-  trustedProxy: direct
 identity:
   environment: $package_environment
   instanceId: $instance_id

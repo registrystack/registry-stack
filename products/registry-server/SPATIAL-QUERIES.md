@@ -92,7 +92,6 @@ GIS deployments require an operator-configured origin:
 ```yaml
 listener:
   bind: 127.0.0.1:8080
-  trustedProxy: direct
   publicOrigin: http://127.0.0.1:8080
 ```
 

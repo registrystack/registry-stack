@@ -225,7 +225,6 @@ def _template_text(root: Path, revision: str, package_root: Path, runtime_databa
 kind: RegistryServerRuntimeConfig
 listener:
   bind: 127.0.0.1:{origin.port}
-  trustedProxy: direct
 {f'  publicOrigin: http://127.0.0.1:{origin.port}\n' if spatial else ''}identity:
   environment: local
   instanceId: {INSTANCE_ID}

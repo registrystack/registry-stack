@@ -259,7 +259,6 @@ apiVersion: registry.registrystack.org/server-runtime/v1alpha1
 kind: RegistryServerRuntimeConfig
 listener:
   bind: $listener
-  trustedProxy: direct
 identity:
   environment: acceptance
   instanceId: asset-site-placement-acceptance

@@ -4893,7 +4893,6 @@ fn write_runtime_config(
 kind: RegistryServerRuntimeConfig
 listener:
   bind: {bind}
-  trustedProxy: direct
 identity:
   environment: production
   instanceId: {PACKAGE_INSTANCE}

@@ -114,9 +114,7 @@ fn startup_value_disclosure_and_listener_activation_threats_are_enforced_by_prep
     drop(probe);
     fs::write(
         &runtime_config,
-        format!(
-            "listener:\n  bind: {address}\n  trustedProxy: direct\nunexpected: {CONFIG_VALUE_CANARY}\n"
-        ),
+        format!("listener:\n  bind: {address}\nunexpected: {CONFIG_VALUE_CANARY}\n"),
     )
     .expect("invalid runtime configuration is written");
 

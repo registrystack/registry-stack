@@ -4930,11 +4930,11 @@ const INIT_RUNTIME_EXAMPLE: &[u8] =
 apiVersion: registry.registrystack.org/server-runtime/v1alpha1
 kind: RegistryServerRuntimeConfig
 
-# Where the server listens, and whether it trusts an upstream proxy's client
-# address. `direct` means nothing is in front of it.
+# Where the server listens. Client addresses and TLS termination belong to
+# whatever sits in front of it: the runtime reads neither peer addresses nor
+# forwarded headers.
 listener:
   bind: 127.0.0.1:8080
-  trustedProxy: direct
 
 # The environment, instance, and database this file may serve. `environment`
 # and `instanceId` must equal the `package` block in registry.yaml, and

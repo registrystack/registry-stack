@@ -590,7 +590,6 @@ fn write_runtime_config(parent: &Path, package: &PublishedPackage, trust_anchor:
 kind: RegistryServerRuntimeConfig
 listener:
   bind: 127.0.0.1:1
-  trustedProxy: direct
 identity:
   environment: production
   instanceId: {INSTANCE}

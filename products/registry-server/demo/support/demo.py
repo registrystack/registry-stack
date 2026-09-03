@@ -728,7 +728,6 @@ eventDelivery:
 kind: RegistryServerRuntimeConfig
 listener:
   bind: {bind}
-  trustedProxy: direct
 identity:
   environment: local
   instanceId: {config["instance_id"]}

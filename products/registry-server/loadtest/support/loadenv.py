@@ -180,7 +180,6 @@ def _runtime_template(
 kind: RegistryServerRuntimeConfig
 listener:
   bind: 127.0.0.1:{origin.port}
-  trustedProxy: direct
 identity:
   environment: local
   instanceId: {INSTANCE_ID}
