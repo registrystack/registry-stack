@@ -50,7 +50,7 @@ class LoadtestError(RuntimeError):
     pass
 
 
-def _write_new(path: Path, content: str, mode: int = 0o644) -> None:
+def _write_new(path: Path, content: str, mode: int = 0o600) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
     with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
@@ -58,7 +58,7 @@ def _write_new(path: Path, content: str, mode: int = 0o644) -> None:
     path.chmod(mode)
 
 
-def _write_json(path: Path, value: Any, mode: int = 0o644) -> None:
+def _write_json(path: Path, value: Any, mode: int = 0o600) -> None:
     _write_new(path, json.dumps(value, sort_keys=True, separators=(",", ":")), mode)
 
 

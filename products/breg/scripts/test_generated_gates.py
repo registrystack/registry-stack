@@ -5,7 +5,6 @@ from __future__ import annotations
 import importlib.util
 import os
 import shutil
-import subprocess
 import sys
 import tempfile
 import unittest

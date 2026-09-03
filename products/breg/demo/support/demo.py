@@ -367,7 +367,7 @@ def _validated_token_lifetime_seconds(value: int) -> int:
     return value
 
 
-def _write_new(path: Path, content: str, mode: int = 0o644) -> None:
+def _write_new(path: Path, content: str, mode: int = 0o600) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
     with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
@@ -375,7 +375,7 @@ def _write_new(path: Path, content: str, mode: int = 0o644) -> None:
     path.chmod(mode)
 
 
-def _write_json(path: Path, value: Any, mode: int = 0o644) -> None:
+def _write_json(path: Path, value: Any, mode: int = 0o600) -> None:
     _write_new(path, json.dumps(value, sort_keys=True, separators=(",", ":")), mode)
 
 
@@ -2804,6 +2804,7 @@ def write_handoff(root: Path, fixture_kind: str, out: Path) -> None:
 def wait_http(url: str, timeout_seconds: float) -> None:
     deadline = time.monotonic() + timeout_seconds
     last_status: int | None = None
+    last_error: OSError | None = None
     while time.monotonic() < deadline:
         try:
             with urllib.request.urlopen(url, timeout=1) as response:
@@ -2812,10 +2813,15 @@ def wait_http(url: str, timeout_seconds: float) -> None:
                     return
         except urllib.error.HTTPError as error:
             last_status = error.code
-        except OSError:
-            pass
+        except OSError as error:
+            last_error = error
         time.sleep(0.1)
-    suffix = f" (last HTTP status {last_status})" if last_status is not None else ""
+    if last_status is not None:
+        suffix = f" (last HTTP status {last_status})"
+    elif last_error is not None:
+        suffix = f" (last error: {last_error})"
+    else:
+        suffix = ""
     raise DemoError(f"{url} did not become ready within {timeout_seconds:g} seconds{suffix}")
 
 

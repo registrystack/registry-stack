@@ -349,7 +349,6 @@ def validate_definition_of_done(waves: set[str], errors: list[str]) -> set[str]:
             errors.append(f"definition of done.requirements[{index}].phase: unknown wave")
         if state not in CONTRACT_STATES:
             errors.append(f"definition of done.requirements[{index}].state: expected enforced, partial, or planned")
-        identifier = item.get("id")
         nonempty_string(item.get("doneWhen"), f"definition of done.requirements[{index}].doneWhen", errors)
         journeys = as_list(item.get("journeys"), f"definition of done.requirements[{index}].journeys", errors)
         if not journeys or any(not isinstance(journey, str) or not journey for journey in journeys):

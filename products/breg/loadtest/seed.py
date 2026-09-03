@@ -25,7 +25,6 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any

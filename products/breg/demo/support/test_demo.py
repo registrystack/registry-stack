@@ -1205,5 +1205,19 @@ class DemoProvisioningTests(unittest.TestCase):
                     DEMO.store_token(self.root / "secrets/token", value)
 
 
+class WaitHttpTests(unittest.TestCase):
+    def test_readiness_timeout_reports_the_last_connection_error(self) -> None:
+        import socket
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            listener.bind(("127.0.0.1", 0))
+            port = listener.getsockname()[1]
+        with self.assertRaises(DEMO.DemoError) as raised:
+            DEMO.wait_http(f"http://127.0.0.1:{port}/health", 0.3)
+        message = str(raised.exception)
+        self.assertIn("did not become ready within 0.3 seconds", message)
+        self.assertIn("Connection refused", message)
+
+
 if __name__ == "__main__":
     unittest.main()

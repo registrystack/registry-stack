@@ -249,8 +249,8 @@ class EvidenceTests(unittest.TestCase):
 
         try:
             server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        except PermissionError:
-            self.skipTest("loopback sockets are unavailable in this sandbox")
+        except PermissionError as error:
+            raise unittest.SkipTest("loopback sockets are unavailable in this sandbox") from error
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
