@@ -18,15 +18,25 @@ Mint client whose verified claims bind it to that UUID and business code.
 
 ## Run it
 
-Prerequisites are Docker, Cargo, OpenSSL, Python 3, and `uv`. Run:
+Prerequisites are Docker, OpenSSL, Python 3, and `uv`, plus either released
+`breg`, `bregctl`, and `mint` binaries on `PATH` or Cargo to build them from
+this checkout. With the released binaries installed, run:
+
+```bash
+products/breg/demo/run.sh --installed
+```
+
+`--installed` takes `breg`, `bregctl`, and `mint` from `PATH`, skips the build,
+and combines with every other option in this document. Without it, the first
+run builds those three binaries from this checkout with Cargo:
 
 ```bash
 products/breg/demo/run.sh
 ```
 
-The first run builds the four required Registry Stack binaries and may pull the
-pinned PostgreSQL image. When the demo is ready, leave that terminal running.
-In a second terminal, execute all sample reads:
+Either way, the first run may pull the pinned PostgreSQL image. When the demo
+is ready, leave that terminal running. In a second terminal, execute all sample
+reads:
 
 ```bash
 products/breg/demo/query.sh all

@@ -13,8 +13,8 @@ standards_referenced: []
 
 Registry Stack helps institutions manage controlled access to authoritative data.
 Evidence Gateway signs the answer to a bounded question, Registry Relay publishes selected
-records from an existing source, and the Base Registry Engine source preview provides a
-configuration-defined writable registry backed by PostgreSQL.
+records from an existing source, and Base Registry Engine provides a configuration-defined
+writable registry backed by PostgreSQL.
 
 {/* Evidence: crates/registry-breg/src/contract.rs, RegistryProject;
     crates/registry-breg/src/api/mod.rs; crates/registry-breg/src/postgres/mutation.rs. */}
@@ -55,8 +55,7 @@ sources, token issuers, audit retention, and revision replacement.
 Use Base Registry Engine when you need a system of record, including create and update operations.
 Your project defines entities, relationships, constraints, and caller permissions; the compiler
 generates the storage and REST contract. Holdings, plots, businesses, and assets are configured
-models, not built-in BReg types. Base Registry Engine is currently documented as an unreleased
-source preview.
+models, not built-in BReg types.
 
 Start with the [Base Registry Engine overview](explanation/configuration-defined-registry/), then
 [create and query your first registry](tutorials/first-breg/). Continue with
