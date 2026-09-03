@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## v0.26.0 - 2026-09-03
+
+- `registry-platform-config` exposes a parsed `SecretReference` for the exact
+  `secret:env/NAME` and `secret:file/name` grammars. Its debug form redacts the
+  reference name, and callers may resolve an already parsed reference without
+  interpreting it again.
+- `registry-platform-httputil` adds a closed event-delivery destination and
+  request shape for bounded canonical-JSON CloudEvents HTTP posts. The shared
+  boundary fixes the path, header names, body and request limits, forbids an
+  authorization slot, and keeps redirects disabled for Base Registry Engine
+  webhook delivery.
+
 ## v0.25.0 - 2026-08-22
 
 - No separately versioned Registry Platform API changes.

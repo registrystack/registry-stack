@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.26.0
+
+- BREAKING: every `data_services[]` entry must list at least one existing
+  dataset in `serves_datasets`. Add the datasets exposed by each service before
+  validating or republishing an older manifest that omitted this relationship.
+- Datasets may declare a canonical IRI and a deliberate release version.
+  Manifests may also declare first-class distributions linked to exactly one
+  dataset and, optionally, to a serving data service or HTTP(S) access or
+  download URL.
+- DCAT output renders declared distributions, access services, media types,
+  formats, and dataset versions. A distribution that names an access service
+  must belong to a dataset that service lists in `serves_datasets`.
+- Existing manifests that omit the additive dataset and distribution fields
+  keep their exact typed canonical bytes and `source_manifest_digest`. An
+  absent or empty `distributions` collection is canonically equivalent.
+
 ## 0.25.0
 
 - Registry Manifest has no user-visible format changes in this release.

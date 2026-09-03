@@ -1,6 +1,6 @@
 {
   "name": "@registrystack/discovery-client",
-  "version": "0.25.0",
+  "version": "0.26.0",
   "description": "Node.js binding for the Registry Discovery client, via napi-rs.",
   "license": "Apache-2.0",
   "publishConfig": { "access": "public", "provenance": true },
