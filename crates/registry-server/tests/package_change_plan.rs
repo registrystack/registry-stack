@@ -20,13 +20,16 @@ use registry_server::migration_plan::{
     ReviewedMigrationSource, ReviewedMigrationStepDescriptor,
 };
 use registry_server::package::{
-    change_set_to_applicable_migration_plan, compiled_registry_change_set, derive_package_revision,
-    prepare_package_with_project_assets, CompiledRegistryChangeClass, CompiledRegistryChangeCode,
-    PackageBuildRequest, PackageEnvelope, PackageError, PackageFileRole, PackageMigrationPlanInput,
-    PackageModuleSource, PackageSourceFile, SignaturePolicy, MAX_RHAI_PLANNER_SOURCE_BYTES,
+    change_set_to_applicable_migration_plan, compiled_registry_change_set,
+    CompiledRegistryChangeClass, CompiledRegistryChangeCode, PackageBuildRequest,
+    PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile, SignaturePolicy,
 };
 #[cfg(feature = "tooling")]
-use registry_server::package::{inspect_package_integrity, prepare_package, PreparedPackage};
+use registry_server::package::{
+    derive_package_revision, inspect_package_integrity, prepare_package,
+    prepare_package_with_project_assets, PackageEnvelope, PackageError, PackageFileRole,
+    PreparedPackage, MAX_RHAI_PLANNER_SOURCE_BYTES,
+};
 use registry_server::CompiledRegistry;
 #[cfg(feature = "tooling")]
 use serde::Serialize;
@@ -61,6 +64,7 @@ const FINAL_FINGERPRINT: &str =
 const SUMMARY_CANARY: &str = "summary-canary";
 #[cfg(feature = "tooling")]
 const SQL_CANARY: &str = "summary-sql-canary";
+#[cfg(feature = "tooling")]
 const RHAI_PLANNER_CANARY: &str = "rhai-package-source-canary";
 
 #[cfg(feature = "tooling")]
