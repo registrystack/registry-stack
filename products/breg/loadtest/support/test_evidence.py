@@ -8,10 +8,10 @@ import subprocess
 import tempfile
 import threading
 import unittest
+import unittest.mock as mock
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from unittest import mock
 
 
 MODULE_PATH = Path(__file__).with_name("evidence.py")

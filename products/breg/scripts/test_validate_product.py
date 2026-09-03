@@ -9,8 +9,8 @@ import subprocess
 import sys
 import tomllib
 import unittest
+import unittest.mock as mock
 from pathlib import Path
-from unittest import mock
 
 
 sys.dont_write_bytecode = True
@@ -390,6 +390,7 @@ class BRegProductCatalogTests(unittest.TestCase):
         def test_nested_helper() -> None:
             return None
 
+        self.assertTrue(callable(test_nested_helper))
         errors: list[str] = []
         VALIDATOR.executable_test_resolves(
             {

@@ -10,10 +10,10 @@ import re
 import sys
 import tempfile
 import unittest
+import unittest.mock as mock
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest import mock
 
 
 MODULE_PATH = Path(__file__).with_name("demo.py")
