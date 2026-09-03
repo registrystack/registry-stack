@@ -182,7 +182,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The official v0.26.0 Linux AMD64 Discovery candidate imports none of the deprecated resolver-printing functions ns_printrrf, ns_printrr, or fp_nquery and embeds none of those names, so no vulnerable TSIG record printing path exists in the reviewed bytes. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound executable closure digests.",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The official v0.26.0 Linux AMD64 Discovery candidate imports none of the deprecated resolver-printing functions ns_sprintrrf, ns_sprintrr, or fp_nquery and embeds none of those names, so no vulnerable TSIG record printing path exists in the reviewed bytes. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound executable closure digests.",
       "reviewed_at": "2026-09-03",
       "expires_at": "2026-09-17",
       "invalidation_triggers": [

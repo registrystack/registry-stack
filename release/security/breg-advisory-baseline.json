@@ -190,7 +190,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no fixed Trixie version. The official v0.26.0 Linux AMD64 BReg candidate imports __res_init but none of the deprecated ns_printrrf, ns_printrr, or fp_nquery functions and contains none of those function names for dynamic resolution. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed file digests.",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no fixed Trixie version. The official v0.26.0 Linux AMD64 BReg candidate imports __res_init but none of the deprecated ns_sprintrrf, ns_sprintrr, or fp_nquery functions and contains none of those function names for dynamic resolution. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed file digests.",
       "reviewed_at": "2026-09-03",
       "expires_at": "2026-09-17",
       "invalidation_triggers": [
