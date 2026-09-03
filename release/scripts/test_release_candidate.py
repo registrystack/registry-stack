@@ -41,7 +41,13 @@ def json_bytes(value: object) -> bytes:
 
 
 def security_evidence_members(
-    image_names: tuple[str, ...] = ("discovery", "evidence", "mint", "relay"),
+    image_names: tuple[str, ...] = (
+        "discovery",
+        "evidence",
+        "mint",
+        "registry-server",
+        "relay",
+    ),
 ) -> dict[str, bytes]:
     refs = {
         name: f"ghcr.io/registrystack/{name}-candidate@{IMAGE_DIGEST}"
@@ -346,7 +352,13 @@ class ReleaseCandidateTest(TestCase):
 
     def make_v2_candidate(self) -> tuple[dict, Path, Path, dict]:
         bundle_root = self.root / "v2-bundle"
-        image_names = ("discovery", "evidence", "mint", "relay")
+        image_names = (
+            "discovery",
+            "evidence",
+            "mint",
+            "registry-server",
+            "relay",
+        )
         evidence_members = security_evidence_members(image_names)
         evidence_name = "registry-stack-v1.2.3-security-evidence.tar.gz"
         payload_inventory = self.module._relay_v2_payload_inventory("1.2.3")
@@ -697,6 +709,25 @@ class ReleaseCandidateTest(TestCase):
         self.assertNotIn("discovery-v0.23.0-linux-amd64", historical)
         self.assertEqual("binary", current["discovery-v0.24.0-linux-amd64"])
 
+    def test_registry_server_payloads_begin_with_v0_26_0(self) -> None:
+        historical = self.module._relay_v2_payload_inventory("0.25.0")
+        current = self.module._relay_v2_payload_inventory("0.26.0")
+
+        self.assertNotIn("registry-server-v0.25.0-linux-amd64", historical)
+        for platform in ("linux-amd64", "linux-arm64", "macos-arm64"):
+            self.assertEqual(
+                "binary",
+                current[f"registry-server-v0.26.0-{platform}"],
+            )
+            self.assertEqual(
+                "binary",
+                current[f"registry-serverctl-v0.26.0-{platform}"],
+            )
+        self.assertEqual(
+            "installer", current["registry-server-v0.26.0-install.sh"]
+        )
+        self.assertEqual("installer", current["registry-server-install.sh"])
+
     def test_v2_security_evidence_members_follow_candidate_images(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -748,11 +779,22 @@ class ReleaseCandidateTest(TestCase):
             self.module._candidate_image_names("0.24.0"),
         )
 
+    def test_registry_server_image_joins_the_roster_at_v0_26(self) -> None:
+        self.assertEqual(
+            {"discovery", "evidence", "mint", "relay"},
+            self.module._candidate_image_names("0.25.0"),
+        )
+        self.assertEqual(
+            {"discovery", "evidence", "mint", "registry-server", "relay"},
+            self.module._candidate_image_names("0.26.0"),
+        )
+
     def test_image_names_cli_emits_the_version_appropriate_roster(self) -> None:
         cases = (
             ("0.20.2", "relay\n"),
             ("0.21.0", "evidence mint relay\n"),
             ("0.24.0", "discovery evidence mint relay\n"),
+            ("0.26.0", "discovery evidence mint registry-server relay\n"),
         )
         for version, expected in cases:
             with self.subTest(version=version):

@@ -54,6 +54,8 @@ class ReleaseRepeatabilityWorkflowTest(unittest.TestCase):
         self.assertIn('"discovery": "discovery"', self.workflow)
         self.assertIn('"evidence-oid4vci": "evidence-oid4vci"', self.workflow)
         self.assertIn('"registry-manifest": "registry-manifest"', self.workflow)
+        self.assertIn('"registry-server": "registry-server"', self.workflow)
+        self.assertIn('"registry-serverctl": "registry-serverctl"', self.workflow)
         self.assertIn('"relay": "relay"', self.workflow)
         self.assertIn('"relayctl": "relayctl"', self.workflow)
         self.assertIn(

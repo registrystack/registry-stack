@@ -177,8 +177,8 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "run: products/registry-server/scripts/test-adopter-workflow.sh",
     ),
     (
-        "Registry Server PostgreSQL 17 image pin",
-        "postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675",
+        "Registry Server PostgreSQL 17 / PostGIS 3.5 image pin",
+        "postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6",
     ),
     (
         "Release Linux Node client path filter",
@@ -663,6 +663,7 @@ REQUIRED_RELEASE_SECURITY_GATES = (
             '    "discovery",\n',
             '    "evidence",\n',
             '    "mint",\n',
+            '    "registry-server",\n',
             '    "relay",\n',
             "if package in PUBLIC_PACKAGES:",
             "if package not in CANDIDATE_PACKAGES:",

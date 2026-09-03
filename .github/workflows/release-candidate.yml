@@ -277,6 +277,14 @@ jobs:
             "relay ${{ needs.validate.outputs.version }}"
           test "$("dist/bin/relayctl-${{ needs.validate.outputs.tag }}-linux-amd64" --version)" = \
             "relayctl ${{ needs.validate.outputs.version }}"
+          IFS=. read -r server_major server_minor _server_patch \
+            <<<"${{ needs.validate.outputs.version }}"
+          if (( server_major > 0 || server_minor >= 26 )); then
+            test "$("dist/bin/registry-server-${{ needs.validate.outputs.tag }}-linux-amd64" --version)" = \
+              "registry-server ${{ needs.validate.outputs.version }}"
+            test "$("dist/bin/registry-serverctl-${{ needs.validate.outputs.tag }}-linux-amd64" --version)" = \
+              "registry-serverctl ${{ needs.validate.outputs.version }}"
+          fi
 
       - name: Set up Docker Buildx
         id: buildx
@@ -354,7 +362,7 @@ jobs:
           retention-days: 2
 
   build-platforms:
-    name: Build relayctl ${{ matrix.asset }} once
+    name: Build native ${{ matrix.asset }} payload once
     needs: validate
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 35
@@ -391,6 +399,18 @@ jobs:
             -p registry-relayctl -p registry-evidence -p registry-evidencectl \
             -p registry-mint -p registry-evidence-oid4vci \
             --target "${{ matrix.target }}"
+          IFS=. read -r server_major server_minor _server_patch \
+            <<<"${{ needs.validate.outputs.version }}"
+          include_registry_server=0
+          if (( server_major > 0 || server_minor >= 26 )); then
+            include_registry_server=1
+            cargo build --release --locked \
+              -p registry-server --bin registry-server --features runtime \
+              --target "${{ matrix.target }}"
+            cargo build --release --locked \
+              -p registry-serverctl \
+              --target "${{ matrix.target }}"
+          fi
           mkdir -p platform
           asset="relayctl-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}"
           cp "target/${{ matrix.target }}/release/relayctl" "platform/${asset}"
@@ -403,6 +423,16 @@ jobs:
               "platform/${asset}"
             chmod 0755 "platform/${asset}"
           done
+          if [[ "${include_registry_server}" -eq 1 ]]; then
+            for server_binary in registry-server registry-serverctl; do
+              asset="${server_binary}-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}"
+              cp "target/${{ matrix.target }}/release/${server_binary}" \
+                "platform/${asset}"
+              chmod 0755 "platform/${asset}"
+              test "$("platform/${asset}" --version)" = \
+                "${server_binary} ${{ needs.validate.outputs.version }}"
+            done
+          fi
           mkdir -p candidate-platform
           mv platform candidate-platform/platform
 
@@ -1188,6 +1218,45 @@ jobs:
             observed="$("${relay_install_dir}/relayctl" --version)"
             test "${observed}" = \
               "relayctl ${{ needs.validate.outputs.version }}"
+            rm candidate/bundle-root/SHA256SUMS
+          fi
+          if (( relay_major > 0 || relay_minor >= 26 )); then
+            registry_server_installer="registry-server-${{ needs.validate.outputs.tag }}-install.sh"
+            awk -v version="${{ needs.validate.outputs.tag }}" '
+              $0 == "default_version=\"\"" {
+                print "default_version=\"" version "\""
+                rendered = 1
+                next
+              }
+              { print }
+              END { if (!rendered) exit 1 }
+            ' crates/registry-server/install.sh \
+              > "candidate/bundle-root/${registry_server_installer}"
+            chmod 0755 "candidate/bundle-root/${registry_server_installer}"
+            cp "candidate/bundle-root/${registry_server_installer}" \
+              candidate/bundle-root/registry-server-install.sh
+            chmod 0755 candidate/bundle-root/registry-server-install.sh
+            (
+              cd candidate/bundle-root
+              sha256sum -- \
+                "registry-server-${{ needs.validate.outputs.tag }}-linux-amd64" \
+                "registry-serverctl-${{ needs.validate.outputs.tag }}-linux-amd64" \
+                > SHA256SUMS
+            )
+            registry_server_install_dir="${RUNNER_TEMP}/candidate-registry-server-install"
+            REGISTRY_SERVER_ASSET_DIR="${GITHUB_WORKSPACE}/candidate/bundle-root" \
+            REGISTRY_SERVER_INSTALL_DIR="${registry_server_install_dir}" \
+              bash "candidate/bundle-root/${registry_server_installer}"
+            for server_binary in registry-server registry-serverctl; do
+              observed="$("${registry_server_install_dir}/${server_binary}" --version)"
+              test "${observed}" = \
+                "${server_binary} ${{ needs.validate.outputs.version }}"
+            done
+            registry_server_project="${RUNNER_TEMP}/candidate-registry-server-project"
+            "${registry_server_install_dir}/registry-serverctl" \
+              init "${registry_server_project}"
+            "${registry_server_install_dir}/registry-serverctl" \
+              check "${registry_server_project}"
             rm candidate/bundle-root/SHA256SUMS
           fi
           evidencectl_installer="evidencectl-${{ needs.validate.outputs.tag }}-install.sh"

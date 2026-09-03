@@ -100,6 +100,7 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
             "discovery",
             "evidence",
             "mint",
+            "registry-server",
             "relay",
             "other-candidate",
         ):

@@ -33,6 +33,7 @@ PUBLIC_PACKAGES = (
     "discovery",
     "evidence",
     "mint",
+    "registry-server",
     "relay",
 )
 

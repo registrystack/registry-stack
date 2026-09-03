@@ -38,6 +38,7 @@ RELAY_V2_ARTIFACT_INVENTORY = (
 RELAY_CLIENT_PACKAGE_MINIMUM_VERSION = (0, 19, 1)
 DISCOVERY_CLIENT_PACKAGE_MINIMUM_VERSION = (0, 23, 0)
 DISCOVERY_RUNTIME_MINIMUM_VERSION = (0, 24, 0)
+REGISTRY_SERVER_RELEASE_MINIMUM_VERSION = (0, 26, 0)
 
 
 def run(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -85,6 +86,12 @@ def manifest(version: str, release_id: str, source_ref: str, status: str) -> dic
         inventory += ("discovery-client-node", "discovery-client-python")
     if version_tuple >= DISCOVERY_RUNTIME_MINIMUM_VERSION:
         inventory += ("discovery",)
+    if version_tuple >= REGISTRY_SERVER_RELEASE_MINIMUM_VERSION:
+        inventory += (
+            "registry-server",
+            "registry-serverctl",
+            "registry-server-installer",
+        )
     data = {
         "stack": {
             "release": release_id,

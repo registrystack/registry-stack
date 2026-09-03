@@ -19,6 +19,10 @@ include_discovery=0
 if ((version_major > 0 || version_minor >= 24)); then
   include_discovery=1
 fi
+include_registry_server=0
+if ((version_major > 0 || version_minor >= 26)); then
+  include_registry_server=1
+fi
 default_builder_image="rust:1.95-trixie@sha256:f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3"
 if [[ -n "${RELEASE_BUILDER_IMAGE:-}" && "${RELEASE_BUILDER_IMAGE}" != "${default_builder_image}" ]]; then
   printf 'RELEASE_BUILDER_IMAGE must remain pinned to %s\n' "${default_builder_image}" >&2
@@ -57,6 +61,7 @@ docker run --rm \
   --env CARGO_TERM_COLOR="${CARGO_TERM_COLOR:-always}" \
   --env HOME=/workspace \
   --env RELEASE_INCLUDE_DISCOVERY="${include_discovery}" \
+  --env RELEASE_INCLUDE_REGISTRY_SERVER="${include_registry_server}" \
   --env RELEASE_TAG="${tag}" \
   --env REGISTRY_RELEASE_TAG="${tag}" \
   --env RELEASE_RUSTFLAGS="${release_rustflags}" \
@@ -100,6 +105,18 @@ docker run --rm \
       cp target/release/discovery "dist/bin/discovery-${RELEASE_TAG}-linux-amd64"
       cp target/release/discovery dist/image-bin/discovery
     fi
+
+    if [[ "${RELEASE_INCLUDE_REGISTRY_SERVER}" -eq 1 ]]; then
+      cargo build --release --locked \
+        -p registry-server \
+        --bin registry-server \
+        --features runtime
+      cargo build --release --locked \
+        -p registry-serverctl
+      cp target/release/registry-server "dist/bin/registry-server-${RELEASE_TAG}-linux-amd64"
+      cp target/release/registry-serverctl "dist/bin/registry-serverctl-${RELEASE_TAG}-linux-amd64"
+      cp target/release/registry-server dist/image-bin/registry-server
+    fi
   '
 
 printf '%s\n' "${release_builder_image}" > "${repo_root}/dist/image-bin/RELEASE_BUILDER_IMAGE"
@@ -110,6 +127,13 @@ image_bin_binaries=()
 if [[ "${include_discovery}" -eq 1 ]]; then
   bin_assets+=("discovery-${tag}-linux-amd64")
   image_bin_binaries+=(discovery)
+fi
+if [[ "${include_registry_server}" -eq 1 ]]; then
+  bin_assets+=(
+    "registry-server-${tag}-linux-amd64"
+    "registry-serverctl-${tag}-linux-amd64"
+  )
+  image_bin_binaries+=(registry-server)
 fi
 bin_assets+=(
   "evidence-${tag}-linux-amd64"

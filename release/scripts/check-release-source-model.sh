@@ -75,6 +75,8 @@ require_path "registry-evidence crate" "${stack_root}/crates/registry-evidence"
 require_path "registry-evidencectl crate" "${stack_root}/crates/registry-evidencectl"
 require_path "registry-mint crate" "${stack_root}/crates/registry-mint"
 require_path "registry-evidence-oid4vci crate" "${stack_root}/crates/registry-evidence-oid4vci"
+require_path "registry-server crate" "${stack_root}/crates/registry-server"
+require_path "registry-serverctl crate" "${stack_root}/crates/registry-serverctl"
 if [[ "${stack_git_root}" != "${stack_root}" ]]; then
 	echo "release source model failed: registry-stack source dir must be the monorepo root, got ${stack_root} inside ${stack_git_root}" >&2
 	exit 2

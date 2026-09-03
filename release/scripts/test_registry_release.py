@@ -5,6 +5,7 @@ import importlib.util
 import hashlib
 import io
 import json
+import os
 import stat
 import subprocess
 import sys
@@ -912,8 +913,10 @@ class RegistryReleaseTest(TestCase):
             encoding="utf-8"
         )
         release_dockerfiles = [
+            "release/docker/Dockerfile.discovery",
             "release/docker/Dockerfile.evidence",
             "release/docker/Dockerfile.mint",
+            "release/docker/Dockerfile.registry-server",
             "release/docker/Dockerfile.relay",
         ]
 
@@ -985,6 +988,84 @@ class RegistryReleaseTest(TestCase):
             "for binary in evidence evidencectl mint evidence-oid4vci",
             workflow,
         )
+
+    def test_release_builds_installs_and_smokes_registry_server_from_v0_26(self) -> None:
+        workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
+            encoding="utf-8"
+        )
+        platform_job = workflow[
+            workflow.index("\n  build-platforms:") : workflow.index("\n  clients:")
+        ]
+        assemble = workflow.split("\n  assemble:", 1)[1].split("\n  attest:", 1)[0]
+        installer = ROOT / "crates/registry-server/install.sh"
+        installer_text = installer.read_text(encoding="utf-8")
+
+        self.assertIn("server_minor >= 26", platform_job)
+        self.assertIn("-p registry-server --bin registry-server --features runtime", platform_job)
+        self.assertIn("-p registry-serverctl", platform_job)
+        self.assertIn(
+            "for server_binary in registry-server registry-serverctl",
+            platform_job,
+        )
+        self.assertIn(
+            'registry_server_installer="registry-server-${{ needs.validate.outputs.tag }}-install.sh"',
+            assemble,
+        )
+        self.assertIn("crates/registry-server/install.sh", assemble)
+        self.assertIn("REGISTRY_SERVER_ASSET_DIR", assemble)
+        self.assertIn("REGISTRY_SERVER_INSTALL_DIR", assemble)
+        self.assertIn('init "${registry_server_project}"', assemble)
+        self.assertIn('check "${registry_server_project}"', assemble)
+        self.assertIn(
+            "binaries=(registry-server registry-serverctl)", installer_text
+        )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            assets = root / "assets"
+            destination = root / "bin"
+            assets.mkdir()
+            os_name = subprocess.run(
+                ["uname", "-s"], check=True, capture_output=True, text=True
+            ).stdout.strip()
+            architecture = subprocess.run(
+                ["uname", "-m"], check=True, capture_output=True, text=True
+            ).stdout.strip()
+            if os_name == "Darwin" and architecture in {"arm64", "aarch64"}:
+                platform_name = "macos-arm64"
+            elif os_name == "Linux" and architecture in {"x86_64", "amd64"}:
+                platform_name = "linux-amd64"
+            elif os_name == "Linux" and architecture in {"arm64", "aarch64"}:
+                platform_name = "linux-arm64"
+            else:
+                self.skipTest(f"installer has no release asset for {os_name}/{architecture}")
+            checksums = []
+            for binary in ("registry-server", "registry-serverctl"):
+                name = f"{binary}-v0.26.0-{platform_name}"
+                body = f"{binary} fixture\n".encode()
+                (assets / name).write_bytes(body)
+                checksums.append(f"{hashlib.sha256(body).hexdigest()}  {name}\n")
+            (assets / "SHA256SUMS").write_text("".join(checksums), encoding="utf-8")
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "REGISTRY_SERVER_VERSION": "v0.26.0",
+                    "REGISTRY_SERVER_ASSET_DIR": str(assets),
+                    "REGISTRY_SERVER_INSTALL_DIR": str(destination),
+                }
+            )
+            result = subprocess.run(
+                ["bash", str(installer)],
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            for binary in ("registry-server", "registry-serverctl"):
+                installed = destination / binary
+                self.assertEqual(f"{binary} fixture\n", installed.read_text())
+                self.assertTrue(installed.stat().st_mode & stat.S_IXUSR)
 
 
 
@@ -1192,12 +1273,13 @@ class RegistryReleaseTest(TestCase):
         for current in (
             "_relay_v2_payload_inventory",
             "payloads: $payloads[0]",
-            "image_names=(relay evidence mint discovery)",
+            "image_names=(relay evidence mint discovery registry-server)",
             "images: $images[0]",
             "scans: $scans[0]",
             '"discovery-image"',
             '"evidence-image"',
             '"mint-image"',
+            '"registry-server-image"',
             '"relay-image"',
         ):
             self.assertIn(current, workflow)
@@ -1265,7 +1347,13 @@ class RegistryReleaseTest(TestCase):
             name: (ROOT / f"release/docker/Dockerfile.{name}").read_text(
                 encoding="utf-8"
             )
-            for name in ("discovery", "evidence", "mint", "relay")
+            for name in (
+                "discovery",
+                "evidence",
+                "mint",
+                "registry-server",
+                "relay",
+            )
         }
 
         self.assertIn("-p registry-manifest-cli", binary_recipe)
@@ -1283,7 +1371,13 @@ class RegistryReleaseTest(TestCase):
         self.assertNotIn("-p registryctl ", binary_recipe)
         self.assertNotIn("-p registry-relay ", binary_recipe)
         self.assertNotIn("registry-relay-rhai-worker", binary_recipe)
-        for name in ("discovery", "evidence", "mint", "relay"):
+        for name in (
+            "discovery",
+            "evidence",
+            "mint",
+            "registry-server",
+            "relay",
+        ):
             self.assertIn(
                 f"cp target/release/{name} dist/image-bin/{name}",
                 binary_recipe,
@@ -1293,8 +1387,36 @@ class RegistryReleaseTest(TestCase):
                 f"/workspace/runtime-root/usr/local/bin/{name}",
                 release_dockerfiles[name],
             )
-        self.assertIn("discovery|evidence|mint|relay)", image_recipe)
+        self.assertIn("discovery|evidence|mint|registry-server|relay)", image_recipe)
         self.assertNotIn("registry-relay)", image_recipe)
+
+    def test_registry_server_release_image_keeps_deployment_inputs_external(self) -> None:
+        dockerfile = (
+            ROOT / "release/docker/Dockerfile.registry-server"
+        ).read_text(encoding="utf-8")
+        bind_mounts = [
+            line.strip()
+            for line in dockerfile.splitlines()
+            if "--mount=type=bind,source=" in line
+        ]
+        copy_instructions = [
+            line.strip()
+            for line in dockerfile.splitlines()
+            if line.lstrip().startswith(("COPY ", "ADD "))
+        ]
+
+        self.assertEqual(
+            [
+                "RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \\",
+                "--mount=type=bind,source=LICENSE,target=/workspace/LICENSE \\",
+            ],
+            bind_mounts,
+        )
+        self.assertEqual(
+            ["COPY --from=runtime-root /workspace/runtime-root/ /"],
+            copy_instructions,
+        )
+        self.assertNotIn("registry-serverctl", dockerfile)
 
     def test_discovery_runtime_artifact_joins_the_inventory_at_v0_24(self) -> None:
         module = load_registry_release()
@@ -1379,6 +1501,58 @@ class RegistryReleaseTest(TestCase):
         )
         self.assertIn("image_bin_binaries+=(discovery)", recipe)
 
+    def test_registry_server_release_surface_begins_at_v0_26(self) -> None:
+        module = load_registry_release()
+        current = {
+            name: "0.26.0"
+            for name in (
+                *module.RELAY_V2_ARTIFACT_INVENTORY,
+                "relay-installer",
+                "registry-docs",
+                "relay-client-node",
+                "relay-client-python",
+                "discovery-client-node",
+                "discovery-client-python",
+                "discovery",
+            )
+        }
+        registry_server = {
+            "registry-server": "0.26.0",
+            "registry-serverctl": "0.26.0",
+            "registry-server-installer": "0.26.0",
+        }
+
+        self.assertNotEqual(
+            [], module.artifact_inventory_errors("0.26.0", current)
+        )
+        self.assertEqual(
+            [],
+            module.artifact_inventory_errors(
+                "0.26.0", current | registry_server
+            ),
+        )
+        self.assertEqual(
+            [],
+            module.artifact_inventory_errors(
+                "0.25.0", {name: "0.25.0" for name in current}
+            ),
+        )
+
+        recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("RELEASE_INCLUDE_REGISTRY_SERVER", recipe)
+        self.assertIn("-p registry-server", recipe)
+        self.assertIn("--features runtime", recipe)
+        self.assertIn("-p registry-serverctl", recipe)
+        self.assertIn(
+            '"registry-server-${tag}-linux-amd64"', recipe
+        )
+        self.assertIn(
+            '"registry-serverctl-${tag}-linux-amd64"', recipe
+        )
+        self.assertIn("image_bin_binaries+=(registry-server)", recipe)
+
     def test_release_packaging_excludes_retired_notary(self) -> None:
         binary_recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(
             encoding="utf-8"
@@ -1412,7 +1586,13 @@ class RegistryReleaseTest(TestCase):
         workflow = (ROOT / ".github/workflows/nightly-security.yml").read_text(
             encoding="utf-8"
         )
-        for name in ("discovery", "evidence", "mint", "relay"):
+        for name in (
+            "discovery",
+            "evidence",
+            "mint",
+            "registry-server",
+            "relay",
+        ):
             self.assertIn(
                 f'Path("release/docker/Dockerfile.{name}")',
                 workflow,
@@ -2468,6 +2648,10 @@ def write_manifest(
         artifacts["discovery-client-python"] = version
     if version_tuple >= (0, 24, 0):
         artifacts["discovery"] = version
+    if version_tuple >= (0, 26, 0):
+        artifacts["registry-server"] = version
+        artifacts["registry-serverctl"] = version
+        artifacts["registry-server-installer"] = version
     manifest = {
         "stack": {
             "release": "beta-6",

@@ -177,6 +177,8 @@ jobs:
               "mint": "mint",
               "registry-manifest": "registry-manifest",
               "registry-manifest-cli": "registry-manifest",
+              "registry-server": "registry-server",
+              "registry-serverctl": "registry-serverctl",
               "relay": "relay",
               "relayctl": "relayctl",
           }

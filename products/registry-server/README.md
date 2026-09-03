@@ -92,9 +92,10 @@ action-only grant. The household example adds narrow target conditions and
 recovery from stale input or a lost response. Mandatory reviewed change control
 still applies to every targeted operation.
 
-The pilot lifecycle uses the published `registry-serverctl` and
-`registry-server` executables. It does not require a Rust change for a new
-configured domain or a compatible additive schema change.
+The pilot lifecycle uses matching `registry-serverctl` and `registry-server`
+executables from the same build, whether built from source during the preview
+or installed from a release that includes them. It does not require a Rust
+change for a new configured domain or a compatible additive schema change.
 
 1. An author runs `registry-serverctl check <project> --production`, generates
    review artifacts as needed, and uses `diff` against the active runtime

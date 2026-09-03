@@ -737,9 +737,9 @@ class GateInventoryTest(unittest.TestCase):
                 "Registry Server adopter workflow",
             ),
             (
-                "postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675",
-                "postgres:17.11",
-                "Registry Server PostgreSQL 17 image pin",
+                "postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6",
+                "postgis/postgis",
+                "Registry Server PostgreSQL 17 / PostGIS 3.5 image pin",
             ),
         ):
             with self.subTest(gate=gate):
