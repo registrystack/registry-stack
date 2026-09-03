@@ -1,11 +1,11 @@
 ---
 title: Relay client API reference
-description: Construction, authentication, methods, outcomes, continuations, caching, raw documents, and errors for the Rust, Python, and Node Relay V2 clients.
+description: Construction, authentication, methods, outcomes, continuations, caching, raw documents, and errors for the Rust, Python, and Node Relay V2 clients, plus the Rust-only Registry Server client.
 status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-11"
+last_reviewed: "2026-09-03"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -16,7 +16,9 @@ standards_referenced:
 The Registry Relay clients cover the fixed Relay V2 HTTP surface without importing a deployment's
 record, selector, filter, artifact, or SDMX schemas. Rust is the canonical implementation. The
 Python and Node packages are thin bindings that return native plain values and keep HTTP, route,
-authentication, Problem, trace, and response validation in Rust.
+authentication, Problem, trace, and response validation in Rust. The same Rust crate also
+implements a client for the separate Registry Server product, covered in the
+[Registry Server](#registry-server) section.
 
 ## Availability and compatibility
 
@@ -265,6 +267,8 @@ optional access profile. It intentionally does not carry first-page fields, filt
 box, or page size. The clients reject raw cursor strings, extra members, and attempts to combine a
 cursor with first-page choices.
 
+The [Registry Server](#registry-server) list continuation uses a different, flatter projection.
+
 ## Conditional cache contract
 
 A complete cacheable response can carry a validated strong ETag. It has exactly one quoted,
@@ -326,8 +330,160 @@ The Python and Node bindings convert native values, construct the Rust client, r
 and map the validated result or error. They do not implement Python or JavaScript HTTP, route,
 authentication, Problem, redirect, retry, cache, or pagination policy.
 
+## Registry Server
+
+`RegistryServerClient` is part of the same crate and covers a separate product: Registry Server
+discovery, record reads, capability-driven direct writes, and change-request lifecycle actions.
+Registry Server and Relay share the Registry Record v1 envelope but not routes, queries, Problem
+codes, entity tags, or credential eligibility. This surface is Rust-only; the Python and Node
+packages remain Relay-only.
+
+### Construct a Registry Server client
+
+```rust
+use registry_relay_client::{RegistryServerClient, RegistryServerClientConfig};
+use url::Url;
+
+let config = RegistryServerClientConfig::new(
+    Url::parse("https://server.example.invalid/institution-a")?,
+);
+let client = RegistryServerClient::new(config)?;
+```
+
+`RegistryServerClientConfig` accepts the same base URL rules and the same `with_token_provider`,
+`with_request_timeout`, `with_connect_timeout`, `with_max_response_bytes`, `with_user_agent`, and
+`with_trusted_root_certificates` builders as `RelayClientConfig`. Every method is asynchronous
+except `lifecycle_actions`, which promotes already-fetched values without a network exchange.
+
+`health` and `ready` never acquire or send a bearer. Every other method attaches one when a token
+provider is configured, using the same `StaticToken` and `PrivateKeyJwt` providers described in
+[Authentication](#authentication).
+
+### Registry Server read operations
+
+| Operation | Method | Returns |
+| --- | --- | --- |
+| Liveness probe | `health()` | `ProbeStatus` |
+| Readiness probe | `ready()` | `ProbeStatus` |
+| Caller-filtered OpenAPI | `openapi(access_profile)` | `RawDocument` |
+| Raw registry metadata | `registry_metadata(access_profile)` | `RawDocument` |
+| Parsed registry metadata | `registry_contract(access_profile)` | `RegistryServerMetadata` |
+| Entity schema | `entity_schema(entity_identifier, access_profile)` | `RawDocument` |
+| Record read | `get_record(entity_route, record_identifier, options)` | `RegistryRecordSingleResponse` |
+| Record list | `list_records(entity_route, request)` | `RegistryServerPage<RegistryRecordCollectionResponse>` |
+| List continuation | `continue_list(continuation)` | `RegistryServerPage<RegistryRecordCollectionResponse>` |
+| Lookup | `lookup_record(entity_route, request)` | `RegistryRecordSingleResponse` |
+
+Every method returns `RegistryServerComplete<T>`, a `value` and `metadata` pair.
+`metadata.trace_id()` is always present. `metadata.etag()` is present only on `get_record`; probes,
+discovery documents, `list_records`, `continue_list`, and `lookup_record` never carry one.
+`patch_record` requires an ETag from a fresh `get_record` call through the same route and access
+profile. A lifecycle action's `If-Match` is a separate, action-specific value and is never
+interchangeable with a record ETag.
+
+`list_records` and `continue_list` return an optional `continuation: Option<ServerContinuation>`.
+Its wire projection has no `route` object, unlike a Relay record-list continuation:
+
+```json
+{
+  "route": "<entity-route>",
+  "skiptoken": "<opaque-skiptoken>",
+  "format": "json",
+  "accessProfile": "<access-profile>"
+}
+```
+
+`format` is `json` or `json-ld`. `accessProfile` is absent when the request did not select one.
+Persist the projection with `ServerContinuation::projection()` and reconstruct it with the public
+`ServerContinuation::try_from_projection`, which revalidates every field. It exposes no `$select`,
+`$filter`, `$orderby`, `$top`, or `$count` setters, so a caller cannot combine a cursor with
+first-page options.
+
+### Registry Server capability discovery
+
+`registry_contract` parses Registry Metadata v1 into `RegistryServerMetadata`, bound to this
+client's exact service base so a value parsed from one client cannot authorize a write through
+another. Two methods promote a filtered operation into an executable, non-forgeable binding:
+
+- `select_direct_write(operation_identifier, expected_profile)` returns
+  `RegistryServerDirectWrite::Create(RegistryServerCreateBinding)` or
+  `::Patch(RegistryServerPatchBinding)` only when the operation's method, route, request contract,
+  capabilities, registry, dataset, entity, and access profile match the one supported shape
+  exactly.
+- `select_lifecycle(entity_identifier, expected_profile)` returns every lifecycle route offered for
+  that entity and profile as one `RegistryServerLifecycleAuthority`.
+
+Both return `RegistryServerMetadataSelectionError` on a mismatch. Its `kind()` is one of
+`NotFound`, `UnboundSource`, `ProfileMismatch`, `UnsupportedOperation`, `RequiredCapability`, or
+`ContractMismatch`, and it carries no other data.
+
+### Registry Server writes
+
+`ServerCreateRequest::new(data)` and `ServerPatchRequest::builder()` (`add`, `replace`, `remove`,
+`test`, then `build()`) validate field-name grammar, I-JSON-safe values, nesting depth, operation
+count, and encoded body size before any network I/O. A patch operation serializes as an RFC 6902
+object under `/data/<field>`, for example
+`{"op": "replace", "path": "/data/legalName", "value": "Example Company Ltd"}`.
+
+`RegistryServerIdempotencyKey::parse(value)` validates 1 to 256 visible ASCII bytes, excluding
+comma and semicolon. The client never generates a key and never retries a mutation on its own; a
+caller retry after an unknown outcome must reuse the same binding, body, precondition,
+representation, and key.
+
+`create_record(operation, request, idempotency_key, format)` sends the bound Create and requires a
+`201` response whose `Location` header matches `<create-path>/<record-identifier>`.
+`patch_record(operation, record_identifier, etag, request, idempotency_key, format)` sends the
+bound PATCH with `If-Match` and requires a `200` response with no `Location` header. Both require
+the response record to carry exactly one extension member, `snapshot`, and both re-validate the
+request's fields against the binding's writable and required, or readable, writable, and
+removable, API names before sending anything.
+
+Change-request records carry a Server-owned `request` extension, decoded by
+`RegistryServerRequestMetadata::from_record`. `lifecycle_actions(authority, record)` promotes only
+the actor-bound actions advertised on a fresh record read against a
+`RegistryServerLifecycleAuthority` from `select_lifecycle`, returning `RegistryServerLifecycleAction`
+values. `execute_lifecycle_action(action, idempotency_key)` sends the promoted action's exact href,
+body, and `If-Match`, and requires a matching `RegistryServerLifecycleActionReceipt` in return.
+`RegistryServerLifecycleOperation` is a closed set of seven actions in workflow order:
+`SubmitRequest`, `ApproveRequest`, `RejectRequest`, `RequestRevision`, `ReviseRequest`,
+`CancelRequest`, `ApplyRequest`. Refetch the record after a lifecycle action before deciding what is
+possible next; a receipt is a distinct shape, not a Registry Record or a new action authority.
+
+### Registry Server error contract
+
+`RegistryServerClient` methods return `RegistryServerClientError`, a `#[non_exhaustive]` type
+distinct from `RelayClientError`, with `Configuration`, `InvalidRequest`, `Token`, `Transport`,
+`Problem`, and `Protocol` variants and `trace_id()`, `kind()`, `status()`, and `problem_code()`
+accessors that read across variants.
+
+`RegistryServerProblemCode` is a closed, `#[non_exhaustive]` set covering 15 registered codes at
+this crate revision: `authentication.refused`, `idempotency.conflict`, `lookup.unresolved`,
+`mutation.conflict`, `precondition.failed`, `precondition.required`, `query.cursor_invalid`,
+`query.invalid`, `request.invalid`, `request.timeout`, `resource.not_found`, `runtime.not_ready`,
+`service.unavailable`, `source.unavailable`, and `unsupported.media_type`. See the
+[Registry Server API reference](../registry-server-api/#problem-documents) for the status and
+meaning of each. A Problem is accepted only when its code, status, title, detail, type URI, and
+header and body trace all match a registered entry exactly; an unrecognized code fails closed to
+`Protocol { failure: Problem }`. `RegistryServerProtocolFailure` names the closed local reasons a
+response can fail its wire contract independent of any Problem: `HeaderBounds`, `TraceContext`,
+`MediaType`, `Body`, `Problem`, `EntityTag`, `ProfileLink`, `Location`, `CachePolicy`, `Status`.
+
+Registry Server has no conditional-read contract: reads validate only whether an ETag is present or
+absent, never `If-None-Match` or `304`. An ETag exists solely as a direct-write and
+lifecycle-action precondition.
+
+Request and metadata construction failures are separate, non-network error types:
+`ServerRequestError`, `ServerMutationRequestError`, `RegistryServerIdempotencyKeyError`,
+`RegistryServerEtagError`, `RegistryServerMetadataError`, `RegistryServerMetadataSelectionError`
+(covered in [Registry Server capability discovery](#registry-server-capability-discovery)), and
+`RegistryServerLifecycleDecodeError` and `RegistryServerLifecyclePromotionError`. All are
+`#[non_exhaustive]` and value-free or reason-only, so no response-controlled data appears in
+`Debug` or `Display`.
+
 ## Related reference
 
 - [Relayctl command reference](../relayctl/) for project authoring and package commands.
 - [Instance API references](../apis/) for the deployment-generated Relay OpenAPI boundary.
+- [Registry Server API reference](../registry-server-api/) for the HTTP contract this client binds
+  to.
 - [Errors and status codes](../errors/) for the wider Registry Stack error vocabulary.
