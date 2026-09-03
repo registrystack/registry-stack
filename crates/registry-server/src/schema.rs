@@ -210,7 +210,7 @@ mod tests {
             "hmacSha256KeyRef": "secret:file/webhook-hmac",
             "classificationCeiling": "public",
             "deliveryCeilings": {
-                "attemptTimeoutMilliseconds": 100,
+                "attemptTimeoutMilliseconds": 1000,
                 "maximumAttempts": 1
             }
         })

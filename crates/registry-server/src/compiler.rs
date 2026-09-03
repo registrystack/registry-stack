@@ -53,6 +53,9 @@ use crate::physical_names::{
 pub const AUTHORING_API_VERSION: &str = "registry.registrystack.org/v1alpha1";
 pub const MAX_BATCH_ITEMS: u16 = 100;
 pub const MAX_BATCH_BYTES: u32 = 2_097_152;
+/// The attempt budget starts at the claim's database timestamp and covers the claim
+/// commit and reload round trips before the request leaves, so this floor is a
+/// validation bound: samples and fixtures should use a realistic value such as 1000 ms.
 pub const MIN_WEBHOOK_ATTEMPT_TIMEOUT_MS: u32 = 100;
 pub const WEBHOOK_ATTEMPT_TIMEOUT_MS: u32 = 5_000;
 pub const WEBHOOK_INITIAL_BACKOFF_MS: u32 = 1_000;
