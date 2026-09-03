@@ -20,30 +20,34 @@ ROOT = Path(__file__).resolve().parents[2]
 CHECKER = Path(__file__).with_name("check-advisory-baselines.py")
 LIVE_BASELINES = (
     ROOT / "products/relay-v2/security/advisory-baseline.json",
+    ROOT / "release/security/breg-advisory-baseline.json",
     ROOT / "release/security/discovery-advisory-baseline.json",
     ROOT / "release/security/evidence-advisory-baseline.json",
     ROOT / "release/security/mint-advisory-baseline.json",
 )
 LIVE_REFERENCE_IMAGE_DIGESTS = {
-    "relay": "sha256:e36610df8906a7ba0e238f5007c5f0e1c2dff2ab2509f56045a1a5397cf6fc35",
-    "discovery": "sha256:8901d3f3c52a178162ef534d180bd9f43c7441674cdcf0f87b8b3f6c52591c71",
-    "evidence": "sha256:607e0797fec9273d0acf5a1313ede9a8c517e73505ebff3b6191c8342a397d4f",
-    "mint": "sha256:01e025a12f410fb9c563545fec58fabf4685b161be6a18608f0ff0108a98eaa2",
+    "relay": "sha256:64052a8a9aa86f7e68559f4343dfa22ac7d4b19c244fc2989ae3f0d967ec99a4",
+    "breg": "sha256:4bde5e4116a51c664385e62f47564a844a3e700f3e36066f6c91f0555b99907a",
+    "discovery": "sha256:0e2e21ccc1fec3fa40efa7855ee3ee745cfe588c4601dcd7a8a38661798bc589",
+    "evidence": "sha256:9b186ad6026466a1baab26d98cfd69759289325a4e094b9433abe1fc667833ce",
+    "mint": "sha256:a8c23cd64bc1d31c9413d283eaf5a8388ba0be0a2d011077a3bfe4e9380c3e57",
 }
-LIVE_REFERENCE_SOURCE_REVISION = "130136a2b20ad10d359849ac111316a2fb1cb39e"
+LIVE_REFERENCE_SOURCE_REVISION = "e7bd7aa3c7ab72d240f60a5fffa93d39265bc0e4"
 # The date the live exceptions below were reviewed against, stated here rather
 # than derived from the baselines: deriving it from their own reviewed_at values
 # would make the checker's future-dated guard unreachable for the newest
 # exception. Move it forward by hand when the baselines are renewed.
-LIVE_REVIEW_EVALUATION_DATE = "2026-08-22"
+LIVE_REVIEW_EVALUATION_DATE = "2026-09-03"
 LIVE_REFERENCE_PROVENANCE = {
     "relay": "official_candidate",
+    "breg": "official_candidate",
     "discovery": "official_candidate",
     "evidence": "official_candidate",
     "mint": "official_candidate",
 }
 LIVE_EXECUTABLES = {
     "relay": "/usr/local/bin/relay",
+    "breg": "/usr/local/bin/breg",
     "discovery": "/usr/local/bin/discovery",
     "evidence": "/usr/local/bin/evidence",
     "mint": "/usr/local/bin/mint",

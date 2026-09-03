@@ -370,7 +370,7 @@ prefix of the candidate's authoritative uncompressed DiffIDs:
 
 ```sh
 baseline=products/relay-v2/security/advisory-baseline.json
-# Discovery, Evidence, and Mint use release/security/<name>-advisory-baseline.json.
+# BReg, Discovery, Evidence, and Mint use release/security/<name>-advisory-baseline.json.
 jq --slurpfile baseline "${baseline}" -e '
   .rootfs.diff_ids[0:($baseline[0].runtime.layer_ids | length)]
     == $baseline[0].runtime.layer_ids
