@@ -106,5 +106,10 @@
     "starlight-llms-txt": {
       "astro": "$astro"
     }
+  },
+  "allowScripts": {
+    "@vvago/vale": true,
+    "esbuild": true,
+    "fsevents": true
   }
 }
