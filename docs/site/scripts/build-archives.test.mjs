@@ -163,7 +163,7 @@ test('archive generation excludes current-source generators', async () => {
   }
   for (const script of [
     'generate-evidence-configuration.mjs',
-    'generate-server-configuration.mjs',
+    'generate-breg-configuration.mjs',
     'generate-cli-reference.mjs',
   ]) {
     assert.doesNotMatch(

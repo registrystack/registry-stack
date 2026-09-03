@@ -826,7 +826,7 @@ class RegistryReleaseTest(TestCase):
                 "discovery-contracts",
                 "evidence-contracts",
                 "identifiers",
-                "registry-server-contracts",
+                "breg-contracts",
                 "relay-client-contracts",
                 "relay-v2-contracts",
             },
@@ -916,7 +916,7 @@ class RegistryReleaseTest(TestCase):
             "release/docker/Dockerfile.discovery",
             "release/docker/Dockerfile.evidence",
             "release/docker/Dockerfile.mint",
-            "release/docker/Dockerfile.registry-server",
+            "release/docker/Dockerfile.breg",
             "release/docker/Dockerfile.relay",
         ]
 
@@ -989,7 +989,7 @@ class RegistryReleaseTest(TestCase):
             workflow,
         )
 
-    def test_release_builds_installs_and_smokes_registry_server_from_v0_26(self) -> None:
+    def test_release_builds_installs_and_smokes_breg_from_v0_26(self) -> None:
         workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
             encoding="utf-8"
         )
@@ -997,27 +997,27 @@ class RegistryReleaseTest(TestCase):
             workflow.index("\n  build-platforms:") : workflow.index("\n  clients:")
         ]
         assemble = workflow.split("\n  assemble:", 1)[1].split("\n  attest:", 1)[0]
-        installer = ROOT / "crates/registry-server/install.sh"
+        installer = ROOT / "crates/registry-breg/install.sh"
         installer_text = installer.read_text(encoding="utf-8")
 
-        self.assertIn("server_minor >= 26", platform_job)
-        self.assertIn("-p registry-server --bin registry-server --features runtime", platform_job)
-        self.assertIn("-p registry-serverctl", platform_job)
+        self.assertIn("release_minor >= 26", platform_job)
+        self.assertIn("-p registry-breg --bin breg --features runtime", platform_job)
+        self.assertIn("-p registry-bregctl", platform_job)
         self.assertIn(
-            "for server_binary in registry-server registry-serverctl",
+            "for breg_binary in breg bregctl",
             platform_job,
         )
         self.assertIn(
-            'registry_server_installer="registry-server-${{ needs.validate.outputs.tag }}-install.sh"',
+            'breg_installer="breg-${{ needs.validate.outputs.tag }}-install.sh"',
             assemble,
         )
-        self.assertIn("crates/registry-server/install.sh", assemble)
-        self.assertIn("REGISTRY_SERVER_ASSET_DIR", assemble)
-        self.assertIn("REGISTRY_SERVER_INSTALL_DIR", assemble)
-        self.assertIn('init "${registry_server_project}"', assemble)
-        self.assertIn('check "${registry_server_project}"', assemble)
+        self.assertIn("crates/registry-breg/install.sh", assemble)
+        self.assertIn("BREG_ASSET_DIR", assemble)
+        self.assertIn("BREG_INSTALL_DIR", assemble)
+        self.assertIn('init "${breg_project}"', assemble)
+        self.assertIn('check "${breg_project}"', assemble)
         self.assertIn(
-            "binaries=(registry-server registry-serverctl)", installer_text
+            "binaries=(breg bregctl)", installer_text
         )
 
         with tempfile.TemporaryDirectory() as temporary:
@@ -1040,7 +1040,7 @@ class RegistryReleaseTest(TestCase):
             else:
                 self.skipTest(f"installer has no release asset for {os_name}/{architecture}")
             checksums = []
-            for binary in ("registry-server", "registry-serverctl"):
+            for binary in ("breg", "bregctl"):
                 name = f"{binary}-v0.26.0-{platform_name}"
                 body = f"{binary} fixture\n".encode()
                 (assets / name).write_bytes(body)
@@ -1049,9 +1049,9 @@ class RegistryReleaseTest(TestCase):
             environment = os.environ.copy()
             environment.update(
                 {
-                    "REGISTRY_SERVER_VERSION": "v0.26.0",
-                    "REGISTRY_SERVER_ASSET_DIR": str(assets),
-                    "REGISTRY_SERVER_INSTALL_DIR": str(destination),
+                    "BREG_VERSION": "v0.26.0",
+                    "BREG_ASSET_DIR": str(assets),
+                    "BREG_INSTALL_DIR": str(destination),
                 }
             )
             result = subprocess.run(
@@ -1062,7 +1062,7 @@ class RegistryReleaseTest(TestCase):
                 check=False,
             )
             self.assertEqual(0, result.returncode, result.stderr)
-            for binary in ("registry-server", "registry-serverctl"):
+            for binary in ("breg", "bregctl"):
                 installed = destination / binary
                 self.assertEqual(f"{binary} fixture\n", installed.read_text())
                 self.assertTrue(installed.stat().st_mode & stat.S_IXUSR)
@@ -1273,13 +1273,13 @@ class RegistryReleaseTest(TestCase):
         for current in (
             "_relay_v2_payload_inventory",
             "payloads: $payloads[0]",
-            "image_names=(relay evidence mint discovery registry-server)",
+            "image_names=(relay evidence mint discovery breg)",
             "images: $images[0]",
             "scans: $scans[0]",
             '"discovery-image"',
             '"evidence-image"',
             '"mint-image"',
-            '"registry-server-image"',
+            '"breg-image"',
             '"relay-image"',
         ):
             self.assertIn(current, workflow)
@@ -1351,7 +1351,7 @@ class RegistryReleaseTest(TestCase):
                 "discovery",
                 "evidence",
                 "mint",
-                "registry-server",
+                "breg",
                 "relay",
             )
         }
@@ -1375,7 +1375,7 @@ class RegistryReleaseTest(TestCase):
             "discovery",
             "evidence",
             "mint",
-            "registry-server",
+            "breg",
             "relay",
         ):
             self.assertIn(
@@ -1387,12 +1387,12 @@ class RegistryReleaseTest(TestCase):
                 f"/workspace/runtime-root/usr/local/bin/{name}",
                 release_dockerfiles[name],
             )
-        self.assertIn("discovery|evidence|mint|registry-server|relay)", image_recipe)
+        self.assertIn("discovery|evidence|mint|breg|relay)", image_recipe)
         self.assertNotIn("registry-relay)", image_recipe)
 
-    def test_registry_server_release_image_keeps_deployment_inputs_external(self) -> None:
+    def test_breg_release_image_keeps_deployment_inputs_external(self) -> None:
         dockerfile = (
-            ROOT / "release/docker/Dockerfile.registry-server"
+            ROOT / "release/docker/Dockerfile.breg"
         ).read_text(encoding="utf-8")
         bind_mounts = [
             line.strip()
@@ -1416,7 +1416,7 @@ class RegistryReleaseTest(TestCase):
             ["COPY --from=runtime-root /workspace/runtime-root/ /"],
             copy_instructions,
         )
-        self.assertNotIn("registry-serverctl", dockerfile)
+        self.assertNotIn("bregctl", dockerfile)
 
     def test_discovery_runtime_artifact_joins_the_inventory_at_v0_24(self) -> None:
         module = load_registry_release()
@@ -1501,7 +1501,7 @@ class RegistryReleaseTest(TestCase):
         )
         self.assertIn("image_bin_binaries+=(discovery)", recipe)
 
-    def test_registry_server_release_surface_begins_at_v0_26(self) -> None:
+    def test_breg_release_surface_begins_at_v0_26(self) -> None:
         module = load_registry_release()
         current = {
             name: "0.26.0"
@@ -1516,10 +1516,10 @@ class RegistryReleaseTest(TestCase):
                 "discovery",
             )
         }
-        registry_server = {
-            "registry-server": "0.26.0",
-            "registry-serverctl": "0.26.0",
-            "registry-server-installer": "0.26.0",
+        breg = {
+            "breg": "0.26.0",
+            "bregctl": "0.26.0",
+            "breg-installer": "0.26.0",
         }
 
         self.assertNotEqual(
@@ -1528,7 +1528,7 @@ class RegistryReleaseTest(TestCase):
         self.assertEqual(
             [],
             module.artifact_inventory_errors(
-                "0.26.0", current | registry_server
+                "0.26.0", current | breg
             ),
         )
         self.assertEqual(
@@ -1541,17 +1541,17 @@ class RegistryReleaseTest(TestCase):
         recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(
             encoding="utf-8"
         )
-        self.assertIn("RELEASE_INCLUDE_REGISTRY_SERVER", recipe)
-        self.assertIn("-p registry-server", recipe)
+        self.assertIn("RELEASE_INCLUDE_BREG", recipe)
+        self.assertIn("-p registry-breg", recipe)
         self.assertIn("--features runtime", recipe)
-        self.assertIn("-p registry-serverctl", recipe)
+        self.assertIn("-p registry-bregctl", recipe)
         self.assertIn(
-            '"registry-server-${tag}-linux-amd64"', recipe
+            '"breg-${tag}-linux-amd64"', recipe
         )
         self.assertIn(
-            '"registry-serverctl-${tag}-linux-amd64"', recipe
+            '"bregctl-${tag}-linux-amd64"', recipe
         )
-        self.assertIn("image_bin_binaries+=(registry-server)", recipe)
+        self.assertIn("image_bin_binaries+=(breg)", recipe)
 
     def test_release_packaging_excludes_retired_notary(self) -> None:
         binary_recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(
@@ -1590,7 +1590,7 @@ class RegistryReleaseTest(TestCase):
             "discovery",
             "evidence",
             "mint",
-            "registry-server",
+            "breg",
             "relay",
         ):
             self.assertIn(
@@ -2649,9 +2649,9 @@ def write_manifest(
     if version_tuple >= (0, 24, 0):
         artifacts["discovery"] = version
     if version_tuple >= (0, 26, 0):
-        artifacts["registry-server"] = version
-        artifacts["registry-serverctl"] = version
-        artifacts["registry-server-installer"] = version
+        artifacts["breg"] = version
+        artifacts["bregctl"] = version
+        artifacts["breg-installer"] = version
     manifest = {
         "stack": {
             "release": "beta-6",

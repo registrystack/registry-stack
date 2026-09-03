@@ -1,0 +1,181 @@
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: publicschema-household
+  canonicalBaseIri: "https://publicschema-household.example.gov"
+  version: 0.1.0
+  defaultLanguage: en
+package:
+  environment: acceptance
+  instanceId: publicschema-household-acceptance
+  sequence: 1
+  sourceRevision: publicschema-household-acceptance-0.1.0
+manifestProjection:
+  accessProfile: household-operator
+  classificationCeiling: restricted
+  catalog:
+    baseUrl: https://publicschema-household.example.gov
+    title:
+      en: PublicSchema Household Registry Catalog
+      fr: Catalogue du registre des ménages PublicSchema
+    description:
+      en: Portable metadata for household, person, and group membership records.
+      fr: Métadonnées portables pour les personnes, les ménages et leur appartenance.
+    publisher:
+      id: "publicschema-household-authority"
+      name: PublicSchema Household Authority
+      iri: https://publicschema-household.example.gov/authority
+    conformsTo: [https://www.w3.org/TR/vocab-dcat-3/]
+    standards:
+      dcat: "3.0"
+      jsonSchema: "2020-12"
+  datasets:
+    -
+      id: household-registry
+      title:
+        en: PublicSchema Household Registry
+        fr: Registre des ménages PublicSchema
+      description:
+        en: Household, person, and time-bounded group membership metadata.
+        fr: Métadonnées sur les ménages, les personnes et les appartenances limitées dans le temps.
+      owner: PublicSchema Household Authority
+      status: active
+  dataServices:
+    -
+      id: household-registry-api
+      iri: https://publicschema-household.example.gov/services/registry-api
+      title:
+        en: Household Registry REST API
+        fr: API REST du registre des ménages
+      endpointUrl: https://publicschema-household.example.gov/v1
+      endpointDescription: https://publicschema-household.example.gov/openapi.json
+      conformsTo: https://spec.openapis.org/oas/v3.1.0
+      servesDatasets:
+        - "household-registry"
+  entities:
+    - id: person
+      title: {en: Person, fr: Personne}
+      description:
+        en: A person recorded by the household registry.
+        fr: Une personne enregistrée dans le registre des ménages.
+      conceptUri: https://publicschema.org/Person
+      identifiers:
+        - {field: person-code, kind: local}
+      fields:
+        - {id: person-code, concepts: [https://publicschema.org/identifier]}
+        - {id: legal-name, concepts: [https://publicschema.org/name]}
+        - {id: family-name, concepts: [https://publicschema.org/family_name]}
+        - {id: date-of-birth, concepts: [https://publicschema.org/date_of_birth]}
+        - {id: person-sex, concepts: [https://publicschema.org/sex]}
+    - id: household
+      title: {en: Household, fr: Ménage}
+      description:
+        en: A social and economic unit represented as a configured registry entity.
+        fr: Une unité sociale et économique représentée comme une entité configurée du registre.
+      conceptUri: https://publicschema.org/Household
+      identifiers:
+        - {field: household-code, kind: local}
+      fields:
+        - {id: household-code, concepts: [https://publicschema.org/identifier]}
+        - {id: local-household-number, concepts: [https://publicschema.org/local_identifier]}
+        - {id: household-name, concepts: [https://publicschema.org/name]}
+    - id: group-membership
+      title: {en: Group membership, fr: Appartenance à un groupe}
+      description:
+        en: A time-bounded link between a person and a household.
+        fr: Un lien limité dans le temps entre une personne et un ménage.
+      conceptUri: https://publicschema.org/GroupMembership
+      fields:
+        - id: person
+          relationshipRole: member
+          relationshipConceptUri: https://publicschema.org/person
+        - id: household
+          relationshipRole: group
+          relationshipConceptUri: https://publicschema.org/group
+        - {id: relationship, concepts: [https://publicschema.org/role]}
+        - {id: valid-from, concepts: [https://publicschema.org/start_date]}
+        - {id: valid-to, concepts: [https://publicschema.org/end_date]}
+  vocabularies:
+    - id: household-relationship
+      schemeIri: https://publicschema.org/GroupRole
+      version: "0.3.0"
+      externalRef: https://publicschema.org/GroupRole
+      concepts:
+        - {code: head, iri: https://publicschema.org/GroupRole/head, label: {en: Head, fr: Chef}}
+        - {code: spouse, iri: https://publicschema.org/GroupRole/spouse, label: {en: Spouse, fr: Conjoint}}
+        - {code: child, iri: https://publicschema.org/GroupRole/child, label: {en: Child, fr: Enfant}}
+        - {code: dependent, iri: https://publicschema.org/GroupRole/dependent, label: {en: Dependent, fr: Personne à charge}}
+        - {code: other, iri: https://publicschema.org/GroupRole/other, label: {en: Other, fr: Autre}}
+    - id: household-type
+      schemeIri: https://publicschema-household.example.gov/vocab/household-type
+    - id: residency-status
+      schemeIri: https://publicschema-household.example.gov/vocab/residency-status
+    - id: preferred-language
+      schemeIri: https://id.loc.gov/vocabulary/iso639-1
+      externalRef: https://id.loc.gov/vocabulary/iso639-1.html
+    - id: person-sex
+      schemeIri: https://publicschema.org/Sex
+      version: "0.3.0"
+      externalRef: https://publicschema.org/Sex
+      concepts:
+        - {code: female, iri: https://publicschema.org/Sex/female, label: {en: Female, fr: Féminin}}
+        - {code: male, iri: https://publicschema.org/Sex/male, label: {en: Male, fr: Masculin}}
+        - {code: unknown, iri: https://publicschema.org/Sex/unknown, label: {en: Unknown, fr: Inconnu}}
+  publicService:
+    id: "publicschema-household-service"
+    title:
+      en: PublicSchema Household Registry Catalog
+      fr: Catalogue du registre des ménages PublicSchema
+  distributions: []
+modules:
+  - id: publicschema-household-core
+    version: 0.1.0
+    digest: "sha256:d4e1006567136af7e266115b617b4b7956730a468b182681c026ce0d6d401454"
+  - id: publicschema-household-demographics
+    version: 0.1.0
+    digest: "sha256:989bfca8759ac919f7ef689ef92fb463cd7849eb1dfe0362ced4362e17c71051"
+accessProfiles:
+  - id: household-operator
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: [registry:household:operate]
+    requiredPurposes: [household-administration]
+    grants:
+      - {entity: person, operations: [create, get, list, patch], readableFields: [person-code, legal-name, family-name, date-of-birth, person-sex, residency-status, preferred-language], writableFields: [person-code, legal-name, family-name, date-of-birth, person-sex, residency-status, preferred-language], filterableFields: [person-code, person-sex, residency-status], sortableFields: [person-code]}
+      - entity: household
+        operations: [create, get, lookup, list, patch]
+        readableFields: [household-code, local-household-number, household-name, administrative-area, household-type, head-count, child-count, child-under-5-count, elderly-count, single-headed, woman-headed]
+        writableFields: [household-code, local-household-number, household-name, administrative-area, household-type]
+        filterableFields: [household-code, local-household-number, administrative-area, household-type, head-count, child-count, child-under-5-count, elderly-count, single-headed, woman-headed]
+        sortableFields: [local-household-number, household-code, child-count]
+        allowCount: true
+        lookups:
+          - {selector: by-local-reference, valueOrigin: request}
+          - {selector: by-household-code, valueOrigin: request}
+        readPaths:
+          - path: people
+            readableFields: [person-code, legal-name, family-name, date-of-birth, person-sex, residency-status]
+            filterableFields: [person-sex, residency-status]
+            sortableFields: [person-code]
+            allowCount: true
+      - {entity: group-membership, operations: [create, get, list, patch], readableFields: [person, household, relationship, valid-from, valid-to], writableFields: [person, household, relationship, valid-from, valid-to], filterableFields: [person, household, relationship, valid-from]}
+  - id: household-viewer
+    principalClaim: registry_principal
+    requiredScopes: [registry:household:view]
+    requiredPurposes: [household-view]
+    grants:
+      - entity: household
+        operations: [get, lookup]
+        readableFields: [household-code, local-household-number, household-name, administrative-area, household-type]
+        rowBoundaries:
+          - {field: id, claim: household_id, operator: equals}
+        lookups:
+          - selector: by-household-code
+            valueOrigin: verified_claim
+            claimMapping: {household-code: household_code}
+vocabularies:
+  - {id: household-relationship, values: [head, spouse, child, dependent, other]}
+  - {id: household-type, values: [private, collective, institutional]}
+  - {id: residency-status, values: [usual-resident, temporary-resident, departed]}
+  - {id: preferred-language, values: [en, es, fr]}
+  - {id: person-sex, values: [female, male, unknown]}

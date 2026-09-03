@@ -239,23 +239,23 @@ test('gives Evidence Gateway a lane on both front doors without a retired Notary
   assert.doesNotMatch(homepageSource, /Expose Notary|verify-claim-registry-api/);
 });
 
-test('keeps the Server guide and references in one adoption path', () => {
-  const server = topLevelSection(sidebarSource, 'Build a registry');
-  const slugs = [...server.matchAll(/slug: '([^']+)'/g)].map((match) => match[1]);
+test('keeps the BReg guide and references in one adoption path', () => {
+  const breg = topLevelSection(sidebarSource, 'Build a registry');
+  const slugs = [...breg.matchAll(/slug: '([^']+)'/g)].map((match) => match[1]);
   assert.deepEqual(slugs, [
     'explanation/configuration-defined-registry',
-    'tutorials/first-registry-server',
+    'tutorials/first-breg',
     'tutorials/review-registry-changes',
     'tutorials/query-a-spatial-registry-from-qgis',
-    'configure/registry-server',
-    'operate/registry-server',
+    'configure/breg',
+    'operate/breg',
     'explanation/registry-modeling-patterns',
-    'reference/registry-server-configuration',
-    'reference/registry-server-api',
-    'reference/registry-server-client-api',
+    'reference/breg-configuration',
+    'reference/breg-api',
+    'reference/breg-client-api',
   ]);
   for (const slug of slugs) {
-    assert.ok(hasDocForSlug(slug), `${slug} must be reachable from the Server journey`);
+    assert.ok(hasDocForSlug(slug), `${slug} must be reachable from the BReg journey`);
     // A link may land on a section of the page rather than its top, so allow
     // an optional `#fragment` after the trailing slash.
     const escaped = slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -270,20 +270,20 @@ test('keeps the Server guide and references in one adoption path', () => {
 test('redirects the retired Server webhook, history, and event pages to their merged pages', () => {
   assert.match(
     configSource,
-    /'\/configure\/registry-server-webhooks\/': internalRedirect\('\/operate\/registry-server\/'\)/,
+    /'\/configure\/breg-webhooks\/': internalRedirect\('\/operate\/breg\/'\)/,
   );
   assert.match(
     configSource,
-    /'\/reference\/registry-server-history\/': internalRedirect\('\/reference\/registry-server-api\/'\)/,
+    /'\/reference\/breg-history\/': internalRedirect\('\/reference\/breg-api\/'\)/,
   );
   assert.match(
     configSource,
-    /'\/reference\/registry-server-events\/': internalRedirect\('\/reference\/registry-server-api\/'\)/,
+    /'\/reference\/breg-events\/': internalRedirect\('\/reference\/breg-api\/'\)/,
   );
   for (const retired of [
-    'configure/registry-server-webhooks',
-    'reference/registry-server-history',
-    'reference/registry-server-events',
+    'configure/breg-webhooks',
+    'reference/breg-history',
+    'reference/breg-events',
   ]) {
     assert.equal(hasDocForSlug(retired), false, `${retired} must not be a published page`);
   }

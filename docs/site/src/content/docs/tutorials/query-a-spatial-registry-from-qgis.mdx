@@ -18,18 +18,18 @@ standards_referenced:
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-If you are evaluating Registry Server's spatial read path, this tutorial starts a synthetic
+If you are evaluating Base Registry Engine's spatial read path, this tutorial starts a synthetic
 service-site registry on PostGIS and connects QGIS as a read-only installation client. You will
 display authorized Point records, pan within a bounded map area, import one record through the
 normal API, and see the new Point after QGIS renews its Registry Mint credential.
 
 <QuickstartMeta
-  outcome="One protected QGIS Point layer that pages, pans, renews its credential, and refreshes after an authenticated Registry Server write."
+  outcome="One protected QGIS Point layer that pages, pans, renews its credential, and refreshes after an authenticated Base Registry Engine write."
   time="About 35 minutes, plus the first Rust build and PostGIS image download"
   level="Source preview with synthetic data on loopback"
   prerequisites={[
     'Linux or macOS, Bash, and two terminals',
-    'A clone of the registry-stack repository; Registry Server is unreleased',
+    'A clone of the registry-stack repository; Base Registry Engine is unreleased',
     'QGIS 4.2.1 with GDAL 3.12.4',
     'Rust and Cargo',
     'Running Docker',
@@ -41,11 +41,11 @@ normal API, and see the new Point after QGIS renews its Registry Mint credential
 ## Before you start
 
 Run every shell command from the root of your registry-stack clone. Keep two terminals open: the
-first runs Registry Server and Registry Mint, while the second performs the refresh write.
+first runs Base Registry Engine and Registry Mint, while the second performs the refresh write.
 
 :::caution[Use synthetic data only]
 The quickstart creates local keys, tokens, and a disposable database under
-`products/registry-server/quickstart/.run/`. A later quickstart run replaces that directory.
+`products/breg/quickstart/.run/`. A later quickstart run replaces that directory.
 Do not put production data or credentials in this exercise.
 :::
 
@@ -54,26 +54,26 @@ Do not put production data or credentials in this exercise.
 In the first terminal, start the spatial quickstart:
 
 ```sh
-products/registry-server/quickstart/run.sh --spatial
+products/breg/quickstart/run.sh --spatial
 ```
 
-The first run builds Registry Server, `registry-serverctl`, and Registry Mint. It also downloads
+The first run builds Base Registry Engine, `bregctl`, and Registry Mint. It also downloads
 the pinned PostGIS image. Wait for this banner; the ports, the operator token suffix, and the
 absolute paths vary:
 
 ```text
-Registry Server spatial service-site quickstart is ready.
-  Registry Server: http://127.0.0.1:<server-port>
+Base Registry Engine spatial service-site quickstart is ready.
+  Base Registry Engine: http://127.0.0.1:<breg-port>
   Registry Mint:   http://127.0.0.1:<mint-port>
-  Project:         <clone>/products/registry-server/quickstart/.run/project
-  Runtime config:  <clone>/products/registry-server/quickstart/.run/runtime.yaml
-  QGIS OAPIF URL:  http://127.0.0.1:<server-port>/v1/gis
+  Project:         <clone>/products/breg/quickstart/.run/project
+  Runtime config:  <clone>/products/breg/quickstart/.run/runtime.yaml
+  QGIS OAPIF URL:  http://127.0.0.1:<breg-port>/v1/gis
   Collection:      service-site.installation-map-reader
   QGIS client id:  qgis-installation-central
-  QGIS secret:     <clone>/products/registry-server/quickstart/.run/secrets/qgis-client-secret
-  Operator token:  <clone>/products/registry-server/quickstart/.run/secrets/operator-token-<suffix>
-  Map token:       <clone>/products/registry-server/quickstart/.run/secrets/map-token
-  Logs:            <clone>/products/registry-server/quickstart/.run/logs
+  QGIS secret:     <clone>/products/breg/quickstart/.run/secrets/qgis-client-secret
+  Operator token:  <clone>/products/breg/quickstart/.run/secrets/operator-token-<suffix>
+  Map token:       <clone>/products/breg/quickstart/.run/secrets/map-token
+  Logs:            <clone>/products/breg/quickstart/.run/logs
 ```
 
 This tutorial uses the QGIS OAPIF URL, the collection, the client id, and the client secret. The
@@ -83,12 +83,12 @@ fresh one instead of reusing them.
 Leave the first terminal running. The launcher has compiled, tested, packaged, and applied the
 synthetic service-site project. It has also seeded Point records and checked native JSON,
 GeoJSON, and the QGIS-compatible collection route. QGIS calls this provider OAPIF, short for
-Open Geospatial Consortium (OGC) API Features. Registry Server exposes only the compatibility
+Open Geospatial Consortium (OGC) API Features. Base Registry Engine exposes only the compatibility
 routes named in this tutorial and publishes an empty conformance list.
 
-{/* Evidence: products/registry-server/quickstart/run.sh;
-    products/registry-server/quickstart/support/quickstart.py, spatial_smoke() and QGIS_CLIENT_ID;
-    products/registry-server/scripts/test_quickstart.py. */}
+{/* Evidence: products/breg/quickstart/run.sh;
+    products/breg/quickstart/support/quickstart.py, spatial_smoke() and QGIS_CLIENT_ID;
+    products/breg/scripts/test_quickstart.py. */}
 
 ## Set a bounded QGIS map view
 
@@ -105,20 +105,20 @@ latitude degrees. The cap limits how much of the map one query may ask for. It d
 which records you may see: that is the profile's row boundary, which compares each record's
 `zone` with the `service_zones` claim in the installation credential. The smaller view leaves
 room for QGIS decimal serialization and for canvas aspect-ratio changes. A world view exceeds the
-cap and Registry Server refuses the query with `query.invalid`.
+cap and Base Registry Engine refuses the query with `query.invalid`.
 
-{/* Evidence: products/registry-server/acceptance/spatial-service-sites/registry.yaml;
-    crates/registry-server/src/query.rs, parse_bbox();
-    crates/registry-server/src/api/mod.rs, first_page_spatial_query();
-    crates/registry-server/tests/postgres_spatial_read.rs,
+{/* Evidence: products/breg/acceptance/spatial-service-sites/registry.yaml;
+    crates/registry-breg/src/query.rs, parse_bbox();
+    crates/registry-breg/src/api/mod.rs, first_page_spatial_query();
+    crates/registry-breg/tests/postgres_spatial_read.rs,
     real_postgres_spatial_bbox_reads_preserve_authority_and_geojson_audit(). */}
 
 ## Store the installation credential in QGIS
 
 1. Open **Settings > Options > Authentication > Configurations**, then select
    **Add a new authentication configuration**. Set a QGIS master password if prompted.
-2. Name the configuration `Registry Server spatial quickstart`. Set **Resource URL** to the
-   printed Registry Server origin without `/v1/gis`.
+2. Name the configuration `Base Registry Engine spatial quickstart`. Set **Resource URL** to the
+   printed Base Registry Engine origin without `/v1/gis`.
 3. Select **OAuth2 authentication**, **Grant flow: Client Credentials**, and
    **Resource access token method: Header**.
 4. Set **Token URL** to `http://127.0.0.1:<mint-port>/token`, using the printed Registry Mint
@@ -136,15 +136,15 @@ Do not paste the secret into shell history, a QGIS connection URL, logs, screens
 messages. The quickstart creates the secret file with owner-only permissions.
 :::
 
-{/* Evidence: products/registry-server/quickstart/run.sh;
-    products/registry-server/quickstart/support/quickstart.py,
+{/* Evidence: products/breg/quickstart/run.sh;
+    products/breg/quickstart/support/quickstart.py,
     _mint_client_secret_client() and _require_owner_only_regular();
-    products/registry-server/scripts/test_quickstart.py. */}
+    products/breg/scripts/test_quickstart.py. */}
 
 ## Add the protected Point layer
 
 1. Open **Layer > Data Source Manager > WFS / OGC API - Features**, then select **New**.
-2. Name the connection `Registry Server spatial quickstart`. Set **URL** to the printed
+2. Name the connection `Base Registry Engine spatial quickstart`. Set **URL** to the printed
    **QGIS OAPIF URL** and select the saved OAuth2 configuration under **Authentication**.
 3. Keep GET and feature paging enabled. Set **Page size** to `25`, then save the connection.
 4. Select the connection under **Server Connections** and select **Connect**.
@@ -156,7 +156,7 @@ table includes `id`, `label`, `mapLabel`, `nativeId`, `serviceKind`, `siteCode`,
 
 The installation credential carries a `service_zones: central` claim, so the collection returns
 only records whose `zone` is `central`. The layer is read-only, requests at most 25 records per
-page, and sends the visible extent as a bounding box. Registry Server applies the same scope,
+page, and sends the visible extent as a bounding box. Base Registry Engine applies the same scope,
 purpose, row, and field rules to the QGIS-compatible route as it applies to native reads.
 
 The bounding box is a filter inside that row boundary, not the boundary itself. If you leave
@@ -164,10 +164,10 @@ The bounding box is a filter inside that row boundary, not the boundary itself. 
 through every record the row boundary allows, 25 at a time; the server allows at most 100 records
 per page on this collection.
 
-{/* Evidence: crates/registry-server/src/api/gis.rs, collections(), collection(), items(),
+{/* Evidence: crates/registry-breg/src/api/gis.rs, collections(), collection(), items(),
     authorize_gis_collection(), parse_items_query() and query_options();
-    products/registry-server/acceptance/spatial-service-sites/registry.yaml;
-    crates/registry-server/tests/postgres_spatial_read.rs,
+    products/breg/acceptance/spatial-service-sites/registry.yaml;
+    crates/registry-breg/tests/postgres_spatial_read.rs,
     real_postgres_spatial_bbox_reads_preserve_authority_and_geojson_audit(). */}
 
 ## Pan within the bounding box cap
@@ -180,19 +180,19 @@ The visible Points move and reload. If QGIS reports `query.invalid`, reduce the 
 
 The `/v1/gis` surface supplies the route shape QGIS needs, including collection discovery,
 absolute paging links, and GeoJSON features. Its conformance list is empty because Registry
-Server does not claim full Open Geospatial Consortium API Features conformance.
+BReg does not claim full Open Geospatial Consortium API Features conformance.
 
-{/* Evidence: crates/registry-server/src/api/gis.rs, landing(), conformance(), api(), items()
-    and absolute_href(); crates/registry-server/tests/postgres_spatial_read.rs. */}
+{/* Evidence: crates/registry-breg/src/api/gis.rs, landing(), conformance(), api(), items()
+    and absolute_href(); crates/registry-breg/tests/postgres_spatial_read.rs. */}
 
-## Import a Point through Registry Server
+## Import a Point through Base Registry Engine
 
 Keep QGIS open. In the second terminal, validate and import the supplied refresh record:
 
 ```sh
-spatial_run="$PWD/products/registry-server/quickstart/.run"
-spatial_input="$PWD/products/registry-server/acceptance/spatial-service-sites/fixtures/qgis-refresh-service-site.jsonl"
-target/debug/registry-serverctl data validate \
+spatial_run="$PWD/products/breg/quickstart/.run"
+spatial_input="$PWD/products/breg/acceptance/spatial-service-sites/fixtures/qgis-refresh-service-site.jsonl"
+target/debug/bregctl data validate \
   --package "$spatial_run/build/package" \
   --entity service-site --profile service-site-admin --operation create \
   --input "$spatial_input"
@@ -202,11 +202,11 @@ target/debug/mint token \
   --url "$(cat "$spatial_run/mint-origin")/token" \
   --client-id generic-quickstart \
   --key "$spatial_run/keys/operator/signing-p256-private-jwk" |
-  python3 products/registry-server/quickstart/support/quickstart.py \
+  python3 products/breg/quickstart/support/quickstart.py \
     store-token --out "$spatial_refresh_token"
-target/debug/registry-serverctl data import \
+target/debug/bregctl data import \
   --package "$spatial_run/build/package" \
-  --server-url "$(cat "$spatial_run/server-origin")" \
+  --breg-url "$(cat "$spatial_run/breg-origin")" \
   --access-token-file "$spatial_refresh_token" \
   --entity service-site --profile service-site-admin --operation create \
   --input "$spatial_input" \
@@ -249,9 +249,9 @@ interrupted import resumes without sending a completed chunk again. If you run t
 second time with the same checkpoint, it sends nothing and reports `committed items: 0` with
 `complete: true`. The operator token stays in an owner-only file and is never copied into QGIS.
 
-{/* Evidence: crates/registry-serverctl/src/lib.rs;
-    products/registry-server/quickstart/support/quickstart.py, store_token();
-    products/registry-server/acceptance/spatial-service-sites/fixtures/qgis-refresh-service-site.jsonl. */}
+{/* Evidence: crates/registry-bregctl/src/lib.rs;
+    products/breg/quickstart/support/quickstart.py, store_token();
+    products/breg/acceptance/spatial-service-sites/fixtures/qgis-refresh-service-site.jsonl. */}
 
 ## Refresh and confirm credential renewal
 
@@ -277,25 +277,25 @@ Wait at least 95 seconds, then pan within the bounded extent and press `F5` agai
 layer reloads without asking you to paste a token. Spatial quickstart access tokens last 60
 seconds; QGIS uses the stored client credential to request a replacement from Registry Mint.
 
-{/* Evidence: products/registry-server/quickstart/support/quickstart.py,
+{/* Evidence: products/breg/quickstart/support/quickstart.py,
     SPATIAL_TOKEN_LIFETIME_SECONDS and _mint_client_secret_client();
-    products/registry-server/acceptance/spatial-service-sites/fixtures/qgis-refresh-service-site.jsonl. */}
+    products/breg/acceptance/spatial-service-sites/fixtures/qgis-refresh-service-site.jsonl. */}
 
 ## Stop the local services
 
-Close the QGIS project. In the first terminal, press `Ctrl+C`. The launcher stops Registry Server,
+Close the QGIS project. In the first terminal, press `Ctrl+C`. The launcher stops Base Registry Engine,
 Registry Mint, and the disposable database container. The files under
-`products/registry-server/quickstart/.run/` remain until the next quickstart replaces them.
+`products/breg/quickstart/.run/` remain until the next quickstart replaces them.
 
 If you do not plan to repeat the tutorial, remove the QGIS server connection and OAuth2
 configuration so the disposable client secret does not remain in your QGIS authentication
 database.
 
-{/* Evidence: products/registry-server/quickstart/run.sh, cleanup(). */}
+{/* Evidence: products/breg/quickstart/run.sh, cleanup(). */}
 
 ## What you built
 
-- A local Registry Server package with synthetic CRS84 Point records and PostGIS-backed bbox reads
+- A local Base Registry Engine package with synthetic CRS84 Point records and PostGIS-backed bbox reads
 - A protected QGIS layer using an OAuth2 client credential stored outside the project file
 - A row-bounded map layer whose queries stay inside the profile's bounding box cap, with page size 25 and flat authorized attributes
 - An authenticated API write that appeared after QGIS Refresh
@@ -303,13 +303,13 @@ database.
 
 ## Next
 
-- [Create and query your first registry](../first-registry-server/) covers Registry Server
+- [Create and query your first registry](../first-breg/) covers Base Registry Engine
   records, updates, refusals, and modules without the GIS client.
-- [Author a registry project](../../configure/registry-server/) explains how to replace the
+- [Author a registry project](../../configure/breg/) explains how to replace the
   supplied fixture with your own entities, access profiles, and spatial grants.
-- [Registry Server API reference](../../reference/registry-server-api/#spatial-adapter) describes
+- [Base Registry Engine API reference](../../reference/breg-api/#spatial-adapter) describes
   the `/v1/gis` routes, the bounding box rules, and the GeoJSON encoding.
-- [Deploy and operate a registry](../../operate/registry-server/) covers running Registry Server
+- [Deploy and operate a registry](../../operate/breg/) covers running Base Registry Engine
   against your own PostgreSQL with PostGIS.
 - [QGIS authentication](https://docs.qgis.org/4.2/en/docs/user_manual/auth_system/auth_overview.html)
   describes the client credential store used by this tutorial.

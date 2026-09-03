@@ -41,7 +41,7 @@ const INFRASTRUCTURE_MEMBERS: &[&str] = &[
 /// The expected wire representation for a Registry Record v1 response.
 ///
 /// The distinction between the two JSON-LD variants keeps an exact shared
-/// context response, as emitted by Registry Server, separate from a product
+/// context response, as emitted by Base Registry Engine, separate from a product
 /// composition, as emitted by Registry Relay.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RegistryRecordRepresentation {

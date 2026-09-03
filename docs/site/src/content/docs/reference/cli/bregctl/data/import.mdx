@@ -1,0 +1,47 @@
+---
+title: "bregctl data import command reference"
+description: "Generated syntax and options for bregctl data import."
+status: draft
+draft: true
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "unreviewed"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+{/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}
+
+Import JSONL records through the ordinary authenticated batch API.
+
+## Contract status
+
+This page is generated from the public Clap command tree for Registry Stack source version `0.25.0` and catalog SHA-256 `f2d66681cf378262863ccc22a56204a57cb78ebedb070cf677ea106d73097edc`. Hidden implementation commands are omitted.
+
+## Usage
+
+```text
+bregctl data import [OPTIONS] --package <ABSOLUTE_DIRECTORY> --breg-url <URL> --access-token-file <ABSOLUTE_FILE> --entity <ID> --profile <ID> --operation <OPERATION> --input <FILE> --checkpoint <FILE>
+```
+
+## Options
+
+| Option | Always required | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- |
+| `--package <ABSOLUTE_DIRECTORY>` | Yes | n/a | n/a | n/a | Absolute closed package directory used only for deterministic planning |
+| `--breg-url <URL>` | Yes | n/a | n/a | n/a | Base Registry Engine base URL. HTTP is accepted only for loopback hosts |
+| `--access-token-file <ABSOLUTE_FILE>` | Yes | n/a | n/a | n/a | File containing one bearer access token and no other credential material |
+| `--entity <ID>` | Yes | n/a | n/a | n/a | Compiled entity identifier |
+| `--profile <ID>` | Yes | n/a | n/a | n/a | Compiled non-anonymous access profile identifier |
+| `--operation <OPERATION>` | Yes | n/a | `create`, `patch` | n/a | Import item operation |
+| `--input <FILE>` | Yes | n/a | n/a | n/a | JSON Lines import file |
+| `--checkpoint <FILE>` | Yes | n/a | n/a | n/a | Import checkpoint file. A ctl-held .state sidecar is created beside it |
+| `--max-chunks <COUNT>` | No | n/a | n/a | n/a | Stop after this many committed chunks, for resumable operator runs |
+| `--format <FORMAT>` | No | `human` | `human`, `json` | n/a | Emit the selected command's report in this format |
+| `-h, --help` | No | n/a | n/a | n/a | Print help |
+
+## Generation contract
+
+Run `npm run generate` from `docs/site` after changing a public command, argument, option, default, environment binding, or help description.

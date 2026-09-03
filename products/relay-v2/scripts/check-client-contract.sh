@@ -11,4 +11,4 @@ cargo test --locked -p registry-relay-http-contract
 cargo test --locked -p registry-record
 cargo test --locked -p registry-relay-client
 
-echo "relay-v2 client contract passed"
+echo "Relay client contract passed"

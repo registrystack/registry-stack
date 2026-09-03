@@ -1,8 +1,8 @@
 # Registry Relay Rust client
 
 `registry-relay-client` is the canonical bounded Rust client for the fixed
-Registry Relay V2 HTTP API. Product-specific Server routes, request types,
-Problems, and entity tags are owned by `registry-server-client`.
+Registry Relay V2 HTTP API. Product-specific BReg routes, request types,
+Problems, and entity tags are owned by `registry-breg-client`.
 
 One method performs at most one explicitly initiated HTTP exchange. The client
 does not follow redirects, use ambient proxies, retry, advance pagination, or

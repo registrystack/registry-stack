@@ -648,7 +648,7 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
                     str(ROOT / "release/docker/Dockerfile.discovery"),
                     str(ROOT / "release/docker/Dockerfile.evidence"),
                     str(ROOT / "release/docker/Dockerfile.mint"),
-                    str(ROOT / "release/docker/Dockerfile.registry-server"),
+                    str(ROOT / "release/docker/Dockerfile.breg"),
                     str(ROOT / "release/docker/Dockerfile.relay"),
                 },
                 set(dockerfiles),
@@ -659,7 +659,7 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
                     str(ROOT / "release/docker/Dockerfile.relay")
                 ),
             )
-            for name in ("discovery", "evidence", "mint", "registry-server"):
+            for name in ("discovery", "evidence", "mint", "breg"):
                 self.assertEqual(
                     2,
                     dockerfiles.count(
@@ -679,7 +679,7 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
                     "correct-discovery-first",
                     "correct-evidence-first",
                     "correct-mint-first",
-                    "correct-registry-server-first",
+                    "correct-breg-first",
                     "correct-relay-first",
                 },
                 {

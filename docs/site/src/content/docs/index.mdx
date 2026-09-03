@@ -1,6 +1,6 @@
 ---
 title: Registry Stack documentation
-description: Answer bounded questions with Evidence Gateway, publish existing records with Registry Relay, or build a writable registry with Registry Server.
+description: Answer bounded questions with Evidence Gateway, publish existing records with Registry Relay, or build a writable registry with Base Registry Engine.
 status: current
 owner: registry-docs
 source_repos:
@@ -13,11 +13,11 @@ standards_referenced: []
 
 Registry Stack helps institutions manage controlled access to authoritative data.
 Evidence Gateway signs the answer to a bounded question, Registry Relay publishes selected
-records from an existing source, and the Registry Server source preview provides a
+records from an existing source, and the Base Registry Engine source preview provides a
 configuration-defined writable registry backed by PostgreSQL.
 
-{/* Evidence: crates/registry-server/src/contract.rs, RegistryProject;
-    crates/registry-server/src/api/mod.rs; crates/registry-server/src/postgres/mutation.rs. */}
+{/* Evidence: crates/registry-breg/src/contract.rs, RegistryProject;
+    crates/registry-breg/src/api/mod.rs; crates/registry-breg/src/postgres/mutation.rs. */}
 
 ## Answer a bounded question with Evidence Gateway
 
@@ -50,16 +50,17 @@ Continue with [author a Registry Relay project](configure/relay/) to bind an
 institution-owned view, then [operate Registry Relay](operate/relay/) for
 sources, token issuers, audit retention, and revision replacement.
 
-## Build a writable registry with Registry Server
+## Build a writable registry with Base Registry Engine
 
-Use Server when you need a system of record, including create and update operations.
+Use Base Registry Engine when you need a system of record, including create and update operations.
 Your project defines entities, relationships, constraints, and caller permissions; the compiler
 generates the storage and REST contract. Holdings, plots, businesses, and assets are configured
-models, not built-in server types. Server is currently documented as an unreleased source preview.
+models, not built-in BReg types. Base Registry Engine is currently documented as an unreleased
+source preview.
 
-Start with the [Registry Server overview](explanation/configuration-defined-registry/), then
-[create and query your first registry](tutorials/first-registry-server/). Continue with
-[configure your registry](configure/registry-server/) to extend the model and prepare a tested
+Start with the [Base Registry Engine overview](explanation/configuration-defined-registry/), then
+[create and query your first registry](tutorials/first-breg/). Continue with
+[configure your registry](configure/breg/) to extend the model and prepare a tested
 deployment handoff.
 
 Follow [review changes before updating records](tutorials/review-registry-changes/) to configure
@@ -72,22 +73,22 @@ authenticated write.
 Use [modeling patterns](explanation/registry-modeling-patterns/) to choose identifier, relationship,
 declaration, provenance, and document-reference structures for your registry.
 
-Follow [bind webhook receivers](operate/registry-server/#bind-webhook-receivers) to notify another
+Follow [bind webhook receivers](operate/breg/#bind-webhook-receivers) to notify another
 service.
-Use the [configuration reference](reference/registry-server-configuration/) to look up keys,
+Use the [configuration reference](reference/breg-configuration/) to look up keys,
 defaults, and constraints.
-Use the [API reference](reference/registry-server-api/#history-reads) for saved snapshots,
+Use the [API reference](reference/breg-api/#history-reads) for saved snapshots,
 effective-time queries, and correction context, and the
-[events and webhooks section](reference/registry-server-api/#events-and-webhooks) for the receiver
+[events and webhooks section](reference/breg-api/#events-and-webhooks) for the receiver
 contract, signatures, and delivery behavior. Use the
-[Registry Server client API reference](reference/registry-server-client-api/) for the Rust client
-surface. For retained-history erasure, see
-[erase retained history](operate/registry-server/#erase-retained-history).
+[BReg client API reference](reference/breg-client-api/) for the Rust client surface. For
+retained-history erasure, see
+[erase retained history](operate/breg/#erase-retained-history).
 
-{/* Evidence: crates/registry-server/src/contract.rs, RegistryProject and RegistryModule;
-    crates/registry-server/tests/postgres_pilot_acceptance.rs;
-    crates/registry-server/tests/postgres_historical.rs;
-    crates/registry-server/tests/postgres_history_erasure.rs. */}
+{/* Evidence: crates/registry-breg/src/contract.rs, RegistryProject and RegistryModule;
+    crates/registry-breg/tests/postgres_pilot_acceptance.rs;
+    crates/registry-breg/tests/postgres_historical.rs;
+    crates/registry-breg/tests/postgres_history_erasure.rs. */}
 
 ## Keep the product boundaries clear
 
@@ -102,10 +103,10 @@ one sealed package per process, authored with `relayctl` and served by `relay`.
 Evidence Gateway has its own toolset and deployment project shape, covered by the
 [Evidence Gateway overview](start/evidence-quickstart/). Relay responses are not
 signed: portable signed minimum disclosure is what Evidence Gateway is for.
-Server owns its PostgreSQL records; it does not automatically publish them through Relay or
+BReg owns its PostgreSQL records; it does not automatically publish them through Relay or
 configure Evidence Gateway on your behalf.
 
-{/* Evidence: crates/registry-server/Cargo.toml; crates/registry-serverctl/src/lib.rs;
+{/* Evidence: crates/registry-breg/Cargo.toml; crates/registry-bregctl/src/lib.rs;
     crates/registry-relayctl/src/lib.rs; crates/registry-evidencectl/src/lib.rs. */}
 
 ## Move beyond the first run

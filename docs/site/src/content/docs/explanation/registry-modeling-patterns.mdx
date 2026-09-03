@@ -11,9 +11,9 @@ locale: en
 standards_referenced: []
 ---
 
-Use these patterns when designing business, facility, or public-organisation registries with Registry Server.
+Use these patterns when designing business, facility, or public-organisation registries with Base Registry Engine.
 They describe common record structures and the choices you need to make before configuring them.
-The YAML examples use Server's current configuration syntax, but are fragments, not installable
+The YAML examples use BReg's current configuration syntax, but are fragments, not installable
 modules or complete projects. Merge their list entries into your own configuration.
 References assume you have defined the target entities and created the referenced records.
 Each fragment names a `primaryDataset`; replace it with a dataset your project declares.
@@ -25,9 +25,9 @@ Requests omit the deployment's host and bearer token. The
 [example reader profile](#access-for-the-example-queries) supplies the required read permissions;
 selecting its name does not authenticate a caller. Creation and correction need separate write grants.
 
-{/* Evidence: crates/registry-server/src/artifacts.rs, single_response_schema() and list_response_schema();
-    crates/registry-server/src/api/mod.rs, read_dispatch();
-    crates/registry-server/src/contract.rs, AccessProfileSource. */}
+{/* Evidence: crates/registry-breg/src/artifacts.rs, single_response_schema() and list_response_schema();
+    crates/registry-breg/src/api/mod.rs, read_dispatch();
+    crates/registry-breg/src/contract.rs, AccessProfileSource. */}
 
 ## Patterns become ordinary configuration
 
@@ -36,10 +36,10 @@ modules. A pattern does not add a built-in domain entity to the server.
 For example, an operator assignment links an establishment to the business operating it, with dates.
 The same configuration mechanism can describe an authority's responsibility for a jurisdiction.
 
-{/* Evidence: crates/registry-server/src/contract.rs, RegistryProject and RegistryModule;
-    products/registry-server/acceptance/asset-site-placement/registry.yaml;
-    products/registry-server/acceptance/asset-site-placement/modules/asset-site-placement-core/module.yaml;
-    products/registry-server/acceptance/business/registry.yaml. */}
+{/* Evidence: crates/registry-breg/src/contract.rs, RegistryProject and RegistryModule;
+    products/breg/acceptance/asset-site-placement/registry.yaml;
+    products/breg/acceptance/asset-site-placement/modules/asset-site-placement-core/module.yaml;
+    products/breg/acceptance/business/registry.yaml. */}
 
 Keep the object you describe separate from its registration when they have different lifecycles.
 A business can have several permits; an asset can move between sites without becoming a different
@@ -66,13 +66,13 @@ For a scheme that already defines one shared namespace, adding the issuer to the
 incorrectly allow duplicates. Also decide whether expired numbers can be reassigned.
 An unknown scheme or issuer is missing information, not permission to infer a confident match.
 
-Server supports composite unique constraints and exact lookup selectors.
+BReg supports composite unique constraints and exact lookup selectors.
 Choose the key from the scheme's rules before declaring either.
 The business example scopes its registration number to a jurisdiction.
 
-{/* Evidence: crates/registry-server/src/contract.rs, ConstraintSource and SelectorProfileSource;
-    crates/registry-server/src/compiler.rs, validate_selector_profiles();
-    products/registry-server/acceptance/business/registry.yaml. */}
+{/* Evidence: crates/registry-breg/src/contract.rs, ConstraintSource and SelectorProfileSource;
+    crates/registry-breg/src/compiler.rs, validate_selector_profiles();
+    products/breg/acceptance/business/registry.yaml. */}
 
 A useful review query is "which business holds this identifier in this namespace?"
 Test equal values in different namespaces, duplicate assignments within one namespace, and refused
@@ -154,8 +154,8 @@ An `operator-assignment` can reference one establishment and one business and ca
 An authority's responsibility can similarly link a public organisation, jurisdiction, and function.
 Use references with declared target entities rather than an untyped pair of text IDs.
 
-{/* Evidence: crates/registry-server/src/contract.rs, FieldTypeSource;
-    products/registry-server/acceptance/business-establishments/modules/business-establishments-core/module.yaml. */}
+{/* Evidence: crates/registry-breg/src/contract.rs, FieldTypeSource;
+    products/breg/acceptance/business-establishments/modules/business-establishments-core/module.yaml. */}
 
 Dates and exclusivity answer different questions: when did a link apply, and which other links
 were allowed at the same time? These are distinct possible policies:
@@ -171,9 +171,9 @@ the tuple within which intervals cannot overlap. Treat that tuple as a business 
 for any record that happens to have dates. A role or primary flag alone does not enforce
 conditional exclusivity.
 
-{/* Evidence: crates/registry-server/src/contract.rs, TemporalSource and ConstraintSource;
-    crates/registry-server/src/compiler.rs, validate_constraints();
-    crates/registry-server/src/generated_ddl.rs. */}
+{/* Evidence: crates/registry-breg/src/contract.rs, TemporalSource and ConstraintSource;
+    crates/registry-breg/src/compiler.rs, validate_constraints();
+    crates/registry-breg/src/generated_ddl.rs. */}
 
 Use "which business operated this establishment on the chosen date?" and
 "which authority had responsibility for this jurisdiction?"
@@ -262,10 +262,10 @@ A successor starting July 1 is allowed because the end date is exclusive. If the
 incorrectly, correct the original assignment rather than inventing a transfer on today's date.
 A permitted patch needs the current record's `If-Match` value and an `Idempotency-Key`.
 
-{/* Evidence: crates/registry-server/src/query.rs, ReadQueryOptions;
-    crates/registry-server/src/artifacts.rs;
-    crates/registry-server/src/generated_ddl.rs;
-    crates/registry-server/src/api/mod.rs, patch_dispatch(). */}
+{/* Evidence: crates/registry-breg/src/query.rs, ReadQueryOptions;
+    crates/registry-breg/src/artifacts.rs;
+    crates/registry-breg/src/generated_ddl.rs;
+    crates/registry-breg/src/api/mod.rs, patch_dispatch(). */}
 
 ## Declarations and observations
 
@@ -285,15 +285,15 @@ and permissions. A submitted `verified` value is not evidence that verification 
 The decision process belongs to your application; the registry model records the relevant inputs
 and outcomes.
 
-Server offers `create_only` entities when an accepted record must not be patched through its API.
+BReg offers `create_only` entities when an accepted record must not be patched through its API.
 This controls mutation; it does not define what a later correction means.
 A correcting declaration can point to an earlier declaration, with your application deciding which
 one is applicable and why.
 
-{/* Evidence: crates/registry-server/src/contract.rs, MutationMode;
-    products/registry-server/acceptance/business/registry.yaml;
-    crates/registry-server/tests/postgres_pilot_acceptance.rs, assert_create_only_refuses_patch_and_tombstone();
-    products/registry-server/README.md. */}
+{/* Evidence: crates/registry-breg/src/contract.rs, MutationMode;
+    products/breg/acceptance/business/registry.yaml;
+    crates/registry-breg/tests/postgres_pilot_acceptance.rs, assert_create_only_refuses_patch_and_tombstone();
+    products/breg/README.md. */}
 
 Review queries for both "what was reported for this reporting period?" and "what information was accepted?"
 Test corrections for the same reporting period, missing units, and a submitter attempting an
@@ -396,9 +396,9 @@ Both records remain. The application must decide which declaration applies, prev
 correction chains, and keep a correction from being counted as another discharge.
 Omitting `unit`, or sending `"tonnes"` without changing the vocabulary, is invalid.
 
-{/* Evidence: crates/registry-server/src/contract.rs, FieldTypeSource;
-    crates/registry-server/src/data.rs;
-    crates/registry-server/src/artifacts.rs. */}
+{/* Evidence: crates/registry-breg/src/contract.rs, FieldTypeSource;
+    crates/registry-breg/src/data.rs;
+    crates/registry-breg/src/artifacts.rs. */}
 
 ## Source provenance
 
@@ -416,9 +416,9 @@ The facility and business examples contain source-system and source-record field
 uniqueness. Those constraints prevent duplicate tuples; they do not reconcile identities or
 distinguish source revisions unless your model includes that distinction.
 
-{/* Evidence: products/registry-server/acceptance/facility/registry.yaml;
-    products/registry-server/acceptance/business/registry.yaml;
-    crates/registry-server/src/contract.rs, ConstraintSource. */}
+{/* Evidence: products/breg/acceptance/facility/registry.yaml;
+    products/breg/acceptance/business/registry.yaml;
+    crates/registry-breg/src/contract.rs, ConstraintSource. */}
 
 A review query is "which source record and mapping produced this value?"
 Test a repeated import, a changed version of the same source record, and an ambiguous match.
@@ -615,12 +615,12 @@ or document reference. Several authorities may have different functions in the s
 so a jurisdiction alone is not a suitable non-overlap scope for every responsibility.
 
 These are configuration choices using the same typed references and dates as the operator-assignment
-example. Registry Server does not decide organisational succession or run permit approval workflows.
+example. Base Registry Engine does not decide organisational succession or run permit approval workflows.
 
-{/* Evidence: crates/registry-server/src/contract.rs, FieldTypeSource and TemporalSource;
-    products/registry-server/acceptance/inspection/registry.yaml;
-    products/registry-server/acceptance/inspection/modules/inspection-core/module.yaml;
-    products/registry-server/README.md. */}
+{/* Evidence: crates/registry-breg/src/contract.rs, FieldTypeSource and TemporalSource;
+    products/breg/acceptance/inspection/registry.yaml;
+    products/breg/acceptance/inspection/modules/inspection-core/module.yaml;
+    products/breg/README.md. */}
 
 ## Preserve meaning when values are incomplete
 
@@ -635,10 +635,10 @@ example. Registry Server does not decide organisational succession or run permit
 
 These choices affect queries. "No declaration received" differs from "declared quantity is zero";
 an approximate start year cannot establish an operator assignment on a particular day.
-Server's ordinary `date` field represents a full calendar date.
+BReg's ordinary `date` field represents a full calendar date.
 
-{/* Evidence: crates/registry-server/src/artifacts.rs;
-    crates/registry-server/src/data.rs, valid_iso_date(). */}
+{/* Evidence: crates/registry-breg/src/artifacts.rs;
+    crates/registry-breg/src/data.rs, valid_iso_date(). */}
 
 ## Adapt a pattern without inheriting policy accidentally
 
@@ -648,19 +648,19 @@ Their extensions are additive: they can contribute fields and constraints but ca
 inherited constraint or replace an existing field. If a shared definition imposes the wrong policy,
 change an owned copy or the owning module rather than expecting an extension to relax it.
 
-{/* Evidence: crates/registry-server/src/contract.rs, EntityExtensionSource;
-    crates/registry-server/src/compiler.rs, merge_extension();
-    crates/registry-server/tests/compiler_contract.rs, additive_module_conflicts_fail_instead_of_using_input_precedence(). */}
+{/* Evidence: crates/registry-breg/src/contract.rs, EntityExtensionSource;
+    crates/registry-breg/src/compiler.rs, merge_extension();
+    crates/registry-breg/tests/compiler_contract.rs, additive_module_conflicts_fail_instead_of_using_input_precedence(). */}
 
 Review access separately from record structure. Adding a field does not grant access to it, but a
 module can itself contain access-profile or event contributions. Inspect those contributions before
 adopting a module; do not copy example publication settings as an incidental part of a model.
 A stored classification label is not a substitute for configured field permissions and row rules.
 
-{/* Evidence: crates/registry-server/src/contract.rs, EntitySource and EntityExtensionSource;
-    crates/registry-server/src/compiler.rs, merge_extension();
-    crates/registry-server/src/access.rs, explain_access();
-    crates/registry-server/tests/access_configuration.rs. */}
+{/* Evidence: crates/registry-breg/src/contract.rs, EntitySource and EntityExtensionSource;
+    crates/registry-breg/src/compiler.rs, merge_extension();
+    crates/registry-breg/src/access.rs, explain_access();
+    crates/registry-breg/tests/access_configuration.rs. */}
 
 Manifest metadata can carry optional concept and vocabulary mappings. The business-establishments
 example uses local example concept URIs; these are not claims of compliance with an external model.
@@ -670,8 +670,8 @@ A semantic mapping does not establish compliance with an exchange protocol.
 A vocabulary, exchange format, API response, and database schema serve different purposes.
 Use them as inputs to your model without assuming that any one of them defines the complete registry.
 
-{/* Evidence: crates/registry-server/src/contract.rs, ManifestProjectionSource;
-    crates/registry-server/src/manifest_adapter.rs. */}
+{/* Evidence: crates/registry-breg/src/contract.rs, ManifestProjectionSource;
+    crates/registry-breg/src/manifest_adapter.rs. */}
 
 Before relying on an adapted pattern, pair its configuration with synthetic records, permitted
 queries, refused operations, a correction journey, and an upgrade example.
@@ -743,13 +743,13 @@ accessProfiles:
         filterableFields: [inspection]
 ```
 
-{/* Evidence: crates/registry-server/src/contract.rs, AccessProfileSource and AccessGrantSource;
-    crates/registry-server/src/access.rs, explain_access();
-    crates/registry-server/src/compiler.rs. */}
+{/* Evidence: crates/registry-breg/src/contract.rs, AccessProfileSource and AccessGrantSource;
+    crates/registry-breg/src/access.rs, explain_access();
+    crates/registry-breg/src/compiler.rs. */}
 
 ## Next
 
-- [Author a registry project](../../configure/registry-server/) to express your model and permissions.
-- [Registry Server API](../../reference/registry-server-api/) for the record envelope and query options.
-- [Configuration reference](../../reference/registry-server-configuration/) for the authoring fields.
-- [Create and query your first registry](../../tutorials/first-registry-server/) for a runnable project.
+- [Author a registry project](../../configure/breg/) to express your model and permissions.
+- [Base Registry Engine API](../../reference/breg-api/) for the record envelope and query options.
+- [Configuration reference](../../reference/breg-configuration/) for the authoring fields.
+- [Create and query your first registry](../../tutorials/first-breg/) for a runnable project.

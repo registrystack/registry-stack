@@ -1,0 +1,62 @@
+apiVersion: registry.registrystack.org/breg-journeys/v1
+journeys:
+  - id: household-history-caller-surfaces
+    steps:
+      - id: create-initial-membership
+        entity: membership-record
+        accessProfile: registry-operator
+        claims: &registry_operator_claims
+          principal: synthetic-history-operator
+          purpose: history-maintenance
+          scopes: [history-maintain]
+        request:
+          operation: create
+          data:
+            subject: household-schema-001
+            group: A
+            valid-from: "2026-01-01"
+            source-reference: schema-initial-membership
+        expect:
+          outcome: success
+          status: 201
+          fields:
+            subject: household-schema-001
+            group: A
+            valid-from: "2026-01-01"
+            valid-to: null
+            source-reference: schema-initial-membership
+        capture: initial-membership
+      - id: get-initial-membership
+        entity: membership-record
+        accessProfile: registry-operator
+        claims: *registry_operator_claims
+        request: {operation: get, recordRef: initial-membership}
+        expect:
+          outcome: success
+          status: 200
+          fields:
+            subject: household-schema-001
+            group: A
+            valid-from: "2026-01-01"
+            valid-to: null
+            source-reference: schema-initial-membership
+      - id: consumer-lists-initial-membership
+        entity: membership-record
+        accessProfile: eligibility-consumer
+        claims: &eligibility_consumer_claims
+          principal: synthetic-eligibility-consumer
+          purpose: eligibility-evaluation
+          scopes: [eligibility-read]
+        request: {operation: list}
+        expect: {outcome: success, status: 200, count: 1}
+      - id: consumer-without-purpose-cannot-list-memberships
+        entity: membership-record
+        accessProfile: eligibility-consumer
+        claims:
+          principal: synthetic-eligibility-consumer
+          scopes: [eligibility-read]
+        request: {operation: list}
+        expect:
+          outcome: refusal
+          status: 404
+          problemCode: resource.not_found

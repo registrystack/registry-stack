@@ -46,7 +46,7 @@ jobs:
       discovery_contracts: ${{ steps.filter.outputs.discovery_contracts }}
       relay_v2_contracts: ${{ steps.filter.outputs.relay_v2_contracts }}
       relay_client_contracts: ${{ steps.filter.outputs.relay_client_contracts }}
-      registry_server_contracts: ${{ steps.filter.outputs.registry_server_contracts }}
+      breg_contracts: ${{ steps.filter.outputs.breg_contracts }}
       evidence_contracts: ${{ steps.filter.outputs.evidence_contracts }}
       release_tool: ${{ steps.filter.outputs.release_tool }}
       release_source_proof: ${{ steps.filter.outputs.release_source_proof }}
@@ -593,10 +593,10 @@ jobs:
       - name: Relay client source neutrality
         run: products/relay-v2/scripts/check-source-neutrality.sh
 
-  registry-server-contracts:
-    name: Registry Server product contracts
+  breg-contracts:
+    name: Base Registry Engine product contracts
     needs: changes
-    if: needs.changes.outputs.registry_server_contracts == 'true'
+    if: needs.changes.outputs.breg_contracts == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     services:
@@ -605,11 +605,11 @@ jobs:
         # remain extension-free unless a spatial test explicitly installs it.
         image: postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6
         env:
-          POSTGRES_DB: registry_server
-          POSTGRES_PASSWORD: registry_server_test
-          POSTGRES_USER: registry_server
+          POSTGRES_DB: breg
+          POSTGRES_PASSWORD: breg_test
+          POSTGRES_USER: breg
         options: >-
-          --health-cmd "pg_isready -U registry_server -d registry_server"
+          --health-cmd "pg_isready -U breg -d breg"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -622,19 +622,19 @@ jobs:
           persist-credentials: false
           submodules: false
 
-      - name: Configure Registry Server test environment
+      - name: Configure Base Registry Engine test environment
         env:
           DATABASE_PORT: ${{ job.services.postgres.ports['5432'] }}
           POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
-          TLS_CA_PEM_PATH: ${{ runner.temp }}/registry-server-postgres-trusted-ca.pem
+          TLS_CA_PEM_PATH: ${{ runner.temp }}/breg-postgres-trusted-ca.pem
         run: |
           {
-            echo "REGISTRY_SERVER_TEST_DATABASE_URL=postgresql://registry_server:registry_server_test@localhost:${DATABASE_PORT}/registry_server"
-            echo "REGISTRY_SERVER_TEST_TLS_DATABASE_HOST=localhost"
-            echo "REGISTRY_SERVER_TEST_TLS_DATABASE_URL=postgresql://registry_server:registry_server_test@localhost:${DATABASE_PORT}/registry_server"
-            echo "REGISTRY_SERVER_TEST_TLS_HOSTNAME_MISMATCH_DATABASE_URL=postgresql://registry_server:registry_server_test@127.0.0.1:${DATABASE_PORT}/registry_server"
-            echo "REGISTRY_SERVER_TEST_TLS_POSTGRES_CONTAINER_ID=${POSTGRES_CONTAINER_ID}"
-            echo "REGISTRY_SERVER_TEST_TLS_CA_PEM_PATH=${TLS_CA_PEM_PATH}"
+            echo "BREG_TEST_DATABASE_URL=postgresql://breg:breg_test@localhost:${DATABASE_PORT}/breg"
+            echo "BREG_TEST_TLS_DATABASE_HOST=localhost"
+            echo "BREG_TEST_TLS_DATABASE_URL=postgresql://breg:breg_test@localhost:${DATABASE_PORT}/breg"
+            echo "BREG_TEST_TLS_HOSTNAME_MISMATCH_DATABASE_URL=postgresql://breg:breg_test@127.0.0.1:${DATABASE_PORT}/breg"
+            echo "BREG_TEST_TLS_POSTGRES_CONTAINER_ID=${POSTGRES_CONTAINER_ID}"
+            echo "BREG_TEST_TLS_CA_PEM_PATH=${TLS_CA_PEM_PATH}"
           } >> "${GITHUB_ENV}"
 
       - name: Cache Cargo registry
@@ -649,26 +649,26 @@ jobs:
         with:
           version: "0.11.16"
 
-      - name: Registry Server contract consistency
-        run: products/registry-server/scripts/check-contracts.sh
+      - name: Base Registry Engine contract consistency
+        run: products/breg/scripts/check-contracts.sh
 
-      - name: Registry Server client contract consistency
-        run: products/registry-server/scripts/check-client-contract.sh
+      - name: BReg client contract consistency
+        run: products/breg/scripts/check-client-contract.sh
 
-      - name: Registry Server PostgreSQL journeys
-        run: products/registry-server/scripts/test-postgres.sh
+      - name: Base Registry Engine PostgreSQL journeys
+        run: products/breg/scripts/test-postgres.sh
 
-      - name: Registry Server PostgreSQL TLS proof
-        run: products/registry-server/scripts/test-postgres-tls.sh
+      - name: Base Registry Engine PostgreSQL TLS proof
+        run: products/breg/scripts/test-postgres-tls.sh
 
-      - name: Registry Server clean-checkout adopter workflow
-        run: products/registry-server/scripts/test-adopter-workflow.sh
+      - name: Base Registry Engine clean-checkout adopter workflow
+        run: products/breg/scripts/test-adopter-workflow.sh
 
-      - name: Registry Server generic quickstart
-        run: products/registry-server/quickstart/run.sh --smoke
+      - name: Base Registry Engine generic quickstart
+        run: products/breg/quickstart/run.sh --smoke
 
-      - name: Registry Server spatial quickstart
-        run: products/registry-server/quickstart/run.sh --spatial --smoke
+      - name: Base Registry Engine spatial quickstart
+        run: products/breg/quickstart/run.sh --spatial --smoke
 
   identifiers:
     name: Public identifier catalog
@@ -708,7 +708,7 @@ jobs:
       - evidence-contracts
       - relay-v2-contracts
       - relay-client-contracts
-      - registry-server-contracts
+      - breg-contracts
       - identifiers
     runs-on: ubuntu-24.04
     env:

@@ -12,7 +12,7 @@ publish = false
 workspace = true
 
 [dependencies]
-registry-server-client.workspace = true
+registry-breg-client.workspace = true
 registry-discovery-client.workspace = true
 registry-evidence-client.workspace = true
 registry-platform-httputil.workspace = true

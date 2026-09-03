@@ -1,0 +1,264 @@
+apiVersion: registry.registrystack.org/breg-journeys/v1
+journeys:
+  - id: action-only-household-contact-registration
+    steps:
+      - id: create-household
+        entity: household
+        accessProfile: household-operator
+        claims: &operator_claims
+          principal: synthetic-household-operator
+          scopes: [registry:household:operate]
+          purpose: household-administration
+          directClaims:
+            district: north-district
+        request:
+          operation: create
+          data:
+            householdCode: HH-ACTION-001
+            householdName: Rivera household
+            district: north-district
+        expect:
+          outcome: success
+          status: 201
+          fields:
+            householdCode: HH-ACTION-001
+            householdName: Rivera household
+            district: north-district
+        capture: household
+      - id: create-service-center
+        entity: service-center
+        accessProfile: household-operator
+        claims: *operator_claims
+        request:
+          operation: create
+          data:
+            centerCode: CENTER-ACTION-001
+            label: Northern field office
+            district: north-district
+        expect:
+          outcome: success
+          status: 201
+          fields:
+            centerCode: CENTER-ACTION-001
+            label: Northern field office
+            district: north-district
+        capture: service-center
+      - id: read-household-action-condition
+        action: register-household-contact
+        accessProfile: contact-registrar
+        claims: &registrar_claims
+          principal: synthetic-contact-registrar
+          scopes: [registry:contact:register]
+          purpose: contact-registration
+          directClaims:
+            district: north-district
+        request:
+          operation: target_conditions
+          input:
+            householdId:
+              recordRef: household
+        expect:
+          outcome: success
+          status: 200
+        capture: household-condition
+      - id: read-household-for-maintenance
+        entity: household
+        accessProfile: household-maintainer
+        claims: &maintainer_claims
+          principal: synthetic-household-maintainer
+          scopes: [registry:household:maintain]
+          purpose: household-maintenance
+          directClaims:
+            district: north-district
+        request:
+          operation: get
+          recordRef: household
+        expect:
+          outcome: success
+          status: 200
+          fields:
+            householdCode: HH-ACTION-001
+            householdName: Rivera household
+            district: north-district
+        capture: household-for-maintenance
+      - id: stale-household-after-user-selection
+        entity: household
+        accessProfile: household-maintainer
+        claims: *maintainer_claims
+        request:
+          operation: patch
+          recordRef: household-for-maintenance
+          etagRef: household-for-maintenance
+          changes:
+            - {field: householdName, value: Rivera family household}
+        expect:
+          outcome: success
+          status: 200
+          fields:
+            householdName: Rivera family household
+        capture: household-after-intervening-edit
+      - id: stale-condition-refuses-without-dropping-input
+        action: register-household-contact
+        accessProfile: contact-registrar
+        claims: *registrar_claims
+        request:
+          operation: invoke
+          idempotencyKey: household-contact-actions-stale
+          input: &contact_input
+            householdId:
+              recordRef: household
+            serviceCenterId:
+              recordRef: service-center
+            personCode: PERSON-ACTION-001
+            contactName: Alicia Rivera
+            district: north-district
+          preconditions:
+            householdId:
+              conditionRef: household-condition
+        expect:
+          outcome: refusal
+          status: 412
+          problemCode: precondition.failed
+      - id: refresh-household-action-condition
+        action: register-household-contact
+        accessProfile: contact-registrar
+        claims: *registrar_claims
+        request:
+          operation: target_conditions
+          input:
+            householdId:
+              recordRef: household-after-intervening-edit
+        expect:
+          outcome: success
+          status: 200
+        capture: refreshed-household-condition
+      - id: invoke-contact-registration-action
+        action: register-household-contact
+        accessProfile: contact-registrar
+        claims: *registrar_claims
+        request:
+          operation: invoke
+          idempotencyKey: household-contact-actions-001
+          input: *contact_input
+          preconditions:
+            householdId:
+              conditionRef: refreshed-household-condition
+        expect:
+          outcome: success
+          status: 200
+        capture: contact-application
+        captureResults:
+          person: created-person
+          membership: created-membership
+          household: patched-household
+      - id: retry-lost-contact-registration-response
+        action: register-household-contact
+        accessProfile: contact-registrar
+        claims: *registrar_claims
+        request:
+          operation: invoke
+          idempotencyKey: household-contact-actions-001
+          input: *contact_input
+          preconditions:
+            householdId:
+              conditionRef: refreshed-household-condition
+        expect:
+          outcome: success
+          status: 200
+        capture: replayed-contact-application
+        captureResults:
+          person: replayed-person
+          membership: replayed-membership
+          household: replayed-household
+      - id: same-key-different-input-is-refused
+        action: register-household-contact
+        accessProfile: contact-registrar
+        claims: *registrar_claims
+        request:
+          operation: invoke
+          idempotencyKey: household-contact-actions-001
+          input:
+            householdId:
+              recordRef: household
+            serviceCenterId:
+              recordRef: service-center
+            personCode: PERSON-ACTION-002
+            contactName: Alicia Rivera
+            district: north-district
+          preconditions:
+            householdId:
+              conditionRef: refreshed-household-condition
+        expect:
+          outcome: refusal
+          status: 409
+          problemCode: idempotency.conflict
+  - id: link-only-target-authority-is-still-enforced
+    steps:
+      - id: create-household
+        entity: household
+        accessProfile: household-operator
+        claims: *operator_claims
+        request:
+          operation: create
+          data:
+            householdCode: HH-ACTION-002
+            householdName: Kim household
+            district: north-district
+        expect:
+          outcome: success
+          status: 201
+        capture: north-household
+      - id: create-south-service-center
+        entity: service-center
+        accessProfile: household-operator
+        claims:
+          principal: synthetic-household-operator
+          scopes: [registry:household:operate]
+          purpose: household-administration
+          directClaims:
+            district: south-district
+        request:
+          operation: create
+          data:
+            centerCode: CENTER-ACTION-002
+            label: Southern field office
+            district: south-district
+        expect:
+          outcome: success
+          status: 201
+        capture: south-service-center
+      - id: read-north-household-condition
+        action: register-household-contact
+        accessProfile: contact-registrar
+        claims: *registrar_claims
+        request:
+          operation: target_conditions
+          input:
+            householdId:
+              recordRef: north-household
+        expect:
+          outcome: success
+          status: 200
+        capture: north-household-condition
+      - id: link-only-service-center-outside-boundary-is-concealed
+        action: register-household-contact
+        accessProfile: contact-registrar
+        claims: *registrar_claims
+        request:
+          operation: invoke
+          idempotencyKey: household-contact-actions-link-boundary
+          input:
+            householdId:
+              recordRef: north-household
+            serviceCenterId:
+              recordRef: south-service-center
+            personCode: PERSON-ACTION-003
+            contactName: Mina Kim
+            district: north-district
+          preconditions:
+            householdId:
+              conditionRef: north-household-condition
+        expect:
+          outcome: refusal
+          status: 412
+          problemCode: precondition.failed

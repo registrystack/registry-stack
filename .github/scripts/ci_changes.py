@@ -45,7 +45,7 @@ SHARDS = {
         "registry-relay-client-py",
     ),
     "relay-v2": ("registry-relay-v2", "registry-relayctl"),
-    "registry-server": ("registry-server", "registry-server-client", "registry-serverctl"),
+    "breg": ("registry-breg", "registry-breg-client", "registry-bregctl"),
     "stack-client": ("registry-record", "registry-stack-client"),
     "evidence": (
         "registry-evidence",
@@ -70,11 +70,11 @@ PLATFORM_PACKAGES = frozenset(SHARDS["platform"])
 MANIFEST_PACKAGES = frozenset(SHARDS["manifest"])
 RELAY_V2_PACKAGES = frozenset(SHARDS["relay-v2"])
 RELAY_CLIENT_PACKAGES = frozenset(SHARDS["relay-client"])
-REGISTRY_SERVER_PACKAGES = frozenset(SHARDS["registry-server"])
+BREG_PACKAGES = frozenset(SHARDS["breg"])
 STACK_CLIENT_PACKAGES = frozenset(SHARDS["stack-client"])
 
 # These are the cross-product semantic commitments implemented independently by
-# Registry Server and Relay V2. A change must replay both real product routers,
+# Base Registry Engine and Relay V2. A change must replay both real product routers,
 # while profile-only tooling and ordinary positive/negative fixtures remain on
 # the identifier/profile gate without widening the Rust matrix.
 REGISTRY_RECORD_CROSS_PRODUCT_INPUTS = (
@@ -211,8 +211,8 @@ CLI_REFERENCE_INPUTS = (
     ("crates/registry-mint/src/cli.rs", "crates/registry-mint/src/cli.rs"),
     ("crates/registry-relay-v2/src/cli.rs", "crates/registry-relay-v2/src/cli.rs"),
     ("crates/registry-relayctl/src/**", "crates/registry-relayctl/src/lib.rs"),
-    ("crates/registry-server/src/cli.rs", "crates/registry-server/src/cli.rs"),
-    ("crates/registry-serverctl/src/**", "crates/registry-serverctl/src/lib.rs"),
+    ("crates/registry-breg/src/cli.rs", "crates/registry-breg/src/cli.rs"),
+    ("crates/registry-bregctl/src/**", "crates/registry-bregctl/src/lib.rs"),
 )
 CLI_REFERENCE_PATTERNS = tuple(pattern for pattern, _ in CLI_REFERENCE_INPUTS)
 
@@ -535,8 +535,8 @@ def classify(
                 seeds.update(PLATFORM_PACKAGES)
             elif path.startswith("products/relay-v2/"):
                 seeds.update(RELAY_V2_PACKAGES)
-            elif path.startswith("products/registry-server/"):
-                seeds.update(REGISTRY_SERVER_PACKAGES)
+            elif path.startswith("products/breg/"):
+                seeds.update(BREG_PACKAGES)
             elif path.startswith("products/identifiers/"):
                 # The catalog gate compiles its focused Relay V2 exporter.
                 # Catalog-only tooling does not require the full Rust matrix.
@@ -636,8 +636,8 @@ def classify(
             # them, so either going stale needs a docs rebuild.
             "products/evidence/contracts/*",
             "crates/registry-evidencectl/schemas/authoring/*",
-            "products/registry-server/generated/authoring/*",
-            "products/registry-server/generated/runtime/*",
+            "products/breg/generated/authoring/*",
+            "products/breg/generated/runtime/*",
             # The same page names the product reference that explains each
             # schema, and the docs tests read those references to prove the
             # published key paths and the documented ones agree.
@@ -737,8 +737,8 @@ def classify(
         "relay_v2_contracts": registry_record_cross_product
         or bool(affected & RELAY_V2_PACKAGES),
         "relay_client_contracts": bool(affected & RELAY_CLIENT_PACKAGES),
-        "registry_server_contracts": registry_record_cross_product
-        or bool(affected & REGISTRY_SERVER_PACKAGES),
+        "breg_contracts": registry_record_cross_product
+        or bool(affected & BREG_PACKAGES),
         "evidence_contracts": bool(affected & EVIDENCE_PACKAGES),
         "release_tool": release_tool,
         "release_source_proof": release_source_proof,

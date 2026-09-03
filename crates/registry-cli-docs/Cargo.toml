@@ -19,7 +19,7 @@ registry-evidencectl.workspace = true
 registry-mint.workspace = true
 registry-relay-v2.workspace = true
 registry-relayctl.workspace = true
-registry-server = { workspace = true, features = ["runtime"] }
-registry-serverctl.workspace = true
+registry-breg = { workspace = true, features = ["runtime"] }
+registry-bregctl.workspace = true
 serde.workspace = true
 serde_json.workspace = true

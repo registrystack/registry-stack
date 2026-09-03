@@ -16,8 +16,8 @@ standards_referenced:
 The Registry Relay clients cover the fixed Relay V2 HTTP surface without importing a deployment's
 record, selector, filter, artifact, or SDMX schemas. Rust is the canonical implementation. The
 Python and Node packages are thin bindings that return native plain values and keep HTTP, route,
-authentication, Problem, trace, and response validation in Rust. Server has a separate Rust client
-and transport documented in the [Server client API reference](../registry-server-client-api/).
+authentication, Problem, trace, and response validation in Rust. BReg has a separate Rust client
+and transport documented in the [BReg client API reference](../breg-client-api/).
 
 ## Availability and compatibility
 
@@ -331,5 +331,5 @@ authentication, Problem, redirect, retry, cache, or pagination policy.
 
 - [Relayctl command reference](../relayctl/) for project authoring and package commands.
 - [Instance API references](../apis/) for the deployment-generated Relay OpenAPI boundary.
-- [Server client API reference](../registry-server-client-api/) for the separate Registry Server client.
+- [BReg client API reference](../breg-client-api/) for the separate Base Registry Engine client.
 - [Errors and status codes](../errors/) for the wider Registry Stack error vocabulary.

@@ -3,20 +3,17 @@
 //! Each product remains in its own module so route, authentication, error,
 //! record, and verification contracts cannot be mistaken for one another.
 
-pub mod registry_server {
-    pub use registry_server_client::{
-        RegistryServerClient, RegistryServerClientConfig, RegistryServerClientError,
-        RegistryServerComplete, RegistryServerCreateBinding, RegistryServerDirectWrite,
-        RegistryServerEtag, RegistryServerIdempotencyKey, RegistryServerLifecycleAction,
-        RegistryServerLifecycleActionReceipt, RegistryServerLifecycleAuthority,
-        RegistryServerLifecycleOperation, RegistryServerMetadata,
-        RegistryServerMetadataSelectionError, RegistryServerOperationKind, RegistryServerPage,
-        RegistryServerPatchBinding, RegistryServerPlanRefusal, RegistryServerProbeStatus,
-        RegistryServerProblemCode, RegistryServerProtocolFailure, RegistryServerRawDocument,
-        RegistryServerResponseMetadata, ServerContinuation, ServerContinuationProjection,
-        ServerCreateRequest, ServerListRequest, ServerLookupRequest, ServerMutationRequestError,
-        ServerPatchBuilder, ServerPatchRequest, ServerRecordFormat, ServerRecordOptions,
-        ServerRequestError,
+pub mod breg {
+    pub use registry_breg_client::{
+        BRegComplete, BRegContinuation, BRegContinuationProjection, BRegCreateBinding,
+        BRegCreateRequest, BRegDirectWrite, BRegEtag, BRegIdempotencyKey, BRegLifecycleAction,
+        BRegLifecycleActionReceipt, BRegLifecycleAuthority, BRegLifecycleOperation,
+        BRegListRequest, BRegLookupRequest, BRegMetadata, BRegMetadataSelectionError,
+        BRegMutationRequestError, BRegOperationKind, BRegPage, BRegPatchBinding, BRegPatchBuilder,
+        BRegPatchRequest, BRegPlanRefusal, BRegProbeStatus, BRegProblemCode, BRegProtocolFailure,
+        BRegRawDocument, BRegRecordFormat, BRegRecordOptions, BRegRequestError,
+        BRegResponseMetadata, BaseRegistryClient, BaseRegistryClientConfig,
+        BaseRegistryClientError,
     };
 }
 

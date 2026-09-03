@@ -13,7 +13,7 @@ standards_referenced: []
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-If you are evaluating Registry Server for data that needs approval, this tutorial takes you through
+If you are evaluating Base Registry Engine for data that needs approval, this tutorial takes you through
 an asset-location correction: propose a different site, collect two approvals, and apply the change.
 You will run the supplied workflow against PostgreSQL, adapt its configuration, and check a refusal.
 
@@ -23,7 +23,7 @@ You will run the supplied workflow against PostgreSQL, adapt its configuration, 
   level="Source preview, local development"
   prerequisites={[
     'Linux or macOS, Bash, and two terminals',
-    'A clone of the registry-stack repository; Registry Server is unreleased',
+    'A clone of the registry-stack repository; Base Registry Engine is unreleased',
     'Rust and Cargo',
     'Running Docker',
     'OpenSSL, PostgreSQL client tools (psql), and Python 3.11+',
@@ -32,13 +32,13 @@ You will run the supplied workflow against PostgreSQL, adapt its configuration, 
 />
 
 Run commands from the root of that clone unless a step says otherwise.
-The workflow runs through `registry-serverctl test`, which sends requests through the real HTTP
+The workflow runs through `bregctl test`, which sends requests through the real HTTP
 router with separate caller credentials and a disposable database.
 It does not leave the change-request example running as an HTTP service.
 
-{/* Evidence: products/registry-server/scripts/test-change-request-examples.sh;
-    crates/registry-serverctl/src/test_lifecycle.rs;
-    crates/registry-server/src/fixtures.rs. */}
+{/* Evidence: products/breg/scripts/test-change-request-examples.sh;
+    crates/registry-bregctl/src/test_lifecycle.rs;
+    crates/registry-breg/src/fixtures.rs. */}
 
 ## 1. Check your first request type
 
@@ -47,10 +47,10 @@ then check it:
 
 ```sh
 mkdir -p tutorial-work
-cp -R products/registry-server/acceptance/asset-site-placement-change-requests tutorial-work/asset-corrections
+cp -R products/breg/acceptance/asset-site-placement-change-requests tutorial-work/asset-corrections
 export CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
-cargo build --locked -p registry-serverctl
-target/debug/registry-serverctl check tutorial-work/asset-corrections
+cargo build --locked -p registry-bregctl
+target/debug/bregctl check tutorial-work/asset-corrections
 ```
 
 The check succeeds, prints the compiled configuration's digest, and lists fifteen findings:
@@ -74,7 +74,7 @@ No database has changed yet.
 Ask the CLI to describe what it compiled:
 
 ```sh
-target/debug/registry-serverctl explain change-requests tutorial-work/asset-corrections \
+target/debug/bregctl explain change-requests tutorial-work/asset-corrections \
   --format json > tutorial-work/change-requests.json
 python3 - tutorial-work/change-requests.json <<'PY'
 import json
@@ -110,8 +110,8 @@ Every action needs an `Idempotency-Key` and an `If-Match`; a decision or an appl
 the `proposalVersion` and `effectDigest` the caller read.
 The JSON file also lists the compiled effects, the planner and application policy, the grants of each role, and the request bounds.
 
-{/* Evidence: crates/registry-serverctl/src/lib.rs, explain_change_requests;
-    products/registry-server/acceptance/asset-site-placement-change-requests/registry.yaml. */}
+{/* Evidence: crates/registry-bregctl/src/lib.rs, explain_change_requests;
+    products/breg/acceptance/asset-site-placement-change-requests/registry.yaml. */}
 
 ## 2. Read the rule you are testing
 
@@ -173,11 +173,11 @@ placements at all: the only way to change a placement's site is an applied reque
 Those grants carry `requestPresence` instead, so an operator reading a placement sees that a
 correction is pending.
 
-{/* Evidence: products/registry-server/acceptance/asset-site-placement-change-requests/registry.yaml;
-    products/registry-server/scripts/test-change-request-examples.sh;
-    crates/registry-server/src/request_workflow.rs;
-    crates/registry-server/src/request_retention.rs;
-    crates/registry-server/tests/postgres_change_requests.rs. */}
+{/* Evidence: products/breg/acceptance/asset-site-placement-change-requests/registry.yaml;
+    products/breg/scripts/test-change-request-examples.sh;
+    crates/registry-breg/src/request_workflow.rs;
+    crates/registry-breg/src/request_retention.rs;
+    crates/registry-breg/tests/postgres_change_requests.rs. */}
 
 ## 3. Run the approval workflow
 
@@ -186,20 +186,20 @@ You are borrowing its disposable PostgreSQL cluster, which the runner reaches ov
 quickstart's certificate authority.
 
 :::caution[Disposable local services]
-Starting the quickstart replaces its previous `products/registry-server/quickstart/.run` directory.
+Starting the quickstart replaces its previous `products/breg/quickstart/.run` directory.
 Do not run two quickstarts in the same clone.
 Stopping the launcher removes its database container and the records inside it.
 Keep real data and production credentials out of this tutorial.
 :::
 
 ```sh
-products/registry-server/quickstart/run.sh
+products/breg/quickstart/run.sh
 ```
 
 Wait for this line, then leave the terminal running:
 
 ```text
-Registry Server generic quickstart is ready.
+Base Registry Engine generic quickstart is ready.
 ```
 
 Return to your first terminal.
@@ -223,7 +223,7 @@ The example runner sources the file as shell code, so use only the file you crea
 :::
 
 ```sh
-python3 - "$PWD/products/registry-server/quickstart/.run" tutorial-work/test.env <<'PY'
+python3 - "$PWD/products/breg/quickstart/.run" tutorial-work/test.env <<'PY'
 from pathlib import Path
 from urllib.parse import urlsplit
 import shlex
@@ -233,8 +233,8 @@ connection = urlsplit((run / "secrets/runtime-database-url").read_text().strip()
 password = (run / "secrets/database-password").read_text().strip()
 url = f"postgresql://postgres:{password}@localhost:{connection.port}/postgres"
 values = {
-    "REGISTRY_SERVER_TEST_DATABASE_URL": url,
-    "REGISTRY_SERVER_TEST_TLS_CA_PEM_PATH": str(run / "tls/ca.pem"),
+    "BREG_TEST_DATABASE_URL": url,
+    "BREG_TEST_TLS_CA_PEM_PATH": str(run / "tls/ca.pem"),
 }
 target = Path(sys.argv[2])
 target.touch(mode=0o600)
@@ -242,7 +242,7 @@ target.write_text("".join(
     f"export {name}={shlex.quote(value)}\n" for name, value in values.items()
 ))
 PY
-products/registry-server/scripts/test-change-request-examples.sh \
+products/breg/scripts/test-change-request-examples.sh \
   --env tutorial-work/test.env --asset-project "$PWD/tutorial-work/asset-corrections"
 ```
 
@@ -283,13 +283,13 @@ The journey's `etagRef`, `proposalVersionRef`, and `effectDigestRef` take those 
 captured response, and a client making HTTP calls itself reads the same members.
 The record's ordinary `ETag` header edits the draft; it is not an action's `ifMatch`.
 
-{/* Evidence: products/registry-server/quickstart/run.sh;
-    products/registry-server/quickstart/support/quickstart.py, prepare;
-    products/registry-server/scripts/test-change-request-examples.sh;
-    products/registry-server/acceptance/asset-site-placement-change-requests/tests/journeys.yaml;
-    products/registry-server/generated/asset-site-placement-change-requests/generated/openapi.json;
-    crates/registry-server/src/fixtures.rs;
-    crates/registry-server/src/request_workflow.rs. */}
+{/* Evidence: products/breg/quickstart/run.sh;
+    products/breg/quickstart/support/quickstart.py, prepare;
+    products/breg/scripts/test-change-request-examples.sh;
+    products/breg/acceptance/asset-site-placement-change-requests/tests/journeys.yaml;
+    products/breg/generated/asset-site-placement-change-requests/generated/openapi.json;
+    crates/registry-breg/src/fixtures.rs;
+    crates/registry-breg/src/request_workflow.rs. */}
 
 ## 4. Make the second stage your own
 
@@ -327,8 +327,8 @@ request:
 Run the structural check and the database journey again:
 
 ```sh
-target/debug/registry-serverctl check tutorial-work/asset-corrections
-products/registry-server/scripts/test-change-request-examples.sh \
+target/debug/bregctl check tutorial-work/asset-corrections
+products/breg/scripts/test-change-request-examples.sh \
   --env tutorial-work/test.env --asset-project "$PWD/tutorial-work/asset-corrections"
 ```
 
@@ -338,9 +338,9 @@ You changed the stage name, its authority grant, and the caller's action without
 code.
 For a new stage rather than a rename, you would also add its GET and approval steps to the journey.
 
-{/* Evidence: products/registry-server/acceptance/asset-site-placement-change-requests/registry.yaml;
-    products/registry-server/acceptance/asset-site-placement-change-requests/tests/journeys.yaml;
-    products/registry-server/scripts/test-change-request-examples.sh. */}
+{/* Evidence: products/breg/acceptance/asset-site-placement-change-requests/registry.yaml;
+    products/breg/acceptance/asset-site-placement-change-requests/tests/journeys.yaml;
+    products/breg/scripts/test-change-request-examples.sh. */}
 
 ## 5. Check that a direct-write bypass is refused
 
@@ -352,7 +352,7 @@ operations: [create, get, list, patch]
 ```
 
 ```sh
-target/debug/registry-serverctl check tutorial-work/asset-corrections
+target/debug/bregctl check tutorial-work/asset-corrections
 ```
 
 The check fails with `change_control.direct_write_grant` and the message
@@ -360,8 +360,8 @@ The check fails with `change_control.direct_write_grant` and the message
 This is an expected refusal: a grant cannot bypass the placement's `changeControl` rule.
 Remove `patch` from that grant and rerun the check; it succeeds again.
 
-{/* Evidence: crates/registry-server/src/change_request.rs;
-    products/registry-server/acceptance/asset-site-placement-change-requests/registry.yaml. */}
+{/* Evidence: crates/registry-breg/src/change_request.rs;
+    products/breg/acceptance/asset-site-placement-change-requests/registry.yaml. */}
 
 ## Cleanup
 
@@ -382,7 +382,7 @@ This also deletes the quickstart's generated project, but not your separate copy
 :::
 
 ```sh
-rm -rf products/registry-server/quickstart/.run
+rm -rf products/breg/quickstart/.run
 ```
 
 ## What you built
@@ -395,13 +395,13 @@ deployment are separate steps.
 
 ## Next
 
-- [Author a registry project](../../configure/registry-server/#change-requests) for every member
+- [Author a registry project](../../configure/breg/#change-requests) for every member
   of `changeRequest` and `changeControl`.
-- [Registry Server API reference](../../reference/registry-server-api/#change-requests) for the
+- [Base Registry Engine API reference](../../reference/breg-api/#change-requests) for the
   seven request states, the action routes, and the `request.actions[]` shape.
-- [Deploy and operate a registry](../../operate/registry-server/) to package and activate your
+- [Deploy and operate a registry](../../operate/breg/) to package and activate your
   project, and to erase proposal detail under `operator_erase`.
-- Open `products/registry-server/CHANGE_REQUEST_EXAMPLES.md` in your clone for the household
+- Open `products/breg/CHANGE_REQUEST_EXAMPLES.md` in your clone for the household
   example and stale-proposal recovery.
 - Use [Registry Mint](../../configure/mint/) when connecting callers to your own deployment.
 
@@ -415,4 +415,4 @@ deployment are separate steps.
 | Python cannot import `yaml` | Repeat the virtual environment installation and `PATH` assignment in your first terminal. |
 | Renaming the stage makes `check` fail | Match the stage `id` to the supervisor's `reviewStages` entry. |
 | The runner reports `test.step.failed` | Its path `journeys[0].steps[<n>]` counts the steps of `tests/journeys.yaml` from zero. Check that step's `stage` and expected status. |
-| `change-requests` is not a recognized explain subject | Rebuild `registry-serverctl` from this clone; the tutorial does not target a released binary. |
+| `change-requests` is not a recognized explain subject | Rebuild `bregctl` from this clone; the tutorial does not target a released binary. |

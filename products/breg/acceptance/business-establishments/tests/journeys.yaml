@@ -1,0 +1,318 @@
+apiVersion: registry.registrystack.org/breg-journeys/v1
+journeys:
+  - id: business-establishment-lifecycle
+    steps:
+      - id: create-north-head-office
+        entity: establishment
+        accessProfile: business-operator
+        claims: &business_operator_claims
+          principal: synthetic-business-operator
+          scopes:
+            - registry:business:operate
+          purpose: business-administration
+        request:
+          operation: create
+          data:
+            establishment-code: ESTABLISHMENT-SYNTH-001
+            site-name: North Quay Head Office
+            locality: Example
+            opened-on: 1986-02-22
+            establishment-kind: warehouse
+            operating-status: operating
+            preferred-language: en
+        expect:
+          outcome: success
+          status: 201
+          fields:
+            establishment-code: ESTABLISHMENT-SYNTH-001
+            site-name: North Quay Head Office
+            establishment-kind: warehouse
+            operating-status: operating
+        capture: north-head-office
+      - id: create-production-branch
+        entity: establishment
+        accessProfile: business-operator
+        claims: *business_operator_claims
+        request:
+          operation: create
+          data:
+            establishment-code: ESTABLISHMENT-SYNTH-002
+            site-name: North Quay Riverside Works
+            locality: Example
+            opened-on: 2023-03-14
+            establishment-kind: production
+            operating-status: operating
+            preferred-language: en
+        expect:
+          outcome: success
+          status: 201
+          fields:
+            establishment-code: ESTABLISHMENT-SYNTH-002
+            establishment-kind: production
+            operating-status: operating
+        capture: production-branch
+      - id: create-central-head-office
+        entity: establishment
+        accessProfile: business-operator
+        claims: *business_operator_claims
+        request:
+          operation: create
+          data:
+            establishment-code: ESTABLISHMENT-SYNTH-003
+            site-name: Central Fabrication Works
+            locality: Sample
+            opened-on: 1980-11-02
+            establishment-kind: production
+            operating-status: operating
+            preferred-language: es
+        expect:
+          outcome: success
+          status: 201
+          fields:
+            establishment-code: ESTABLISHMENT-SYNTH-003
+            establishment-kind: production
+        capture: central-head-office
+      - id: create-central-branch
+        entity: establishment
+        accessProfile: business-operator
+        claims: *business_operator_claims
+        request:
+          operation: create
+          data:
+            establishment-code: ESTABLISHMENT-SYNTH-004
+            site-name: Central Distribution Branch
+            locality: Sample
+            opened-on: 2016-06-17
+            establishment-kind: warehouse
+            operating-status: operating
+            preferred-language: es
+        expect:
+          outcome: success
+          status: 201
+          fields:
+            establishment-code: ESTABLISHMENT-SYNTH-004
+            establishment-kind: warehouse
+        capture: central-branch
+      - id: create-central-depot
+        entity: establishment
+        accessProfile: business-operator
+        claims: *business_operator_claims
+        request:
+          operation: create
+          data:
+            establishment-code: ESTABLISHMENT-SYNTH-005
+            site-name: Central Storage Depot
+            locality: Sample
+            opened-on: 1940-08-20
+            establishment-kind: production
+            operating-status: operating
+            preferred-language: es
+        expect:
+          outcome: success
+          status: 201
+          fields:
+            establishment-code: ESTABLISHMENT-SYNTH-005
+            establishment-kind: production
+        capture: central-depot
+      - id: create-isolation-head-office
+        entity: establishment
+        accessProfile: business-operator
+        claims: *business_operator_claims
+        request:
+          operation: create
+          data:
+            establishment-code: ESTABLISHMENT-SYNTH-006
+            site-name: South Harbour Head Office
+            locality: Control
+            opened-on: 1975-01-09
+            establishment-kind: warehouse
+            operating-status: operating
+            preferred-language: fr
+        expect:
+          outcome: success
+          status: 201
+          fields:
+            establishment-code: ESTABLISHMENT-SYNTH-006
+            establishment-kind: warehouse
+        capture: isolation-head-office
+      - id: create-isolation-regional-office
+        entity: establishment
+        accessProfile: business-operator
+        claims: *business_operator_claims
+        request:
+          operation: create
+          data:
+            establishment-code: ESTABLISHMENT-SYNTH-007
+            site-name: South Harbour Regional Office
+            locality: Control
+            opened-on: 1977-09-23
+            establishment-kind: production
+            operating-status: operating
+            preferred-language: fr
+        expect:
+          outcome: success
+          status: 201
+          fields:
+            establishment-code: ESTABLISHMENT-SYNTH-007
+            establishment-kind: production
+        capture: isolation-regional-office
+      - id: create-isolation-branch
+        entity: establishment
+        accessProfile: business-operator
+        claims: *business_operator_claims
+        request:
+          operation: create
+          data:
+            establishment-code: ESTABLISHMENT-SYNTH-008
+            site-name: South Harbour Branch
+            locality: Control
+            opened-on: 2018-05-06
+            establishment-kind: production
+            operating-status: operating
+            preferred-language: fr
+        expect:
+          outcome: success
+          status: 201
+          fields:
+            establishment-code: ESTABLISHMENT-SYNTH-008
+            establishment-kind: production
+        capture: isolation-branch
+      - id: create-north-business
+        entity: business
+        accessProfile: business-operator
+        claims: *business_operator_claims
+        request:
+          operation: create
+          data:
+            business-code: BUSINESS-SYNTH-001
+            local-registration-number: 1001
+            registered-name: North Quay Engineering Ltd
+            administrative-area: demonstration-north
+            business-type: private
+        expect:
+          outcome: success
+          status: 201
+          fields:
+            business-code: BUSINESS-SYNTH-001
+            local-registration-number: 1001
+            registered-name: North Quay Engineering Ltd
+        capture: north-business
+      - id: create-central-business
+        entity: business
+        accessProfile: business-operator
+        claims: *business_operator_claims
+        request:
+          operation: create
+          data:
+            business-code: BUSINESS-SYNTH-002
+            local-registration-number: 1002
+            registered-name: Central Fabrication Ltd
+            administrative-area: demonstration-central
+            business-type: private
+        expect:
+          outcome: success
+          status: 201
+          fields:
+            business-code: BUSINESS-SYNTH-002
+            local-registration-number: 1002
+        capture: central-business
+      - id: create-isolation-business
+        entity: business
+        accessProfile: business-operator
+        claims: *business_operator_claims
+        request:
+          operation: create
+          data:
+            business-code: BUSINESS-SYNTH-003
+            local-registration-number: 1003
+            registered-name: South Harbour Logistics Ltd
+            administrative-area: demonstration-south
+            business-type: private
+        expect:
+          outcome: success
+          status: 201
+          fields:
+            business-code: BUSINESS-SYNTH-003
+            local-registration-number: 1003
+        capture: isolation-business
+      - id: lookup-north-business
+        entity: business
+        accessProfile: business-operator
+        claims: *business_operator_claims
+        request:
+          operation: lookup
+          selector: by-local-reference
+          values:
+            administrative-area: demonstration-north
+            local-registration-number: 1001
+        expect:
+          outcome: success
+          status: 200
+          fields:
+            business-code: BUSINESS-SYNTH-001
+            local-registration-number: 1001
+      - id: read-establishments-from-north-business
+        entity: business
+        accessProfile: business-operator
+        claims: *business_operator_claims
+        request:
+          operation: read_path
+          path: establishments
+          recordRef: north-business
+          select:
+            - establishment-code
+            - site-name
+            - establishment-kind
+          top: 20
+          count: true
+        expect:
+          outcome: success
+          status: 200
+          count: 0
+      - id: query-establishment-summary
+        entity: business
+        accessProfile: business-operator
+        claims: *business_operator_claims
+        request:
+          operation: query
+          select:
+            - business-code
+            - local-registration-number
+            - branch-count
+            - production-site-count
+            - suspended-site-count
+            - has-head-office
+            - has-production-site
+          top: 3
+          count: true
+        expect:
+          outcome: success
+          status: 200
+          count: 3
+      - id: refuse-incomplete-assignment
+        entity: operator-assignment
+        accessProfile: business-operator
+        claims: *business_operator_claims
+        request:
+          operation: create
+          data:
+            relationship: head-office
+            valid-from: 2026-01-01
+        expect:
+          outcome: refusal
+          status: 400
+          problemCode: request.invalid
+      - id: operator-without-purpose-is-concealed
+        entity: establishment
+        accessProfile: business-operator
+        claims:
+          principal: synthetic-business-operator
+          scopes:
+            - registry:business:operate
+        request:
+          operation: get
+          recordRef: north-head-office
+        expect:
+          outcome: refusal
+          status: 404
+          problemCode: resource.not_found

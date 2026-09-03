@@ -34,9 +34,9 @@ container package as private, so publish a clearly non-release bootstrap
 artifact without putting a token on the command line:
 
 ```sh
-package="${PACKAGE:?set PACKAGE to relay, evidence, mint, discovery, or registry-server}"
+package="${PACKAGE:?set PACKAGE to relay, evidence, mint, discovery, or breg}"
 case "${package}" in
-  relay|evidence|mint|discovery|registry-server) ;;
+  relay|evidence|mint|discovery|breg) ;;
   *) echo "unsupported release image package: ${package}" >&2; exit 1 ;;
 esac
 
@@ -58,11 +58,11 @@ oras push \
 In the organization package settings, change only the selected package to
 public and grant `registrystack/registry-stack` Actions access with Write.
 Starting with `v0.21.0`, the release requires public `relay`, `evidence`, and
-`mint` packages, joined by `discovery` from `v0.24.0` and `registry-server`
+`mint` packages, joined by `discovery` from `v0.24.0` and `breg`
 from `v0.26.0`. Verify all five before candidate dispatch:
 
 ```sh
-for package in relay evidence mint discovery registry-server; do
+for package in relay evidence mint discovery breg; do
   gh api "/orgs/registrystack/packages/container/${package}" \
     --jq '[.name,.package_type,.visibility]'
 done
@@ -265,7 +265,7 @@ workflow then:
 - Validates the release identity, manifests, pins, recipes, and destinations.
 - Builds the release payloads and OCI images once. Starting with `v0.21.0`, the
   image set is Relay, Evidence Gateway, and Registry Mint. Discovery joins at
-  `v0.24.0`, and Registry Server joins at `v0.26.0`.
+  `v0.24.0`, and Base Registry Engine joins at `v0.26.0`.
 - Builds the exact locked release documentation archive once and includes it in
   the candidate payload closure.
 - Publishes images only to private candidate packages.

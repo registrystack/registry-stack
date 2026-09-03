@@ -116,20 +116,20 @@
       "description": "Relay V2 authoring JSON Schema."
     },
     {
-      "glob": "products/registry-server/generated/authoring/*.schema.json",
-      "sourcePath": "crates/registry-server/src/schema.rs",
-      "owner": "registry-server",
+      "glob": "products/breg/generated/authoring/*.schema.json",
+      "sourcePath": "crates/registry-breg/src/schema.rs",
+      "owner": "breg",
       "status": "active",
       "compatibilityLine": "v1alpha1",
-      "description": "Registry Server project authoring JSON Schema."
+      "description": "Base Registry Engine project authoring JSON Schema."
     },
     {
-      "glob": "products/registry-server/generated/runtime/*.schema.json",
-      "sourcePath": "crates/registry-server/src/schema.rs",
-      "owner": "registry-server",
+      "glob": "products/breg/generated/runtime/*.schema.json",
+      "sourcePath": "crates/registry-breg/src/schema.rs",
+      "owner": "breg",
       "status": "active",
       "compatibilityLine": "v1alpha1",
-      "description": "Registry Server runtime configuration JSON Schema."
+      "description": "Base Registry Engine runtime configuration JSON Schema."
     }
   ],
   "records": [

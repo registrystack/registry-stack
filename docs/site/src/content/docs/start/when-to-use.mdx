@@ -13,10 +13,10 @@ standards_referenced: []
 
 Use Registry Stack when an institution needs controlled record access, bounded signed answers,
 or a configuration-defined system of record. Relay and Evidence Gateway work over existing sources.
-The unreleased Registry Server source preview owns records in PostgreSQL and supports writes.
+The unreleased Base Registry Engine source preview owns records in PostgreSQL and supports writes.
 
-{/* Evidence: crates/registry-server/src/contract.rs, RegistryProject;
-    crates/registry-server/src/postgres/mutation.rs. */}
+{/* Evidence: crates/registry-breg/src/contract.rs, RegistryProject;
+    crates/registry-breg/src/postgres/mutation.rs. */}
 
 ## Registry Stack is a good fit when
 
@@ -34,9 +34,9 @@ The unreleased Registry Server source preview owns records in PostgreSQL and sup
 | --- | --- | --- |
 | To read specific data | Registry Relay | A protected, read-only API response |
 | To learn only a fact | Evidence Gateway | A signed assertion carrying the answer, not the source record |
-| To own and update registry records | Registry Server (source preview) | A configuration-defined PostgreSQL registry and REST API |
+| To own and update registry records | Base Registry Engine (source preview) | A configuration-defined PostgreSQL registry and REST API |
 
-Registry Relay, Evidence Gateway, and Registry Server are separate product choices. They can be
+Registry Relay, Evidence Gateway, and Base Registry Engine are separate product choices. They can be
 operated by the same institution, but each has its own source, authorization,
 configuration, and audit boundary. Evidence Gateway does not require Relay as its
 source path. Registry Mint can issue short-lived access tokens to these
@@ -54,11 +54,11 @@ process the institution owns and Relay does not see.
 Evidence Gateway calls its own fixed, reviewed sources and evaluates one bounded
 question against them. Its source may be a separately reviewed HTTP API integration.
 
-Registry Server starts from an authored data model and an operator-provisioned PostgreSQL database.
+Base Registry Engine starts from an authored data model and an operator-provisioned PostgreSQL database.
 Choose it when the institution needs to create and maintain records through the registry itself;
 it is not a drop-in publisher for arbitrary pre-existing database tables.
 
-{/* Evidence: crates/registry-server/src/generated_ddl.rs; crates/registry-server/src/startup.rs;
+{/* Evidence: crates/registry-breg/src/generated_ddl.rs; crates/registry-breg/src/startup.rs;
     crates/registry-evidence/src/source.rs. */}
 
 ### Who does what
@@ -66,7 +66,7 @@ it is not a drop-in publisher for arbitrary pre-existing database tables.
 - The assertion provider is an institution that answers requests with signed
   facts through Evidence Gateway.
 - The data publisher is an institution that exposes records through Registry
-  Relay or maintains a configured registry through Registry Server.
+  Relay or maintains a configured registry through Base Registry Engine.
 - The consumer or verifier is a relying service that calls a product's API and
   verifies the answers it receives.
 - The operator is whoever runs the deployment.
@@ -98,7 +98,7 @@ approval.
 
 ## Next
 
-- [Build a registry with Registry Server](../../explanation/configuration-defined-registry/)
+- [Build a registry with Base Registry Engine](../../explanation/configuration-defined-registry/)
 - [Publish a governed SQLite registry](../../tutorials/publish-governed-sqlite-registry/)
 - [Evaluate Evidence Gateway](../evaluate-evidence/)
 - [Connect an existing registry](../../configure/)

@@ -812,6 +812,60 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/schemas/breg/authoring/registry-module.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "breg",
+      "title": "Base Registry Engine authored module",
+      "description": "Base Registry Engine project authoring JSON Schema.",
+      "source": {
+        "path": "crates/registry-breg/src/schema.rs",
+        "sha256": "e8e9f7a5d45b432df798d268d292094f518ace7124be8d2268d4f51a081508c7"
+      },
+      "artifact": {
+        "path": "products/breg/generated/authoring/registry-module.schema.json",
+        "sha256": "581cd380fa3c33ed81d56ef4d88a514a34ee1e7665128f3b657a7f1124e182fc",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/breg/authoring/registry-project.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "breg",
+      "title": "Base Registry Engine authored project",
+      "description": "Base Registry Engine project authoring JSON Schema.",
+      "source": {
+        "path": "crates/registry-breg/src/schema.rs",
+        "sha256": "e8e9f7a5d45b432df798d268d292094f518ace7124be8d2268d4f51a081508c7"
+      },
+      "artifact": {
+        "path": "products/breg/generated/authoring/registry-project.schema.json",
+        "sha256": "fbdcd49bfc04974e387dad5fbdbc450b7e12dca8e7b8168c7f227fb352bffb70",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/breg/runtime/runtime.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "breg",
+      "title": "Base Registry Engine runtime configuration",
+      "description": "Base Registry Engine runtime configuration JSON Schema.",
+      "source": {
+        "path": "crates/registry-breg/src/schema.rs",
+        "sha256": "e8e9f7a5d45b432df798d268d292094f518ace7124be8d2268d4f51a081508c7"
+      },
+      "artifact": {
+        "path": "products/breg/generated/runtime/runtime.schema.json",
+        "sha256": "27e592e90e643a7fb58045deb716678d3740be17bc60f9fdb109bb28cd9b7f95",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/identifiers/catalog.v1.schema.json",
       "kind": "schema",
       "status": "active",
@@ -857,7 +911,7 @@
       "description": "Relay V2 generated public JSON Schema.",
       "source": {
         "path": "crates/registry-relay-v2/src/artifacts.rs",
-        "sha256": "d5fa67cf1f0ad2e50e70c26115125976ff869cd68727fd212245f0bf363865eb"
+        "sha256": "7feb222632ac997903c8809e190fa0c008bf17790e39fa075fc10c3fd3e0bec1"
       },
       "artifact": {
         "path": "products/identifiers/generated/artifacts/registry-relay/audit-event/v2alpha1.json",
@@ -898,60 +952,6 @@
       "artifact": {
         "path": "crates/registry-relayctl/schemas/authoring/runtime.schema.json",
         "sha256": "9beeda053e86d8ffa67755e91883efd0d2205026ee7d0aa7f38cecef7a6f781b",
-        "mediaType": "application/schema+json"
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/schemas/registry-server/authoring/registry-module.v1alpha1.schema.json",
-      "kind": "schema",
-      "status": "active",
-      "compatibilityLine": "v1alpha1",
-      "owner": "registry-server",
-      "title": "Registry Server authored module",
-      "description": "Registry Server project authoring JSON Schema.",
-      "source": {
-        "path": "crates/registry-server/src/schema.rs",
-        "sha256": "0c5a95128b19d886b837fca829974b718283fce480ca674940e8bd03814e5f9f"
-      },
-      "artifact": {
-        "path": "products/registry-server/generated/authoring/registry-module.schema.json",
-        "sha256": "b7d9548f6d2320179f70c338fabfac31a1075acac4b19474eb8b72c7afaae6a6",
-        "mediaType": "application/schema+json"
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/schemas/registry-server/authoring/registry-project.v1alpha1.schema.json",
-      "kind": "schema",
-      "status": "active",
-      "compatibilityLine": "v1alpha1",
-      "owner": "registry-server",
-      "title": "Registry Server authored project",
-      "description": "Registry Server project authoring JSON Schema.",
-      "source": {
-        "path": "crates/registry-server/src/schema.rs",
-        "sha256": "0c5a95128b19d886b837fca829974b718283fce480ca674940e8bd03814e5f9f"
-      },
-      "artifact": {
-        "path": "products/registry-server/generated/authoring/registry-project.schema.json",
-        "sha256": "8290bb45abb16f8d9e8cbe786d7cf02358d9973932e095691d56e0b1ef2f60b9",
-        "mediaType": "application/schema+json"
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/schemas/registry-server/runtime/runtime.v1alpha1.schema.json",
-      "kind": "schema",
-      "status": "active",
-      "compatibilityLine": "v1alpha1",
-      "owner": "registry-server",
-      "title": "Registry Server runtime configuration",
-      "description": "Registry Server runtime configuration JSON Schema.",
-      "source": {
-        "path": "crates/registry-server/src/schema.rs",
-        "sha256": "0c5a95128b19d886b837fca829974b718283fce480ca674940e8bd03814e5f9f"
-      },
-      "artifact": {
-        "path": "products/registry-server/generated/runtime/runtime.schema.json",
-        "sha256": "c273fdb60c7721c28038d0809aaf92a132c54857cc2dd60e29e10444e1387d99",
         "mediaType": "application/schema+json"
       }
     },

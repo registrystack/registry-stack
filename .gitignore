@@ -20,7 +20,7 @@ __pycache__/
 /products/evidence/.env
 /products/evidence/.first-curl/
 /products/evidence/.sd-jwt-vc-demo/
-.registry-server-history.*/
+.breg-history.*/
 
-# Working directory created by the Registry Server tutorials
+# Working directory created by the Base Registry Engine tutorials
 /tutorial-work/

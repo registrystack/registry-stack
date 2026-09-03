@@ -1,0 +1,155 @@
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: spatial-service-sites
+  canonicalBaseIri: "https://spatial-service-sites.example.gov"
+  version: 0.1.0
+  defaultLanguage: en
+package:
+  environment: acceptance
+  instanceId: spatial-service-sites-acceptance
+  sequence: 1
+  sourceRevision: spatial-service-sites-acceptance-0.1.0
+manifestProjection:
+  accessProfile: map-reader
+  classificationCeiling: public
+  catalog:
+    baseUrl: https://spatial-service-sites.example.gov
+    title: Service Site Map Catalog
+    description: Portable public metadata for synthetic service-site map records.
+    publisher:
+      id: "spatial-service-sites-authority"
+      name: Service Site Registry Authority
+      iri: https://spatial-service-sites.example.gov/authority
+  datasets:
+    -
+      id: "spatial-service-sites"
+      title: Service Site Map Registry
+      description: Public service-site labels, zones and CRS84 point locations for map-reader clients.
+      owner: Service Site Registry Authority
+      status: active
+  dataServices:
+    -
+      id: service-site-map-api
+      iri: https://spatial-service-sites.example.gov/services/registry-api
+      title: Service Site Map API
+      endpointUrl: https://spatial-service-sites.example.gov/v1
+      endpointDescription: https://spatial-service-sites.example.gov/openapi.json
+      conformsTo: https://spec.openapis.org/oas/v3.1.0
+      servesDatasets:
+        - "spatial-service-sites"
+  entities:
+    - id: service-site
+      title: Service site
+      description: A synthetic public service location exposed as a bounded CRS84 Point collection.
+      identifiers:
+        - {field: native-id, kind: uuid}
+        - {field: site-code, kind: local}
+      fields:
+        - {id: native-id, concepts: [https://example.gov/service-site/native-id]}
+        - {id: site-code, concepts: [https://example.gov/service-site/code]}
+        - {id: label, concepts: [https://example.gov/service-site/label]}
+        - {id: zone, concepts: [https://example.gov/service-site/zone]}
+  publicService:
+    id: "spatial-service-sites-service"
+    title: Service Site Map Catalog
+  distributions: []
+modules:
+  - id: "spatial-service-sites-core"
+    version: "0.1.0"
+    digest: "sha256:2ac0445c7f15c1c6bbdf6fd30ecf71552171d99b74201ab95362f4b83b0ecd53"
+
+entities:
+  - id: service-site
+    primaryDataset: "spatial-service-sites"
+    route: service-sites
+    mutationMode: mutable
+    classification: public
+    batch: {maximumItems: 100, maximumBytes: 262144}
+    fields:
+      - {id: native-id, type: uuid, required: true, classification: public}
+      - {id: site-code, type: string, required: true, maxLength: 64, classification: public}
+      - {id: label, type: string, required: true, maxLength: 160, classification: public}
+      - {id: zone, type: vocabulary-code, vocabulary: service-zone, required: true, classification: public}
+      - {id: service-kind, type: vocabulary-code, vocabulary: service-kind, required: true, classification: public}
+      - {id: installation-client-id, type: string, required: true, maxLength: 96, classification: internal}
+      - {id: location, type: crs84-point, precision: 9, bbox: {west: "100.450000000", south: "13.600000000", east: "100.700000000", north: "13.900000000"}, required: false, classification: public}
+    geojson:
+      geometryField: location
+    constraints:
+      - {kind: unique, fields: [native-id]}
+      - {kind: unique, fields: [site-code]}
+accessProfiles:
+  - id: service-site-admin
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: [service-sites:seed]
+    requiredPurposes: [service-site-administration]
+    grants:
+      - entity: service-site
+        operations: [create, get, list, patch, batch]
+        readableFields: [native-id, site-code, label, zone, service-kind, location, map-label]
+        writableFields: [native-id, site-code, label, zone, service-kind, installation-client-id, location]
+        filterableFields: [native-id, site-code, zone, service-kind]
+        sortableFields: [site-code, label]
+        allowCount: true
+  - id: map-reader
+    anonymous: true
+    grants:
+      - entity: service-site
+        operations: [get, list]
+        readableFields: [native-id, site-code, label, zone, service-kind, location]
+        filterableFields: [site-code, zone, service-kind]
+        sortableFields: [site-code, label]
+        allowCount: true
+        spatialQueries:
+          bbox:
+            maximumLongitudeSpanDegrees: 0.25
+            maximumLatitudeSpanDegrees: 0.20
+  - id: installation-map-reader
+    principalClaim: registry_principal
+    requiredScopes: [service-sites:map.read]
+    requiredPurposes: [service-site-map]
+    grants:
+      - entity: service-site
+        operations: [get, list]
+        readableFields: [native-id, site-code, label, zone, service-kind, location, map-label]
+        filterableFields: [site-code, zone, service-kind]
+        sortableFields: [site-code, label]
+        allowCount: true
+        rowBoundaries:
+          - {field: zone, claim: service_zones, operator: equals}
+        spatialQueries:
+          bbox:
+            maximumLongitudeSpanDegrees: 0.25
+            maximumLatitudeSpanDegrees: 0.20
+  - id: directory-reader
+    anonymous: true
+    grants:
+      - entity: service-site
+        operations: [get, list]
+        readableFields: [native-id, site-code, label, zone, service-kind]
+        filterableFields: [site-code, zone, service-kind]
+        sortableFields: [site-code, label]
+        allowCount: true
+  - id: hidden-geometry-reader
+    principalClaim: registry_principal
+    requiredScopes: [service-sites:directory.read]
+    requiredPurposes: [service-site-directory]
+    grants:
+      - entity: service-site
+        operations: [get, list]
+        readableFields: [native-id, site-code, label, zone, service-kind, map-label]
+        filterableFields: [site-code, zone, service-kind]
+        sortableFields: [site-code, label]
+  - id: get-only-map-reader
+    principalClaim: registry_principal
+    requiredScopes: [service-sites:site.read]
+    requiredPurposes: [service-site-map]
+    grants:
+      - entity: service-site
+        operations: [get]
+        readableFields: [native-id, site-code, label, zone, service-kind, location, map-label]
+vocabularies:
+  - {id: service-zone, values: [north, central, south, edge]}
+  - {id: service-kind, values: [clinic, school, water-point, depot]}

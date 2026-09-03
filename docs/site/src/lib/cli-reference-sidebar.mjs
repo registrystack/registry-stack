@@ -22,7 +22,7 @@ export function cliReferenceSidebar(indexPath = generatedIndex) {
       items: [
         { label: 'Overview', slug: 'reference/cli' },
         // Older pinned catalogs predate Server and contain no Server pages.
-        ...['registry-server', 'registry-serverctl']
+        ...['breg', 'bregctl']
           .filter((name) => index.includes(`](./${name}/)`))
           .map((name) => ({ label: name, slug: `reference/cli/${name}` })),
         { label: 'relay', slug: 'reference/cli/relay' },

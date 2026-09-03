@@ -1,0 +1,680 @@
+---
+title: Base Registry Engine API reference
+description: Routes, the Registry Record envelope, headers, query options, mutations, history reads, change requests, immediate actions, problem codes, and the event and webhook contract.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: reference
+locale: en
+standards_referenced:
+  - openapi
+  - json-ld
+  - geojson
+  - cloudevents
+  - json-schema
+wide: true
+---
+
+import ApiReferenceTable from '../../../components/ApiReferenceTable.astro';
+import ConfigurationReference from '../../../components/ConfigurationReference.astro';
+import EventReferenceTable from '../../../components/EventReferenceTable.astro';
+import configuration from '../../../data/generated/breg-configuration.json';
+import { eventConfiguration } from '../../../lib/breg-event-reference.mjs';
+
+Lookup reference for the HTTP API a compiled Base Registry Engine package serves and for the events
+it emits. Every registry serves the same route shapes; the entity routes, fields, profiles, and
+actions come from your project. The contract is a source preview, not a frozen compatibility
+promise.
+
+For the authoring grammar, use [author a registry project](../../configure/breg/).
+For deployment, receivers, and recovery, use
+[deploy and operate a registry](../../operate/breg/).
+For every YAML key, use the [configuration reference](../breg-configuration/).
+A running server publishes its own OpenAPI document at `/openapi.json`; the schemas there are
+the exact ones its package compiled.
+
+## Authentication and profile selection
+
+Every request carries `Authorization: Bearer <token>` unless the selected profile sets
+`anonymous: true`. The token is a JWT signed by the configured issuer with the configured
+algorithm. It must carry
+`iss`, `aud`, and `exp`, and its scopes come from the claim named by `scopeClaim` (default
+`scope`, space separated). The principal and purpose claims are the ones named under
+`authorityClaims`.
+
+Each route has one default access profile. A caller selects another with the `accessProfile`
+query option. A profile grants access when the token satisfies its `requiredScopes`,
+`requiredPurposes`, and `principalClaim`, and when the profile grants the operation on that
+entity. Row boundaries on the grant compare a record field with a token claim and hide every
+record outside them, on reads and on writes.
+
+A refusal is concealed as `404 resource.not_found` whenever the token is missing, does not
+satisfy the profile, or names a record outside the caller's boundary. The only exception is a
+token that was presented and rejected, which returns `401 authentication.refused`. A caller
+therefore cannot distinguish a record that does not exist from one it may not see.
+
+{/* Evidence: crates/registry-breg/src/auth.rs;
+    crates/registry-breg/src/api/mod.rs, router();
+    crates/registry-breg/src/query.rs, access_profile;
+    crates/registry-breg/src/contract.rs, ProjectAccessProfileSource and AccessGrantSource. */}
+
+## Routes
+
+`{route}` is the entity's `route` value. `{readPath}` is the `route` of one of the entity's
+`readPaths`. `{stage}` is a review stage identifier, and `{action}` under `/v1/actions` is an
+immediate action identifier. An unknown path or a method the route does not accept returns the
+same concealed 404 as an unauthorized request.
+
+<ApiReferenceTable id="routes" />
+
+{/* Evidence: crates/registry-breg/src/api/mod.rs, router(), registry_metadata(), entity_schema(), revision_dispatch(), and tombstone_dispatch();
+    crates/registry-breg/src/compiler.rs, route_shape() and query_kind_id();
+    crates/registry-breg/src/model.rs, MAX_REVISION_HISTORY_RECORDS. */}
+
+## Record envelope
+
+Reads, creates, patches, tombstones, revisions, and snapshots return one shape, the Registry
+Record envelope:
+
+```json
+{
+  "data": {
+    "recordIdentifier": "2d7e5e0c-5b2c-4b8e-9f1e-0d3c1a2b3c4d",
+    "revisionIdentifier": "3",
+    "domainData": {
+      "code": "SITE-001",
+      "label": "North depot",
+      "location": {"type": "Point", "coordinates": [30.5234, -1.9441]}
+    }
+  },
+  "meta": {
+    "registryIdentifier": "asset-registry",
+    "datasetIdentifier": "asset-sites",
+    "entityTypeIdentifier": "asset-site"
+  }
+}
+```
+
+| Member | Type | Meaning |
+| --- | --- | --- |
+| `data.recordIdentifier` | string, UUID | Stable identity of the record. |
+| `data.revisionIdentifier` | string, `^[1-9][0-9]*$` | Revision counter, starting at `1`. Compare as a string. |
+| `data.domainData` | object | The entity's fields under their `apiName`, narrowed to the grant's `readableFields` and to `$select`. |
+| `data.snapshot` | string | Present on mutation responses: an opaque token for `:snapshot` reads, at most 4096 bytes. |
+| `data.request` | object | Present on change request records: workflow state and the actions the caller may take. |
+| `data.requestPresence` | object | Present when the grant declares `requestPresence`: the pending change requests that target this record. |
+| `meta.*` | strings | Registry, dataset, and entity identifiers from the compiled package. |
+
+A field name that would collide with an envelope member is refused at compile time, so
+`domainData` never contains `data`, `meta`, `items`, `pageInfo`, `nextCursor`, `@context`,
+`@id`, `@type`, or any of the identifier members named in the table.
+
+Response headers:
+
+| Header | Value |
+| --- | --- |
+| `Content-Type` | `application/json`, or `application/ld+json` when the request sent `Accept: application/ld+json`. The JSON-LD form adds `@context` pointing at `https://id.registrystack.org/contexts/registry-record/v1`. |
+| `ETag` | `"breg-hmac-sha256:<64 hex>"`, a strong validator of the current revision. Send it back in `If-Match`. |
+| `Link` | `<https://id.registrystack.org/profiles/registry-record/v1>; rel="profile"`, then `</v1/schemas/{entity}>; rel="describedby"`. |
+| `Location` | On `201 Created`: `/v1/records/{route}/{recordId}`. |
+
+Field values are encoded by type. The generated JSON Schema for each entity carries the same
+rules, with an optional field spelled as `anyOf` of the type and `null`.
+
+<ApiReferenceTable id="field-encodings" />
+
+{/* Evidence: crates/registry-breg/src/artifacts.rs, record_member_schema() and field_schema();
+    crates/registry-breg/src/api/mod.rs, exact_read() and exact_mutation();
+    crates/registry-breg/src/compiler.rs, reserved_logical_name();
+    products/breg/acceptance/registry-record-conformance/registry.yaml. */}
+
+## Collections and paging
+
+A collection read returns the matching envelopes as `items`, a `pageInfo` object, and the same
+`meta` as a single record:
+
+```json
+{
+  "items": [{"data": {"recordIdentifier": "…", "revisionIdentifier": "1", "domainData": {}}}],
+  "pageInfo": {"nextCursor": "eyJ…"},
+  "meta": {"registryIdentifier": "asset-registry", "datasetIdentifier": "asset-sites", "entityTypeIdentifier": "asset-site"}
+}
+```
+
+`nextCursor` is `null` on the last page. To continue, send the cursor as `$skiptoken` with no
+other query option except `accessProfile`. The cursor is signed with the runtime `cursor.secret`,
+binds the whole original query, and expires after `cursor.maxAgeSeconds`; a cursor that fails
+any of those checks returns `400 query.cursor_invalid`. With `$count`, the response carries the
+matching total beside the page.
+
+{/* Evidence: crates/registry-breg/src/query.rs, ParsedReadQueryMode;
+    crates/registry-breg/src/api/mod.rs, cursor_invalid();
+    crates/registry-breg/src/runtime_config.rs, CursorConfig. */}
+
+## Query options
+
+Options apply only where the grant permits them: `$select` draws from `readableFields`,
+`$filter` from `filterableFields`, `$orderby` from `sortableFields`, and `$count` needs
+`allowCount`. Anything else returns `400 query.invalid` with the same status for an unknown
+field and for a field the grant withholds.
+
+<ApiReferenceTable id="query-options" />
+
+A filter is an expression over field names and literals:
+
+```text
+$filter=status eq 'active' and (region in ('north','east') or startswith(label,'Depot'))
+$filter=not contains(label,'closed') and validFrom ge 2026-01-01
+```
+
+Strings are single quoted, numbers and dates are bare, and `null` compares with `eq` and `ne`.
+Literals must fit the field type. A bounding box is four CRS84 degrees, west, south, east, north:
+
+```text
+bbox=30.0,-2.1,30.9,-1.8
+```
+
+{/* Evidence: crates/registry-breg/src/query.rs, parse_filter(), MAX_SELECTED_FIELDS, MAX_IN_VALUES, MAX_FILTER_PREDICATES, MAX_FILTER_DEPTH, MAX_FILTER_NODES, MAX_LITERAL_BYTES, MAX_OPAQUE_VALUE_BYTES, MAX_QUERY_PAYLOAD_BYTES, and MAX_BBOX_PARAMETER_BYTES;
+    crates/registry-breg/src/api/mod.rs, MAX_TOP. */}
+
+## Mutations
+
+Every write needs `Content-Type: application/json`, except a patch, which needs
+`application/json-patch+json`. A body over the entity's byte bound or with an unknown member is
+refused with `400 request.invalid` and a `fieldPath`.
+
+### Create
+
+`POST /v1/records/{route}` with the fields the grant lists in `writableFields`:
+
+```json
+{"data": {"code": "SITE-001", "label": "North depot", "location": {"type": "Point", "coordinates": [30.5234, -1.9441]}}}
+```
+
+The response is `201 Created` with the envelope, `ETag`, and `Location`. Required fields
+missing from the body, values outside their type bounds, a reference to a missing target, and a
+violated `unique` constraint are refused before anything is written.
+
+### Patch
+
+`PATCH /v1/records/{route}/{recordId}` takes a JSON Patch document whose paths start at
+`/data/`, followed by the field's `apiName`:
+
+```json
+[
+  {"op": "replace", "path": "/data/label", "value": "North depot (annex)"},
+  {"op": "add", "path": "/data/closedOn", "value": "2026-12-31"}
+]
+```
+
+`If-Match` is required and must carry the `ETag` of the revision you read; a stale value returns
+`412 precondition.failed` and a missing one `428 precondition.required`. A field outside
+`writableFields`, an envelope member, or a path that does not start with `/data/` is refused.
+The response is the new revision's envelope with `data.snapshot`.
+
+### Tombstone
+
+`DELETE /v1/records/{route}/{recordId}` with `If-Match` writes a final revision that marks the
+record tombstoned and returns that revision's envelope. A tombstoned record stays readable through
+its revisions and disappears from live collection reads. The route exists only when the entity
+sets `tombstone: true`.
+
+### Batch
+
+`POST /v1/records/{route}:batch` applies several items to one entity in one transaction, bounded
+by the entity's `batch.maximumItems` and `batch.maximumBytes`:
+
+```json
+{
+  "items": [
+    {"operation": "create", "data": {"code": "SITE-002", "label": "East depot"}},
+    {"operation": "patch", "id": "2d7e5e0c-…", "ifMatch": "\"breg-hmac-sha256:…\"", "patch": [{"op": "replace", "path": "/data/label", "value": "West depot"}]}
+  ],
+  "changeContext": {
+    "kind": "correction",
+    "reasonCode": "effective-date-corrected",
+    "reasonText": "Site start date was recorded one month late.",
+    "sourceReferences": ["case-document:correction-001"]
+  }
+}
+```
+
+The response is `{"snapshot": "…", "results": [...]}` where each result carries `operation`,
+`id`, `revision`, `etag`, and `data`. Note that the result items keep the older identifier
+spelling rather than the Registry Record envelope.
+
+`changeContext` is optional and shared by the whole batch; an item-level override is refused. A
+`correction` requires a nonempty `reasonCode`. `reasonCode` holds at most 64 UTF-8 bytes,
+`reasonText` at most 4 KiB, and `sourceReferences` at most 16 entries of 256 bytes each.
+Temporal non-overlap constraints are checked on the final state of the batch, so two interval
+edits can be sent in either order. One stale `ifMatch` or one violated constraint rolls back every
+item.
+
+### Idempotency
+
+Send `Idempotency-Key` (at most 256 bytes) on any create, patch, tombstone, batch, request
+action, or immediate action. A repeat with the same key and the same request returns the stored
+response without writing again. The same key with a different request returns
+`409 idempotency.conflict`. Request actions and immediate actions require the header.
+
+{/* Evidence: crates/registry-breg/src/api/mod.rs, patch_dispatch(), tombstone_dispatch(), and precondition_required();
+    crates/registry-breg/src/mutation/request.rs;
+    crates/registry-breg/src/postgres/mutation.rs;
+    crates/registry-breg/src/artifacts.rs, batch_response_schema;
+    crates/registry-breg/tests/postgres_temporal_corrections.rs. */}
+
+## History reads
+
+Every write appends a revision; nothing is updated in place. Three route families read that
+history, each under its own grant operation.
+
+### Revisions
+
+`GET /v1/records/{route}/{recordId}/revisions` returns a collection of the record's revisions,
+and `.../revisions/{revision}` returns one. A read covers at most 100 revisions. Revisions show
+stored field values only; derived fields and read paths are not evaluated over history.
+
+Correction context from a batch is absent unless the `revisions` grant lists
+`provenanceFields`, drawn from `kind`, `reasonCode`, `reasonText`, and `sourceReferences`, and
+even then only when every revision that batch produced is visible to the caller.
+
+### Effective time
+
+A temporal entity, one with `temporal.startField` and `temporal.endField`, gains two collection
+routes. `:current` returns the records whose interval contains the current instant, and
+`:as-of` returns the records whose interval contains `asOf`. Intervals include the start and
+exclude the end, and a null end is open. `asOf` is a UTC RFC 3339 timestamp such as
+`2026-06-05T00:00:00Z` for either field type.
+
+### Snapshots
+
+`GET /v1/records/{route}:snapshot` reproduces a collection as the registry recorded it. Without
+`snapshot`, it captures the latest committed state once and returns the token with the page, so
+a client can page consistently while writes continue. With `snapshot`, it reproduces that earlier
+state. `validAt` adds an effective-time filter inside the snapshot and is refused on a
+non-temporal entity. Its value follows the start field's type: a calendar date such as
+`2026-06-05` for a `date` field, a UTC RFC 3339 timestamp for a `timestamp` field.
+`recordedAsOf` is not an option.
+
+A snapshot token is a bookmark, not a credential: the caller needs the `snapshot` operation on
+the route, and today's row boundaries apply. Historical queries use stored fields only.
+
+History starts at an exact empty or verified baseline, and a saved token never falls back to
+current data. A snapshot whose history is unavailable, whose field metadata no longer matches, or
+whose database budget of two seconds is exhausted returns `503 source.unavailable`. One query
+resolves at most 64 originating schema descriptors. A retained-history erasure makes every
+snapshot at or after the earliest erased commit unavailable, including later ones.
+
+{/* Evidence: crates/registry-breg/src/api/mod.rs, revision_dispatch();
+    crates/registry-breg/src/query.rs, ParsedSnapshotQuery;
+    crates/registry-breg/src/postgres/history_read.rs;
+    crates/registry-breg/src/postgres/revision_read.rs;
+    crates/registry-breg/src/history_erasure.rs;
+    crates/registry-breg/tests/postgres_historical.rs. */}
+
+## Change requests
+
+A change request is a record of an entity that declares `changeRequest`. Creating it stores a
+proposal; a proposal changes its targets only when it is applied. The record moves through seven
+server states:
+
+```text
+draft ──submit──▶ submitted ──approve (every stage)──▶ approved ──apply──▶ applied
+  ▲                   │ reject ──▶ rejected ──revise──▶ draft
+  │                   └ request-revision ──▶ needs_changes ──revise──▶ draft
+  └── cancel from any state except applied and canceled ──▶ canceled (owner only)
+```
+
+Three of those transitions belong to the principal that owns the request. `submit` and `revise`
+move the owner's own draft, and `cancel` is the owner's withdrawal: a reviewer rejects a request
+rather than cancelling it. Another principal does not see those actions in `actions`, and calling
+one regardless is refused with `precondition.failed`.
+
+Two declarations shorten the path. With `review: {mode: none}` there are no stages, and `submit`
+moves the request straight to `approved`. When the proposal's disposition is `apply`, from
+`application.mode: automatic` or from a planner that chose `apply`, the submit or the final
+approval also applies the request in the same transaction. That action is offered only to a
+profile holding `apply_request` and `applyTargets` for every target; another profile does not see
+it in `actions`, and calling it regardless is refused with `precondition.failed`.
+
+An `rhai` planner runs at submit. A planner that produces no plan refuses the submission with
+`400 request.plan_refused`, whose detail names the failure kind from the planner's closed
+vocabulary and nothing else; a planner that ran out of its time budget returns
+`503 service.unavailable` instead. Nothing is stored either way: the request stays a draft, and
+the refusal is journaled with the same failure kind.
+
+A read of the request record adds `data.request`:
+
+```json
+{
+  "bregState": "submitted",
+  "proposalVersion": 2,
+  "effectDigest": "sha256:9f2c…",
+  "proposal": {"reviewMode": "staged", "applicationDisposition": "queue"},
+  "editable": false,
+  "actions": [
+    {"operation": "approve_request", "stage": "review", "href": "/v1/records/placement-corrections/2d7e…/actions/stages/review/approve", "ifMatch": "\"breg-hmac-sha256:…\""}
+  ]
+}
+```
+
+`actions` lists only what the caller's profile may do in the current state, with the exact
+`href` and the `ifMatch` value to send. Follow those links rather than composing routes.
+
+`proposal` appears once the request has been submitted and describes the frozen proposal's policy:
+`reviewMode` is `staged` or `none`, `applicationDisposition` is `apply` or `queue`, and a queued
+plan adds `queueReason` with its `code` and `label`. `editable` is `true` only while the request
+is a draft, the caller owns it, and the selected profile may patch it.
+
+<ApiReferenceTable id="request-actions" />
+
+Every action requires `If-Match` and `Idempotency-Key`. A decision or an apply names the exact
+proposal it acts on through `proposalVersion` and `effectDigest`; both come from the read that
+showed the action. The server rejects a decision whose binding no longer matches, so a reviewer
+never approves a proposal that changed under them. A stage with `excludeSubmitter: true` refuses
+the principal that submitted the request.
+
+The response of an action is not a Registry Record envelope:
+
+```json
+{
+  "id": "2d7e5e0c-…",
+  "revision": 4,
+  "snapshot": "…",
+  "request": {
+    "bregState": "applied",
+    "proposalVersion": 2,
+    "effectDigest": "sha256:9f2c…",
+    "application": {"applicationId": "7c1d…", "proposalVersion": 2, "effectDigest": "sha256:9f2c…", "appliedAt": "2026-09-02T10:15:00Z"}
+  }
+}
+```
+
+`application` is `null` until the request is applied. When the entity sets
+`retention.mode: operator_erase`, an operator can erase the proposal payload of a terminal
+request; a later read then shows `request.detailErased: true` and the provenance stub stays
+while target revisions reference the request.
+
+`GET /v1/registry` describes each request entity's `changeRequest` capability: the planner kind
+(`declarative`, or `rhai` with its ABI, limits, and possible write count), the review mode, and
+the application policy with its allowed dispositions and queue reasons.
+
+{/* Evidence: crates/registry-breg/src/request_workflow.rs, RequestState;
+    crates/registry-breg/src/mutation/request.rs, action_requires_request_owner();
+    crates/registry-breg/src/api/mod.rs, request_action_dispatch() and planner_failure_problem();
+    crates/registry-breg/src/artifacts.rs, request_action_response_schema() and request_capability_metadata();
+    crates/registry-breg/src/fixtures.rs, assert_request_action_shape();
+    crates/registry-breg/src/postgres/request_read.rs;
+    products/breg/acceptance/asset-site-placement-change-requests/registry.yaml;
+    products/breg/acceptance/person-name-change-rhai/registry.yaml. */}
+
+## Immediate actions
+
+An action declared under `actions[]` applies its effects in one request. Call
+`POST /v1/actions/{action}/target-conditions` with the input to learn which records the effects
+would touch and the `ifMatch` each one currently has:
+
+```json
+{"input": {"assetCode": "AST-0042", "siteCode": "SITE-001"}}
+```
+
+Then call `POST /v1/actions/{action}` with the same input and those preconditions:
+
+```json
+{
+  "input": {"assetCode": "AST-0042", "siteCode": "SITE-001"},
+  "preconditions": {"asset": {"ifMatch": "\"breg-hmac-sha256:…\""}}
+}
+```
+
+The response names the application and every record the effects wrote:
+
+```json
+{
+  "action": "register-asset",
+  "applicationId": "7c1d…",
+  "results": {"asset": {"entity": "asset-item", "recordId": "2d7e…", "revision": 2}}
+}
+```
+
+A precondition that no longer matches returns `412 precondition.failed` and nothing is written.
+The caller needs the `invoke` operation on the action, and its `targets` row boundaries apply to
+every record an effect reaches.
+
+{/* Evidence: crates/registry-breg/src/api/mod.rs, router();
+    crates/registry-breg/src/contract.rs, ActionSource;
+    crates/registry-breg/src/fixtures.rs;
+    products/breg/generated/household-contact-actions/generated/openapi.json. */}
+
+## Problem documents
+
+A refusal is an RFC 9457 problem document with `Content-Type: application/problem+json`:
+
+```json
+{
+  "type": "urn:breg:problem:precondition.failed",
+  "title": "Precondition failed",
+  "status": 412,
+  "detail": "The If-Match header does not match the current revision.",
+  "code": "precondition.failed",
+  "traceId": "3f1a9c2e5b7d4e6f8a9b0c1d2e3f4a5b",
+  "fieldPath": null
+}
+```
+
+`traceId` is a 32-character hexadecimal value that also appears in the server's request log and, for
+every request the journal records, in its audit record, so an operator can find the refusal without
+the client sending any record value. A request that presents no credential and is refused before
+admission is counted on the metrics listener rather than journaled, so its `traceId` is in the
+request log only; see [Scrape metrics](../../operate/breg/#scrape-metrics).
+`fieldPath` names the offending body member when the refusal is about one.
+
+<ApiReferenceTable id="problem-codes" />
+
+{/* Evidence: crates/registry-breg/src/api/mod.rs, fixed_problem(), lookup_unresolved(), cursor_invalid(), and precondition_required();
+    crates/registry-breg/src/auth.rs;
+    crates/registry-breg/src/artifacts.rs, problem_schema. */}
+
+## Events and webhooks
+
+An event is declared on an entity or a module extension and delivered to a webhook destination
+bound in the runtime configuration. Field paths in the next table are relative to one event
+under `entities[].events[]`; types, defaults, and descriptions come from the generated module
+schema, and compiler rules follow the table.
+
+<ConfigurationReference contracts={eventConfiguration(configuration)} prefix="breg-events" compact />
+
+Compiler rules:
+
+- Event IDs are unique across the registry.
+- A projection names at least one declared field.
+- Production compilation requires a webhook destination.
+- Conditions and projections use authored field IDs, not the record API's `apiName` spellings.
+- The event's classification is the highest classification of every projected or condition field,
+  and a lifecycle event is at least as classified as its request entity.
+
+Destination URLs, keys, network policy, and ceilings live in runtime `eventDestinations`, keyed by
+`webhook.destinationId`. The runtime binds the exact compiled destination set, and each
+destination's `classificationCeiling` must cover the event classification; runtime configuration
+cannot add projected fields.
+
+{/* Evidence: crates/registry-breg/src/contract.rs, EventSource and WebhookSource;
+    crates/registry-breg/src/compiler.rs, validate_events() and compile_event_delivery_inventory();
+    crates/registry-breg/src/event_destination.rs, EventDestinationConfig.
+    Configuration fields selected by docs/site/src/lib/breg-event-reference.mjs, eventConfiguration(),
+    from src/data/generated/breg-configuration.json. Run npm run generate from docs/site. */}
+
+### Triggers and conditions
+
+<EventReferenceTable id="triggers" />
+
+A create-only entity refuses `patched` and `tombstoned`, and `tombstoned` also requires tombstone
+support. Only a change request entity permits `request_lifecycle`. Omitting `when` selects every
+matching trigger. With `kind: fields`, at least one test is nonempty, every test combines with
+AND, and `changed` compares before and after values rather than whether a field appeared in the
+patch. With `kind: request_lifecycle`, at least one of `transitions`, `toStates`, or `stages`
+is set and each nonempty list must match; the projection then contains request fields, not target
+values.
+
+Capture and mutation commit in one transaction. Delivery uses the captured projection; later
+record or package changes do not recompute it.
+
+{/* Evidence: crates/registry-breg/src/compiler.rs, validate_event_condition();
+    crates/registry-breg/src/outbox.rs, condition_matches() and insert_configured_events();
+    crates/registry-breg/src/request_events.rs, lifecycle_condition_matches() and insert_request_lifecycle_events();
+    crates/registry-breg/src/mutation.rs. */}
+
+### HTTP request
+
+Method `POST` to the configured fixed path, without query parameters, encoded as
+[CloudEvents 1.0 HTTP binary mode](https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/bindings/http-protocol-binding.md)
+with canonical JSON in the body. Every listed header is present on every delivery.
+
+<EventReferenceTable id="headers" />
+
+The package carries each event schema at
+`generated/event-schemas/<entity-id>.<event-id>.schema.json`. Record identifiers appear in the
+body, never in CloudEvents headers.
+
+The six common payload members are required, and a lifecycle event also requires `request`.
+Other top-level members and unprojected values are absent.
+
+<EventReferenceTable id="payload" />
+
+The lifecycle `request` object requires `proposalVersion` and `workflowRevision` as positive
+integers, `transition`, `fromState`, `toState`, and `deduplicationKey` as strings, and `stage`
+and `effectDigest` as strings or null. The deduplication key is stable across retries and
+operator replay. Receiving a lifecycle event grants no authority to approve or apply a request.
+
+```json
+{
+  "entity": "record",
+  "recordId": "<record-uuid>",
+  "revision": 2,
+  "trigger": "patched",
+  "packageRevision": "sha256:<package-digest>",
+  "values": {"code": "EX-003", "label": "Updated label"}
+}
+```
+
+{/* Evidence: crates/registry-breg/src/webhook.rs, reload_and_send();
+    crates/registry-breg/src/artifacts.rs, event_data_schema_binding();
+    crates/registry-platform-httputil/src/destination.rs, EventDestinationRequestTemplate;
+    crates/registry-breg/src/outbox.rs, insert_configured_events();
+    crates/registry-breg/src/request_events.rs, insert_request_lifecycle_events();
+    crates/registry-breg/tests/postgres_webhook_delivery.rs, assert_exact_request(). */}
+
+### Signature
+
+`X-Registry-Signature` is an HMAC-SHA-256 over the request, keyed with the exact bytes resolved
+by `hmacSha256KeyRef`, at least 32 bytes, neither trimmed nor hex-decoded. This is a Registry
+BReg format, not a CloudEvents signing standard.
+
+The signing input starts with the ASCII bytes `breg-webhook-signature-v1`. Each later
+value is prefixed with its byte length as an unsigned 64-bit big-endian integer, in this order:
+
+1. `ce-specversion`
+2. `ce-id`
+3. `ce-source`
+4. `ce-type`
+5. `ce-time`
+6. `ce-dataschema`
+7. `X-Registry-Event-Generation`
+8. `X-Registry-Delivery-Attempt`
+9. `X-Registry-Delivery-Time`
+10. The method bytes, `POST`
+11. The configured request path bytes, without the origin
+12. The content type bytes, `application/json`
+13. `Idempotency-Key`
+14. The exact body bytes
+
+Header values keep their original bytes; header names are not included. The header value is:
+
+```text
+v1=BASE64URL_WITHOUT_PADDING(HMAC_SHA256(key, signing_input))
+```
+
+A receiver compares the signature in constant time, validates the expected source, type, schema,
+and payload, bounds the skew of `X-Registry-Delivery-Time` (not `ce-time`), and deduplicates
+before it acts. The accepted skew is receiver policy, not a BReg limit.
+
+{/* Evidence: crates/registry-breg/src/webhook.rs, webhook_signature(), append_length_prefixed(),
+    and hmac_sha256_v1_binds_every_header_and_exact_canonical_body();
+    crates/registry-breg/src/event_destination.rs, MIN_HMAC_SHA256_KEY_BYTES;
+    crates/registry-platform-config/src/secrets.rs, resolve_reference() and read_secret_file();
+    products/breg/demo/support/demo.py, _verify_webhook_request(). */}
+
+### Delivery, retry, and replay
+
+<EventReferenceTable id="delivery" />
+
+Runtime ceilings may tighten compiled limits, never widen them. A durable attempt audit precedes
+every send, and the terminal audit, state transition, and payload erasure commit together.
+Activation refuses a destination change that would strand retained nonterminal work.
+
+<EventReferenceTable id="retry-replay" />
+
+An idempotency key identifies one delivery generation, not an event across generations. A replay
+opens a new generation with a new key, so a receiver whose effect must happen once deduplicates on
+event identity, `ce-source` plus `ce-id`, or on a business key.
+
+<EventReferenceTable id="states" />
+
+An empty `webhook list` result is neither a delivery history nor proof of receiver acceptance,
+and an expired payload cannot be replayed.
+
+{/* Evidence: crates/registry-breg/src/webhook.rs, claim(), finalize(), replay(), webhook_idempotency_key(), verify_retained_bindings(), WebhookDeliveryService, and WebhookDeliveryStatusKind;
+    crates/registry-breg/src/compiler.rs, compile_event_delivery_inventory() and MAX_WEBHOOK_PAYLOAD_BYTES;
+    crates/registry-breg/src/runtime_config.rs, default_webhook_payload_retention_days();
+    crates/registry-breg/src/event_destination.rs, EventDestinationDeliveryCeilings;
+    crates/registry-bregctl/src/webhook_lifecycle.rs, list_item(). */}
+
+### Operator commands
+
+Command prefix `bregctl`; add `--format json` for a machine-readable report.
+
+<EventReferenceTable id="commands" />
+
+`list` and `replay` connect directly to PostgreSQL through the runtime configuration. The public
+record API has no outbox, payload, delivery, or replay endpoint. A replay needs a retained,
+unexpired dead letter and the matching generation and activated destination binding. The JSON
+result of `list` is a `deliveries` array whose entries carry these fields and no record values:
+
+<EventReferenceTable id="operator-fields" />
+
+{/* Evidence: crates/registry-bregctl/src/lib.rs, WebhookCommand, WebhookListArgs, and WebhookReplayArgs;
+    crates/registry-bregctl/src/webhook_lifecycle.rs, WebhookListOutcome and WebhookListItem;
+    crates/registry-breg/src/webhook.rs, WebhookOperatorService and MAX_WEBHOOK_STATUS_RESULTS. */}
+
+## Spatial adapter
+
+An entity with a `crs84-point` field and a `geojson.geometryField` is also served under
+`/v1/gis` for desktop GIS clients. The adapter exposes `/v1/gis`, `/v1/gis/api`,
+`/v1/gis/conformance`, `/v1/gis/collections`, `/v1/gis/collections/{collection}`, and
+`/v1/gis/collections/{collection}/items` with `bbox`, `limit` (at most 10000), and `cursor`.
+It answers with GeoJSON feature collections under the same profile, grant, and row-boundary rules
+as the record routes, and it declares the profile
+`breg-gis-bounded-crs84-point-bbox-v1`. It does not declare OGC API Features
+conformance, compute collection extents, or add a query engine of its own.
+
+{/* Evidence: crates/registry-breg/src/api/gis.rs;
+    products/breg/acceptance/spatial-service-sites/README.md. */}
+
+## Sources
+
+The implementation and generated schemas in the same source checkout are the source of truth.
+Configuration fields are schema-generated; route, query, problem, and protocol tables are
+maintained data checked against that implementation.
+
+{/* Route, query, problem, and request tables generated from docs/site/src/data/breg-api.yaml,
+    protocol tables from docs/site/src/data/breg-events.yaml, by
+    docs/site/scripts/generate-data.mjs. Run npm run generate from docs/site. */}
+
+## Next
+
+- [Deploy and operate a registry](../../operate/breg/) for runtime configuration, receivers, replay, and erasure.
+- [Author a registry project](../../configure/breg/) for entities, profiles, change requests, and actions.
+- [Configuration reference](../breg-configuration/) for every project, module, and runtime key.
+- [Create and query your first registry](../../tutorials/first-breg/) to see the envelope and headers in a running server.

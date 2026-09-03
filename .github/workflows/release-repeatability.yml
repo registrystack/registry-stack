@@ -177,8 +177,8 @@ jobs:
               "mint": "mint",
               "registry-manifest": "registry-manifest",
               "registry-manifest-cli": "registry-manifest",
-              "registry-server": "registry-server",
-              "registry-serverctl": "registry-serverctl",
+              "breg": "breg",
+              "bregctl": "bregctl",
               "relay": "relay",
               "relayctl": "relayctl",
           }

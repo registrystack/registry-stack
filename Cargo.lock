@@ -3351,18 +3351,112 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
+name = "registry-breg"
+version = "0.25.0"
+dependencies = [
+ "axum",
+ "base64",
+ "chacha20poly1305",
+ "clap",
+ "deadpool-postgres",
+ "getrandom 0.4.3",
+ "hex",
+ "hmac 0.13.0",
+ "ipnet",
+ "jsonschema",
+ "jsonwebtoken",
+ "pg_query",
+ "rcgen",
+ "registry-breg-client",
+ "registry-manifest-core",
+ "registry-platform-audit",
+ "registry-platform-authcommon",
+ "registry-platform-buildinfo",
+ "registry-platform-canonical-json",
+ "registry-platform-config",
+ "registry-platform-crypto",
+ "registry-platform-httpsec",
+ "registry-platform-httputil",
+ "registry-platform-oidc",
+ "registry-platform-testing",
+ "rhai",
+ "rustix 1.1.4",
+ "rustls",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "serde_path_to_error",
+ "sha2 0.11.0",
+ "subtle",
+ "tempfile",
+ "thiserror 2.0.20",
+ "time",
+ "tokio",
+ "tokio-postgres",
+ "tokio-postgres-rustls",
+ "tokio-rustls",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "registry-breg-client"
+version = "0.25.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "registry-platform-httpsec",
+ "registry-platform-httputil",
+ "registry-record",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "url",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "registry-bregctl"
+version = "0.25.0"
+dependencies = [
+ "clap",
+ "registry-breg",
+ "registry-platform-buildinfo",
+ "registry-platform-canonical-json",
+ "registry-platform-crypto",
+ "registry-platform-httputil",
+ "reqwest",
+ "rustix 1.1.4",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "sha2 0.11.0",
+ "thiserror 2.0.20",
+ "tokio",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "registry-cli-docs"
 version = "0.25.0"
 dependencies = [
  "clap",
+ "registry-breg",
+ "registry-bregctl",
  "registry-evidence",
  "registry-evidence-oid4vci",
  "registry-evidencectl",
  "registry-mint",
  "registry-relay-v2",
  "registry-relayctl",
- "registry-server",
- "registry-serverctl",
  "serde",
  "serde_json",
 ]
@@ -4169,109 +4263,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "registry-server"
-version = "0.25.0"
-dependencies = [
- "axum",
- "base64",
- "chacha20poly1305",
- "clap",
- "deadpool-postgres",
- "getrandom 0.4.3",
- "hex",
- "hmac 0.13.0",
- "ipnet",
- "jsonschema",
- "jsonwebtoken",
- "pg_query",
- "rcgen",
- "registry-manifest-core",
- "registry-platform-audit",
- "registry-platform-authcommon",
- "registry-platform-buildinfo",
- "registry-platform-canonical-json",
- "registry-platform-config",
- "registry-platform-crypto",
- "registry-platform-httpsec",
- "registry-platform-httputil",
- "registry-platform-oidc",
- "registry-platform-testing",
- "registry-server-client",
- "rhai",
- "rustix 1.1.4",
- "rustls",
- "schemars",
- "serde",
- "serde_json",
- "serde_norway",
- "serde_path_to_error",
- "sha2 0.11.0",
- "subtle",
- "tempfile",
- "thiserror 2.0.20",
- "time",
- "tokio",
- "tokio-postgres",
- "tokio-postgres-rustls",
- "tokio-rustls",
- "tower",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "zeroize",
-]
-
-[[package]]
-name = "registry-server-client"
-version = "0.25.0"
-dependencies = [
- "async-trait",
- "axum",
- "registry-platform-httpsec",
- "registry-platform-httputil",
- "registry-record",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
- "tokio",
- "url",
- "uuid",
- "zeroize",
-]
-
-[[package]]
-name = "registry-serverctl"
-version = "0.25.0"
-dependencies = [
- "clap",
- "registry-platform-buildinfo",
- "registry-platform-canonical-json",
- "registry-platform-crypto",
- "registry-platform-httputil",
- "registry-server",
- "reqwest",
- "rustix 1.1.4",
- "serde",
- "serde_json",
- "serde_norway",
- "sha2 0.11.0",
- "thiserror 2.0.20",
- "tokio",
- "uuid",
- "zeroize",
-]
-
-[[package]]
 name = "registry-stack-client"
 version = "0.25.0"
 dependencies = [
+ "registry-breg-client",
  "registry-discovery-client",
  "registry-evidence-client",
  "registry-platform-httputil",
  "registry-record",
  "registry-relay-client",
- "registry-server-client",
 ]
 
 [[package]]

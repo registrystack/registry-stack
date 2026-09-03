@@ -47,9 +47,9 @@ CLIENT_REGISTRY_PACKAGE_MINIMUM_VERSION = (0, 21, 1)
 DISCOVERY_CLIENT_PACKAGE_MINIMUM_VERSION = (0, 23, 0)
 DISCOVERY_RUNTIME_MINIMUM_VERSION = (0, 24, 0)
 DISCOVERY_RUNTIME_IMAGE_NAMES = OFFICIAL_RUNTIME_IMAGE_NAMES | {"discovery"}
-REGISTRY_SERVER_RELEASE_MINIMUM_VERSION = (0, 26, 0)
-REGISTRY_SERVER_RUNTIME_IMAGE_NAMES = DISCOVERY_RUNTIME_IMAGE_NAMES | {
-    "registry-server"
+BREG_RELEASE_MINIMUM_VERSION = (0, 26, 0)
+BREG_RUNTIME_IMAGE_NAMES = DISCOVERY_RUNTIME_IMAGE_NAMES | {
+    "breg"
 }
 V2_TOP_LEVEL_FIELDS = {
     "schema_version",
@@ -89,7 +89,7 @@ SECURITY_EVIDENCE_COMMON_REQUIRED_FILES = {
 }
 SECURITY_EVIDENCE_REQUIRED_FILES = SECURITY_EVIDENCE_COMMON_REQUIRED_FILES | {
     f"{directory}/{image}.{suffix}.json"
-    for image in REGISTRY_SERVER_RUNTIME_IMAGE_NAMES
+    for image in BREG_RUNTIME_IMAGE_NAMES
     for directory, suffix in (
         ("image-sbom", "spdx"),
         ("syft", "syft"),
@@ -113,9 +113,9 @@ def _candidate_image_names(version: str) -> set[str]:
         return HISTORICAL_RUNTIME_IMAGE_NAMES
     if parsed < DISCOVERY_RUNTIME_MINIMUM_VERSION:
         return OFFICIAL_RUNTIME_IMAGE_NAMES
-    if parsed < REGISTRY_SERVER_RELEASE_MINIMUM_VERSION:
+    if parsed < BREG_RELEASE_MINIMUM_VERSION:
         return DISCOVERY_RUNTIME_IMAGE_NAMES
-    return REGISTRY_SERVER_RUNTIME_IMAGE_NAMES
+    return BREG_RUNTIME_IMAGE_NAMES
 
 
 def _version_uses_release_docs(version: tuple[int, int, int]) -> bool:
@@ -212,12 +212,12 @@ def _relay_v2_payload_inventory(version: str) -> dict[str, str]:
             ] = "client-package"
     if version_tuple >= DISCOVERY_RUNTIME_MINIMUM_VERSION:
         inventory[f"discovery-{tag}-linux-amd64"] = "binary"
-    if version_tuple >= REGISTRY_SERVER_RELEASE_MINIMUM_VERSION:
+    if version_tuple >= BREG_RELEASE_MINIMUM_VERSION:
         for platform in ("linux-amd64", "linux-arm64", "macos-arm64"):
-            inventory[f"registry-server-{tag}-{platform}"] = "binary"
-            inventory[f"registry-serverctl-{tag}-{platform}"] = "binary"
-        inventory[f"registry-server-{tag}-install.sh"] = "installer"
-        inventory["registry-server-install.sh"] = "installer"
+            inventory[f"breg-{tag}-{platform}"] = "binary"
+            inventory[f"bregctl-{tag}-{platform}"] = "binary"
+        inventory[f"breg-{tag}-install.sh"] = "installer"
+        inventory["breg-install.sh"] = "installer"
     return inventory
 
 

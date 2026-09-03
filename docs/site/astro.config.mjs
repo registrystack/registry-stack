@@ -140,9 +140,9 @@ export default defineConfig({
     '/reference/openssf-evidence/': internalRedirect('/security/openssf-evidence/'),
     // Webhook configuration, history reads, and the event reference are
     // sections of the operate and API reference pages.
-    '/configure/registry-server-webhooks/': internalRedirect('/operate/registry-server/'),
-    '/reference/registry-server-history/': internalRedirect('/reference/registry-server-api/'),
-    '/reference/registry-server-events/': internalRedirect('/reference/registry-server-api/'),
+    '/configure/breg-webhooks/': internalRedirect('/operate/breg/'),
+    '/reference/breg-history/': internalRedirect('/reference/breg-api/'),
+    '/reference/breg-events/': internalRedirect('/reference/breg-api/'),
     // Retired pages keep old links useful by sending readers to a supported
     // task or reference page.
     '/journeys/': internalRedirect('/'),
@@ -216,7 +216,7 @@ export default defineConfig({
     }),
     starlight({
       title: 'Registry stack docs',
-      description: 'Documentation for Registry Stack: publish existing records with Registry Relay, answer bounded questions with Evidence Gateway, or build a writable registry with the Registry Server source preview.',
+      description: 'Documentation for Registry Stack: publish existing records with Registry Relay, answer bounded questions with Evidence Gateway, or build a writable registry with the Base Registry Engine source preview.',
       // Historical archives keep their sealed search posture. A new released
       // archive is built once on the release runner and carries its exact
       // Pagefind output into production.
@@ -231,7 +231,7 @@ export default defineConfig({
         // Released archives carry their machine-readable corpus into the
         // canonical root. Historical archives retain their sealed output.
         ...(isHistoricalArchiveBuild ? [] : [starlightLlmsTxt({
-          description: 'Documentation for Registry Stack: tutorials, product docs, explanation, and API reference for Registry Relay, Evidence Gateway, and the Registry Server source preview.',
+          description: 'Documentation for Registry Stack: tutorials, product docs, explanation, and API reference for Registry Relay, Evidence Gateway, and the Base Registry Engine source preview.',
           details: discoveryHeaderForBase(base),
           exclude: ['reference/apis/**'],
           promote: ['index*', 'explanation/**'],
@@ -430,16 +430,16 @@ export default defineConfig({
         {
           label: 'Build a registry',
           items: [
-            { label: 'Registry Server overview', slug: 'explanation/configuration-defined-registry' },
-            { label: 'Create and query your first registry', slug: 'tutorials/first-registry-server' },
+            { label: 'Base Registry Engine overview', slug: 'explanation/configuration-defined-registry' },
+            { label: 'Create and query your first registry', slug: 'tutorials/first-breg' },
             { label: 'Review changes before updating a registry', slug: 'tutorials/review-registry-changes' },
             { label: 'Map a registry in QGIS', slug: 'tutorials/query-a-spatial-registry-from-qgis' },
-            { label: 'Configure your registry', slug: 'configure/registry-server' },
-            { label: 'Deploy and operate a registry', slug: 'operate/registry-server' },
+            { label: 'Configure your registry', slug: 'configure/breg' },
+            { label: 'Deploy and operate a registry', slug: 'operate/breg' },
             { label: 'Modeling patterns', slug: 'explanation/registry-modeling-patterns' },
-            { label: 'Configuration reference', slug: 'reference/registry-server-configuration' },
-            { label: 'API reference', slug: 'reference/registry-server-api' },
-            { label: 'Registry Server client APIs', slug: 'reference/registry-server-client-api' },
+            { label: 'Configuration reference', slug: 'reference/breg-configuration' },
+            { label: 'API reference', slug: 'reference/breg-api' },
+            { label: 'BReg client APIs', slug: 'reference/breg-client-api' },
           ],
         },
         {

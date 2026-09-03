@@ -1,4 +1,4 @@
-use registry_stack_client::{auth, discovery, evidence, record, registry_server, relay};
+use registry_stack_client::{auth, breg, discovery, evidence, record, relay};
 
 #[test]
 fn facade_keeps_every_product_under_its_own_module() {
@@ -6,7 +6,7 @@ fn facade_keeps_every_product_under_its_own_module() {
         std::any::type_name::<T>()
     }
 
-    assert!(names::<registry_server::RegistryServerClient>().contains("registry_server_client"));
+    assert!(names::<breg::BaseRegistryClient>().contains("registry_breg_client"));
     assert!(names::<relay::RelayClient>().contains("registry_relay_client"));
     assert!(names::<discovery::DiscoveryClient>().contains("registry_discovery_client"));
     assert!(names::<evidence::EvidenceClient>().contains("registry_evidence_client"));

@@ -68,8 +68,8 @@ pub fn catalog() -> Catalog {
         command_reference(registry_evidence_oid4vci::command(), None),
         command_reference(registry_evidencectl::command(), None),
         command_reference(registry_mint::command(), None),
-        command_reference(registry_server::command(), None),
-        command_reference(registry_serverctl::command(), None),
+        command_reference(registry_breg::command(), None),
+        command_reference(registry_bregctl::command(), None),
         command_reference(registry_relay_v2::command(), None),
         command_reference(registry_relayctl::command(), None),
     ];
@@ -553,12 +553,12 @@ mod tests {
                 .map(|command| command.name.as_str())
                 .collect::<Vec<_>>(),
             [
+                "breg",
+                "bregctl",
                 "evidence",
                 "evidence-oid4vci",
                 "evidencectl",
                 "mint",
-                "registry-server",
-                "registry-serverctl",
                 "relay",
                 "relayctl",
             ]
@@ -566,13 +566,13 @@ mod tests {
     }
 
     #[test]
-    fn server_configuration_and_webhook_commands_are_published() {
+    fn breg_configuration_and_webhook_commands_are_published() {
         let catalog = catalog();
-        let server = find_command(&catalog.binaries, "registry-server");
-        assert!(server.options.iter().any(|option| {
+        let breg = find_command(&catalog.binaries, "breg");
+        assert!(breg.options.iter().any(|option| {
             option.display == "--config <ABSOLUTE_FILE>" && option.always_required
         }));
-        let generate = find_command(&catalog.binaries, "registry-serverctl generate");
+        let generate = find_command(&catalog.binaries, "bregctl generate");
         assert!(generate.arguments.iter().any(|argument| {
             argument.possible_values
                 == [
@@ -580,10 +580,10 @@ mod tests {
                 ]
         }));
         for invocation in [
-            "registry-serverctl explain",
-            "registry-serverctl webhook sample",
-            "registry-serverctl webhook list",
-            "registry-serverctl webhook replay",
+            "bregctl explain",
+            "bregctl webhook sample",
+            "bregctl webhook list",
+            "bregctl webhook replay",
         ] {
             assert!(!find_command(&catalog.binaries, invocation).usage.is_empty());
         }

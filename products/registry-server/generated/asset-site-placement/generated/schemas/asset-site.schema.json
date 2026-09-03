@@ -1,1 +1,0 @@
-{"$id":"urn:registry-server:entity:asset-site","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"properties":{"label":{"maxLength":200,"minLength":0,"type":"string"},"siteCode":{"maxLength":64,"minLength":0,"type":"string"}},"required":["siteCode","label"],"type":"object","x-registry-mutationMode":"mutable"}

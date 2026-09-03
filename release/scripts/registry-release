@@ -49,7 +49,7 @@ RELAY_V2_ARTIFACT_INVENTORY = {
     "evidence-client-python",
 }
 DISCOVERY_RUNTIME_MINIMUM_VERSION = (0, 24, 0)
-REGISTRY_SERVER_RELEASE_MINIMUM_VERSION = (0, 26, 0)
+BREG_RELEASE_MINIMUM_VERSION = (0, 26, 0)
 RELEASE_PLAN_SCHEMA = "registry-release.plan.v1"
 RELEASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 STRICT_SEMVER = re.compile(
@@ -163,12 +163,12 @@ def artifact_inventory_errors(version: str, artifacts: dict[Any, Any]) -> list[s
             expected_inventory.update({"discovery-client-node", "discovery-client-python"})
         if parsed_version >= DISCOVERY_RUNTIME_MINIMUM_VERSION:
             expected_inventory.add("discovery")
-        if parsed_version >= REGISTRY_SERVER_RELEASE_MINIMUM_VERSION:
+        if parsed_version >= BREG_RELEASE_MINIMUM_VERSION:
             expected_inventory.update(
                 {
-                    "registry-server",
-                    "registry-serverctl",
-                    "registry-server-installer",
+                    "breg",
+                    "bregctl",
+                    "breg-installer",
                 }
             )
         missing = sorted(expected_inventory - artifact_names)

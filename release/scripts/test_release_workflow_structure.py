@@ -335,7 +335,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             module._candidate_image_names("0.24.0"),
         )
         self.assertEqual(
-            {"discovery", "evidence", "mint", "registry-server", "relay"},
+            {"discovery", "evidence", "mint", "breg", "relay"},
             module._candidate_image_names("0.26.0"),
         )
         self.assertFalse(

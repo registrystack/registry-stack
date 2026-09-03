@@ -21,7 +21,7 @@ from ci_changes import (
     EVIDENCE_TUTORIAL_INPUTS,
     IDENTIFIER_CATALOG_INPUTS,
     REGISTRY_RECORD_CROSS_PRODUCT_INPUTS,
-    REGISTRY_SERVER_PACKAGES,
+    BREG_PACKAGES,
     RELAY_CLIENT_PACKAGES,
     STACK_CLIENT_PACKAGES,
     SECURITY_WORKFLOW_GATES,
@@ -343,7 +343,7 @@ class CiChangesTest(unittest.TestCase):
             with self.subTest(path=path):
                 outputs = classify(self.workspace, (path,))
                 self.assertTrue(outputs["identifiers"])
-                self.assertTrue(outputs["registry_server_contracts"])
+                self.assertTrue(outputs["breg_contracts"])
                 self.assertTrue(outputs["relay_v2_contracts"])
                 self.assertFalse(outputs["rust"])
                 self.assertEqual([], outputs["rust_matrix"]["include"])
@@ -424,36 +424,36 @@ class CiChangesTest(unittest.TestCase):
         self.assertTrue(outputs["relay_v2_contracts"])
         self.assertTrue(outputs["editors"])
 
-    def test_registry_server_paths_select_its_shard_and_product_gate(self) -> None:
+    def test_breg_paths_select_its_shard_and_product_gate(self) -> None:
         for path in (
-            "crates/registry-server/src/compiler.rs",
-            "crates/registry-serverctl/src/main.rs",
-            "products/registry-server/contracts/definition-of-done.yaml",
+            "crates/registry-breg/src/compiler.rs",
+            "crates/registry-bregctl/src/main.rs",
+            "products/breg/contracts/definition-of-done.yaml",
         ):
             with self.subTest(path=path):
                 outputs = classify(self.workspace, (path,))
-                self.assertTrue(outputs["registry_server_contracts"])
+                self.assertTrue(outputs["breg_contracts"])
                 self.assertTrue(
-                    set(outputs["rust_packages"]) & REGISTRY_SERVER_PACKAGES
+                    set(outputs["rust_packages"]) & BREG_PACKAGES
                 )
 
         product_outputs = classify(
             self.workspace,
-            ("products/registry-server/contracts/definition-of-done.yaml",),
+            ("products/breg/contracts/definition-of-done.yaml",),
         )
         self.assertEqual(
-            set(REGISTRY_SERVER_PACKAGES),
-            set(product_outputs["rust_packages"]) & REGISTRY_SERVER_PACKAGES,
+            set(BREG_PACKAGES),
+            set(product_outputs["rust_packages"]) & BREG_PACKAGES,
         )
 
-    def test_manifest_core_changes_select_registry_server_through_linked_code(
+    def test_manifest_core_changes_select_breg_through_linked_code(
         self,
     ) -> None:
         manifest_change = ("crates/registry-manifest-core/src/lib.rs",)
         outputs = classify(self.workspace, manifest_change)
 
-        self.assertTrue(outputs["registry_server_contracts"])
-        self.assertIn("registry-server", outputs["rust_packages"])
+        self.assertTrue(outputs["breg_contracts"])
+        self.assertIn("registry-breg", outputs["rust_packages"])
         self.assertIn("registry-manifest-core", outputs["rust_packages"])
 
     def test_evidence_tutorial_inputs_cover_every_registered_tutorial(self) -> None:
@@ -742,13 +742,13 @@ class CiChangesTest(unittest.TestCase):
         self.assertTrue(outputs["relay_client_contracts"])
         self.assertTrue(outputs["client_bindings"])
         # Relay V2 owns the real-router Relay client journey through a dev-only
-        # edge. Registry Server has a separate transport and client crate.
+        # edge. BReg has a separate transport and client crate.
         self.assertIn("registry-relay-v2", outputs["rust_packages"])
         self.assertNotIn("registry-relayctl", outputs["rust_packages"])
-        self.assertNotIn("registry-server", outputs["rust_packages"])
-        self.assertNotIn("registry-server-client", outputs["rust_packages"])
+        self.assertNotIn("registry-breg", outputs["rust_packages"])
+        self.assertNotIn("registry-breg-client", outputs["rust_packages"])
         self.assertFalse(outputs["evidence_contracts"])
-        self.assertFalse(outputs["registry_server_contracts"])
+        self.assertFalse(outputs["breg_contracts"])
         self.assertEqual(
             {entry["name"] for entry in outputs["rust_matrix"]["include"]},
             {"discovery", "relay-client", "relay-v2", "stack-client"},
@@ -760,19 +760,19 @@ class CiChangesTest(unittest.TestCase):
         )
         self.assertFalse(relay_client_matrix["all_features"])
 
-    def test_registry_server_client_change_stays_on_registry_server_surfaces(self) -> None:
+    def test_breg_client_change_stays_on_breg_surfaces(self) -> None:
         outputs = classify(
             self.workspace,
-            ("crates/registry-server-client/src/lib.rs",),
+            ("crates/registry-breg-client/src/lib.rs",),
         )
-        self.assertTrue(outputs["registry_server_contracts"])
+        self.assertTrue(outputs["breg_contracts"])
         self.assertFalse(outputs["relay_client_contracts"])
-        self.assertIn("registry-server", outputs["rust_packages"])
-        self.assertNotIn("registry-serverctl", outputs["rust_packages"])
+        self.assertIn("registry-breg", outputs["rust_packages"])
+        self.assertNotIn("registry-bregctl", outputs["rust_packages"])
         self.assertNotIn("registry-relay-client", outputs["rust_packages"])
         self.assertEqual(
             {entry["name"] for entry in outputs["rust_matrix"]["include"]},
-            {"registry-server", "stack-client"},
+            {"breg", "stack-client"},
         )
 
     def test_registry_record_change_runs_both_product_clients_and_facade(self) -> None:
@@ -780,9 +780,9 @@ class CiChangesTest(unittest.TestCase):
             self.workspace,
             ("crates/registry-record/src/lib.rs",),
         )
-        self.assertTrue(outputs["registry_server_contracts"])
+        self.assertTrue(outputs["breg_contracts"])
         self.assertTrue(outputs["relay_client_contracts"])
-        self.assertTrue(REGISTRY_SERVER_PACKAGES & set(outputs["rust_packages"]))
+        self.assertTrue(BREG_PACKAGES & set(outputs["rust_packages"]))
         self.assertTrue(RELAY_CLIENT_PACKAGES & set(outputs["rust_packages"]))
         self.assertTrue(STACK_CLIENT_PACKAGES <= set(outputs["rust_packages"]))
 
@@ -956,16 +956,16 @@ class CiChangesTest(unittest.TestCase):
         self.assertNotIn("\n  notary-contracts:\n", workflow)
         self.assertNotIn("notary_contracts", workflow)
 
-        self.assertIn("\n  registry-server-contracts:\n", workflow)
-        self.assertIn("name: Registry Server product contracts", workflow)
+        self.assertIn("\n  breg-contracts:\n", workflow)
+        self.assertIn("name: Base Registry Engine product contracts", workflow)
         self.assertIn(
-            "products/registry-server/scripts/check-contracts.sh", workflow
+            "products/breg/scripts/check-contracts.sh", workflow
         )
         self.assertIn(
-            "products/registry-server/scripts/test-postgres.sh", workflow
+            "products/breg/scripts/test-postgres.sh", workflow
         )
         self.assertIn(
-            "products/registry-server/scripts/test-adopter-workflow.sh", workflow
+            "products/breg/scripts/test-adopter-workflow.sh", workflow
         )
 
         rust_result = workflow.split("\n  rust-result:\n", 1)[1].split(
@@ -975,64 +975,64 @@ class CiChangesTest(unittest.TestCase):
         self.assertIn("\n      - evidence-contracts\n", rust_result)
         self.assertIn("\n      - relay-v2-contracts\n", rust_result)
         self.assertIn("\n      - relay-client-contracts\n", rust_result)
-        self.assertIn("\n      - registry-server-contracts\n", rust_result)
+        self.assertIn("\n      - breg-contracts\n", rust_result)
         self.assertNotIn("\n      - notary-contracts\n", rust_result)
 
-    def test_registry_server_contracts_pin_postgresql_and_use_the_product_entry_points(
+    def test_breg_contracts_pin_postgresql_and_use_the_product_entry_points(
         self,
     ) -> None:
         workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
-        registry_server_job = workflow.split(
-            "\n  registry-server-contracts:\n", 1
+        breg_job = workflow.split(
+            "\n  breg-contracts:\n", 1
         )[1].split("\n  identifiers:\n", 1)[0]
 
         self.assertIn(
             "postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6",
-            registry_server_job,
+            breg_job,
         )
         self.assertIn(
             "ports:\n          - 5432/tcp",
-            registry_server_job,
+            breg_job,
         )
         self.assertIn(
             "DATABASE_PORT: ${{ job.services.postgres.ports['5432'] }}",
-            registry_server_job,
+            breg_job,
         )
         self.assertIn(
-            "REGISTRY_SERVER_TEST_DATABASE_URL=postgresql://registry_server:registry_server_test@localhost:${DATABASE_PORT}/registry_server",
-            registry_server_job,
+            "BREG_TEST_DATABASE_URL=postgresql://breg:breg_test@localhost:${DATABASE_PORT}/breg",
+            breg_job,
         )
         self.assertIn(
-            "REGISTRY_SERVER_TEST_TLS_DATABASE_URL=postgresql://registry_server:registry_server_test@localhost:${DATABASE_PORT}/registry_server",
-            registry_server_job,
+            "BREG_TEST_TLS_DATABASE_URL=postgresql://breg:breg_test@localhost:${DATABASE_PORT}/breg",
+            breg_job,
         )
         self.assertIn(
-            "REGISTRY_SERVER_TEST_TLS_HOSTNAME_MISMATCH_DATABASE_URL=postgresql://registry_server:registry_server_test@127.0.0.1:${DATABASE_PORT}/registry_server",
-            registry_server_job,
+            "BREG_TEST_TLS_HOSTNAME_MISMATCH_DATABASE_URL=postgresql://breg:breg_test@127.0.0.1:${DATABASE_PORT}/breg",
+            breg_job,
         )
         self.assertIn(
             "POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}",
-            registry_server_job,
+            breg_job,
         )
         self.assertIn(
-            "TLS_CA_PEM_PATH: ${{ runner.temp }}/registry-server-postgres-trusted-ca.pem",
-            registry_server_job,
+            "TLS_CA_PEM_PATH: ${{ runner.temp }}/breg-postgres-trusted-ca.pem",
+            breg_job,
         )
         self.assertIn(
             "uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d",
-            registry_server_job,
+            breg_job,
         )
-        self.assertIn('version: "0.11.16"', registry_server_job)
+        self.assertIn('version: "0.11.16"', breg_job)
         for entry_point in (
-            "products/registry-server/scripts/check-contracts.sh",
-            "products/registry-server/scripts/check-client-contract.sh",
-            "products/registry-server/scripts/test-postgres.sh",
-            "products/registry-server/scripts/test-postgres-tls.sh",
-            "products/registry-server/scripts/test-adopter-workflow.sh",
-            "products/registry-server/quickstart/run.sh --smoke",
+            "products/breg/scripts/check-contracts.sh",
+            "products/breg/scripts/check-client-contract.sh",
+            "products/breg/scripts/test-postgres.sh",
+            "products/breg/scripts/test-postgres-tls.sh",
+            "products/breg/scripts/test-adopter-workflow.sh",
+            "products/breg/quickstart/run.sh --smoke",
         ):
             with self.subTest(entry_point=entry_point):
-                self.assertIn(entry_point, registry_server_job)
+                self.assertIn(entry_point, breg_job)
 
     def test_discovery_contracts_pins_node_for_adopter_binding_tests(self) -> None:
         workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
@@ -1155,14 +1155,14 @@ on:
 
     def test_server_config_schema_change_runs_docs_and_server_contracts(self) -> None:
         for path in (
-            "products/registry-server/generated/authoring/registry-project.schema.json",
-            "products/registry-server/generated/authoring/registry-module.schema.json",
-            "products/registry-server/generated/runtime/runtime.schema.json",
+            "products/breg/generated/authoring/registry-project.schema.json",
+            "products/breg/generated/authoring/registry-module.schema.json",
+            "products/breg/generated/runtime/runtime.schema.json",
         ):
             with self.subTest(path=path):
                 outputs = classify(self.workspace, (path,))
                 self.assertTrue(outputs["docs"])
-                self.assertTrue(outputs["registry_server_contracts"])
+                self.assertTrue(outputs["breg_contracts"])
 
     def test_evidence_authoring_schema_change_runs_docs(self) -> None:
         """The same page publishes the authoring form beside the frozen ones."""
