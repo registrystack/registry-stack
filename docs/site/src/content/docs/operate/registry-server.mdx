@@ -107,7 +107,6 @@ apiVersion: registry.registrystack.org/server-runtime/v1alpha1
 kind: RegistryServerRuntimeConfig
 listener:
   bind: 127.0.0.1:8080
-  trustedProxy: operator-controlled-upstream
   publicOrigin: https://registry.example.org
 identity:
   environment: production
@@ -157,7 +156,7 @@ eventDestinations: {}
 
 | Section | What it binds |
 | --- | --- |
-| `listener` | The bind address, the `trustedProxy` posture (`direct` or `operator-controlled-upstream`), and the optional public origin that generated documents cite. The runtime accepts the posture and does not yet act on it, so enforce client addresses and TLS at your proxy. |
+| `listener` | The bind address and the optional public origin that generated documents cite. The runtime reads neither peer addresses nor forwarded headers, so client addresses and TLS termination are enforced at your proxy. |
 | `identity` | The environment, instance, and database this file may serve. `environment` and `instanceId` must equal the `package` block in `registry.yaml`; `databaseId` must equal the `--database-id` given to `test` and `package`. |
 | `secretProviders` | The file root (owner-only files) and, when declared, the environment provider. |
 | `database` | Secret references for the runtime and migration connection URLs, pool bounds, and the two role names the package's policies are written for. |
