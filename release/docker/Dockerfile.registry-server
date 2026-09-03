@@ -8,17 +8,17 @@ ARG SOURCE_DATE_EPOCH
 # The runtime configuration, compiled package, deployment trust anchor, runtime
 # secrets, migration credential, and signing keys are deployment inputs. The
 # release image carries only the runtime binary and the license, and gives
-# operators fixed read-only mount points under /etc/registry-server.
+# operators fixed read-only mount points under /etc/registry-server. Registry
+# Server keeps no local state: its audit journal lives in PostgreSQL, and the
+# image carries no writable directory of its own.
 RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \
     --mount=type=bind,source=LICENSE,target=/workspace/LICENSE \
     mkdir -p \
         /workspace/runtime-root/etc/registry-server \
         /workspace/runtime-root/licenses/registry-server \
         /workspace/runtime-root/usr/local/bin \
-        /workspace/runtime-root/var/lib/registry-server \
     && install -m 0755 /workspace/image-bin/registry-server /workspace/runtime-root/usr/local/bin/registry-server \
     && install -m 0644 /workspace/LICENSE /workspace/runtime-root/licenses/registry-server/LICENSE \
-    && chown -R 65532:65532 /workspace/runtime-root/var/lib/registry-server \
     && find /workspace/runtime-root -exec touch -h --date="@${SOURCE_DATE_EPOCH}" {} +
 
 FROM gcr.io/distroless/cc-debian13:nonroot@sha256:d97bc0a941b8d4be647dc0ee75b264ddbb772f1ac5ba690a4309c00723b23775 AS runtime
@@ -28,7 +28,7 @@ LABEL org.registrystack.runtime.uid="65532" \
 
 COPY --from=runtime-root /workspace/runtime-root/ /
 
-WORKDIR /var/lib/registry-server
+WORKDIR /etc/registry-server
 
 EXPOSE 8080
 
