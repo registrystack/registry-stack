@@ -599,11 +599,19 @@ def main() -> int:
 
         committed = yaml.safe_load(BASELINE_PATH.read_text(encoding="utf-8"))
         if committed != baseline_document:
-            raise GateFailure("generated semantic hashes or exposure inventory drifted")
+            raise GateFailure(
+                "generated semantic hashes or exposure inventory drifted; "
+                "run products/relay-v2/scripts/check-generated.sh --write "
+                f"to refresh {BASELINE_PATH.relative_to(REPOSITORY_ROOT)}"
+            )
         for kind, paths in key_paths.items():
             documented = documented_key_paths(reference, CONFIGURATION_MARKERS[kind])
             if documented != paths:
-                raise GateFailure(f"{kind} configuration key-path reference drifted")
+                raise GateFailure(
+                    f"{kind} configuration key-path reference drifted; "
+                    "run products/relay-v2/scripts/check-generated.sh --write "
+                    f"to refresh {CONFIGURATION_REFERENCE.relative_to(REPOSITORY_ROOT)}"
+                )
     except (GateFailure, OSError, KeyError, TypeError, yaml.YAMLError) as error:
         print(f"relay-v2 adopter workflow: {error}", file=sys.stderr)
         return 1
