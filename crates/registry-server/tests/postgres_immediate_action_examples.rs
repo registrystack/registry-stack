@@ -433,7 +433,6 @@ impl TestPackage {
 kind: RegistryServerRuntimeConfig
 listener:
   bind: 127.0.0.1:9
-  trustedProxy: direct
 identity:
   environment: {}
   instanceId: {}

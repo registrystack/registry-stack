@@ -1030,7 +1030,6 @@ impl StartupFixture {
 kind: RegistryServerRuntimeConfig
 listener:
   bind: {listener}
-  trustedProxy: direct
 identity:
   environment: production
   instanceId: {INSTANCE}

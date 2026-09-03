@@ -143,8 +143,7 @@ mod tests {
             "apiVersion": RUNTIME_CONFIG_API_VERSION,
             "kind": RUNTIME_CONFIG_KIND,
             "listener": {
-                "bind": "127.0.0.1:8080",
-                "trustedProxy": "direct"
+                "bind": "127.0.0.1:8080"
             },
             "identity": {
                 "environment": "production",

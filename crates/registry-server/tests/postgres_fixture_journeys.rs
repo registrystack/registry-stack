@@ -821,7 +821,6 @@ impl PackageFixture {
 kind: RegistryServerRuntimeConfig
 listener:
   bind: 127.0.0.1:9
-  trustedProxy: direct
 identity:
   environment: production
   instanceId: {INSTANCE_ID}
@@ -918,7 +917,6 @@ operationalTimeouts:
 kind: RegistryServerRuntimeConfig
 listener:
   bind: 127.0.0.1:9
-  trustedProxy: direct
 identity:
   environment: local
   instanceId: {QUICKSTART_INSTANCE_ID}

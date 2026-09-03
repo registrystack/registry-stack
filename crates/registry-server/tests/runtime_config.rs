@@ -21,8 +21,8 @@ use registry_server::contract::parse_project_json;
 use registry_server::event_destination::EventDestinationActivationError;
 use registry_server::runtime_config::{
     load_runtime_config, load_runtime_config_with_env, parse_runtime_config,
-    parse_runtime_config_with_env, RuntimeConfigError, TrustedProxyPosture,
-    RUNTIME_CONFIG_API_VERSION, RUNTIME_CONFIG_KIND,
+    parse_runtime_config_with_env, RuntimeConfigError, RUNTIME_CONFIG_API_VERSION,
+    RUNTIME_CONFIG_KIND,
 };
 use serde_json::{json, Value};
 
@@ -83,7 +83,6 @@ apiVersion: {api_version}
 kind: {kind}
 listener:
   bind: 127.0.0.1:8080
-  trustedProxy: direct
 identity:
   environment: production
   instanceId: registry-primary
@@ -274,10 +273,6 @@ fn strict_runtime_file_loads_and_constructs_existing_runtime_inputs() {
     let config = load_runtime_config(&config_path).expect("runtime config loads");
 
     assert_eq!(config.listener().bind().to_string(), "127.0.0.1:8080");
-    assert_eq!(
-        config.listener().trusted_proxy(),
-        TrustedProxyPosture::Direct
-    );
     assert_eq!(config.identity().environment(), "production");
     assert_eq!(
         config.database().pool_bounds().wait_timeout,
@@ -1649,56 +1644,27 @@ fn oidc_leeway_must_be_whole_seconds_within_its_documented_range() {
     }
 }
 
-/// `listener.trustedProxy` is a required closed-list deployment declaration.
-/// Both postures load, and neither changes any other loaded binding: no
-/// runtime path reads the posture.
+/// `listener.trustedProxy` was removed: nothing in the runtime reads a
+/// trusted-proxy posture. `RawListenerConfig` denies unknown fields, so a
+/// runtime configuration that still carries `listener.trustedProxy: direct`
+/// is refused rather than silently accepted.
 #[test]
-fn listener_trusted_proxy_postures_load_and_change_no_other_binding() {
+fn listener_trusted_proxy_is_refused_as_an_unknown_field() {
     let fixture = RuntimeFixture::new();
-    let direct = valid_runtime(
+    let base = valid_runtime(
         &fixture.secret_root,
         &fixture.package_root,
         &fixture.trust_anchor,
-    );
-    let upstream = direct.replace(
-        "trustedProxy: direct",
-        "trustedProxy: operator-controlled-upstream",
+    )
+    .replace("  trustedProxy: direct\n", "");
+    let with_trusted_proxy = base.replace(
+        "listener:\n  bind: 127.0.0.1:8080\n",
+        "listener:\n  bind: 127.0.0.1:8080\n  trustedProxy: direct\n",
     );
 
-    let direct_config =
-        parse_runtime_config_with_env(&direct, env_lookup).expect("direct posture loads");
-    let upstream_config = parse_runtime_config_with_env(&upstream, env_lookup)
-        .expect("operator-controlled-upstream posture loads");
-
     assert_eq!(
-        direct_config.listener().trusted_proxy(),
-        TrustedProxyPosture::Direct
-    );
-    assert_eq!(
-        upstream_config.listener().trusted_proxy(),
-        TrustedProxyPosture::OperatorControlledUpstream
-    );
-    assert_eq!(
-        direct_config.listener().bind(),
-        upstream_config.listener().bind(),
-        "the posture does not restrict the accepted bind address"
-    );
-    assert_eq!(
-        direct_config
-            .listener()
-            .public_origin()
-            .map(|origin| origin.as_str().to_owned()),
-        upstream_config
-            .listener()
-            .public_origin()
-            .map(|origin| origin.as_str().to_owned())
-    );
-    assert_eq!(
-        parse_runtime_config_with_env(
-            &direct.replace("trustedProxy: direct", "trustedProxy: reverse-proxy"),
-            env_lookup
-        )
-        .expect_err("an undeclared posture is refused"),
+        parse_runtime_config_with_env(&with_trusted_proxy, env_lookup)
+            .expect_err("listener.trustedProxy is refused as an unknown field"),
         RuntimeConfigError::Document
     );
 }

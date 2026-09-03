@@ -455,14 +455,10 @@
             "string",
             "null"
           ]
-        },
-        "trustedProxy": {
-          "$ref": "#/$defs/TrustedProxyPosture"
         }
       },
       "required": [
-        "bind",
-        "trustedProxy"
+        "bind"
       ],
       "type": "object"
     },
@@ -793,13 +789,6 @@
         "runtime"
       ],
       "type": "object"
-    },
-    "TrustedProxyPosture": {
-      "enum": [
-        "direct",
-        "operator-controlled-upstream"
-      ],
-      "type": "string"
     }
   },
   "$id": "https://id.registrystack.org/schemas/registry-server/runtime/runtime.v1alpha1.schema.json",

@@ -612,7 +612,6 @@ impl fmt::Debug for RuntimeConfig {
 #[derive(Clone)]
 pub struct ListenerConfig {
     bind: SocketAddr,
-    trusted_proxy: TrustedProxyPosture,
     public_origin: Option<PublicOrigin>,
 }
 
@@ -624,7 +623,6 @@ impl ListenerConfig {
             .map_err(|_| RuntimeConfigError::InvalidListener)?;
         Ok(Self {
             bind,
-            trusted_proxy: raw.trusted_proxy,
             public_origin: raw
                 .public_origin
                 .as_deref()
@@ -637,10 +635,6 @@ impl ListenerConfig {
         self.bind
     }
 
-    pub fn trusted_proxy(&self) -> TrustedProxyPosture {
-        self.trusted_proxy
-    }
-
     pub fn public_origin(&self) -> Option<&PublicOrigin> {
         self.public_origin.as_ref()
     }
@@ -651,7 +645,6 @@ impl fmt::Debug for ListenerConfig {
         formatter
             .debug_struct("ListenerConfig")
             .field("bind", &"<redacted>")
-            .field("trusted_proxy", &self.trusted_proxy)
             .field("public_origin", &self.public_origin)
             .finish()
     }
@@ -784,14 +777,6 @@ impl fmt::Debug for PublicOrigin {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("PublicOrigin(<redacted>)")
     }
-}
-
-#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "kebab-case")]
-pub enum TrustedProxyPosture {
-    Direct,
-    OperatorControlledUpstream,
 }
 
 #[derive(Clone)]
@@ -1741,7 +1726,6 @@ struct RawRuntimeConfig {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawListenerConfig {
     bind: String,
-    trusted_proxy: TrustedProxyPosture,
     /// Canonical HTTPS origin (loopback HTTP for local development) for QGIS
     /// discovery and pagination. Required when the registry exposes GIS collections.
     #[serde(default, skip_serializing_if = "Option::is_none")]

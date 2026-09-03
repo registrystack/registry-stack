@@ -945,7 +945,6 @@ impl DestinationFixture {
 kind: RegistryServerRuntimeConfig
 listener:
   bind: 127.0.0.1:8080
-  trustedProxy: direct
 identity:
   environment: local
   instanceId: {INSTANCE_ID}

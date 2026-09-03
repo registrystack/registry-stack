@@ -1183,7 +1183,6 @@ fn runtime_without_telemetry(root: &Path) -> String {
 kind: RegistryServerRuntimeConfig
 listener:
   bind: 127.0.0.1:8080
-  trustedProxy: direct
 identity:
   environment: production
   instanceId: registry-primary
