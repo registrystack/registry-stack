@@ -747,7 +747,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         for forbidden in ("npm publish", "maturin publish", "twine upload"):
             self.assertNotIn(forbidden, text)
 
-    def test_reuses_cache_with_seven_day_validity_and_storage_margin(self) -> None:
+    def test_scopes_canonical_cache_to_exact_builder_recipe(self) -> None:
         text, document = workflow("release-candidate.yml")
         cache = next(
             step
@@ -761,7 +761,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             "'release/scripts/build-release-binaries.sh', "
             "'release/docker/Dockerfile.builder') }}",
         )
-        self.assertIn("registry-stack-release-${{ runner.os }}-", cache["with"]["restore-keys"])
+        self.assertNotIn("restore-keys", cache["with"])
         self.assertIn('created_at} + 7 days', text)
         final_upload = next(
             step

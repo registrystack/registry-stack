@@ -101,8 +101,6 @@ jobs:
             .cargo-home/git
             target
           key: registry-stack-release-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'release/scripts/build-release-binaries.sh', 'release/docker/Dockerfile.builder') }}
-          restore-keys: |
-            registry-stack-release-${{ runner.os }}-
 
       - name: Build and smoke the canonical Linux payload
         env:

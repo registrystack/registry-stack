@@ -49,6 +49,16 @@ class ReleaseRehearsalTest(unittest.TestCase):
         self.assertFalse(
             any("upload-artifact@" in str(step) for step in canonical["steps"])
         )
+        canonical_cache = next(
+            step
+            for step in canonical["steps"]
+            if step.get("name") == "Restore reusable Cargo cache"
+        )
+        self.assertNotIn("restore-keys", canonical_cache["with"])
+        self.assertIn(
+            "'release/docker/Dockerfile.builder'",
+            canonical_cache["with"]["key"],
+        )
         canonical_build = next(
             step["run"]
             for step in canonical["steps"]
