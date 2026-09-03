@@ -177,7 +177,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         "retry waits the exact compiler-produced delay after the failed attempt is finalized"
     );
 
-    tokio::time::sleep(Duration::from_millis(1_020)).await;
+    wait_until_retry_is_due(&database, &first).await;
     assert_eq!(
         service.deliver_once().await,
         Ok(WebhookWorkOutcome::Delivered)
@@ -282,10 +282,10 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     )
     .await;
     receiver
-        .enqueue(ResponsePlan::Delay(Duration::from_millis(250), 204))
+        .enqueue(ResponsePlan::Delay(Duration::from_millis(2_500), 204))
         .await;
     receiver
-        .enqueue(ResponsePlan::Delay(Duration::from_millis(250), 204))
+        .enqueue(ResponsePlan::Delay(Duration::from_millis(2_500), 204))
         .await;
     let timeout_event = create_event(
         &database,
@@ -301,7 +301,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         service.deliver_once().await,
         Ok(WebhookWorkOutcome::RetryScheduled)
     );
-    tokio::time::sleep(Duration::from_millis(1_020)).await;
+    wait_until_retry_is_due(&database, &timeout_event).await;
     assert_eq!(
         service.deliver_once().await,
         Ok(WebhookWorkOutcome::DeadLettered)
@@ -445,7 +445,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         Duration::from_millis(1_000),
         "interrupted work receives the same full post-finalization backoff"
     );
-    tokio::time::sleep(Duration::from_millis(1_020)).await;
+    wait_until_retry_is_due(&database, &recovered).await;
     assert_eq!(
         service.deliver_once().await,
         Ok(WebhookWorkOutcome::Delivered),
@@ -515,7 +515,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         service.deliver_once().await,
         Ok(WebhookWorkOutcome::RetryScheduled)
     );
-    tokio::time::sleep(Duration::from_millis(1_020)).await;
+    wait_until_retry_is_due(&database, &transport_event).await;
     assert_eq!(
         service.deliver_once().await,
         Ok(WebhookWorkOutcome::DeadLettered)
@@ -624,7 +624,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         "destination_binding_refused",
     )
     .await;
-    tokio::time::sleep(Duration::from_millis(1_020)).await;
+    wait_until_retry_is_due(&database, &binding_refused).await;
     assert_eq!(
         service.deliver_once().await,
         Ok(WebhookWorkOutcome::DeadLettered)
@@ -712,7 +712,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         "payload_refused",
     )
     .await;
-    tokio::time::sleep(Duration::from_millis(1_020)).await;
+    wait_until_retry_is_due(&database, &payload_refused).await;
     assert_eq!(
         service.deliver_once().await,
         Ok(WebhookWorkOutcome::DeadLettered)
@@ -1100,7 +1100,7 @@ async fn real_postgres_webhook_delivery_reap_refuses_an_out_of_bounds_captured_a
         .admin
         .execute(
             "UPDATE registry_internal.registry_webhook_deliveries
-             SET deployed_attempt_timeout_ms = 100
+             SET deployed_attempt_timeout_ms = 2000
              WHERE event_id = $1 AND compiled_delivery_id = $2",
             &[
                 &policy_corrupted.event_id,
@@ -1266,7 +1266,7 @@ async fn assert_seed_is_exact(
         row.get::<_, Vec<u8>>(3),
         Sha256::digest(&event.payload).to_vec()
     );
-    assert_eq!(row.get::<_, i64>(4), 100);
+    assert_eq!(row.get::<_, i64>(4), 2_000);
     assert_eq!(row.get::<_, i16>(5), 2);
     assert_eq!(
         row.get::<_, Vec<i64>>(6),
@@ -1326,6 +1326,37 @@ async fn delivery_retry_delay(database: &TestDatabase, event: &CapturedEvent) ->
     next_attempt_at
         .duration_since(updated_at)
         .expect("retry is scheduled after finalization")
+}
+
+/// Waits until the scheduled retry is claimable on the database clock.
+///
+/// The retry delay is stored as a database timestamp and the claim compares it
+/// with `transaction_timestamp()`, so the test observes the row becoming due
+/// instead of sleeping a fixed span that has to guess that clock.
+async fn wait_until_retry_is_due(database: &TestDatabase, event: &CapturedEvent) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let due: bool = database
+                .admin
+                .query_one(
+                    "SELECT state = 'pending'
+                            AND next_attempt_at IS NOT NULL
+                            AND next_attempt_at <= transaction_timestamp()
+                       FROM registry_internal.registry_webhook_delivery_state
+                      WHERE event_id = $1 AND compiled_delivery_id = $2",
+                    &[&event.event_id, &event.compiled_delivery_id],
+                )
+                .await
+                .expect("administrator can inspect the exact retry schedule")
+                .get(0);
+            if due {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the scheduled retry becomes claimable");
 }
 
 async fn revoke_audit_insert(database: &TestDatabase) {
@@ -1729,7 +1760,11 @@ eventDestinations:
     tls:
       caBundleRef: secret:file/{CA_REF_CANARY}
     deliveryCeilings:
-      attemptTimeoutMilliseconds: 100
+      # The captured attempt timeout is measured from the claim transaction, so
+      # it covers the claim commit and the reload transaction that precede
+      # egress as well as the request itself. Two seconds leaves room for those
+      # database round trips on a loaded host.
+      attemptTimeoutMilliseconds: 2000
       maximumAttempts: 2
 operationalTimeouts:
   httpRequestMilliseconds: 10000

@@ -307,7 +307,7 @@ async fn real_postgres_request_lifecycle_webhook_retries_and_operator_replay_kee
         Ok(WebhookWorkOutcome::RetryScheduled)
     );
     receiver.wait_for_count(1).await;
-    tokio::time::sleep(Duration::from_millis(1_020)).await;
+    wait_until_retry_is_due(&database, &captured).await;
     assert_eq!(
         service.deliver_once().await,
         Ok(WebhookWorkOutcome::DeadLettered)
@@ -653,6 +653,37 @@ async fn capture_event(database: &TestDatabase) -> CapturedEvent {
         payload: row.get(2),
         data_schema: row.get(3),
     }
+}
+
+/// Waits until the scheduled retry is claimable on the database clock.
+///
+/// The retry delay is stored as a database timestamp and the claim compares it
+/// with `transaction_timestamp()`, so the test observes the row becoming due
+/// instead of sleeping a fixed span that has to guess that clock.
+async fn wait_until_retry_is_due(database: &TestDatabase, event: &CapturedEvent) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let due: bool = database
+                .admin
+                .query_one(
+                    "SELECT state = 'pending'
+                            AND next_attempt_at IS NOT NULL
+                            AND next_attempt_at <= transaction_timestamp()
+                       FROM registry_internal.registry_webhook_delivery_state
+                      WHERE event_id = $1 AND compiled_delivery_id = $2",
+                    &[&event.event_id, &event.compiled_delivery_id],
+                )
+                .await
+                .expect("administrator can inspect the exact retry schedule")
+                .get(0);
+            if due {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the scheduled retry becomes claimable");
 }
 
 fn assert_lifecycle_delivery_request(
@@ -1009,7 +1040,11 @@ eventDestinations:
     tls:
       caBundleRef: secret:file/{CA_REF}
     deliveryCeilings:
-      attemptTimeoutMilliseconds: 100
+      # The captured attempt timeout is measured from the claim transaction, so
+      # it covers the claim commit and the reload transaction that precede
+      # egress as well as the request itself. Two seconds leaves room for those
+      # database round trips on a loaded host.
+      attemptTimeoutMilliseconds: 2000
       maximumAttempts: 2
 operationalTimeouts:
   httpRequestMilliseconds: 10000
@@ -1162,8 +1197,22 @@ impl HttpsReceiver {
 
     async fn wait_for_count(&self, expected: usize) {
         tokio::time::timeout(Duration::from_secs(3), async {
-            while self.requests.lock().await.len() < expected {
-                self.notify.notified().await;
+            // `notify.notified()` must be constructed before the count check
+            // below, not after it. Notify::notify_waiters() stores no permit for
+            // waiters that register later, so a construct-after-check ordering
+            // can miss a notification that lands between the check and the
+            // construction. This loop mirrors tokio's documented `Notify` usage:
+            // keep the future registered (via `enable`), check the condition,
+            // wait, and only then build the next future.
+            let notified = self.notify.notified();
+            tokio::pin!(notified);
+            loop {
+                notified.as_mut().enable();
+                if self.requests.lock().await.len() >= expected {
+                    return;
+                }
+                notified.as_mut().await;
+                notified.set(self.notify.notified());
             }
         })
         .await
