@@ -355,6 +355,8 @@ impl AuditOperatorService {
             .await
             .map_err(|_| AuditToolingError::Unavailable)?;
 
+        verify_chain_snapshot(&transaction, &self.audit_profile.chain_hasher(), None).await?;
+
         let future = transaction
             .query_one(
                 "SELECT $1::text::timestamptz > transaction_timestamp()",
@@ -518,26 +520,36 @@ impl AuditOperatorService {
         .await
         .map_err(|_| AuditToolingError::Unavailable)?;
 
-        let head_hash = read_head_hash(&transaction).await?;
-        let walk = walk_chain(&transaction, &self.audit_profile.chain_hasher(), sink).await?;
-        if walk.last_hash != head_hash {
-            return Err(AuditToolingError::HeadMismatch);
-        }
-        let total = transaction
-            .query_one("SELECT count(*) FROM registry_internal.registry_audit", &[])
-            .await
-            .map_err(|_| AuditToolingError::Unavailable)?;
-        if walk.records != count_from(&total, 0)? {
-            return Err(AuditToolingError::Unreachable {
-                records: walk.records,
-            });
-        }
+        let (walk, head_hash) =
+            verify_chain_snapshot(&transaction, &self.audit_profile.chain_hasher(), sink).await?;
         transaction
             .commit()
             .await
             .map_err(|_| AuditToolingError::Unavailable)?;
         Ok((walk, head_hash))
     }
+}
+
+async fn verify_chain_snapshot(
+    transaction: &tokio_postgres::Transaction<'_>,
+    hasher: &AuditChainHasher,
+    sink: Option<&mut dyn Write>,
+) -> Result<(ChainWalk, Option<[u8; 32]>)> {
+    let head_hash = read_head_hash(transaction).await?;
+    let walk = walk_chain(transaction, hasher, sink).await?;
+    if walk.last_hash != head_hash {
+        return Err(AuditToolingError::HeadMismatch);
+    }
+    let total = transaction
+        .query_one("SELECT count(*) FROM registry_internal.registry_audit", &[])
+        .await
+        .map_err(|_| AuditToolingError::Unavailable)?;
+    if walk.records != count_from(&total, 0)? {
+        return Err(AuditToolingError::Unreachable {
+            records: walk.records,
+        });
+    }
+    Ok((walk, head_hash))
 }
 
 async fn read_head_hash(transaction: &tokio_postgres::Transaction<'_>) -> Result<Option<[u8; 32]>> {

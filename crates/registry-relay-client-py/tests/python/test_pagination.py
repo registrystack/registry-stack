@@ -35,7 +35,9 @@ class PaginationTest(unittest.TestCase):
                 )
             if target.path == "/prefix/v2/resources/people/searches/nearby":
                 response = json_response(
-                    record_collection(None if "cursor" in query else "search_cursor")
+                    record_collection(
+                        None if "cursor" in query else "search_cursor", json_ld=True
+                    )
                 )
                 return type(response)(
                     response.status,

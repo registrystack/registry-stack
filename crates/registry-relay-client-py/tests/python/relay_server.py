@@ -11,6 +11,8 @@ from typing import Callable, Mapping
 TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"
 TRACEPARENT = f"00-{TRACE_ID}-00f067aa0ba902b7-01"
 ETAG = f'"{"a" * 64}"'
+REGISTRY_RECORD_CONTEXT = "https://id.registrystack.org/contexts/registry-record/v1"
+RELAY_CONTEXT = "https://relay.example.test/v2/artifacts/context"
 
 
 @dataclass(frozen=True)
@@ -110,6 +112,9 @@ def service_metadata() -> dict[str, object]:
 
 def record_metadata() -> dict[str, object]:
     return {
+        "registryIdentifier": "urn:example:registry",
+        "datasetIdentifier": "people",
+        "entityTypeIdentifier": "person",
         "operationIdentifier": "records",
         "accessProfile": "public",
         "family": "consultation",
@@ -120,16 +125,15 @@ def record_metadata() -> dict[str, object]:
         "selectedFields": [],
         "links": {
             "self": "/v2/resources/people/records",
-            "context": "/v2/artifacts/context",
+            "context": RELAY_CONTEXT,
             "schema": "/v2/artifacts/schema",
             "semanticModel": "/v2/artifacts/model",
         },
     }
 
 
-def record(identifier: str = "one") -> dict[str, object]:
-    return {
-        "registryIdentifier": "urn:example:registry",
+def record(identifier: str = "one", *, json_ld: bool = False) -> dict[str, object]:
+    value = {
         "recordIdentifier": identifier,
         "revisionIdentifier": "r1",
         "lifecycleState": "active",
@@ -139,14 +143,21 @@ def record(identifier: str = "one") -> dict[str, object]:
         "recordedAt": "2026-08-11T00:00:00Z",
         "domainData": {"label": "Example"},
     }
+    if json_ld:
+        value["@id"] = f"https://relay.example.test/v2/resources/people/records/{identifier}"
+        value["@type"] = "urn:example:Person"
+    return value
 
 
-def record_collection(next_cursor: str | None) -> dict[str, object]:
-    return {
-        "items": [record()],
+def record_collection(next_cursor: str | None, *, json_ld: bool = False) -> dict[str, object]:
+    value = {
+        "items": [record(json_ld=json_ld)],
         "pageInfo": {"nextCursor": next_cursor},
         "meta": record_metadata(),
     }
+    if json_ld:
+        value["@context"] = [REGISTRY_RECORD_CONTEXT, RELAY_CONTEXT]
+    return value
 
 
 def resource_document() -> dict[str, object]:

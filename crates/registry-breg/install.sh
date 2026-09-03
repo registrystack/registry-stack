@@ -199,42 +199,74 @@ that verified directory:
 EOF
 
 mkdir -p "$install_dir"
-stage_dir="$(mktemp -d "$install_dir/.breg-install.XXXXXX")"
-install_started=0
+stage_dir="$(mktemp -d "$install_dir/.breg-toolset.XXXXXX")"
+link_stage_dir="$(mktemp -d "$install_dir/.breg-links.XXXXXX")"
 install_complete=0
-rollback_install() {
+cleanup_install() {
 	set +e
-	if [ "$install_started" -eq 1 ] && [ "$install_complete" -eq 0 ]; then
-		local binary
-		for binary in "${binaries[@]}"; do
-			if [ -f "$tmpdir/${binary}.previous" ]; then
-				cp -p "$tmpdir/${binary}.previous" "$install_dir/$binary"
-			else
-				rm -f "$install_dir/$binary"
-			fi
-		done
+	if [ "$install_complete" -eq 0 ]; then
+		rm -rf "$stage_dir"
 	fi
-	rm -rf "$stage_dir"
+	rm -rf "$link_stage_dir"
 }
-trap 'rollback_install; cleanup' EXIT
+trap 'cleanup_install; cleanup' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
 for binary in "${binaries[@]}"; do
 	cp "$tmpdir/${binary}-${version}-${os_label}-${arch_label}" "$stage_dir/$binary"
 	chmod 0755 "$stage_dir/$binary"
-	if [ -e "$install_dir/$binary" ]; then
-		cp -p "$install_dir/$binary" "$tmpdir/${binary}.previous"
-	fi
 done
 
-# Replace both binaries only after each one is staged and verified, so an
-# interrupted update never leaves a mixed-version Base Registry Engine toolset.
-install_started=1
+replace_path() {
+	local source="$1"
+	local destination="$2"
+	if [ "$os_label" = "macos" ]; then
+		mv -fh "$source" "$destination"
+	else
+		mv -Tf "$source" "$destination"
+	fi
+}
+
+current_link="$install_dir/.breg-current"
+if [ -e "$current_link" ] && [ ! -L "$current_link" ]; then
+	echo "Refusing to replace a non-symbolic Base Registry Engine toolset pointer." >&2
+	exit 1
+fi
+
+# A one-time migration keeps existing direct binaries behind the same pointer
+# before their stable command links are installed. At every point both commands
+# therefore resolve to the prior toolset, the new toolset, or neither.
+if [ ! -L "$current_link" ]; then
+	previous_dir="$(mktemp -d "$install_dir/.breg-previous.XXXXXX")"
+	previous_count=0
+	for binary in "${binaries[@]}"; do
+		if [ -e "$install_dir/$binary" ] && [ ! -d "$install_dir/$binary" ]; then
+			cp -p "$install_dir/$binary" "$previous_dir/$binary"
+			previous_count=$((previous_count + 1))
+		fi
+	done
+	if [ "$previous_count" -gt 0 ]; then
+		ln -s "${previous_dir##*/}" "$link_stage_dir/current"
+		replace_path "$link_stage_dir/current" "$current_link"
+	else
+		rm -rf "$previous_dir"
+	fi
+fi
+
 for binary in "${binaries[@]}"; do
-	mv -f "$stage_dir/$binary" "$install_dir/$binary"
+	if [ -d "$install_dir/$binary" ] && [ ! -L "$install_dir/$binary" ]; then
+		echo "Refusing to replace a directory at $install_dir/$binary." >&2
+		exit 1
+	fi
+	ln -s ".breg-current/$binary" "$link_stage_dir/$binary"
+	replace_path "$link_stage_dir/$binary" "$install_dir/$binary"
 done
+
+# Both stable command links change version through this one atomic rename.
+ln -s "${stage_dir##*/}" "$link_stage_dir/current"
 install_complete=1
+replace_path "$link_stage_dir/current" "$current_link"
 
 for binary in "${binaries[@]}"; do
 	printf '%s installed to %s\n' "$binary" "$install_dir/$binary"

@@ -8,6 +8,8 @@
 use std::fs;
 use std::future::Future;
 use std::io::{self, Write};
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -20,8 +22,7 @@ use registry_breg::data::{
 use registry_breg::package::{inspect_package_integrity, PackageEnvelope, PackageError};
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use registry_platform_httputil::client::{
-    build_client, transport_protects_the_credential, OutboundOptions, DEFAULT_CONNECT_TIMEOUT,
-    DEFAULT_REQUEST_TIMEOUT,
+    build_client, OutboundOptions, ServiceBaseUrl, DEFAULT_CONNECT_TIMEOUT, DEFAULT_REQUEST_TIMEOUT,
 };
 use registry_platform_httputil::{read_bounded, validate_response_headers};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
@@ -288,8 +289,6 @@ pub(crate) fn run_export(
         request.fields.iter().cloned(),
     )
     .map_err(DataLifecycleError::Data)?;
-    ensure_new_file(request.output)?;
-    ensure_new_file(request.checkpoint)?;
     let breg_url = parse_breg_url(request.breg_url)?;
     let token = read_access_token(request.access_token_file)?;
     let (mut checkpoint, mut resume_state) = DataExportCheckpoint::start(
@@ -303,6 +302,7 @@ pub(crate) fn run_export(
         .build()
         .map_err(|_| DataLifecycleError::Runtime)?;
     let client = build_data_http_client()?;
+    reserve_export_paths(request.output, request.checkpoint)?;
     let mut output_prefix = Vec::new();
     let mut pages = 0u64;
     let max_pages = request.max_pages.unwrap_or(u64::MAX);
@@ -348,14 +348,11 @@ pub(crate) fn run_export(
 
 async fn dispatch_http(
     client: &Client,
-    base: &Url,
+    base: &ServiceBaseUrl,
     token: &str,
     request: DataHttpRequest,
 ) -> Result<DataHttpResponse, ()> {
-    let url = base.join(request.path_and_query()).map_err(|_| ())?;
-    if url.origin() != base.origin() {
-        return Err(());
-    }
+    let url = data_endpoint(base, request.path_and_query())?;
     let method = match request.method() {
         DataHttpMethod::Get => Method::GET,
         DataHttpMethod::Post => Method::POST,
@@ -628,20 +625,18 @@ fn read_access_token(path: &Path) -> Result<String, DataLifecycleError> {
     Ok(token.to_owned())
 }
 
-fn parse_breg_url(value: &str) -> Result<Url, DataLifecycleError> {
-    let mut url = Url::parse(value).map_err(|_| DataLifecycleError::BRegUrl)?;
-    if url.username() != ""
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-        || url.host_str().is_none()
-    {
-        return Err(DataLifecycleError::BRegUrl);
-    }
-    if !transport_protects_the_credential(&url) {
-        return Err(DataLifecycleError::BRegUrl);
-    }
-    url.set_path("/");
+fn parse_breg_url(value: &str) -> Result<ServiceBaseUrl, DataLifecycleError> {
+    let url = Url::parse(value).map_err(|_| DataLifecycleError::BRegUrl)?;
+    ServiceBaseUrl::new(url).map_err(|_| DataLifecycleError::BRegUrl)
+}
+
+fn data_endpoint(base: &ServiceBaseUrl, path_and_query: &str) -> Result<Url, ()> {
+    let (path, query) = path_and_query
+        .split_once('?')
+        .map_or((path_and_query, None), |(path, query)| (path, Some(query)));
+    let path = path.strip_prefix('/').ok_or(())?;
+    let mut url = base.join(path).map_err(|_| ())?;
+    url.set_query(query);
     Ok(url)
 }
 
@@ -659,19 +654,9 @@ fn read_bounded_regular(path: &Path, max_bytes: u64) -> Result<Vec<u8>, io::Erro
     fs::read(path)
 }
 
-fn ensure_new_file(path: &Path) -> Result<(), DataLifecycleError> {
-    if path.as_os_str().is_empty() || super::has_parent_component(path) {
-        return Err(DataLifecycleError::Output);
-    }
-    if let Some(parent) = path.parent() {
-        super::ensure_no_symlink_components(parent, "data.output.invalid", "output")
-            .map_err(|_| DataLifecycleError::Output)?;
-    }
-    match fs::symlink_metadata(path) {
-        Ok(_) => Err(DataLifecycleError::Output),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(_) => Err(DataLifecycleError::Output),
-    }
+fn reserve_export_paths(output: &Path, checkpoint: &Path) -> Result<(), DataLifecycleError> {
+    write_atomic_create_new(output, &[])?;
+    write_atomic_create_new(checkpoint, &[])
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), DataLifecycleError> {
@@ -724,11 +709,11 @@ fn write_atomic_temporary(parent: &Path, bytes: &[u8]) -> Result<PathBuf, DataLi
     for _ in 0..MAX_ATOMIC_WRITE_TEMP_ATTEMPTS {
         let temporary =
             atomic_write_temporary_path(parent, DATA_WRITE_COUNTER.fetch_add(1, Ordering::Relaxed));
-        let mut file = match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-        {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut file = match options.open(&temporary) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(_) => return Err(DataLifecycleError::Output),
@@ -977,6 +962,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn write_atomic_skips_temp_symlink_collision_and_refuses_final_symlink() {
+        use std::os::unix::fs::PermissionsExt as _;
+
         let directory = test_directory("atomic-symlink");
         let canary = directory.join("canary.txt");
         let destination = directory.join("checkpoint.json");
@@ -990,6 +977,10 @@ mod tests {
         write_atomic(&destination, b"checkpoint").unwrap();
 
         assert_eq!(fs::read(&destination).unwrap(), b"checkpoint");
+        assert_eq!(
+            fs::metadata(&destination).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         assert_eq!(fs::read(&canary).unwrap(), b"unchanged");
         assert!(fs::symlink_metadata(&collided_temporary)
             .unwrap()
@@ -1002,6 +993,29 @@ mod tests {
             Err(DataLifecycleError::Output)
         ));
         assert_eq!(fs::read(&canary).unwrap(), b"unchanged");
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn export_paths_are_reserved_without_clobbering_a_concurrent_file() {
+        let directory = test_directory("export-reservation");
+        let output = directory.join("records.jsonl");
+        let checkpoint = directory.join("export.checkpoint.json");
+
+        fs::write(&checkpoint, b"concurrent-checkpoint").unwrap();
+        assert!(matches!(
+            reserve_export_paths(&output, &checkpoint),
+            Err(DataLifecycleError::Output)
+        ));
+        assert_eq!(fs::read(&output).unwrap(), b"");
+        assert_eq!(fs::read(&checkpoint).unwrap(), b"concurrent-checkpoint");
+
+        fs::remove_file(&output).unwrap();
+        fs::remove_file(&checkpoint).unwrap();
+        reserve_export_paths(&output, &checkpoint).unwrap();
+        assert_eq!(fs::read(&output).unwrap(), b"");
+        assert_eq!(fs::read(&checkpoint).unwrap(), b"");
 
         fs::remove_dir_all(directory).unwrap();
     }
@@ -1431,12 +1445,20 @@ mod tests {
         assert!(parse_breg_url("https://registry.example.test").is_ok());
         assert!(parse_breg_url("http://127.0.0.1:8080").is_ok());
         assert!(parse_breg_url("http://localhost:8080").is_ok());
+        let prefixed = parse_breg_url("https://registry.example.test/deployment").unwrap();
+        assert_eq!(
+            data_endpoint(&prefixed, "/v1/records/people?accessProfile=operator")
+                .unwrap()
+                .as_str(),
+            "https://registry.example.test/deployment/v1/records/people?accessProfile=operator"
+        );
 
         for refused in [
             "http://registry.example.test",
             "https://user:pass@registry.example.test",
             "https://registry.example.test?x=1",
             "https://registry.example.test/#fragment",
+            "https://registry.example.test/a//b",
             "file:///tmp/registry",
         ] {
             assert!(parse_breg_url(refused).is_err(), "{refused}");

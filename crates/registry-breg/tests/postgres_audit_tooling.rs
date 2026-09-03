@@ -272,6 +272,61 @@ async fn prune_removes_the_qualifying_prefix_and_records_what_went() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn prune_refuses_an_unverified_journal_before_deleting_records() {
+    let fixture = Fixture::create().await;
+    fixture.seed(3).await;
+    let chain = fixture.chain().await;
+    let original = fixture.envelope_bytes(&chain[1].envelope_id).await;
+    let mut tampered: Value = serde_json::from_slice(&original).expect("the envelope is JSON");
+    tampered["record"]["operationId"] = Value::String("records.membership.list".to_owned());
+    fixture
+        .set_envelope_bytes(
+            &chain[1].envelope_id,
+            &serde_json::to_vec(&tampered).expect("the tampered envelope serializes"),
+        )
+        .await;
+    assert_eq!(
+        fixture
+            .service()
+            .prune(boundary("2025-01-01T00:00:00Z"), false)
+            .await
+            .err(),
+        Some(AuditToolingError::ChainBroken { position: 2 })
+    );
+    assert_eq!(fixture.record_count().await, 3);
+    fixture.cleanup().await;
+
+    let fixture = Fixture::create().await;
+    fixture.seed(3).await;
+    fixture.set_head(Some(UNKNOWN_HASH.as_slice())).await;
+    assert_eq!(
+        fixture
+            .service()
+            .prune(boundary("2025-01-01T00:00:00Z"), false)
+            .await
+            .err(),
+        Some(AuditToolingError::HeadMismatch)
+    );
+    assert_eq!(fixture.record_count().await, 3);
+    fixture.cleanup().await;
+
+    let fixture = Fixture::create().await;
+    fixture.seed(3).await;
+    let chain = fixture.chain().await;
+    fixture.delete_record(&chain[1].envelope_id).await;
+    assert_eq!(
+        fixture
+            .service()
+            .prune(boundary("2025-01-01T00:00:00Z"), false)
+            .await
+            .err(),
+        Some(AuditToolingError::Unreachable { records: 1 })
+    );
+    assert_eq!(fixture.record_count().await, 2);
+    fixture.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prune_stops_at_the_first_record_the_boundary_retains() {
     let fixture = Fixture::create().await;
     fixture.seed(4).await;

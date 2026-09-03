@@ -279,6 +279,9 @@ fn shacl(
             " ;\n  sh:property [ sh:path <{namespace}{path}> ; sh:datatype <{datatype}>{controlled_values} ; sh:minCount 1 ; sh:maxCount 1 ]"
         ));
     }
+    output.push_str(
+        " ;\n  sh:property [ sh:path <https://id.registrystack.org/vocab/registry-record/domainData> ; sh:minCount 1 ; sh:maxCount 1 ; sh:node [ sh:closed true",
+    );
     for property in selected_properties(resource, selected) {
         match &property.binding {
             CompiledPropertyBinding::Scalar(binding) => {
@@ -295,7 +298,7 @@ fn shacl(
                     _ => String::new(),
                 };
                 output.push_str(&format!(
-                    " ;\n  sh:property [ sh:path <{}> ; sh:datatype <{}>{} ; sh:minCount {} ; sh:maxCount 1 ]",
+                    " ;\n    sh:property [ sh:path <{}> ; sh:datatype <{}>{} ; sh:minCount {} ; sh:maxCount 1 ]",
                     property.semantic_iri,
                     datatype_iri(binding.data_type),
                     controlled_values,
@@ -303,13 +306,13 @@ fn shacl(
                 ));
             }
             CompiledPropertyBinding::Point(_) => output.push_str(&format!(
-                " ;\n  sh:property [ sh:path <{}> ; sh:datatype <http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON> ; sh:minCount {} ; sh:maxCount 1 ]",
+                " ;\n    sh:property [ sh:path <{}> ; sh:datatype <http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON> ; sh:minCount {} ; sh:maxCount 1 ]",
                 property.semantic_iri,
                 usize::from(full && property.source_required)
             )),
         }
     }
-    output.push_str(" .\n");
+    output.push_str(" ] ] .\n");
     output
 }
 
@@ -509,6 +512,12 @@ mod tests {
         assert!(shacl.contains("sh:targetClass <https://example.invalid/vocab/Record>"));
         assert!(shacl.contains("sh:ignoredProperties ( rdf:type )"));
         assert!(shacl.contains("sh:nodeKind sh:IRI"));
+        assert!(shacl.contains(
+            "sh:path <https://id.registrystack.org/vocab/registry-record/domainData> ; sh:minCount 1 ; sh:maxCount 1 ; sh:node [ sh:closed true"
+        ));
+        assert!(shacl.contains(
+            "sh:node [ sh:closed true ;\n    sh:property [ sh:path <https://example.invalid/vocab/name>"
+        ));
         assert!(shacl.contains("sh:in ( \"ACTIVE\" \"RETIRED\" )"));
         assert!(shacl.contains("sh:in ( \"ONE\" \"TWO\" )"));
     }
