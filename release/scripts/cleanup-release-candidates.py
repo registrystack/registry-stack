@@ -20,8 +20,8 @@ OWNER = "registrystack"
 RETENTION_DAYS = 8
 CANDIDATE_PACKAGES = (
     # Listing an absent package fails closed, so a candidate name joins this
-    # allowlist with the release that first publishes it.
-    "breg-candidate",
+    # allowlist with the release that first publishes it. breg-candidate
+    # joins once v0.26.0 publishes the first Base Registry Engine candidate.
     "discovery-candidate",
     "evidence-candidate",
     "mint-candidate",
@@ -48,7 +48,37 @@ class GitHubApiError(CleanupError):
 
     def __init__(self, method: str, url: str, status: int, detail: str) -> None:
         self.status = status
+        self.detail = detail
         super().__init__(f"GitHub API {method} {url} failed with {status}: {detail}")
+
+
+# The exact text GitHub uses when a publicly visible package version has
+# crossed its download threshold and can no longer be deleted by any caller;
+# clearing it needs GitHub support. This is the one documented restriction
+# that must not abort a scheduled cleanup run.
+UNDELETABLE_HIGH_DOWNLOAD_MESSAGE = (
+    "Publicly visible package versions with more than 5000 downloads "
+    "cannot be deleted"
+)
+
+
+def undeletable_high_download_reason(error: GitHubApiError) -> str | None:
+    """Return GitHub's message for the documented high-download delete refusal.
+
+    Returns None for every other failure (status, message, or unparsable
+    body) so callers keep failing closed on anything not proven safe to
+    tolerate.
+    """
+    if error.status != 400:
+        return None
+    try:
+        payload = json.loads(error.detail)
+    except json.JSONDecodeError:
+        return None
+    message = payload.get("message") if isinstance(payload, dict) else None
+    if isinstance(message, str) and UNDELETABLE_HIGH_DOWNLOAD_MESSAGE in message:
+        return message
+    return None
 
 
 def parse_rfc3339(value: Any, *, field: str) -> datetime:
@@ -229,7 +259,14 @@ def cleanup(
             actions.append(action)
     if apply:
         for action in actions:
-            client.delete_package_version(action["package"], action["version_id"])
+            try:
+                client.delete_package_version(action["package"], action["version_id"])
+            except GitHubApiError as error:
+                reason = undeletable_high_download_reason(error)
+                if reason is None:
+                    raise
+                action["action"] = "undeletable"
+                action["reason"] = reason
     return {
         "schema_version": "registry-stack.release-candidate-cleanup.v1",
         "owner": OWNER,
