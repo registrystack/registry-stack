@@ -93,9 +93,9 @@ jq -e --arg tag "${tag}" '
 ```
 
 Starting with `v0.21.0`, the exact image set is Evidence Gateway, Registry
-Mint, and Registry Relay. Registry Discovery joins at `v0.24.0`, and Registry
-Server joins at `v0.26.0`. The final release tags recorded in the manifest must
-resolve to the same digests as their candidate bindings:
+Mint, and Registry Relay. Registry Discovery joins at `v0.24.0`, and Base
+Registry Engine joins at `v0.26.0`. The final release tags recorded in the
+manifest must resolve to the same digests as their candidate bindings:
 
 ```sh
 while IFS=$'\t' read -r name digest final_ref; do

@@ -91,9 +91,9 @@ exactly the names in `CANDIDATE_PACKAGES` in
 cannot list, so naming an unpublished package would abort the whole scheduled
 run. Add `<name>-candidate` to that allowlist with a matching fixture in
 `release/scripts/test_cleanup_release_candidates.py`. Also add the public name
-to `PUBLIC_PACKAGES` so cleanup can never reach a released image. Registry
-Server is already on the public denylist; its candidate name joins the allowlist
-after the first private candidate is present.
+to `PUBLIC_PACKAGES` so cleanup can never reach a released image. Base
+Registry Engine is already on the public denylist; its candidate name joins
+the allowlist after the first private candidate is present.
 
 ### Provision client registries
 
