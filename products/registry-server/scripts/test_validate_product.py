@@ -231,6 +231,10 @@ class RegistryServerProductCatalogTests(unittest.TestCase):
     def test_postgres_immediate_action_examples_are_registered_after_core_action_gate(self) -> None:
         commands = list(VALIDATOR.POSTGRES_TEST_COMMANDS)
         mutation = "cargo test --locked -p registry-server --features postgres-test --test postgres_mutation"
+        mutation_logical_names = (
+            "cargo test --locked -p registry-server --features postgres-test "
+            "--test postgres_mutation_logical_names"
+        )
         immediate_actions = (
             "cargo test --locked -p registry-server --features postgres-test "
             "--test postgres_immediate_actions"
@@ -247,7 +251,8 @@ class RegistryServerProductCatalogTests(unittest.TestCase):
             "cargo test --locked -p registry-server --features postgres-test "
             "--test postgres_webhook_outbox"
         )
-        self.assertEqual(commands.index(mutation) + 1, commands.index(immediate_actions))
+        self.assertEqual(commands.index(mutation) + 1, commands.index(mutation_logical_names))
+        self.assertEqual(commands.index(mutation_logical_names) + 1, commands.index(immediate_actions))
         self.assertEqual(commands.index(immediate_actions) + 1, commands.index(immediate_examples))
         self.assertEqual(commands.index(immediate_examples) + 1, commands.index(immediate_activation))
         self.assertEqual(commands.index(immediate_activation) + 1, commands.index(webhook_outbox))

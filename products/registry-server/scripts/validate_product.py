@@ -96,6 +96,7 @@ POSTGRES_TEST_COMMANDS = (
     "cargo test --locked -p registry-server --features postgres-test --test postgres_history_rebaseline",
     "cargo test --locked -p registry-server --features postgres-test --test postgres_workspace_metadata",
     "cargo test --locked -p registry-server --features postgres-test --test postgres_mutation",
+    "cargo test --locked -p registry-server --features postgres-test --test postgres_mutation_logical_names",
     "cargo test --locked -p registry-server --features postgres-test --test postgres_immediate_actions",
     "cargo test --locked -p registry-server --features postgres-test,tooling --test postgres_immediate_action_examples",
     "cargo test --locked -p registry-server --features postgres-test,tooling --test postgres_immediate_action_activation",

@@ -39,11 +39,13 @@ async fn real_postgres_mutations_use_only_governed_api_field_names() {
         .expect("ETag is ASCII")
         .to_owned();
     let created = response_json(created).await;
-    assert_eq!(created["data"]["assetCode"], "A-100");
-    assert_eq!(created["data"]["assetClass"], "equipment");
-    assert!(created["data"].get("asset-code").is_none());
-    assert!(created["data"].get("asset-class").is_none());
-    let record_id = created["id"].as_str().expect("created id is present");
+    assert_eq!(created["data"]["domainData"]["assetCode"], "A-100");
+    assert_eq!(created["data"]["domainData"]["assetClass"], "equipment");
+    assert!(created["data"]["domainData"].get("asset-code").is_none());
+    assert!(created["data"]["domainData"].get("asset-class").is_none());
+    let record_id = created["data"]["recordIdentifier"]
+        .as_str()
+        .expect("created record identifier is present");
 
     let patched = harness
         .send(
@@ -71,8 +73,8 @@ async fn real_postgres_mutations_use_only_governed_api_field_names() {
         .expect("ETag is ASCII")
         .to_owned();
     let patched = response_json(patched).await;
-    assert_eq!(patched["data"]["assetCode"], "A-101");
-    assert!(patched["data"].get("asset-code").is_none());
+    assert_eq!(patched["data"]["domainData"]["assetCode"], "A-101");
+    assert!(patched["data"]["domainData"].get("asset-code").is_none());
 
     let batch = harness
         .send_json(
