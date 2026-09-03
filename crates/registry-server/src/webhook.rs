@@ -963,10 +963,9 @@ impl WebhookDeliveryService {
             u64::try_from(material.deployed_attempt_timeout_ms)
                 .map_err(|_| WebhookDeliveryError::Unavailable)?,
         );
-        let elapsed = SystemTime::now()
-            .duration_since(claim.attempt_started_at)
-            .map_err(|_| WebhookDeliveryError::Unavailable)?;
-        let Some(remaining) = attempt_timeout.checked_sub(elapsed) else {
+        let Some(remaining) =
+            remaining_attempt_budget(attempt_timeout, claim.attempt_started_at, SystemTime::now())
+        else {
             return Ok(WebhookAuditOutcome::DestinationTimeout);
         };
         if remaining.is_zero() {
@@ -1535,6 +1534,24 @@ fn classify_send_error(error: DestinationSendError, deadline_reached: bool) -> W
     }
 }
 
+/// Attempt budget still available for the request, or `None` once the captured
+/// attempt timeout is spent.
+///
+/// The claim timestamp is the database clock and `now` is this process's clock,
+/// so the two disagree by whatever offset separates the two hosts. An attempt
+/// that appears to start in the local future has spent none of its budget, and
+/// the request that follows still gets at most the captured attempt timeout.
+fn remaining_attempt_budget(
+    attempt_timeout: Duration,
+    attempt_started_at: SystemTime,
+    now: SystemTime,
+) -> Option<Duration> {
+    let elapsed = now
+        .duration_since(attempt_started_at)
+        .unwrap_or(Duration::ZERO);
+    attempt_timeout.checked_sub(elapsed)
+}
+
 fn bounded_delivery_id(
     row: &tokio_postgres::Row,
     index: usize,
@@ -1649,6 +1666,41 @@ fn append_length_prefixed(output: &mut Vec<u8>, value: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn attempt_budget_is_unspent_when_the_claim_clock_runs_ahead_of_this_process() {
+        let attempt_timeout = Duration::from_millis(2_000);
+        let attempt_started_at = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        let ahead_of_this_process = attempt_started_at - Duration::from_millis(5);
+        assert_eq!(
+            remaining_attempt_budget(attempt_timeout, attempt_started_at, ahead_of_this_process),
+            Some(attempt_timeout),
+            "a claim that appears to start in the local future has spent none of its budget"
+        );
+    }
+
+    #[test]
+    fn attempt_budget_is_exhausted_once_the_captured_attempt_timeout_elapses() {
+        let attempt_timeout = Duration::from_millis(2_000);
+        let attempt_started_at = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        assert_eq!(
+            remaining_attempt_budget(
+                attempt_timeout,
+                attempt_started_at,
+                attempt_started_at + Duration::from_millis(1_500)
+            ),
+            Some(Duration::from_millis(500))
+        );
+        assert_eq!(
+            remaining_attempt_budget(
+                attempt_timeout,
+                attempt_started_at,
+                attempt_started_at + Duration::from_millis(2_001)
+            ),
+            None,
+            "an attempt that outlives its captured timeout never reaches the destination"
+        );
+    }
 
     #[test]
     fn hmac_sha256_v1_binds_every_header_and_exact_canonical_body() {
