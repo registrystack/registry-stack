@@ -283,7 +283,7 @@ projects:
       size: 6630
       visibility: operator-only
   business-registry:
-    packageRevision: sha256:2725ee1e6ee2b5e2b9d00af0d7a7b62546197e6d892d42b9cd08a89da2fc602e
+    packageRevision: sha256:70878695f248748a4ff171e44ac3b5cf5eb18a6fb102c0d02ed41642ce6909f7
     contractRevision: sha256:e7bce610dec7dd1d5227e7931950fce675804efdf9537b8f31346c749732b5ae
     sourceSchemaFingerprints:
       companies: sha256:dd62b98578f0fa7341eeeaaac4b34da9b79405ae067dc06e5edb004c2d4a38fe
@@ -623,7 +623,7 @@ projects:
       mediaType: application/schema+json
       operationIdentifier: registered-premises.list
       path: generated/artifacts/registered-premises--list--access-profile-registrar-premises.geojson.schema.json
-      sha256: sha256:8060b8d58ed20db6d9193dca1d2f93b27f38b81582ac2e9e7682d0f4683299bf
+      sha256: sha256:17c3c49c52438d809b7924282f136f250a492bafc9c6a2c004fd8330d6fcbe23
       visibility: operation-bound
     - accessBinding:
         identifier: registrar-premises
@@ -680,7 +680,7 @@ projects:
       mediaType: application/schema+json
       operationIdentifier: null
       path: generated/artifacts/registered-premises--read--access-profile-public-premises.geojson.schema.json
-      sha256: sha256:36f4a79cec52f78c69e3f72f36d9c9e899af38fd9670849c10282ee965068221
+      sha256: sha256:3eb8430996cd2febd9e5fa41ef3800b282754652c2addcc1e5b72cade19c619a
       visibility: public
     - accessBinding: null
       id: registered-premises--read--access-profile-public-premises-processing
@@ -744,7 +744,7 @@ projects:
       mediaType: application/schema+json
       operationIdentifier: registered-premises.read
       path: generated/artifacts/registered-premises--read--access-profile-registrar-premises.geojson.schema.json
-      sha256: sha256:bf21539e0e036e39cc9370a03625975fb7e42ea75731dbcfad17ec79295d95a2
+      sha256: sha256:b1f8f1ce635b49a46e52818bd2f5c4bec113060ab76f17db86b47420c08df36c
       visibility: operation-bound
     - accessBinding:
         identifier: registrar-premises
@@ -801,7 +801,7 @@ projects:
       mediaType: application/schema+json
       operationIdentifier: null
       path: generated/artifacts/registered-premises--search-within-bbox--access-profile-public-premises.geojson.schema.json
-      sha256: sha256:6a77843becd7e2ee01966acfa7d29928dac0df9a2061120270f3bac7e5a2ed58
+      sha256: sha256:8fa5da5c0295a530e154e08d39561105eeb451ce84ce6bc612a4c8e8b4b09db8
       visibility: public
     - accessBinding: null
       id: registered-premises--search-within-bbox--access-profile-public-premises-processing
@@ -865,7 +865,7 @@ projects:
       mediaType: application/schema+json
       operationIdentifier: registered-premises.search.within-bbox
       path: generated/artifacts/registered-premises--search-within-bbox--access-profile-registrar-premises.geojson.schema.json
-      sha256: sha256:873b17fa7c6b22fe3190b5ce7b8416d9aaa01ffa9e8b256d417cf768e4f6ea89
+      sha256: sha256:ca73b4358f749f3e3b5a52eaba18cbf32bda03142a445dcd613324bb2041e5a0
       visibility: operation-bound
     - accessBinding:
         identifier: registrar-premises
@@ -950,14 +950,14 @@ projects:
       mediaType: application/yaml
       operationIdentifier: null
       path: generated/openapi.full.yaml
-      sha256: sha256:24f528938a9e1dddf0e876ef05325d4c67b04c77c9496d410be6fa7e3ceba17e
+      sha256: sha256:ed305f59d27e11414ae94244785f5ff3fded5a1863011a2b3e9c31284c57270f
       visibility: operator-only
     - accessBinding: null
       id: openapi-public
       mediaType: application/json
       operationIdentifier: null
       path: generated/openapi.public.json
-      sha256: sha256:08d66c8923272385b48fcf37a287f292878c031053b50ae4fb56783a024bf5d1
+      sha256: sha256:543c0aecaba6b38769a7a872dedc5efdf49672aa16f730311f604fbd983cbd07
       visibility: public
     governedFiles:
     - generated: false

@@ -1599,13 +1599,13 @@ fn geojson_response_schema(
             "type": "object", "additionalProperties": false,
             "required": ["type", "features", "pageInfo", "meta"],
             "properties": {
-                "type": {"const": "FeatureCollection"},
+                "type": {"type": "string", "const": "FeatureCollection"},
                 "features": {"type": "array", "items": geojson_feature_schema(registry, access_profile, resource, false)},
                 "pageInfo": {"type": "object", "additionalProperties": false, "required": ["nextCursor"], "properties": {"nextCursor": {"type": ["string", "null"]}}},
                 "meta": {"type": "object"},
                 "conformsTo": json_fg_conforms_to_schema(),
-                "featureType": {"const": resource.id},
-                "coordRefSys": {"const": CRS84_URI}
+                "featureType": {"type": "string", "const": resource.id},
+                "coordRefSys": {"type": "string", "const": CRS84_URI}
             },
             "dependentRequired": {
                 "conformsTo": ["featureType", "coordRefSys"],
@@ -1651,7 +1651,7 @@ fn geojson_feature_schema(
         required.push(json!("meta"));
     }
     let mut properties = json!({
-        "type": {"const": "Feature"},
+        "type": {"type": "string", "const": "Feature"},
         "id": {"type": "string", "minLength": 1},
         "geometry": {"oneOf": [point_geometry_schema(), {"type": "null"}]},
         "properties": geojson_record_properties_schema(registry, access_profile, resource)
@@ -1662,8 +1662,14 @@ fn geojson_feature_schema(
             .expect("Feature properties schema");
         object.insert("meta".into(), json!({"type": "object"}));
         object.insert("conformsTo".into(), json_fg_conforms_to_schema());
-        object.insert("featureType".into(), json!({"const": resource.id}));
-        object.insert("coordRefSys".into(), json!({"const": CRS84_URI}));
+        object.insert(
+            "featureType".into(),
+            json!({"type": "string", "const": resource.id}),
+        );
+        object.insert(
+            "coordRefSys".into(),
+            json!({"type": "string", "const": CRS84_URI}),
+        );
     }
     let mut schema = json!({
         "type": "object", "additionalProperties": false,
@@ -1712,7 +1718,7 @@ fn geojson_record_properties_schema(
         .expect("record properties")
         .insert(
             "registryIdentifier".into(),
-            json!({"const": registry.registry_identifier}),
+            json!({"type": "string", "const": registry.registry_identifier}),
         );
     schema
 }
@@ -1722,7 +1728,7 @@ fn point_geometry_schema() -> Value {
         "type": "object", "additionalProperties": false,
         "required": ["type", "coordinates"],
         "properties": {
-            "type": {"const": "Point"},
+            "type": {"type": "string", "const": "Point"},
             "coordinates": {
                 "type": "array",
                 "prefixItems": [
