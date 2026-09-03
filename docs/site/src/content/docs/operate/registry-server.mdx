@@ -667,9 +667,23 @@ One transaction proves the retained journal head of every live row still reprodu
 installs one baseline commit at the head, and moves the coverage baseline to it. It restores
 nothing that was erased: references taken before the new baseline stay unavailable, because the
 bytes they named are gone. Take a fresh reference afterwards. The command refuses when coverage
-is already complete, when the registry is not ready, when a retained revision is not indexed by a
-commit, and when a live row has no retained journal head that reproduces it. The result and the
-audit record carry counts and positions, not values.
+is already complete, when the registry is not ready, when a retained journal head is not indexed
+by a commit, and when a live row has no retained journal head that reproduces it. The result and
+the audit record carry counts and positions, not values.
+
+That one transaction verifies at most 1,000 live rows, and a registry holding more is refused
+with `history.rebaseline.live_rows.budget_exceeded`. The limit is fixed and the refusal is not
+retryable: a registry above it cannot restore snapshot coverage with this command, so treat the
+code as a report that the erasure left coverage unrecoverable rather than as a transient failure.
+
+`history.rebaseline.live_rows.unverified` reports one live row that its journal head does not
+reproduce, and names neither the entity nor the record, because operator refusals here carry no
+values. It stops at the first entity whose live rows and journal heads do not line up, and inside
+an entity at the first record identifier whose values differ, so a run that gets further has
+already proved every earlier entity. To find the row, read the revisions of the records you
+suspect with `GET /v1/records/{route}/{recordId}/revisions`, or compare live rows with their
+journal heads directly under the migration role you already hold. The usual cause is a live row
+that changed outside the server's write path, so the journal never recorded the change.
 
 {/* Evidence: crates/registry-server/src/history_rebaseline.rs;
     crates/registry-serverctl/src/history_rebaseline_lifecycle.rs;
@@ -768,7 +782,8 @@ and `--max-pages` bound one operator run.
 | A webhook never fires | Confirm the destination is bound, the receiver returns `2xx`, and the event's condition matched; use `webhook list` for dead letters. |
 | Replay is refused | Refresh the list and check the generation, `replayEligible`, payload expiry, and the destination binding. |
 | A saved snapshot returns `503 source.unavailable` | Retained history no longer covers it, after an erasure or an incompatible successor. Take a fresh reference. |
-| A fresh snapshot reference is refused after an erasure | Coverage ends before the erased commit. Run `history rebaseline` to cover the current state again; earlier references stay unavailable. |
+| A fresh snapshot reference is refused after an erasure | Coverage ends before the erased commit. Run `history rebaseline` to cover the current state again; earlier references stay unavailable. It verifies at most 1,000 live rows, and refuses a larger registry outright. |
+| `history rebaseline` reports `history.rebaseline.live_rows.unverified` | A live row and its journal head disagree, and the refusal names no record. Read the revisions of the records you suspect, or compare live rows with their journal heads under the migration role. |
 | `request-retention erase` is refused | The request entity's retention mode is `retain`, or the version is pinned. |
 | An operator command cannot reach PostgreSQL | Check the migration URL secret, the role names, and `SSL_CERT_FILE` for a private authority. |
 
