@@ -195,7 +195,7 @@ One file per client, parsed by `crates/registry-mint/src/clients.rs`.
 | `requesterTags` | 1..=32 unique strings, each 1..=256 bytes | Evidence profile only | Required with `evidenceAudience`; cannot coexist with `authorization`. |
 | `grant` | object: `id`, `authority` | Evidence profile only, optional | Both values are 1..=512 bytes when present. Cannot coexist with `authorization`. |
 | `delegation` | object: `actors`, `subjectClaims` | Evidence profile only, optional | `actors`, when present, has 1..=64 unique values of 1..=512 bytes. `subjectClaims` has 1..=16 non-overlapping claim paths. Cannot coexist with `authorization`. |
-| `authorization` | object: `scopes`, `claims` | Standard profile only | `scopes` has 1..=64 unique RFC 6749 scope-tokens. `claims` has at most 32 direct strings. Cannot coexist with Evidence fields. |
+| `authorization` | object: `scopes`, `claims` | Standard profile only | `scopes` has 1..=64 unique RFC 6749 scope-tokens. `claims` has at most 32 entries, each one direct string or a list of 1..=64 unique direct strings. Cannot coexist with Evidence fields. |
 | `clientAuthentication` | object | `method: private-key-jwt` | Selects `private-key-jwt` or `client-secret`. The secret method is valid only with standard `authorization` and carries one or two canonical `sha256:` fingerprints under `secretFingerprints`. |
 | `keys` | list of public JWKs (1..=8 entries) | required for `private-key-jwt` | Key ids are non-empty, at most 256 bytes, and unique per client. A document carrying a private key member is rejected. Must be omitted for `client-secret`. |
 
@@ -209,7 +209,10 @@ delegation. Each registration must be a regular file no larger than 256 KiB. Loa
 one malformed or duplicated registration refuses the complete startup or reload.
 
 Each standard scope is 1 to 256 bytes and follows the RFC 6749 scope-token grammar. Direct claim
-names are 1 to 128 bytes. Direct claim values are non-empty strings of at most 512 bytes. The
+names are 1 to 128 bytes. A direct claim value is either one string or a list of 1 to 64 unique
+strings, and each string is non-empty and at most 512 bytes. A resource server boundary that
+matches a row against a set of permitted values reads an array-valued claim and refuses a scalar,
+so a registration that must satisfy one uses the list form. The
 names `iss`, `aud`, `exp`, `iat`, `nbf`, `jti`, `client_id`, `sub`, and `scope` are reserved and
 cannot be configured as direct claims. When `accessTokens.claims` is present, direct standard
 claims also cannot reuse any configured Evidence claim name.
@@ -297,8 +300,9 @@ a client obtains a new short-lived token by repeating Client Credentials authent
 "kid": "<RFC-7638-thumbprint>"}`. Its claims carry the standard `iss`, `aud`, `iat`, `nbf`,
 `exp`, `jti`, `client_id`, and `sub` (the principal). An Evidence-profile token adds the
 authority claims named under `accessTokens.claims` and omits the response `scope` member. A
-standard-profile token adds its space-delimited `scope` claim and direct registered string
-claims; its response adds the same `scope` string. `expires_in` equals
+standard-profile token adds its space-delimited `scope` claim and its direct registered claims,
+each written as a JSON string or, where the registration lists values, a JSON array of strings;
+its response adds the same `scope` string. `expires_in` equals
 `accessTokens.lifetimeSeconds`. Mint durably appends the matching token-release audit record
 before sending this response. If that append fails, the token is not released.
 

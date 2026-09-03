@@ -323,7 +323,7 @@ fn registered_claims(
         let scope = authorization.scopes.join(" ");
         claims.insert("scope".to_owned(), Value::String(scope.clone()));
         for (name, value) in &authorization.claims {
-            claims.insert(name.clone(), Value::String(value.clone()));
+            claims.insert(name.clone(), value.to_json());
         }
         Some(scope)
     } else {
@@ -952,6 +952,37 @@ clients:
             serde_json::to_value(&minted).expect("token response serializes")["scope"],
             json!("registry:business:read registry:business:lookup")
         );
+    }
+
+    #[tokio::test]
+    async fn a_listed_authority_claim_is_minted_as_a_json_array() {
+        let fixture = fixture(None).await;
+        let client_path = fixture._directory.path().join("clients/client-a.yaml");
+        fs::write(
+            &client_path,
+            format!(
+                "clientId: client-a\nprincipal: urn:example:client-a\nauthorization:\n  scopes: [registry:business:read]\n  claims:\n    purpose: statutory-consultation\n    authority: [district-17, district-18]\nkeys: [{}]\n",
+                client_key(1, "client-a-1").1
+            ),
+        )
+        .expect("write scoped client");
+        let registry = ClientRegistry::load(
+            client_path
+                .parent()
+                .expect("the registration has a parent directory"),
+        )
+        .expect("scoped registry loads");
+        let client = registry.get("client-a").expect("client registered");
+
+        let minted = fixture
+            .minter
+            .mint(&undelegated(client), NOW)
+            .await
+            .expect("token mints");
+        let claims = decode_claims(&minted.access_token);
+
+        assert_eq!(claims["authority"], json!(["district-17", "district-18"]));
+        assert_eq!(claims["purpose"], json!("statutory-consultation"));
     }
 
     #[tokio::test]
