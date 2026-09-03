@@ -44,6 +44,11 @@ migration as durable failed maintenance, applies the exact fix-forward package,
 and restarts the byte-identical server binary. The original data survives and
 the restricted field remains outside the selected response projection.
 
+A pinned migration can also be recovered with `migration reconcile`, which
+assesses it and either completes or abandons the pinned target without
+building a new package. That path is proven by its own CLI-authority test,
+not by this journey.
+
 The machine-readable matrix binds each journey to its exact executable proof.
 Compiler-only evidence is not used to claim the unchanged-binary upgrade or
 the author-versus-production authority boundary.

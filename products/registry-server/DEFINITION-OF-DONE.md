@@ -25,7 +25,10 @@ real-PostgreSQL five-domain acceptance test with a clean public-binary lifecycle
 that exercises production checking, isolated schema tests, external signing,
 operator apply, authenticated serving, compatible additive upgrade, durable
 failed maintenance, exact fix-forward recovery, and restart with unchanged
-server bytes. The business pilot fixture also exercises configured selector,
+server bytes. A second migration recovery path, `migration reconcile`, assesses
+and resolves a pinned migration without building a new package; it is proven
+by its own CLI-authority test, not by this closing proof. The business pilot
+fixture also exercises configured selector,
 derived-field, and relationship read-path surfaces without making business or
 establishment a runtime type. This is a pilot exit claim, not a claim that a release
 has been published.
