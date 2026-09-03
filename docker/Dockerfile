@@ -47,7 +47,7 @@ RUN cargo build --release --locked -p registry-mint --bin mint \
     && chown -R 65532:65532 /workspace/runtime-root
 
 # Distroless cc keeps glibc and CA certificates while dropping shell/package tools.
-FROM gcr.io/distroless/cc-debian13:nonroot@sha256:d97bc0a941b8d4be647dc0ee75b264ddbb772f1ac5ba690a4309c00723b23775 AS mint
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:c31ff9abcb1910f3ab25c7957bdaf0bfe12a01eb546e8df2282f1c8f682b606c AS mint
 
 COPY --from=mint-builder /workspace/runtime-root/ /
 COPY --from=mint-builder /workspace/target/release/mint /usr/local/bin/mint
@@ -78,7 +78,7 @@ RUN cargo build --release --locked -p registry-evidence --bin evidence \
         /workspace/runtime-root/var/lib/registry-evidence/audit \
     && chown -R 65532:65532 /workspace/runtime-root
 
-FROM gcr.io/distroless/cc-debian13:nonroot@sha256:d97bc0a941b8d4be647dc0ee75b264ddbb772f1ac5ba690a4309c00723b23775 AS evidence
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:c31ff9abcb1910f3ab25c7957bdaf0bfe12a01eb546e8df2282f1c8f682b606c AS evidence
 
 COPY --from=evidence-builder /workspace/runtime-root/ /
 COPY --from=evidence-builder /workspace/target/release/evidence /usr/local/bin/evidence

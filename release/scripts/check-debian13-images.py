@@ -21,9 +21,11 @@ DEBIAN_PREPARATION = (
     "debian:trixie-slim@sha256:"
     "3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258"
 )
+# This index carries libssl3t64 3.5.7-1~deb13u2 on both supported Linux
+# architectures. Earlier bytes fail the release policy on fixable OpenSSL CVEs.
 DISTROLESS_RUNTIME = (
     "gcr.io/distroless/cc-debian13:nonroot@sha256:"
-    "d97bc0a941b8d4be647dc0ee75b264ddbb772f1ac5ba690a4309c00723b23775"
+    "c31ff9abcb1910f3ab25c7957bdaf0bfe12a01eb546e8df2282f1c8f682b606c"
 )
 DOCKERFILE_FRONTEND = (
     "docker/dockerfile:1.7@sha256:"
