@@ -1,5 +1,5 @@
 current: latest
-released: v0.15.2
+released: v0.25.0
 published_archive_limit: 3
 docsets:
   - id: latest
@@ -49,24 +49,24 @@ docsets:
     label: v0.25.0
     path: /v/0.25.0/
     status: archived
-    availability: candidate
+    availability: released
     source: registry-stack-v0.25.0
     repo_docs_source: monorepo
     published_at: 2026-08-22
-    description: Registry Stack v0.25.0 beta-36 candidate documentation set.
+    description: Released Registry Stack v0.25.0 beta-36 documentation set.
     products:
       registry-stack:
         version: v0.25.0
-        ref: v0.25.0
+        ref: 6e662d66ab1278b81396c0827538bc58b0abe224
       registry-relay:
         version: v0.25.0
-        ref: v0.25.0
+        ref: 6e662d66ab1278b81396c0827538bc58b0abe224
       registry-manifest:
         version: v0.25.0
-        ref: v0.25.0
+        ref: 6e662d66ab1278b81396c0827538bc58b0abe224
       registry-evidence:
         version: v0.25.0
-        ref: v0.25.0
+        ref: 6e662d66ab1278b81396c0827538bc58b0abe224
   - id: v0.24.0
     label: v0.24.0
     path: /v/0.24.0/
