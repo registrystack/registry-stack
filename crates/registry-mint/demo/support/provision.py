@@ -27,7 +27,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.x509.oid import NameOID
 
-from key_material import b64, ed25519_jwk, p256_jwk, write, write_secret
+from key_material import ed25519_jwk, p256_jwk, write, write_secret
 
 MINT_PORT = 8090
 TLS_PORT = 8443
