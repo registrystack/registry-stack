@@ -389,8 +389,14 @@ behind its head lock. Refusals of an authenticated principal are journaled exact
 so is every admitted request. Alert on a sharp rise in this counter the way you would on a rise in
 `client_error` responses: it is the signal the journal no longer carries.
 
+An admitted anonymous read is not a lighter-weight request: it writes the same pre-I/O audit
+envelope as any admitted request, before any I/O runs. The runtime enforces no request-rate limit
+of its own, so a registry that admits anonymous reads should sit behind an upstream rate limit to
+bound that traffic.
+
 {/* Evidence: crates/registry-server/src/metrics.rs, AnonymousRefusalReason;
     crates/registry-server/src/api/mod.rs, anonymous_refusal();
+    crates/registry-server/src/postgres/read.rs, record_pre_io_audit() call in execute();
     crates/registry-server/tests/postgres_anonymous_refusals.rs;
     crates/registry-server/src/runtime_config.rs, MetricsListenerConfig;
     crates/registry-server/src/startup.rs. */}
