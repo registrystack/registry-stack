@@ -22,7 +22,7 @@ class SourceNeutralityTests(unittest.TestCase):
     def test_fixture_identifier_in_registry_server_client_source_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            source = root / "crates/registry-relay-client/src/server.rs"
+            source = root / "crates/registry-server-client/src/client.rs"
             source.parent.mkdir(parents=True)
             source.write_text(
                 'const ROUTE: &str = "/v1/records/legal-entities";\n',

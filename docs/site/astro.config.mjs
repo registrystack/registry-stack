@@ -439,6 +439,7 @@ export default defineConfig({
             { label: 'Modeling patterns', slug: 'explanation/registry-modeling-patterns' },
             { label: 'Configuration reference', slug: 'reference/registry-server-configuration' },
             { label: 'API reference', slug: 'reference/registry-server-api' },
+            { label: 'Registry Server client APIs', slug: 'reference/registry-server-client-api' },
           ],
         },
         {

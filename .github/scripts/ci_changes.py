@@ -45,7 +45,8 @@ SHARDS = {
         "registry-relay-client-py",
     ),
     "relay-v2": ("registry-relay-v2", "registry-relayctl"),
-    "registry-server": ("registry-server", "registry-serverctl"),
+    "registry-server": ("registry-server", "registry-server-client", "registry-serverctl"),
+    "stack-client": ("registry-record", "registry-stack-client"),
     "evidence": (
         "registry-evidence",
         "registry-evidence-authoring",
@@ -70,6 +71,7 @@ MANIFEST_PACKAGES = frozenset(SHARDS["manifest"])
 RELAY_V2_PACKAGES = frozenset(SHARDS["relay-v2"])
 RELAY_CLIENT_PACKAGES = frozenset(SHARDS["relay-client"])
 REGISTRY_SERVER_PACKAGES = frozenset(SHARDS["registry-server"])
+STACK_CLIENT_PACKAGES = frozenset(SHARDS["stack-client"])
 
 # These are the cross-product semantic commitments implemented independently by
 # Registry Server and Relay V2. A change must replay both real product routers,

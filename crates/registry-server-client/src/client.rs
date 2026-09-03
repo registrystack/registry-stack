@@ -14,7 +14,7 @@ use reqwest::header::{
 use reqwest::{Method, Response, StatusCode};
 use uuid::Uuid;
 
-use crate::server_query::{server_encoded_query, MAX_SERVER_REQUEST_URI_BYTES};
+use crate::query::{server_encoded_query, MAX_SERVER_REQUEST_URI_BYTES};
 use crate::transport::{exact_media_type, Transport};
 use crate::*;
 
@@ -32,7 +32,7 @@ pub struct RegistryServerClient {
 impl RegistryServerClient {
     pub fn new(config: RegistryServerClientConfig) -> Result<Self, RegistryServerClientError> {
         config.validate()?;
-        let transport = Transport::new_server(&config)?;
+        let transport = Transport::new(&config)?;
         Ok(Self { config, transport })
     }
 
@@ -40,7 +40,7 @@ impl RegistryServerClient {
     /// acquired or sent.
     pub async fn health(
         &self,
-    ) -> Result<RegistryServerComplete<ProbeStatus>, RegistryServerClientError> {
+    ) -> Result<RegistryServerComplete<RegistryServerProbeStatus>, RegistryServerClientError> {
         self.probe(&["health"], "alive").await
     }
 
@@ -48,7 +48,7 @@ impl RegistryServerClient {
     /// never acquired or sent.
     pub async fn ready(
         &self,
-    ) -> Result<RegistryServerComplete<ProbeStatus>, RegistryServerClientError> {
+    ) -> Result<RegistryServerComplete<RegistryServerProbeStatus>, RegistryServerClientError> {
         self.probe(&["ready"], "ready").await
     }
 
@@ -56,7 +56,7 @@ impl RegistryServerClient {
     pub async fn openapi(
         &self,
         access_profile: Option<&str>,
-    ) -> Result<RegistryServerComplete<RawDocument>, RegistryServerClientError> {
+    ) -> Result<RegistryServerComplete<RegistryServerRawDocument>, RegistryServerClientError> {
         self.raw_document(&["openapi.json"], access_profile).await
     }
 
@@ -64,7 +64,7 @@ impl RegistryServerClient {
     pub async fn registry_metadata(
         &self,
         access_profile: Option<&str>,
-    ) -> Result<RegistryServerComplete<RawDocument>, RegistryServerClientError> {
+    ) -> Result<RegistryServerComplete<RegistryServerRawDocument>, RegistryServerClientError> {
         self.raw_document(&["v1", "registry"], access_profile).await
     }
 
@@ -98,7 +98,7 @@ impl RegistryServerClient {
         &self,
         entity_identifier: &str,
         access_profile: Option<&str>,
-    ) -> Result<RegistryServerComplete<RawDocument>, RegistryServerClientError> {
+    ) -> Result<RegistryServerComplete<RegistryServerRawDocument>, RegistryServerClientError> {
         validate_server_identifier(
             entity_identifier,
             "the Registry Server entity identifier is invalid",
@@ -200,7 +200,7 @@ impl RegistryServerClient {
                     .map_err(|error| RegistryServerClientError::invalid_request(error.reason()))?,
             );
         builder = self.authorize(builder, Credential::Optional).await?;
-        let response = self.transport.send_server(builder).await?;
+        let response = self.transport.send(builder).await?;
         let wire = self
             .wire(
                 response,
@@ -233,7 +233,7 @@ impl RegistryServerClient {
             .header("idempotency-key", idempotency_key.as_str())
             .body(request.body().to_vec());
         builder = self.authorize(builder, Credential::Optional).await?;
-        let response = self.transport.send_server(builder).await?;
+        let response = self.transport.send(builder).await?;
         let wire = self
             .mutation_wire(
                 response,
@@ -291,7 +291,7 @@ impl RegistryServerClient {
             .header(IF_MATCH, etag.as_str())
             .body(request.body().to_vec());
         builder = self.authorize(builder, Credential::Optional).await?;
-        let response = self.transport.send_server(builder).await?;
+        let response = self.transport.send(builder).await?;
         let wire = self
             .mutation_wire(
                 response,
@@ -366,7 +366,7 @@ impl RegistryServerClient {
             .header(IF_MATCH, action.if_match().as_str())
             .body(body);
         builder = self.authorize(builder, Credential::Optional).await?;
-        let response = self.transport.send_server(builder).await?;
+        let response = self.transport.send(builder).await?;
         let wire = self.lifecycle_wire(response).await?;
         let receipt = RegistryServerLifecycleActionReceipt::from_slice(&wire.body)
             .map_err(|_| body_failure(wire.status, wire.metadata.trace_id().clone()))?;
@@ -448,7 +448,7 @@ impl RegistryServerClient {
             ));
         }
         let segments = fixed_operation_segments(path)?;
-        let mut url = self.transport.server_url(&segments)?;
+        let mut url = self.transport.url(&segments)?;
         url.set_query(Some(query));
         if url.as_str().len() > MAX_SERVER_REQUEST_URI_BYTES {
             return Err(RegistryServerClientError::invalid_request(
@@ -462,7 +462,7 @@ impl RegistryServerClient {
         &self,
         segments: &[&str],
         expected_status: &str,
-    ) -> Result<RegistryServerComplete<ProbeStatus>, RegistryServerClientError> {
+    ) -> Result<RegistryServerComplete<RegistryServerProbeStatus>, RegistryServerClientError> {
         let wire = self
             .get(
                 segments,
@@ -472,7 +472,7 @@ impl RegistryServerClient {
                 EntityTagExpectation::Forbidden,
             )
             .await?;
-        let complete = decode_server_json::<ProbeStatus>(wire)?;
+        let complete = decode_server_json::<RegistryServerProbeStatus>(wire)?;
         if complete.value.status != expected_status {
             return Err(RegistryServerClientError::protocol(
                 StatusCode::OK.as_u16(),
@@ -487,7 +487,7 @@ impl RegistryServerClient {
         &self,
         segments: &[&str],
         access_profile: Option<&str>,
-    ) -> Result<RegistryServerComplete<RawDocument>, RegistryServerClientError> {
+    ) -> Result<RegistryServerComplete<RegistryServerRawDocument>, RegistryServerClientError> {
         let pairs = access_profile_query(access_profile)?;
         let wire = self
             .get(
@@ -499,7 +499,7 @@ impl RegistryServerClient {
             )
             .await?;
         Ok(RegistryServerComplete {
-            value: RawDocument::new(wire.media_type, wire.body),
+            value: RegistryServerRawDocument::new(wire.media_type, wire.body),
             metadata: wire.metadata,
         })
     }
@@ -566,7 +566,7 @@ impl RegistryServerClient {
         let url = self.url_with_query(segments, pairs)?;
         let mut builder = self.transport.http.get(url).header(ACCEPT, accept);
         builder = self.authorize(builder, credential).await?;
-        let response = self.transport.send_server(builder).await?;
+        let response = self.transport.send(builder).await?;
         self.wire(response, accept, etag).await
     }
 
@@ -589,7 +589,7 @@ impl RegistryServerClient {
         segments: &[&str],
         pairs: &[(String, String)],
     ) -> Result<reqwest::Url, RegistryServerClientError> {
-        let mut url = self.transport.server_url(segments)?;
+        let mut url = self.transport.url(segments)?;
         if !pairs.is_empty() {
             url.set_query(Some(&server_encoded_query(pairs)));
         }
@@ -631,7 +631,7 @@ impl RegistryServerClient {
         let link = server_response_link(status, &headers, &trace_id)?;
         let body = self
             .transport
-            .read_server(response, self.config.max_response_bytes)
+            .read(response, self.config.max_response_bytes)
             .await?;
         Ok(ServerWire {
             body,
@@ -688,7 +688,7 @@ impl RegistryServerClient {
         }
         let body = self
             .transport
-            .read_server(response, self.config.max_response_bytes)
+            .read(response, self.config.max_response_bytes)
             .await?;
         let mut metadata = RegistryServerResponseMetadata::new(trace_id, Some(etag));
         if let Some(location) = location {
@@ -747,7 +747,7 @@ impl RegistryServerClient {
         }
         let body = self
             .transport
-            .read_server(response, self.config.max_response_bytes)
+            .read(response, self.config.max_response_bytes)
             .await?;
         Ok(ServerWire {
             body,
@@ -1211,10 +1211,7 @@ async fn server_problem(response: Response, transport: &Transport) -> RegistrySe
             Some(trace_id),
         );
     }
-    let body = match transport
-        .read_server(response, MAXIMUM_PROBLEM_BYTES as u64)
-        .await
-    {
+    let body = match transport.read(response, MAXIMUM_PROBLEM_BYTES as u64).await {
         Ok(value) => value,
         Err(error) => return error,
     };

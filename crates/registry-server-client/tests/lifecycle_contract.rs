@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-#[path = "../src/server_lifecycle.rs"]
+#[path = "../src/lifecycle.rs"]
 mod server_lifecycle;
 #[path = "../src/strict_json.rs"]
 mod strict_json;

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use registry_relay_client::{
+use registry_server_client::{
     RegistryServerIdempotencyKey, ServerCreateRequest, ServerMutationRequestError,
     ServerPatchRequest, MAXIMUM_SERVER_PATCH_OPERATIONS,
 };

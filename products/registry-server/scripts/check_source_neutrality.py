@@ -122,7 +122,7 @@ FORBIDDEN_DOMAIN_COMPONENTS = (
     "appointments",
 )
 SOURCE_ROOTS = (
-    "crates/registry-relay-client",
+    "crates/registry-server-client",
     "crates/registry-server",
     "crates/registry-serverctl",
 )

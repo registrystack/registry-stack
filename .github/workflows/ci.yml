@@ -652,6 +652,9 @@ jobs:
       - name: Registry Server contract consistency
         run: products/registry-server/scripts/check-contracts.sh
 
+      - name: Registry Server client contract consistency
+        run: products/registry-server/scripts/check-client-contract.sh
+
       - name: Registry Server PostgreSQL journeys
         run: products/registry-server/scripts/test-postgres.sh
 

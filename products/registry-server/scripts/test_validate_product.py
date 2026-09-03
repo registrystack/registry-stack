@@ -76,11 +76,15 @@ class RegistryServerProductCatalogTests(unittest.TestCase):
                 self.assertTrue(invariant["refusal"])
                 self.assertIn("negativeTest", invariant)
 
-    def test_w0_crate_boundary_is_two_crates_with_opt_in_runtime(self) -> None:
+    def test_w0_crate_boundary_is_three_crates_with_opt_in_runtime(self) -> None:
         root = tomllib.loads((VALIDATOR.REPOSITORY_ROOT / "Cargo.toml").read_text(encoding="utf-8"))
         members = root["workspace"]["members"]
         self.assertEqual(
-            ["crates/registry-server", "crates/registry-serverctl"],
+            [
+                "crates/registry-server-client",
+                "crates/registry-server",
+                "crates/registry-serverctl",
+            ],
             [member for member in members if member.startswith("crates/registry-server")],
         )
 

@@ -252,6 +252,7 @@ test('keeps the Server guide and references in one adoption path', () => {
     'explanation/registry-modeling-patterns',
     'reference/registry-server-configuration',
     'reference/registry-server-api',
+    'reference/registry-server-client-api',
   ]);
   for (const slug of slugs) {
     assert.ok(hasDocForSlug(slug), `${slug} must be reachable from the Server journey`);

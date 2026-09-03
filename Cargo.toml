@@ -30,6 +30,8 @@ members = [
     "crates/registry-manifest-core",
     "crates/registry-manifest-cli",
     "crates/registry-mint",
+    "crates/registry-record",
+    "crates/registry-server-client",
     "crates/registry-relay-http-contract",
     "crates/registry-relay-client",
     "crates/registry-relay-client-node",
@@ -38,6 +40,7 @@ members = [
     "crates/registry-relayctl",
     "crates/registry-server",
     "crates/registry-serverctl",
+    "crates/registry-stack-client",
     "crates/registry-language-server",
 ]
 exclude = [
@@ -75,6 +78,8 @@ registry-evidencectl = { path = "crates/registry-evidencectl", version = "0.25.0
 registry-language-server = { path = "crates/registry-language-server", version = "0.25.0" }
 registry-manifest-core = { path = "crates/registry-manifest-core", version = "0.25.0" }
 registry-mint = { path = "crates/registry-mint", version = "0.25.0" }
+registry-record = { path = "crates/registry-record", version = "0.25.0" }
+registry-server-client = { path = "crates/registry-server-client", version = "0.25.0" }
 registry-relay-http-contract = { path = "crates/registry-relay-http-contract", version = "0.25.0" }
 registry-relay-client = { path = "crates/registry-relay-client", version = "0.25.0" }
 registry-relay-client-node = { path = "crates/registry-relay-client-node", version = "0.25.0" }
@@ -83,6 +88,7 @@ registry-relay-v2 = { path = "crates/registry-relay-v2", version = "0.25.0" }
 registry-relayctl = { path = "crates/registry-relayctl", version = "0.25.0" }
 registry-server = { path = "crates/registry-server", version = "0.25.0", default-features = false }
 registry-serverctl = { path = "crates/registry-serverctl", version = "0.25.0" }
+registry-stack-client = { path = "crates/registry-stack-client", version = "0.25.0" }
 registry-platform-audit = { path = "crates/registry-platform-audit", version = "0.25.0" }
 registry-platform-authcommon = { path = "crates/registry-platform-authcommon", version = "0.25.0" }
 registry-platform-buildinfo = { path = "crates/registry-platform-buildinfo", version = "0.25.0" }

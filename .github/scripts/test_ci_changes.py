@@ -22,6 +22,8 @@ from ci_changes import (
     IDENTIFIER_CATALOG_INPUTS,
     REGISTRY_RECORD_CROSS_PRODUCT_INPUTS,
     REGISTRY_SERVER_PACKAGES,
+    RELAY_CLIENT_PACKAGES,
+    STACK_CLIENT_PACKAGES,
     SECURITY_WORKFLOW_GATES,
     SHARDS,
     Workspace,
@@ -229,7 +231,14 @@ class CiChangesTest(unittest.TestCase):
         self.assertTrue(outputs["discovery_contracts"])
         self.assertEqual(
             {entry["name"] for entry in outputs["rust_matrix"]["include"]},
-            {"developer-tools", "discovery", "evidence", "mint", "relay-v2"},
+            {
+                "developer-tools",
+                "discovery",
+                "evidence",
+                "mint",
+                "relay-v2",
+                "stack-client",
+            },
         )
 
     def test_discovery_profile_changes_select_reverse_dependents_and_contracts(self) -> None:
@@ -614,6 +623,7 @@ class CiChangesTest(unittest.TestCase):
                         "mint",
                         "relay-v2",
                         "developer-tools",
+                        "stack-client",
                     },
                 )
 
@@ -724,25 +734,24 @@ class CiChangesTest(unittest.TestCase):
             {"evidence"},
         )
 
-    def test_shared_rust_client_change_runs_both_product_contract_gates(self) -> None:
+    def test_relay_client_change_stays_on_relay_surfaces(self) -> None:
         outputs = classify(
             self.workspace,
             ("crates/registry-relay-client/src/lib.rs",),
         )
         self.assertTrue(outputs["relay_client_contracts"])
         self.assertTrue(outputs["client_bindings"])
-        # Relay V2 and Registry Server own real-router client journeys and
-        # therefore dev-depend on the SDK. Their test suites must still run,
-        # but the dev-only edges cannot cascade into product dependents.
+        # Relay V2 owns the real-router Relay client journey through a dev-only
+        # edge. Registry Server has a separate transport and client crate.
         self.assertIn("registry-relay-v2", outputs["rust_packages"])
         self.assertNotIn("registry-relayctl", outputs["rust_packages"])
-        self.assertIn("registry-server", outputs["rust_packages"])
-        self.assertNotIn("registry-serverctl", outputs["rust_packages"])
+        self.assertNotIn("registry-server", outputs["rust_packages"])
+        self.assertNotIn("registry-server-client", outputs["rust_packages"])
         self.assertFalse(outputs["evidence_contracts"])
-        self.assertTrue(outputs["registry_server_contracts"])
+        self.assertFalse(outputs["registry_server_contracts"])
         self.assertEqual(
             {entry["name"] for entry in outputs["rust_matrix"]["include"]},
-            {"discovery", "registry-server", "relay-client", "relay-v2"},
+            {"discovery", "relay-client", "relay-v2", "stack-client"},
         )
         relay_client_matrix = next(
             entry
@@ -750,6 +759,32 @@ class CiChangesTest(unittest.TestCase):
             if entry["name"] == "relay-client"
         )
         self.assertFalse(relay_client_matrix["all_features"])
+
+    def test_registry_server_client_change_stays_on_registry_server_surfaces(self) -> None:
+        outputs = classify(
+            self.workspace,
+            ("crates/registry-server-client/src/lib.rs",),
+        )
+        self.assertTrue(outputs["registry_server_contracts"])
+        self.assertFalse(outputs["relay_client_contracts"])
+        self.assertIn("registry-server", outputs["rust_packages"])
+        self.assertNotIn("registry-serverctl", outputs["rust_packages"])
+        self.assertNotIn("registry-relay-client", outputs["rust_packages"])
+        self.assertEqual(
+            {entry["name"] for entry in outputs["rust_matrix"]["include"]},
+            {"registry-server", "stack-client"},
+        )
+
+    def test_registry_record_change_runs_both_product_clients_and_facade(self) -> None:
+        outputs = classify(
+            self.workspace,
+            ("crates/registry-record/src/lib.rs",),
+        )
+        self.assertTrue(outputs["registry_server_contracts"])
+        self.assertTrue(outputs["relay_client_contracts"])
+        self.assertTrue(REGISTRY_SERVER_PACKAGES & set(outputs["rust_packages"]))
+        self.assertTrue(RELAY_CLIENT_PACKAGES & set(outputs["rust_packages"]))
+        self.assertTrue(STACK_CLIENT_PACKAGES <= set(outputs["rust_packages"]))
 
     def test_mint_change_runs_the_direct_relay_pairing_without_relay_fanout(self) -> None:
         outputs = classify(
@@ -990,6 +1025,7 @@ class CiChangesTest(unittest.TestCase):
         self.assertIn('version: "0.11.16"', registry_server_job)
         for entry_point in (
             "products/registry-server/scripts/check-contracts.sh",
+            "products/registry-server/scripts/check-client-contract.sh",
             "products/registry-server/scripts/test-postgres.sh",
             "products/registry-server/scripts/test-postgres-tls.sh",
             "products/registry-server/scripts/test-adopter-workflow.sh",

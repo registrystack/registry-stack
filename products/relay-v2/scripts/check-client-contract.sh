@@ -8,6 +8,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$REPO_ROOT"
 
 cargo test --locked -p registry-relay-http-contract
+cargo test --locked -p registry-record
 cargo test --locked -p registry-relay-client
 
 echo "relay-v2 client contract passed"

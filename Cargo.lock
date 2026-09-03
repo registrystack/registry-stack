@@ -4031,6 +4031,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-record"
+version = "0.25.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "url",
+]
+
+[[package]]
 name = "registry-relay-client"
 version = "0.25.0"
 dependencies = [
@@ -4038,6 +4048,7 @@ dependencies = [
  "axum",
  "registry-platform-httpsec",
  "registry-platform-httputil",
+ "registry-record",
  "registry-relay-http-contract",
  "reqwest",
  "serde",
@@ -4185,7 +4196,7 @@ dependencies = [
  "registry-platform-httputil",
  "registry-platform-oidc",
  "registry-platform-testing",
- "registry-relay-client",
+ "registry-server-client",
  "rhai",
  "rustix 1.1.4",
  "rustls",
@@ -4211,6 +4222,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-server-client"
+version = "0.25.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "registry-platform-httpsec",
+ "registry-platform-httputil",
+ "registry-record",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "url",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "registry-serverctl"
 version = "0.25.0"
 dependencies = [
@@ -4230,6 +4260,18 @@ dependencies = [
  "tokio",
  "uuid",
  "zeroize",
+]
+
+[[package]]
+name = "registry-stack-client"
+version = "0.25.0"
+dependencies = [
+ "registry-discovery-client",
+ "registry-evidence-client",
+ "registry-platform-httputil",
+ "registry-record",
+ "registry-relay-client",
+ "registry-server-client",
 ]
 
 [[package]]

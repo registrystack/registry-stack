@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use registry_relay_client::{
+use registry_record::{
     RegistryRecordRepresentation, RegistryRecordResponse, REGISTRY_RECORD_CONTEXT_IDENTIFIER,
 };
 use serde_json::{json, Value};

@@ -169,6 +169,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "run: products/registry-server/scripts/check-contracts.sh",
     ),
     (
+        "Registry Server client contract consistency",
+        "run: products/registry-server/scripts/check-client-contract.sh",
+    ),
+    (
         "Registry Server PostgreSQL journeys",
         "run: products/registry-server/scripts/test-postgres.sh",
     ),

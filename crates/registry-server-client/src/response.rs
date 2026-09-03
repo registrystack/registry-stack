@@ -1,6 +1,46 @@
 use registry_platform_httpsec::TraceId;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fmt;
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RegistryServerProbeStatus {
+    pub status: String,
+}
+
+/// A Server artifact or protocol document with a caller-selected representation.
+#[derive(Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegistryServerRawDocument {
+    media_type: String,
+    bytes: Vec<u8>,
+}
+
+impl RegistryServerRawDocument {
+    pub(crate) fn new(media_type: String, bytes: Vec<u8>) -> Self {
+        Self { media_type, bytes }
+    }
+
+    #[must_use]
+    pub fn media_type(&self) -> &str {
+        &self.media_type
+    }
+
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+impl fmt::Debug for RegistryServerRawDocument {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RegistryServerRawDocument")
+            .field("media_type", &self.media_type)
+            .field("body_bytes", &self.bytes.len())
+            .finish_non_exhaustive()
+    }
+}
 
 /// A validated strong Registry Server entity tag.
 #[derive(Clone, PartialEq, Eq, Serialize)]

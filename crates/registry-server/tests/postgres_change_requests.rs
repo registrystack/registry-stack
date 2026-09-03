@@ -16,13 +16,6 @@ use axum::http::{HeaderName, HeaderValue, Method, Request, StatusCode};
 use axum::middleware::Next;
 use postgres_harness::TestDatabase;
 use registry_platform_audit::AuditProfile;
-use registry_relay_client::{
-    RegistryRecordSingleResponse, RegistryServerClient, RegistryServerClientConfig,
-    RegistryServerIdempotencyKey, RegistryServerLifecycleAction,
-    RegistryServerLifecycleActionReceipt, RegistryServerLifecycleAuthority,
-    RegistryServerLifecycleOperation, RegistryServerProblemCode, RegistryServerRequestMetadata,
-    RegistryServerRequestState, ServerRecordOptions, StaticToken,
-};
 use registry_server::api::{
     router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
     VerifiedRequestClaims,
@@ -37,6 +30,13 @@ use registry_server::postgres::{
     RegistryLockKey, RegistryStateTestIdentity,
 };
 use registry_server::startup::with_request_timeout_for_test;
+use registry_server_client::{
+    RegistryRecordSingleResponse, RegistryServerClient, RegistryServerClientConfig,
+    RegistryServerIdempotencyKey, RegistryServerLifecycleAction,
+    RegistryServerLifecycleActionReceipt, RegistryServerLifecycleAuthority,
+    RegistryServerLifecycleOperation, RegistryServerProblemCode, RegistryServerRequestMetadata,
+    RegistryServerRequestState, ServerRecordOptions, StaticToken,
+};
 use serde_json::{json, Value};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;

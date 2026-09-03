@@ -9,10 +9,7 @@ use registry_relay_http_contract::{ProblemCode, PROBLEM_MEDIA_TYPE};
 use reqwest::header::{HeaderMap, CONTENT_TYPE, ETAG};
 use reqwest::{Response, StatusCode, Url};
 
-use crate::{
-    ProtocolFailure, RegistryServerClientConfig, RegistryServerClientError,
-    RegistryServerProtocolFailure, RelayClientConfig, RelayClientError, StrongEtag,
-};
+use crate::{ProtocolFailure, RelayClientConfig, RelayClientError, StrongEtag};
 
 const MAXIMUM_PROBLEM_BYTES: usize = 4 * 1024;
 const MAXIMUM_RETRY_AFTER_SECONDS: u64 = 60;
@@ -44,38 +41,9 @@ impl Transport {
         })
     }
 
-    pub(crate) fn new_server(
-        config: &RegistryServerClientConfig,
-    ) -> Result<Self, RegistryServerClientError> {
-        let base_url = ServiceBaseUrl::new(config.base_url.clone()).map_err(|_| {
-            RegistryServerClientError::configuration("the service base URL is not usable")
-        })?;
-        let http = build_client(OutboundOptions {
-            request_timeout: config.request_timeout,
-            connect_timeout: config.connect_timeout,
-            user_agent: config.user_agent.as_deref(),
-            trusted_root_certificates: config
-                .trusted_root_certificates
-                .as_deref()
-                .map(Vec::as_slice),
-        })
-        .map_err(RegistryServerClientError::configuration)?;
-        Ok(Self {
-            http,
-            base_url,
-            max_response_bytes: config.max_response_bytes,
-        })
-    }
-
     pub(crate) fn url(&self, segments: &[&str]) -> Result<Url, RelayClientError> {
         append_path_segments(self.base_url.as_url(), segments)
             .map_err(|_| RelayClientError::configuration("a route identifier cannot be encoded"))
-    }
-
-    pub(crate) fn server_url(&self, segments: &[&str]) -> Result<Url, RegistryServerClientError> {
-        append_path_segments(self.base_url.as_url(), segments).map_err(|_| {
-            RegistryServerClientError::configuration("a route identifier cannot be encoded")
-        })
     }
 
     pub(crate) async fn send(
@@ -96,24 +64,6 @@ impl Transport {
         Ok(response)
     }
 
-    pub(crate) async fn send_server(
-        &self,
-        request: reqwest::RequestBuilder,
-    ) -> Result<Response, RegistryServerClientError> {
-        let response = request
-            .send()
-            .await
-            .map_err(|error| RegistryServerClientError::transport(send_failure_kind(&error)))?;
-        validate_response_headers(response.headers()).map_err(|_| {
-            RegistryServerClientError::protocol(
-                response.status().as_u16(),
-                RegistryServerProtocolFailure::HeaderBounds,
-                None,
-            )
-        })?;
-        Ok(response)
-    }
-
     pub(crate) async fn read(
         &self,
         response: Response,
@@ -122,16 +72,6 @@ impl Transport {
         read_bounded(response, maximum.min(self.max_response_bytes))
             .await
             .map_err(|error| RelayClientError::transport(read_failure_kind(&error)))
-    }
-
-    pub(crate) async fn read_server(
-        &self,
-        response: Response,
-        maximum: u64,
-    ) -> Result<Vec<u8>, RegistryServerClientError> {
-        read_bounded(response, maximum.min(self.max_response_bytes))
-            .await
-            .map_err(|error| RegistryServerClientError::transport(read_failure_kind(&error)))
     }
 
     /// Inspect the actual 304 message body without treating Content-Length as

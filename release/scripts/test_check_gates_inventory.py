@@ -727,6 +727,11 @@ class GateInventoryTest(unittest.TestCase):
                 "Registry Server contract consistency",
             ),
             (
+                "run: products/registry-server/scripts/check-client-contract.sh",
+                "run: true # Registry Server client contracts disabled",
+                "Registry Server client contract consistency",
+            ),
+            (
                 "run: products/registry-server/scripts/test-postgres.sh",
                 "run: true # Registry Server PostgreSQL disabled",
                 "Registry Server PostgreSQL journeys",

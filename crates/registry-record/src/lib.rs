@@ -4,6 +4,8 @@
 //! validated as inert strings and are never resolved, fetched, or interpreted
 //! as authority.
 
+mod strict_json;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Serialize, Serializer};

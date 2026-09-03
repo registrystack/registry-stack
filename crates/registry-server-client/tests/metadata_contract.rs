@@ -5,17 +5,17 @@ use uuid::Uuid;
 mod strict_json;
 
 #[allow(dead_code)]
-#[path = "../src/registry_record.rs"]
+#[path = "../../registry-record/src/lib.rs"]
 mod registry_record;
 pub use registry_record::*;
 
 #[allow(dead_code)]
-#[path = "../src/server_lifecycle.rs"]
+#[path = "../src/lifecycle.rs"]
 mod server_lifecycle;
 pub use server_lifecycle::*;
 
 #[allow(dead_code)]
-#[path = "../src/server_metadata.rs"]
+#[path = "../src/metadata.rs"]
 mod server_metadata;
 
 use server_metadata::{

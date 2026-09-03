@@ -8,7 +8,7 @@ use axum::http::{Request, Response, StatusCode};
 use axum::routing::any;
 use axum::Router;
 use registry_platform_httputil::client::{BearerToken, TokenError, TokenProvider};
-use registry_relay_client::{
+use registry_server_client::{
     RegistryServerClient, RegistryServerClientConfig, RegistryServerClientError,
     RegistryServerProblemCode, RegistryServerProtocolFailure, ServerListRequest,
     ServerLookupRequest, ServerRecordFormat, ServerRecordOptions, TransportKind,

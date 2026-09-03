@@ -16,7 +16,7 @@ use axum::body::Body;
 use axum::http::{Method, Response, StatusCode};
 use jsonschema::{Draft, JSONSchema};
 use pilot_acceptance_harness::{response_bytes, response_json, PilotHarness};
-use registry_relay_client::{
+use registry_server_client::{
     RegistryServerClient, RegistryServerClientConfig, RegistryServerDirectWrite,
     RegistryServerIdempotencyKey, RegistryServerProblemCode, ServerCreateRequest,
     ServerListRequest, ServerPatchRequest, ServerRecordFormat, ServerRecordOptions, StaticToken,
@@ -425,7 +425,7 @@ async fn registry_server_client_executes_metadata_bound_direct_writes_against_re
 }
 
 fn assert_registry_record(
-    response: &registry_relay_client::RegistryRecordSingleResponse,
+    response: &registry_server_client::RegistryRecordSingleResponse,
     entity_identifier: &str,
     revision_identifier: &str,
     domain_data: &Value,

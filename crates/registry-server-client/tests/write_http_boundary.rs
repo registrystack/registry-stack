@@ -11,7 +11,7 @@ use axum::http::{HeaderName, HeaderValue, Request, Response, StatusCode};
 use axum::routing::any;
 use axum::Router;
 use registry_platform_httputil::client::{BearerToken, TokenError, TokenProvider};
-use registry_relay_client::{
+use registry_server_client::{
     RegistryRecordRepresentation, RegistryRecordResponse, RegistryServerClient,
     RegistryServerClientConfig, RegistryServerClientError, RegistryServerDirectWrite,
     RegistryServerEtag, RegistryServerIdempotencyKey, RegistryServerLifecycleOperation,
@@ -447,8 +447,8 @@ fn key(value: &str) -> RegistryServerIdempotencyKey {
 }
 
 fn create_binding(
-    metadata: &registry_relay_client::RegistryServerMetadata,
-) -> registry_relay_client::RegistryServerCreateBinding {
+    metadata: &registry_server_client::RegistryServerMetadata,
+) -> registry_server_client::RegistryServerCreateBinding {
     let RegistryServerDirectWrite::Create(binding) = metadata
         .select_direct_write("records.company.create", "company-writer")
         .expect("select exact Create contract")
@@ -459,8 +459,8 @@ fn create_binding(
 }
 
 fn patch_binding(
-    metadata: &registry_relay_client::RegistryServerMetadata,
-) -> registry_relay_client::RegistryServerPatchBinding {
+    metadata: &registry_server_client::RegistryServerMetadata,
+) -> registry_server_client::RegistryServerPatchBinding {
     let RegistryServerDirectWrite::Patch(binding) = metadata
         .select_direct_write("records.company.patch", "company-writer")
         .expect("select exact PATCH contract")
@@ -871,8 +871,8 @@ async fn lifecycle_success_forbids_record_response_headers() {
 async fn execute_submit(
     response: MockResponse,
 ) -> Result<
-    registry_relay_client::RegistryServerComplete<
-        registry_relay_client::RegistryServerLifecycleActionReceipt,
+    registry_server_client::RegistryServerComplete<
+        registry_server_client::RegistryServerLifecycleActionReceipt,
     >,
     RegistryServerClientError,
 > {

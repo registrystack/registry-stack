@@ -255,6 +255,6 @@ zeroize = { workspace = true, optional = true }
 [dev-dependencies]
 rcgen.workspace = true
 registry-platform-testing = { workspace = true, features = ["test-utils"] }
-registry-relay-client.workspace = true
+registry-server-client.workspace = true
 tokio-rustls.workspace = true
 tower.workspace = true
