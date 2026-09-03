@@ -68,6 +68,52 @@ jobs:
           --release-id "${REHEARSAL_RELEASE_ID}"
           --base-ref origin/main
 
+  canonical-linux:
+    name: Prove the canonical Linux payload
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      RELEASE_BUILDER_IMAGE: rust:1.95-trixie@sha256:f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3
+    steps:
+      - name: Require a branch rehearsal
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" != refs/heads/* ]]; then
+            echo "release rehearsal must run from a prepared branch" >&2
+            exit 1
+          fi
+
+      - name: Checkout prepared branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Restore reusable Cargo cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .cargo-home/registry
+            .cargo-home/git
+            target
+          key: registry-stack-release-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'release/scripts/build-release-binaries.sh', 'release/docker/Dockerfile.builder') }}
+
+      - name: Build and smoke the canonical Linux payload
+        env:
+          REHEARSAL_VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release/scripts/build-release-binaries.sh "${REHEARSAL_VERSION}"
+          test "$("dist/bin/breg-v${REHEARSAL_VERSION}-linux-amd64" --version)" = \
+            "breg ${REHEARSAL_VERSION}"
+          test "$("dist/bin/bregctl-v${REHEARSAL_VERSION}-linux-amd64" --version)" = \
+            "bregctl ${REHEARSAL_VERSION}"
+
   node-clients:
     name: Prove Linux Node clients for ${{ matrix.asset }}
     runs-on: ${{ matrix.runner }}

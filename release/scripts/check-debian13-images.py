@@ -14,6 +14,9 @@ RUST_BUILDER = (
     "rust:1.95-trixie@sha256:"
     "f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3"
 )
+RUST_BUILDER_SNAPSHOT = "20250810T000000Z"
+RUST_BUILDER_LIBCLANG = "libclang-19-dev=1:19.1.7-3+b1"
+RUST_BUILDER_PROTOC = "protobuf-compiler=3.21.12-11"
 DEBIAN_PREPARATION = (
     "debian:trixie-slim@sha256:"
     "3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258"
@@ -48,16 +51,21 @@ DOCKERFILES = (
 # them, so they are checked here under their own shape rather than left
 # uncovered for not fitting the release one.
 ADOPTER_DOCKERFILES = (Path("docker/Dockerfile"),)
+RUST_BUILDER_DOCKERFILES = (Path("release/docker/Dockerfile.builder"),)
 
 # These are the maintained image and image-policy surfaces. Historical release
 # notes are immutable evidence and intentionally are not rewritten by this gate.
-MAINTAINED_TEXT_PATHS = DOCKERFILES + ADOPTER_DOCKERFILES + (
-    Path(".github/workflows/release-candidate.yml"),
-    Path(".github/workflows/release.yml"),
-    Path("release/scripts/build-release-binaries.sh"),
+MAINTAINED_TEXT_PATHS = (
+    DOCKERFILES
+    + ADOPTER_DOCKERFILES
+    + RUST_BUILDER_DOCKERFILES
+    + (
+        Path(".github/workflows/release-candidate.yml"),
+        Path(".github/workflows/release.yml"),
+        Path("release/scripts/build-release-binaries.sh"),
+    )
 )
 
-RUST_BUILDER_DOCKERFILES = ()
 PREPARATION_DOCKERFILES = DOCKERFILES
 RELAY_V2_DOCKERFILES = (Path("release/docker/Dockerfile.relay"),)
 RELAY_RUNTIME_ROOT_STAGE = f"""\
@@ -272,11 +280,45 @@ def check_repository(root: Path = ROOT) -> list[str]:
             )
 
     for relative in RUST_BUILDER_DOCKERFILES:
+        text = texts[relative]
+        if not text.startswith(f"# syntax={DOCKERFILE_FRONTEND}\n"):
+            failures.append(
+                f"{relative}: pinned Dockerfile frontend must be the first line"
+            )
+        bases = FROM_RE.findall(text)
+        if not bases:
+            failures.append(f"{relative}: no FROM instruction found")
+        for base in bases:
+            if not DIGEST_PIN_RE.search(base):
+                failures.append(
+                    f"{relative}: upstream base is not pinned by immutable digest: {base}"
+                )
         require(
-            texts[relative],
+            text,
             f"FROM {RUST_BUILDER} AS builder",
             relative,
             "pinned Debian 13 Rust builder",
+            failures,
+        )
+        require(
+            text,
+            f"snapshot.debian.org/archive/debian/{RUST_BUILDER_SNAPSHOT}",
+            relative,
+            "dated Debian package snapshot",
+            failures,
+        )
+        require(
+            text,
+            RUST_BUILDER_LIBCLANG,
+            relative,
+            "exact libclang build package",
+            failures,
+        )
+        require(
+            text,
+            RUST_BUILDER_PROTOC,
+            relative,
+            "exact protobuf build package",
             failures,
         )
 

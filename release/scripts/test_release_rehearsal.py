@@ -26,7 +26,10 @@ class ReleaseRehearsalTest(unittest.TestCase):
         self.assertIn("request_id:", trigger)
         self.assertIn("required: true", trigger)
         self.assertEqual({"contents": "read"}, document["permissions"])
-        self.assertEqual(["rehearse", "node-clients"], list(document["jobs"]))
+        self.assertEqual(
+            ["rehearse", "canonical-linux", "node-clients"],
+            list(document["jobs"]),
+        )
         job = document["jobs"]["rehearse"]
         self.assertEqual("ubuntu-24.04", job["runs-on"])
         self.assertLessEqual(job["timeout-minutes"], 15)
@@ -38,6 +41,44 @@ class ReleaseRehearsalTest(unittest.TestCase):
             rehearsal["env"]["REHEARSAL_RELEASE_ID"],
         )
         self.assertNotIn("${{ inputs.", rehearsal["run"])
+
+        canonical = document["jobs"]["canonical-linux"]
+        self.assertEqual("ubuntu-24.04", canonical["runs-on"])
+        self.assertLessEqual(canonical["timeout-minutes"], 90)
+        self.assertEqual({"contents": "read"}, canonical["permissions"])
+        self.assertFalse(
+            any("upload-artifact@" in str(step) for step in canonical["steps"])
+        )
+        canonical_cache = next(
+            step
+            for step in canonical["steps"]
+            if step.get("name") == "Restore reusable Cargo cache"
+        )
+        self.assertNotIn("restore-keys", canonical_cache["with"])
+        self.assertIn(
+            "'release/docker/Dockerfile.builder'",
+            canonical_cache["with"]["key"],
+        )
+        canonical_build = next(
+            step["run"]
+            for step in canonical["steps"]
+            if step.get("name") == "Build and smoke the canonical Linux payload"
+        )
+        self.assertIn(
+            'release/scripts/build-release-binaries.sh "${REHEARSAL_VERSION}"',
+            canonical_build,
+        )
+        self.assertIn("breg-v${REHEARSAL_VERSION}-linux-amd64", canonical_build)
+        self.assertIn("bregctl-v${REHEARSAL_VERSION}-linux-amd64", canonical_build)
+        self.assertNotIn("${{ inputs.", canonical_build)
+        for forbidden in (
+            "upload-artifact@",
+            "npm publish",
+            "gh release",
+            "git tag",
+            "git push",
+        ):
+            self.assertNotIn(forbidden, str(canonical))
 
         clients = document["jobs"]["node-clients"]
         self.assertLessEqual(clients["timeout-minutes"], 40)

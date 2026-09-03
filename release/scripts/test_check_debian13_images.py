@@ -72,6 +72,62 @@ class ReleaseImagePolicyTests(unittest.TestCase):
             set(POLICY.HTTP_PROBE_DOCKERFILES),
         )
 
+    def test_release_builder_pins_base_snapshot_and_native_tools(self) -> None:
+        self.assertEqual(
+            (Path("release/docker/Dockerfile.builder"),),
+            POLICY.RUST_BUILDER_DOCKERFILES,
+        )
+        mutations = (
+            (
+                POLICY.DOCKERFILE_FRONTEND,
+                "docker/dockerfile:1",
+                "pinned Dockerfile frontend",
+            ),
+            (
+                POLICY.RUST_BUILDER,
+                "rust:1.95-trixie",
+                "pinned Debian 13 Rust builder",
+            ),
+            (
+                POLICY.RUST_BUILDER_SNAPSHOT,
+                "latest",
+                "dated Debian package snapshot",
+            ),
+            (
+                POLICY.RUST_BUILDER_LIBCLANG,
+                "libclang-19-dev",
+                "exact libclang build package",
+            ),
+            (
+                POLICY.RUST_BUILDER_PROTOC,
+                "protobuf-compiler",
+                "exact protobuf build package",
+            ),
+        )
+        for original, replacement, expected in mutations:
+            with self.subTest(expected=expected):
+                with tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    self.repository_copy(root)
+                    dockerfile = root / "release/docker/Dockerfile.builder"
+                    dockerfile.write_text(
+                        dockerfile.read_text(encoding="utf-8").replace(
+                            original, replacement, 1
+                        ),
+                        encoding="utf-8",
+                    )
+
+                    failures = POLICY.check_repository(root)
+
+                    self.assertTrue(
+                        any(
+                            "Dockerfile.builder" in failure
+                            and expected in failure
+                            for failure in failures
+                        ),
+                        failures,
+                    )
+
     def test_http_probed_images_bind_fixed_config_and_entrypoint(self) -> None:
         # Discovery reads no environment variable, so its configuration binding
         # is the command; the others bind it through the environment.

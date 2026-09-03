@@ -46,6 +46,12 @@ A rebuild must therefore go through that script, as this workflow does.
 `cargo build --release` over the same source produces a development version and
 different bytes, which is a different build rather than a failed reproduction.
 
+For releases that include BReg, the script installs the exact libclang and
+protobuf compiler packages needed by BReg's pinned SQL parser from a dated
+Debian snapshot inside the pinned builder container. The source commit
+therefore fixes both the builder image and the additional build packages
+instead of consulting Debian's mutable package indexes.
+
 ## OpenSSF Silver claim boundary
 
 The OpenSSF `build_repeatable` answer is supportable only while the latest

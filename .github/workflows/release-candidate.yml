@@ -264,9 +264,7 @@ jobs:
             .cargo-home/registry
             .cargo-home/git
             target
-          key: registry-stack-release-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'release/scripts/build-release-binaries.sh') }}
-          restore-keys: |
-            registry-stack-release-${{ runner.os }}-
+          key: registry-stack-release-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'release/scripts/build-release-binaries.sh', 'release/docker/Dockerfile.builder') }}
 
       - name: Build canonical Linux payload once
         run: |
