@@ -53,13 +53,34 @@ pub enum RecordProfileError {
     InvalidMember,
 }
 
-pub fn link_header_value(entity: &CompiledEntity) -> Result<String, RecordProfileError> {
-    if entity.id.is_empty() || entity.id.chars().any(char::is_control) {
+pub fn link_header_value(
+    entity: &CompiledEntity,
+    deployment_prefix: &str,
+) -> Result<String, RecordProfileError> {
+    link_header_value_for_entity(&entity.id, deployment_prefix)
+}
+
+fn link_header_value_for_entity(
+    entity_id: &str,
+    deployment_prefix: &str,
+) -> Result<String, RecordProfileError> {
+    let valid_deployment_prefix = deployment_prefix.is_empty()
+        || deployment_prefix.starts_with('/')
+            && !deployment_prefix.ends_with('/')
+            && deployment_prefix.split('/').skip(1).all(|segment| {
+                !segment.is_empty()
+                    && segment != "."
+                    && segment != ".."
+                    && segment.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~')
+                    })
+            });
+    if entity_id.is_empty() || entity_id.chars().any(char::is_control) || !valid_deployment_prefix {
         return Err(RecordProfileError::InvalidContext);
     }
     Ok(format!(
-        "<{PROFILE_IDENTIFIER}>; rel=\"profile\", </v1/schemas/{}>; rel=\"describedby\"",
-        entity.id
+        "<{PROFILE_IDENTIFIER}>; rel=\"profile\", <{deployment_prefix}/v1/schemas/{}>; rel=\"describedby\"",
+        entity_id
     ))
 }
 
@@ -219,6 +240,13 @@ fn contains_inline_context(value: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn schema_link_preserves_the_deployment_prefix() {
+        assert!(link_header_value_for_entity("site", "/registry-a")
+            .expect("link header")
+            .contains("</registry-a/v1/schemas/site>; rel=\"describedby\""));
+    }
 
     #[test]
     fn domain_data_refuses_every_profile_infrastructure_member() {

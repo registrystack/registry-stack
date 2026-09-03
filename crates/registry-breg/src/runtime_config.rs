@@ -725,10 +725,14 @@ fn is_unique_local_ipv6(address: std::net::Ipv6Addr) -> bool {
     (address.segments()[0] & 0xfe00) == 0xfc00
 }
 
-/// Operator-configured origin for authenticated absolute discovery and paging
-/// links. It never derives authority from request Host or forwarded headers.
+/// Operator-configured public base URL for authenticated absolute discovery
+/// and paging links. It never derives authority from request Host or forwarded
+/// headers.
 #[derive(Clone, Eq, PartialEq)]
-pub struct PublicOrigin(String);
+pub struct PublicOrigin {
+    value: String,
+    deployment_prefix: String,
+}
 
 impl PublicOrigin {
     pub fn parse(value: &str) -> Result<Self> {
@@ -752,24 +756,45 @@ impl PublicOrigin {
             Some("http") => loopback,
             _ => false,
         };
+        let path = uri.path();
+        let deployment_prefix = path.strip_suffix('/').unwrap_or(path);
+        let valid_deployment_prefix = deployment_prefix.is_empty()
+            || deployment_prefix.starts_with('/')
+                && deployment_prefix.split('/').skip(1).all(|segment| {
+                    !segment.is_empty()
+                        && segment != "."
+                        && segment != ".."
+                        && segment.bytes().all(|byte| {
+                            byte.is_ascii_alphanumeric()
+                                || matches!(byte, b'-' | b'.' | b'_' | b'~')
+                        })
+                });
         if authority.host().is_empty()
             || (authority.as_str() != authority.host() && authority.port_u16().is_none())
             || authority.port_u16() == Some(0)
-            || !matches!(uri.path(), "" | "/")
+            || !valid_deployment_prefix
             || uri.query().is_some()
             || !scheme_allowed
         {
             return Err(RuntimeConfigError::InvalidListener);
         }
-        Ok(Self(format!(
-            "{}://{}",
-            uri.scheme_str().unwrap(),
-            authority
-        )))
+        Ok(Self {
+            value: format!(
+                "{}://{}{}",
+                uri.scheme_str().unwrap(),
+                authority,
+                deployment_prefix
+            ),
+            deployment_prefix: deployment_prefix.to_owned(),
+        })
     }
 
     pub fn as_str(&self) -> &str {
-        &self.0
+        &self.value
+    }
+
+    pub fn deployment_prefix(&self) -> &str {
+        &self.deployment_prefix
     }
 }
 

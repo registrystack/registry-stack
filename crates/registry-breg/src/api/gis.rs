@@ -822,6 +822,12 @@ mod tests {
         assert!(links.iter().all(|link| link["href"]
             .as_str()
             .is_some_and(|href| href.starts_with("https://registry.example.test/v1/gis"))));
+
+        let prefixed = collection.value("https://registry.example.test/registry-a");
+        let links = prefixed["links"].as_array().expect("prefixed links");
+        assert!(links.iter().all(|link| link["href"].as_str().is_some_and(
+            |href| href.starts_with("https://registry.example.test/registry-a/v1/gis")
+        )));
     }
 
     #[tokio::test]

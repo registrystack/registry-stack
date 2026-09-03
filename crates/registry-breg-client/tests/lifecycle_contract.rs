@@ -371,6 +371,14 @@ fn record_application_shape_tracks_retained_or_erased_detail() {
     let mut null_application = request_metadata(Vec::new());
     null_application["application"] = Value::Null;
     assert!(BRegRequestMetadata::from_value(null_application, false).is_ok());
+
+    let mut impossible_timestamp = request_metadata(Vec::new());
+    impossible_timestamp["application"]["appliedAt"] = json!("2026-02-30T12:00:00Z");
+    assert!(BRegRequestMetadata::from_value(impossible_timestamp, false).is_err());
+
+    let mut invalid_offset = request_metadata(Vec::new());
+    invalid_offset["application"]["appliedAt"] = json!("2026-09-01T12:00:00+99:99");
+    assert!(BRegRequestMetadata::from_value(invalid_offset, false).is_err());
 }
 
 #[test]

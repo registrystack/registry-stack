@@ -229,7 +229,7 @@ pub(super) async fn dispatch(
                 .await;
             match outcome {
                 Ok(outcome) => {
-                    let mut response = exact_mutation(outcome.response());
+                    let mut response = exact_mutation(outcome.response(), None, "");
                     response
                         .headers_mut()
                         .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));

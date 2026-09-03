@@ -7,7 +7,7 @@
 
 use std::fs;
 use std::future::Future;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
@@ -192,7 +192,7 @@ pub(crate) fn run_import(
     let (mut checkpoint, import_id) =
         load_or_start_import(&plan, &inspected, request.checkpoint, &state_path)?;
     let client = build_data_http_client()?;
-    let (_committed_chunks, committed_items) = run_import_chunks(
+    let (_committed_chunks, _committed_items) = run_import_chunks(
         &plan,
         &mut checkpoint,
         ImportExecutionBinding {
@@ -220,7 +220,7 @@ pub(crate) fn run_import(
         input_length: plan.input_length(),
         item_count: plan.item_count(),
         completed_chunk_count: checkpoint.completed_chunk_count(),
-        committed_items,
+        committed_items: checkpoint.next_item_index(),
         complete: checkpoint.is_complete(),
     })
 }
@@ -334,7 +334,7 @@ pub(crate) fn run_export(
         entity_id: plan.entity_id().to_owned(),
         profile_id: plan.profile_id().to_owned(),
         requested_fields: plan.requested_fields().to_vec(),
-        completed_page_count: pages,
+        completed_page_count: checkpoint.completed_page_count(),
         record_count: checkpoint.record_count(),
         output_length: checkpoint.output_length(),
         complete: checkpoint.is_complete(),
@@ -689,15 +689,26 @@ fn data_endpoint(base: &ServiceBaseUrl, path_and_query: &str) -> Result<Url, ()>
 fn read_bounded_regular(path: &Path, max_bytes: u64) -> Result<Vec<u8>, io::Error> {
     super::ensure_no_symlink_components(path, "data.input.invalid", "data")
         .map_err(|_| io::Error::other("unsafe path"))?;
-    let metadata = fs::symlink_metadata(path)?;
-    if metadata.file_type().is_symlink()
-        || !metadata.is_file()
-        || metadata.len() == 0
-        || metadata.len() > max_bytes
-    {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(file_no_follow_flags());
+    let file = options.open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > max_bytes {
         return Err(io::Error::other("invalid file"));
     }
-    fs::read(path)
+    let read_limit = max_bytes
+        .checked_add(1)
+        .ok_or_else(|| io::Error::other("invalid file limit"))?;
+    let mut bytes = Vec::with_capacity(
+        usize::try_from(metadata.len()).map_err(|_| io::Error::other("invalid file"))?,
+    );
+    file.take(read_limit).read_to_end(&mut bytes)?;
+    if bytes.is_empty() || u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_bytes {
+        return Err(io::Error::other("invalid file"));
+    }
+    Ok(bytes)
 }
 
 fn reserve_export_paths(
@@ -715,7 +726,7 @@ fn read_export_output_state(path: &Path) -> Result<DataExportOutputState, DataLi
     let mut options = fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
-    options.custom_flags(export_file_no_follow_flags());
+    options.custom_flags(file_no_follow_flags());
     let file = options.open(path).map_err(|_| DataLifecycleError::Output)?;
     if !file
         .metadata()
@@ -732,7 +743,7 @@ fn append_export_page(path: &Path, page: &[u8]) -> Result<(), DataLifecycleError
     let mut options = fs::OpenOptions::new();
     options.append(true);
     #[cfg(unix)]
-    options.custom_flags(export_file_no_follow_flags());
+    options.custom_flags(file_no_follow_flags());
     let mut file = options.open(path).map_err(|_| DataLifecycleError::Output)?;
     if !file
         .metadata()
@@ -747,7 +758,7 @@ fn append_export_page(path: &Path, page: &[u8]) -> Result<(), DataLifecycleError
 }
 
 #[cfg(unix)]
-fn export_file_no_follow_flags() -> i32 {
+fn file_no_follow_flags() -> i32 {
     (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NONBLOCK)
         .bits() as i32
 }
@@ -1119,6 +1130,22 @@ mod tests {
         fs::remove_dir_all(directory).unwrap();
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn bounded_regular_read_refuses_symlinks_and_growth_past_the_limit() {
+        let directory = test_directory("bounded-read");
+        let target = directory.join("token.txt");
+        let symlink = directory.join("token-link.txt");
+        fs::write(&target, b"token").unwrap();
+        std::os::unix::fs::symlink(&target, &symlink).unwrap();
+
+        assert!(read_bounded_regular(&symlink, MAX_TOKEN_BYTES).is_err());
+        assert!(read_bounded_regular(&target, 4).is_err());
+        assert_eq!(read_bounded_regular(&target, 5).unwrap(), b"token");
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
     #[test]
     fn export_paths_are_reserved_without_clobbering_a_concurrent_file() {
         let directory = test_directory("export-reservation");
@@ -1193,6 +1220,7 @@ mod tests {
         assert_eq!(output.iter().filter(|byte| **byte == b'\n').count(), 2);
         DataExportOutputState::from_bytes(&output)
             .expect("appended output remains canonical JSONL");
+        assert_eq!(resumed.completed_page_count(), 2);
         assert_eq!(resumed.record_count(), 2);
         assert!(resumed.is_complete());
 

@@ -1661,6 +1661,10 @@ impl DataExportCheckpoint {
         self.record_count
     }
 
+    pub fn completed_page_count(&self) -> u64 {
+        self.completed_page_count
+    }
+
     pub fn is_complete(&self) -> bool {
         self.complete
     }

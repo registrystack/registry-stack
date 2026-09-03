@@ -1819,7 +1819,7 @@ impl MutationCoordinator {
             (PermittedResponseHeader::Etag, etag.into_bytes()),
             (
                 PermittedResponseHeader::Link,
-                record_profile::link_header_value(&request.plan.entity)
+                record_profile::link_header_value(&request.plan.entity, "")
                     .map_err(|_| MutationError::Unavailable)?
                     .into_bytes(),
             ),

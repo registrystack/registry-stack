@@ -18,6 +18,7 @@ use registry_breg::artifacts::REGISTRY_METADATA_ARTIFACT_PATH;
 use registry_breg::contract::{ModuleAssetSource, Operation};
 use registry_breg::cursor::CursorCodec;
 use registry_breg::cursor::{CursorAdapter, CursorRepresentation};
+use registry_breg::runtime_config::PublicOrigin;
 use registry_breg::{
     compile_project, compile_project_with_assets, parse_project_yaml, CompileProfile,
 };
@@ -990,6 +991,22 @@ async fn closed_query_grammar_reaches_record_service_as_compiled_query() {
 }
 
 #[tokio::test]
+async fn registry_record_links_preserve_the_configured_deployment_prefix() {
+    let harness = Harness::from_project_with_public_origin(
+        PROJECT,
+        true,
+        Some("https://registry.example.test/registry-a"),
+    );
+    let response = harness.send(Method::GET, "/v1/records/cases", None).await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()["link"],
+        "<https://id.registrystack.org/profiles/registry-record/v1>; rel=\"profile\", </registry-a/v1/schemas/case>; rel=\"describedby\""
+    );
+}
+
+#[tokio::test]
 async fn bbox_reaches_record_service_only_with_declared_spatial_grant() {
     let harness = Harness::from_project(SPATIAL_PROJECT, true);
     let accepted = harness
@@ -1052,10 +1069,10 @@ async fn bbox_reaches_record_service_only_with_declared_spatial_grant() {
         .is_some());
     assert_eq!(
         spatial_success["headers"]["Link"]["description"],
-        "Emitted only for application/json and application/ld+json Registry Record responses and omitted for application/geo+json. Carries the Registry Record profile and caller-visible entity schema. The describedby target is a relative BReg route and is never derived from Host or forwarded headers."
+        "Emitted only for application/json and application/ld+json Registry Record responses and omitted for application/geo+json. Carries the Registry Record profile and caller-visible entity schema. The describedby target includes the configured deployment prefix and is never derived from Host or forwarded headers."
     );
     assert_eq!(
-        spatial_success["headers"]["Link"]["schema"]["const"],
+        spatial_success["headers"]["Link"]["schema"]["example"],
         "<https://id.registrystack.org/profiles/registry-record/v1>; rel=\"profile\", </v1/schemas/site>; rel=\"describedby\""
     );
 
@@ -2174,19 +2191,28 @@ impl Harness {
     }
 
     fn from_project(source: &str, ready: bool) -> Self {
+        Self::from_project_with_public_origin(source, ready, None)
+    }
+
+    fn from_project_with_public_origin(source: &str, ready: bool, origin: Option<&str>) -> Self {
         let project = parse_project_yaml(source.as_bytes()).expect("project parses");
         let registry = Arc::new(
             compile_project(&project, &[], CompileProfile::Authoring).expect("project compiles"),
         );
         let records = Arc::new(RecordingReadService::default());
         let readiness = Arc::new(ControlledReadiness(AtomicBool::new(ready)));
-        let app = router(Arc::new(HttpService::new(
+        let mut service = HttpService::new(
             registry,
             read_identity(),
             records.clone(),
             readiness.clone(),
             cursor_codec(),
-        )));
+        );
+        if let Some(origin) = origin {
+            service =
+                service.with_public_origin(PublicOrigin::parse(origin).expect("public origin"));
+        }
+        let app = router(Arc::new(service));
         Self {
             app,
             records,
@@ -3292,10 +3318,10 @@ async fn runtime_openapi_contract_is_filtered_to_the_selected_acceptance_profile
     let link = &record_operation["responses"]["200"]["headers"]["Link"];
     assert_eq!(
         link["description"],
-        "Emitted only for application/json and application/ld+json Registry Record responses and omitted for application/geo+json. Carries the Registry Record profile and caller-visible entity schema. The describedby target is a relative BReg route and is never derived from Host or forwarded headers."
+        "Emitted only for application/json and application/ld+json Registry Record responses and omitted for application/geo+json. Carries the Registry Record profile and caller-visible entity schema. The describedby target includes the configured deployment prefix and is never derived from Host or forwarded headers."
     );
     assert_eq!(
-        link["schema"]["const"],
+        link["schema"]["example"],
         "<https://id.registrystack.org/profiles/registry-record/v1>; rel=\"profile\", </v1/schemas/asset-item>; rel=\"describedby\""
     );
     assert!(

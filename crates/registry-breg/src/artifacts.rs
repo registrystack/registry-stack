@@ -2692,9 +2692,10 @@ fn registry_record_success_response(
     let mut response = success_response(description, headers, json_schema);
     response["content"]["application/ld+json"] = json!({"schema": json_ld_schema});
     response["headers"]["Link"] = json!({
-        "description": "Emitted only for application/json and application/ld+json Registry Record responses and omitted for application/geo+json. Carries the Registry Record profile and caller-visible entity schema. The describedby target is a relative BReg route and is never derived from Host or forwarded headers.",
+        "description": "Emitted only for application/json and application/ld+json Registry Record responses and omitted for application/geo+json. Carries the Registry Record profile and caller-visible entity schema. The describedby target includes the configured deployment prefix and is never derived from Host or forwarded headers.",
         "schema": {
-            "const": link_header_value(spec.response_entity)
+            "type": "string",
+            "example": link_header_value(spec.response_entity, "")
                 .expect("compiled entity identifiers are safe response-header components")
         }
     });

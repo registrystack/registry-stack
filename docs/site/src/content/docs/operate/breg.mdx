@@ -153,6 +153,10 @@ cursor:
 eventDestinations: {}
 ```
 
+`publicOrigin` may include a deployment path prefix, such as
+`https://registry.example.org/registry-a`. Discovery, paging, and schema links preserve the
+configured prefix and never derive their authority from request headers.
+
 | Section | What it binds |
 | --- | --- |
 | `listener` | The bind address and the optional public origin that generated documents cite. The runtime reads neither peer addresses nor forwarded headers, so client addresses and TLS termination are enforced at your proxy. |

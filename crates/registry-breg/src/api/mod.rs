@@ -603,7 +603,11 @@ async fn read_dispatch(
                 correlation: correlation.clone(),
             };
             match service.records.get(request).await {
-                Ok(Some(record)) => exact_read(record, surface.response_entity),
+                Ok(Some(record)) => exact_read(
+                    record,
+                    surface.response_entity,
+                    public_deployment_prefix(&service),
+                ),
                 Ok(None) => concealed(),
                 Err(ReadServiceError::Unavailable) => unavailable(),
                 Err(ReadServiceError::CursorInvalid) => cursor_invalid(),
@@ -718,7 +722,11 @@ async fn read_dispatch(
                 correlation: correlation.clone(),
             };
             match service.records.list(request).await {
-                Ok(response) => exact_read_no_store(response, surface.response_entity),
+                Ok(response) => exact_read_no_store(
+                    response,
+                    surface.response_entity,
+                    public_deployment_prefix(&service),
+                ),
                 Err(ReadServiceError::Unavailable) => unavailable(),
                 Err(ReadServiceError::CursorInvalid) => cursor_invalid(),
             }
@@ -888,7 +896,11 @@ async fn lookup_dispatch(
         correlation: correlation.clone(),
     };
     match service.records.lookup(request).await {
-        Ok(Some(record)) => exact_read_no_store(record, surface.response_entity),
+        Ok(Some(record)) => exact_read_no_store(
+            record,
+            surface.response_entity,
+            public_deployment_prefix(&service),
+        ),
         Ok(None) => lookup_unresolved(),
         Err(ReadServiceError::Unavailable) => unavailable(),
         Err(ReadServiceError::CursorInvalid) => cursor_invalid(),
@@ -1012,12 +1024,20 @@ async fn revision_dispatch(
     };
     match route.revision_kind {
         Some(CompiledRevisionKind::List) => match revisions.list(request).await {
-            Ok(Some(response)) => exact_read_no_store(response, surface.response_entity),
+            Ok(Some(response)) => exact_read_no_store(
+                response,
+                surface.response_entity,
+                public_deployment_prefix(&service),
+            ),
             Ok(None) => concealed(),
             Err(_) => unavailable(),
         },
         Some(CompiledRevisionKind::Detail) => match revisions.detail(request).await {
-            Ok(Some(response)) => exact_read_no_store(response, surface.response_entity),
+            Ok(Some(response)) => exact_read_no_store(
+                response,
+                surface.response_entity,
+                public_deployment_prefix(&service),
+            ),
             Ok(None) => concealed(),
             Err(_) => unavailable(),
         },
@@ -1095,7 +1115,11 @@ async fn snapshot_dispatch(
         correlation,
     };
     match snapshots.list(request).await {
-        Ok(response) => exact_read_no_store(response, surface.response_entity),
+        Ok(response) => exact_read_no_store(
+            response,
+            surface.response_entity,
+            public_deployment_prefix(&service),
+        ),
         Err(ReadServiceError::Unavailable) => unavailable(),
         Err(ReadServiceError::CursorInvalid) => cursor_invalid(),
     }
@@ -1397,7 +1421,11 @@ async fn create_dispatch(
         })
         .await
     {
-        Ok(outcome) => exact_mutation(outcome.response()),
+        Ok(outcome) => exact_mutation(
+            outcome.response(),
+            Some(surface.response_entity),
+            public_deployment_prefix(&service),
+        ),
         Err(error) => mutation_problem(error),
     }
 }
@@ -1549,7 +1577,11 @@ async fn patch_dispatch(
         )
         .await
     {
-        Ok(outcome) => exact_mutation(outcome.response()),
+        Ok(outcome) => exact_mutation(
+            outcome.response(),
+            Some(surface.response_entity),
+            public_deployment_prefix(&service),
+        ),
         Err(error) => mutation_problem(error),
     }
 }
@@ -1671,7 +1703,11 @@ async fn batch_dispatch(
         })
         .await
     {
-        Ok(outcome) => exact_mutation(outcome.response()),
+        Ok(outcome) => exact_mutation(
+            outcome.response(),
+            Some(surface.response_entity),
+            public_deployment_prefix(&service),
+        ),
         Err(error) => mutation_problem(error),
     }
 }
@@ -1798,7 +1834,11 @@ async fn tombstone_dispatch(
         })
         .await
     {
-        Ok(outcome) => exact_mutation(outcome.response()),
+        Ok(outcome) => exact_mutation(
+            outcome.response(),
+            Some(surface.response_entity),
+            public_deployment_prefix(&service),
+        ),
         Err(error) => mutation_problem(error),
     }
 }
@@ -1956,7 +1996,11 @@ async fn request_action_dispatch(
         })
         .await
     {
-        Ok(outcome) => exact_mutation(outcome.response()),
+        Ok(outcome) => exact_mutation(
+            outcome.response(),
+            Some(surface.response_entity),
+            public_deployment_prefix(&service),
+        ),
         Err(error) => mutation_problem(error),
     }
 }
@@ -4510,7 +4554,18 @@ fn lookup_unresolved() -> Response {
     )
 }
 
-fn exact_read(response: HeldReadResponse, entity: &CompiledEntity) -> Response {
+fn public_deployment_prefix(service: &HttpService) -> &str {
+    service
+        .public_origin
+        .as_ref()
+        .map_or("", |origin| origin.deployment_prefix())
+}
+
+fn exact_read(
+    response: HeldReadResponse,
+    entity: &CompiledEntity,
+    deployment_prefix: &str,
+) -> Response {
     let mut builder = Response::builder()
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, response.content_type())
@@ -4520,7 +4575,7 @@ fn exact_read(response: HeldReadResponse, entity: &CompiledEntity) -> Response {
         response.content_type(),
         "application/json" | "application/ld+json"
     ) {
-        let Ok(link) = record_profile::link_header_value(entity) else {
+        let Ok(link) = record_profile::link_header_value(entity, deployment_prefix) else {
             return unavailable();
         };
         builder = builder.header(LINK, link);
@@ -4536,7 +4591,11 @@ fn exact_read(response: HeldReadResponse, entity: &CompiledEntity) -> Response {
         .unwrap_or_else(|_| unavailable())
 }
 
-fn exact_read_no_store(response: HeldReadResponse, entity: &CompiledEntity) -> Response {
+fn exact_read_no_store(
+    response: HeldReadResponse,
+    entity: &CompiledEntity,
+    deployment_prefix: &str,
+) -> Response {
     let mut builder = Response::builder()
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, response.content_type())
@@ -4546,7 +4605,7 @@ fn exact_read_no_store(response: HeldReadResponse, entity: &CompiledEntity) -> R
         response.content_type(),
         "application/json" | "application/ld+json"
     ) {
-        let Ok(link) = record_profile::link_header_value(entity) else {
+        let Ok(link) = record_profile::link_header_value(entity, deployment_prefix) else {
             return unavailable();
         };
         builder = builder.header(LINK, link);
@@ -4672,13 +4731,26 @@ fn geojson_available(surface: &AuthorizedSurface<'_>) -> bool {
         )
 }
 
-fn exact_mutation(response: &HeldResponse) -> Response {
+fn exact_mutation(
+    response: &HeldResponse,
+    response_entity: Option<&CompiledEntity>,
+    deployment_prefix: &str,
+) -> Response {
     let mut builder = Response::builder()
         .status(response.status())
         .header(CACHE_CONTROL, "no-store")
         .header(VARY, "authorization, accept");
     for (name, value) in response.headers() {
-        let Ok(value) = HeaderValue::from_bytes(value) else {
+        let value = match (name, response_entity) {
+            (PermittedResponseHeader::Link, Some(entity)) => {
+                let Ok(value) = record_profile::link_header_value(entity, deployment_prefix) else {
+                    return unavailable();
+                };
+                value.into_bytes()
+            }
+            _ => value.to_vec(),
+        };
+        let Ok(value) = HeaderValue::from_bytes(&value) else {
             return unavailable();
         };
         builder = match name {

@@ -95,10 +95,11 @@ listener:
   publicOrigin: http://127.0.0.1:8080
 ```
 
-Use HTTPS outside loopback development. The value is an origin only, without
-credentials, a path, query string or fragment. Discovery and paging links use
-this configuration, never request Host or forwarded headers. QGIS requires
-absolute links to retain authentication and follow every page.
+Use HTTPS outside loopback development. The value may include a deployment path
+prefix, such as `https://registry.example.org/registry-a`, but not credentials,
+a query string or a fragment. Discovery, paging and schema links preserve that
+prefix and never use request Host or forwarded headers. QGIS requires absolute
+links to retain authentication and follow every page.
 
 The adapter accepts `bbox`, `limit`, `cursor` and `f=json`. An oversized `limit`
 is clamped to the compiled page maximum, with an opaque cursor-only next link

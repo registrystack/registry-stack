@@ -1906,15 +1906,12 @@ fn validate_timestamp(value: &str) -> Result<(), BRegLifecycleDecodeError> {
         || value.len() > MAX_TIMESTAMP_BYTES
         || !value.is_ascii()
         || value.chars().any(char::is_control)
-        || !value.contains('T')
-        || !(value.ends_with('Z')
-            || value
-                .rsplit_once(['+', '-'])
-                .is_some_and(|(_, offset)| offset.len() == 5 && offset.as_bytes()[2] == b':'))
     {
         return Err(BRegLifecycleDecodeError::Profile);
     }
-    Ok(())
+    time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+        .map(|_| ())
+        .map_err(|_| BRegLifecycleDecodeError::Profile)
 }
 
 fn validate_relative_action_href(href: &str) -> Result<(), BRegLifecycleDecodeError> {
