@@ -1901,8 +1901,22 @@ impl HttpsReceiver {
 
     async fn wait_for_count(&self, expected: usize) {
         tokio::time::timeout(Duration::from_secs(3), async {
-            while self.count().await < expected {
-                self.notify.notified().await;
+            // `notify.notified()` must be constructed before the count check below,
+            // not after it. Notify::notify_waiters() stores no permit for waiters
+            // that register later, so a construct-after-check ordering can miss a
+            // notification that lands between the check and the construction. This
+            // loop mirrors tokio's documented `Notify` usage: keep the future
+            // registered (via `enable`), check the condition, wait, and only then
+            // build the next future.
+            let notified = self.notify.notified();
+            tokio::pin!(notified);
+            loop {
+                notified.as_mut().enable();
+                if self.count().await >= expected {
+                    return;
+                }
+                notified.as_mut().await;
+                notified.set(self.notify.notified());
             }
         })
         .await
