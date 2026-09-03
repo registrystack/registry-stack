@@ -38,6 +38,11 @@ Migration:
    shared term.
 5. Treat pre-change cursors and ETags as invalid. Restart pagination and cache
    revalidation after deployment.
+6. If you publish a Registry Discovery description for this deployment,
+   declare `conformsTo` with both
+   `https://id.registrystack.org/profiles/registry-record/v1` and the
+   bumped `https://registrystack.org/relay/profile/v3`, replacing the prior
+   `https://registrystack.org/relay/profile/v2`.
 
 JSON and JSON-LD success responses advertise both the shared profile and Relay
 profile v3 in `Link` headers. Generated OpenAPI operations identify the shared
