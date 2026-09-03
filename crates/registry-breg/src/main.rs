@@ -50,7 +50,7 @@ fn initialize_logging(level: OperationalLogLevel) {
 }
 
 fn initialize_logging_filter(level: tracing_subscriber::filter::LevelFilter) {
-    let filter = Targets::new().with_target("breg", level);
+    let filter = Targets::new().with_target("registry_breg", level);
     tracing_subscriber::registry()
         .with(filter)
         .with(
