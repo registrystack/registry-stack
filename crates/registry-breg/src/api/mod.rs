@@ -332,6 +332,7 @@ async fn openapi(
     Json(json!({
         "openapi": "3.1.0",
         "info": {"title": service.registry.registry_id(), "version": service.registry.version()},
+        "servers": [{"url": public_deployment_base_path(&service)}],
         "paths": paths,
         "components": openapi_components(schemas, has_request_actions, !visible_actions.is_empty())
     }))
@@ -4561,6 +4562,15 @@ fn public_deployment_prefix(service: &HttpService) -> &str {
         .map_or("", |origin| origin.deployment_prefix())
 }
 
+fn public_deployment_base_path(service: &HttpService) -> &str {
+    let prefix = public_deployment_prefix(service);
+    if prefix.is_empty() {
+        "/"
+    } else {
+        prefix
+    }
+}
+
 fn exact_read(
     response: HeldReadResponse,
     entity: &CompiledEntity,
@@ -4747,6 +4757,15 @@ fn exact_mutation(
                     return unavailable();
                 };
                 value.into_bytes()
+            }
+            (PermittedResponseHeader::Location, _) => {
+                let Ok(path) = std::str::from_utf8(value) else {
+                    return unavailable();
+                };
+                if !path.starts_with('/') || path.starts_with("//") {
+                    return unavailable();
+                }
+                format!("{deployment_prefix}{path}").into_bytes()
             }
             _ => value.to_vec(),
         };
@@ -5102,6 +5121,34 @@ mod batch_admission_tests {
             assert!(parse_batch_body(&serde_json::to_vec(&refused).unwrap(), 1).is_err());
         }
         assert!(parse_batch_body(br#"{"items":[],"items":[]}"#, 1).is_err());
+    }
+}
+
+#[cfg(test)]
+mod deployment_response_tests {
+    use std::collections::BTreeMap;
+
+    use super::exact_mutation;
+    use crate::idempotency::{HeldResponse, PermittedResponseHeader};
+    use serde_json::json;
+
+    #[test]
+    fn create_locations_preserve_the_configured_deployment_prefix() {
+        let held = HeldResponse::from_json(
+            201,
+            &json!({"created": true}),
+            BTreeMap::from([(
+                PermittedResponseHeader::Location,
+                b"/v1/records/cases/00000000-0000-4000-8000-000000000001".to_vec(),
+            )]),
+        )
+        .unwrap();
+
+        let response = exact_mutation(&held, None, "/registry-a");
+        assert_eq!(
+            response.headers()["location"],
+            "/registry-a/v1/records/cases/00000000-0000-4000-8000-000000000001"
+        );
     }
 }
 

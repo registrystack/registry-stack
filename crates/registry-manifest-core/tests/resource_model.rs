@@ -106,6 +106,26 @@ fn compiles_and_renders_multi_dataset_distribution_graph() {
 }
 
 #[test]
+fn media_type_iris_percent_encode_reserved_token_characters() {
+    let mut manifest = fixture();
+    manifest.distributions[0].media_type = Some("application/vnd.example#snapshot%v1".to_string());
+    let compiled = compile_manifest(&manifest).expect("valid media type compiles");
+    let dcat = render_base_dcat(&compiled);
+    let dataset = dcat["dcat:dataset"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|dataset| dataset["dcterms:identifier"] == "legal-entities")
+        .unwrap();
+    let distribution = &dataset["dcat:distribution"][0];
+
+    assert_eq!(
+        distribution["dcat:mediaType"],
+        "https://www.iana.org/assignments/media-types/application/vnd.example%23snapshot%25v1"
+    );
+}
+
+#[test]
 fn rejects_duplicate_and_dangling_distribution_relationships() {
     let mut duplicate = fixture();
     duplicate

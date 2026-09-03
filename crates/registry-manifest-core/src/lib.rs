@@ -7184,7 +7184,14 @@ fn dataset_url_from_id(dataset_id: &str) -> String {
 }
 
 fn media_type_iri(media_type: &str) -> String {
-    format!("https://www.iana.org/assignments/media-types/{media_type}")
+    let (kind, subtype) = media_type
+        .split_once('/')
+        .expect("validated media types contain one separator");
+    format!(
+        "https://www.iana.org/assignments/media-types/{}/{}",
+        percent_encode_iri_path_segment(kind),
+        percent_encode_iri_path_segment(subtype)
+    )
 }
 
 fn entity_schema_id(

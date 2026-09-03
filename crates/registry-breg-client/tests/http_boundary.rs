@@ -21,7 +21,7 @@ const TRACE_ID: &str = "4bf92f3577b34da6a3ce929d0e0e4736";
 const TRACEPARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
 const RECORD_ID: &str = "00000000-0000-4000-8000-000000000001";
 const SERVER_ETAG: &str = "\"breg-record-000000000001\"";
-const PROFILE_LINK: &str = "<https://id.registrystack.org/profiles/registry-record/v1>; rel=\"profile\", </v1/schemas/company>; rel=\"describedby\"";
+const PROFILE_LINK: &str = "<https://id.registrystack.org/profiles/registry-record/v1>; rel=\"profile\", </tenant/prefix/v1/schemas/company>; rel=\"describedby\"";
 
 #[derive(Clone)]
 struct TestState {
@@ -49,6 +49,7 @@ enum Mode {
     BadEtag,
     DuplicateEtag,
     CollectionEtag,
+    MismatchedContinuation,
     WrongMedia,
     DuplicateMedia,
     TraceMissing,
@@ -170,6 +171,12 @@ fn happy_response(request: &CapturedRequest, mode: Mode) -> Response<Body> {
     } else {
         json!({"data": record(), "meta": meta()})
     };
+    if collection
+        && matches!(mode, Mode::MismatchedContinuation)
+        && request.uri.contains("$skiptoken=")
+    {
+        document["meta"]["registryIdentifier"] = Value::String("other-registry".into());
+    }
     if json_ld {
         document["@context"] = Value::String(REGISTRY_RECORD_CONTEXT_IDENTIFIER.into());
     }
@@ -514,6 +521,28 @@ async fn invalid_breg_record_identifiers_are_rejected_before_authentication_or_i
     ));
     assert_eq!(provider.0.load(Ordering::SeqCst), 0);
     assert!(captured.lock().expect("captured requests").is_empty());
+}
+
+#[tokio::test]
+async fn continuation_pages_must_preserve_the_first_page_collection_identity() {
+    let (client, _) = test_client(Mode::MismatchedContinuation, None, 1024 * 1024).await;
+    let first = client
+        .list_records("companies", &BRegListRequest::default())
+        .await
+        .expect("first page");
+    let continuation = first.value.continuation.expect("continuation");
+
+    let error = client
+        .continue_list(&continuation)
+        .await
+        .expect_err("mixed collection metadata is refused");
+    assert!(matches!(
+        error,
+        BaseRegistryClientError::Protocol {
+            failure: BRegProtocolFailure::Body,
+            ..
+        }
+    ));
 }
 
 #[tokio::test]

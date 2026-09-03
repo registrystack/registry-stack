@@ -124,7 +124,7 @@ impl BaseRegistryClient {
                 EntityTagExpectation::Required,
             )
             .await?;
-        decode_breg_single(wire, format)
+        decode_breg_single(wire, format, self.deployment_prefix())
     }
 
     /// Retrieve the first page of one Base Registry Engine record collection.
@@ -143,6 +143,7 @@ impl BaseRegistryClient {
             &pairs,
             request.record_options().format_value(),
             request.record_options().access_profile_value(),
+            None,
         )
         .await
     }
@@ -161,6 +162,7 @@ impl BaseRegistryClient {
             &pairs,
             continuation.format(),
             continuation.access_profile(),
+            Some(continuation),
         )
         .await
     }
@@ -198,7 +200,7 @@ impl BaseRegistryClient {
                 EntityTagExpectation::Forbidden,
             )
             .await?;
-        decode_breg_single(wire, format)
+        decode_breg_single(wire, format, self.deployment_prefix())
     }
 
     /// Execute one metadata-bound direct Create without automatic retry.
@@ -231,7 +233,7 @@ impl BaseRegistryClient {
                 LocationExpectation::Required,
             )
             .await?;
-        let complete = decode_breg_single(wire, format)?;
+        let complete = decode_breg_single(wire, format, self.deployment_prefix())?;
         validate_mutation_record(
             &complete,
             StatusCode::CREATED,
@@ -240,7 +242,8 @@ impl BaseRegistryClient {
             operation.entity_identifier(),
         )?;
         let expected_location = format!(
-            "{}/{}",
+            "{}{}/{}",
+            self.deployment_prefix(),
             operation.path(),
             complete.value.data.record_identifier
         );
@@ -288,7 +291,7 @@ impl BaseRegistryClient {
                 LocationExpectation::Forbidden,
             )
             .await?;
-        let complete = decode_breg_single(wire, format)?;
+        let complete = decode_breg_single(wire, format, self.deployment_prefix())?;
         validate_mutation_record(
             &complete,
             StatusCode::OK,
@@ -412,6 +415,14 @@ impl BaseRegistryClient {
         self.transport.base_url.as_url().as_str().to_owned()
     }
 
+    fn deployment_prefix(&self) -> &str {
+        self.transport
+            .base_url
+            .as_url()
+            .path()
+            .trim_end_matches('/')
+    }
+
     fn url_for_lifecycle_action(
         &self,
         href: &str,
@@ -494,6 +505,7 @@ impl BaseRegistryClient {
         pairs: &[(String, String)],
         format: BRegRecordFormat,
         access_profile: Option<&str>,
+        expected: Option<&BRegContinuation>,
     ) -> Result<BRegComplete<BRegPage<RegistryRecordCollectionResponse>>, BaseRegistryClientError>
     {
         validate_entity_route(entity_route)?;
@@ -506,7 +518,13 @@ impl BaseRegistryClient {
                 EntityTagExpectation::Forbidden,
             )
             .await?;
-        let complete = decode_breg_collection(wire, format)?;
+        let complete = decode_breg_collection(wire, format, self.deployment_prefix())?;
+        if expected.is_some_and(|expected| !expected.matches_meta(&complete.value.meta)) {
+            return Err(body_failure(
+                StatusCode::OK.as_u16(),
+                complete.metadata.trace_id().clone(),
+            ));
+        }
         let continuation = complete
             .value
             .page_info
@@ -518,6 +536,7 @@ impl BaseRegistryClient {
                     cursor,
                     format,
                     access_profile.map(str::to_owned),
+                    &complete.value.meta,
                 )
             })
             .transpose()
@@ -796,6 +815,7 @@ fn decode_breg_json<T: serde::de::DeserializeOwned>(
 fn decode_breg_single(
     wire: BRegWire,
     format: BRegRecordFormat,
+    deployment_prefix: &str,
 ) -> Result<BRegComplete<RegistryRecordSingleResponse>, BaseRegistryClientError> {
     let status = wire.status;
     let trace_id = wire.metadata.trace_id().clone();
@@ -808,6 +828,7 @@ fn decode_breg_single(
     validate_profile_link(
         link.as_deref(),
         &value.meta.entity_type_identifier,
+        deployment_prefix,
         status,
         &trace_id,
     )?;
@@ -820,6 +841,7 @@ fn decode_breg_single(
 fn decode_breg_collection(
     wire: BRegWire,
     format: BRegRecordFormat,
+    deployment_prefix: &str,
 ) -> Result<BRegComplete<RegistryRecordCollectionResponse>, BaseRegistryClientError> {
     let status = wire.status;
     let trace_id = wire.metadata.trace_id().clone();
@@ -832,6 +854,7 @@ fn decode_breg_collection(
     validate_profile_link(
         link.as_deref(),
         &value.meta.entity_type_identifier,
+        deployment_prefix,
         status,
         &trace_id,
     )?;
@@ -873,6 +896,7 @@ fn validate_breg_records(
 fn validate_profile_link(
     actual: Option<&str>,
     entity_identifier: &str,
+    deployment_prefix: &str,
     status: u16,
     trace_id: &TraceId,
 ) -> Result<(), BaseRegistryClientError> {
@@ -880,7 +904,7 @@ fn validate_profile_link(
         return Err(body_failure(status, trace_id.clone()));
     }
     let expected = format!(
-        "<{REGISTRY_RECORD_PROFILE_IDENTIFIER}>; rel=\"profile\", </v1/schemas/{entity_identifier}>; rel=\"describedby\""
+        "<{REGISTRY_RECORD_PROFILE_IDENTIFIER}>; rel=\"profile\", <{deployment_prefix}/v1/schemas/{entity_identifier}>; rel=\"describedby\""
     );
     if actual != Some(expected.as_str()) {
         return Err(BaseRegistryClientError::protocol(

@@ -9,6 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use registry_record::RegistryRecordMeta;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -28,6 +29,8 @@ const INVALID_FIELD: &str = "a Base Registry Engine selected field identifier is
 const INVALID_FILTER: &str = "the Base Registry Engine filter expression is invalid";
 const INVALID_ORDERBY: &str = "the Base Registry Engine ordering expression is invalid";
 const INVALID_ROUTE: &str = "the Base Registry Engine continuation route is invalid";
+const INVALID_COLLECTION_BINDING: &str =
+    "the Base Registry Engine continuation collection binding is invalid";
 const INVALID_SELECTOR: &str = "the Base Registry Engine lookup selector is invalid";
 const INVALID_SKIPTOKEN: &str = "the Base Registry Engine continuation token is invalid";
 
@@ -374,6 +377,12 @@ pub struct BRegContinuationProjection {
     /// Access profile selected for the original page, when explicit.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub access_profile: Option<String>,
+    /// Registry identifier returned with the first page.
+    pub registry_identifier: String,
+    /// Dataset identifier returned with the first page.
+    pub dataset_identifier: String,
+    /// Entity identifier returned with the first page.
+    pub entity_type_identifier: String,
 }
 
 impl fmt::Debug for BRegContinuationProjection {
@@ -384,11 +393,13 @@ impl fmt::Debug for BRegContinuationProjection {
             .field("skiptoken", &"<redacted>")
             .field("format", &self.format)
             .field("access_profile_present", &self.access_profile.is_some())
+            .field("collection_binding", &"<redacted>")
             .finish()
     }
 }
 
-/// Opaque Base Registry Engine continuation bound to its route and representation.
+/// Opaque Base Registry Engine continuation bound to its route, representation,
+/// and first-page collection identity.
 ///
 /// Only continuation operations consume this type. It intentionally exposes no
 /// `$select`, `$filter`, `$orderby`, `$top`, or `$count` setters, preventing a
@@ -399,6 +410,9 @@ pub struct BRegContinuation {
     skiptoken: String,
     format: BRegRecordFormat,
     access_profile: Option<String>,
+    registry_identifier: String,
+    dataset_identifier: String,
+    entity_type_identifier: String,
 }
 
 impl BRegContinuation {
@@ -407,12 +421,16 @@ impl BRegContinuation {
         skiptoken: impl Into<String>,
         format: BRegRecordFormat,
         access_profile: Option<String>,
+        meta: &RegistryRecordMeta,
     ) -> Result<Self, BRegRequestError> {
         Self::try_from_projection(BRegContinuationProjection {
             route: route.into(),
             skiptoken: skiptoken.into(),
             format,
             access_profile,
+            registry_identifier: meta.registry_identifier.clone(),
+            dataset_identifier: meta.dataset_identifier.clone(),
+            entity_type_identifier: meta.entity_type_identifier.clone(),
         })
     }
 
@@ -427,11 +445,24 @@ impl BRegContinuation {
         if let Some(profile) = &value.access_profile {
             validate_access_profile(profile)?;
         }
+        if [
+            &value.registry_identifier,
+            &value.dataset_identifier,
+            &value.entity_type_identifier,
+        ]
+        .into_iter()
+        .any(|identifier| !valid_collection_identifier(identifier))
+        {
+            return Err(BRegRequestError::new(INVALID_COLLECTION_BINDING));
+        }
         Ok(Self {
             route: value.route,
             skiptoken: value.skiptoken,
             format: value.format,
             access_profile: value.access_profile,
+            registry_identifier: value.registry_identifier,
+            dataset_identifier: value.dataset_identifier,
+            entity_type_identifier: value.entity_type_identifier,
         })
     }
 
@@ -443,6 +474,9 @@ impl BRegContinuation {
             skiptoken: self.skiptoken.clone(),
             format: self.format,
             access_profile: self.access_profile.clone(),
+            registry_identifier: self.registry_identifier.clone(),
+            dataset_identifier: self.dataset_identifier.clone(),
+            entity_type_identifier: self.entity_type_identifier.clone(),
         }
     }
 
@@ -464,6 +498,12 @@ impl BRegContinuation {
         self.access_profile.as_deref()
     }
 
+    pub(crate) fn matches_meta(&self, meta: &RegistryRecordMeta) -> bool {
+        self.registry_identifier == meta.registry_identifier
+            && self.dataset_identifier == meta.dataset_identifier
+            && self.entity_type_identifier == meta.entity_type_identifier
+    }
+
     pub(crate) fn query_pairs(&self) -> Result<Vec<(String, String)>, BRegRequestError> {
         let mut pairs = Vec::with_capacity(2);
         if let Some(value) = &self.access_profile {
@@ -483,6 +523,7 @@ impl fmt::Debug for BRegContinuation {
             .field("skiptoken", &"<redacted>")
             .field("format", &self.format)
             .field("access_profile_present", &self.access_profile.is_some())
+            .field("collection_binding", &"<redacted>")
             .finish()
     }
 }
@@ -561,6 +602,18 @@ fn valid_compiled_identifier(value: &str) -> bool {
         && first.is_ascii_lowercase()
         && bytes.all(|byte| {
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+        })
+}
+
+fn valid_collection_identifier(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+    value.len() <= MAX_IDENTIFIER_BYTES
+        && first.is_ascii_lowercase()
+        && bytes.all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_' | b'.')
         })
 }
 
@@ -644,6 +697,15 @@ fn percent_encode_query_value(value: &str, output: &mut String) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn collection_meta() -> RegistryRecordMeta {
+        RegistryRecordMeta {
+            registry_identifier: "business-registry".into(),
+            dataset_identifier: "legal-entities".into(),
+            entity_type_identifier: "company".into(),
+            extensions: BTreeMap::new(),
+        }
+    }
 
     #[test]
     fn access_profile_matches_the_breg_config_identifier_grammar() {
@@ -792,12 +854,13 @@ mod tests {
     }
 
     #[test]
-    fn continuation_preserves_route_format_and_access_profile_only() {
+    fn continuation_preserves_request_and_collection_bindings() {
         let continuation = BRegContinuation::try_from_parts(
             "case-files",
             "opaque+/=token",
             BRegRecordFormat::JsonLd,
             Some("caseworker.v1".into()),
+            &collection_meta(),
         )
         .unwrap();
         assert_eq!(continuation.route(), "case-files");
@@ -813,7 +876,10 @@ mod tests {
                 "route": "case-files",
                 "skiptoken": "opaque+/=token",
                 "format": "json-ld",
-                "accessProfile": "caseworker.v1"
+                "accessProfile": "caseworker.v1",
+                "registryIdentifier": "business-registry",
+                "datasetIdentifier": "legal-entities",
+                "entityTypeIdentifier": "company"
             })
         );
     }
@@ -821,21 +887,43 @@ mod tests {
     #[test]
     fn continuation_revalidates_persisted_untrusted_facts() {
         for token in ["", "token\n", &"x".repeat(MAX_SKIPTOKEN_BYTES + 1)] {
-            assert!(
-                BRegContinuation::try_from_parts("cases", token, BRegRecordFormat::Json, None,)
-                    .is_err()
-            );
+            assert!(BRegContinuation::try_from_parts(
+                "cases",
+                token,
+                BRegRecordFormat::Json,
+                None,
+                &collection_meta(),
+            )
+            .is_err());
         }
-        assert!(
-            BRegContinuation::try_from_parts("Cases", "token", BRegRecordFormat::Json, None,)
-                .is_err()
-        );
+        assert!(BRegContinuation::try_from_parts(
+            "Cases",
+            "token",
+            BRegRecordFormat::Json,
+            None,
+            &collection_meta(),
+        )
+        .is_err());
         assert!(serde_json::from_value::<BRegContinuation>(json!({
             "route": "cases",
             "skiptoken": "token",
             "format": "json",
+            "registryIdentifier": "business-registry",
+            "datasetIdentifier": "legal-entities",
+            "entityTypeIdentifier": "company",
             "firstPageFilter": "status eq 'secret'"
         }))
+        .is_err());
+
+        let mut invalid_meta = collection_meta();
+        invalid_meta.registry_identifier = "Business-Registry".into();
+        assert!(BRegContinuation::try_from_parts(
+            "cases",
+            "token",
+            BRegRecordFormat::Json,
+            None,
+            &invalid_meta,
+        )
         .is_err());
     }
 
@@ -862,6 +950,7 @@ mod tests {
             "token-canary",
             BRegRecordFormat::Json,
             Some("profile-canary".into()),
+            &collection_meta(),
         )
         .unwrap();
         for debug in [

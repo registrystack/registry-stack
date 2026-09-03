@@ -33,7 +33,7 @@ const ACTION_ETAG: &str =
 const REVISION: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const EFFECT_DIGEST: &str =
     "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-const PROFILE_LINK: &str = "<https://id.registrystack.org/profiles/registry-record/v1>; rel=\"profile\", </v1/schemas/company>; rel=\"describedby\"";
+const PROFILE_LINK: &str = "<https://id.registrystack.org/profiles/registry-record/v1>; rel=\"profile\", </tenant/base/v1/schemas/company>; rel=\"describedby\"";
 
 #[derive(Clone, Debug)]
 struct CapturedRequest {
@@ -362,7 +362,7 @@ fn mutation_response(
     if location {
         response = response.with_header(
             "location",
-            &format!("/v1/records/companies/{record_identifier}"),
+            &format!("/tenant/base/v1/records/companies/{record_identifier}"),
         );
     }
     response
@@ -509,7 +509,7 @@ async fn metadata_selected_create_and_patch_use_the_exact_http_contract() {
     assert_eq!(created.metadata.etag().unwrap().as_str(), SERVER_ETAG);
     assert_eq!(
         created.metadata.location(),
-        Some("/v1/records/companies/00000000-0000-4000-8000-000000000001")
+        Some("/tenant/base/v1/records/companies/00000000-0000-4000-8000-000000000001")
     );
 
     let patched = fixture

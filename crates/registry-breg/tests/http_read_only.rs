@@ -1004,6 +1004,9 @@ async fn registry_record_links_preserve_the_configured_deployment_prefix() {
         response.headers()["link"],
         "<https://id.registrystack.org/profiles/registry-record/v1>; rel=\"profile\", </registry-a/v1/schemas/case>; rel=\"describedby\""
     );
+
+    let openapi = body_json(harness.send(Method::GET, "/openapi.json", None).await).await;
+    assert_eq!(openapi["servers"], json!([{"url": "/registry-a"}]));
 }
 
 #[tokio::test]

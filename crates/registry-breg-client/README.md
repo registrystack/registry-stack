@@ -54,8 +54,10 @@ if let Some(next) = first.value.continuation {
 # }
 ```
 
-The opaque continuation carries only its route, representation, profile, and
-skip-token facts. First-page query parameters cannot be combined with it.
+The opaque continuation carries its route, representation, profile, skip-token,
+and the first page's registry, dataset, and entity identifiers. First-page query
+parameters cannot be combined with it, and every continued page must retain the
+same collection identity.
 
 ## Registry Record profile
 
