@@ -171,6 +171,7 @@ The server generates the identifier, shown as `<record-id>`:
   "data": {
     "recordIdentifier": "<record-id>",
     "revisionIdentifier": "1",
+    "snapshot": "<snapshot-token>",
     "domainData": {
       "code": "DEMO-002",
       "group": null,
@@ -186,12 +187,17 @@ The server generates the identifier, shown as `<record-id>`:
 }
 ```
 
+`data.snapshot` only appears on create, patch, and tombstone responses. It is an opaque
+token for a later `:snapshot` read, described in the
+[Registry Server API](../../reference/registry-server-api/) reference.
+
 Run the create command again unchanged, then read the response again.
 You get `201` with the same identifier and revision, not a second record.
 `Idempotency-Key` identifies a single write so a client can retry after losing a response.
 Use a different key for a different write.
 
-{/* Evidence: crates/registry-server/src/idempotency.rs; crates/registry-server/src/mutation.rs;
+{/* Evidence: crates/registry-server/src/idempotency.rs; crates/registry-server/src/mutation.rs, held_response();
+    crates/registry-server/src/record_profile.rs, record_member();
     crates/registry-server/tests/postgres_mutation.rs. */}
 
 ## Choose which fields to read
