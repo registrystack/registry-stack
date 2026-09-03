@@ -264,7 +264,7 @@ class EvidenceTests(unittest.TestCase):
                 summary = artifacts / "summary.json"
                 seed.write_text("record-1 LT-E-1\n", encoding="utf-8")
                 secret.write_text("unrelated-secret-value", encoding="utf-8")
-                origin = f"http://127.0.0.1:{server.breg_port}"
+                origin = f"http://127.0.0.1:{server.server_port}"
                 profile = MODULE_PATH.parent.parent / "profiles/cursor-smoke.js"
                 command = [
                         "k6",
