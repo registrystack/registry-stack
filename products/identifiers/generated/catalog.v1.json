@@ -30,7 +30,7 @@
       "description": "JSON-LD namespace for Registry Manifest terms.",
       "source": {
         "path": "crates/registry-manifest-core/src/lib.rs",
-        "sha256": "fffbf6f3136634bd665b94397892dfeb73e57d2e8c838e7ea47d37a6c75b2079"
+        "sha256": "daf88b30e1fb8d98a3989f5e26ed4511fa5d1c1fab48787997cd3dabf0b03fae"
       }
     },
     {
