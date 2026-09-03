@@ -67,7 +67,7 @@ pub enum HistoryRebaselineError {
     CoverageComplete,
     #[error("history rebaseline cannot run before a history baseline exists")]
     HistoryNotReady,
-    #[error("history rebaseline requires every retained revision to be indexed by a commit")]
+    #[error("history rebaseline requires every retained journal head to be indexed by a commit")]
     UnindexedRevisions,
     #[error("history rebaseline requires the retained journal head to reproduce every live row")]
     LiveHistoryMismatch,
@@ -160,7 +160,7 @@ pub async fn rebaseline_history_coverage(
     if head.coverage_ready && head.unavailable_after_position.is_none() {
         return Err(HistoryRebaselineError::CoverageComplete);
     }
-    if has_unindexed_revisions(&transaction).await? {
+    if has_unindexed_journal_heads(&transaction).await? {
         return Err(HistoryRebaselineError::UnindexedRevisions);
     }
 
@@ -182,7 +182,7 @@ pub async fn rebaseline_history_coverage(
     set_force_row_security(&transaction, &tables, true).await?;
     let members = verified?;
 
-    // Every retained revision is already indexed, which the refusal above
+    // Every retained journal head is already indexed, which the refusal above
     // proved, so the baseline commit carries no member of its own. It is the
     // covered position reconstruction starts from; the members earlier commits
     // hold reproduce the live rows verified here.
@@ -234,18 +234,30 @@ fn entity_tables(registry: &CompiledRegistry) -> Vec<String> {
         .collect()
 }
 
-async fn has_unindexed_revisions(
+/// Report whether any retained journal head carries no commit member.
+///
+/// Reconstruction from the new baseline reads the newest member at or before
+/// the position it starts from, so it reaches a record only through the commit
+/// that indexes that record's journal head. Earlier revisions an existing-data
+/// migration left outside the commit index are unreachable from every covered
+/// position and cannot make the new baseline vouch for anything.
+async fn has_unindexed_journal_heads(
     transaction: &tokio_postgres::Transaction<'_>,
 ) -> Result<bool, HistoryRebaselineError> {
     let row = transaction
         .query_one(
             "SELECT EXISTS (
                  SELECT 1
-                   FROM registry_internal.registry_revisions AS revision
+                   FROM (
+                       SELECT DISTINCT ON (entity_id, record_id)
+                              entity_id, record_id, record_revision
+                         FROM registry_internal.registry_revisions
+                        ORDER BY entity_id, record_id, record_revision DESC
+                   ) AS head
                    LEFT JOIN registry_internal.registry_revision_commit_members AS member
-                     ON member.entity_id = revision.entity_id
-                    AND member.record_id = revision.record_id
-                    AND member.record_revision = revision.record_revision
+                     ON member.entity_id = head.entity_id
+                    AND member.record_id = head.record_id
+                    AND member.record_revision = head.record_revision
                   WHERE member.commit_position IS NULL
              )",
             &[],

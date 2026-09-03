@@ -265,7 +265,7 @@ async fn rebaseline_refuses_while_maintenance_is_not_ready() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn rebaseline_refuses_while_retained_revisions_are_unindexed() {
+async fn rebaseline_refuses_while_a_retained_journal_head_is_unindexed() {
     let database = TestDatabase::create(4).await;
     let (mut migration, migration_task) = database.connect_migration().await;
     let registry = compiled_registry();
@@ -324,7 +324,7 @@ async fn rebaseline_refuses_while_retained_revisions_are_unindexed() {
         .await
         .err(),
         Some(HistoryRebaselineError::UnindexedRevisions),
-        "a retained revision no commit indexes cannot be covered by a new baseline"
+        "a retained journal head no commit indexes cannot be covered by a new baseline"
     );
 
     migration_task.abort();
@@ -382,6 +382,80 @@ async fn rebaseline_refuses_when_a_live_row_has_no_matching_journal_head() {
         Some(HistoryRebaselineError::LiveHistoryMismatch),
         "a live row whose retained history is gone cannot be vouched for by a new baseline"
     );
+
+    migration_task.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rebaseline_restores_coverage_when_a_migration_baseline_indexed_only_journal_heads() {
+    let database = TestDatabase::create(4).await;
+    let (mut migration, migration_task) = database.connect_migration().await;
+    let registry = compiled_registry();
+    let expected = install_ready_history_registry(&database, &mut migration, &registry).await;
+    let lock_key = RegistryLockKey::derive(&expected.package_id).expect("lock key derives");
+    let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x85; 32].into())
+        .expect("test owns a keyed audit profile");
+    let kept = Uuid::parse_str(KEPT_RECORD).unwrap();
+    let erased = Uuid::parse_str(ERASED_RECORD).unwrap();
+
+    seed_migrated_records(&database.admin, &mut migration, &registry, kept, erased).await;
+
+    erase_record_history(
+        &mut migration,
+        HistoryErasureRequest {
+            expected: &expected,
+            migration_role: &database.migration_role,
+            lock_key,
+            timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
+                .unwrap(),
+            audit_profile: &audit_profile,
+            operator_reference: "operator-run-1",
+            reason: "approved retention request",
+            target: RecordHistoryErasureTarget::new(ENTITY, erased, 1),
+        },
+    )
+    .await
+    .expect("erasing the pre-migration revision succeeds");
+
+    let outcome = rebaseline_history_coverage(
+        &mut migration,
+        HistoryRebaselineRequest {
+            expected: &expected,
+            migration_role: &database.migration_role,
+            lock_key,
+            timeouts: HistoryRebaselineTimeouts::new(
+                Duration::from_secs(5),
+                Duration::from_secs(5),
+            )
+            .unwrap(),
+            audit_profile: &audit_profile,
+            operator_reference: OPERATOR_CANARY,
+            registry: &registry,
+        },
+    )
+    .await
+    .expect("revisions older than the migration baseline do not block the rebaseline");
+    assert_eq!(outcome.baseline_position, 2);
+    assert_eq!(outcome.verified_entity_count, 1);
+    assert_eq!(outcome.verified_record_count, 2);
+    assert_eq!(outcome.previous_coverage_baseline_position, 0);
+    assert_eq!(outcome.previous_unavailable_after_position, None);
+
+    let transaction = migration.transaction().await.expect("transaction begins");
+    let restored = capture_latest_snapshot_reference(&transaction)
+        .await
+        .expect("a fresh reference resolves after the rebaseline");
+    assert_eq!(restored.position, 2);
+    assert_eq!(
+        reconstruct_records(&transaction, restored.position).await,
+        vec![
+            (kept, 2, "household-2".to_owned()),
+            (erased, 2, "household-2".to_owned()),
+        ],
+        "the fresh reference reads the current rows through the heads the migration indexed"
+    );
+    transaction.commit().await.expect("read commits");
 
     migration_task.abort();
     database.cleanup().await;
@@ -456,6 +530,52 @@ async fn seed_two_records(
     // Entity tables force row-level security, so the fixture writes live rows
     // through the administrator the harness owns, as the migration fixtures do.
     insert_live_row(admin, registry, kept, 1, OLD_PACKAGE).await;
+    insert_live_row(admin, registry, erased, 2, CURRENT_PACKAGE).await;
+}
+
+/// Seed the journal an existing-data migration leaves behind. Such a migration
+/// indexes the journal head of every live row as a member of one baseline
+/// commit, so every revision the registry retained before that commit stays
+/// outside the commit index.
+async fn seed_migrated_records(
+    admin: &tokio_postgres::Client,
+    migration: &mut tokio_postgres::Client,
+    registry: &registry_server::CompiledRegistry,
+    kept: Uuid,
+    erased: Uuid,
+) {
+    let transaction = migration.transaction().await.expect("transaction begins");
+    insert_revision(&transaction, kept, 1, OLD_PACKAGE, "create").await;
+    insert_revision(&transaction, kept, 2, CURRENT_PACKAGE, "patch").await;
+    insert_revision(&transaction, erased, 1, OLD_PACKAGE, "create").await;
+    insert_revision(&transaction, erased, 2, CURRENT_PACKAGE, "patch").await;
+    allocate_revision_commit(
+        &transaction,
+        CommitAllocation {
+            package_revision: CURRENT_PACKAGE,
+            origin: CommitOrigin::Baseline {
+                system_origin: "registry-server-existing-history-baseline-v1",
+                baseline_reference: None,
+            },
+            change_context: None,
+            members: &[
+                RevisionCommitMember {
+                    entity_id: ENTITY,
+                    record_id: kept,
+                    record_revision: 2,
+                },
+                RevisionCommitMember {
+                    entity_id: ENTITY,
+                    record_id: erased,
+                    record_revision: 2,
+                },
+            ],
+        },
+    )
+    .await
+    .expect("the migration baseline indexes the journal heads alone");
+    transaction.commit().await.expect("fixture commits");
+    insert_live_row(admin, registry, kept, 2, CURRENT_PACKAGE).await;
     insert_live_row(admin, registry, erased, 2, CURRENT_PACKAGE).await;
 }
 

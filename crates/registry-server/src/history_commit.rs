@@ -361,10 +361,11 @@ pub(crate) async fn allocate_revision_commit(
 /// Append the baseline commit a coverage rebaseline installs at the head, over
 /// a commit-head row the caller already locked.
 ///
-/// A retained revision belongs to exactly one commit, and the rebaseline runs
-/// only when every retained revision is already indexed, so this commit carries
-/// no member of its own. It exists to be the covered position reconstruction
-/// starts from; the members earlier commits hold still reproduce the live rows.
+/// A retained revision belongs to at most one commit, and the rebaseline runs
+/// only when every retained journal head is already indexed, so this commit
+/// carries no member of its own. It exists to be the covered position
+/// reconstruction starts from; the members earlier commits hold still reproduce
+/// the live rows.
 #[cfg(feature = "runtime")]
 pub(crate) async fn allocate_coverage_baseline_commit(
     transaction: &Transaction<'_>,
