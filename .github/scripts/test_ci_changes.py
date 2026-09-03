@@ -784,7 +784,7 @@ class CiChangesTest(unittest.TestCase):
         self.assertTrue(outputs["relay_client_contracts"])
         self.assertTrue(BREG_PACKAGES & set(outputs["rust_packages"]))
         self.assertTrue(RELAY_CLIENT_PACKAGES & set(outputs["rust_packages"]))
-        self.assertTrue(STACK_CLIENT_PACKAGES <= set(outputs["rust_packages"]))
+        self.assertLessEqual(STACK_CLIENT_PACKAGES, set(outputs["rust_packages"]))
 
     def test_mint_change_runs_the_direct_relay_pairing_without_relay_fanout(self) -> None:
         outputs = classify(
