@@ -28,10 +28,11 @@ Start release preparation when:
 The scheduled release canary is useful maintenance telemetry, but it is not a
 Beta release prerequisite.
 
-For the first release under a new image package name, provision the package
-once before requesting the candidate. GitHub creates a first-published
-container package as private, so publish a clearly non-release bootstrap
-artifact without putting a token on the command line:
+For the first release under a new image package name, provision both the final
+and candidate package identities before requesting the candidate. A package
+first published with the classic PAT bootstrap below starts private. Publish a
+clearly non-release artifact to each identity without putting a token on the
+command line:
 
 ```sh
 package="${PACKAGE:?set PACKAGE to relay, evidence, mint, discovery, or breg}"
@@ -47,16 +48,22 @@ printf '%s' "${GHCR_BOOTSTRAP_TOKEN:?set a classic PAT with write:packages}" \
   | oras login ghcr.io \
       --username "${GHCR_BOOTSTRAP_USER:?set the PAT owner}" \
       --password-stdin
-oras push \
-  --artifact-type application/vnd.registrystack.package-bootstrap.v1 \
-  --annotation \
-    org.opencontainers.image.source=https://github.com/registrystack/registry-stack \
-  "ghcr.io/registrystack/${package}:bootstrap" \
-  "${bootstrap_dir}/bootstrap.txt:text/plain"
+(
+  cd -- "${bootstrap_dir}"
+  for destination in "${package}" "${package}-candidate"; do
+    oras push \
+      --artifact-type application/vnd.registrystack.package-bootstrap.v1 \
+      --annotation \
+        org.opencontainers.image.source=https://github.com/registrystack/registry-stack \
+      "ghcr.io/registrystack/${destination}:bootstrap" \
+      "bootstrap.txt:text/plain"
+  done
+)
 ```
 
-In the organization package settings, change only the selected package to
-public and grant `registrystack/registry-stack` Actions access with Write.
+In the organization package settings, change only the final `${package}`
+identity to public and grant `registrystack/registry-stack` Actions access with
+Write.
 Starting with `v0.21.0`, the release requires public `relay`, `evidence`, and
 `mint` packages, joined by `discovery` from `v0.24.0` and `breg`
 from `v0.26.0`. Verify all five before candidate dispatch:
@@ -72,6 +79,28 @@ Each result must name the requested package and report `container` and
 `public`. Keep each bootstrap version until the first real version is public,
 then remove only that bootstrap version. This is a package-identity setup step,
 not part of later releases.
+
+Candidate packages have the inverse visibility requirement. A package first
+published by Actions may inherit this public repository's visibility and be
+created public. For a new release image, keep the candidate identity created by
+the classic-PAT bootstrap private and grant `registrystack/registry-stack`
+Actions access with Write. Check all five candidate destinations before
+dispatch:
+
+```sh
+for package in relay-candidate evidence-candidate mint-candidate discovery-candidate breg-candidate; do
+  gh api "/orgs/registrystack/packages/container/${package}" \
+    --jq '[.name,.package_type,.visibility]' 2>/dev/null \
+    || echo "[\"${package}\",\"absent\"]"
+done
+```
+
+Each result must name the requested package and report `container` and
+`private`. If a candidate package is absent, provision it with the classic-PAT
+bootstrap before dispatch. If it reports `public`, change it to private in the
+organization package settings. The package REST API does not provide a
+visibility change. Remove the candidate bootstrap version only after the first
+real candidate tag exists.
 
 A new release image also needs its own reviewed advisory baseline at
 `release/security/<name>-advisory-baseline.json` before its first candidate.
@@ -311,7 +340,7 @@ evidence with the scanner versions pinned in the candidate workflow:
 ```sh
 run_id=<failed-run-id>
 run_attempt=<failed-run-attempt>
-name=relay # or evidence, mint, or discovery
+name=relay # or evidence, mint, discovery, or breg
 candidate_tag="ghcr.io/registrystack/${name}-candidate:candidate-${run_id}-${run_attempt}"
 digest="$(crane digest "${candidate_tag}")"
 candidate_ref="ghcr.io/registrystack/${name}-candidate@${digest}"
