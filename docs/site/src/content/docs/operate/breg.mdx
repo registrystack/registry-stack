@@ -727,6 +727,65 @@ and erasing these rows does not touch record history.
     crates/registry-bregctl/src/request_retention.rs;
     crates/registry-bregctl/src/lib.rs, RequestRetentionCommand. */}
 
+## Keep the audit journal
+
+Every write path appends one hash-chained audit record, and the journal keeps its own head. The
+`audit` commands prove that chain, take a portable copy of it, and retire its oldest part under a
+retention boundary. They read envelope bytes, hashes, envelope identifiers, and timestamps only,
+so no record value reaches the report or a refusal.
+
+```sh
+target/debug/bregctl --format json audit verify \
+  --runtime-config /etc/breg/runtime.yaml
+
+target/debug/bregctl --format json audit export \
+  --runtime-config /etc/breg/runtime.yaml \
+  --output /srv/registry/private/audit-journal.jsonl
+```
+
+`verify` walks the chain from the recorded head backwards through the recorded links, never by
+timestamp, so a clock skew or an out-of-order insert cannot change what the journal claims. It
+runs in one repeatable-read read-only transaction that also compares the head and the total row
+count, and reports the record count with the first previous hash, the last hash, and the head
+hash. `export` verifies the same way while it writes, and emits one envelope per line in chain
+order. The destination must be an absolute path that holds no file; the command creates it with
+owner-only permissions and removes it again when the export does not finish, so a partial copy is
+never left behind. Verification proves the retained journal links and matches the head; it cannot
+prove the journal is complete, because a pruned prefix is gone and the earliest retained record's
+previous hash is the only trace of it.
+
+`prune` removes the longest run of records at the start of the chain whose creation time precedes
+one RFC 3339 boundary. It stops at the first retained record, so a gap can never open in the
+middle, and it refuses a boundary later than the database transaction time. Take an export first,
+count what the boundary would remove, then remove it:
+
+:::danger[Pruning the journal is irreversible]
+Pruned records leave no copy behind. Export the journal and store it under the institution's
+retention policy before running a prune without `--dry-run`, and confirm the approved boundary.
+:::
+
+```sh
+target/debug/bregctl --format json audit prune \
+  --runtime-config /etc/breg/runtime.yaml \
+  --before 2026-01-01T00:00:00Z --dry-run
+
+target/debug/bregctl --format json audit prune \
+  --runtime-config /etc/breg/runtime.yaml \
+  --before 2026-01-01T00:00:00Z
+```
+
+The report names whether the run was a dry run, how many records it removed and retained, the
+hash the retained chain now starts from, and the first retained envelope. A prune runs on the
+migration connection under the exclusive registry lock with the head row locked, so no writer can
+append and no second operator can prune while the prefix is being decided; the runtime role keeps
+its insert-only grant and cannot delete a record. Every prune that removes anything appends one
+retention record to the journal, so the chain states what left it.
+
+{/* Evidence: crates/registry-breg/src/audit_tooling.rs;
+    crates/registry-bregctl/src/audit_lifecycle.rs;
+    crates/registry-breg/tests/postgres_audit_tooling.rs;
+    crates/registry-bregctl/tests/audit.rs. */}
+
 ## Move data in bulk
 
 `data import` and `data export` drive the ordinary authenticated batch and list routes, so every
@@ -790,6 +849,9 @@ and `--max-pages` bound one operator run.
 | A fresh snapshot reference is refused after an erasure | Coverage ends before the erased commit. Run `history rebaseline` to cover the current state again; earlier references stay unavailable. It verifies at most 1,000 live rows, and refuses a larger registry outright. |
 | `history rebaseline` reports `history.rebaseline.live_rows.unverified` | A live row and its journal head disagree, and the refusal names no record. Read the revisions of the records you suspect, or compare live rows with their journal heads under the migration role. |
 | `request-retention erase` is refused | The request entity's retention mode is `retain`, or the version is pinned. |
+| `audit verify` reports `audit.chain.broken` or `audit.head.mismatch` | The journal no longer links to its head. Export what is still reachable, keep the database as it is, and treat it as an integrity incident. |
+| `audit prune` reports `audit.boundary.future` | `--before` is later than the database transaction time. Choose a boundary in the past. |
+| `audit export` is refused with `audit.operation.refused` | The runtime configuration path or `--output` is relative, the destination already holds a file, or the database is unreachable. |
 | An operator command cannot reach PostgreSQL | Check the migration URL secret, the role names, and `SSL_CERT_FILE` for a private authority. |
 
 ## Next

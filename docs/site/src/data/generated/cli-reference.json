@@ -2173,6 +2173,201 @@
               "subcommands": []
             }
           ]
+        },
+        {
+          "name": "audit",
+          "invocation": "bregctl audit",
+          "about": "Verify, export, and prune the chained audit journal",
+          "long_about": null,
+          "usage": "bregctl audit [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "verify",
+              "invocation": "bregctl audit verify",
+              "about": "Verify the chained audit journal against its recorded head",
+              "long_about": null,
+              "usage": "bregctl audit verify [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Absolute Base Registry Engine runtime configuration file",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "export",
+              "invocation": "bregctl audit export",
+              "about": "Export the verified audit journal as JSON Lines in chain order",
+              "long_about": null,
+              "usage": "bregctl audit export [OPTIONS] --runtime-config <ABSOLUTE_FILE> --output <ABSOLUTE_FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Absolute Base Registry Engine runtime configuration file",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--output <ABSOLUTE_FILE>",
+                  "description": "Absolute JSON Lines file the export creates",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "prune",
+              "invocation": "bregctl audit prune",
+              "about": "Remove the verified journal prefix older than one retention boundary",
+              "long_about": null,
+              "usage": "bregctl audit prune [OPTIONS] --runtime-config <ABSOLUTE_FILE> --before <RFC3339>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Absolute Base Registry Engine runtime configuration file",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--before <RFC3339>",
+                  "description": "RFC 3339 instant every removed record must precede",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--dry-run",
+                  "description": "Report what the boundary would remove without removing it",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
         }
       ]
     },

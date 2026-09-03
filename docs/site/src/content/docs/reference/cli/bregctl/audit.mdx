@@ -1,6 +1,6 @@
 ---
-title: "mint serve command reference"
-description: "Generated syntax and options for mint serve."
+title: "bregctl audit command reference"
+description: "Generated syntax and options for bregctl audit."
 status: draft
 draft: true
 owner: registry-docs
@@ -14,7 +14,7 @@ standards_referenced: []
 
 {/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}
 
-Serve the token endpoint until terminated.
+Verify, export, and prune the chained audit journal.
 
 ## Contract status
 
@@ -23,14 +23,22 @@ This page is generated from the public Clap command tree for Registry Stack sour
 ## Usage
 
 ```text
-mint serve --config <CONFIG>
+bregctl audit [OPTIONS] <COMMAND>
 ```
+
+## Commands
+
+| Command | Description |
+| --- | --- |
+| [`verify`](./verify/) | Verify the chained audit journal against its recorded head |
+| [`export`](./export/) | Export the verified audit journal as JSON Lines in chain order |
+| [`prune`](./prune/) | Remove the verified journal prefix older than one retention boundary |
 
 ## Options
 
 | Option | Always required | Default | Values | Environment | Description |
 | --- | --- | --- | --- | --- | --- |
-| `--config <CONFIG>` | No | n/a | n/a | `MINT_CONFIG` | Mint deployment configuration file |
+| `--format <FORMAT>` | No | `human` | `human`, `json` | n/a | Emit the selected command's report in this format |
 | `-h, --help` | No | n/a | n/a | n/a | Print help |
 
 ## Generation contract
