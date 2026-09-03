@@ -34,6 +34,7 @@ fn installer_switches_both_commands_through_one_toolset_pointer() {
             .file_type()
             .is_symlink()
     );
+    fixture.assert_active_toolset_is_traversable();
 }
 
 #[test]
@@ -49,6 +50,7 @@ fn failed_atomic_pointer_switch_preserves_the_previous_toolset() {
             format!("{binary} previous binary\n")
         );
     }
+    fixture.assert_active_toolset_is_traversable();
 }
 
 struct InstallerFixture {
@@ -160,6 +162,14 @@ exec "$REAL_MV" "$@"
                 format!("{binary} release binary\n")
             );
         }
+    }
+
+    fn assert_active_toolset_is_traversable(&self) {
+        let permissions = fs::metadata(self.install_dir.join(".breg-current"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(permissions & 0o111, 0o111);
     }
 }
 

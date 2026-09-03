@@ -10,7 +10,7 @@
 use std::fs::File;
 use std::io::BufWriter;
 #[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt as _;
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 
 use registry_breg::audit_tooling::{
@@ -18,6 +18,7 @@ use registry_breg::audit_tooling::{
     AuditVerification,
 };
 use serde::Serialize;
+use tempfile::{Builder, NamedTempFile};
 
 /// Owner-only permissions for an export the operator has not yet placed.
 #[cfg(unix)]
@@ -74,18 +75,16 @@ pub(crate) fn export(
         return Err(AuditCliError::Operator);
     }
     let runtime = operator_runtime()?;
-    let mut sink = BufWriter::new(create_export_file(output)?);
-    let export = runtime.block_on(async {
-        let service = service(runtime_config).await?;
-        service.export(&mut sink).await.map_err(map_error)
-    });
-    let export = match export.and_then(|export| finish_export_file(sink).map(|()| export)) {
-        Ok(export) => export,
-        Err(error) => {
-            let _ = std::fs::remove_file(output);
-            return Err(error);
-        }
+    let mut temporary = create_export_file(output)?;
+    let export = {
+        let mut sink = BufWriter::new(temporary.as_file_mut());
+        let export = runtime.block_on(async {
+            let service = service(runtime_config).await?;
+            service.export(&mut sink).await.map_err(map_error)
+        });
+        export.and_then(|export| finish_export_file(sink).map(|()| export))?
     };
+    publish_export_file(temporary, output)?;
     Ok(AuditExportOutcome { export })
 }
 
@@ -112,17 +111,35 @@ async fn service(runtime_config: &Path) -> Result<AuditOperatorService, AuditCli
         .map_err(map_error)
 }
 
-fn create_export_file(output: &Path) -> Result<File, AuditCliError> {
-    let mut options = File::options();
-    options.write(true).create_new(true);
+fn create_export_file(output: &Path) -> Result<NamedTempFile, AuditCliError> {
+    let parent = output.parent().ok_or(AuditCliError::Operator)?;
+    let temporary = Builder::new()
+        .prefix(".bregctl-audit-export-")
+        .suffix(".tmp")
+        .tempfile_in(parent)
+        .map_err(|_| AuditCliError::Operator)?;
     #[cfg(unix)]
-    options.mode(EXPORT_FILE_MODE);
-    options.open(output).map_err(|_| AuditCliError::Operator)
+    temporary
+        .as_file()
+        .set_permissions(std::fs::Permissions::from_mode(EXPORT_FILE_MODE))
+        .map_err(|_| AuditCliError::Operator)?;
+    Ok(temporary)
 }
 
-fn finish_export_file(sink: BufWriter<File>) -> Result<(), AuditCliError> {
+fn finish_export_file(sink: BufWriter<&mut File>) -> Result<(), AuditCliError> {
     let file = sink.into_inner().map_err(|_| AuditCliError::Operator)?;
     file.sync_all().map_err(|_| AuditCliError::Operator)
+}
+
+fn publish_export_file(temporary: NamedTempFile, output: &Path) -> Result<(), AuditCliError> {
+    temporary
+        .persist_noclobber(output)
+        .map_err(|_| AuditCliError::Operator)?;
+    #[cfg(unix)]
+    File::open(output.parent().ok_or(AuditCliError::Operator)?)
+        .and_then(|parent| parent.sync_all())
+        .map_err(|_| AuditCliError::Operator)?;
+    Ok(())
 }
 
 fn map_error(error: AuditToolingError) -> AuditCliError {
@@ -146,6 +163,32 @@ fn operator_runtime() -> Result<tokio::runtime::Runtime, AuditCliError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write as _;
+
+    #[test]
+    fn export_is_hidden_until_an_owner_only_file_is_published() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("audit.jsonl");
+        let mut temporary = create_export_file(&output).unwrap();
+        let temporary_path = temporary.path().to_owned();
+        assert!(!output.exists());
+
+        {
+            let mut sink = BufWriter::new(temporary.as_file_mut());
+            sink.write_all(b"verified\n").unwrap();
+            finish_export_file(sink).unwrap();
+        }
+        assert!(!output.exists());
+        publish_export_file(temporary, &output).unwrap();
+
+        assert_eq!(std::fs::read(&output).unwrap(), b"verified\n");
+        assert!(!temporary_path.exists());
+        #[cfg(unix)]
+        assert_eq!(
+            std::fs::metadata(&output).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
 
     #[test]
     fn operator_paths_must_be_absolute_and_the_export_target_must_be_free() {

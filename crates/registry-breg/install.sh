@@ -201,6 +201,7 @@ EOF
 mkdir -p "$install_dir"
 stage_dir="$(mktemp -d "$install_dir/.breg-toolset.XXXXXX")"
 link_stage_dir="$(mktemp -d "$install_dir/.breg-links.XXXXXX")"
+chmod 0755 "$stage_dir"
 install_complete=0
 cleanup_install() {
 	set +e
@@ -239,6 +240,7 @@ fi
 # therefore resolve to the prior toolset, the new toolset, or neither.
 if [ ! -L "$current_link" ]; then
 	previous_dir="$(mktemp -d "$install_dir/.breg-previous.XXXXXX")"
+	chmod 0755 "$previous_dir"
 	previous_count=0
 	for binary in "${binaries[@]}"; do
 		if [ -e "$install_dir/$binary" ] && [ ! -d "$install_dir/$binary" ]; then

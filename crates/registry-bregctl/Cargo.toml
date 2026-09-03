@@ -28,6 +28,7 @@ serde.workspace = true
 serde_json.workspace = true
 serde_norway.workspace = true
 sha2.workspace = true
+tempfile.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt"] }
 uuid.workspace = true
