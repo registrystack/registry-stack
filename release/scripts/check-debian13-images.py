@@ -281,6 +281,10 @@ def check_repository(root: Path = ROOT) -> list[str]:
 
     for relative in RUST_BUILDER_DOCKERFILES:
         text = texts[relative]
+        if not text.startswith(f"# syntax={DOCKERFILE_FRONTEND}\n"):
+            failures.append(
+                f"{relative}: pinned Dockerfile frontend must be the first line"
+            )
         bases = FROM_RE.findall(text)
         if not bases:
             failures.append(f"{relative}: no FROM instruction found")

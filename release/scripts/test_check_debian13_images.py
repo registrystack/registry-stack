@@ -79,6 +79,11 @@ class ReleaseImagePolicyTests(unittest.TestCase):
         )
         mutations = (
             (
+                POLICY.DOCKERFILE_FRONTEND,
+                "docker/dockerfile:1",
+                "pinned Dockerfile frontend",
+            ),
+            (
                 POLICY.RUST_BUILDER,
                 "rust:1.95-trixie",
                 "pinned Debian 13 Rust builder",
