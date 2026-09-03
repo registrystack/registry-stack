@@ -11,6 +11,8 @@ pub mod api;
 pub mod artifacts;
 #[cfg(feature = "runtime")]
 pub mod audit;
+#[cfg(all(feature = "runtime", feature = "tooling"))]
+pub mod audit_tooling;
 #[cfg(feature = "runtime")]
 pub mod auth;
 pub mod change_request;

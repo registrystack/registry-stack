@@ -114,6 +114,7 @@ POSTGRES_TEST_COMMANDS = (
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_request_queries",
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_request_read_retention",
     "cargo test --locked -p registry-breg --features postgres-test,tooling --test postgres_request_activation",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling --test postgres_audit_tooling",
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_pilot_acceptance",
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_rhai_planner",
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_tombstone_revision",
