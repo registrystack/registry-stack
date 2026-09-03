@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-#![cfg(feature = "postgres-test")]
+#![cfg(all(feature = "postgres-test", feature = "tooling"))]
 
 #[path = "support/postgres_harness.rs"]
 #[allow(dead_code)]

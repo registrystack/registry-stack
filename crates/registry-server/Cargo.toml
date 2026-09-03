@@ -164,6 +164,11 @@ name = "postgres_fixture_journeys"
 path = "tests/postgres_fixture_journeys.rs"
 required-features = ["postgres-test", "tooling"]
 
+[[test]]
+name = "schema_fingerprint_rehearsal"
+path = "tests/schema_fingerprint_rehearsal.rs"
+required-features = ["postgres-test", "tooling"]
+
 [lints]
 workspace = true
 
