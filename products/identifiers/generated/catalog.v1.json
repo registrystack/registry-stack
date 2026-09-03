@@ -965,7 +965,7 @@
       "description": "Relay V2 Registry Core predicate binding a controlled property to its codelist.",
       "source": {
         "path": "crates/registry-relay-v2/src/semantics.rs",
-        "sha256": "d585ce17229a864b6270c1442158c876bdbd2e41546395ae92c485b8572914da"
+        "sha256": "563740f4b7d7582a8c1f80756d52137915b85cd349e19ce5ab272d1d791234ca"
       }
     },
     {
@@ -978,7 +978,7 @@
       "description": "Relay V2 Registry Core predicate identifying a spatial property's coordinate reference system.",
       "source": {
         "path": "crates/registry-relay-v2/src/semantics.rs",
-        "sha256": "d585ce17229a864b6270c1442158c876bdbd2e41546395ae92c485b8572914da"
+        "sha256": "563740f4b7d7582a8c1f80756d52137915b85cd349e19ce5ab272d1d791234ca"
       }
     },
     {
@@ -991,7 +991,7 @@
       "description": "Vocabulary base for Relay V2 Registry Core semantic predicates.",
       "source": {
         "path": "crates/registry-relay-v2/src/semantics.rs",
-        "sha256": "d585ce17229a864b6270c1442158c876bdbd2e41546395ae92c485b8572914da"
+        "sha256": "563740f4b7d7582a8c1f80756d52137915b85cd349e19ce5ab272d1d791234ca"
       }
     },
     {
@@ -1004,7 +1004,7 @@
       "description": "Relay V2 Registry Core predicate identifying a spatial property's geometry type.",
       "source": {
         "path": "crates/registry-relay-v2/src/semantics.rs",
-        "sha256": "d585ce17229a864b6270c1442158c876bdbd2e41546395ae92c485b8572914da"
+        "sha256": "563740f4b7d7582a8c1f80756d52137915b85cd349e19ce5ab272d1d791234ca"
       }
     },
     {
@@ -1043,7 +1043,7 @@
       "description": "Relay V2 Registry Core predicate indicating whether a source value is required.",
       "source": {
         "path": "crates/registry-relay-v2/src/semantics.rs",
-        "sha256": "d585ce17229a864b6270c1442158c876bdbd2e41546395ae92c485b8572914da"
+        "sha256": "563740f4b7d7582a8c1f80756d52137915b85cd349e19ce5ab272d1d791234ca"
       }
     }
   ]
