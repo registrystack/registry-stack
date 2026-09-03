@@ -549,14 +549,14 @@ fn record_helpers_extract_exact_extension_and_bind_envelope_context() {
 
 #[test]
 fn errors_and_debug_output_do_not_echo_response_controlled_values() {
-    let secret = "citizen-national-identifier-123";
+    let canary = "citizen-national-identifier-123";
     let error = BRegRequestMetadata::from_value(
-        json!({"bregState": "attacker", "proposalVersion": 1, "editable": false, secret: secret}),
+        json!({"bregState": "attacker", "proposalVersion": 1, "editable": false, canary: canary}),
         false,
     )
     .unwrap_err();
-    assert!(!format!("{error:?}").contains(secret));
-    assert!(!error.to_string().contains(secret));
+    assert!(!format!("{error:?}").contains(canary));
+    assert!(!error.to_string().contains(canary));
 
     let metadata = BRegRequestMetadata::from_value(request_metadata(all_actions()), false).unwrap();
     let debug = format!("{metadata:?}");
