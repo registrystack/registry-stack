@@ -456,17 +456,27 @@ distinct from `RelayClientError`, with `Configuration`, `InvalidRequest`, `Token
 `Problem`, and `Protocol` variants and `trace_id()`, `kind()`, `status()`, and `problem_code()`
 accessors that read across variants.
 
-`RegistryServerProblemCode` is a closed, `#[non_exhaustive]` set covering 15 registered codes at
+`RegistryServerProblemCode` is a closed, `#[non_exhaustive]` set covering 16 registered codes at
 this crate revision: `authentication.refused`, `idempotency.conflict`, `lookup.unresolved`,
 `mutation.conflict`, `precondition.failed`, `precondition.required`, `query.cursor_invalid`,
-`query.invalid`, `request.invalid`, `request.timeout`, `resource.not_found`, `runtime.not_ready`,
-`service.unavailable`, `source.unavailable`, and `unsupported.media_type`. See the
+`query.invalid`, `request.invalid`, `request.plan_refused`, `request.timeout`,
+`resource.not_found`, `runtime.not_ready`, `service.unavailable`, `source.unavailable`, and
+`unsupported.media_type`. See the
 [Registry Server API reference](../registry-server-api/#problem-documents) for the status and
 meaning of each. A Problem is accepted only when its code, status, title, detail, type URI, and
 header and body trace all match a registered entry exactly; an unrecognized code fails closed to
 `Protocol { failure: Problem }`. `RegistryServerProtocolFailure` names the closed local reasons a
 response can fail its wire contract independent of any Problem: `HeaderBounds`, `TraceContext`,
 `MediaType`, `Body`, `Problem`, `EntityTag`, `ProfileLink`, `Location`, `CachePolicy`, `Status`.
+
+`request.plan_refused` is the one code that carries a reason. Registry Server answers `400 Bad
+Request` with it when the change-request planner refuses a submission, and the client surfaces it
+as `RegistryServerProblemCode::RequestPlanRefused(RegistryServerPlanRefusal)`. The refusal is a
+closed, `#[non_exhaustive]` set of seven kinds (`Source`, `Entrypoint`, `Execution`, `Result`,
+`Ceiling`, `Disposition`, `Resource`); `kind()` and `Display` give the exact term the server
+names, such as `change_request.planner.ceiling`. The kind is the whole disclosed reason: no
+script text, request value, or target data travels with it. A planner that exhausts its deadline
+is not a refusal; it answers `503 service.unavailable` like any other unavailable dependency.
 
 Registry Server has no conditional-read contract: reads validate only whether an ETag is present or
 absent, never `If-None-Match` or `304`. An ETag exists solely as a direct-write and
