@@ -7,6 +7,7 @@ source_repos:
   - registry-evidence
   - registry-mint
   - registry-relay
+  - registry-stack
 last_reviewed: "2026-08-11"
 doc_type: reference
 locale: en
@@ -17,11 +18,11 @@ This page lists Registry Stack's supported fixed environment-variable interfaces
 adopter tooling, and installers. It also records how Relayctl keeps fixture scratch state independent
 of host temporary-directory configuration.
 
-The stack's other kind of environment variable is operator-named. Secret material such as an audit integrity key is not read from a fixed variable name: a configuration field carries a reference that names the variable, and the operator chooses the name. Relay is the product that works that way, and the reference grammar is closed rather than free-form. Evidence Gateway and Registry Mint read no secret from the environment under either kind of name, as the sections for each product record.
+The stack's other kind of environment variable is operator-named. Secret material such as an audit integrity key is not read from a fixed variable name: a configuration field carries a reference that names the variable, and the operator chooses the name. Relay and Base Registry Engine are the products that work that way, and the reference grammar is closed rather than free-form. Evidence Gateway and Registry Mint read no secret from the environment under either kind of name, as the sections for each product record.
 
 ## Configuration expansion
 
-None of the three binaries expands environment references inside its configuration documents. Each parses its documents as written: Relay in `RelayRuntime::parse_yaml` and `RegistryContract::parse_yaml` (`crates/registry-relay-v2/src/contract.rs`), Evidence Gateway in `RuntimeConfig::parse_yaml` (`crates/registry-evidence/src/config.rs`), and Registry Mint in `MintConfig::load` (`crates/registry-mint/src/config.rs`).
+Relay, Evidence Gateway, and Registry Mint expand no environment reference inside their configuration documents. Each parses its documents as written: Relay in `RelayRuntime::parse_yaml` and `RegistryContract::parse_yaml` (`crates/registry-relay-v2/src/contract.rs`), Evidence Gateway in `RuntimeConfig::parse_yaml` (`crates/registry-evidence/src/config.rs`), and Registry Mint in `MintConfig::load` (`crates/registry-mint/src/config.rs`). Base Registry Engine is the exception: `breg` expands `${NAME}` expressions in its runtime file at load, as [its section](#base-registry-engine) records.
 
 ## Relay
 
@@ -117,6 +118,45 @@ matters. The installer reads these variables; the installed binaries do not.
 | `EVIDENCE_OID4VCI_CONFIG` | YAML configuration path for `evidence-oid4vci check`, `inspect`, and `serve`. Equivalent to `--config`. | Required for those three subcommands, by flag or by variable. |
 | `RUST_LOG` | Tracing filter installed for every subcommand. | Defaults to `info`. |
 
+## Base Registry Engine
+
+The `breg` binary reads one fixed variable.
+
+| Name | Purpose | Default or required |
+| --- | --- | --- |
+| `BREG_LOG` | Level for the JSON operational records the process writes on standard output. | Defaults to `info`. |
+
+`BREG_LOG` is a closed enumeration, not a tracing filter directive. It accepts exactly `error`, `warn`, and `info`, and the level applies to the `registry_breg` target only. Any other value is refused: the process reports that the operational log level was refused and exits with status 2 instead of falling back to `info`.
+
+### Expansion and secret references in `runtime.yaml`
+
+`breg` expands `${NAME}` expressions in `runtime.yaml` before parsing it. A bare `${NAME}` refuses the file when the variable is unset or empty, `${NAME:-fallback}` substitutes the fallback in that case, and `${NAME:?message}` refuses the file with that message. A value that fills a whole YAML scalar is inserted as a quoted scalar. A value embedded in a longer scalar is refused when it carries anything YAML could read as structure: a line break, a quote or backtick, a brace or bracket, a comma, `|` or `>`, a colon followed by a space, a space followed by `#`, or a leading `#`, `&`, `*`, `!`, `%`, `@`, `---`, or `...`. A refused expansion stops the process at startup.
+
+Secret references use the same two grammars as Relay: `secret:env/<NAME>` names an operator-chosen environment variable and `secret:file/<name>` a file under the `secretProviders.file.root` directory. `secret:env/<NAME>` resolves only when `runtime.yaml` declares `secretProviders.environment`; without that declaration the reference is refused. See [Deploy and operate a registry](../../operate/breg/#write-the-runtime-configuration) for the fields that take a reference.
+
+### Bregctl
+
+`bregctl` reads no fixed environment variable. Projects, runtime files, credentials, and packages
+arrive through positional paths and explicit flags. Every command that takes `--runtime-config`
+loads the runtime file the way `breg` does, so the `${NAME}` expressions in that file resolve from
+the environment of the `bregctl` process.
+
+### Base Registry Engine installer
+
+The install script reads these variables. They are read by the script, not by the installed binaries.
+
+| Name | Purpose | Default or required |
+| --- | --- | --- |
+| `BREG_VERSION` | Base Registry Engine tag to install. A published installer asset embeds its own tag and refuses an override that does not match it. | Defaults to the installer's pinned tag. |
+| `BREG_INSTALL_DIR` | Directory the script installs into. | Defaults to `~/.local/bin`. |
+| `BREG_ASSET_DIR` | Directory of already-downloaded release assets to read instead of downloading. Use it after verifying a release with [`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/v0.26.0/release/VERIFY.md). | Optional. |
+
+The script verifies the downloaded `breg` and `bregctl` binaries against the release
+`SHA256SUMS` before anything reaches the install directory. It installs both binaries together or
+preserves the previous pair. It does not verify release authenticity.
+
+{/* Evidence: crates/registry-breg/install.sh; crates/registry-breg/src/main.rs; crates/registry-breg/src/runtime_config.rs. */}
+
 ## Registry Mint
 
 The `mint` binary reads these variables.
@@ -143,4 +183,7 @@ secret grammar in `contract.rs`, and resolution in `startup.rs`. Evidence CLI ow
 `registry-platform-config`. Evidencectl binary selection is in
 `crates/registry-evidencectl/src/evidence_binary.rs`; its installer is
 `crates/registry-evidencectl/install.sh`. OID4VCI and Mint CLI ownership is in each crate's `cli.rs`,
-with logging and dispatch in `main.rs`.
+with logging and dispatch in `main.rs`. Base Registry Engine logging is in
+`crates/registry-breg/src/main.rs` and `startup.rs`, runtime-file expansion and the secret grammar in
+`runtime_config.rs` over `registry-platform-config`, and its installer is
+`crates/registry-breg/install.sh`.

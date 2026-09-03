@@ -25,13 +25,12 @@ normal API, and see the new Point after QGIS renews its Registry Mint credential
 
 <QuickstartMeta
   outcome="One protected QGIS Point layer that pages, pans, renews its credential, and refreshes after an authenticated Base Registry Engine write."
-  time="About 35 minutes, plus the first Rust build and PostGIS image download"
-  level="Source preview with synthetic data on loopback"
+  time="About 35 minutes, plus the PostGIS image download"
+  level="Local evaluation with synthetic data on loopback"
   prerequisites={[
     'Linux or macOS, Bash, and two terminals',
-    'A clone of the registry-stack repository; Base Registry Engine is unreleased',
+    'Git and curl',
     'QGIS 4.2.1 with GDAL 3.12.4',
-    'Rust and Cargo',
     'Running Docker',
     'OpenSSL, Python 3.11 or later, and uv',
     'A text editor',
@@ -40,8 +39,43 @@ normal API, and see the new Point after QGIS renews its Registry Mint credential
 
 ## Before you start
 
-Run every shell command from the root of your registry-stack clone. Keep two terminals open: the
-first runs Base Registry Engine and Registry Mint, while the second performs the refresh write.
+Install Base Registry Engine and its command-line tool:
+
+```sh
+curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/breg-install.sh | bash
+bregctl --version
+```
+
+The installer places `breg` and `bregctl` together in `~/.local/bin` after checking both downloads
+against the release `SHA256SUMS`. It supports Linux on amd64 and arm64 and macOS on Apple Silicon.
+Replace `| bash` with `| less` to read the installer before you run it on a host you operate.
+Before these binaries reach a host that serves anyone else, check them against the signed release
+chain described in [OpenSSF and release trust](../../security/openssf-evidence/). If the installer
+ends by asking you to add its directory to `PATH`, do that in both terminals before you continue.
+
+The quickstart also runs Registry Mint, which the Evidence Gateway installer provides:
+
+```sh
+curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/evidencectl-install.sh | bash
+mint --version
+```
+
+The quickstart launcher and the synthetic service-site project live in the repository, so clone it
+at the tag that matches your installed binaries:
+
+```sh
+installed="$(bregctl --version | awk '{print $2}')"
+git clone --depth 1 --branch "v$installed" https://github.com/registrystack/registry-stack.git breg-tutorial
+cd breg-tutorial
+```
+
+This project is pre-1.0, so its default branch may already carry configuration or API changes the
+installed binaries do not implement. Pinning the checkout to the installed version keeps the
+project and the binaries on one contract. If you already have a checkout, use it instead of
+cloning, after confirming its `version` in `Cargo.toml` matches `bregctl --version`.
+
+Run every shell command from the root of that clone. Keep two terminals open: the first runs Base
+Registry Engine and Registry Mint, while the second performs the refresh write.
 
 :::caution[Use synthetic data only]
 The quickstart creates local keys, tokens, and a disposable database under
@@ -49,17 +83,21 @@ The quickstart creates local keys, tokens, and a disposable database under
 Do not put production data or credentials in this exercise.
 :::
 
+{/* Evidence: crates/registry-breg/install.sh; crates/registry-evidencectl/install.sh. */}
+
 ## Start the spatial registry
 
 In the first terminal, start the spatial quickstart:
 
 ```sh
-products/breg/quickstart/run.sh --spatial
+products/breg/quickstart/run.sh --installed --spatial
 ```
 
-The first run builds Base Registry Engine, `bregctl`, and Registry Mint. It also downloads
-the pinned PostGIS image. Wait for this banner; the ports, the operator token suffix, and the
-absolute paths vary:
+The `--installed` flag makes the launcher use the `breg`, `bregctl`, and `mint` you installed
+rather than building them from the checkout. The launcher first prints
+`== Using installed breg, bregctl, and mint from PATH` with the three paths it resolved. The first
+run also downloads the pinned PostGIS image. Wait for this banner; the ports, the operator token
+suffix, and the absolute paths vary:
 
 ```text
 Base Registry Engine spatial service-site quickstart is ready.
@@ -179,8 +217,8 @@ The visible Points move and reload. If QGIS reports `query.invalid`, reduce the 
 `1:2500`, return to `100.55,13.75`, and reload the layer with `F5`.
 
 The `/v1/gis` surface supplies the route shape QGIS needs, including collection discovery,
-absolute paging links, and GeoJSON features. Its conformance list is empty because Registry
-BReg does not claim full Open Geospatial Consortium API Features conformance.
+absolute paging links, and GeoJSON features. Its conformance list is empty because Base Registry
+Engine does not claim full Open Geospatial Consortium API Features conformance.
 
 {/* Evidence: crates/registry-breg/src/api/gis.rs, landing(), conformance(), api(), items()
     and absolute_href(); crates/registry-breg/tests/postgres_spatial_read.rs. */}
@@ -192,19 +230,19 @@ Keep QGIS open. In the second terminal, validate and import the supplied refresh
 ```sh
 spatial_run="$PWD/products/breg/quickstart/.run"
 spatial_input="$PWD/products/breg/acceptance/spatial-service-sites/fixtures/qgis-refresh-service-site.jsonl"
-target/debug/bregctl data validate \
+bregctl data validate \
   --package "$spatial_run/build/package" \
   --entity service-site --profile service-site-admin --operation create \
   --input "$spatial_input"
 
 spatial_refresh_token="$spatial_run/secrets/refresh-token-$(openssl rand -hex 8)"
-target/debug/mint token \
+mint token \
   --url "$(cat "$spatial_run/mint-origin")/token" \
   --client-id generic-quickstart \
   --key "$spatial_run/keys/operator/signing-p256-private-jwk" |
   python3 products/breg/quickstart/support/quickstart.py \
     store-token --out "$spatial_refresh_token"
-target/debug/bregctl data import \
+bregctl data import \
   --package "$spatial_run/build/package" \
   --breg-url "$(cat "$spatial_run/breg-origin")" \
   --access-token-file "$spatial_refresh_token" \
@@ -318,7 +356,8 @@ database.
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| The first run takes several minutes on Apple Silicon | The pinned PostGIS image uses `linux/amd64`, so Docker Desktop may run it under emulation | Leave the launcher running; later runs reuse the downloaded image and compiled binaries |
+| The first run takes several minutes on Apple Silicon | The pinned PostGIS image uses `linux/amd64`, so Docker Desktop may run it under emulation | Leave the launcher running; later runs reuse the downloaded image |
+| The launcher exits before the banner and names `breg`, `bregctl`, or `mint` as required in `--installed` mode | The installer's directory is not on your `PATH`, or you skipped one of the two installers | Add `~/.local/bin` to `PATH` in this terminal, rerun the installer you skipped, then start the launcher again |
 | QGIS reports `query.invalid` while adding or panning the layer | The visible extent exceeds the profile's bounding box cap, often after QGIS adjusts the canvas aspect ratio | Return to `100.55,13.75`, set scale to `1:2500`, confirm the displayed spans are less than `0.24` and `0.19`, then press `F5` |
 | QGIS asks for credentials or reports an OAuth2 error | The token URL, client ID, secret, or authentication selection does not match the current quickstart | Confirm the printed ports, use client ID `qgis-installation-central`, copy the current owner-only secret, leave Scope empty, and keep the first terminal running |
 | The connection opens but no Point appears | The project starts at a world extent or outside the synthetic fixture area | Set project CRS to `OGC:CRS84`, locate `100.55,13.75`, reduce the scale, and reload |

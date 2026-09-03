@@ -13,7 +13,7 @@ standards_referenced: []
 
 Use Registry Stack when an institution needs controlled record access, bounded signed answers,
 or a configuration-defined system of record. Relay and Evidence Gateway work over existing sources.
-The unreleased Base Registry Engine source preview owns records in PostgreSQL and supports writes.
+Base Registry Engine owns records in PostgreSQL and supports writes.
 
 {/* Evidence: crates/registry-breg/src/contract.rs, RegistryProject;
     crates/registry-breg/src/postgres/mutation.rs. */}
@@ -34,7 +34,7 @@ The unreleased Base Registry Engine source preview owns records in PostgreSQL an
 | --- | --- | --- |
 | To read specific data | Registry Relay | A protected, read-only API response |
 | To learn only a fact | Evidence Gateway | A signed assertion carrying the answer, not the source record |
-| To own and update registry records | Base Registry Engine (source preview) | A configuration-defined PostgreSQL registry and REST API |
+| To own and update registry records | Base Registry Engine | A configuration-defined PostgreSQL registry and REST API |
 
 Registry Relay, Evidence Gateway, and Base Registry Engine are separate product choices. They can be
 operated by the same institution, but each has its own source, authorization,

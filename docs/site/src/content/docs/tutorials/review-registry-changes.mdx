@@ -19,24 +19,66 @@ You will run the supplied workflow against PostgreSQL, adapt its configuration, 
 
 <QuickstartMeta
   outcome="A tested approval workflow with a review stage you configured"
-  time="About 25 minutes, plus the first Rust build and container download"
-  level="Source preview, local development"
+  time="About 25 minutes, plus the PostgreSQL image download"
+  level="Local evaluation only"
   prerequisites={[
     'Linux or macOS, Bash, and two terminals',
-    'A clone of the registry-stack repository; Base Registry Engine is unreleased',
-    'Rust and Cargo',
+    'Git and curl',
     'Running Docker',
     'OpenSSL, PostgreSQL client tools (psql), and Python 3.11+',
     'uv and a text editor',
   ]}
 />
 
+## Before you start
+
+Install Base Registry Engine and its command-line tool:
+
+```sh
+curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/breg-install.sh | bash
+bregctl --version
+```
+
+The installer places `breg` and `bregctl` together in `~/.local/bin` after checking both
+downloads against the release `SHA256SUMS`.
+It supports Linux on amd64 and arm64 and macOS on Apple Silicon.
+Replace `| bash` with `| less` to read the installer before you run it on a host you operate.
+Before these binaries reach a host that serves anyone else, check them against the signed
+release chain described in [OpenSSF and release trust](../../security/openssf-evidence/).
+If the installer ends by asking you to add its directory to `PATH`, do that in both terminals
+before you continue.
+
+The quickstart you borrow a database from in step 3 also runs Registry Mint, which the Evidence
+Gateway installer provides:
+
+```sh
+curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/evidencectl-install.sh | bash
+mint --version
+```
+
+The workflow example, the quickstart launcher, and the example runner live in the repository, so
+clone it at the tag that matches your installed binaries:
+
+```sh
+installed="$(bregctl --version | awk '{print $2}')"
+git clone --depth 1 --branch "v$installed" https://github.com/registrystack/registry-stack.git breg-tutorial
+cd breg-tutorial
+```
+
+This project is pre-1.0, so its default branch may already carry configuration or API changes
+the installed binaries do not implement.
+Pinning the checkout to the installed version keeps the examples and the binaries on one contract.
+If you already have a checkout, use it instead of cloning, after confirming its `version` in
+`Cargo.toml` matches `bregctl --version`.
+
 Run commands from the root of that clone unless a step says otherwise.
 The workflow runs through `bregctl test`, which sends requests through the real HTTP
 router with separate caller credentials and a disposable database.
 It does not leave the change-request example running as an HTTP service.
 
-{/* Evidence: products/breg/scripts/test-change-request-examples.sh;
+{/* Evidence: crates/registry-breg/install.sh;
+    crates/registry-evidencectl/install.sh;
+    products/breg/scripts/test-change-request-examples.sh;
     crates/registry-bregctl/src/test_lifecycle.rs;
     crates/registry-breg/src/fixtures.rs. */}
 
@@ -48,12 +90,10 @@ then check it:
 ```sh
 mkdir -p tutorial-work
 cp -R products/breg/acceptance/asset-site-placement-change-requests tutorial-work/asset-corrections
-export CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
-cargo build --locked -p registry-bregctl
-target/debug/bregctl check tutorial-work/asset-corrections
+bregctl check tutorial-work/asset-corrections
 ```
 
-The check succeeds, prints the compiled configuration's digest, and lists fifteen findings:
+The check succeeds, prints the compiled configuration's digest, and lists eighteen findings:
 
 ```text
 check succeeded
@@ -64,7 +104,8 @@ finding access.profile.unrestricted_collection at entities[id=asset-item].access
 
 Findings are advisories, not failures.
 The example's `asset-operator` and `site-planner` profiles admit any authenticated caller with the
-right purpose and can list every row, and the reviewer can list every request.
+right purpose and can list every row, and the correction submitter and reviewer can list every
+row they reach.
 The four correction profiles require scopes.
 Leave the findings as they are for this tutorial; `--deny-findings` turns them into failures when
 you want a project held to that bar.
@@ -74,7 +115,7 @@ No database has changed yet.
 Ask the CLI to describe what it compiled:
 
 ```sh
-target/debug/bregctl explain change-requests tutorial-work/asset-corrections \
+bregctl explain change-requests tutorial-work/asset-corrections \
   --format json > tutorial-work/change-requests.json
 python3 - tutorial-work/change-requests.json <<'PY'
 import json
@@ -184,6 +225,8 @@ correction is pending.
 In a second terminal, at the root of the same clone, start the local quickstart.
 You are borrowing its disposable PostgreSQL cluster, which the runner reaches over TLS with the
 quickstart's certificate authority.
+The `--installed` flag makes the launcher use the `breg`, `bregctl`, and `mint` you installed
+rather than building them from the checkout.
 
 :::caution[Disposable local services]
 Starting the quickstart replaces its previous `products/breg/quickstart/.run` directory.
@@ -193,9 +236,11 @@ Keep real data and production credentials out of this tutorial.
 :::
 
 ```sh
-products/breg/quickstart/run.sh
+products/breg/quickstart/run.sh --installed
 ```
 
+The launcher first prints `== Using installed breg, bregctl, and mint from PATH` with the three
+paths it resolved.
 Wait for this line, then leave the terminal running:
 
 ```text
@@ -242,12 +287,12 @@ target.write_text("".join(
     f"export {name}={shlex.quote(value)}\n" for name, value in values.items()
 ))
 PY
-products/breg/scripts/test-change-request-examples.sh \
+products/breg/scripts/test-change-request-examples.sh --installed \
   --env tutorial-work/test.env --asset-project "$PWD/tutorial-work/asset-corrections"
 ```
 
-The runner builds the server runtime the first time, so expect a second compile.
-Look for these lines among the build output:
+The `--installed` flag makes the runner use the same installed `breg` and `bregctl`.
+Look for these lines in its output:
 
 ```text
 running change-request fixture: asset-site-placement-change-requests
@@ -327,8 +372,8 @@ request:
 Run the structural check and the database journey again:
 
 ```sh
-target/debug/bregctl check tutorial-work/asset-corrections
-products/breg/scripts/test-change-request-examples.sh \
+bregctl check tutorial-work/asset-corrections
+products/breg/scripts/test-change-request-examples.sh --installed \
   --env tutorial-work/test.env --asset-project "$PWD/tutorial-work/asset-corrections"
 ```
 
@@ -352,7 +397,7 @@ operations: [create, get, list, patch]
 ```
 
 ```sh
-target/debug/bregctl check tutorial-work/asset-corrections
+bregctl check tutorial-work/asset-corrections
 ```
 
 The check fails with `change_control.direct_write_grant` and the message
@@ -400,7 +445,8 @@ deployment are separate steps.
 - [Base Registry Engine API reference](../../reference/breg-api/#change-requests) for the
   seven request states, the action routes, and the `request.actions[]` shape.
 - [Deploy and operate a registry](../../operate/breg/) to package and activate your
-  project, and to erase proposal detail under `operator_erase`.
+  project, to review a later revision with `bregctl diff`, and to erase proposal detail under
+  `operator_erase`.
 - Open `products/breg/CHANGE_REQUEST_EXAMPLES.md` in your clone for the household
   example and stale-proposal recovery.
 - Use [Registry Mint](../../configure/mint/) when connecting callers to your own deployment.
@@ -415,4 +461,5 @@ deployment are separate steps.
 | Python cannot import `yaml` | Repeat the virtual environment installation and `PATH` assignment in your first terminal. |
 | Renaming the stage makes `check` fail | Match the stage `id` to the supervisor's `reviewStages` entry. |
 | The runner reports `test.step.failed` | Its path `journeys[0].steps[<n>]` counts the steps of `tests/journeys.yaml` from zero. Check that step's `stage` and expected status. |
-| `change-requests` is not a recognized explain subject | Rebuild `bregctl` from this clone; the tutorial does not target a released binary. |
+| `change-requests` is not a recognized explain subject | Your `bregctl` predates the checkout. Confirm that `bregctl --version` matches the checkout's tag, then reinstall or clone again so they agree. |
+| `command not found` for `bregctl` or `mint` | The installer's directory is not on your `PATH`, or you skipped one of the two installers. Add `~/.local/bin` to `PATH` in this terminal and rerun the installer you skipped. |

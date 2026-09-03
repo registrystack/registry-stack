@@ -26,26 +26,55 @@ An optional final exercise sends a signed webhook to a local receiver.
 
 <QuickstartMeta
   outcome="Records created and updated over HTTP, plus a changed module and the generated API schema for its field."
-  time="About 30 minutes, plus the first Rust build and image download"
-  level="Source preview, local development only"
-  prerequisites={['Linux or macOS', 'Git and a Bash shell', 'Rust and Cargo', 'Running Docker', 'OpenSSL', 'Python 3.11 or later and uv', 'curl 7.76 or later', 'An editor and two terminals']}
+  time="About 30 minutes, plus the image download"
+  level="Local evaluation only"
+  prerequisites={['Linux amd64 or arm64, or macOS on Apple Silicon', 'Git and a Bash shell', 'Running Docker', 'OpenSSL', 'Python 3.11 or later and uv', 'curl 7.76 or later', 'An editor and two terminals']}
 />
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, init_files();
     products/breg/quickstart/run.sh;
     crates/registry-mint/demo/support/key_material.py. */}
 
-## Get the source
+## Install Base Registry Engine
 
-Base Registry Engine is unreleased. Clone the repository; its default branch carries the source preview:
+Install `breg` and `bregctl`, then the Evidence Gateway toolset, because Registry Mint ships in it and
+the launcher runs Mint to issue the local access tokens:
 
 ```sh
-git clone https://github.com/registrystack/registry-stack.git breg-tutorial
+curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/breg-install.sh | bash
+curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/evidencectl-install.sh | bash
+bregctl --version
+mint --version
+```
+
+Each installer checks its binaries against the release `SHA256SUMS` before anything reaches
+`~/.local/bin`, and installs them together or not at all. Keep that directory on your `PATH` in both
+terminals, because the launcher finds all three binaries there.
+
+The commands pipe a script from GitHub straight into `bash`, so replace `| bash` with `| less` first if you
+would rather read it before it runs. On a tutorial machine that is your own call, but before these binaries
+reach a host that serves anyone else, check them against the signed `SHA256SUMS` chain described in
+[OpenSSF and release trust](../../security/openssf-evidence/), or follow
+[release verification](https://github.com/registrystack/registry-stack/blob/v0.26.0/release/VERIFY.md)
+and rerun the installer with `BREG_ASSET_DIR` pointing at the verified directory.
+
+{/* Evidence: crates/registry-breg/install.sh; crates/registry-evidencectl/install.sh. */}
+
+## Get the quickstart files
+
+The launcher, its support scripts, and the fixtures live in the repository. Clone it at the version you
+installed, not at the default branch:
+
+```sh
+installed="$(bregctl --version | awk '{print $2}')"
+git clone --depth 1 --branch "v$installed" https://github.com/registrystack/registry-stack.git breg-tutorial
 cd breg-tutorial
 ```
 
+This project is pre-1.0, so the default branch may carry configuration and API changes the installed
+binaries do not implement; pinning the checkout keeps the launcher and the binaries on one contract.
 Run the commands from this checkout's root in both terminals.
-The launcher supplies PostgreSQL and Registry Mint, which issues the local access tokens.
+The launcher supplies PostgreSQL and Registry Mint.
 
 ## Start the registry
 
@@ -58,10 +87,13 @@ keys, tokens, and logs. Keep your edited project outside that directory.
 In the first terminal, start the services:
 
 ```sh
-products/breg/quickstart/run.sh
+products/breg/quickstart/run.sh --installed
 ```
 
-Wait for this line; build and setup output is omitted:
+The flag tells the launcher to use the `breg`, `bregctl`, and `mint` on your `PATH` rather than
+compiling them from the checkout. It names the three binaries it resolved before it starts anything,
+so a stale build of the same name elsewhere on your `PATH` is visible at once.
+Wait for this line; setup output is omitted:
 
 ```text
 Base Registry Engine generic quickstart is ready.
@@ -333,7 +365,7 @@ The same definition supplies the validation rule and generated request schema.
 Create an editable project outside the launcher's disposable directory:
 
 ```sh
-target/debug/bregctl init tutorial-work/project
+bregctl init tutorial-work/project
 ```
 
 The command prints `init succeeded` and writes a working project: `registry.yaml`, one module
@@ -373,8 +405,8 @@ Now change the module itself: raise its `maxLength` to `1000` and its `version` 
 Re-pin it and check the combined project:
 
 ```sh
-target/debug/bregctl project lock tutorial-work/project
-target/debug/bregctl check tutorial-work/project
+bregctl project lock tutorial-work/project
+bregctl check tutorial-work/project
 ```
 
 Look for `project lock succeeded`, a `modules` list showing the module as `updated`, and
@@ -386,7 +418,7 @@ module edit and review the changed digest with its source.
 Inspect the query permissions:
 
 ```sh
-target/debug/bregctl explain queries tutorial-work/project
+bregctl explain queries tutorial-work/project
 ```
 
 The operator's list operation over `record` has `filterable` entries for `code` and `status`,
@@ -402,8 +434,8 @@ This describes your edited project; the running quickstart still uses its origin
 Generate JSON Schema and OpenAPI from the edited project:
 
 ```sh
-target/debug/bregctl generate schemas tutorial-work/project --output tutorial-work/schemas
-target/debug/bregctl generate openapi tutorial-work/project --output tutorial-work/api
+bregctl generate schemas tutorial-work/project --output tutorial-work/schemas
+bregctl generate openapi tutorial-work/project --output tutorial-work/api
 ```
 
 Both commands print `generate succeeded`.
@@ -478,7 +510,7 @@ Stopping it removes its database. Use synthetic records and keep your own projec
 In the first terminal, after stopping the generic quickstart, run:
 
 ```sh
-products/breg/demo/run.sh --webhook
+products/breg/demo/run.sh --installed --webhook
 ```
 
 Wait for these lines; other setup output is omitted:
@@ -499,7 +531,7 @@ In the second terminal, inspect the compiled event:
 
 ```sh
 webhook_run="$PWD/products/breg/demo/.run"
-target/debug/bregctl explain events "$webhook_run/project"
+bregctl explain events "$webhook_run/project"
 ```
 
 Find `operating-created-v1`. Open
@@ -529,7 +561,7 @@ Do not edit these running deployment files; changes need a checked package and r
 Preview the request without sending it:
 
 ```sh
-target/debug/bregctl --format json webhook sample "$webhook_run/project" \
+bregctl --format json webhook sample "$webhook_run/project" \
   --event operating-created-v1
 ```
 
@@ -542,9 +574,9 @@ worker signs actual deliveries with the shared key.
 Obtain a fresh token from this demo's Mint client and keep it in an owner-only header file:
 
 ```sh
-webhook_url=$(cat "$webhook_run/server-origin")
+webhook_url=$(cat "$webhook_run/breg-origin")
 umask 077
-target/debug/mint token \
+mint token \
   --url "$(cat "$webhook_run/mint-origin")/token" \
   --client-id business-demo \
   --key "$webhook_run/keys/operator/signing-p256-private-jwk" \
@@ -605,7 +637,7 @@ Compare that saved report with the current queue. This CLI command connects to P
 directly, so give it the demo's certificate authority (CA) file:
 
 ```sh
-SSL_CERT_FILE="$webhook_run/tls/ca.pem" target/debug/bregctl --format json webhook list \
+SSL_CERT_FILE="$webhook_run/tls/ca.pem" bregctl --format json webhook list \
   --runtime-config "$webhook_run/runtime.yaml"
 ```
 
@@ -641,7 +673,7 @@ The local token lasts five minutes. While Mint is still running, renew it and re
 
 ```sh
 umask 077
-target/debug/mint token \
+mint token \
   --url "$(cat "$registry_run/mint-origin")/token" \
   --client-id generic-quickstart \
   --key "$registry_run/keys/operator/signing-p256-private-jwk" \
@@ -661,7 +693,8 @@ If renewal fails, check that the first terminal is still running and inspect its
 | Symptom | Next move |
 | --- | --- |
 | A prerequisite is missing or Docker cannot start a container | Install the named tool or start Docker, then rerun the launcher. A rerun replaces the previous disposable run. |
-| The first build takes time | Wait for the ready message. The first run compiles Rust and may download the PostgreSQL image. |
+| The launcher stops because `breg`, `bregctl`, or `mint` is not on `PATH` | Add the installers' directory, `~/.local/bin` unless you changed it, to `PATH` in that terminal, or rerun the installer that provides the missing binary. |
+| The first run pauses before the ready message | Docker is downloading the PostgreSQL image. Wait for the ready message. |
 | A service does not become ready | Inspect `.run/logs/` under the quickstart directory. Do not share tokens, keys, or database URL files. |
 | A create request returns `409` with code `idempotency.conflict` | The key was already used with a different body. Reuse the exact body to retry, or choose a new key for a new write. |
 | A create request returns `409` with code `mutation.conflict` | The code is already taken; codes are unique in this project. Choose a new code and a new key. |
