@@ -286,8 +286,8 @@ reproduces that row, installs one baseline commit at the head, and moves the
 coverage baseline to it. It resurrects nothing: snapshot references before the
 new baseline remain unavailable, because the bytes they named are gone. The
 command refuses when coverage is already complete, when the registry is not
-ready, when a retained revision is not indexed by a commit, and when a live row
-has no retained journal head that reproduces it. The 1,000-row live bound that
-applies to establishing an existing-data baseline applies here too. The result
-and keyed audit contain counts and positions, not record values; the operator
-reference is recorded as a keyed hash.
+ready, when a retained journal head is not indexed by a commit, and when a live
+row has no retained journal head that reproduces it. The 1,000-row live bound
+that applies to establishing an existing-data baseline applies here too. The
+result and keyed audit contain counts and positions, not record values; the
+operator reference is recorded as a keyed hash.
