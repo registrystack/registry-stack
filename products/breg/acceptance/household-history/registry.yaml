@@ -1,0 +1,78 @@
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: household-history
+  canonicalBaseIri: "https://household-history.example.gov"
+  version: 0.1.0
+  defaultLanguage: en
+package:
+  environment: acceptance
+  instanceId: household-history-acceptance
+  sequence: 1
+  sourceRevision: household-history-acceptance-0.1.0
+manifestProjection:
+  accessProfile: registry-operator
+  classificationCeiling: internal
+  catalog:
+    baseUrl: https://household-history.example.gov
+    title: Household History Acceptance Catalog
+    description: Portable metadata for the corrections and historical query acceptance registry.
+    publisher:
+      id: "household-history-authority"
+      name: Household History Acceptance Authority
+      iri: https://household-history.example.gov/authority
+  datasets:
+    -
+      id: "household-history"
+      title: Household History Acceptance Registry
+      description: Effective membership records used to verify correction and snapshot behavior.
+      owner: Household History Acceptance Authority
+      status: active
+  dataServices:
+    -
+      id: "household-history-data-service"
+      title: Household History Acceptance Catalog
+      endpointUrl: "https://household-history.example.gov"
+      servesDatasets:
+        - "household-history"
+  publicService:
+    id: "household-history-service"
+    title: Household History Acceptance Catalog
+  distributions: []
+modules:
+  - id: household-history-core
+    version: 0.1.0
+    digest: sha256:a372ce18b6ef7335ca8ab4f157fd78930fd87aa660bd13991d301a82e9e2709b
+entities:
+  - id: membership-record
+    primaryDataset: "household-history"
+    route: memberships
+    mutationMode: mutable
+    batch: {maximumItems: 4, maximumBytes: 16384}
+    fields:
+      - {id: subject, type: string, required: true, maxLength: 80, classification: internal}
+      - {id: group, type: vocabulary-code, vocabulary: membership-group, required: true, classification: internal}
+      - {id: valid-from, type: date, required: true, classification: internal}
+      - {id: valid-to, type: date, required: false, classification: internal}
+      - {id: source-reference, type: string, required: false, maxLength: 120, classification: internal}
+    temporal:
+      startField: valid-from
+      endField: valid-to
+    constraints:
+      - {kind: temporal-non-overlap, scopeFields: [subject], startField: valid-from, endField: valid-to}
+accessProfiles:
+  - id: registry-operator
+    default: true
+    principalClaim: registry_principal
+    requiredPurposes: [history-maintenance]
+    requiredScopes: [history-maintain]
+    grants:
+      - {entity: membership-record, operations: [create, get, list, patch, batch, snapshot], readableFields: [subject, group, valid-from, valid-to, source-reference], writableFields: [subject, group, valid-from, valid-to, source-reference], filterableFields: [subject, group, valid-from, valid-to]}
+  - id: eligibility-consumer
+    principalClaim: registry_principal
+    requiredPurposes: [eligibility-evaluation]
+    requiredScopes: [eligibility-read]
+    grants:
+      - {entity: membership-record, operations: [list, snapshot], readableFields: [subject, group, valid-from, valid-to], filterableFields: [subject, group, valid-from, valid-to]}
+vocabularies:
+  - {id: membership-group, values: [A, B]}

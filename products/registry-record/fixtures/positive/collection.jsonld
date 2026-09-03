@@ -1,0 +1,20 @@
+{
+  "@context": "https://id.registrystack.org/contexts/registry-record/v1",
+  "items": [
+    {
+      "recordIdentifier": "company-123",
+      "revisionIdentifier": "42",
+      "domainData": {
+        "legalName": "Example Ltd"
+      }
+    }
+  ],
+  "pageInfo": {
+    "nextCursor": "cursor-2"
+  },
+  "meta": {
+    "registryIdentifier": "business-registry",
+    "datasetIdentifier": "legal-entities",
+    "entityTypeIdentifier": "company"
+  }
+}

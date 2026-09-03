@@ -694,16 +694,6 @@ pub fn validate_service_selection_structure(
     Ok(())
 }
 
-/// Compatibility alias for the original structural-validation name.
-#[deprecated(
-    note = "use validate_service_selection_structure; validation is structural, not trust"
-)]
-pub fn validate_service_selection(
-    selection: &ServiceSelection,
-) -> Result<(), DiscoveryClientError> {
-    validate_service_selection_structure(selection)
-}
-
 /// Apply adopter-owned local policy and create an ephemeral native handoff.
 ///
 /// The callback owns the trust decision. Discovery supplies no trust policy,
@@ -1267,20 +1257,6 @@ mod tests {
             renew_unchanged_service_selection(&relay_previous, &relay_current),
             Err(DiscoveryClientError::SelectionChanged)
         );
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn legacy_validation_name_remains_a_structural_compatibility_alias() {
-        let record = service();
-        let response = ServiceSearchResponse {
-            catalog_revision: catalog_revision(std::slice::from_ref(&record)).unwrap(),
-            items: vec![record],
-        };
-        let selection = response
-            .select_only(MatchedCapability::EvidenceType("urn:evidence".into()))
-            .expect("valid exact selection");
-        validate_service_selection(&selection).expect("the compatibility alias remains available");
     }
 
     #[test]

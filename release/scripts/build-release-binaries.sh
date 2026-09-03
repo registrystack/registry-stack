@@ -19,6 +19,10 @@ include_discovery=0
 if ((version_major > 0 || version_minor >= 24)); then
   include_discovery=1
 fi
+include_breg=0
+if ((version_major > 0 || version_minor >= 26)); then
+  include_breg=1
+fi
 default_builder_image="rust:1.95-trixie@sha256:f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3"
 if [[ -n "${RELEASE_BUILDER_IMAGE:-}" && "${RELEASE_BUILDER_IMAGE}" != "${default_builder_image}" ]]; then
   printf 'RELEASE_BUILDER_IMAGE must remain pinned to %s\n' "${default_builder_image}" >&2
@@ -57,6 +61,7 @@ docker run --rm \
   --env CARGO_TERM_COLOR="${CARGO_TERM_COLOR:-always}" \
   --env HOME=/workspace \
   --env RELEASE_INCLUDE_DISCOVERY="${include_discovery}" \
+  --env RELEASE_INCLUDE_BREG="${include_breg}" \
   --env RELEASE_TAG="${tag}" \
   --env REGISTRY_RELEASE_TAG="${tag}" \
   --env RELEASE_RUSTFLAGS="${release_rustflags}" \
@@ -100,9 +105,21 @@ docker run --rm \
       cp target/release/discovery "dist/bin/discovery-${RELEASE_TAG}-linux-amd64"
       cp target/release/discovery dist/image-bin/discovery
     fi
+
+    if [[ "${RELEASE_INCLUDE_BREG}" -eq 1 ]]; then
+      cargo build --release --locked \
+        -p registry-breg \
+        --bin breg \
+        --features runtime
+      cargo build --release --locked \
+        -p registry-bregctl
+      cp target/release/breg "dist/bin/breg-${RELEASE_TAG}-linux-amd64"
+      cp target/release/bregctl "dist/bin/bregctl-${RELEASE_TAG}-linux-amd64"
+      cp target/release/breg dist/image-bin/breg
+    fi
   '
 
-printf '%s\n' "${release_builder_image}" > "${repo_root}/dist/image-bin/RELEASE_BUILDER_IMAGE"
+printf '%s\n' "${release_builder_image}" >"${repo_root}/dist/image-bin/RELEASE_BUILDER_IMAGE"
 # The staged asset lists follow the same gate as the build above, so a version
 # that predates an asset neither checksums nor chmods a file it never built.
 bin_assets=()
@@ -110,6 +127,13 @@ image_bin_binaries=()
 if [[ "${include_discovery}" -eq 1 ]]; then
   bin_assets+=("discovery-${tag}-linux-amd64")
   image_bin_binaries+=(discovery)
+fi
+if [[ "${include_breg}" -eq 1 ]]; then
+  bin_assets+=(
+    "breg-${tag}-linux-amd64"
+    "bregctl-${tag}-linux-amd64"
+  )
+  image_bin_binaries+=(breg)
 fi
 bin_assets+=(
   "evidence-${tag}-linux-amd64"
@@ -131,11 +155,11 @@ done
 
 (
   cd -- "${repo_root}/dist/bin"
-  sha256sum -- "${bin_assets[@]}" > SHA256SUMS
+  sha256sum -- "${bin_assets[@]}" >SHA256SUMS
 )
 (
   cd -- "${repo_root}/dist/image-bin"
-  sha256sum -- RELEASE_BUILDER_IMAGE "${image_bin_binaries[@]}" > SHA256SUMS
+  sha256sum -- RELEASE_BUILDER_IMAGE "${image_bin_binaries[@]}" >SHA256SUMS
 )
 
 printf 'built release binaries for %s with canonical container paths\n' "${tag}"

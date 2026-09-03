@@ -1,0 +1,20 @@
+[package]
+name = "registry-stack-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Curated product-module facade for Registry Stack Rust clients."
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+registry-breg-client.workspace = true
+registry-discovery-client.workspace = true
+registry-evidence-client.workspace = true
+registry-platform-httputil.workspace = true
+registry-record.workspace = true
+registry-relay-client.workspace = true

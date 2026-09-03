@@ -164,14 +164,14 @@ For the complete field list, including every default, see the
 Add one file per client under the directory named in `clients.directory`:
 
 ```yaml
-clientId: health-desk
-principal: service:health-desk
+clientId: permit-desk
+principal: service:permit-desk
 evidenceAudience: https://evidence.example.org
-requesterTags: [health-desk, region-north]
+requesterTags: [permit-desk, region-north]
 keys:
   - kty: OKP
     crv: Ed25519
-    kid: health-desk-2026-01
+    kid: permit-desk-2026-01
     x: "<public-key-x-coordinate>"
 ```
 
@@ -201,17 +201,34 @@ keys:
 
 Set `accessTokens.audiences` to the one exact audience in the Relay runtime's issuer
 configuration. Set `authorization.scopes` to the exact operation or access-profile scopes this
-client may use. Add a direct string under `authorization.claims` only when the compiled Relay
+client may use. Add a claim under `authorization.claims` only when the compiled Relay
 access rule reads that claim for purpose or authority-to-row binding.
 
+A claim value is either one string or a list of strings:
+
+```yaml
+authorization:
+  scopes:
+    - registry:business:read
+  claims:
+    purpose: statutory-consultation
+    authority: [district-17, district-18]
+```
+
+Registry Mint mints the single string as a JSON string and the list as a JSON array. A resource
+server boundary that matches a row against a set of permitted values reads an array-valued claim
+and refuses a scalar, so name every permitted value in the list form when the access rule binds
+rows that way.
+
 The registration is the only authority source. Registry Mint joins the registered scopes into
-the access token's space-delimited `scope` claim and copies the direct claims as strings. The
+the access token's space-delimited `scope` claim and copies the direct claims unchanged. The
 client assertion and token form cannot provide or override these values. A Relay registration
 cannot also contain `evidenceAudience`, `requesterTags`, `grant`, or `delegation`.
 
 The standard profile admits 1 to 64 unique RFC 6749 scope-tokens and at most 32 direct claims.
-Each direct value is a non-empty string of at most 512 bytes. Claim names cannot shadow `iss`,
-`aud`, `exp`, `iat`, `nbf`, `jti`, `client_id`, `sub`, or `scope`.
+Each direct value is a non-empty string of at most 512 bytes, or a list of 1 to 64 unique such
+strings. Claim names cannot shadow `iss`, `aud`, `exp`, `iat`, `nbf`, `jti`, `client_id`, `sub`,
+or `scope`.
 When `accessTokens.claims` is configured for Evidence clients in the same deployment, a scoped
 client's direct claims cannot reuse any of those configured Evidence names.
 Mint projects the complete signed response and refuses a standard registration whose token
@@ -294,7 +311,7 @@ tool: it signs with the caller's own key and never touches Registry Mint's signi
 
 ```sh
 mint token --url https://mint.example.org/token \
-  --client-id health-desk --key ./dev/health-desk.jwk
+  --client-id permit-desk --key ./dev/permit-desk.jwk
 ```
 
 It prints the access token alone on stdout, so `TOKEN=$(mint token ...)` is the whole usage.

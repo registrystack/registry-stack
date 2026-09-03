@@ -34,9 +34,9 @@ container package as private, so publish a clearly non-release bootstrap
 artifact without putting a token on the command line:
 
 ```sh
-package="${PACKAGE:?set PACKAGE to relay, evidence, mint, or discovery}"
+package="${PACKAGE:?set PACKAGE to relay, evidence, mint, discovery, or breg}"
 case "${package}" in
-  relay|evidence|mint|discovery) ;;
+  relay|evidence|mint|discovery|breg) ;;
   *) echo "unsupported release image package: ${package}" >&2; exit 1 ;;
 esac
 
@@ -58,11 +58,11 @@ oras push \
 In the organization package settings, change only the selected package to
 public and grant `registrystack/registry-stack` Actions access with Write.
 Starting with `v0.21.0`, the release requires public `relay`, `evidence`, and
-`mint` packages, joined by `discovery` from `v0.24.0`. Verify all four before
-candidate dispatch:
+`mint` packages, joined by `discovery` from `v0.24.0` and `breg`
+from `v0.26.0`. Verify all five before candidate dispatch:
 
 ```sh
-for package in relay evidence mint discovery; do
+for package in relay evidence mint discovery breg; do
   gh api "/orgs/registrystack/packages/container/${package}" \
     --jq '[.name,.package_type,.visibility]'
 done
@@ -84,15 +84,16 @@ fingerprint" below, and record the reviewed runtime block, exception set,
 owner, and expiry from that evidence. `discovery` is the first image to need
 this since the baselines were introduced.
 
-Enrol the new candidate package in the daily cleanup only after that first
+Enrol a new candidate package in the daily cleanup only after that first
 candidate publishes `ghcr.io/registrystack/<name>-candidate`. The cleanup lists
 exactly the names in `CANDIDATE_PACKAGES` in
 `release/scripts/cleanup-release-candidates.py` and fails closed on a package it
 cannot list, so naming an unpublished package would abort the whole scheduled
-run. Add `discovery-candidate` to that allowlist, with a matching fixture in
-`release/scripts/test_cleanup_release_candidates.py`, as part of the `v0.24.0`
-release. The public `discovery` name is already on the `PUBLIC_PACKAGES`
-denylist, so cleanup can never reach a released image.
+run. Add `<name>-candidate` to that allowlist with a matching fixture in
+`release/scripts/test_cleanup_release_candidates.py`. Also add the public name
+to `PUBLIC_PACKAGES` so cleanup can never reach a released image. Base
+Registry Engine is already on the public denylist; its candidate name joins
+the allowlist after the first private candidate is present.
 
 ### Provision client registries
 
@@ -263,7 +264,8 @@ workflow then:
 
 - Validates the release identity, manifests, pins, recipes, and destinations.
 - Builds the release payloads and OCI images once. Starting with `v0.21.0`, the
-  image set is Relay, Evidence Gateway, and Registry Mint.
+  image set is Relay, Evidence Gateway, and Registry Mint. Discovery joins at
+  `v0.24.0`, and Base Registry Engine joins at `v0.26.0`.
 - Builds the exact locked release documentation archive once and includes it in
   the candidate payload closure.
 - Publishes images only to private candidate packages.

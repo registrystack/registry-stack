@@ -1,0 +1,755 @@
+---
+title: Modeling patterns for registries
+description: Model identifiers, dated relationships, declarations, provenance, and document references with explicit local rules.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: explanation
+locale: en
+standards_referenced: []
+---
+
+Use these patterns when designing business, facility, or public-organisation registries with Base Registry Engine.
+They describe common record structures and the choices you need to make before configuring them.
+The YAML examples use BReg's current configuration syntax, but are fragments, not installable
+modules or complete projects. Merge their list entries into your own configuration.
+References assume you have defined the target entities and created the referenced records.
+Each fragment names a `primaryDataset`; replace it with a dataset your project declares.
+
+The HTTP examples use those configured routes and field names. Each response is illustrative
+JSON with synthetic records, not a captured server response; it doubles as a sample record.
+YAML field IDs such as `valid-from` become JSON names such as `validFrom`.
+Requests omit the deployment's host and bearer token. The
+[example reader profile](#access-for-the-example-queries) supplies the required read permissions;
+selecting its name does not authenticate a caller. Creation and correction need separate write grants.
+
+{/* Evidence: crates/registry-breg/src/artifacts.rs, single_response_schema() and list_response_schema();
+    crates/registry-breg/src/api/mod.rs, read_dispatch();
+    crates/registry-breg/src/contract.rs, AccessProfileSource. */}
+
+## Patterns become ordinary configuration
+
+You define entities, fields, references, constraints, and permissions in `registry.yaml` or local
+modules. A pattern does not add a built-in domain entity to the server.
+For example, an operator assignment links an establishment to the business operating it, with dates.
+The same configuration mechanism can describe an authority's responsibility for a jurisdiction.
+
+{/* Evidence: crates/registry-breg/src/contract.rs, RegistryProject and RegistryModule;
+    products/breg/acceptance/asset-site-placement/registry.yaml;
+    products/breg/acceptance/asset-site-placement/modules/asset-site-placement-core/module.yaml;
+    products/breg/acceptance/business/registry.yaml. */}
+
+Keep the object you describe separate from its registration when they have different lifecycles.
+A business can have several permits; an asset can move between sites without becoming a different
+asset. A permit's expiry does not mean the business has ceased to exist.
+Whether these need separate entities depends on the questions your registry must answer.
+
+## Identifiers
+
+An external identifier is a value within a named scheme, such as a business registration number
+issued by a regional authority. Keep that value separate from the server's record ID.
+A record ID locates stored data; it does not establish that two records describe different
+real-world businesses or assets.
+
+An identifier record can hold a typed reference to its holder, the scheme, issuer, string value,
+validity dates, and a reference to an assignment it replaces. Use a string for a value such as
+`0017` so its leading zeroes survive.
+If every business has one permanent registration number, fields on the business record may be
+sufficient. A separate identifier entity becomes useful when numbers have their own history or
+several identifiers can belong to one holder.
+
+Decide the scope of uniqueness explicitly. Regional authorities A and B might both issue `0017`.
+In that case, `(authority, registration-number)` can identify an assignment; the number alone cannot.
+For a scheme that already defines one shared namespace, adding the issuer to the key could
+incorrectly allow duplicates. Also decide whether expired numbers can be reassigned.
+An unknown scheme or issuer is missing information, not permission to infer a confident match.
+
+BReg supports composite unique constraints and exact lookup selectors.
+Choose the key from the scheme's rules before declaring either.
+The business example scopes its registration number to a jurisdiction.
+
+{/* Evidence: crates/registry-breg/src/contract.rs, ConstraintSource and SelectorProfileSource;
+    crates/registry-breg/src/compiler.rs, validate_selector_profiles();
+    products/breg/acceptance/business/registry.yaml. */}
+
+A useful review query is "which business holds this identifier in this namespace?"
+Test equal values in different namespaces, duplicate assignments within one namespace, and refused
+lookups by callers without access. For a replacement, retain the old assignment and explain how
+the successor relates to it. An upgrade that adds issuer information must preserve unknown
+historical issuers rather than inventing them.
+
+### Example: a business identifier
+
+This model assumes a `business` entity. Here, `namespace` names the complete issuing scheme,
+including its jurisdiction. The unique key prevents reuse even after a replacement is recorded.
+
+```yaml
+entities:
+  - id: business-identifier
+    route: business-identifiers
+    primaryDataset: business-registry
+    mutationMode: create_only
+    fields:
+      - id: holder
+        type: reference
+        target: business
+        required: true
+        classification: internal
+      - id: namespace
+        type: string
+        maxLength: 100
+        required: true
+        classification: internal
+      - id: value
+        type: string
+        maxLength: 64
+        required: true
+        classification: internal
+      - id: replaces
+        type: reference
+        target: business-identifier
+        classification: internal
+    constraints:
+      - kind: unique
+        fields: [namespace, value]
+```
+
+Which business holds `0017` in the `region-a:business` namespace?
+
+```http
+GET /v1/records/business-identifiers?accessProfile=model-reader&$filter=namespace%20eq%20%27region-a%3Abusiness%27%20and%20value%20eq%20%270017%27
+```
+
+Illustrative response:
+
+```json
+{
+  "items": [{
+    "data": {
+      "recordIdentifier": "11111111-1111-4111-8111-111111111111",
+      "revisionIdentifier": "1",
+      "domainData": {
+        "holder": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "namespace": "region-a:business",
+        "value": "0017"
+      }
+    }
+  }],
+  "pageInfo": {"nextCursor": null},
+  "meta": {"registryIdentifier": "business-registry", "datasetIdentifier": "business-registry", "entityTypeIdentifier": "business-identifier"}
+}
+```
+
+**Refusal case:** another holder with the same `namespace` and `value` conflicts with this record.
+The same value in `region-b:business` is allowed. To replace `0017` with `0021`, create a complete
+assignment with `value: "0021"` and `replaces` pointing to the earlier assignment. That reference
+does not automatically mark `0017` inactive; an application needs an explicit rule for that decision.
+
+## Relationships with dates
+
+Use a relationship entity when a link has information of its own.
+An `operator-assignment` can reference one establishment and one business and carry start and end dates.
+An authority's responsibility can similarly link a public organisation, jurisdiction, and function.
+Use references with declared target entities rather than an untyped pair of text IDs.
+
+{/* Evidence: crates/registry-breg/src/contract.rs, FieldTypeSource;
+    products/breg/acceptance/business-establishments/modules/business-establishments-core/module.yaml. */}
+
+Dates and exclusivity answer different questions: when did a link apply, and which other links
+were allowed at the same time? These are distinct possible policies:
+
+- An establishment has one operating business at a time.
+- A facility has several operators at the same time.
+- A facility has several operators, but one designated primary operator at a time.
+
+Choose the policy before configuring temporal constraints. A `temporal` declaration names the
+start and end fields and adds the `:current` and `:as-of` routes; on its own it allows overlapping
+intervals. Exclusivity is a separate `temporal-non-overlap` constraint whose `scopeFields` name
+the tuple within which intervals cannot overlap. Treat that tuple as a business rule, not a label
+for any record that happens to have dates. A role or primary flag alone does not enforce
+conditional exclusivity.
+
+{/* Evidence: crates/registry-breg/src/contract.rs, TemporalSource and ConstraintSource;
+    crates/registry-breg/src/compiler.rs, validate_constraints();
+    crates/registry-breg/src/generated_ddl.rs. */}
+
+Use "which business operated this establishment on the chosen date?" and
+"which authority had responsibility for this jurisdiction?"
+to review the model. Test adjacent periods, open-ended periods, and concurrency that your policy
+allows. Related-record access needs its own review; permission to read one endpoint is not a
+reason to expose everything linked to it.
+
+A transfer to another operating business is a real change. Discovering that an assignment named
+the wrong business is a correction. Preserve that distinction in the record history and test the correction for
+the original period, not only a successor beginning later. When an upgrade adds an optional role,
+keep earlier records readable without assigning them a role nobody recorded.
+
+Keep effective time separate from recording time. An assignment that began on June 1 but was entered
+on June 10 has two relevant dates. Decide whether a query asks which business operated the establishment or what
+the registry had recorded at the time; those questions need different historical information.
+
+### Example: one operating business at a time
+
+This model assumes `establishment` and `business` entities. It deliberately disallows overlapping
+operator assignments for one establishment, while allowing one business to operate several establishments.
+
+```yaml
+entities:
+  - id: operator-assignment
+    route: operator-assignments
+    primaryDataset: business-registry
+    mutationMode: mutable
+    fields:
+      - id: establishment
+        type: reference
+        target: establishment
+        required: true
+        classification: internal
+      - id: business
+        type: reference
+        target: business
+        required: true
+        classification: internal
+      - id: valid-from
+        type: date
+        required: true
+        classification: internal
+      - id: valid-to
+        type: date
+        classification: internal
+    temporal:
+      startField: valid-from
+      endField: valid-to
+    constraints:
+      - kind: temporal-non-overlap
+        scopeFields: [establishment]
+        startField: valid-from
+        endField: valid-to
+```
+
+Who operated this establishment on June 15? The `:as-of` route takes a timestamp even though this model
+stores calendar dates. It selects effective periods from the records, not a past database snapshot.
+
+```http
+GET /v1/records/operator-assignments:as-of?accessProfile=model-reader&asOf=2026-06-15T00:00:00Z&$filter=establishment%20eq%20%27bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb%27
+```
+
+Illustrative response:
+
+```json
+{
+  "items": [{
+    "data": {
+      "recordIdentifier": "22222222-2222-4222-8222-222222222222",
+      "revisionIdentifier": "1",
+      "domainData": {
+        "establishment": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "business": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "validFrom": "2026-06-01",
+        "validTo": "2026-07-01"
+      }
+    }
+  }],
+  "pageInfo": {"nextCursor": null},
+  "meta": {"registryIdentifier": "business-registry", "datasetIdentifier": "business-registry", "entityTypeIdentifier": "operator-assignment"}
+}
+```
+
+**Refusal case:** another operator assignment for that establishment starting June 20 conflicts with this period.
+A successor starting July 1 is allowed because the end date is exclusive. If the operating business was entered
+incorrectly, correct the original assignment rather than inventing a transfer on today's date.
+A permitted patch needs the current record's `If-Match` value and an `Idempotency-Key`.
+
+{/* Evidence: crates/registry-breg/src/query.rs, ReadQueryOptions;
+    crates/registry-breg/src/artifacts.rs;
+    crates/registry-breg/src/generated_ddl.rs;
+    crates/registry-breg/src/api/mod.rs, patch_dispatch(). */}
+
+## Declarations and observations
+
+A declaration records what someone reported. An observation records what was observed and how.
+For an environmental facility, a declaration might report `1200` kilograms of nitrogen discharged
+during June; an inspection can record an independently measured quantity and method.
+Neither record needs to overwrite the other.
+
+Consider fields for the facility or installation, reporter or observer, reporting period, observation time,
+quantity, unit, method or form version, and a correction reference.
+Keep the person who supplied information distinct from the authenticated account that submitted it.
+An importer may submit a declaration on someone else's behalf.
+
+Recording a declaration, accepting it for processing, and verifying its contents are different
+events. If your institution records acceptance or verification, give those actions explicit owners
+and permissions. A submitted `verified` value is not evidence that verification occurred.
+The decision process belongs to your application; the registry model records the relevant inputs
+and outcomes.
+
+BReg offers `create_only` entities when an accepted record must not be patched through its API.
+This controls mutation; it does not define what a later correction means.
+A correcting declaration can point to an earlier declaration, with your application deciding which
+one is applicable and why.
+
+{/* Evidence: crates/registry-breg/src/contract.rs, MutationMode;
+    products/breg/acceptance/business/registry.yaml;
+    crates/registry-breg/tests/postgres_pilot_acceptance.rs, assert_create_only_refuses_patch_and_tombstone();
+    products/breg/README.md. */}
+
+Review queries for both "what was reported for this reporting period?" and "what information was accepted?"
+Test corrections for the same reporting period, missing units, and a submitter attempting an
+acceptance action without permission. When a form or scoring method changes, retain its version
+on earlier records instead of applying the later interpretation to every historical value.
+
+### Example: a discharge declaration and its correction
+
+This model assumes a `facility` entity. The unit vocabulary deliberately accepts only kilograms;
+the decimal quantity is a JSON string, so `"1200.00"` retains its decimal representation.
+
+```yaml
+entities:
+  - id: discharge-declaration
+    route: discharge-declarations
+    primaryDataset: facility-registry
+    mutationMode: create_only
+    fields:
+      - id: facility
+        type: reference
+        target: facility
+        required: true
+        classification: internal
+      - id: reporting-period
+        type: string
+        maxLength: 32
+        required: true
+        classification: internal
+      - id: substance
+        type: string
+        maxLength: 64
+        required: true
+        classification: internal
+      - id: reporter
+        type: string
+        maxLength: 100
+        required: true
+        classification: internal
+      - id: quantity
+        type: decimal
+        precision: 12
+        scale: 2
+        required: true
+        classification: internal
+      - id: unit
+        type: vocabulary-code
+        vocabulary: discharge-mass-unit
+        required: true
+        classification: internal
+      - id: correction-of
+        type: reference
+        target: discharge-declaration
+        classification: internal
+vocabularies:
+  - id: discharge-mass-unit
+    values: [kg]
+```
+
+What was reported for the June 2026 reporting period? This query returns declarations, including any
+corrections; it does not choose an accepted value or calculate a corrected total.
+
+```http
+GET /v1/records/discharge-declarations?accessProfile=model-reader&$filter=reportingPeriod%20eq%20%272026-06%27
+```
+
+Illustrative response before a correction:
+
+```json
+{
+  "items": [{
+    "data": {
+      "recordIdentifier": "33333333-3333-4333-8333-333333333333",
+      "revisionIdentifier": "1",
+      "domainData": {
+        "facility": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        "reportingPeriod": "2026-06",
+        "substance": "nitrogen",
+        "reporter": "facility-operator-17",
+        "quantity": "1200.00",
+        "unit": "kg"
+      }
+    }
+  }],
+  "pageInfo": {"nextCursor": null},
+  "meta": {"registryIdentifier": "facility-registry", "datasetIdentifier": "facility-registry", "entityTypeIdentifier": "discharge-declaration"}
+}
+```
+
+**Correction case:** create another complete declaration for the same facility, reporting period, and substance.
+Its `data` includes these changed fields; this fragment alone is not a complete create request:
+
+```json
+{
+  "quantity": "1150.00",
+  "correctionOf": "33333333-3333-4333-8333-333333333333"
+}
+```
+
+Both records remain. The application must decide which declaration applies, prevent invalid
+correction chains, and keep a correction from being counted as another discharge.
+Omitting `unit`, or sending `"tonnes"` without changing the vocabulary, is invalid.
+
+{/* Evidence: crates/registry-breg/src/contract.rs, FieldTypeSource;
+    crates/registry-breg/src/data.rs;
+    crates/registry-breg/src/artifacts.rs. */}
+
+## Source provenance
+
+Provenance records where a contribution came from.
+For a facility registry, source system `inventory-a` and record key `0042` identify a source record.
+They do not establish that it is the same facility as record `0042` in another system.
+Matching those records is a separate decision.
+
+Keep the source namespace, source record key and version when available, observation time, and the
+mapping version used to produce the local record. Record source observation time separately from
+local acceptance time. If one local record combines several sources, keep separate contributions
+so their origins remain distinguishable.
+
+The facility and business examples contain source-system and source-record fields with composite
+uniqueness. Those constraints prevent duplicate tuples; they do not reconcile identities or
+distinguish source revisions unless your model includes that distinction.
+
+{/* Evidence: products/breg/acceptance/facility/registry.yaml;
+    products/breg/acceptance/business/registry.yaml;
+    crates/registry-breg/src/contract.rs, ConstraintSource. */}
+
+A review query is "which source record and mapping produced this value?"
+Test a repeated import, a changed version of the same source record, and an ambiguous match.
+Keep provenance access explicit because source keys and mapping details can themselves be sensitive.
+When upgrading a mapping, preserve the mapping identity for existing contributions and record
+reprocessed contributions without relabelling the old ones as if they used the later mapping.
+
+### Example: a versioned source contribution
+
+This model assumes a `facility` entity and a source that supplies a version for each record.
+The unique key includes the mapping version so reprocessing can preserve an earlier contribution.
+
+```yaml
+entities:
+  - id: facility-source-contribution
+    route: facility-sources
+    primaryDataset: facility-registry
+    mutationMode: create_only
+    fields:
+      - id: facility
+        type: reference
+        target: facility
+        required: true
+        classification: internal
+      - id: source-system
+        type: string
+        maxLength: 64
+        required: true
+        classification: internal
+      - id: source-record-id
+        type: string
+        maxLength: 100
+        required: true
+        classification: internal
+      - id: source-version
+        type: string
+        maxLength: 64
+        required: true
+        classification: internal
+      - id: mapping-version
+        type: string
+        maxLength: 64
+        required: true
+        classification: internal
+    constraints:
+      - kind: unique
+        fields:
+          - source-system
+          - source-record-id
+          - source-version
+          - mapping-version
+```
+
+Which source revisions and mappings contributed to source record `inventory-a / 0042`?
+
+```http
+GET /v1/records/facility-sources?accessProfile=model-reader&$filter=sourceSystem%20eq%20%27inventory-a%27%20and%20sourceRecordId%20eq%20%270042%27
+```
+
+Illustrative response:
+
+```json
+{
+  "items": [{
+    "data": {
+      "recordIdentifier": "44444444-4444-4444-8444-444444444444",
+      "revisionIdentifier": "1",
+      "domainData": {
+        "facility": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "sourceSystem": "inventory-a",
+        "sourceRecordId": "0042",
+        "sourceVersion": "7",
+        "mappingVersion": "inventory-map-2"
+      }
+    }
+  }],
+  "pageInfo": {"nextCursor": null},
+  "meta": {"registryIdentifier": "facility-registry", "datasetIdentifier": "facility-registry", "entityTypeIdentifier": "facility-source-contribution"}
+}
+```
+
+**Refusal case:** a separate create with the same four key values conflicts with this contribution.
+Source version `8`, or reprocessing version `7` with `inventory-map-3`, produces a different key
+and can be recorded separately. Neither entry automatically replaces the facility's current values.
+This fragment tracks record-level origins; tracing individual values also needs retained source
+content or field-level contributions.
+
+## Document references
+
+A document reference describes supporting material stored elsewhere.
+A facility inspection can reference a PDF using an object key and object version, media type
+`application/pdf`, digest algorithm and value, and an optional title.
+Keep the relationship to the inspection explicit.
+File storage, retrieval permissions, and document authenticity checks remain separate responsibilities.
+
+A digest lets a reader compare retrieved bytes with the expected bytes.
+It does not prove who issued the document or whether its contents are true.
+An object reference that can silently resolve to replacement bytes is unsuitable when an inspection
+must retain its original supporting material. Prefer an immutable object version for that use.
+
+Review "which document version supported this inspection?" as well as "who may retrieve it?"
+Test denied access to both the reference and the object, and a mismatch between expected and retrieved
+bytes in the component responsible for retrieval. Replace the reference explicitly when a document
+is corrected. An upgrade can add optional document-language metadata without changing existing
+object references or digests.
+
+### Example: an inspection's supporting PDF
+
+This model assumes an `inspection` entity. The storage service, not these string fields,
+must guarantee that an object version resolves to immutable bytes.
+
+```yaml
+entities:
+  - id: inspection-document
+    route: inspection-documents
+    primaryDataset: inspection-registry
+    mutationMode: create_only
+    fields:
+      - id: inspection
+        type: reference
+        target: inspection
+        required: true
+        classification: internal
+      - id: object-key
+        type: string
+        maxLength: 256
+        required: true
+        classification: internal
+      - id: object-version
+        type: string
+        maxLength: 128
+        required: true
+        classification: internal
+      - id: media-type
+        type: string
+        maxLength: 100
+        required: true
+        classification: internal
+      - id: sha256
+        type: string
+        maxLength: 64
+        required: true
+        classification: internal
+      - id: replaces
+        type: reference
+        target: inspection-document
+        classification: internal
+```
+
+Which document versions support this inspection? The example digest is synthetic, not a hash
+of a supplied PDF. A production writer must calculate and validate the digest; `maxLength`
+alone does not enforce 64 hexadecimal characters.
+
+```http
+GET /v1/records/inspection-documents?accessProfile=model-reader&$filter=inspection%20eq%20%27eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee%27
+```
+
+Illustrative response:
+
+```json
+{
+  "items": [{
+    "data": {
+      "recordIdentifier": "55555555-5555-4555-8555-555555555555",
+      "revisionIdentifier": "1",
+      "domainData": {
+        "inspection": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+        "objectKey": "inspections/inspection-17/report.pdf",
+        "objectVersion": "v3",
+        "mediaType": "application/pdf",
+        "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      }
+    }
+  }],
+  "pageInfo": {"nextCursor": null},
+  "meta": {"registryIdentifier": "inspection-registry", "datasetIdentifier": "inspection-registry", "entityTypeIdentifier": "inspection-document"}
+}
+```
+
+**Correction case:** create another complete document reference with the corrected object version,
+its calculated digest, and `replaces: "55555555-5555-4555-8555-555555555555"`.
+Keep the original object version available for historical checks. This read returns metadata,
+not PDF bytes or a download authorization; retrieval needs its own permission check.
+
+## Public authorities and responsibilities
+
+Give a public authority its own record and stable identifier. A business registration or permit can
+reference that authority without copying its name into every record. Keep departments distinct when
+you need to record their parent organisation, jurisdiction, or responsibility for a service.
+
+Record a transfer of responsibility with dates. Renaming an authority does not necessarily create a
+new organisation; a merger may. Decide those identity rules explicitly and retain the source decision
+or document reference. Several authorities may have different functions in the same jurisdiction,
+so a jurisdiction alone is not a suitable non-overlap scope for every responsibility.
+
+These are configuration choices using the same typed references and dates as the operator-assignment
+example. Base Registry Engine does not decide organisational succession or run permit approval workflows.
+
+{/* Evidence: crates/registry-breg/src/contract.rs, FieldTypeSource and TemporalSource;
+    products/breg/acceptance/inspection/registry.yaml;
+    products/breg/acceptance/inspection/modules/inspection-core/module.yaml;
+    products/breg/README.md. */}
+
+## Preserve meaning when values are incomplete
+
+- Missing, unknown, not applicable, and withheld values have different meanings. Use explicit
+  reason codes when that distinction matters; do not convert all of them to zero or `false`.
+- Preserve identifiers as supplied. Document any scheme-specific normalization, such as removing
+  permitted separators. Normalization is not fuzzy matching or proof of identity.
+- Allow business and operator names in multiple languages or scripts where needed. Keep the
+  registered name separate from abbreviations and translated display names.
+- Preserve approximate dates as approximate. A known year is not a known January 1. Define a
+  separate precision-aware representation when the information is less precise than a full date.
+
+These choices affect queries. "No declaration received" differs from "declared quantity is zero";
+an approximate start year cannot establish an operator assignment on a particular day.
+BReg's ordinary `date` field represents a full calendar date.
+
+{/* Evidence: crates/registry-breg/src/artifacts.rs;
+    crates/registry-breg/src/data.rs, valid_iso_date(). */}
+
+## Adapt a pattern without inheriting policy accidentally
+
+Start with the structures your questions require. Keep a small model in the project file when that
+is sufficient. Modules help share definitions that actually have the same meaning across projects.
+Their extensions are additive: they can contribute fields and constraints but cannot remove an
+inherited constraint or replace an existing field. If a shared definition imposes the wrong policy,
+change an owned copy or the owning module rather than expecting an extension to relax it.
+
+{/* Evidence: crates/registry-breg/src/contract.rs, EntityExtensionSource;
+    crates/registry-breg/src/compiler.rs, merge_extension();
+    crates/registry-breg/tests/compiler_contract.rs, additive_module_conflicts_fail_instead_of_using_input_precedence(). */}
+
+Review access separately from record structure. Adding a field does not grant access to it, but a
+module can itself contain access-profile or event contributions. Inspect those contributions before
+adopting a module; do not copy example publication settings as an incidental part of a model.
+A stored classification label is not a substitute for configured field permissions and row rules.
+
+{/* Evidence: crates/registry-breg/src/contract.rs, EntitySource and EntityExtensionSource;
+    crates/registry-breg/src/compiler.rs, merge_extension();
+    crates/registry-breg/src/access.rs, explain_access();
+    crates/registry-breg/tests/access_configuration.rs. */}
+
+Manifest metadata can carry optional concept and vocabulary mappings. The business-establishments
+example uses local example concept URIs; these are not claims of compliance with an external model.
+Keep a record of the semantic source version and mapping revision you adopt.
+Report unsupported or ambiguous imported definitions rather than silently dropping them.
+A semantic mapping does not establish compliance with an exchange protocol.
+A vocabulary, exchange format, API response, and database schema serve different purposes.
+Use them as inputs to your model without assuming that any one of them defines the complete registry.
+
+{/* Evidence: crates/registry-breg/src/contract.rs, ManifestProjectionSource;
+    crates/registry-breg/src/manifest_adapter.rs. */}
+
+Before relying on an adapted pattern, pair its configuration with synthetic records, permitted
+queries, refused operations, a correction journey, and an upgrade example.
+Include at least one case your policy permits that a stricter model might accidentally reject.
+Record the source version of copied examples, and review changes to required fields, uniqueness,
+permissions, and meaning independently of changes that only add optional metadata.
+
+## Access for the example queries
+
+This profile grants the five example queries and no writes. It can list every row in these entities;
+the example filters do not restrict authorization. Add it only if one reader should see all these
+rows and fields. Real deployments may need separate profiles and row restrictions. It requires
+a verified `registry_principal` claim, the scope `registry:examples:read`, and the purpose
+`registry-operations`, configured through your trusted authentication setup.
+It grants no access to the target business, establishment, facility, or inspection records themselves.
+
+```yaml
+accessProfiles:
+  - id: model-reader
+    principalClaim: registry_principal
+    requiredScopes: [registry:examples:read]
+    requiredPurposes: [registry-operations]
+    grants:
+      - entity: business-identifier
+        operations: [list]
+        readableFields:
+          - holder
+          - namespace
+          - value
+          - replaces
+        filterableFields: [namespace, value]
+      - entity: operator-assignment
+        operations: [list]
+        readableFields:
+          - establishment
+          - business
+          - valid-from
+          - valid-to
+        filterableFields: [establishment]
+      - entity: discharge-declaration
+        operations: [list]
+        readableFields:
+          - facility
+          - reporting-period
+          - substance
+          - reporter
+          - quantity
+          - unit
+          - correction-of
+        filterableFields: [reporting-period]
+      - entity: facility-source-contribution
+        operations: [list]
+        readableFields:
+          - facility
+          - source-system
+          - source-record-id
+          - source-version
+          - mapping-version
+        filterableFields: [source-system, source-record-id]
+      - entity: inspection-document
+        operations: [list]
+        readableFields:
+          - inspection
+          - object-key
+          - object-version
+          - media-type
+          - sha256
+          - replaces
+        filterableFields: [inspection]
+```
+
+{/* Evidence: crates/registry-breg/src/contract.rs, AccessProfileSource and AccessGrantSource;
+    crates/registry-breg/src/access.rs, explain_access();
+    crates/registry-breg/src/compiler.rs. */}
+
+## Next
+
+- [Author a registry project](../../configure/breg/) to express your model and permissions.
+- [Base Registry Engine API](../../reference/breg-api/) for the record envelope and query options.
+- [Configuration reference](../../reference/breg-configuration/) for the authoring fields.
+- [Create and query your first registry](../../tutorials/first-breg/) for a runnable project.

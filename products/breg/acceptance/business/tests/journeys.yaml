@@ -1,0 +1,99 @@
+apiVersion: registry.registrystack.org/breg-journeys/v1
+journeys:
+  - id: registrar-and-public-register
+    steps:
+      - id: create-legal-entity
+        entity: legal-entity
+        accessProfile: business-registrar
+        claims: &business_registrar_claims
+          principal: synthetic-business-registrar
+          purpose: business-registry
+        request:
+          operation: create
+          data:
+            jurisdiction-code: ZZ
+            registration-number: BUSINESS-SYNTH-001
+            legal-name: Synthetic Example Cooperative
+            entity-status: active
+            public-service-address: Synthetic service address
+            protected-contact: synthetic-contact@example.invalid
+            protected-ownership-reference: OWNERSHIP-SYNTH-001
+            internal-case-note: Synthetic test record only
+        expect:
+          outcome: success
+          status: 201
+          fields:
+            jurisdiction-code: ZZ
+            registration-number: BUSINESS-SYNTH-001
+            legal-name: Synthetic Example Cooperative
+            entity-status: active
+            protected-ownership-reference: OWNERSHIP-SYNTH-001
+        capture: first-business
+      - id: public-register-gets-business
+        entity: legal-entity
+        accessProfile: public-register
+        request:
+          operation: get
+          recordRef: first-business
+        expect:
+          outcome: success
+          status: 200
+          fields:
+            jurisdiction-code: ZZ
+            registration-number: BUSINESS-SYNTH-001
+            legal-name: Synthetic Example Cooperative
+            entity-status: active
+            public-service-address: Synthetic service address
+      - id: public-register-lists-businesses
+        entity: legal-entity
+        accessProfile: public-register
+        request:
+          operation: list
+        expect:
+          outcome: success
+          status: 200
+          count: 1
+      - id: registrar-suspends-business
+        entity: legal-entity
+        accessProfile: business-registrar
+        claims: *business_registrar_claims
+        request:
+          operation: patch
+          recordRef: first-business
+          etagRef: first-business
+          changes:
+            - field: entity-status
+              value: suspended
+        expect:
+          outcome: success
+          status: 200
+          fields:
+            registration-number: BUSINESS-SYNTH-001
+            entity-status: suspended
+            protected-ownership-reference: OWNERSHIP-SYNTH-001
+        capture: suspended-business
+      - id: public-register-sees-new-status
+        entity: legal-entity
+        accessProfile: public-register
+        request:
+          operation: get
+          recordRef: suspended-business
+        expect:
+          outcome: success
+          status: 200
+          fields:
+            registration-number: BUSINESS-SYNTH-001
+            legal-name: Synthetic Example Cooperative
+            entity-status: suspended
+      - id: registrar-without-purpose-is-concealed
+        entity: legal-entity
+        accessProfile: business-registrar
+        claims:
+          principal: synthetic-business-registrar
+        request:
+          operation: get
+          recordRef: suspended-business
+        expect:
+          outcome: refusal
+          status: 404
+          problemCode: resource.not_found

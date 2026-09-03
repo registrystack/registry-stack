@@ -228,6 +228,8 @@ class MonorepoFixture:
             "crates/registry-evidencectl",
             "crates/registry-mint",
             "crates/registry-evidence-oid4vci",
+            "crates/registry-breg",
+            "crates/registry-bregctl",
         ):
             (stack_root / crate_dir).mkdir(parents=True)
             (stack_root / crate_dir / ".keep").write_text("", encoding="utf-8")

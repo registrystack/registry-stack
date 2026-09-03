@@ -77,6 +77,8 @@ sources:
   source: {kind: sqlite, profile: snapshot, expectedSchemaFingerprint: "OBSERVED_FINGERPRINT"}
 resources:
   - id: record
+    datasetIdentifier: records
+    entityTypeIdentifier: record
     title: Record
     description: One governed synthetic Record
     semanticClass: local:Record

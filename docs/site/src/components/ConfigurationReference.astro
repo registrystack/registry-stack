@@ -1,6 +1,4 @@
 ---
-import reference from '../data/generated/evidence-configuration.json';
-
 type Field = {
   key_path: string;
   kind: string;
@@ -18,6 +16,7 @@ type Field = {
   conditional_constraints: string[][];
   description: string | null;
   runtime_validation: string | null;
+  defaults: string[];
 };
 
 const kindLabels: Record<string, string> = {
@@ -49,22 +48,29 @@ type Contract = {
 const statusLabels: Record<string, string> = {
   frozen: 'Frozen Version 1 contract',
   tooling: 'Adopter tooling, not frozen',
+  beta: 'Source preview, pre-1.0',
 };
 
-const contracts = reference.contracts as Array<Contract>;
+interface Props {
+  contracts: Contract[];
+  prefix: string;
+  compact?: boolean;
+}
+
+const { contracts, prefix, compact = false } = Astro.props;
 
 if (contracts.length === 0) {
-  throw new Error('the Evidence configuration reference is empty; run npm run generate');
+  throw new Error('the configuration reference is empty; run npm run generate');
 }
 
 const unlabelled = contracts.find((contract) => !statusLabels[contract.status]);
 if (unlabelled) {
   throw new Error(
-    `the Evidence configuration reference publishes ${unlabelled.id} under an unknown status ${unlabelled.status}`,
+    `the configuration reference publishes ${unlabelled.id} under an unknown status ${unlabelled.status}`,
   );
 }
 
-const slug = (id: string) => `evidence-${id}-configuration`;
+const slug = (id: string) => `${prefix}-${id}-configuration`;
 
 // Descriptions come from the contracts, which mark identifiers with backticks
 // the way a schema description is written for an editor tooltip. Split on the
@@ -73,36 +79,42 @@ const segments = (text: string) =>
   text.split('`').map((part, index) => ({ code: index % 2 === 1, text: part }));
 ---
 
-<nav aria-label="Configuration files" class="contract-index">
-  <ul>
-    {
-      contracts.map((contract) => (
-        <li>
-          <a href={`#${slug(contract.id)}`}>
-            <code>{contract.title}</code>
-          </a>{' '}
-          <span>
-            {statusLabels[contract.status]}, {contract.field_count} key paths
-          </span>
-        </li>
-      ))
-    }
-  </ul>
-</nav>
+{
+  !compact && (
+    <nav aria-label="Configuration files" class="contract-index">
+      <ul>
+        {contracts.map((contract) => (
+          <li>
+            <a href={`#${slug(contract.id)}`}>
+              <code>{contract.title}</code>
+            </a>{' '}
+            <span>
+              {statusLabels[contract.status]}, {contract.field_count} key paths
+            </span>
+          </li>
+        ))}
+      </ul>
+    </nav>
+  )
+}
 
 {
   contracts.map((contract) => (
     <section class="contract-reference">
-      <h2 id={slug(contract.id)}>
-        <code>{contract.title}</code>
-      </h2>
-      <p class={`contract-status contract-status-${contract.status}`}>
-        {statusLabels[contract.status]}
-      </p>
-      <p class="contract-source">
-        Generated from <code>{contract.file}</code>. {contract.field_count} key paths. Explained in{' '}
-        <code>{contract.reference}</code>.
-      </p>
+      {!compact && (
+        <>
+          <h2 id={slug(contract.id)}>
+            <code>{contract.title}</code>
+          </h2>
+          <p class={`contract-status contract-status-${contract.status}`}>
+            {statusLabels[contract.status]}
+          </p>
+          <p class="contract-source">
+            Generated from <code>{contract.file}</code>. {contract.field_count} key paths. Explained in{' '}
+            <code>{contract.reference}</code>.
+          </p>
+        </>
+      )}
       <div class="table-scroll">
         <table>
           <thead>
@@ -131,7 +143,7 @@ const segments = (text: string) =>
                     <span class="note">Runtime check: {field.runtime_validation}</span>
                   )}
                 </th>
-                <td>{field.type ?? '—'}</td>
+                <td>{field.type ?? 'Not specified'}</td>
                 <td>{requiredLabels[field.required]}</td>
                 <td>
                   {field.values ? (
@@ -148,13 +160,20 @@ const segments = (text: string) =>
                       )}
                     </>
                   ) : (
-                    '—'
+                    'Not specified'
+                  )}
+                  {field.defaults.length > 0 && (
+                    <span class="note">
+                      Schema default, where declared: {field.defaults.map((value, index) => (
+                        <>{index > 0 && ' or '}<code>{value}</code></>
+                      ))}
+                    </span>
                   )}
                 </td>
                 <td>
                   {field.constraints.length === 0 &&
                     field.conditional_constraints.length === 0 &&
-                    '—'}
+                    'None specified'}
                   {field.constraints.map((group, index) => (
                     <>
                       {index > 0 && <p class="alternative">or</p>}

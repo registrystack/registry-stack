@@ -3,6 +3,24 @@
   "baseUrl": "https://id.registrystack.org",
   "entries": [
     {
+      "uri": "https://id.registrystack.org/contexts/registry-record/v1",
+      "kind": "context",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "registry-record",
+      "title": "Registry Record v1 JSON-LD context",
+      "description": "Governed JSON-LD terms for the Registry Record v1 base response profile.",
+      "source": {
+        "path": "products/registry-record/profile/registry-record-v1.md",
+        "sha256": "f165e62044df2129b5cc533d3199cf81ae23d263617f39437ee37be87d3b37fe"
+      },
+      "artifact": {
+        "path": "products/registry-record/context/registry-record-v1.jsonld",
+        "sha256": "9b8bf452538214d8559b4e8034446bfade37b5f409cfeaaace650a567423be71",
+        "mediaType": "application/ld+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/ns/registry-manifest/v1#",
       "kind": "namespace",
       "status": "active",
@@ -12,7 +30,7 @@
       "description": "JSON-LD namespace for Registry Manifest terms.",
       "source": {
         "path": "crates/registry-manifest-core/src/lib.rs",
-        "sha256": "ac1ef80a34aa0e477702fd5c5b61f715fd4f4cd8f4982c5e914ec8665ef6bf92"
+        "sha256": "daf88b30e1fb8d98a3989f5e26ed4511fa5d1c1fab48787997cd3dabf0b03fae"
       }
     },
     {
@@ -776,6 +794,78 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/profiles/registry-record/v1",
+      "kind": "profile",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "registry-record",
+      "title": "Registry Record v1 profile",
+      "description": "Open base response profile for one Registry record or a homogeneous Registry record collection.",
+      "source": {
+        "path": "products/registry-record/profile/registry-record-v1.md",
+        "sha256": "f165e62044df2129b5cc533d3199cf81ae23d263617f39437ee37be87d3b37fe"
+      },
+      "artifact": {
+        "path": "products/registry-record/profile/registry-record-v1.md",
+        "sha256": "f165e62044df2129b5cc533d3199cf81ae23d263617f39437ee37be87d3b37fe",
+        "mediaType": "text/markdown"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/breg/authoring/registry-module.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "breg",
+      "title": "Base Registry Engine authored module",
+      "description": "Base Registry Engine project authoring JSON Schema.",
+      "source": {
+        "path": "crates/registry-breg/src/schema.rs",
+        "sha256": "e8e9f7a5d45b432df798d268d292094f518ace7124be8d2268d4f51a081508c7"
+      },
+      "artifact": {
+        "path": "products/breg/generated/authoring/registry-module.schema.json",
+        "sha256": "581cd380fa3c33ed81d56ef4d88a514a34ee1e7665128f3b657a7f1124e182fc",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/breg/authoring/registry-project.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "breg",
+      "title": "Base Registry Engine authored project",
+      "description": "Base Registry Engine project authoring JSON Schema.",
+      "source": {
+        "path": "crates/registry-breg/src/schema.rs",
+        "sha256": "e8e9f7a5d45b432df798d268d292094f518ace7124be8d2268d4f51a081508c7"
+      },
+      "artifact": {
+        "path": "products/breg/generated/authoring/registry-project.schema.json",
+        "sha256": "fbdcd49bfc04974e387dad5fbdbc450b7e12dca8e7b8168c7f227fb352bffb70",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/breg/runtime/runtime.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "breg",
+      "title": "Base Registry Engine runtime configuration",
+      "description": "Base Registry Engine runtime configuration JSON Schema.",
+      "source": {
+        "path": "crates/registry-breg/src/schema.rs",
+        "sha256": "e8e9f7a5d45b432df798d268d292094f518ace7124be8d2268d4f51a081508c7"
+      },
+      "artifact": {
+        "path": "products/breg/generated/runtime/runtime.schema.json",
+        "sha256": "27e592e90e643a7fb58045deb716678d3740be17bc60f9fdb109bb28cd9b7f95",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/identifiers/catalog.v1.schema.json",
       "kind": "schema",
       "status": "active",
@@ -785,11 +875,29 @@
       "description": "JSON Schema for the Registry Stack identifier catalog.",
       "source": {
         "path": "products/identifiers/contracts/catalog.v1.schema.json",
-        "sha256": "25eb7b86185ab1d3aa5919752790c2600b5610b484397836eab17b82924e9d01"
+        "sha256": "e45632976b2436dc468805b78e6ac35d4cb05340b260370d011eee68fcf28c5d"
       },
       "artifact": {
         "path": "products/identifiers/contracts/catalog.v1.schema.json",
-        "sha256": "25eb7b86185ab1d3aa5919752790c2600b5610b484397836eab17b82924e9d01",
+        "sha256": "e45632976b2436dc468805b78e6ac35d4cb05340b260370d011eee68fcf28c5d",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/registry-record/v1",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "registry-record",
+      "title": "Registry Record v1 base response",
+      "description": "Registry Record base response profile JSON Schema.",
+      "source": {
+        "path": "products/registry-record/schema/registry-record-v1.schema.json",
+        "sha256": "31cae7de9e84904e300d0d77ffbfdfc7a1de6127719a0ccbb3f6a88d7306510e"
+      },
+      "artifact": {
+        "path": "products/registry-record/schema/registry-record-v1.schema.json",
+        "sha256": "31cae7de9e84904e300d0d77ffbfdfc7a1de6127719a0ccbb3f6a88d7306510e",
         "mediaType": "application/schema+json"
       }
     },
@@ -803,7 +911,7 @@
       "description": "Relay V2 generated public JSON Schema.",
       "source": {
         "path": "crates/registry-relay-v2/src/artifacts.rs",
-        "sha256": "11101d8c32539b21051940790c36d72a3fb2dddd6a4ad10796623b456a55431d"
+        "sha256": "7feb222632ac997903c8809e190fa0c008bf17790e39fa075fc10c3fd3e0bec1"
       },
       "artifact": {
         "path": "products/identifiers/generated/artifacts/registry-relay/audit-event/v2alpha1.json",
@@ -821,11 +929,11 @@
       "description": "Relay V2 authoring JSON Schema.",
       "source": {
         "path": "crates/registry-relayctl/schemas/authoring/registry.schema.json",
-        "sha256": "d7a3d7b6dc9c1904fc067f0779c941ff247b26feb3a62f8d391b04f463c5a2ca"
+        "sha256": "c030917d19b1f50c8d2b41fc7b2ef4fb07b803b5fa98ffd971f5c964f491f7e5"
       },
       "artifact": {
         "path": "crates/registry-relayctl/schemas/authoring/registry.schema.json",
-        "sha256": "d7a3d7b6dc9c1904fc067f0779c941ff247b26feb3a62f8d391b04f463c5a2ca",
+        "sha256": "c030917d19b1f50c8d2b41fc7b2ef4fb07b803b5fa98ffd971f5c964f491f7e5",
         "mediaType": "application/schema+json"
       }
     },
@@ -857,7 +965,7 @@
       "description": "Relay V2 Registry Core predicate binding a controlled property to its codelist.",
       "source": {
         "path": "crates/registry-relay-v2/src/semantics.rs",
-        "sha256": "bac9c3e6ca299349a4bcde2ad51b77decff32efa268278722f5d17d436a76b00"
+        "sha256": "563740f4b7d7582a8c1f80756d52137915b85cd349e19ce5ab272d1d791234ca"
       }
     },
     {
@@ -870,7 +978,7 @@
       "description": "Relay V2 Registry Core predicate identifying a spatial property's coordinate reference system.",
       "source": {
         "path": "crates/registry-relay-v2/src/semantics.rs",
-        "sha256": "bac9c3e6ca299349a4bcde2ad51b77decff32efa268278722f5d17d436a76b00"
+        "sha256": "563740f4b7d7582a8c1f80756d52137915b85cd349e19ce5ab272d1d791234ca"
       }
     },
     {
@@ -883,7 +991,7 @@
       "description": "Vocabulary base for Relay V2 Registry Core semantic predicates.",
       "source": {
         "path": "crates/registry-relay-v2/src/semantics.rs",
-        "sha256": "bac9c3e6ca299349a4bcde2ad51b77decff32efa268278722f5d17d436a76b00"
+        "sha256": "563740f4b7d7582a8c1f80756d52137915b85cd349e19ce5ab272d1d791234ca"
       }
     },
     {
@@ -896,7 +1004,7 @@
       "description": "Relay V2 Registry Core predicate identifying a spatial property's geometry type.",
       "source": {
         "path": "crates/registry-relay-v2/src/semantics.rs",
-        "sha256": "bac9c3e6ca299349a4bcde2ad51b77decff32efa268278722f5d17d436a76b00"
+        "sha256": "563740f4b7d7582a8c1f80756d52137915b85cd349e19ce5ab272d1d791234ca"
       }
     },
     {
@@ -909,7 +1017,20 @@
       "description": "Ordered Relay V2 technical handling levels: public, internal, confidential, and restricted.",
       "source": {
         "path": "products/relay-v2/CONCEPT.md",
-        "sha256": "6502c4860b3ff48cb85f5833099be607c8d4b2d0d1126fb4b8e3a7790820a7d7"
+        "sha256": "5a60dadc119db6869534f2087ca817fe68f86625d3a48510eb26f99774fd62ed"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/vocab/registry-record/",
+      "kind": "vocabulary",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "registry-record",
+      "title": "Registry Record vocabulary",
+      "description": "Vocabulary base for Registry Record v1 response-profile terms.",
+      "source": {
+        "path": "products/registry-record/context/registry-record-v1.jsonld",
+        "sha256": "9b8bf452538214d8559b4e8034446bfade37b5f409cfeaaace650a567423be71"
       }
     },
     {
@@ -922,7 +1043,7 @@
       "description": "Relay V2 Registry Core predicate indicating whether a source value is required.",
       "source": {
         "path": "crates/registry-relay-v2/src/semantics.rs",
-        "sha256": "bac9c3e6ca299349a4bcde2ad51b77decff32efa268278722f5d17d436a76b00"
+        "sha256": "563740f4b7d7582a8c1f80756d52137915b85cd349e19ce5ab272d1d791234ca"
       }
     }
   ]

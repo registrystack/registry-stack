@@ -1,0 +1,55 @@
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: access-review
+  canonicalBaseIri: https://registry.example.com
+  version: 0.1.0
+  defaultLanguage: en
+package:
+  environment: local
+  instanceId: access-review-example
+  sequence: 1
+  sourceRevision: access-review-example-1
+manifestProjection:
+  accessProfile: district-reader
+  classificationCeiling: internal
+  catalog:
+    baseUrl: https://registry.example.com
+    title: Access review example
+    publisher: {id: access-review-authority, name: Example institution}
+  publicService: {id: access-review-service, title: Access review example}
+  datasets:
+    - {id: access-review, title: Access review records, owner: Example institution, status: active}
+  dataServices:
+    - id: access-review-data-service
+      title: Access review example
+      endpointUrl: https://registry.example.com
+      servesDatasets: [access-review]
+  distributions: []
+entities:
+  - id: record
+    primaryDataset: access-review
+    route: records
+    mutationMode: mutable
+    classification: internal
+    fields:
+      - {id: code, type: string, required: true, maxLength: 32, classification: internal}
+      - {id: label, type: string, required: true, maxLength: 100, classification: internal}
+      - {id: district, type: string, required: true, maxLength: 32, classification: internal}
+    accessRequirements:
+      requiredScopes: [record:read]
+      allowedPurposes: [record-administration]
+      rowBoundaries:
+        - {field: district, claim: assigned_districts, operator: in}
+accessProfiles:
+  - id: district-reader
+    principalClaim: registry_principal
+    requiredScopes: [record:read]
+    requiredPurposes: [record-administration]
+    grants:
+      - entity: record
+        operations: [get, list]
+        readableFields: [code, label, district]
+        filterableFields: [code, district]
+        rowBoundaries:
+          - {field: district, claim: assigned_districts, operator: in}

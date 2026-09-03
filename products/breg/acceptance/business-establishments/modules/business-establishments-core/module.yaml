@@ -1,0 +1,147 @@
+id: business-establishments-core
+version: 0.1.0
+entities:
+  - id: establishment
+    primaryDataset: "business-registry"
+    route: establishments
+    mutationMode: mutable
+    classification: restricted
+    batch: {maximumItems: 100, maximumBytes: 262144}
+    indexes:
+      - id: by-establishment-kind
+        fields:
+          - establishment-kind
+      - id: by-operating-status
+        fields:
+          - operating-status
+    fields:
+      - id: establishment-code
+        type: string
+        required: true
+        maxLength: 64
+        classification: restricted
+      - id: site-name
+        type: string
+        required: true
+        maxLength: 160
+        classification: restricted
+      - id: locality
+        type: string
+        required: false
+        maxLength: 120
+        classification: restricted
+      - id: opened-on
+        type: date
+        required: false
+        classification: restricted
+      - id: establishment-kind
+        type: vocabulary-code
+        vocabulary: establishment-kind
+        required: true
+        classification: restricted
+    constraints:
+      - kind: unique
+        fields:
+          - establishment-code
+  - id: business
+    primaryDataset: registered-businesses
+    route: businesses
+    mutationMode: mutable
+    classification: restricted
+    batch: {maximumItems: 100, maximumBytes: 262144}
+    indexes:
+      - id: by-administrative-area
+        fields:
+          - administrative-area
+    fields:
+      - id: business-code
+        type: string
+        required: true
+        maxLength: 64
+        classification: restricted
+      - id: local-registration-number
+        type: int64
+        required: true
+        classification: restricted
+      - id: registered-name
+        type: string
+        required: true
+        maxLength: 160
+        classification: restricted
+      - id: administrative-area
+        type: string
+        required: true
+        maxLength: 80
+        classification: restricted
+      - id: business-type
+        type: vocabulary-code
+        vocabulary: business-type
+        required: true
+        classification: restricted
+    constraints:
+      - kind: unique
+        fields:
+          - business-code
+      - kind: unique
+        fields:
+          - administrative-area
+          - local-registration-number
+    selectorProfiles:
+      - id: by-local-reference
+        fields:
+          - administrative-area
+          - local-registration-number
+      - id: by-business-code
+        fields:
+          - business-code
+    readPaths:
+      - id: establishments
+        through: operator-assignment
+        to: establishment
+        route: establishments
+  - id: operator-assignment
+    primaryDataset: "business-registry"
+    route: operator-assignments
+    mutationMode: mutable
+    classification: restricted
+    batch: {maximumItems: 100, maximumBytes: 262144}
+    fields:
+      - id: establishment
+        type: reference
+        target: establishment
+        required: true
+        classification: restricted
+      - id: business
+        type: reference
+        target: business
+        required: true
+        classification: restricted
+      - id: relationship
+        type: vocabulary-code
+        vocabulary: establishment-role
+        required: true
+        classification: restricted
+      - id: valid-from
+        type: date
+        required: true
+        classification: restricted
+      - id: valid-to
+        type: date
+        required: false
+        classification: restricted
+    temporal:
+      startField: valid-from
+      endField: valid-to
+      scopeFields:
+        - establishment
+    constraints:
+      - kind: unique
+        fields:
+          - establishment
+          - business
+          - valid-from
+      - kind: temporal-non-overlap
+        scopeFields:
+          - establishment
+        startField: valid-from
+        endField: valid-to

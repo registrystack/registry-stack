@@ -1,0 +1,306 @@
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: inspection
+  canonicalBaseIri: "https://inspection-registry.example.gov"
+  version: 0.1.0
+  defaultLanguage: en
+package:
+  environment: acceptance
+  instanceId: inspection-acceptance
+  sequence: 1
+  sourceRevision: inspection-acceptance-0.1.0
+manifestProjection:
+  accessProfile: inspection-inspector
+  classificationCeiling: restricted
+  catalog:
+    baseUrl: https://inspection-registry.example.gov
+    title: Facility Inspection and Permit Registry Catalog
+    description: Protected facility inspection observations and permit records.
+    publisher:
+      id: "inspection-authority"
+      name: Environmental Authority
+      iri: https://inspection-registry.example.gov/authority
+  datasets:
+    -
+      id: "inspection"
+      title: Facility Inspection and Permit Registry
+      description: Inspection findings, measurement metadata, and permit validity records.
+      owner: Environmental Authority
+      status: active
+  dataServices:
+    -
+      id: "inspection-data-service"
+      title: Facility Inspection and Permit Registry Catalog
+      endpointUrl: "https://inspection-registry.example.gov"
+      servesDatasets:
+        - "inspection"
+  publicService:
+    id: "inspection-service"
+    title: Facility Inspection and Permit Registry Catalog
+  distributions: []
+modules:
+  - id: "inspection-core"
+    version: "0.1.0"
+    digest: "sha256:01d8e9e41a6b5578d55635cc42d79b34141f6ab6d867128a6bd0aec673c17619"
+
+entities:
+  - id: inspection
+    primaryDataset: "inspection"
+    route: inspections
+    mutationMode: mutable
+    classification: restricted
+    fields:
+      - id: inspection-code
+        type: string
+        required: true
+        maxLength: 64
+        classification: restricted
+      - id: facility-code
+        type: string
+        required: true
+        maxLength: 64
+        classification: restricted
+      - id: opened-on
+        type: date
+        required: true
+        classification: restricted
+      - id: closed-on
+        type: date
+        required: false
+        classification: restricted
+      - id: inspection-authority
+        type: string
+        required: true
+        maxLength: 80
+        classification: restricted
+    constraints:
+      - kind: unique
+        fields:
+          - inspection-code
+  - id: inspection-observation
+    primaryDataset: "inspection"
+    route: inspection-observations
+    mutationMode: create_only
+    classification: restricted
+    fields:
+      - id: inspection
+        type: reference
+        target: inspection
+        required: true
+        classification: restricted
+      - id: observed-at
+        type: timestamp
+        required: true
+        classification: restricted
+      - id: inspection-domain
+        type: vocabulary-code
+        vocabulary: inspection-domain
+        required: true
+        classification: restricted
+      - id: finding-grade
+        type: int64
+        required: true
+        classification: restricted
+      - id: observation-schema-metadata
+        type: structured
+        required: true
+        maxBytes: 2048
+        classification: restricted
+        schema:
+          type: object
+          additionalProperties: false
+          required:
+            - schemaVersion
+            - vocabularyRelease
+            - scoringScale
+          properties:
+            schemaVersion:
+              type: string
+              minLength: 1
+              maxLength: 32
+            vocabularyRelease:
+              type: string
+              minLength: 1
+              maxLength: 32
+            scoringScale:
+              type: string
+              enum:
+                - zero-to-four
+      - id: observation-note
+        type: text
+        required: false
+        maxLength: 4000
+        classification: restricted
+    constraints:
+      - kind: int_range
+        field: finding-grade
+        minimum: 0
+        maximum: 4
+  - id: permit
+    primaryDataset: "inspection"
+    route: permits
+    mutationMode: create_only
+    classification: restricted
+    fields:
+      - id: permit-code
+        type: string
+        required: true
+        maxLength: 64
+        classification: restricted
+      - id: inspection
+        type: reference
+        target: inspection
+        required: true
+        classification: restricted
+      - id: permit-status
+        type: vocabulary-code
+        vocabulary: permit-status
+        required: true
+        classification: restricted
+      - id: valid-from
+        type: date
+        required: true
+        classification: restricted
+      - id: valid-to
+        type: date
+        required: false
+        classification: restricted
+      - id: corrected-permit
+        type: reference
+        target: permit
+        required: false
+        classification: restricted
+      - id: correction-reason
+        type: text
+        required: false
+        maxLength: 2000
+        classification: restricted
+      - id: validity-source
+        type: string
+        required: true
+        maxLength: 120
+        classification: restricted
+      - id: provenance-note
+        type: text
+        required: false
+        maxLength: 4000
+        classification: restricted
+      - id: issuing-authority
+        type: reference
+        target: public-authority
+        required: true
+        classification: restricted
+    constraints:
+      - kind: unique
+        fields:
+          - permit-code
+
+accessProfiles:
+  - id: inspection-inspector
+    principalClaim: registry_principal
+    requiredPurposes:
+      - facility-inspection
+    grants:
+      - entity: inspection
+        operations:
+          - create
+          - get
+          - list
+          - patch
+        readableFields:
+          - inspection-code
+          - facility-code
+          - opened-on
+          - closed-on
+          - inspection-authority
+        writableFields:
+          - inspection-code
+          - facility-code
+          - opened-on
+          - closed-on
+          - inspection-authority
+        filterableFields:
+          - inspection-code
+          - facility-code
+      - entity: inspection-observation
+        operations:
+          - create
+          - get
+          - list
+        readableFields:
+          - inspection
+          - observed-at
+          - inspection-domain
+          - finding-grade
+          - observation-schema-metadata
+          - observation-note
+        writableFields:
+          - inspection
+          - observed-at
+          - inspection-domain
+          - finding-grade
+          - observation-schema-metadata
+          - observation-note
+        filterableFields:
+          - inspection
+          - inspection-domain
+      - entity: permit
+        operations:
+          - create
+          - get
+          - list
+        readableFields:
+          - permit-code
+          - inspection
+          - permit-status
+          - valid-from
+          - valid-to
+          - corrected-permit
+          - correction-reason
+          - validity-source
+          - provenance-note
+          - issuing-authority
+        writableFields:
+          - permit-code
+          - inspection
+          - permit-status
+          - valid-from
+          - valid-to
+          - corrected-permit
+          - correction-reason
+          - validity-source
+          - provenance-note
+          - issuing-authority
+        filterableFields:
+          - inspection
+          - permit-status
+          - valid-from
+      - entity: public-authority
+        operations:
+          - create
+          - get
+          - list
+        readableFields:
+          - authority-code
+          - name
+          - jurisdiction
+        writableFields:
+          - authority-code
+          - name
+          - jurisdiction
+        filterableFields:
+          - authority-code
+vocabularies:
+  - id: inspection-domain
+    values:
+      - air
+      - water
+      - waste
+      - noise
+  - id: permit-status
+    values:
+      - draft
+      - active
+      - corrected
+      - withdrawn

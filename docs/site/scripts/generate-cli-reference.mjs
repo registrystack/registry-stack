@@ -24,6 +24,8 @@ const defaultRepoRoot = resolve(defaultDocsRoot, '../..');
 export const schemaVersion = 'registry.cli-reference/v2';
 export const reviewSchemaVersion = 'registry.cli-reference-review/v2';
 export const expectedBinaries = [
+  'breg',
+  'bregctl',
   'evidence',
   'evidence-oid4vci',
   'evidencectl',
@@ -43,6 +45,7 @@ const hiddenCommands = new Set([
   'local-audit-last-operation',
 ]);
 const groups = [
+  { title: 'Base Registry Engine', binaries: ['breg', 'bregctl'] },
   { title: 'Registry Relay', binaries: ['relay', 'relayctl'] },
   { title: 'Evidence Gateway', binaries: ['evidence', 'evidencectl'] },
   {

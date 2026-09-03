@@ -20,6 +20,10 @@ from ci_changes import (
     EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_INPUTS,
     EVIDENCE_TUTORIAL_INPUTS,
     IDENTIFIER_CATALOG_INPUTS,
+    REGISTRY_RECORD_CROSS_PRODUCT_INPUTS,
+    BREG_PACKAGES,
+    RELAY_CLIENT_PACKAGES,
+    STACK_CLIENT_PACKAGES,
     SECURITY_WORKFLOW_GATES,
     SHARDS,
     Workspace,
@@ -227,7 +231,14 @@ class CiChangesTest(unittest.TestCase):
         self.assertTrue(outputs["discovery_contracts"])
         self.assertEqual(
             {entry["name"] for entry in outputs["rust_matrix"]["include"]},
-            {"developer-tools", "discovery", "evidence", "mint", "relay-v2"},
+            {
+                "developer-tools",
+                "discovery",
+                "evidence",
+                "mint",
+                "relay-v2",
+                "stack-client",
+            },
         )
 
     def test_discovery_profile_changes_select_reverse_dependents_and_contracts(self) -> None:
@@ -322,6 +333,47 @@ class CiChangesTest(unittest.TestCase):
             with self.subTest(pattern=pattern):
                 self.assertTrue(classify(self.workspace, (sample,))["identifiers"])
 
+    def test_registry_record_cross_product_inputs_select_both_product_gates(self) -> None:
+        for path in (
+            "products/registry-record/profile/registry-record-v1.md",
+            "products/registry-record/schema/registry-record-v1.schema.json",
+            "products/registry-record/context/registry-record-v1.jsonld",
+            "products/registry-record/fixtures/cross-product/semantic-gold.json",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["identifiers"])
+                self.assertTrue(outputs["breg_contracts"])
+                self.assertTrue(outputs["relay_v2_contracts"])
+                self.assertFalse(outputs["rust"])
+                self.assertEqual([], outputs["rust_matrix"]["include"])
+
+    def test_cross_product_registry_record_patterns_are_narrow_and_live(self) -> None:
+        self.assertEqual(
+            REGISTRY_RECORD_CROSS_PRODUCT_INPUTS,
+            (
+                "products/registry-record/schema/**",
+                "products/registry-record/context/**",
+                "products/registry-record/profile/**",
+                "products/registry-record/fixtures/cross-product/**",
+            ),
+        )
+        for pattern in REGISTRY_RECORD_CROSS_PRODUCT_INPUTS:
+            with self.subTest(pattern=pattern):
+                self.assertTrue(list(Path().glob(pattern)))
+
+    def test_registry_record_tooling_and_ordinary_fixtures_stay_profile_only(
+        self,
+    ) -> None:
+        for path in (
+            "products/registry-record/fixtures/positive/single.json",
+            "products/registry-record/scripts/test_contract.py",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["identifiers"])
+                self.assertFalse(outputs["rust"])
+
     def test_identifier_exporters_and_indirect_inputs_select_the_catalog_gate(
         self,
     ) -> None:
@@ -341,6 +393,7 @@ class CiChangesTest(unittest.TestCase):
             "products/identifiers/scripts/generate.py --check-references",
             workflow,
         )
+        self.assertIn("products/registry-record/scripts/check.sh", workflow)
 
     def test_identifier_tooling_does_not_force_the_rust_matrix(self) -> None:
         outputs = classify(
@@ -370,6 +423,38 @@ class CiChangesTest(unittest.TestCase):
         )
         self.assertTrue(outputs["relay_v2_contracts"])
         self.assertTrue(outputs["editors"])
+
+    def test_breg_paths_select_its_shard_and_product_gate(self) -> None:
+        for path in (
+            "crates/registry-breg/src/compiler.rs",
+            "crates/registry-bregctl/src/main.rs",
+            "products/breg/contracts/definition-of-done.yaml",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["breg_contracts"])
+                self.assertTrue(
+                    set(outputs["rust_packages"]) & BREG_PACKAGES
+                )
+
+        product_outputs = classify(
+            self.workspace,
+            ("products/breg/contracts/definition-of-done.yaml",),
+        )
+        self.assertEqual(
+            set(BREG_PACKAGES),
+            set(product_outputs["rust_packages"]) & BREG_PACKAGES,
+        )
+
+    def test_manifest_core_changes_select_breg_through_linked_code(
+        self,
+    ) -> None:
+        manifest_change = ("crates/registry-manifest-core/src/lib.rs",)
+        outputs = classify(self.workspace, manifest_change)
+
+        self.assertTrue(outputs["breg_contracts"])
+        self.assertIn("registry-breg", outputs["rust_packages"])
+        self.assertIn("registry-manifest-core", outputs["rust_packages"])
 
     def test_evidence_tutorial_inputs_cover_every_registered_tutorial(self) -> None:
         # The gate's registry is the source of truth for which tutorials exist.
@@ -538,6 +623,7 @@ class CiChangesTest(unittest.TestCase):
                         "mint",
                         "relay-v2",
                         "developer-tools",
+                        "stack-client",
                     },
                 )
 
@@ -648,22 +734,24 @@ class CiChangesTest(unittest.TestCase):
             {"evidence"},
         )
 
-    def test_relay_client_change_runs_its_contract_and_native_binding_gates(self) -> None:
+    def test_relay_client_change_stays_on_relay_surfaces(self) -> None:
         outputs = classify(
             self.workspace,
             ("crates/registry-relay-client/src/lib.rs",),
         )
         self.assertTrue(outputs["relay_client_contracts"])
         self.assertTrue(outputs["client_bindings"])
-        # Relay V2 owns the real-router acceptance test and therefore
-        # dev-depends on the SDK. Its test suite must still run, but the
-        # dev-only edge cannot cascade into Relay V2's normal dependents.
+        # Relay V2 owns the real-router Relay client journey through a dev-only
+        # edge. BReg has a separate transport and client crate.
         self.assertIn("registry-relay-v2", outputs["rust_packages"])
         self.assertNotIn("registry-relayctl", outputs["rust_packages"])
+        self.assertNotIn("registry-breg", outputs["rust_packages"])
+        self.assertNotIn("registry-breg-client", outputs["rust_packages"])
         self.assertFalse(outputs["evidence_contracts"])
+        self.assertFalse(outputs["breg_contracts"])
         self.assertEqual(
             {entry["name"] for entry in outputs["rust_matrix"]["include"]},
-            {"discovery", "relay-client", "relay-v2"},
+            {"discovery", "relay-client", "relay-v2", "stack-client"},
         )
         relay_client_matrix = next(
             entry
@@ -671,6 +759,32 @@ class CiChangesTest(unittest.TestCase):
             if entry["name"] == "relay-client"
         )
         self.assertFalse(relay_client_matrix["all_features"])
+
+    def test_breg_client_change_stays_on_breg_surfaces(self) -> None:
+        outputs = classify(
+            self.workspace,
+            ("crates/registry-breg-client/src/lib.rs",),
+        )
+        self.assertTrue(outputs["breg_contracts"])
+        self.assertFalse(outputs["relay_client_contracts"])
+        self.assertIn("registry-breg", outputs["rust_packages"])
+        self.assertNotIn("registry-bregctl", outputs["rust_packages"])
+        self.assertNotIn("registry-relay-client", outputs["rust_packages"])
+        self.assertEqual(
+            {entry["name"] for entry in outputs["rust_matrix"]["include"]},
+            {"breg", "stack-client"},
+        )
+
+    def test_registry_record_change_runs_both_product_clients_and_facade(self) -> None:
+        outputs = classify(
+            self.workspace,
+            ("crates/registry-record/src/lib.rs",),
+        )
+        self.assertTrue(outputs["breg_contracts"])
+        self.assertTrue(outputs["relay_client_contracts"])
+        self.assertTrue(BREG_PACKAGES & set(outputs["rust_packages"]))
+        self.assertTrue(RELAY_CLIENT_PACKAGES & set(outputs["rust_packages"]))
+        self.assertLessEqual(STACK_CLIENT_PACKAGES, set(outputs["rust_packages"]))
 
     def test_mint_change_runs_the_direct_relay_pairing_without_relay_fanout(self) -> None:
         outputs = classify(
@@ -842,6 +956,18 @@ class CiChangesTest(unittest.TestCase):
         self.assertNotIn("\n  notary-contracts:\n", workflow)
         self.assertNotIn("notary_contracts", workflow)
 
+        self.assertIn("\n  breg-contracts:\n", workflow)
+        self.assertIn("name: Base Registry Engine product contracts", workflow)
+        self.assertIn(
+            "products/breg/scripts/check-contracts.sh", workflow
+        )
+        self.assertIn(
+            "products/breg/scripts/test-postgres.sh", workflow
+        )
+        self.assertIn(
+            "products/breg/scripts/test-adopter-workflow.sh", workflow
+        )
+
         rust_result = workflow.split("\n  rust-result:\n", 1)[1].split(
             "\n  release-tool:\n", 1
         )[0]
@@ -849,7 +975,64 @@ class CiChangesTest(unittest.TestCase):
         self.assertIn("\n      - evidence-contracts\n", rust_result)
         self.assertIn("\n      - relay-v2-contracts\n", rust_result)
         self.assertIn("\n      - relay-client-contracts\n", rust_result)
+        self.assertIn("\n      - breg-contracts\n", rust_result)
         self.assertNotIn("\n      - notary-contracts\n", rust_result)
+
+    def test_breg_contracts_pin_postgresql_and_use_the_product_entry_points(
+        self,
+    ) -> None:
+        workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+        breg_job = workflow.split(
+            "\n  breg-contracts:\n", 1
+        )[1].split("\n  identifiers:\n", 1)[0]
+
+        self.assertIn(
+            "postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6",
+            breg_job,
+        )
+        self.assertIn(
+            "ports:\n          - 5432/tcp",
+            breg_job,
+        )
+        self.assertIn(
+            "DATABASE_PORT: ${{ job.services.postgres.ports['5432'] }}",
+            breg_job,
+        )
+        self.assertIn(
+            "BREG_TEST_DATABASE_URL=postgresql://breg:breg_test@localhost:${DATABASE_PORT}/breg",
+            breg_job,
+        )
+        self.assertIn(
+            "BREG_TEST_TLS_DATABASE_URL=postgresql://breg:breg_test@localhost:${DATABASE_PORT}/breg",
+            breg_job,
+        )
+        self.assertIn(
+            "BREG_TEST_TLS_HOSTNAME_MISMATCH_DATABASE_URL=postgresql://breg:breg_test@127.0.0.1:${DATABASE_PORT}/breg",
+            breg_job,
+        )
+        self.assertIn(
+            "POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}",
+            breg_job,
+        )
+        self.assertIn(
+            "TLS_CA_PEM_PATH: ${{ runner.temp }}/breg-postgres-trusted-ca.pem",
+            breg_job,
+        )
+        self.assertIn(
+            "uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d",
+            breg_job,
+        )
+        self.assertIn('version: "0.11.16"', breg_job)
+        for entry_point in (
+            "products/breg/scripts/check-contracts.sh",
+            "products/breg/scripts/check-client-contract.sh",
+            "products/breg/scripts/test-postgres.sh",
+            "products/breg/scripts/test-postgres-tls.sh",
+            "products/breg/scripts/test-adopter-workflow.sh",
+            "products/breg/quickstart/run.sh --smoke",
+        ):
+            with self.subTest(entry_point=entry_point):
+                self.assertIn(entry_point, breg_job)
 
     def test_discovery_contracts_pins_node_for_adopter_binding_tests(self) -> None:
         workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
@@ -969,6 +1152,17 @@ on:
                 outputs = classify(self.workspace, (path,))
                 self.assertTrue(outputs["docs"])
                 self.assertTrue(outputs["evidence_contracts"])
+
+    def test_server_config_schema_change_runs_docs_and_server_contracts(self) -> None:
+        for path in (
+            "products/breg/generated/authoring/registry-project.schema.json",
+            "products/breg/generated/authoring/registry-module.schema.json",
+            "products/breg/generated/runtime/runtime.schema.json",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["docs"])
+                self.assertTrue(outputs["breg_contracts"])
 
     def test_evidence_authoring_schema_change_runs_docs(self) -> None:
         """The same page publishes the authoring form beside the frozen ones."""

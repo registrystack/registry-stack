@@ -24,6 +24,64 @@ pub enum SecretProvider {
     File,
 }
 
+/// Parsed `secret:...` reference whose debug form never exposes the name.
+#[derive(Clone, Eq, PartialEq)]
+pub struct SecretReference {
+    reference: String,
+    provider: SecretProvider,
+    name_start: usize,
+}
+
+impl SecretReference {
+    /// Parse one exact `secret:env/NAME` or `secret:file/name` reference.
+    pub fn parse(reference: impl Into<String>) -> Result<Self, SecretError> {
+        let reference = reference.into();
+        if let Some(name) = reference.strip_prefix("secret:env/") {
+            if valid_environment_name(name) {
+                return Ok(Self {
+                    reference,
+                    provider: SecretProvider::Environment,
+                    name_start: "secret:env/".len(),
+                });
+            }
+        } else if let Some(name) = reference.strip_prefix("secret:file/") {
+            if valid_file_name(name) {
+                return Ok(Self {
+                    reference,
+                    provider: SecretProvider::File,
+                    name_start: "secret:file/".len(),
+                });
+            }
+        }
+        Err(SecretError::InvalidReference)
+    }
+
+    #[must_use]
+    pub fn provider(&self) -> SecretProvider {
+        self.provider
+    }
+
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.reference[self.name_start..]
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.reference
+    }
+}
+
+impl fmt::Debug for SecretReference {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SecretReference")
+            .field("provider", &self.provider)
+            .field("name", &"[REDACTED]")
+            .finish()
+    }
+}
+
 /// Value-free secret resolution failure.
 #[derive(Debug, Error, Eq, PartialEq)]
 pub enum SecretError {
@@ -103,30 +161,25 @@ impl SecretResolver {
 
     /// Resolve one exact `secret:env/NAME` or `secret:file/name` reference.
     pub fn resolve(&self, reference: &str) -> Result<ProtectedSecret, SecretError> {
-        let (provider, name) = parse_reference(reference)?;
-        if !self.providers.contains(&provider) {
+        let reference = SecretReference::parse(reference)?;
+        self.resolve_reference(&reference)
+    }
+
+    /// Resolve an already parsed secret reference.
+    pub fn resolve_reference(
+        &self,
+        reference: &SecretReference,
+    ) -> Result<ProtectedSecret, SecretError> {
+        if !self.providers.contains(&reference.provider()) {
             return Err(SecretError::ProviderDisabled);
         }
 
-        let bytes = match provider {
-            SecretProvider::Environment => read_environment(name)?,
-            SecretProvider::File => read_secret_file(&self.file_root, name)?,
+        let bytes = match reference.provider() {
+            SecretProvider::Environment => read_environment(reference.name())?,
+            SecretProvider::File => read_secret_file(&self.file_root, reference.name())?,
         };
         validate_secret(bytes)
     }
-}
-
-fn parse_reference(reference: &str) -> Result<(SecretProvider, &str), SecretError> {
-    if let Some(name) = reference.strip_prefix("secret:env/") {
-        if valid_environment_name(name) {
-            return Ok((SecretProvider::Environment, name));
-        }
-    } else if let Some(name) = reference.strip_prefix("secret:file/") {
-        if valid_file_name(name) {
-            return Ok((SecretProvider::File, name));
-        }
-    }
-    Err(SecretError::InvalidReference)
 }
 
 fn valid_environment_name(name: &str) -> bool {
@@ -238,13 +291,24 @@ mod tests {
 
     #[test]
     fn references_use_only_the_two_exact_contract_grammars() {
-        for valid in [
-            "secret:env/A",
-            "secret:env/SOURCE_2_PASSWORD",
-            "secret:file/a",
-            "secret:file/source-token_v2.json",
+        for (valid, provider, name) in [
+            ("secret:env/A", SecretProvider::Environment, "A"),
+            (
+                "secret:env/SOURCE_2_PASSWORD",
+                SecretProvider::Environment,
+                "SOURCE_2_PASSWORD",
+            ),
+            ("secret:file/a", SecretProvider::File, "a"),
+            (
+                "secret:file/source-token_v2.json",
+                SecretProvider::File,
+                "source-token_v2.json",
+            ),
         ] {
-            assert!(parse_reference(valid).is_ok(), "{valid}");
+            let reference = SecretReference::parse(valid).expect("valid reference parses");
+            assert_eq!(reference.provider(), provider);
+            assert_eq!(reference.name(), name);
+            assert_eq!(reference.as_str(), valid);
         }
         for invalid in [
             "secret:env/",
@@ -258,13 +322,26 @@ mod tests {
             "secret:file/token\0suffix",
             "plain-value",
         ] {
-            assert_eq!(parse_reference(invalid), Err(SecretError::InvalidReference));
+            assert_eq!(
+                SecretReference::parse(invalid),
+                Err(SecretError::InvalidReference)
+            );
         }
-        assert!(parse_reference(&format!("secret:env/A{}", "B".repeat(127))).is_ok());
+        assert!(SecretReference::parse(format!("secret:env/A{}", "B".repeat(127))).is_ok());
         assert_eq!(
-            parse_reference(&format!("secret:env/A{}", "B".repeat(128))),
+            SecretReference::parse(format!("secret:env/A{}", "B".repeat(128))),
             Err(SecretError::InvalidReference)
         );
+    }
+
+    #[test]
+    fn secret_reference_debug_does_not_render_the_reference_name() {
+        let reference =
+            SecretReference::parse("secret:file/reference-name-canary").expect("reference parses");
+        let rendered = format!("{reference:?}");
+        assert!(rendered.contains("File"));
+        assert!(!rendered.contains("reference-name-canary"));
+        assert!(!rendered.contains(reference.as_str()));
     }
 
     #[test]
@@ -286,8 +363,10 @@ mod tests {
     fn provider_allowlist_is_enforced_before_lookup() {
         let resolver =
             SecretResolver::new([SecretProvider::File], "/safe-root").expect("resolver builds");
+        let reference =
+            SecretReference::parse("secret:env/DEFINITELY_NOT_PRESENT").expect("reference parses");
         assert!(matches!(
-            resolver.resolve("secret:env/DEFINITELY_NOT_PRESENT"),
+            resolver.resolve_reference(&reference),
             Err(SecretError::ProviderDisabled)
         ));
     }
@@ -299,8 +378,11 @@ mod tests {
         env::set_var(NAME, "environment-canary");
         let resolver =
             SecretResolver::new([SecretProvider::Environment], "").expect("resolver builds");
+        let reference =
+            SecretReference::parse("secret:env/REGISTRY_PLATFORM_CONFIG_SECRET_RESOLVER_TEST")
+                .expect("reference parses");
         let secret = resolver
-            .resolve("secret:env/REGISTRY_PLATFORM_CONFIG_SECRET_RESOLVER_TEST")
+            .resolve_reference(&reference)
             .expect("secret resolves");
         env::remove_var(NAME);
 

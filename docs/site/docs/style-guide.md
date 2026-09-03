@@ -108,6 +108,14 @@ Preferred terms.
 | Legacy repo paths     | `registry_relay` and `decentralized-evidence-demo` appear only in historical pages or `rename_status` fields. Never in prose on a `current` page without explicit rename context. |
 | Standards             | Use the official acronym after spelling on first use. `DCAT`, `SHACL`, `OGC API Records`, `SD-JWT VC`, `CCCEV`. Never translate. |
 
+## Choosing examples
+
+Use business registrations, establishments, environmental facilities, permits, and public authorities
+for general explanations and default product examples. Do not use health, social protection,
+farmer registries, or civil registration and CRVS as generic examples.
+Keep dedicated external-system integration documentation and historical references accurate;
+do not relabel an existing integration as a different domain.
+
 ## Lists
 
 - Ordered list for steps that must run in sequence. Unordered list for items with no order.
@@ -131,6 +139,26 @@ Preferred terms.
 - When real output is long, quote the lines the reader checks against and say plainly that the rest is omitted. When it varies per reader, replace the varying parts with `<placeholder>` and name what varies: timestamps, identifiers, host names, absolute paths.
 - Repo paths such as `crates/registry-evidence/` and `products/evidence/` address a contributor with the repository checked out. An adopter has a terminal and a released binary. Keep repo paths out of reader-facing prose in tutorials, how-tos, and start pages: put them in an author-facing MDX comment, in a page whose reader is a contributor, or in a pinned link so a reader without a clone can still open the file.
 - Paths the reader creates, edits, or passes on their own machine are not repo paths. Write those in full and say where they come from.
+
+### YAML examples
+
+Use block mappings with one key per line in reader-facing YAML examples, including objects inside lists.
+Do not compress fields, constraints, grants, or other objects into inline `{...}` mappings to save space, even when the source fixture uses that format.
+Use two-space indentation:
+
+```yaml
+- id: unit
+  type: vocabulary-code
+  vocabulary: crop-mass-unit
+  required: true
+  classification: internal
+```
+
+Short lists of scalar values such as `operations: [get, list]` may stay inline when they are easy to scan.
+Expand long lists and lists containing objects into block sequences.
+Keep `{}` when an empty mapping is the intended value.
+When reformatting an existing example, preserve its values and types; compare the parsed YAML before and after.
+This is a documentation convention, not a request to reformat runtime fixtures or generated artifacts.
 
 ## Procedures
 

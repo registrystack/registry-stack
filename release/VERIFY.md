@@ -73,7 +73,8 @@ manifest="registry-stack-${tag}-release-manifest.json"
 jq -e --arg tag "${tag}" '
   (if ($tag | test("^v0\\.(19|20)\\.")) then ["relay"]
    elif ($tag | test("^v0\\.(21|22|23)\\.")) then ["evidence", "mint", "relay"]
-   else ["discovery", "evidence", "mint", "relay"] end) as $image_names |
+   elif ($tag | test("^v0\\.(24|25)\\.")) then ["discovery", "evidence", "mint", "relay"]
+   else ["discovery", "evidence", "mint", "breg", "relay"] end) as $image_names |
   .schema_version == "registry-stack.release-candidate.v2" and
   .repository == "registrystack/registry-stack" and
   .release.tag == $tag and
@@ -92,14 +93,14 @@ jq -e --arg tag "${tag}" '
 ```
 
 Starting with `v0.21.0`, the exact image set is Evidence Gateway, Registry
-Mint, and Registry Relay; starting with `v0.24.0`, Registry Discovery joins
-them. The final release tags recorded in the manifest must resolve to the same
-digests as their candidate bindings:
+Mint, and Registry Relay. Registry Discovery joins at `v0.24.0`, and Base
+Registry Engine joins at `v0.26.0`. The final release tags recorded in the
+manifest must resolve to the same digests as their candidate bindings:
 
 ```sh
 while IFS=$'\t' read -r name digest final_ref; do
   case "${name}" in
-    discovery|evidence|mint|relay) ;;
+    discovery|evidence|mint|breg|relay) ;;
     *) echo "unexpected release image: ${name}" >&2; exit 1 ;;
   esac
   test "$(crane digest "${final_ref}")" = "${digest}"
@@ -130,8 +131,8 @@ tar -tzf "${evidence}"
 
 Starting with `v0.21.0`, the archive contains image-specific SPDX and Syft
 reports and Grype reports for `evidence`, `mint`, and `relay`, joined by
-`discovery` from `v0.24.0`; `v0.19.x` and `v0.20.x` archives contain those
-reports for `relay` only. The archive also
+`discovery` from `v0.24.0` and `breg` from `v0.26.0`; `v0.19.x` and
+`v0.20.x` archives contain those reports for `relay` only. The archive also
 contains the advisory verdict used for candidate acceptance. Each report names
 the exact candidate digest that was promoted. The archive hash is covered by
 the authenticated checksum chain. The candidate workflow also evaluates any

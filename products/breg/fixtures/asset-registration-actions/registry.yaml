@@ -1,0 +1,81 @@
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: asset-registration-actions
+  canonicalBaseIri: https://asset-registration-actions.example.gov
+  version: 0.1.0
+  defaultLanguage: en
+package:
+  environment: acceptance
+  instanceId: asset-registration-actions-fixture
+  sequence: 1
+  sourceRevision: asset-registration-actions-fixture-0.1.0
+manifestProjection:
+  accessProfile: asset-auditor
+  classificationCeiling: internal
+  catalog:
+    baseUrl: https://asset-registration-actions.example.gov
+    title: Asset Registration Actions Catalog
+    description: Portable metadata for the asset registration action fixture.
+    publisher:
+      id: asset-registration-actions-authority
+      name: Asset Registration Authority
+      iri: https://asset-registration-actions.example.gov/authority
+  publicService: {id: asset-registration-actions-service, title: Asset Registration Actions Catalog}
+  datasets:
+    - id: asset-registration-actions
+      title: Asset Registration Actions Registry
+      description: Asset records and initial inspection events created by one configured immediate action.
+      owner: Asset Registration Authority
+      status: active
+  dataServices:
+    - id: asset-registration-actions-data-service
+      title: Asset Registration Actions Catalog
+      endpointUrl: https://asset-registration-actions.example.gov
+      servesDatasets: [asset-registration-actions]
+  distributions: []
+modules:
+  - id: "asset-registration-actions-core"
+    version: "0.1.0"
+    digest: "sha256:e0948d6e7f9eebcbf9ce366510ca9ce4bf6d5b30c58ee68dc22638431a94e8b1"
+
+entities: []
+accessProfiles:
+  - id: asset-action-registrar
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: [registry:asset:register]
+    requiredPurposes: [asset-registration]
+    grants:
+      - action: register-asset-with-inspection
+        operations: [invoke]
+        targets:
+          - entity: asset
+            rowBoundaries:
+              - {field: jurisdiction, claim: jurisdiction, operator: equals}
+          - entity: asset-inspection
+            rowBoundaries:
+              - {field: jurisdiction, claim: jurisdiction, operator: equals}
+        results: [asset]
+  - id: asset-auditor
+    principalClaim: registry_principal
+    requiredScopes: [registry:asset:audit]
+    requiredPurposes: [asset-audit]
+    grants:
+      - entity: asset
+        operations: [get, list]
+        readableFields: [asset-code, label, asset-type, jurisdiction]
+        filterableFields: [asset-code, jurisdiction]
+        rowBoundaries:
+          - {field: jurisdiction, claim: jurisdiction, operator: equals}
+      - entity: asset-inspection
+        operations: [get, list]
+        readableFields: [asset, observed-at, result, jurisdiction]
+        filterableFields: [asset, jurisdiction]
+        rowBoundaries:
+          - {field: jurisdiction, claim: jurisdiction, operator: equals}
+vocabularies:
+  - id: asset-type
+    values: [equipment, vehicle, furniture]
+  - id: inspection-result
+    values: [passed, failed, needs-follow-up]

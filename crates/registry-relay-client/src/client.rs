@@ -602,10 +602,18 @@ fn decode_record_conditional(
     format: RecordFormat,
 ) -> Result<Conditional<RecordResponse>, RelayClientError> {
     match format {
-        RecordFormat::Json | RecordFormat::JsonLd => {
-            decode_json_conditional::<RecordEnvelope>(wire, format.media_type())
-                .map(|value| map_conditional(value, RecordResponse::Json))
-        }
+        RecordFormat::Json => decode_registry_record_conditional(
+            wire,
+            RegistryRecordRepresentation::Json,
+            RecordEnvelope::matches_json_representation,
+        )
+        .map(|value| map_conditional(value, RecordResponse::Json)),
+        RecordFormat::JsonLd => decode_registry_record_conditional(
+            wire,
+            RegistryRecordRepresentation::JsonLdProductComposition,
+            RecordEnvelope::matches_json_ld_representation,
+        )
+        .map(|value| map_conditional(value, RecordResponse::Json)),
         RecordFormat::GeoJsonRfc7946 | RecordFormat::JsonFg => {
             decode_json_conditional::<GeoJsonFeature>(wire, APPLICATION_GEO_JSON)
                 .map(|value| map_conditional(value, RecordResponse::GeoJson))
@@ -618,13 +626,63 @@ fn decode_collection_conditional(
     format: RecordFormat,
 ) -> Result<Conditional<RecordCollectionResponse>, RelayClientError> {
     match format {
-        RecordFormat::Json | RecordFormat::JsonLd => {
-            decode_json_conditional::<RecordCollection>(wire, format.media_type())
-                .map(|value| map_conditional(value, RecordCollectionResponse::Json))
-        }
+        RecordFormat::Json => decode_registry_record_collection_conditional(
+            wire,
+            RegistryRecordRepresentation::Json,
+            RecordCollection::matches_json_representation,
+        )
+        .map(|value| map_conditional(value, RecordCollectionResponse::Json)),
+        RecordFormat::JsonLd => decode_registry_record_collection_conditional(
+            wire,
+            RegistryRecordRepresentation::JsonLdProductComposition,
+            RecordCollection::matches_json_ld_representation,
+        )
+        .map(|value| map_conditional(value, RecordCollectionResponse::Json)),
         RecordFormat::GeoJsonRfc7946 | RecordFormat::JsonFg => {
             decode_json_conditional::<GeoJsonFeatureCollection>(wire, APPLICATION_GEO_JSON)
                 .map(|value| map_conditional(value, RecordCollectionResponse::GeoJson))
+        }
+    }
+}
+
+fn decode_registry_record_conditional(
+    wire: WireOutcome,
+    representation: RegistryRecordRepresentation,
+    validates_representation: impl FnOnce(&RecordEnvelope) -> bool,
+) -> Result<Conditional<RecordEnvelope>, RelayClientError> {
+    decode_relay_registry_record_conditional(wire, representation, validates_representation)
+}
+
+fn decode_registry_record_collection_conditional(
+    wire: WireOutcome,
+    representation: RegistryRecordRepresentation,
+    validates_representation: impl FnOnce(&RecordCollection) -> bool,
+) -> Result<Conditional<RecordCollection>, RelayClientError> {
+    decode_relay_registry_record_conditional(wire, representation, validates_representation)
+}
+
+fn decode_relay_registry_record_conditional<T: DeserializeOwned>(
+    wire: WireOutcome,
+    representation: RegistryRecordRepresentation,
+    validates_representation: impl FnOnce(&T) -> bool,
+) -> Result<Conditional<T>, RelayClientError> {
+    match wire {
+        WireOutcome::NotModified(value) => Ok(Conditional::NotModified(value)),
+        WireOutcome::Complete { body, metadata, .. } => {
+            let body_failure = || {
+                RelayClientError::protocol(
+                    200,
+                    ProtocolFailure::Body,
+                    Some(metadata.trace_id().clone()),
+                )
+            };
+            RegistryRecordResponse::from_slice(&body, representation)
+                .map_err(|_| body_failure())?;
+            let value = serde_json::from_slice(&body).map_err(|_| body_failure())?;
+            if !validates_representation(&value) {
+                return Err(body_failure());
+            }
+            Ok(Conditional::Complete(Complete { value, metadata }))
         }
     }
 }

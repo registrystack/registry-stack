@@ -41,6 +41,7 @@ jobs:
               Path("release/docker/Dockerfile.discovery"),
               Path("release/docker/Dockerfile.evidence"),
               Path("release/docker/Dockerfile.mint"),
+              Path("release/docker/Dockerfile.breg"),
               Path("release/docker/Dockerfile.relay"),
           ]
           missing = [str(path) for path in release_paths if not path.is_file()]

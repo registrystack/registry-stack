@@ -1,0 +1,33 @@
+{
+  "@context": {
+    "data": "https://id.registrystack.org/vocab/registry-record/data",
+    "items": "https://id.registrystack.org/vocab/registry-record/items",
+    "pageInfo": "https://id.registrystack.org/vocab/registry-record/pageInfo",
+    "meta": "https://id.registrystack.org/vocab/registry-record/meta",
+    "domainData": "https://id.registrystack.org/vocab/registry-record/domainData",
+    "nextCursor": {
+      "@id": "https://id.registrystack.org/vocab/registry-record/nextCursor",
+      "@type": "http://www.w3.org/2001/XMLSchema#string"
+    },
+    "registryIdentifier": {
+      "@id": "https://id.registrystack.org/vocab/registry-record/registryIdentifier",
+      "@type": "http://www.w3.org/2001/XMLSchema#string"
+    },
+    "datasetIdentifier": {
+      "@id": "https://id.registrystack.org/vocab/registry-record/datasetIdentifier",
+      "@type": "http://www.w3.org/2001/XMLSchema#string"
+    },
+    "entityTypeIdentifier": {
+      "@id": "https://id.registrystack.org/vocab/registry-record/entityTypeIdentifier",
+      "@type": "http://www.w3.org/2001/XMLSchema#string"
+    },
+    "recordIdentifier": {
+      "@id": "https://id.registrystack.org/vocab/registry-record/recordIdentifier",
+      "@type": "http://www.w3.org/2001/XMLSchema#string"
+    },
+    "revisionIdentifier": {
+      "@id": "https://id.registrystack.org/vocab/registry-record/revisionIdentifier",
+      "@type": "http://www.w3.org/2001/XMLSchema#string"
+    }
+  }
+}

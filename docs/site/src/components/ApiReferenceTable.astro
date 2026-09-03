@@ -1,0 +1,42 @@
+---
+import tables from '../data/generated/breg-api.json';
+
+interface Props {
+  id: string;
+}
+
+const table = tables.find((entry) => entry.id === Astro.props.id);
+if (!table) throw new Error(`Unknown API reference table: ${Astro.props.id}`);
+
+const segments = (text: string) =>
+  text.split('`').map((part, index) => ({ code: index % 2 === 1, text: part }));
+---
+
+<div class="table-scroll">
+  <table aria-label={table.title}>
+    <thead>
+      <tr>{table.columns.map((column) => <th scope="col">{column}</th>)}</tr>
+    </thead>
+    <tbody>
+      {table.rows.map((row) => (
+        <tr>
+          {row.map((cell, index) => {
+            const Tag = index === 0 ? 'th' : 'td';
+            return (
+              <Tag scope={index === 0 ? 'row' : undefined}>
+                {segments(cell).map((part) => part.code ? <code>{part.text}</code> : part.text)}
+              </Tag>
+            );
+          })}
+        </tr>
+      ))}
+    </tbody>
+  </table>
+</div>
+
+<style>
+  .table-scroll { overflow-x: auto; }
+  table { width: 100%; }
+  th, td { text-align: start; vertical-align: top; }
+  code { overflow-wrap: anywhere; }
+</style>

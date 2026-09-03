@@ -45,6 +45,8 @@ SHARDS = {
         "registry-relay-client-py",
     ),
     "relay-v2": ("registry-relay-v2", "registry-relayctl"),
+    "breg": ("registry-breg", "registry-breg-client", "registry-bregctl"),
+    "stack-client": ("registry-record", "registry-stack-client"),
     "evidence": (
         "registry-evidence",
         "registry-evidence-authoring",
@@ -68,6 +70,19 @@ PLATFORM_PACKAGES = frozenset(SHARDS["platform"])
 MANIFEST_PACKAGES = frozenset(SHARDS["manifest"])
 RELAY_V2_PACKAGES = frozenset(SHARDS["relay-v2"])
 RELAY_CLIENT_PACKAGES = frozenset(SHARDS["relay-client"])
+BREG_PACKAGES = frozenset(SHARDS["breg"])
+STACK_CLIENT_PACKAGES = frozenset(SHARDS["stack-client"])
+
+# These are the cross-product semantic commitments implemented independently by
+# Base Registry Engine and Relay V2. A change must replay both real product routers,
+# while profile-only tooling and ordinary positive/negative fixtures remain on
+# the identifier/profile gate without widening the Rust matrix.
+REGISTRY_RECORD_CROSS_PRODUCT_INPUTS = (
+    "products/registry-record/schema/**",
+    "products/registry-record/context/**",
+    "products/registry-record/profile/**",
+    "products/registry-record/fixtures/cross-product/**",
+)
 
 # Provider publication is part of the Discovery product contract even though
 # Evidence and Relay own its generation and serving code. Keep this explicit:
@@ -180,8 +195,8 @@ EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_PATTERNS = tuple(
     pattern for pattern, _ in EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_INPUTS
 )
 
-# Generated CLI pages consume the public Clap trees for every released Relay
-# and Evidence binary. Keep this list at module ownership so changing an Args
+# Generated CLI pages consume the supported public Clap trees.
+# Keep this list at module ownership so changing an Args
 # type beside a top-level parser cannot leave its published page stale.
 CLI_REFERENCE_INPUTS = (
     ("Cargo.lock", "Cargo.lock"),
@@ -196,6 +211,8 @@ CLI_REFERENCE_INPUTS = (
     ("crates/registry-mint/src/cli.rs", "crates/registry-mint/src/cli.rs"),
     ("crates/registry-relay-v2/src/cli.rs", "crates/registry-relay-v2/src/cli.rs"),
     ("crates/registry-relayctl/src/**", "crates/registry-relayctl/src/lib.rs"),
+    ("crates/registry-breg/src/cli.rs", "crates/registry-breg/src/cli.rs"),
+    ("crates/registry-bregctl/src/**", "crates/registry-bregctl/src/lib.rs"),
 )
 CLI_REFERENCE_PATTERNS = tuple(pattern for pattern, _ in CLI_REFERENCE_INPUTS)
 
@@ -337,6 +354,7 @@ def identifier_catalog_inputs(
 
     inputs = [
         "products/identifiers/**",
+        "products/registry-record/**",
         "crates/registry-relay-v2/examples/audit-event-schema.rs",
         "crates/registry-relay-v2/src/audit.rs",
     ]
@@ -484,6 +502,9 @@ def classify(
         for path in paths
         for gate in SECURITY_WORKFLOW_GATES.get(path, ())
     )
+    registry_record_cross_product = any(
+        matches(path, *REGISTRY_RECORD_CROSS_PRODUCT_INPUTS) for path in paths
+    )
     force_all = run_all or any(
         path
         in {
@@ -514,9 +535,16 @@ def classify(
                 seeds.update(PLATFORM_PACKAGES)
             elif path.startswith("products/relay-v2/"):
                 seeds.update(RELAY_V2_PACKAGES)
+            elif path.startswith("products/breg/"):
+                seeds.update(BREG_PACKAGES)
             elif path.startswith("products/identifiers/"):
                 # The catalog gate compiles its focused Relay V2 exporter.
                 # Catalog-only tooling does not require the full Rust matrix.
+                pass
+            elif path.startswith("products/registry-record/"):
+                # Shared-profile material remains outside the broad Rust shard.
+                # Cross-product commitments select the two owning product gates
+                # explicitly below; each gate compiles and exercises its router.
                 pass
             elif path.startswith(("crates/", "products/")):
                 # A new or moved Rust package must not silently escape the test matrix.
@@ -608,6 +636,8 @@ def classify(
             # them, so either going stale needs a docs rebuild.
             "products/evidence/contracts/*",
             "crates/registry-evidencectl/schemas/authoring/*",
+            "products/breg/generated/authoring/*",
+            "products/breg/generated/runtime/*",
             # The same page names the product reference that explains each
             # schema, and the docs tests read those references to prove the
             # published key paths and the documented ones agree.
@@ -704,8 +734,11 @@ def classify(
         or bool(affected & DISCOVERY_PACKAGES)
         or any(matches(path, *DISCOVERY_PROVIDER_INPUTS) for path in paths)
         or any(path in DISCOVERY_TUTORIAL_INPUTS for path in paths),
-        "relay_v2_contracts": bool(affected & RELAY_V2_PACKAGES),
+        "relay_v2_contracts": registry_record_cross_product
+        or bool(affected & RELAY_V2_PACKAGES),
         "relay_client_contracts": bool(affected & RELAY_CLIENT_PACKAGES),
+        "breg_contracts": registry_record_cross_product
+        or bool(affected & BREG_PACKAGES),
         "evidence_contracts": bool(affected & EVIDENCE_PACKAGES),
         "release_tool": release_tool,
         "release_source_proof": release_source_proof,

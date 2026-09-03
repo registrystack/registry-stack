@@ -163,6 +163,27 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "Relay client source neutrality",
         "run: products/relay-v2/scripts/check-source-neutrality.sh",
     ),
+    ("Base Registry Engine product contract gate", "breg-contracts:"),
+    (
+        "Base Registry Engine contract consistency",
+        "run: products/breg/scripts/check-contracts.sh",
+    ),
+    (
+        "BReg client contract consistency",
+        "run: products/breg/scripts/check-client-contract.sh",
+    ),
+    (
+        "Base Registry Engine PostgreSQL journeys",
+        "run: products/breg/scripts/test-postgres.sh",
+    ),
+    (
+        "Base Registry Engine adopter workflow",
+        "run: products/breg/scripts/test-adopter-workflow.sh",
+    ),
+    (
+        "Base Registry Engine PostgreSQL 17 / PostGIS 3.5 image pin",
+        "postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6",
+    ),
     (
         "Release Linux Node client path filter",
         "release_linux_node_clients: ${{ steps.filter.outputs.release_linux_node_clients }}",
@@ -641,11 +662,12 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         "Candidate cleanup exact package allowlist",
         "release/scripts/cleanup-release-candidates.py",
         (
-            'CANDIDATE_PACKAGES = (\n    # Listing an absent package fails closed, so a candidate name joins this\n    # allowlist with the release that first publishes it.\n    "discovery-candidate",\n    "evidence-candidate",\n    "mint-candidate",\n    "relay-candidate",\n)',
+            'CANDIDATE_PACKAGES = (\n    # Listing an absent package fails closed, so a candidate name joins this\n    # allowlist with the release that first publishes it.\n    "breg-candidate",\n    "discovery-candidate",\n    "evidence-candidate",\n    "mint-candidate",\n    "relay-candidate",\n)',
             'PUBLIC_PACKAGES = (\n    # Retired public names stay denylisted so cleanup can never delete history.',
             '    "discovery",\n',
             '    "evidence",\n',
             '    "mint",\n',
+            '    "breg",\n',
             '    "relay",\n',
             "if package in PUBLIC_PACKAGES:",
             "if package not in CANDIDATE_PACKAGES:",

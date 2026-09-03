@@ -126,8 +126,8 @@ test('redirects every removed current Notary route to Evidence Gateway or the re
   assert.match(configSource, /\.\.\.buildNotaryRetirementRedirects\(currentDocsetRedirect\)/);
 });
 
-test('presents Relay and Evidence Gateway in the current site descriptions and API navigation', () => {
-  assert.match(configSource, /description: 'Documentation for Registry Stack: Registry Relay and Evidence Gateway/);
+test('presents the maintained services in site descriptions without restoring Notary navigation', () => {
+  assert.match(configSource, /description: 'Documentation for Registry Stack: [^']*Registry Relay[^']*Evidence Gateway[^']*Base Registry Engine/);
   assert.doesNotMatch(configSource, /description: '[^']*Registry Notary/);
   assert.doesNotMatch(configSource, /label: 'Notary \(narrative\)'/);
   assert.doesNotMatch(configSource, /label: 'Registry Notary'/);

@@ -1,0 +1,27 @@
+{
+  "profileIdentifier": "https://id.registrystack.org/profiles/registry-record/v1",
+  "datasets": [
+    {
+      "visibility": "public",
+      "records": [
+        {
+          "revisionIdentifier": "1",
+          "domainData": {
+            "label": "PUBLIC-SEMANTIC-CANARY"
+          }
+        }
+      ]
+    },
+    {
+      "visibility": "protected",
+      "records": [
+        {
+          "revisionIdentifier": "1",
+          "domainData": {
+            "label": "PROTECTED-SEMANTIC-CANARY"
+          }
+        }
+      ]
+    }
+  ]
+}

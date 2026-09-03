@@ -277,6 +277,14 @@ jobs:
             "relay ${{ needs.validate.outputs.version }}"
           test "$("dist/bin/relayctl-${{ needs.validate.outputs.tag }}-linux-amd64" --version)" = \
             "relayctl ${{ needs.validate.outputs.version }}"
+          IFS=. read -r release_major release_minor _release_patch \
+            <<<"${{ needs.validate.outputs.version }}"
+          if (( release_major > 0 || release_minor >= 26 )); then
+            test "$("dist/bin/breg-${{ needs.validate.outputs.tag }}-linux-amd64" --version)" = \
+              "breg ${{ needs.validate.outputs.version }}"
+            test "$("dist/bin/bregctl-${{ needs.validate.outputs.tag }}-linux-amd64" --version)" = \
+              "bregctl ${{ needs.validate.outputs.version }}"
+          fi
 
       - name: Set up Docker Buildx
         id: buildx
@@ -354,7 +362,7 @@ jobs:
           retention-days: 2
 
   build-platforms:
-    name: Build relayctl ${{ matrix.asset }} once
+    name: Build native ${{ matrix.asset }} payload once
     needs: validate
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 35
@@ -391,6 +399,18 @@ jobs:
             -p registry-relayctl -p registry-evidence -p registry-evidencectl \
             -p registry-mint -p registry-evidence-oid4vci \
             --target "${{ matrix.target }}"
+          IFS=. read -r release_major release_minor _release_patch \
+            <<<"${{ needs.validate.outputs.version }}"
+          include_breg=0
+          if (( release_major > 0 || release_minor >= 26 )); then
+            include_breg=1
+            cargo build --release --locked \
+              -p registry-breg --bin breg --features runtime \
+              --target "${{ matrix.target }}"
+            cargo build --release --locked \
+              -p registry-bregctl \
+              --target "${{ matrix.target }}"
+          fi
           mkdir -p platform
           asset="relayctl-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}"
           cp "target/${{ matrix.target }}/release/relayctl" "platform/${asset}"
@@ -403,6 +423,16 @@ jobs:
               "platform/${asset}"
             chmod 0755 "platform/${asset}"
           done
+          if [[ "${include_breg}" -eq 1 ]]; then
+            for breg_binary in breg bregctl; do
+              asset="${breg_binary}-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}"
+              cp "target/${{ matrix.target }}/release/${breg_binary}" \
+                "platform/${asset}"
+              chmod 0755 "platform/${asset}"
+              test "$("platform/${asset}" --version)" = \
+                "${breg_binary} ${{ needs.validate.outputs.version }}"
+            done
+          fi
           mkdir -p candidate-platform
           mv platform candidate-platform/platform
 
@@ -1188,6 +1218,45 @@ jobs:
             observed="$("${relay_install_dir}/relayctl" --version)"
             test "${observed}" = \
               "relayctl ${{ needs.validate.outputs.version }}"
+            rm candidate/bundle-root/SHA256SUMS
+          fi
+          if (( relay_major > 0 || relay_minor >= 26 )); then
+            breg_installer="breg-${{ needs.validate.outputs.tag }}-install.sh"
+            awk -v version="${{ needs.validate.outputs.tag }}" '
+              $0 == "default_version=\"\"" {
+                print "default_version=\"" version "\""
+                rendered = 1
+                next
+              }
+              { print }
+              END { if (!rendered) exit 1 }
+            ' crates/registry-breg/install.sh \
+              > "candidate/bundle-root/${breg_installer}"
+            chmod 0755 "candidate/bundle-root/${breg_installer}"
+            cp "candidate/bundle-root/${breg_installer}" \
+              candidate/bundle-root/breg-install.sh
+            chmod 0755 candidate/bundle-root/breg-install.sh
+            (
+              cd candidate/bundle-root
+              sha256sum -- \
+                "breg-${{ needs.validate.outputs.tag }}-linux-amd64" \
+                "bregctl-${{ needs.validate.outputs.tag }}-linux-amd64" \
+                > SHA256SUMS
+            )
+            breg_install_dir="${RUNNER_TEMP}/candidate-breg-install"
+            BREG_ASSET_DIR="${GITHUB_WORKSPACE}/candidate/bundle-root" \
+            BREG_INSTALL_DIR="${breg_install_dir}" \
+              bash "candidate/bundle-root/${breg_installer}"
+            for breg_binary in breg bregctl; do
+              observed="$("${breg_install_dir}/${breg_binary}" --version)"
+              test "${observed}" = \
+                "${breg_binary} ${{ needs.validate.outputs.version }}"
+            done
+            breg_project="${RUNNER_TEMP}/candidate-breg-project"
+            "${breg_install_dir}/bregctl" \
+              init "${breg_project}"
+            "${breg_install_dir}/bregctl" \
+              check "${breg_project}"
             rm candidate/bundle-root/SHA256SUMS
           fi
           evidencectl_installer="evidencectl-${{ needs.validate.outputs.tag }}-install.sh"

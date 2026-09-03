@@ -1,0 +1,100 @@
+apiVersion: registry.registrystack.org/breg-journeys/v1
+journeys:
+  - id: inspection-and-schema-validation
+    steps:
+      - id: create-inspection
+        entity: inspection
+        accessProfile: inspection-inspector
+        claims: &inspection_inspector_claims
+          principal: synthetic-inspection-inspector
+          purpose: facility-inspection
+        request:
+          operation: create
+          data:
+            inspection-code: INSPECTION-SYNTH-001
+            facility-code: FACILITY-SYNTH-001
+            opened-on: 2026-01-10
+            inspection-authority: synthetic-case-management
+        expect:
+          outcome: success
+          status: 201
+          fields:
+            inspection-code: INSPECTION-SYNTH-001
+            facility-code: FACILITY-SYNTH-001
+            opened-on: 2026-01-10
+            inspection-authority: synthetic-case-management
+        capture: first-inspection
+      - id: close-inspection
+        entity: inspection
+        accessProfile: inspection-inspector
+        claims: *inspection_inspector_claims
+        request:
+          operation: patch
+          recordRef: first-inspection
+          etagRef: first-inspection
+          changes:
+            - field: closed-on
+              value: 2026-01-20
+        expect:
+          outcome: success
+          status: 200
+          fields:
+            inspection-code: INSPECTION-SYNTH-001
+            opened-on: 2026-01-10
+            closed-on: 2026-01-20
+        capture: closed-inspection
+      - id: get-closed-inspection
+        entity: inspection
+        accessProfile: inspection-inspector
+        claims: *inspection_inspector_claims
+        request:
+          operation: get
+          recordRef: closed-inspection
+        expect:
+          outcome: success
+          status: 200
+          fields:
+            inspection-code: INSPECTION-SYNTH-001
+            closed-on: 2026-01-20
+      - id: list-inspections
+        entity: inspection
+        accessProfile: inspection-inspector
+        claims: *inspection_inspector_claims
+        request:
+          operation: list
+        expect:
+          outcome: success
+          status: 200
+          count: 1
+      - id: refuse-undeclared-observation-metadata
+        entity: inspection-observation
+        accessProfile: inspection-inspector
+        claims: *inspection_inspector_claims
+        request:
+          operation: create
+          data:
+            inspection: 00000000-0000-0000-0000-000000000001
+            observed-at: 2026-01-11T09:00:00Z
+            inspection-domain: air
+            finding-grade: 3
+            observation-schema-metadata:
+              schemaVersion: "1"
+              vocabularyRelease: 2026-01
+              scoringScale: zero-to-four
+              undeclared: refused
+        expect:
+          outcome: refusal
+          status: 400
+          problemCode: request.invalid
+      - id: inspector-without-purpose-is-concealed
+        entity: inspection
+        accessProfile: inspection-inspector
+        claims:
+          principal: synthetic-inspection-inspector
+        request:
+          operation: get
+          recordRef: closed-inspection
+        expect:
+          outcome: refusal
+          status: 404
+          problemCode: resource.not_found

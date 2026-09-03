@@ -69,6 +69,9 @@ function fixtureReviewMetadata(overrides = {}) {
 test('renders one linked page for every nested public command', () => {
   const pages = renderCatalog(fixtureCatalog(), fixtureReviewMetadata());
   assert.ok(pages.has('index.mdx'));
+  assert.ok(pages.has('breg.mdx'));
+  assert.ok(pages.has('bregctl.mdx'));
+  assert.match(pages.get('index.mdx'), /Base Registry Engine/u);
   assert.ok(pages.has('relayctl.mdx'));
   assert.ok(pages.has('relayctl/tooling.mdx'));
   assert.ok(pages.has('relayctl/tooling/editor.mdx'));

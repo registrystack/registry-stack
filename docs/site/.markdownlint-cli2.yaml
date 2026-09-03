@@ -24,6 +24,7 @@ config:
       - OpenApiSourcesTable
       - ContractsTable
       - StandardsTable
+      - ApiReferenceTable
       - RelaySupportRoster
       - SpecRegister
       - LegendList
@@ -32,7 +33,8 @@ config:
       - ProjectStarterSequence
       - ProjectWorkspaceJourneys
       - AuthoringConfigurationReference
-      - EvidenceConfigurationReference
+      - ConfigurationReference
+      - EventReferenceTable
       - DiagnosticReference
       - Steps
 globs:

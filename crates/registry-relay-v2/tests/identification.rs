@@ -653,6 +653,8 @@ sources:
   registry: {kind: sqlite, profile: snapshot, expectedSchemaFingerprint: "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"}
 resources:
   - id: records
+    datasetIdentifier: records
+    entityTypeIdentifier: record
     title: Records
     description: Records
     semanticClass: local:Record

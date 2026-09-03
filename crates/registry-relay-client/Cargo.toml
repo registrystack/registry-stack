@@ -3,7 +3,7 @@ name = "registry-relay-client"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Canonical Rust SDK for the Registry Relay V2 HTTP API."
+description = "Canonical bounded Rust client for Registry Relay V2."
 readme = "README.md"
 repository.workspace = true
 publish = false
@@ -15,12 +15,14 @@ workspace = true
 async-trait.workspace = true
 registry-platform-httpsec.workspace = true
 registry-platform-httputil.workspace = true
+registry-record.workspace = true
 registry-relay-http-contract.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 url.workspace = true
+uuid.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]

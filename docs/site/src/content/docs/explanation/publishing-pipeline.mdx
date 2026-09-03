@@ -77,26 +77,24 @@ Embedded codelist nodes are SKOS-shaped inside the linked-data outputs, and the
 linked-data formats are JSON-LD.
 No renderer makes a network call or reads a file the manifest did not name.
 
-A working example lives at
-`products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml`.
-Its catalog block looks like this:
+A generated example lives at
+`products/breg/generated/business-establishments/generated/manifest/registry-manifest.json`.
+Its catalog uses the same Manifest schema. A shortened YAML equivalent looks like this:
 
 ```yaml
 schema_version: registry-manifest/v1
 catalog:
-  id: example-civil-registration
-  base_url: https://civil-registration.example.gov
+  id: business-establishments
+  base_url: https://business-establishments.example.gov
   title:
-    en: Civil Registration Metadata
+    en: Business Establishments Registry Catalog
   publisher:
-    name: Civil Registration Authority
-    iri: https://civil-registration.example.gov/authority
-    authority_type: eli:PublicAuthority
+    name: Business Registration Authority
+    iri: https://business-establishments.example.gov/authority
   conforms_to:
-    - https://semiceu.github.io/BRegDCAT-AP/releases/3.0.0/
+    - https://www.w3.org/TR/vocab-dcat-3/
   standards:
     dcat: "3.0"
-    shacl: "1.1"
     json_schema: "2020-12"
 ```
 

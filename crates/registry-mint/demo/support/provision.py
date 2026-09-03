@@ -13,9 +13,7 @@ Everything this writes is disposable and local. The keys are generated fresh on
 every run and are worthless outside this directory.
 """
 
-import base64
 import datetime as dt
-import hashlib
 import json
 import os
 import secrets
@@ -26,8 +24,10 @@ from pathlib import Path
 
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ec, ed25519
+from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.x509.oid import NameOID
+
+from key_material import ed25519_jwk, p256_jwk, write, write_secret
 
 MINT_PORT = 8090
 TLS_PORT = 8443
@@ -36,79 +36,6 @@ SOURCE_PORT = 8092
 
 MINT_ORIGIN = f"https://localhost:{TLS_PORT}"
 AGENT = "urn:example:demo:agent:appointment-scheduler"
-
-
-def b64(raw: bytes) -> str:
-    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
-
-
-def ed25519_jwk(kid: str) -> tuple[dict, dict]:
-    """Return (private JWK, public JWK) for a fresh Ed25519 key."""
-    private = ed25519.Ed25519PrivateKey.generate()
-    x = b64(
-        private.public_key().public_bytes(
-            serialization.Encoding.Raw, serialization.PublicFormat.Raw
-        )
-    )
-    d = b64(
-        private.private_bytes(
-            serialization.Encoding.Raw,
-            serialization.PrivateFormat.Raw,
-            serialization.NoEncryption(),
-        )
-    )
-    public_jwk = {"kty": "OKP", "crv": "Ed25519", "kid": kid, "alg": "EdDSA", "x": x}
-    return {**public_jwk, "d": d}, public_jwk
-
-
-def p256_jwk() -> tuple[dict, dict]:
-    """Return a service ES256 key whose kid is its RFC 7638 thumbprint."""
-    private = ec.generate_private_key(ec.SECP256R1())
-    numbers = private.private_numbers()
-    public_numbers = numbers.public_numbers
-    public_jwk = {
-        "kty": "EC",
-        "crv": "P-256",
-        "alg": "ES256",
-        "x": b64(public_numbers.x.to_bytes(32, "big")),
-        "y": b64(public_numbers.y.to_bytes(32, "big")),
-    }
-    thumbprint_members = {
-        member: public_jwk[member] for member in ("crv", "kty", "x", "y")
-    }
-    thumbprint = json.dumps(
-        thumbprint_members, sort_keys=True, separators=(",", ":")
-    ).encode()
-    public_jwk["kid"] = b64(hashlib.sha256(thumbprint).digest())
-    private_jwk = {
-        **public_jwk,
-        "d": b64(numbers.private_value.to_bytes(32, "big")),
-    }
-    return private_jwk, public_jwk
-
-
-def write(path: Path, text: str, mode: int = 0o644) -> Path:
-    """Write a file everyone on the machine may read: certificates, configuration."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
-    path.chmod(mode)
-    return path
-
-
-def write_secret(path: Path, text: str) -> Path:
-    """Write a file that is never wider than owner read/write, not even briefly.
-
-    Creating the file and then narrowing it would leave a freshly generated
-    signing key readable by anyone on the machine for the length of the write.
-    `os.open` carries the mode into the creation; the `chmod` after it only
-    undoes the umask.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-        handle.write(text)
-    path.chmod(0o600)
-    return path
 
 
 def issue_tls_certificate(root: Path) -> None:

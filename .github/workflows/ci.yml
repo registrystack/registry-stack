@@ -46,6 +46,7 @@ jobs:
       discovery_contracts: ${{ steps.filter.outputs.discovery_contracts }}
       relay_v2_contracts: ${{ steps.filter.outputs.relay_v2_contracts }}
       relay_client_contracts: ${{ steps.filter.outputs.relay_client_contracts }}
+      breg_contracts: ${{ steps.filter.outputs.breg_contracts }}
       evidence_contracts: ${{ steps.filter.outputs.evidence_contracts }}
       release_tool: ${{ steps.filter.outputs.release_tool }}
       release_source_proof: ${{ steps.filter.outputs.release_source_proof }}
@@ -592,6 +593,83 @@ jobs:
       - name: Relay client source neutrality
         run: products/relay-v2/scripts/check-source-neutrality.sh
 
+  breg-contracts:
+    name: Base Registry Engine product contracts
+    needs: changes
+    if: needs.changes.outputs.breg_contracts == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        # PostgreSQL 17 / PostGIS 3.5.2, verified 2026-08-31. Fresh test databases
+        # remain extension-free unless a spatial test explicitly installs it.
+        image: postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6
+        env:
+          POSTGRES_DB: breg
+          POSTGRES_PASSWORD: breg_test
+          POSTGRES_USER: breg
+        options: >-
+          --health-cmd "pg_isready -U breg -d breg"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432/tcp
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Configure Base Registry Engine test environment
+        env:
+          DATABASE_PORT: ${{ job.services.postgres.ports['5432'] }}
+          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+          TLS_CA_PEM_PATH: ${{ runner.temp }}/breg-postgres-trusted-ca.pem
+        run: |
+          {
+            echo "BREG_TEST_DATABASE_URL=postgresql://breg:breg_test@localhost:${DATABASE_PORT}/breg"
+            echo "BREG_TEST_TLS_DATABASE_HOST=localhost"
+            echo "BREG_TEST_TLS_DATABASE_URL=postgresql://breg:breg_test@localhost:${DATABASE_PORT}/breg"
+            echo "BREG_TEST_TLS_HOSTNAME_MISMATCH_DATABASE_URL=postgresql://breg:breg_test@127.0.0.1:${DATABASE_PORT}/breg"
+            echo "BREG_TEST_TLS_POSTGRES_CONTAINER_ID=${POSTGRES_CONTAINER_ID}"
+            echo "BREG_TEST_TLS_CA_PEM_PATH=${TLS_CA_PEM_PATH}"
+          } >> "${GITHUB_ENV}"
+
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.11.16"
+
+      - name: Base Registry Engine contract consistency
+        run: products/breg/scripts/check-contracts.sh
+
+      - name: BReg client contract consistency
+        run: products/breg/scripts/check-client-contract.sh
+
+      - name: Base Registry Engine PostgreSQL journeys
+        run: products/breg/scripts/test-postgres.sh
+
+      - name: Base Registry Engine PostgreSQL TLS proof
+        run: products/breg/scripts/test-postgres-tls.sh
+
+      - name: Base Registry Engine clean-checkout adopter workflow
+        run: products/breg/scripts/test-adopter-workflow.sh
+
+      - name: Base Registry Engine generic quickstart
+        run: products/breg/quickstart/run.sh --smoke
+
+      - name: Base Registry Engine spatial quickstart
+        run: products/breg/quickstart/run.sh --spatial --smoke
+
   identifiers:
     name: Public identifier catalog
     needs: changes
@@ -615,6 +693,9 @@ jobs:
       - name: Check public identifier catalog
         run: products/identifiers/scripts/check.sh
 
+      - name: Check Registry Record profile artifacts
+        run: products/registry-record/scripts/check.sh
+
   rust-result:
     name: Rust workspace
     if: always()
@@ -627,6 +708,7 @@ jobs:
       - evidence-contracts
       - relay-v2-contracts
       - relay-client-contracts
+      - breg-contracts
       - identifiers
     runs-on: ubuntu-24.04
     env:

@@ -18,7 +18,7 @@
     "smoke:deployment": "node scripts/smoke-docs-deployment.mjs",
     "archive:snapshot": "node scripts/archive-lock.mjs snapshot",
     "preview": "astro preview",
-    "generate": "node scripts/generate-data.mjs && node scripts/generate-evidence-configuration.mjs && node scripts/generate-cli-reference.mjs && node scripts/fetch-openapi.mjs && node scripts/sync-repo-docs.mjs && node scripts/generate-sidebar.mjs",
+    "generate": "node scripts/generate-data.mjs && node scripts/generate-evidence-configuration.mjs && node scripts/generate-breg-configuration.mjs && node scripts/generate-cli-reference.mjs && node scripts/fetch-openapi.mjs && node scripts/sync-repo-docs.mjs && node scripts/generate-sidebar.mjs",
     "generate:archive": "node scripts/generate-data.mjs && node scripts/fetch-openapi.mjs && node scripts/sync-repo-docs.mjs && node scripts/generate-sidebar.mjs",
     "pretest": "cargo --version",
     "test": "node --test \"scripts/**/*.test.mjs\"",
@@ -106,5 +106,10 @@
     "starlight-llms-txt": {
       "astro": "$astro"
     }
+  },
+  "allowScripts": {
+    "@vvago/vale": true,
+    "esbuild": true,
+    "fsevents": true
   }
 }

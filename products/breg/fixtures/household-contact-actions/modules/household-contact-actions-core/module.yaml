@@ -1,0 +1,78 @@
+id: household-contact-actions-core
+version: 0.1.0
+entities:
+  - id: person
+    primaryDataset: household-contact-actions
+    route: persons
+    mutationMode: mutable
+    classification: restricted
+    fields:
+      - {id: person-code, apiName: personCode, type: string, required: true, maxLength: 64, classification: restricted}
+      - {id: legal-name, apiName: legalName, type: string, required: true, maxLength: 160, classification: restricted}
+      - {id: district, type: string, required: true, maxLength: 80, classification: restricted}
+    constraints:
+      - {kind: unique, fields: [person-code]}
+  - id: household
+    primaryDataset: household-contact-actions
+    route: households
+    mutationMode: mutable
+    classification: restricted
+    fields:
+      - {id: household-code, apiName: householdCode, type: string, required: true, maxLength: 64, classification: restricted}
+      - {id: household-name, apiName: householdName, type: string, required: true, maxLength: 160, classification: restricted}
+      - {id: district, type: string, required: true, maxLength: 80, classification: restricted}
+      - {id: contact-person, apiName: contactPerson, type: reference, target: person, required: false, classification: restricted}
+    constraints:
+      - {kind: unique, fields: [household-code]}
+  - id: service-center
+    primaryDataset: household-contact-actions
+    route: service-centers
+    mutationMode: mutable
+    classification: restricted
+    fields:
+      - {id: center-code, apiName: centerCode, type: string, required: true, maxLength: 64, classification: restricted}
+      - {id: label, type: string, required: true, maxLength: 160, classification: restricted}
+      - {id: district, type: string, required: true, maxLength: 80, classification: restricted}
+    constraints:
+      - {kind: unique, fields: [center-code]}
+  - id: group-membership
+    primaryDataset: household-contact-actions
+    route: group-memberships
+    mutationMode: mutable
+    classification: restricted
+    fields:
+      - {id: person, type: reference, target: person, required: true, classification: restricted}
+      - {id: household, type: reference, target: household, required: true, classification: restricted}
+      - {id: registration-site, apiName: registrationSite, type: reference, target: service-center, required: true, classification: restricted}
+      - {id: district, type: string, required: true, maxLength: 80, classification: restricted}
+    constraints:
+      - {kind: unique, fields: [person, household]}
+actions:
+  - id: register-household-contact
+    inputs:
+      - {id: household, apiName: householdId, type: reference, target: household, required: true, classification: restricted}
+      - {id: registration-site, apiName: serviceCenterId, type: reference, target: service-center, required: true, classification: restricted}
+      - {id: person-code, apiName: personCode, type: string, required: true, maxLength: 64, classification: restricted}
+      - {id: legal-name, apiName: contactName, type: string, required: true, maxLength: 160, classification: restricted}
+      - {id: district, type: string, required: true, maxLength: 80, classification: restricted}
+    effects:
+      - id: person
+        target: {entity: person}
+        operation: create
+        set:
+          person-code: {fromField: person-code}
+          legal-name: {fromField: legal-name}
+          district: {fromField: district}
+      - id: membership
+        target: {entity: group-membership}
+        operation: create
+        set:
+          person: {fromEffect: person}
+          household: {fromField: household}
+          registration-site: {fromField: registration-site}
+          district: {fromField: district}
+      - id: household
+        target: {fromField: household}
+        operation: patch
+        set:
+          contact-person: {fromEffect: person}

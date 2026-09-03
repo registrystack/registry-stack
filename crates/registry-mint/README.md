@@ -79,7 +79,8 @@ are registered.
 
 Each client registration selects one authority profile. An Evidence profile
 writes configurable Evidence claims. A standard authorization profile writes
-one space-delimited OAuth `scope` claim plus bounded direct string claims.
+one space-delimited OAuth `scope` claim plus bounded direct string or
+string-list claims.
 The two profiles cannot be combined in one registration, and neither profile
 accepts authority from the token request.
 
@@ -287,13 +288,17 @@ keys:
 
 Mint joins the registered scopes with one ASCII space, writes the result as
 the token's `scope` claim, and returns the same string in the token response's
-optional `scope` member. The direct claims are server-governed strings. The
+optional `scope` member. The direct claims are server-governed. A claim value
+is either one string, minted as a JSON string, or a list of strings such as
+`authority: [district-17, district-18]`, minted as a JSON array for a resource
+server boundary that matches a row against a set of permitted values. The
 client assertion and token request cannot add, narrow, or replace them.
 
 A scoped registration has 1 to 64 unique RFC 6749 scope-tokens and at most 32
-direct claims. It cannot use `evidenceAudience`, `requesterTags`, `grant`, or
-`delegation`. Direct claim names cannot shadow `iss`, `aud`, `exp`, `iat`,
-`nbf`, `jti`, `client_id`, `sub`, or `scope`.
+direct claims, and a listed claim carries 1 to 64 unique values. It cannot use
+`evidenceAudience`, `requesterTags`, `grant`, or `delegation`. Direct claim
+names cannot shadow `iss`, `aud`, `exp`, `iat`, `nbf`, `jti`, `client_id`,
+`sub`, or `scope`.
 When the deployment also configures Evidence claim names, a scoped client's
 direct claims cannot reuse any of those names.
 

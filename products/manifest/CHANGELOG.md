@@ -7,6 +7,29 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- Added optional canonical dataset IRIs and deliberate dataset release versions,
+  plus first-class distributions linked to exactly one dataset and optionally
+  to a serving data service, access URL, download URL, media type, format,
+  title, description, and canonical IRI.
+- DCAT output now renders declared `dcat:Distribution` resources,
+  `dcat:distribution`, `dcat:accessService`, access and download URLs, media
+  type, format, and `dcat:version` relationships.
+
+### Compatibility
+
+- Existing manifests that omit the new fields keep their exact typed canonical
+  bytes and `source_manifest_digest`. An absent or empty top-level
+  `distributions` collection is omitted before canonicalization.
+
+### Changed
+
+- BREAKING: every authored `data_services[]` entry must now list at least one
+  existing dataset in `serves_datasets`. Add the datasets exposed by each
+  service before validating or republishing an older manifest whose data
+  service omitted this relationship.
+
 ## [0.25.0] - 2026-08-22
 
 - No user-visible Registry Manifest format changes.

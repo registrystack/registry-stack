@@ -714,6 +714,43 @@ class GateInventoryTest(unittest.TestCase):
                 text = self.workflow.replace(snippet, replacement)
                 self.assertIn(gate, self.module.missing_gates(text))
 
+    def test_missing_breg_product_gates_are_reported(self) -> None:
+        for snippet, replacement, gate in (
+            (
+                "breg-contracts:",
+                "breg-disabled:",
+                "Base Registry Engine product contract gate",
+            ),
+            (
+                "run: products/breg/scripts/check-contracts.sh",
+                "run: true # Base Registry Engine contracts disabled",
+                "Base Registry Engine contract consistency",
+            ),
+            (
+                "run: products/breg/scripts/check-client-contract.sh",
+                "run: true # BReg client contracts disabled",
+                "BReg client contract consistency",
+            ),
+            (
+                "run: products/breg/scripts/test-postgres.sh",
+                "run: true # Base Registry Engine PostgreSQL disabled",
+                "Base Registry Engine PostgreSQL journeys",
+            ),
+            (
+                "run: products/breg/scripts/test-adopter-workflow.sh",
+                "run: true # Base Registry Engine adopter workflow disabled",
+                "Base Registry Engine adopter workflow",
+            ),
+            (
+                "postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6",
+                "postgis/postgis",
+                "Base Registry Engine PostgreSQL 17 / PostGIS 3.5 image pin",
+            ),
+        ):
+            with self.subTest(gate=gate):
+                text = self.workflow.replace(snippet, replacement, 1)
+                self.assertIn(gate, self.module.missing_gates(text))
+
     def test_linux_node_release_proof_is_two_runner_read_only_and_aggregated(
         self,
     ) -> None:

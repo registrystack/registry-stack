@@ -23,7 +23,7 @@ use std::{
 
 use jsonwebtoken::{jwk::JwkSet, DecodingKey};
 use registry_platform_authcommon::{parse_fingerprint, verify_api_key};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
 use url::Url;
@@ -49,6 +49,9 @@ const MAX_AUTHORIZATION_CLAIMS: usize = 32;
 const MAX_AUTHORIZATION_CLAIM_NAME_BYTES: usize = 128;
 /// Relay accepts direct authority values only through this byte ceiling.
 const MAX_AUTHORIZATION_CLAIM_VALUE_BYTES: usize = 512;
+/// A resource server reads at most this many values from one multi-valued
+/// authority claim, so a longer list could never be used in full.
+const MAX_AUTHORIZATION_CLAIM_VALUES: usize = 64;
 /// One active credential plus one planned rotation credential.
 const MAX_CLIENT_SECRET_FINGERPRINTS: usize = 2;
 
@@ -116,17 +119,41 @@ pub struct Delegation {
     pub subject_claims: BTreeMap<String, String>,
 }
 
+/// One server-governed authority value written into a standard access token.
+///
+/// A single string is the ordinary shape. A list is what a resource server's
+/// multi-valued row boundary requires: it reads an array-valued claim and
+/// refuses a scalar, so a registration that must satisfy one names every
+/// permitted value here.
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(untagged)]
+pub enum AuthorizationClaimValue {
+    Text(String),
+    List(Vec<String>),
+}
+
+impl AuthorizationClaimValue {
+    /// The JSON this value is minted as.
+    #[must_use]
+    pub fn to_json(&self) -> Value {
+        match self {
+            Self::Text(value) => Value::String(value.clone()),
+            Self::List(values) => Value::Array(values.iter().cloned().map(Value::String).collect()),
+        }
+    }
+}
+
 /// Product-neutral authority written into a standard OAuth access token.
 ///
 /// The client assertion never supplies these values. They are fixed in the
 /// reloadable server-side registration and emitted as one space-delimited
-/// `scope` claim plus bounded direct string claims.
+/// `scope` claim plus bounded direct string or string-list claims.
 #[derive(Clone, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Authorization {
     pub scopes: Vec<String>,
     #[serde(default)]
-    pub claims: BTreeMap<String, String>,
+    pub claims: BTreeMap<String, AuthorizationClaimValue>,
 }
 
 /// The client authentication method selected by one registration.
@@ -615,10 +642,28 @@ fn validate_authorization(
                 "authorization claims must not shadow registered access-token claims",
             ));
         }
-        if value.is_empty() || value.len() > MAX_AUTHORIZATION_CLAIM_VALUE_BYTES {
-            return Err(invalid(
-                "authorization claim values must be 1..=512 byte direct strings",
-            ));
+        let values = match value {
+            AuthorizationClaimValue::Text(value) => std::slice::from_ref(value),
+            AuthorizationClaimValue::List(values) => {
+                // An empty list names a claim while asserting nothing, so it is
+                // refused rather than minted as an empty array.
+                if values.is_empty() || values.len() > MAX_AUTHORIZATION_CLAIM_VALUES {
+                    return Err(invalid(
+                        "authorization claim value lists must hold between 1 and 64 values",
+                    ));
+                }
+                if values.iter().collect::<BTreeSet<_>>().len() != values.len() {
+                    return Err(invalid("authorization claim values must be unique"));
+                }
+                values.as_slice()
+            }
+        };
+        for value in values {
+            if value.is_empty() || value.len() > MAX_AUTHORIZATION_CLAIM_VALUE_BYTES {
+                return Err(invalid(
+                    "authorization claim values must be 1..=512 byte direct strings",
+                ));
+            }
         }
     }
     Ok(())
@@ -902,10 +947,88 @@ keys:
         assert_eq!(
             authorization.claims,
             BTreeMap::from([
-                ("authority".to_owned(), "district-17".to_owned()),
-                ("purpose".to_owned(), "statutory-consultation".to_owned()),
+                (
+                    "authority".to_owned(),
+                    AuthorizationClaimValue::Text("district-17".to_owned())
+                ),
+                (
+                    "purpose".to_owned(),
+                    AuthorizationClaimValue::Text("statutory-consultation".to_owned())
+                ),
             ])
         );
+    }
+
+    #[test]
+    fn a_standard_authority_claim_may_carry_a_list_of_values() {
+        let text = SCOPED_CLIENT.replace(
+            "authority: district-17",
+            "authority: [district-17, district-18]",
+        );
+        let registry = load_one(&text).expect("registry loads");
+        let authorization = registry
+            .get("relay-consumer")
+            .expect("the scoped client is registered")
+            .authorization()
+            .expect("the scoped authority is present");
+
+        assert_eq!(
+            authorization.claims,
+            BTreeMap::from([
+                (
+                    "authority".to_owned(),
+                    AuthorizationClaimValue::List(vec![
+                        "district-17".to_owned(),
+                        "district-18".to_owned(),
+                    ])
+                ),
+                (
+                    "purpose".to_owned(),
+                    AuthorizationClaimValue::Text("statutory-consultation".to_owned())
+                ),
+            ])
+        );
+    }
+
+    #[test]
+    fn a_listed_authority_claim_is_bounded_non_empty_and_free_of_repeats() {
+        let with_authority = |value: &str| {
+            SCOPED_CLIENT.replace("authority: district-17", &format!("authority: {value}"))
+        };
+
+        let too_many = (0..=MAX_AUTHORIZATION_CLAIM_VALUES)
+            .map(|index| format!("district-{index}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        for values in ["[]", &format!("[{too_many}]")] {
+            assert_eq!(
+                load_error(&with_authority(values)),
+                invalid("authorization claim value lists must hold between 1 and 64 values"),
+                "value list {values} must be refused"
+            );
+        }
+
+        assert_eq!(
+            load_error(&with_authority("[district-17, district-17]")),
+            invalid("authorization claim values must be unique")
+        );
+
+        for value in [
+            "''".to_owned(),
+            format!("'{}'", "a".repeat(MAX_AUTHORIZATION_CLAIM_VALUE_BYTES + 1)),
+        ] {
+            assert_eq!(
+                load_error(&with_authority(&format!("[{value}]"))),
+                invalid("authorization claim values must be 1..=512 byte direct strings")
+            );
+        }
+
+        for value in ["17", "true", "{district: 17}", "[17]", "[[district-17]]"] {
+            assert!(
+                load_one(&with_authority(value)).is_err(),
+                "claim value {value} is neither a string nor a string list and must be refused"
+            );
+        }
     }
 
     #[test]

@@ -1,0 +1,22 @@
+apiVersion: registry.registrystack.org/product-contract/v1
+product: breg
+currentWave: W5
+waves:
+  - id: W0
+    outcome: "Machine-checked product boundary, authored non-person input, crate skeleton, and CI ownership."
+    exitCriteria: [BREG-W0-CONTRACTS, BREG-W0-CRATES, BREG-W0-CI]
+  - id: W1
+    outcome: "Strict deterministic compiler and one compiled inventory consumed by all generated surfaces."
+    exitCriteria: [BREG-AP-02, BREG-AP-15]
+  - id: W2
+    outcome: "Real PostgreSQL feasibility kernel with roles, RLS, locks, and pool isolation."
+    exitCriteria: [BREG-AP-04, BREG-AP-05, BREG-AP-09, BREG-AP-10, BREG-AP-12, BREG-AP-13]
+  - id: W3
+    outcome: "Real REST record path with atomic revisions, audit, idempotency, and outbox."
+    exitCriteria: [BREG-AP-03, BREG-AP-06, BREG-AP-07, BREG-AP-08, BREG-AP-16]
+  - id: W4
+    outcome: "Verified package activation, migration recovery, and startup integrity."
+    exitCriteria: [BREG-AP-11, BREG-AP-14]
+  - id: W5
+    outcome: "Pilot tooling, bounded operations and webhook delivery, proven by five coequal fixtures."
+    exitCriteria: [BREG-AP-17, BREG-V1-PILOT]

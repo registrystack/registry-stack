@@ -122,6 +122,43 @@ fn render_rejects_undeclared_dcat_profile() {
 }
 
 #[test]
+fn validate_and_render_multi_dataset_distribution_fixture() {
+    let manifest =
+        manifest_product_root().join("profiles/example-multi-dataset/fixtures/metadata.yaml");
+    let validate = Command::new(bin())
+        .args(["validate", manifest.to_str().unwrap()])
+        .output()
+        .expect("validate multi-dataset fixture");
+    assert!(
+        validate.status.success(),
+        "validation failed: {}",
+        String::from_utf8_lossy(&validate.stderr)
+    );
+
+    let render = Command::new(bin())
+        .args(["render", manifest.to_str().unwrap(), "--format", "dcat"])
+        .output()
+        .expect("render multi-dataset fixture");
+    assert!(
+        render.status.success(),
+        "render failed: {}",
+        String::from_utf8_lossy(&render.stderr)
+    );
+    let dcat: serde_json::Value =
+        serde_json::from_slice(&render.stdout).expect("rendered DCAT JSON");
+    let datasets = dcat["dcat:dataset"].as_array().unwrap();
+    assert_eq!(datasets.len(), 2);
+    let legal_entities = datasets
+        .iter()
+        .find(|dataset| dataset["dcterms:identifier"] == "legal-entities")
+        .expect("legal-entities dataset");
+    assert_eq!(
+        legal_entities["dcat:distribution"][0]["@type"],
+        "dcat:Distribution"
+    );
+}
+
+#[test]
 fn validate_reports_stable_manifest_error_codes() {
     let dir = temp_dir("validate-errors");
     let unsupported = dir.join("unsupported.yaml");
@@ -195,7 +232,10 @@ data_services:
   - id: person_api
     title: Person API
     endpoint_url: https://registry.example.test/v1/person
-datasets: []
+    serves_datasets: [people]
+datasets:
+  - id: people
+    title: People
 "#,
     );
     let output = Command::new(bin())
@@ -656,11 +696,12 @@ fn validate_profiles_checks_canonical_examples_without_relay_copies() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
-    assert!(stdout.contains("validated 4 profile descriptors and fixtures"));
+    assert!(stdout.contains("validated 5 profile descriptors and fixtures"));
 
     for profile in [
         "example-benefits-sync",
         "example-civil-registration",
+        "example-multi-dataset",
         "example-person-schema",
         "example-social-benefits",
     ] {

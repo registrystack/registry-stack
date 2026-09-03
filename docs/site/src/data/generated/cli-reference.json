@@ -3,6 +3,2375 @@
   "source_version": "0.25.0",
   "binaries": [
     {
+      "name": "breg",
+      "invocation": "breg",
+      "about": "Serve one verified Base Registry Engine package",
+      "long_about": null,
+      "usage": "breg --config <ABSOLUTE_FILE>",
+      "arguments": [],
+      "options": [
+        {
+          "display": "--config <ABSOLUTE_FILE>",
+          "description": "Absolute path to the runtime configuration file",
+          "always_required": true,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "-h, --help",
+          "description": "Print help",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "-V, --version",
+          "description": "Print version",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        }
+      ],
+      "constraints": [],
+      "subcommands": []
+    },
+    {
+      "name": "bregctl",
+      "invocation": "bregctl",
+      "about": "Base Registry Engine project checking and deterministic generation",
+      "long_about": null,
+      "usage": "bregctl [OPTIONS] <COMMAND>",
+      "arguments": [],
+      "options": [
+        {
+          "display": "--format <FORMAT>",
+          "description": "Emit the selected command's report in this format",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [
+            "human"
+          ],
+          "possible_values": [
+            "human",
+            "json"
+          ],
+          "environment": null
+        },
+        {
+          "display": "-h, --help",
+          "description": "Print help",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "-V, --version",
+          "description": "Print version",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        }
+      ],
+      "constraints": [],
+      "subcommands": [
+        {
+          "name": "init",
+          "invocation": "bregctl init",
+          "about": "Create a domain-neutral example authoring project in a new directory",
+          "long_about": null,
+          "usage": "bregctl init [OPTIONS] <DESTINATION>",
+          "arguments": [
+            {
+              "display": "<DESTINATION>",
+              "description": "New directory that will receive the example project closure",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "check",
+          "invocation": "bregctl check",
+          "about": "Validate a Base Registry Engine authoring project without opening a database",
+          "long_about": null,
+          "usage": "bregctl check [OPTIONS] <PROJECT>",
+          "arguments": [
+            {
+              "display": "<PROJECT>",
+              "description": "Base Registry Engine project directory",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--production",
+              "description": "Enforce production-only package closure requirements",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--deny-findings",
+              "description": "Exit unsuccessfully when any authoring finding needs review, including access warnings",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "project",
+          "invocation": "bregctl project",
+          "about": "Maintain deterministic authoring project metadata",
+          "long_about": null,
+          "usage": "bregctl project [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "lock",
+              "invocation": "bregctl project lock",
+              "about": "Compute and write module source digests in registry.yaml",
+              "long_about": null,
+              "usage": "bregctl project lock [OPTIONS] <PROJECT>",
+              "arguments": [
+                {
+                  "display": "<PROJECT>",
+                  "description": "Base Registry Engine project directory",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--check",
+                  "description": "Refuse when registry.yaml is not already locked instead of rewriting it",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "migrate",
+              "invocation": "bregctl project migrate",
+              "about": "Migrate the retired singular Manifest projection to the plural resource model",
+              "long_about": null,
+              "usage": "bregctl project migrate [OPTIONS] <PROJECT>",
+              "arguments": [
+                {
+                  "display": "<PROJECT>",
+                  "description": "Base Registry Engine project directory",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--write",
+                  "description": "Write the reviewed migration. Without this flag, only a diff is emitted",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "planner-test",
+              "invocation": "bregctl project planner-test",
+              "about": "Run one captured Rhai request planner with bounded synthetic JSON",
+              "long_about": null,
+              "usage": "bregctl project planner-test [OPTIONS] --entity <ENTITY> --request <JSON_FILE> <PROJECT>",
+              "arguments": [
+                {
+                  "display": "<PROJECT>",
+                  "description": "Base Registry Engine project directory",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--entity <ENTITY>",
+                  "description": "Compiled change-request entity whose Rhai planner will run",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--request <JSON_FILE>",
+                  "description": "Bounded strict JSON object containing synthetic request fields",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
+          "name": "generate",
+          "invocation": "bregctl generate",
+          "about": "Write selected compiler artifacts to a new directory",
+          "long_about": null,
+          "usage": "bregctl generate [OPTIONS] --output <DIRECTORY> <ARTIFACT> <PROJECT>",
+          "arguments": [
+            {
+              "display": "<ARTIFACT>",
+              "description": "Artifact family to write",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [
+                "openapi",
+                "schemas",
+                "actions",
+                "manifest",
+                "metadata",
+                "sql"
+              ],
+              "environment": null
+            },
+            {
+              "display": "<PROJECT>",
+              "description": "Base Registry Engine project directory",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--production",
+              "description": "Enforce production-only package closure requirements",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--output <DIRECTORY>",
+              "description": "New directory that will receive exactly the generated artifact inventory",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "explain",
+          "invocation": "bregctl explain",
+          "about": "Explain compiled model, access, route, or event inventories",
+          "long_about": null,
+          "usage": "bregctl explain [OPTIONS] <SUBJECT> <PROJECT>",
+          "arguments": [
+            {
+              "display": "<SUBJECT>",
+              "description": "Compiled inventory to explain",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [
+                "model",
+                "access",
+                "routes",
+                "queries",
+                "actions",
+                "change-requests",
+                "events"
+              ],
+              "environment": null
+            },
+            {
+              "display": "<PROJECT>",
+              "description": "Base Registry Engine project directory",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--production",
+              "description": "Enforce production-only package closure requirements",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--scenario <JSON_FILE>",
+              "description": "For access only: bounded JSON with synthetic claims. Performs no token verification or record access",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "diff",
+          "invocation": "bregctl diff",
+          "about": "Compare an authoring candidate with a rederived closed package",
+          "long_about": null,
+          "usage": "bregctl diff [OPTIONS] <--runtime-config <ABSOLUTE_FILE>|--package <DIRECTORY>> <PROJECT>",
+          "arguments": [
+            {
+              "display": "<PROJECT>",
+              "description": "Base Registry Engine authoring project directory",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--runtime-config <ABSOLUTE_FILE>",
+              "description": "Absolute runtime configuration whose package bindings and trust apply",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--package <DIRECTORY>",
+              "description": "Closed package inspected for integrity only, without activation authority",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "required_exactly_one",
+              "when": null,
+              "arguments": [
+                "--runtime-config <ABSOLUTE_FILE>",
+                "--package <DIRECTORY>"
+              ]
+            },
+            {
+              "kind": "mutually_exclusive",
+              "when": null,
+              "arguments": [
+                "--package <DIRECTORY>",
+                "--runtime-config <ABSOLUTE_FILE>"
+              ]
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "name": "package",
+          "invocation": "bregctl package",
+          "about": "Build a deterministic production-profile signing input or publish its externally signed package",
+          "long_about": null,
+          "usage": "bregctl package [OPTIONS] --database-id <ID> --test-receipt <ABSOLUTE_FILE> --output <DIRECTORY> <PROJECT>",
+          "arguments": [
+            {
+              "display": "<PROJECT>",
+              "description": "Base Registry Engine project directory",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--database-id <ID>",
+              "description": "Stable deployment database identity recorded in the package",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--baseline-runtime-config <ABSOLUTE_FILE>",
+              "description": "Runtime configuration selecting the verified active baseline for a successor",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--reviewed-migrations <DIRECTORY>",
+              "description": "Directory containing reviewed migration descriptors and evidence in package layout. Used identically by test and package; requires a verified baseline",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--signature-threshold <COUNT>",
+              "description": "Production signature threshold. Local packages require zero",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "0"
+              ],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--signature-key-id <KEY_ID>",
+              "description": "Allowed package-signing key id. Repeat once per trust-anchor key",
+              "always_required": false,
+              "repeatable": true,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--schema-fingerprint <SHA256>",
+              "description": "Exact managed-catalog SHA-256 produced by the reviewed PostgreSQL rehearsal. Read from the schema-test receipt when it is not supplied",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--test-receipt <ABSOLUTE_FILE>",
+              "description": "Canonical receipt from a successful schema test of this exact candidate",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--signatures <FILE>",
+              "description": "JSON document containing externally produced package signatures",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--output <DIRECTORY>",
+              "description": "New build directory containing signing-input.json and, once approved, package/",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "requires_all",
+              "when": "--reviewed-migrations <DIRECTORY>",
+              "arguments": [
+                "--baseline-runtime-config <ABSOLUTE_FILE>"
+              ]
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "name": "test",
+          "invocation": "bregctl test",
+          "about": "Execute the production schema-test journey suite for one unsigned package candidate",
+          "long_about": null,
+          "usage": "bregctl test [OPTIONS] --database-id <ID> --runtime-config <ABSOLUTE_FILE> --credentials <ABSOLUTE_FILE> --output <ABSOLUTE_FILE> <PROJECT>",
+          "arguments": [
+            {
+              "display": "<PROJECT>",
+              "description": "Base Registry Engine project directory",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--database-id <ID>",
+              "description": "Stable deployment database identity recorded in the package",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--baseline-runtime-config <ABSOLUTE_FILE>",
+              "description": "Runtime configuration selecting the verified active baseline for a successor",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--reviewed-migrations <DIRECTORY>",
+              "description": "Directory containing reviewed migration descriptors and evidence in package layout. Used identically by test and package; requires a verified baseline",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--signature-threshold <COUNT>",
+              "description": "Production signature threshold. Local packages require zero",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "0"
+              ],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--signature-key-id <KEY_ID>",
+              "description": "Allowed package-signing key id. Repeat once per trust-anchor key",
+              "always_required": false,
+              "repeatable": true,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--runtime-config <ABSOLUTE_FILE>",
+              "description": "Absolute runtime configuration for test database access and secret resolution",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--credentials <ABSOLUTE_FILE>",
+              "description": "Absolute schema-test credential binding document",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--output <ABSOLUTE_FILE>",
+              "description": "New canonical schema-test receipt file",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "requires_all",
+              "when": "--reviewed-migrations <DIRECTORY>",
+              "arguments": [
+                "--baseline-runtime-config <ABSOLUTE_FILE>"
+              ]
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "name": "apply",
+          "invocation": "bregctl apply",
+          "about": "Apply one already signed package using the configured migration authority",
+          "long_about": null,
+          "usage": "bregctl apply [OPTIONS] --runtime-config <ABSOLUTE_FILE> --package <ABSOLUTE_DIRECTORY>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--runtime-config <ABSOLUTE_FILE>",
+              "description": "Absolute runtime configuration for deployment identity, trust, roles, and database access",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--package <ABSOLUTE_DIRECTORY>",
+              "description": "Absolute target package directory",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--initial",
+              "description": "Activate sequence one in an uninitialized Registry database",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--backup <BINDING_PATH=ABSOLUTE_FILE>",
+              "description": "Reviewed backup binding and absolute local artifact as BINDING_PATH=ABSOLUTE_FILE",
+              "always_required": false,
+              "repeatable": true,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "doctor",
+          "invocation": "bregctl doctor",
+          "about": "Verify configured startup dependencies without binding a listener",
+          "long_about": null,
+          "usage": "bregctl doctor [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--runtime-config <ABSOLUTE_FILE>",
+              "description": "Absolute Base Registry Engine runtime configuration file",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "verify",
+          "invocation": "bregctl verify",
+          "about": "Verify one configured package without opening runtime dependencies",
+          "long_about": null,
+          "usage": "bregctl verify [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--runtime-config <ABSOLUTE_FILE>",
+              "description": "Absolute Base Registry Engine runtime configuration file",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "migration",
+          "invocation": "bregctl migration",
+          "about": "Inspect configured migration lifecycle metadata",
+          "long_about": null,
+          "usage": "bregctl migration [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "explain",
+              "invocation": "bregctl migration explain",
+              "about": "Explain the verified package's closed migration plan without executing it",
+              "long_about": null,
+              "usage": "bregctl migration explain [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Absolute Base Registry Engine runtime configuration file",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "reconcile",
+              "invocation": "bregctl migration reconcile",
+              "about": "Assess a Registry pinned by a failed activation, and execute only the safe transition it names",
+              "long_about": null,
+              "usage": "bregctl migration reconcile [OPTIONS] --runtime-config <ABSOLUTE_FILE> --package <ABSOLUTE_DIRECTORY> --operator-reference <REFERENCE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Absolute Base Registry Engine runtime configuration file",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--package <ABSOLUTE_DIRECTORY>",
+                  "description": "Absolute directory of the verified package the failed activation pinned",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--operator-reference <REFERENCE>",
+                  "description": "Operator change reference recorded as a keyed hash beside an executed transition",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--execute",
+                  "description": "Perform the single safe transition the assessment names",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
+          "name": "history",
+          "invocation": "bregctl history",
+          "about": "Run bounded, audited retained-history maintenance",
+          "long_about": null,
+          "usage": "bregctl history [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "erase",
+              "invocation": "bregctl history erase",
+              "about": "Erase retained history for one record using an owner-only JSON request file",
+              "long_about": null,
+              "usage": "bregctl history erase [OPTIONS] --runtime-config <ABSOLUTE_FILE> --request-file <ABSOLUTE_FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Absolute Base Registry Engine runtime configuration file",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--request-file <ABSOLUTE_FILE>",
+                  "description": "Absolute owner-only JSON erasure request file",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "rebaseline",
+              "invocation": "bregctl history rebaseline",
+              "about": "Restore snapshot coverage from the current state using an owner-only JSON request file",
+              "long_about": null,
+              "usage": "bregctl history rebaseline [OPTIONS] --runtime-config <ABSOLUTE_FILE> --request-file <ABSOLUTE_FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Absolute Base Registry Engine runtime configuration file",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--request-file <ABSOLUTE_FILE>",
+                  "description": "Absolute owner-only JSON rebaseline request file",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
+          "name": "data",
+          "invocation": "bregctl data",
+          "about": "Validate, import, or export data through authenticated Registry HTTP APIs",
+          "long_about": null,
+          "usage": "bregctl data [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "validate",
+              "invocation": "bregctl data validate",
+              "about": "Validate a JSONL import file against one closed package plan",
+              "long_about": null,
+              "usage": "bregctl data validate [OPTIONS] --package <ABSOLUTE_DIRECTORY> --entity <ID> --profile <ID> --operation <OPERATION> --input <FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--package <ABSOLUTE_DIRECTORY>",
+                  "description": "Absolute closed package directory used only for deterministic planning",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--entity <ID>",
+                  "description": "Compiled entity identifier",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--profile <ID>",
+                  "description": "Compiled non-anonymous access profile identifier",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--operation <OPERATION>",
+                  "description": "Import item operation",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [
+                    "create",
+                    "patch"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "--input <FILE>",
+                  "description": "JSON Lines import file",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "import",
+              "invocation": "bregctl data import",
+              "about": "Import JSONL records through the ordinary authenticated batch API",
+              "long_about": null,
+              "usage": "bregctl data import [OPTIONS] --package <ABSOLUTE_DIRECTORY> --breg-url <URL> --access-token-file <ABSOLUTE_FILE> --entity <ID> --profile <ID> --operation <OPERATION> --input <FILE> --checkpoint <FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--package <ABSOLUTE_DIRECTORY>",
+                  "description": "Absolute closed package directory used only for deterministic planning",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--breg-url <URL>",
+                  "description": "Base Registry Engine base URL. HTTP is accepted only for loopback hosts",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--access-token-file <ABSOLUTE_FILE>",
+                  "description": "File containing one bearer access token and no other credential material",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--entity <ID>",
+                  "description": "Compiled entity identifier",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--profile <ID>",
+                  "description": "Compiled non-anonymous access profile identifier",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--operation <OPERATION>",
+                  "description": "Import item operation",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [
+                    "create",
+                    "patch"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "--input <FILE>",
+                  "description": "JSON Lines import file",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--checkpoint <FILE>",
+                  "description": "Import checkpoint file. A ctl-held .state sidecar is created beside it",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--max-chunks <COUNT>",
+                  "description": "Stop after this many committed chunks, for resumable operator runs",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "export",
+              "invocation": "bregctl data export",
+              "about": "Export records through the ordinary authenticated list API",
+              "long_about": null,
+              "usage": "bregctl data export [OPTIONS] --package <ABSOLUTE_DIRECTORY> --breg-url <URL> --access-token-file <ABSOLUTE_FILE> --entity <ID> --profile <ID> --field <ID> --output <FILE> --checkpoint <FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--package <ABSOLUTE_DIRECTORY>",
+                  "description": "Absolute closed package directory used only for deterministic planning",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--breg-url <URL>",
+                  "description": "Base Registry Engine base URL. HTTP is accepted only for loopback hosts",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--access-token-file <ABSOLUTE_FILE>",
+                  "description": "File containing one bearer access token and no other credential material",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--entity <ID>",
+                  "description": "Compiled entity identifier",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--profile <ID>",
+                  "description": "Compiled non-anonymous export-enabled access profile identifier",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--field <ID>",
+                  "description": "Requested readable field. Repeat for every exported field",
+                  "always_required": true,
+                  "repeatable": true,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--output <FILE>",
+                  "description": "JSON Lines output file. Existing output resumes from its checkpoint",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--checkpoint <FILE>",
+                  "description": "Export checkpoint file written after every page",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--max-pages <COUNT>",
+                  "description": "Stop after this many pages, for bounded operator runs",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
+          "name": "webhook",
+          "invocation": "bregctl webhook",
+          "about": "Inspect and operate configured webhook deliveries",
+          "long_about": null,
+          "usage": "bregctl webhook [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "sample",
+              "invocation": "bregctl webhook sample",
+              "about": "Render one deterministic exact CloudEvents request with synthetic values",
+              "long_about": null,
+              "usage": "bregctl webhook sample [OPTIONS] --event <ID> <PROJECT>",
+              "arguments": [
+                {
+                  "display": "<PROJECT>",
+                  "description": "Base Registry Engine authoring project directory",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--event <ID>",
+                  "description": "Stable authored event identifier",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "list",
+              "invocation": "bregctl webhook list",
+              "about": "List bounded value-free pending, dead-lettered, and expired delivery metadata",
+              "long_about": null,
+              "usage": "bregctl webhook list [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Absolute Base Registry Engine runtime configuration file",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--limit <COUNT>",
+                  "description": "Maximum number of value-free delivery rows to return",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "50"
+                  ],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "replay",
+              "invocation": "bregctl webhook replay",
+              "about": "Replay one eligible retained dead-letter using optimistic generation binding",
+              "long_about": null,
+              "usage": "bregctl webhook replay [OPTIONS] --runtime-config <ABSOLUTE_FILE> --event-id <UUID> --delivery-id <ID> --expected-generation <NUMBER>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Absolute Base Registry Engine runtime configuration file",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--event-id <UUID>",
+                  "description": "Stable event UUID shown by `webhook list`",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--delivery-id <ID>",
+                  "description": "Compiled delivery identifier shown by `webhook list`",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--expected-generation <NUMBER>",
+                  "description": "Current generation shown by `webhook list`",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
+          "name": "request-retention",
+          "invocation": "bregctl request-retention",
+          "about": "Inspect and erase eligible change-request retention detail",
+          "long_about": null,
+          "usage": "bregctl request-retention [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "list",
+              "invocation": "bregctl request-retention list",
+              "about": "List bounded value-free change-request retention rows",
+              "long_about": null,
+              "usage": "bregctl request-retention list [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Absolute Base Registry Engine runtime configuration file",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--request-entity <ENTITY>",
+                  "description": "Limit the value-free listing to one compiled change-request entity",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--after-cursor <CURSOR>",
+                  "description": "Cursor returned by the previous bounded list response",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--limit <COUNT>",
+                  "description": "Maximum number of request retention rows to return",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "50"
+                  ],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "dry-run",
+              "invocation": "bregctl request-retention dry-run",
+              "about": "Count exactly what one request retention erase would remove",
+              "long_about": null,
+              "usage": "bregctl request-retention dry-run [OPTIONS] --runtime-config <ABSOLUTE_FILE> --request-entity <ENTITY> --request-id <UUID> --proposal-version <VERSION>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Absolute Base Registry Engine runtime configuration file",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--request-entity <ENTITY>",
+                  "description": "Compiled change-request entity identifier",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--request-id <UUID>",
+                  "description": "Exact request record UUID",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--proposal-version <VERSION>",
+                  "description": "Exact proposal version to inspect or erase",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "erase",
+              "invocation": "bregctl request-retention erase",
+              "about": "Erase eligible payload detail for one exact request proposal version",
+              "long_about": null,
+              "usage": "bregctl request-retention erase [OPTIONS] --runtime-config <ABSOLUTE_FILE> --request-entity <ENTITY> --request-id <UUID> --proposal-version <VERSION>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Absolute Base Registry Engine runtime configuration file",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--request-entity <ENTITY>",
+                  "description": "Compiled change-request entity identifier",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--request-id <UUID>",
+                  "description": "Exact request record UUID",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--proposal-version <VERSION>",
+                  "description": "Exact proposal version to inspect or erase",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
+          "name": "audit",
+          "invocation": "bregctl audit",
+          "about": "Verify, export, and prune the chained audit journal",
+          "long_about": null,
+          "usage": "bregctl audit [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "verify",
+              "invocation": "bregctl audit verify",
+              "about": "Verify the chained audit journal against its recorded head",
+              "long_about": null,
+              "usage": "bregctl audit verify [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Absolute Base Registry Engine runtime configuration file",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "export",
+              "invocation": "bregctl audit export",
+              "about": "Export the verified audit journal as JSON Lines in chain order",
+              "long_about": null,
+              "usage": "bregctl audit export [OPTIONS] --runtime-config <ABSOLUTE_FILE> --output <ABSOLUTE_FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Absolute Base Registry Engine runtime configuration file",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--output <ABSOLUTE_FILE>",
+                  "description": "Absolute JSON Lines file the export creates",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "prune",
+              "invocation": "bregctl audit prune",
+              "about": "Remove the verified journal prefix older than one retention boundary",
+              "long_about": null,
+              "usage": "bregctl audit prune [OPTIONS] --runtime-config <ABSOLUTE_FILE> --before <RFC3339>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Absolute Base Registry Engine runtime configuration file",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--before <RFC3339>",
+                  "description": "RFC 3339 instant every removed record must precede",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--dry-run",
+                  "description": "Report what the boundary would remove without removing it",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "evidence",
       "invocation": "evidence",
       "about": "Evidence Gateway Version 1",

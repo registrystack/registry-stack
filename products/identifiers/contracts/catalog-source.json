@@ -102,14 +102,71 @@
       "description": "JSON Schema for the Registry Stack identifier catalog."
     },
     {
+      "glob": "products/registry-record/schema/*.json",
+      "owner": "registry-record",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "description": "Registry Record base response profile JSON Schema."
+    },
+    {
       "glob": "crates/registry-relayctl/schemas/authoring/*.json",
       "owner": "relay-v2",
       "status": "active",
       "compatibilityLine": "v2alpha1",
       "description": "Relay V2 authoring JSON Schema."
+    },
+    {
+      "glob": "products/breg/generated/authoring/*.schema.json",
+      "sourcePath": "crates/registry-breg/src/schema.rs",
+      "owner": "breg",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Base Registry Engine project authoring JSON Schema."
+    },
+    {
+      "glob": "products/breg/generated/runtime/*.schema.json",
+      "sourcePath": "crates/registry-breg/src/schema.rs",
+      "owner": "breg",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Base Registry Engine runtime configuration JSON Schema."
     }
   ],
   "records": [
+    {
+      "uri": "https://id.registrystack.org/profiles/registry-record/v1",
+      "kind": "profile",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "registry-record",
+      "title": "Registry Record v1 profile",
+      "description": "Open base response profile for one Registry record or a homogeneous Registry record collection.",
+      "sourcePath": "products/registry-record/profile/registry-record-v1.md",
+      "artifactPath": "products/registry-record/profile/registry-record-v1.md",
+      "mediaType": "text/markdown"
+    },
+    {
+      "uri": "https://id.registrystack.org/contexts/registry-record/v1",
+      "kind": "context",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "registry-record",
+      "title": "Registry Record v1 JSON-LD context",
+      "description": "Governed JSON-LD terms for the Registry Record v1 base response profile.",
+      "sourcePath": "products/registry-record/profile/registry-record-v1.md",
+      "artifactPath": "products/registry-record/context/registry-record-v1.jsonld",
+      "mediaType": "application/ld+json"
+    },
+    {
+      "uri": "https://id.registrystack.org/vocab/registry-record/",
+      "kind": "vocabulary",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "registry-record",
+      "title": "Registry Record vocabulary",
+      "description": "Vocabulary base for Registry Record v1 response-profile terms.",
+      "sourcePath": "products/registry-record/context/registry-record-v1.jsonld"
+    },
     {
       "uri": "https://id.registrystack.org/ns/registry-manifest/v1#",
       "kind": "namespace",

@@ -6,6 +6,7 @@ requiredDocuments:
   - CONFIGURATION-EXAMPLES.md
   - IMPLEMENTATION.md
   - STANDARDS-ALIGNMENT.md
+  - CHANGELOG.md
 requiredContracts:
   - contracts/security-invariant-matrix.yaml
   - contracts/artifact-inventory.yaml

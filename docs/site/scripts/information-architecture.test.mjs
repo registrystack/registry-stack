@@ -85,7 +85,7 @@ function seatedSlugs() {
   // `draft: true`, which is the same state in which the generated CLI pages are
   // themselves draft and so are not published either.
   //
-  // That group seats the index and the six binaries, not the subcommand pages
+  // That group seats the index and the binaries, not the subcommand pages
   // under them. Publishing the command-line reference will therefore make this
   // test name every subcommand page at once, and seating them is part of that
   // publish rather than a fault in this gate.
@@ -123,6 +123,7 @@ test('uses the adopter-first top-level flow in its published order', () => {
     'Start',
     'Answer a bounded question',
     'Connect an existing registry',
+    'Build a registry',
     'Consume and verify assertions',
     'Authenticate callers',
     'Publish a Discovery index',
@@ -137,6 +138,7 @@ test('publishes one overview route for every task-flow section that has one', ()
     ['Start', "link: '/'"],
     ['Answer a bounded question', "slug: 'start/evidence-quickstart'"],
     ['Connect an existing registry', "slug: 'configure'"],
+    ['Build a registry', "slug: 'explanation/configuration-defined-registry'"],
     ['Operate and secure', "slug: 'operate/advanced'"],
     ['Reference', "slug: 'reference'"],
   ]) {
@@ -235,6 +237,56 @@ test('gives Evidence Gateway a lane on both front doors without a retired Notary
   assert.match(homepageSource, /\]\(start\/evidence-quickstart\/\)/);
   assert.match(homepageSource, /tutorials\/first-evidence-assertion/);
   assert.doesNotMatch(homepageSource, /Expose Notary|verify-claim-registry-api/);
+});
+
+test('keeps the BReg guide and references in one adoption path', () => {
+  const breg = topLevelSection(sidebarSource, 'Build a registry');
+  const slugs = [...breg.matchAll(/slug: '([^']+)'/g)].map((match) => match[1]);
+  assert.deepEqual(slugs, [
+    'explanation/configuration-defined-registry',
+    'tutorials/first-breg',
+    'tutorials/review-registry-changes',
+    'tutorials/query-a-spatial-registry-from-qgis',
+    'configure/breg',
+    'operate/breg',
+    'explanation/registry-modeling-patterns',
+    'reference/breg-configuration',
+    'reference/breg-api',
+    'reference/breg-client-api',
+  ]);
+  for (const slug of slugs) {
+    assert.ok(hasDocForSlug(slug), `${slug} must be reachable from the BReg journey`);
+    // A link may land on a section of the page rather than its top, so allow
+    // an optional `#fragment` after the trailing slash.
+    const escaped = slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    assert.match(
+      homepageSource,
+      new RegExp(`\\]\\(${escaped}/(#[-a-z]+)?\\)`),
+      `${slug} must be linked from the homepage`,
+    );
+  }
+});
+
+test('redirects the retired Server webhook, history, and event pages to their merged pages', () => {
+  assert.match(
+    configSource,
+    /'\/configure\/breg-webhooks\/': internalRedirect\('\/operate\/breg\/'\)/,
+  );
+  assert.match(
+    configSource,
+    /'\/reference\/breg-history\/': internalRedirect\('\/reference\/breg-api\/'\)/,
+  );
+  assert.match(
+    configSource,
+    /'\/reference\/breg-events\/': internalRedirect\('\/reference\/breg-api\/'\)/,
+  );
+  for (const retired of [
+    'configure/breg-webhooks',
+    'reference/breg-history',
+    'reference/breg-events',
+  ]) {
+    assert.equal(hasDocForSlug(retired), false, `${retired} must not be a published page`);
+  }
 });
 
 test('organizes Evidence Gateway tasks without publishing the obsolete Relay composition', () => {

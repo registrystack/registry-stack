@@ -14,12 +14,17 @@ test('pinned docsets expose CLI navigation only when they contain its index', as
   assert.deepEqual(cliReferenceSidebar(index), []);
 
   await writeFile(index, '---\ntitle: CLI reference\n---\n');
+  assert.ok(cliReferenceSidebar(index)[0].items.every((item) => !item.slug.includes('breg')));
+
+  await writeFile(index, '---\ntitle: CLI reference\n---\n[breg](./breg/)\n[bregctl](./bregctl/)\n');
   const [group] = cliReferenceSidebar(index);
   assert.equal(group.label, 'Command-line interfaces');
   assert.deepEqual(
     group.items.map((item) => item.slug),
     [
       'reference/cli',
+      'reference/cli/breg',
+      'reference/cli/bregctl',
       'reference/cli/relay',
       'reference/cli/relayctl',
       'reference/cli/evidence',

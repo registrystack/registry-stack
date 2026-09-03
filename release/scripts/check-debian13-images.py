@@ -36,6 +36,7 @@ DOCKERFILES = (
     Path("release/docker/Dockerfile.discovery"),
     Path("release/docker/Dockerfile.evidence"),
     Path("release/docker/Dockerfile.mint"),
+    Path("release/docker/Dockerfile.breg"),
     Path("release/docker/Dockerfile.relay"),
 )
 
@@ -111,6 +112,11 @@ HTTP_PROBE_DOCKERFILES = {
         "environment": "ENV MINT_CONFIG=/etc/registry-mint/config.yaml",
         "entrypoint": 'ENTRYPOINT ["/usr/local/bin/mint"]',
         "command": 'CMD ["serve"]',
+    },
+    Path("release/docker/Dockerfile.breg"): {
+        "binary": "breg",
+        "entrypoint": 'ENTRYPOINT ["/usr/local/bin/breg"]',
+        "command": 'CMD ["--config", "/etc/breg/runtime.yaml"]',
     },
 }
 

@@ -1,0 +1,11 @@
+id: spatial-service-sites-core
+version: 0.1.0
+extendEntities:
+  - entity: service-site
+    derived:
+      - id: map-labels
+        sql: sql/map-labels.sql
+        key: id
+        execution: live
+        fields:
+          - {id: map-label, type: string, maxLength: 220, classification: public}

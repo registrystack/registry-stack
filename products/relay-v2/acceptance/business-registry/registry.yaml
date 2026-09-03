@@ -49,6 +49,8 @@ sources:
     expectedSchemaFingerprint: sha256:dd62b98578f0fa7341eeeaaac4b34da9b79405ae067dc06e5edb004c2d4a38fe
 resources:
   - id: registered-business
+    datasetIdentifier: legal-entities
+    entityTypeIdentifier: company
     title: Registered business
     description: Current synthetic public business registration.
     semanticClass: local:RegisteredBusiness
@@ -156,6 +158,8 @@ resources:
         dpvProfileRef: governance/legal-basis.yaml
         safeguards: [reviewed-public-view, property-minimization, deterministic-pagination, change-impact-review]
   - id: registered-premises
+    datasetIdentifier: business-premises
+    entityTypeIdentifier: premises
     title: Registered premises
     description: Current synthetic public premises locations associated with registered businesses.
     semanticClass: local:RegisteredPremises

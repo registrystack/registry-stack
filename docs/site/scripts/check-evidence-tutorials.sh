@@ -127,6 +127,8 @@ EXCLUDED_EVIDENCE_TUTORIALS=(
 	connect-an-institution-source                    # how-to against the reader's own OpenAPI source; no fixed scenario this gate can replay
 	connect-a-sqlite-extract                         # starter is covered by evidencectl scaffold and fixture tests; production half needs an operator-mounted extract
 	first-run-with-solmara-lab                       # historical; the Solmara Lab stack is replayed by check-tutorial.sh, not here
+	first-breg                            # Server source preview; product CI runs quickstart/run.sh --smoke, reader execution checks the documented steps
+	query-a-spatial-registry-from-qgis               # Server spatial source preview; product CI runs the spatial smoke, while QGIS needs a desktop reader run
 	integrate-evidence-candidate-with-docker-compose # drift-checked by evidence-production-build-docs.test.mjs; needs Docker Compose
 	issue-a-birth-certificate-vc-from-opencrvs       # needs the public OpenCRVS Farajaland demo; live and opt-in, not replayed in CI
 	issue-evidence-access-tokens-with-registry-mint  # drift-checked by evidence-production-build-docs.test.mjs; needs a Registry Mint deployment
@@ -138,6 +140,7 @@ EXCLUDED_EVIDENCE_TUTORIALS=(
 	publish-governed-sqlite-registry                 # Relay V2 journey; replayed by the Relay product and real-process acceptance gates
 	query-relay-client                               # Relay client journey; depends on a released wheel and the Relay publishing prerequisite
 	request-a-holder-bound-credential                # draft: true, hidden from the sidebar; no verified wallet flow exists to replay
+	review-registry-changes                         # Base Registry Engine source-preview journey; verify page commands in reader mode, outside the Evidence runner
 	rotate-evidence-signing-keys                     # drift-checked by evidence-production-build-docs.test.mjs; needs a deployed signing key
 	verify-a-registered-parent-with-opencrvs         # needs the public OpenCRVS Farajaland demo; live and opt-in, not replayed in CI
 )

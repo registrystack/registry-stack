@@ -115,8 +115,11 @@ A full working example is at
 ## The metadata model
 
 The top-level struct is `MetadataManifest`, which groups catalog, dataset,
-entity, service, form, evidence offering, dataset policy, requirement, evidence
-type, codelist, evaluation profile, and ecosystem binding metadata.
+distribution, entity, service, form, evidence offering, dataset policy,
+requirement, evidence type, codelist, evaluation profile, and ecosystem binding
+metadata. Datasets may carry a canonical IRI and a deliberate release version.
+Each distribution belongs to exactly one dataset and may link to a data service
+that serves that dataset.
 Full field-by-field documentation is in [Registry Manifest reference](./reference.md).
 
 Grouped evidence is explicit.
@@ -142,7 +145,9 @@ before any rendering occurs:
 3. Validates requirement and evidence-type reference integrity.
 4. Validates grouped evidence type lists, including duplicate list IDs, empty lists,
    unknown evidence types, and evidence types that do not prove the owning requirement.
-5. Validates public service, channel, authority, form, and data-service references.
+5. Validates public service, channel, authority, form, data-service, and
+   distribution references, including dataset membership and access-service
+   coverage. Every data service must serve at least one declared dataset.
 6. Validates per-dataset entities, fields, relationships, identifiers, codelists,
    cardinality strings, and ODRL policy terms.
 7. Validates evidence-offering references.
@@ -185,8 +190,9 @@ A profile descriptor (schema version `registry-manifest-profile/v1`) declares:
 - Cardinality expectations per entity field.
 - Runtime-only keys that must not appear in a portable fixture manifest.
 
-Four example profiles ship in the repository: `example-civil-registration`,
-`example-social-benefits`, `example-person-schema`, and `example-benefits-sync`.
+Five example profiles ship in the repository: `example-civil-registration`,
+`example-social-benefits`, `example-person-schema`, `example-benefits-sync`,
+and `example-multi-dataset`.
 These are examples until reviewed against official OpenCRVS, OpenSPP, OpenIMIS, SP DCI,
 or maintainer-provided artifacts.
 

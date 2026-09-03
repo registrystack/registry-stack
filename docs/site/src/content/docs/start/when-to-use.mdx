@@ -1,6 +1,6 @@
 ---
 title: Which product fits your problem
-description: Decide whether Registry Stack matches the access problem your institution needs to solve, and which of its two doors answers it.
+description: Choose between publishing existing records, answering bounded questions, and building a configuration-defined registry.
 status: current
 owner: registry-docs
 source_repos:
@@ -11,10 +11,12 @@ locale: en
 standards_referenced: []
 ---
 
-Use Registry Stack when an institution already manages authoritative data and
-needs a controlled way for another system to read selected records or receive
-a bounded answer. Registry Stack adds an access layer. It does not replace the
-system that owns the data.
+Use Registry Stack when an institution needs controlled record access, bounded signed answers,
+or a configuration-defined system of record. Relay and Evidence Gateway work over existing sources.
+The unreleased Base Registry Engine source preview owns records in PostgreSQL and supports writes.
+
+{/* Evidence: crates/registry-breg/src/contract.rs, RegistryProject;
+    crates/registry-breg/src/postgres/mutation.rs. */}
 
 ## Registry Stack is a good fit when
 
@@ -32,15 +34,16 @@ system that owns the data.
 | --- | --- | --- |
 | To read specific data | Registry Relay | A protected, read-only API response |
 | To learn only a fact | Evidence Gateway | A signed assertion carrying the answer, not the source record |
+| To own and update registry records | Base Registry Engine (source preview) | A configuration-defined PostgreSQL registry and REST API |
 
-Registry Relay and Evidence Gateway are separate product choices. They can be
+Registry Relay, Evidence Gateway, and Base Registry Engine are separate product choices. They can be
 operated by the same institution, but each has its own source, authorization,
-configuration, and audit boundary. Evidence Gateway does not use Relay as its
-source path. Registry Mint can issue short-lived access tokens to either
-service when a deployment has no identity provider; see the
+configuration, and audit boundary. Evidence Gateway does not require Relay as its
+source path. Registry Mint can issue short-lived access tokens to these
+services when a deployment has no identity provider; see the
 [Registry Mint reference](../../reference/mint/).
 
-### What each door needs from the source
+### What each product needs from the source
 
 Registry Relay reads reviewed read-only SQLite views. The institution decides in
 SQL what leaves the system of record, and Relay binds only views: a raw table is
@@ -49,22 +52,27 @@ API, or another database engine has to be reduced to a reviewed view first, by a
 process the institution owns and Relay does not see.
 
 Evidence Gateway calls its own fixed, reviewed sources and evaluates one bounded
-question against them. It never reaches a Relay deployment to do so.
+question against them. Its source may be a separately reviewed HTTP API integration.
+
+Base Registry Engine starts from an authored data model and an operator-provisioned PostgreSQL database.
+Choose it when the institution needs to create and maintain records through the registry itself;
+it is not a drop-in publisher for arbitrary pre-existing database tables.
+
+{/* Evidence: crates/registry-breg/src/generated_ddl.rs; crates/registry-breg/src/startup.rs;
+    crates/registry-evidence/src/source.rs. */}
 
 ### Who does what
 
 - The assertion provider is an institution that answers requests with signed
   facts through Evidence Gateway.
 - The data publisher is an institution that exposes records through Registry
-  Relay.
-- The consumer or verifier is a relying service that calls either door and
+  Relay or maintains a configured registry through Base Registry Engine.
+- The consumer or verifier is a relying service that calls a product's API and
   verifies the answers it receives.
 - The operator is whoever runs the deployment.
 
 ## Registry Stack is not the right tool when
 
-- You need a new system of record.
-- A caller must create, update, or delete source records.
 - You need a workflow, eligibility, ranking, or case-management engine.
 - You need Registry Stack to decide legal authority, data ownership, or
   institutional approval.
@@ -90,8 +98,8 @@ approval.
 
 ## Next
 
+- [Build a registry with Base Registry Engine](../../explanation/configuration-defined-registry/)
 - [Publish a governed SQLite registry](../../tutorials/publish-governed-sqlite-registry/)
 - [Evaluate Evidence Gateway](../evaluate-evidence/)
 - [Connect an existing registry](../../configure/)
-- [Read the architecture overview](../../explanation/architecture/)
 - [Review the security boundaries](../../security/)

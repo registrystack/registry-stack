@@ -1,0 +1,38 @@
+[package]
+name = "registry-bregctl"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Deterministic authoring and operator tooling for Base Registry Engine."
+repository.workspace = true
+publish = false
+readme = "README.md"
+
+[[bin]]
+name = "bregctl"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+clap.workspace = true
+registry-platform-canonical-json.workspace = true
+registry-platform-httputil.workspace = true
+registry-platform-buildinfo.workspace = true
+registry-breg = { workspace = true, features = ["runtime", "tooling"] }
+reqwest.workspace = true
+rustix.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_norway.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt"] }
+uuid.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+registry-platform-crypto.workspace = true

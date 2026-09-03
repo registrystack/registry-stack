@@ -1,0 +1,159 @@
+---
+title: Build a registry with Base Registry Engine
+description: What Base Registry Engine compiles from a registry project, how records, permissions, history, and change control fit together, and where the product stops.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: explanation
+locale: en
+standards_referenced:
+  - openapi
+  - json-schema
+  - json-ld
+---
+
+Base Registry Engine is the Registry Stack product for data an institution does not hold yet.
+You describe the registry in a few YAML files, and the server compiles them into a PostgreSQL schema, a REST API, per-profile permissions, an audit trail, revision history, and outbound events.
+The other two patterns start from data that already exists: Registry Relay exposes read-only APIs over existing sources, and Evidence Gateway answers fixed questions with signed assertions.
+Use [Choose a Registry Stack product](../../start/when-to-use/) if you are still deciding.
+
+{/* Evidence: crates/registry-breg/src/compiler.rs; crates/registry-breg/src/api/mod.rs; products/breg/README.md. */}
+
+## What you write
+
+A registry project is a directory with one required file and two optional ones:
+
+| File | What it declares |
+|---|---|
+| `registry.yaml` | The registry identity, its datasets, entities and fields, vocabularies, selector profiles, read paths, access profiles, change requests, immediate actions, and events. |
+| `modules/<id>/module.yaml` | Reusable groups of entities, vocabularies, and events that `registry.yaml` includes by identifier. Every included module is pinned in `registry.lock.yaml`. |
+| `tests/journeys.yaml` | Scenario tests: sequences of API calls with the claims each call carries and the outcome each call must produce. |
+
+A fourth file, the runtime configuration, belongs to the deployment rather than the project.
+It names the database, the token issuer, the audit key, the cursor secret, and the webhook receivers for one environment.
+Neither file contains a secret value; both name where a value lives.
+
+The authoring tool `bregctl` checks a project, explains what each access profile can do, generates the JSON Schema and OpenAPI documents, and runs the journeys against a database.
+[Author a registry project](../../configure/breg/) walks through every part of the project.
+[Base Registry Engine configuration reference](../../reference/breg-configuration/) lists each key with its constraints.
+
+## What the server compiles
+
+The compiler turns the project into one immutable model, and every runtime behaviour follows from that model:
+
+- **Storage.** Each entity becomes a table with typed columns, uniqueness and reference constraints, and a revision table beside it. Temporal entities add validity columns and an exclusion constraint on overlapping periods.
+- **Routes.** Each entity gets a route under `/v1/records/` with create, read, list, patch, tombstone, lookup, batch, and history operations, but only the operations you enable.
+- **Envelope.** Every record travels in the Registry Record envelope: a `data` object holding the record identifier, the revision identifier, and the domain fields, plus a `meta` object naming the registry, dataset, and entity type. The same envelope carries a JSON-LD context on request.
+- **Documents.** The server publishes a JSON Schema per entity and one OpenAPI document, both derived from the compiled model rather than written by hand.
+- **Audit.** Every admitted request writes a chained audit record, and so does every refusal that names a principal. A request that presents no credential and is refused before admission is counted on the metrics listener instead, so an unauthenticated caller cannot grow the chain; see [Scrape metrics](../../operate/breg/#scrape-metrics). Every mutation writes a revision, and every revision keeps the change context that produced it.
+
+Field identifiers in the project are kebab-case; the API exposes them as camelCase unless you set `apiName`.
+The compiler refuses field names that collide with envelope members, so `recordIdentifier` or `snapshot` can never be a domain field.
+[Base Registry Engine API reference](../../reference/breg-api/) describes the envelope, the query options, and every route.
+
+{/* Evidence: crates/registry-breg/src/compiler.rs, reserved_logical_name(); crates/registry-breg/src/artifacts.rs, record_member_schema(). */}
+
+## How access works
+
+The server does not issue tokens.
+It verifies bearer tokens from your identity provider, or from Registry Mint when you have none, and then selects an access profile.
+A request names the profile it wants with the `accessProfile` query option; without one, the default profile applies.
+A profile states the scopes, purposes, and principal claim a token must carry, and one grant per entity:
+
+- which operations the profile can perform,
+- which fields it can read, write, filter, and sort,
+- which rows it can see, expressed as row boundaries that compare a field with a verified claim,
+- which selector profiles it may use for lookups, which read paths it may follow, and whether it may issue bounding-box queries.
+
+Anonymous profiles exist for public directories.
+Access requirements let you write down what a profile must be able to do, and `bregctl` proves the profile meets them before you deploy.
+Nothing in the runtime consults the identity provider for authorisation: the token's claims and the compiled profile decide every request.
+
+{/* Evidence: crates/registry-breg/src/auth.rs; crates/registry-breg/src/access.rs. */}
+
+## Three ways to write
+
+Not every registry change should be a direct edit.
+Base Registry Engine offers three write paths, and a profile can be granted any mix of them.
+
+**Direct mutations.** Create, patch, tombstone, and batch operations change records at once.
+Patch and tombstone require an `If-Match` header carrying the record's ETag, so two clients cannot overwrite each other unknowingly.
+Batch operations carry a change context that records why the change happened: a correction after a field audit, a bulk import, a routine update.
+
+**Change requests.** A change-request entity holds a proposed change as a record of its own.
+A submitter creates it, edits it, and submits it.
+Reviewers approve or reject it stage by stage, or send it back for revision.
+Once every stage is satisfied, an applier applies it, and the server writes the effects to the target records in one transaction.
+The effects are declared in YAML, or planned by a bounded Rhai script that sees only the request's fields and may write only what the YAML declares.
+A request type may also skip review, or apply on submit or final approval when the acting profile holds apply authority.
+The request record keeps its state, its proposal version, and a digest of the effects, and the server tells each caller which actions its profile may take next.
+Retention rules decide what remains of the request detail after it is applied or canceled.
+
+**Immediate actions.** An action takes a typed input, evaluates its preconditions against the current records, and writes several effects across several entities in one transaction.
+Actions suit operations that must be atomic, such as registering an asset together with its first inspection.
+
+Every write path produces revisions, audit records, and events in the same way.
+
+{/* Evidence: crates/registry-breg/src/request_workflow.rs; crates/registry-breg/src/rhai_planner.rs; crates/registry-breg/src/mutation/action.rs; crates/registry-breg/src/api/mod.rs, exact_mutation(). */}
+
+## History, time, and erasure
+
+The server keeps every revision of every record.
+A client can list the revisions it is allowed to see, read one revision, and re-read a record as it stood when a given mutation was recorded.
+Every mutation response carries a snapshot descriptor for that purpose.
+
+Temporal entities separate two kinds of time.
+Recorded time is when the server stored a revision; valid time is the period the record describes.
+A placement that starts next month is recorded today, and a query for the placement valid at a date returns it only from that date.
+The `asOf` query option reads by valid time, and the snapshot options read by recorded time.
+
+History is append-only, but retention obligations exist.
+An operator can erase the detail of a revision through `bregctl`; the revision stays in the chain with an erasure marker, so later reads and audits remain consistent.
+Change-request retention rules use the same mechanism.
+
+{/* Evidence: crates/registry-breg/src/postgres/revision_read.rs; crates/registry-breg/src/request_retention.rs. */}
+
+## From project to production
+
+A change reaches a running registry through a fixed sequence, and `bregctl` has a command for each step:
+
+1. **Check.** `check` compiles the project and reports findings with the file and path that caused them.
+2. **Test.** `test` runs the journeys against a PostgreSQL database and fails on the first step whose outcome differs.
+3. **Package.** `package` produces a signed bundle from the project and the runtime configuration, including reviewed migrations when the model changed.
+4. **Apply.** `apply` writes the bundle to the database, and the `breg` binary serves it after restart.
+5. **Verify.** `verify` and `doctor` confirm that the running registry, the database, and the bundle agree.
+
+The first deployment creates the schema.
+A later deployment diffs the active model against the new one, and any change that PostgreSQL cannot apply safely on its own needs a reviewed migration that a maintainer signs.
+[Deploy and operate a registry](../../operate/breg/) describes each command, the database prerequisites, and the checks to run before and after apply.
+
+## Events
+
+Modules declare events, and the runtime delivers them as CloudEvents over HTTP with an HMAC signature.
+Deliveries go through an outbox in the same database transaction as the change, so a receiver never sees an event for a change that did not commit.
+Failed deliveries retry with backoff, and an operator can list and replay them.
+
+## Where the product stops
+
+- The server issues no tokens and stores no users. Identity and session handling belong to your identity provider or Registry Mint.
+- It renders no user interface. Clients talk to the REST API.
+- Review workflows are staged approvals over a proposal record, not a general workflow engine.
+- Spatial support is a bounded point-in-bounding-box profile over CRS84 points. The server publishes GeoJSON and claims no OGC API Features conformance.
+- Registries do not federate. Each deployment is one registry with one database.
+- Production code, configuration keys, and error codes stay neutral about any specific source product or domain.
+
+## Related products
+
+- **Registry Relay** exposes existing data read-only. A Relay deployment can sit in front of a Base Registry Engine API when a partner needs a narrower view than any profile offers.
+- **Evidence Gateway** answers fixed questions with signed assertions and can use a Base Registry Engine route as one of its fixed HTTP sources.
+- **Registry Mint** issues the short-lived access tokens a Base Registry Engine accepts when a deployment has no identity provider.
+
+## Next
+
+- [Build your first registry](../../tutorials/first-breg/): stand up a registry with a database and make your first requests.
+- [Author a registry project](../../configure/breg/): every project file and every `bregctl` authoring command.
+- [Deploy and operate a registry](../../operate/breg/): database setup, packaging, applying, webhooks, and erasure.
+- [Base Registry Engine API reference](../../reference/breg-api/): routes, envelope, query options, problem codes, and events.
+- [Registry modeling patterns](../registry-modeling-patterns/): how to shape entities, references, and temporal records.
