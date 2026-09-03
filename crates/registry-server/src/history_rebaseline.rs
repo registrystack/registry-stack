@@ -34,6 +34,11 @@ use crate::postgres::{
 
 pub use crate::history_maintenance::HistoryMaintenanceTimeouts as HistoryRebaselineTimeouts;
 
+/// The number of live rows one rebaseline verifies inside its single
+/// transaction. Verification reads every live row and its journal head at once,
+/// so the bound the existing-data migration enforces is the bound here too.
+pub use crate::history_migration::MAX_HISTORY_MIGRATION_COMMIT_MEMBERS as MAX_REBASELINE_LIVE_ROWS;
+
 const MAX_OPERATOR_REFERENCE_BYTES: usize = 512;
 const AUDIT_OPERATION_ID: &str = "history-rebaseline-maintenance";
 const BASELINE_SYSTEM_ORIGIN: &str = "registry-server-coverage-rebaseline-v1";

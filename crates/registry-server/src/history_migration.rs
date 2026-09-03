@@ -38,7 +38,7 @@ use crate::revision::{
 use tokio_postgres::Transaction;
 
 pub(crate) const HISTORY_MIGRATION_SYSTEM_ORIGIN: &str = "registry-server-reviewed-migration-v1";
-const MAX_HISTORY_MIGRATION_COMMIT_MEMBERS: u64 = 1_000;
+pub const MAX_HISTORY_MIGRATION_COMMIT_MEMBERS: u64 = 1_000;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SupportedHistoryMigrationStep {

@@ -921,6 +921,7 @@ enum SuggestedAction {
     VerifyRequestRetentionOperation,
     PrepareHistoryErasureRequest,
     PrepareHistoryRebaselineRequest,
+    ReviewRetainedHistory,
     CorrectPlannerTestInput,
 }
 
@@ -1839,23 +1840,26 @@ fn history_rebaseline_lifecycle_failure(error: HistoryRebaselineLifecycleError) 
             registry_server::history_rebaseline::HistoryRebaselineError::UnindexedRevisions => (
                 "history.rebaseline.revisions.unindexed",
                 "history",
-                "history rebaseline requires every retained revision to be indexed by a commit",
+                "history rebaseline requires every retained journal head to be indexed by a commit",
                 DiagnosticArtifact::HistoryRebaseline,
-                SuggestedAction::VerifyMigrationAuthority,
+                SuggestedAction::ReviewRetainedHistory,
             ),
             registry_server::history_rebaseline::HistoryRebaselineError::LiveHistoryMismatch => (
                 "history.rebaseline.live_rows.unverified",
                 "history",
-                "history rebaseline requires the retained journal head to reproduce every live row",
+                "history rebaseline requires the retained journal head to reproduce every live row; \
+                 the first record that disagrees is not named, so compare the live rows with their \
+                 revisions to find it",
                 DiagnosticArtifact::HistoryRebaseline,
-                SuggestedAction::VerifyMigrationAuthority,
+                SuggestedAction::ReviewRetainedHistory,
             ),
             registry_server::history_rebaseline::HistoryRebaselineError::LiveRowBudgetExceeded => (
                 "history.rebaseline.live_rows.budget_exceeded",
                 "history",
-                "history rebaseline exceeds the supported live-row budget",
+                "history rebaseline verifies at most 1000 live rows in one transaction and this \
+                 registry holds more, so retrying cannot restore snapshot coverage",
                 DiagnosticArtifact::HistoryRebaseline,
-                SuggestedAction::VerifyMigrationAuthority,
+                SuggestedAction::ReviewRetainedHistory,
             ),
             registry_server::history_rebaseline::HistoryRebaselineError::HistoryNotReady
             | registry_server::history_rebaseline::HistoryRebaselineError::Unavailable => (
@@ -8991,6 +8995,63 @@ accessProfiles:
                     .to_string_lossy()
                     .starts_with(".registry-serverctl-stage-")
             }));
+    }
+
+    #[test]
+    fn rebaseline_history_diagnostics_point_at_the_retained_history() {
+        use registry_server::history_rebaseline::{
+            HistoryRebaselineError, MAX_REBASELINE_LIVE_ROWS,
+        };
+
+        for (error, code) in [
+            (
+                HistoryRebaselineError::UnindexedRevisions,
+                "history.rebaseline.revisions.unindexed",
+            ),
+            (
+                HistoryRebaselineError::LiveHistoryMismatch,
+                "history.rebaseline.live_rows.unverified",
+            ),
+            (
+                HistoryRebaselineError::LiveRowBudgetExceeded,
+                "history.rebaseline.live_rows.budget_exceeded",
+            ),
+        ] {
+            let report = history_rebaseline_lifecycle_failure(
+                HistoryRebaselineLifecycleError::Rebaseline(error),
+            );
+            let diagnostic = &report.diagnostics[0];
+            assert_eq!(diagnostic.code, code);
+            assert_eq!(
+                diagnostic.suggested_action,
+                SuggestedAction::ReviewRetainedHistory,
+                "the operator resolves {code} by reading the retained history, \
+                 not by re-checking the migration authority"
+            );
+        }
+
+        let budget =
+            history_rebaseline_lifecycle_failure(HistoryRebaselineLifecycleError::Rebaseline(
+                HistoryRebaselineError::LiveRowBudgetExceeded,
+            ));
+        assert_eq!(
+            budget.diagnostics[0].message,
+            format!(
+                "history rebaseline verifies at most {MAX_REBASELINE_LIVE_ROWS} live rows in one \
+                 transaction and this registry holds more, so retrying cannot restore snapshot \
+                 coverage"
+            ),
+            "the budget diagnostic states the limit it enforces and what retrying cannot do"
+        );
+
+        let mismatch =
+            history_rebaseline_lifecycle_failure(HistoryRebaselineLifecycleError::Rebaseline(
+                HistoryRebaselineError::LiveHistoryMismatch,
+            ));
+        assert!(
+            mismatch.diagnostics[0].message.contains("is not named"),
+            "the mismatch diagnostic says the refusal identifies no record"
+        );
     }
 
     #[test]
