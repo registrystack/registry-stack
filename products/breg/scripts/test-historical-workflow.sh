@@ -569,9 +569,9 @@ document = json.load(open(sys.argv[1], encoding="utf-8"))
 value = document
 for part in sys.argv[2].split("."):
     value = value[part]
-if not isinstance(value, str) or len(value) != 40 or not value.startswith("breg1_"):
+if not isinstance(value, str) or len(value) != 42 or not value.startswith("breg1_"):
     raise SystemExit(f"invalid snapshot reference: {value!r}")
-UUID(value[4:])
+UUID(value[6:])
 PY
 }
 

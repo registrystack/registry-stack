@@ -3369,16 +3369,20 @@ async fn history_members_for_snapshot(
 
 fn assert_snapshot_reference(value: &Value) {
     let snapshot = value.as_str().expect("response carries snapshot reference");
-    assert_eq!(snapshot.len(), 40);
-    assert!(snapshot.starts_with("breg1_"));
-    Uuid::parse_str(&snapshot[4..]).expect("snapshot suffix is a UUID");
+    let suffix = snapshot
+        .strip_prefix("breg1_")
+        .expect("snapshot reference carries the breg1_ prefix");
+    assert_eq!(suffix.len(), 36);
+    Uuid::parse_str(suffix).expect("snapshot suffix is a UUID");
 }
 
 fn snapshot_uuid(value: &Value) -> Uuid {
     let snapshot = value.as_str().expect("response carries snapshot reference");
-    assert_eq!(snapshot.len(), 40);
-    assert!(snapshot.starts_with("breg1_"));
-    Uuid::parse_str(&snapshot[4..]).expect("snapshot suffix is a UUID")
+    let suffix = snapshot
+        .strip_prefix("breg1_")
+        .expect("snapshot reference carries the breg1_ prefix");
+    assert_eq!(suffix.len(), 36);
+    Uuid::parse_str(suffix).expect("snapshot suffix is a UUID")
 }
 
 fn tampered_if_match(value: &str) -> String {
