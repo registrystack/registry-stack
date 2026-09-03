@@ -1,6 +1,6 @@
 {
   "version": 4,
-  "service": "evidence",
+  "service": "breg",
   "runtime": {
     "image": "gcr.io/distroless/cc-debian13:nonroot@sha256:c31ff9abcb1910f3ab25c7957bdaf0bfe12a01eb546e8df2282f1c8f682b606c",
     "layer_ids": [
@@ -27,25 +27,31 @@
       "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614"
     ],
     "application_layer_ids": [
-      "sha256:ec168be2cb5e4a28a188c17e52b2cf5fbd457312770f2df75f7a63661a9c4b03",
+      "sha256:abe1242b6b576e55376437aed32cfc69b9095091d98dd45aac20c403844a9d5d",
       "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
     ],
     "config": {
       "user": "65532",
-      "entrypoint": ["/usr/local/bin/evidence"],
-      "command": ["serve"],
-      "working_dir": "/var/lib/registry-evidence",
+      "entrypoint": [
+        "/usr/local/bin/breg"
+      ],
+      "command": [
+        "--config",
+        "/etc/breg/runtime.yaml"
+      ],
+      "working_dir": "/etc/breg",
       "environment": [
         "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-        "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt",
-        "REGISTRY_EVIDENCE_RUNTIME=/etc/registry-evidence/runtime.yaml"
+        "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt"
       ],
       "healthcheck": null,
       "args_escaped": true,
-      "exposed_ports": ["8080/tcp"],
+      "exposed_ports": [
+        "8080/tcp"
+      ],
       "stop_signal": ""
     },
-    "definition_digest": "sha256:dc673d2a4ed65c37399a052133723498e0e2ce981241420c1b4170302b918a00"
+    "definition_digest": "sha256:6b10251e32515b928487c58d587c78b48e4cad49f839159552b612bb86730887"
   },
   "policies": [
     {
@@ -68,7 +74,7 @@
       "severity": "Critical",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and Grype reports no fix. The official v0.26.0 Linux AMD64 Evidence candidate from run 33811606748 attempt 1 imports __isoc23_sscanf at exactly two call sites, whose immutable format strings are %lu and %lx, and has no effective vulnerable allocating-character scanf path in the reviewed bytes. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound executable closure digests.",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The official v0.26.0 Linux AMD64 BReg candidate has exactly two __isoc23_sscanf call sites; disassembly binds them to fixed %lu and %lx format strings, with no allocating-character scanf path in the reviewed bytes. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed file digests.",
       "reviewed_at": "2026-09-03",
       "expires_at": "2026-09-17",
       "invalidation_triggers": [
@@ -86,14 +92,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:dc673d2a4ed65c37399a052133723498e0e2ce981241420c1b4170302b918a00",
+      "runtime_definition_digest": "sha256:6b10251e32515b928487c58d587c78b48e4cad49f839159552b612bb86730887",
       "component_layer_id": "sha256:3a7299f559d987305122c7669fc3643095eb0955f8ff4a38c9430d54d0b4452e",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:9b186ad6026466a1baab26d98cfd69759289325a4e094b9433abe1fc667833ce",
+        "reference_image_digest": "sha256:4bde5e4116a51c664385e62f47564a844a3e700f3e36066f6c91f0555b99907a",
         "reference_source_revision": "e7bd7aa3c7ab72d240f60a5fffa93d39265bc0e4",
         "reference_provenance": "official_candidate",
-        "runtime_definition_digest": "sha256:dc673d2a4ed65c37399a052133723498e0e2ce981241420c1b4170302b918a00",
+        "runtime_definition_digest": "sha256:6b10251e32515b928487c58d587c78b48e4cad49f839159552b612bb86730887",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -112,11 +118,11 @@
             "sha256": "sha256:6d567d53e895273ca14a1f9dc164fc6c8d39aed2f60aa46a733c2784228915f3"
           },
           {
-            "path": "/usr/local/bin/evidence",
-            "sha256": "sha256:700d8f2e9aeccfc1ea8763851e027c361dab6b56aeb1c70ceeb8d7d3d3ca7334"
+            "path": "/usr/local/bin/breg",
+            "sha256": "sha256:7527a4fd147dbd2ea931737c08ceb14161015b5ed993902c8ada87211215b777"
           }
         ],
-        "definition_digest": "sha256:5db2c138225c22151a2d2476442d57b820366709ee5b3dab767c6927a3d426be"
+        "definition_digest": "sha256:5bb391a2dcc186dfc2b66928453c3d9ff68aa2f3e99bcccfbf0cbc615a227c2f"
       }
     },
     {
@@ -126,7 +132,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and Grype reports no fix. The official v0.26.0 Linux AMD64 Evidence candidate from run 33811606748 attempt 1 imports no ungetwc, wide-character input, or wide-character scanning function in the reviewed dynamic symbol table. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound executable closure digests.",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The official v0.26.0 Linux AMD64 BReg candidate imports no wide-character input function and contains no ungetwc or other wide-character input function name for dynamic resolution, so it has no effective vulnerable input path in the reviewed bytes. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed file digests.",
       "reviewed_at": "2026-09-03",
       "expires_at": "2026-09-17",
       "invalidation_triggers": [
@@ -144,14 +150,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:dc673d2a4ed65c37399a052133723498e0e2ce981241420c1b4170302b918a00",
+      "runtime_definition_digest": "sha256:6b10251e32515b928487c58d587c78b48e4cad49f839159552b612bb86730887",
       "component_layer_id": "sha256:3a7299f559d987305122c7669fc3643095eb0955f8ff4a38c9430d54d0b4452e",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:9b186ad6026466a1baab26d98cfd69759289325a4e094b9433abe1fc667833ce",
+        "reference_image_digest": "sha256:4bde5e4116a51c664385e62f47564a844a3e700f3e36066f6c91f0555b99907a",
         "reference_source_revision": "e7bd7aa3c7ab72d240f60a5fffa93d39265bc0e4",
         "reference_provenance": "official_candidate",
-        "runtime_definition_digest": "sha256:dc673d2a4ed65c37399a052133723498e0e2ce981241420c1b4170302b918a00",
+        "runtime_definition_digest": "sha256:6b10251e32515b928487c58d587c78b48e4cad49f839159552b612bb86730887",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -170,11 +176,11 @@
             "sha256": "sha256:6d567d53e895273ca14a1f9dc164fc6c8d39aed2f60aa46a733c2784228915f3"
           },
           {
-            "path": "/usr/local/bin/evidence",
-            "sha256": "sha256:700d8f2e9aeccfc1ea8763851e027c361dab6b56aeb1c70ceeb8d7d3d3ca7334"
+            "path": "/usr/local/bin/breg",
+            "sha256": "sha256:7527a4fd147dbd2ea931737c08ceb14161015b5ed993902c8ada87211215b777"
           }
         ],
-        "definition_digest": "sha256:5db2c138225c22151a2d2476442d57b820366709ee5b3dab767c6927a3d426be"
+        "definition_digest": "sha256:5bb391a2dcc186dfc2b66928453c3d9ff68aa2f3e99bcccfbf0cbc615a227c2f"
       }
     },
     {
@@ -184,7 +190,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and Grype reports no fix. The official v0.26.0 Linux AMD64 Evidence candidate from run 33811606748 attempt 1 imports __res_init and none of the deprecated resolver-printing helpers in the reviewed dynamic symbol table. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound executable closure digests.",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no fixed Trixie version. The official v0.26.0 Linux AMD64 BReg candidate imports __res_init but none of the deprecated ns_printrrf, ns_printrr, or fp_nquery functions and contains none of those function names for dynamic resolution. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed file digests.",
       "reviewed_at": "2026-09-03",
       "expires_at": "2026-09-17",
       "invalidation_triggers": [
@@ -202,14 +208,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:dc673d2a4ed65c37399a052133723498e0e2ce981241420c1b4170302b918a00",
+      "runtime_definition_digest": "sha256:6b10251e32515b928487c58d587c78b48e4cad49f839159552b612bb86730887",
       "component_layer_id": "sha256:3a7299f559d987305122c7669fc3643095eb0955f8ff4a38c9430d54d0b4452e",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:9b186ad6026466a1baab26d98cfd69759289325a4e094b9433abe1fc667833ce",
+        "reference_image_digest": "sha256:4bde5e4116a51c664385e62f47564a844a3e700f3e36066f6c91f0555b99907a",
         "reference_source_revision": "e7bd7aa3c7ab72d240f60a5fffa93d39265bc0e4",
         "reference_provenance": "official_candidate",
-        "runtime_definition_digest": "sha256:dc673d2a4ed65c37399a052133723498e0e2ce981241420c1b4170302b918a00",
+        "runtime_definition_digest": "sha256:6b10251e32515b928487c58d587c78b48e4cad49f839159552b612bb86730887",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -228,11 +234,11 @@
             "sha256": "sha256:6d567d53e895273ca14a1f9dc164fc6c8d39aed2f60aa46a733c2784228915f3"
           },
           {
-            "path": "/usr/local/bin/evidence",
-            "sha256": "sha256:700d8f2e9aeccfc1ea8763851e027c361dab6b56aeb1c70ceeb8d7d3d3ca7334"
+            "path": "/usr/local/bin/breg",
+            "sha256": "sha256:7527a4fd147dbd2ea931737c08ceb14161015b5ed993902c8ada87211215b777"
           }
         ],
-        "definition_digest": "sha256:5db2c138225c22151a2d2476442d57b820366709ee5b3dab767c6927a3d426be"
+        "definition_digest": "sha256:5bb391a2dcc186dfc2b66928453c3d9ff68aa2f3e99bcccfbf0cbc615a227c2f"
       }
     }
   ]
