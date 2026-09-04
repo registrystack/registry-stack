@@ -437,7 +437,7 @@ version = "1.1.0"
             (
                 "crates/registry-breg-client-py",
                 "registry-breg-client-native",
-                "registry-breg-client",
+                "breg-client-sdk",
             ),
         ):
             client_root = self.root / relative_root

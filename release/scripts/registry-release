@@ -114,7 +114,7 @@ PYTHON_CLIENT_RELEASE_SURFACES = (
     (
         "crates/registry-breg-client-py",
         "registry-breg-client-native",
-        "registry-breg-client",
+        "breg-client-sdk",
     ),
 )
 FUZZ_LOCK_RELEASE_SURFACE_PATHS = (
