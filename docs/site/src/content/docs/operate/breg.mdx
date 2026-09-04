@@ -44,7 +44,7 @@ before anything reaches the install directory, and installs both or neither. It 
 release authenticity. The signed checksum chain that does, and the checks behind it, are recorded in
 [OpenSSF and release trust](../../security/openssf-evidence/). Replace `| bash` with `| less` to read
 the installer before you run it on a host you operate. For a higher-assurance installation, follow
-[release verification](https://github.com/registrystack/registry-stack/blob/v0.26.0/release/VERIFY.md)
+[release verification](https://github.com/registrystack/registry-stack/blob/v0.26.1/release/VERIFY.md)
 for the pinned tag, then rerun the installer with `BREG_ASSET_DIR` pointing at the verified
 directory. `BREG_INSTALL_DIR` selects the install directory; the default is `~/.local/bin`.
 
@@ -52,12 +52,12 @@ Testing, packaging, activation, and serving must use one release: the `bregctl` 
 the `breg` that serves carry the same tag, and `--version` on each prints it. The installer keeps
 the pair together, so reinstalling replaces both.
 
-The release publishes the installer as `breg-v0.26.0-install.sh`, with `breg-install.sh` as the
-movable alias, and the binaries as `breg-v0.26.0-linux-amd64`, `breg-v0.26.0-linux-arm64`,
-`breg-v0.26.0-macos-arm64`, `bregctl-v0.26.0-linux-amd64`, `bregctl-v0.26.0-linux-arm64`, and
-`bregctl-v0.26.0-macos-arm64`.
+The release publishes the installer as `breg-v0.26.1-install.sh`, with `breg-install.sh` as the
+movable alias, and the binaries as `breg-v0.26.1-linux-amd64`, `breg-v0.26.1-linux-arm64`,
+`breg-v0.26.1-macos-arm64`, `bregctl-v0.26.1-linux-amd64`, `bregctl-v0.26.1-linux-arm64`, and
+`bregctl-v0.26.1-macos-arm64`.
 
-The container image is `ghcr.io/registrystack/breg:v0.26.0`, built on distroless nonroot. Its
+The container image is `ghcr.io/registrystack/breg:v0.26.1`, built on distroless nonroot. Its
 entrypoint is `/usr/local/bin/breg`, its default arguments are `--config /etc/breg/runtime.yaml`,
 and it exposes port 8080. The image carries no shell, no writable directory, and no healthcheck
 subcommand: the audit journal lives in PostgreSQL, the runtime configuration and the files it names
