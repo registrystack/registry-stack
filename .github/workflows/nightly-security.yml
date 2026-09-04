@@ -37,17 +37,13 @@ jobs:
           # The adopter image is scanned beside the release ones: it is built from
           # the same tree by anyone following the local-run docs, so baking key or
           # credential material into it would leak just as widely.
-          release_paths = [
-              Path("release/docker/Dockerfile.discovery"),
-              Path("release/docker/Dockerfile.evidence"),
-              Path("release/docker/Dockerfile.mint"),
-              Path("release/docker/Dockerfile.breg"),
-              Path("release/docker/Dockerfile.relay"),
-          ]
-          missing = [str(path) for path in release_paths if not path.is_file()]
-          if missing:
+          # Scan every release Dockerfile so a newly onboarded image cannot omit
+          # the secret-copy check. The Debian image policy separately fails on
+          # any Dockerfile not added to its maintained roster.
+          release_paths = sorted(Path("release/docker").glob("Dockerfile.*"))
+          if not release_paths:
               print(
-                  f"security assurance check failed: missing release Dockerfiles: {missing}",
+                  "security assurance check failed: no release Dockerfiles found",
                   file=sys.stderr,
               )
               sys.exit(1)

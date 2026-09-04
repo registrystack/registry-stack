@@ -1612,22 +1612,15 @@ class RegistryReleaseTest(TestCase):
                 self.assertIn(audit_path, dockerfile)
                 self.assertIn(f"chmod 0700 {audit_path}", dockerfile)
 
-    def test_nightly_security_scans_the_exact_release_dockerfile_roster(self) -> None:
+    def test_nightly_security_scans_every_release_dockerfile(self) -> None:
         workflow = (ROOT / ".github/workflows/nightly-security.yml").read_text(
             encoding="utf-8"
         )
-        for name in (
-            "discovery",
-            "evidence",
-            "mint",
-            "breg",
-            "relay",
-        ):
-            self.assertIn(
-                f'Path("release/docker/Dockerfile.{name}")',
-                workflow,
-            )
-        self.assertNotIn('glob("Dockerfile.registry-*")', workflow)
+        self.assertIn(
+            'Path("release/docker").glob("Dockerfile.*")',
+            workflow,
+        )
+        self.assertIn("if not release_paths:", workflow)
 
 
 

@@ -236,6 +236,27 @@ def check_relay_image_shape(text: str, relative: Path, failures: list[str]) -> N
 
 def check_repository(root: Path = ROOT) -> list[str]:
     failures: list[str] = []
+    expected_release_dockerfiles = set(DOCKERFILES + RUST_BUILDER_DOCKERFILES)
+    actual_release_dockerfiles = {
+        path.relative_to(root)
+        for path in (root / "release/docker").glob("Dockerfile.*")
+    }
+    missing_release_dockerfiles = sorted(
+        expected_release_dockerfiles - actual_release_dockerfiles
+    )
+    unexpected_release_dockerfiles = sorted(
+        actual_release_dockerfiles - expected_release_dockerfiles
+    )
+    if missing_release_dockerfiles:
+        failures.append(
+            "release Dockerfile policy is missing maintained files: "
+            + ", ".join(map(str, missing_release_dockerfiles))
+        )
+    if unexpected_release_dockerfiles:
+        failures.append(
+            "release Dockerfile policy does not cover files: "
+            + ", ".join(map(str, unexpected_release_dockerfiles))
+        )
     texts = {
         relative: read(root, relative, failures)
         for relative in MAINTAINED_TEXT_PATHS

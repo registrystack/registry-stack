@@ -72,6 +72,21 @@ class ReleaseImagePolicyTests(unittest.TestCase):
             set(POLICY.HTTP_PROBE_DOCKERFILES),
         )
 
+    def test_unrostered_release_dockerfile_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.repository_copy(root)
+            unexpected = root / "release/docker/Dockerfile.unreviewed"
+            unexpected.write_text("FROM scratch\n", encoding="utf-8")
+
+            failures = POLICY.check_repository(root)
+
+            self.assertIn(
+                "release Dockerfile policy does not cover files: "
+                "release/docker/Dockerfile.unreviewed",
+                failures,
+            )
+
     def test_release_builder_pins_base_snapshot_and_native_tools(self) -> None:
         self.assertEqual(
             (Path("release/docker/Dockerfile.builder"),),
