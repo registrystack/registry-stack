@@ -28,11 +28,20 @@ Start release preparation when:
 The scheduled release canary is useful maintenance telemetry, but it is not a
 Beta release prerequisite.
 
-For the first release under a new image package name, provision both the final
-and candidate package identities before requesting the candidate. A package
-first published with the classic PAT bootstrap below starts private. Publish a
-clearly non-release artifact to each identity without putting a token on the
-command line:
+### Onboard a new release image
+
+Complete new-image onboarding outside the release clock, in this order:
+
+1. Complete the product and image implementation before preparing a release.
+2. Add `release/docker/Dockerfile.<name>`, the exact canonical binary staging
+   input, the version-selected image roster entry, and the public cleanup
+   denylist entry. Prepare the candidate cleanup entry, but do not let the
+   scheduled cleanup select a package that does not exist.
+3. Provision both GHCR package identities with the classic-PAT bootstrap below.
+   The final package must be public, the candidate package must be private, and
+   both must grant `registrystack/registry-stack` the documented Actions access.
+   Publish only the clearly non-release bootstrap artifact and never put the
+   token on the command line:
 
 ```sh
 package="${PACKAGE:?set PACKAGE to relay, evidence, mint, discovery, or breg}"
@@ -61,12 +70,32 @@ printf '%s' "${GHCR_BOOTSTRAP_TOKEN:?set a classic PAT with write:packages}" \
 )
 ```
 
-In the organization package settings, change only the final `${package}`
-identity to public and grant `registrystack/registry-stack` Actions access with
-Write.
+   In the organization package settings, change only the final `${package}`
+   identity to public. Keep `${package}-candidate` private. Grant both package
+   identities `registrystack/registry-stack` Actions access with Write.
+4. As soon as the bootstrap has created the private candidate package, add
+   `<name>-candidate` to `CANDIDATE_PACKAGES` in
+   `release/scripts/cleanup-release-candidates.py`, with its matching test.
+   Do not wait for the first real candidate. Keep `<name>` in
+   `PUBLIC_PACKAGES` so cleanup can never reach the released image.
+5. If the image has no reviewed advisory baseline, run one explicitly named
+   baseline-bootstrap candidate outside the release clock. It may build and
+   publish the private exact image evidence, but it is expected to stop at the
+   unconditional advisory-baseline check. It cannot seal or attest a candidate
+   without the reviewed baseline. Do not copy another product's baseline or add
+   a provisional bypass.
+6. Use that exact private image and the existing procedure in "Renew an image
+   advisory fingerprint" to author and review
+   `release/security/<name>-advisory-baseline.json`. Relay alone uses
+   `products/relay-v2/security/advisory-baseline.json`. Merge the reviewed
+   baseline change.
+7. Run protected-main CI and the strict read-only release rehearsal. Only after
+   both pass should you open the version-preparation PR, start the release clock,
+   and request the one normal candidate.
+
 Starting with `v0.21.0`, the release requires public `relay`, `evidence`, and
-`mint` packages, joined by `discovery` from `v0.24.0` and `breg`
-from `v0.26.0`. Verify all five before candidate dispatch:
+`mint` packages, joined by `discovery` from `v0.24.0` and `breg` from
+`v0.26.0`. Verify all five final destinations before a normal candidate:
 
 ```sh
 for package in relay evidence mint discovery breg; do
@@ -82,10 +111,8 @@ not part of later releases.
 
 Candidate packages have the inverse visibility requirement. A package first
 published by Actions may inherit this public repository's visibility and be
-created public. For a new release image, keep the candidate identity created by
-the classic-PAT bootstrap private and grant `registrystack/registry-stack`
-Actions access with Write. Check all five candidate destinations before
-dispatch:
+created public, which is why the classic-PAT bootstrap must create the identity
+first. Check all five candidate destinations before dispatch:
 
 ```sh
 for package in relay-candidate evidence-candidate mint-candidate discovery-candidate breg-candidate; do
@@ -96,33 +123,11 @@ done
 ```
 
 Each result must name the requested package and report `container` and
-`private`. If a candidate package is absent, provision it with the classic-PAT
-bootstrap before dispatch. If it reports `public`, change it to private in the
-organization package settings. The package REST API does not provide a
-visibility change. Remove the candidate bootstrap version only after the first
-real candidate tag exists.
-
-A new release image also needs its own reviewed advisory baseline at
-`release/security/<name>-advisory-baseline.json` before its first candidate.
-The candidate refuses to run without that file, and the pinned Debian 13
-runtime carries findings that a baseline with no exception cannot clear. Author
-it from a real candidate image, never by copying another service's file: run
-the candidate once to publish the private candidate image, regenerate the
-scanner and rootfs evidence with the procedure in "Renew an image advisory
-fingerprint" below, and record the reviewed runtime block, exception set,
-owner, and expiry from that evidence. `discovery` is the first image to need
-this since the baselines were introduced.
-
-Enrol a new candidate package in the daily cleanup only after that first
-candidate publishes `ghcr.io/registrystack/<name>-candidate`. The cleanup lists
-exactly the names in `CANDIDATE_PACKAGES` in
-`release/scripts/cleanup-release-candidates.py` and fails closed on a package it
-cannot list, so naming an unpublished package would abort the whole scheduled
-run. Add `<name>-candidate` to that allowlist with a matching fixture in
-`release/scripts/test_cleanup_release_candidates.py`. Also add the public name
-to `PUBLIC_PACKAGES` so cleanup can never reach a released image. Base
-Registry Engine is already on the public denylist; its candidate name joins
-the allowlist after the first private candidate is present.
+`private`. If a candidate package is absent, stop and provision it with the
+classic-PAT bootstrap before dispatch. If it reports `public`, change it to
+private in the organization package settings. The package REST API does not
+provide a visibility change. Remove the candidate bootstrap version only after
+the first real candidate tag exists.
 
 The daily cleanup tolerates one delete failure: GitHub's 400 stating that
 publicly visible package versions with more than 5000 downloads cannot be
@@ -210,10 +215,13 @@ The Node client manifests and their lockfiles deliberately bind no platform
 package versions. Those versions name the release being prepared, which is
 unpublished for as long as the PR is open, so a tree that carries them records
 placeholder lock entries and leaves `npm ci` unsatisfiable on protected `main`
-from the moment the release publishes. The candidate binds them into the root
-manifest it packs, and `client_registry.py validate-dist` proves the published
-root package carries the exact set. The planner rejects a prepared tree that
-binds them.
+from the moment the release publishes. The client matrix binds and packs each
+root package, smoke-tests that exact tarball with its native platform package,
+and makes the Linux AMD64 row its single artifact owner. Candidate assembly
+reuses that exact root tarball without rebuilding it. `client_registry.py
+validate-dist` remains the exact proof that the published root package carries
+the required platform dependency set. The planner rejects a prepared tree that
+binds those versions.
 
 Before opening the release PR, push the prepared branch and run the read-only
 Ubuntu rehearsal from that branch:

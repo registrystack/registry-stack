@@ -705,6 +705,16 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertRegex(baseline, r"^node:22\.12\.0-bullseye-slim@sha256:[0-9a-f]{64}$")
         self.assertIn("-maxdepth 1 -name '*.node'", node_smoke)
         self.assertIn("node_modules/@registrystack/${client}-client-", node_smoke)
+        root_copy = (
+            'cp "${root_package}" \\\n'
+            '      "${GITHUB_WORKSPACE}/candidate-client-package/clients/"'
+        )
+        self.assertIn('"${{ matrix.asset }}" == linux-amd64-glibc', node_smoke)
+        self.assertIn(root_copy, node_smoke)
+        self.assertLess(
+            node_smoke.index("docker run --rm --network none"),
+            node_smoke.index(root_copy),
+        )
         self.assertIn(
             "crates/registry-discovery-client-node/package-lock.json",
             str(clients),
@@ -731,6 +741,15 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn("expected_client_assets=4", assemble)
         self.assertIn("expected_client_assets=6", assemble)
         self.assertIn("expected_client_assets=9", assemble)
+        self.assertIn('"${platform}" == linux-amd64-glibc', assemble)
+        self.assertIn(
+            "expected_client_assets=$((expected_client_assets + 2))",
+            assemble,
+        )
+        self.assertIn(
+            "expected_client_assets=$((expected_client_assets + 1))",
+            assemble,
+        )
         self.assertIn("relay-client-node-", assemble)
         self.assertIn("discovery-client-node-", assemble)
         self.assertIn("registrystack-${client}-client-${version}.tgz", assemble)
@@ -738,6 +757,15 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn("client_registry.py validate-dist", assemble)
         self.assertIn("registry_relay_client-", assemble)
         self.assertIn("registry_discovery_client-", assemble)
+        assemble_steps = document["jobs"]["assemble"]["steps"]
+        self.assertFalse(
+            any(
+                step.get("name") == "Setup Node for deterministic package assembly"
+                for step in assemble_steps
+            )
+        )
+        for forbidden in ("npm ci", "npm pack", "bind-optional-deps"):
+            self.assertNotIn(forbidden, assemble)
         self.assertIn("kind=client-package", text)
         self.assertIn("discovery-client-node-*.tgz", text)
         self.assertIn("registrystack-discovery-client-*.tgz", text)

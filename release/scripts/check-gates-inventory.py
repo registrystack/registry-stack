@@ -566,6 +566,25 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         ),
     ),
     (
+        "Candidate image onboarding bootstrap boundary",
+        ".github/workflows/release-candidate.yml",
+        (
+            "name: Validate manifests, pins, recipes, and scanner policy fixtures",
+            "release_candidate.py check-image-onboarding",
+            "--allow-missing-baseline",
+        ),
+    ),
+    (
+        "Strict rehearsal image onboarding boundary",
+        ".github/workflows/release-rehearsal.yml",
+        (
+            "validate:\n    name: Validate release image onboarding before builds",
+            "name: Check complete release image onboarding",
+            "release_candidate.py check-image-onboarding",
+            "needs: validate",
+        ),
+    ),
+    (
         "Latest docs release metadata fails closed",
         "release/scripts/verify_latest_published_release.py",
         (
@@ -872,6 +891,11 @@ FORBIDDEN_RELEASE_SECURITY_GATES = (
         "Candidate cleanup cannot select branch-controlled workflow code or write refs",
         ".github/workflows/release-candidate-cleanup.yml",
         ("workflow_dispatch:", "contents: write", "git push", "git update-ref"),
+    ),
+    (
+        "Release rehearsal cannot allow a missing advisory baseline",
+        ".github/workflows/release-rehearsal.yml",
+        ("--allow-missing-baseline",),
     ),
 )
 

@@ -7,6 +7,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import shutil
 import tarfile
 import tempfile
 import zipfile
@@ -17,6 +18,7 @@ from unittest import TestCase, main, mock
 
 
 SCRIPT = Path(__file__).with_name("release_candidate.py")
+ROOT = SCRIPT.parents[2]
 SOURCE_SHA = "a" * 40
 ARCHIVE_SHA = "b" * 64
 IMAGE_DIGEST = "sha256:" + "c" * 64
@@ -145,6 +147,27 @@ class ReleaseCandidateTest(TestCase):
 
     def tearDown(self) -> None:
         self.temp.cleanup()
+
+    def onboarding_repository(self) -> Path:
+        root = self.root / "onboarding"
+        paths = [
+            "release/scripts/build-release-binaries.sh",
+            "release/scripts/build-release-image.sh",
+            "release/scripts/cleanup-release-candidates.py",
+        ]
+        for image_name in self.module._candidate_image_names("0.26.0"):
+            paths.append(f"release/docker/Dockerfile.{image_name}")
+            paths.append(
+                "products/relay-v2/security/advisory-baseline.json"
+                if image_name == "relay"
+                else f"release/security/{image_name}-advisory-baseline.json"
+            )
+        for relative_path in paths:
+            source = ROOT / relative_path
+            destination = root / relative_path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+        return root
 
 
 
@@ -805,6 +828,225 @@ class ReleaseCandidateTest(TestCase):
                     )
                 self.assertEqual(0, result)
                 self.assertEqual(expected, stdout.getvalue())
+
+    def test_image_onboarding_accepts_every_current_version_roster(self) -> None:
+        for version in ("0.20.0", "0.21.0", "0.24.0", "0.26.0"):
+            with self.subTest(version=version):
+                self.assertEqual(
+                    self.module._candidate_image_names(version),
+                    self.module.check_image_onboarding(ROOT, version),
+                )
+
+    def test_image_onboarding_rejects_a_noncanonical_version(self) -> None:
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "version must be canonical semantic version text",
+        ):
+            self.module.check_image_onboarding(ROOT, "0.26")
+
+    def test_image_onboarding_rejects_a_missing_dockerfile(self) -> None:
+        root = self.onboarding_repository()
+        (root / "release/docker/Dockerfile.breg").unlink()
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "breg release Dockerfile is missing",
+        ):
+            self.module.check_image_onboarding(
+                root,
+                "0.26.0",
+                allow_missing_baseline=True,
+            )
+
+    def test_image_onboarding_rejects_symlinked_release_inputs(self) -> None:
+        for relative_path, error in (
+            (
+                "release/docker/Dockerfile.breg",
+                "breg release Dockerfile must not be a symlink",
+            ),
+            (
+                "release/security/breg-advisory-baseline.json",
+                "breg advisory baseline must not be a symlink",
+            ),
+        ):
+            with self.subTest(relative_path=relative_path):
+                root = self.onboarding_repository()
+                path = root / relative_path
+                path.unlink()
+                path.symlink_to(ROOT / relative_path)
+                with self.assertRaisesRegex(self.module.CandidateError, error):
+                    self.module.check_image_onboarding(
+                        root,
+                        "0.26.0",
+                        allow_missing_baseline=True,
+                    )
+                shutil.rmtree(root)
+
+    def test_image_onboarding_rejects_an_unsupported_build_name(self) -> None:
+        root = self.onboarding_repository()
+        recipe = root / "release/scripts/build-release-image.sh"
+        recipe.write_text(
+            recipe.read_text(encoding="utf-8").replace(
+                "discovery|evidence|mint|breg|relay",
+                "discovery|evidence|mint|relay",
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "release image recipe does not recognize breg",
+        ):
+            self.module.check_image_onboarding(
+                root,
+                "0.26.0",
+                allow_missing_baseline=True,
+            )
+
+    def test_image_onboarding_rejects_a_missing_binary_staging_path(self) -> None:
+        root = self.onboarding_repository()
+        recipe = root / "release/scripts/build-release-binaries.sh"
+        recipe.write_text(
+            recipe.read_text(encoding="utf-8").replace(
+                "cp target/release/breg dist/image-bin/breg",
+                "cp target/release/breg dist/image-bin/wrong-breg",
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "canonical binary recipe must stage dist/image-bin/breg",
+        ):
+            self.module.check_image_onboarding(
+                root,
+                "0.26.0",
+                allow_missing_baseline=True,
+            )
+
+    def test_only_an_absent_baseline_has_an_explicit_allowance(self) -> None:
+        root = self.onboarding_repository()
+        baseline = root / "release/security/breg-advisory-baseline.json"
+        baseline.unlink()
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "breg advisory baseline is missing",
+        ):
+            self.module.check_image_onboarding(root, "0.26.0")
+        self.module.check_image_onboarding(
+            root,
+            "0.26.0",
+            allow_missing_baseline=True,
+        )
+        cleanup = root / "release/scripts/cleanup-release-candidates.py"
+        cleanup.write_text(
+            cleanup.read_text(encoding="utf-8").replace(
+                '    "breg-candidate",\n',
+                "    # breg-candidate is not structurally allowlisted\n",
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "CANDIDATE_PACKAGES must contain breg-candidate",
+        ):
+            self.module.check_image_onboarding(
+                root,
+                "0.26.0",
+                allow_missing_baseline=True,
+            )
+
+    def test_image_onboarding_cli_reports_strict_failure_and_bootstrap_success(
+        self,
+    ) -> None:
+        root = self.onboarding_repository()
+        (root / "release/security/breg-advisory-baseline.json").unlink()
+        stderr = io.StringIO()
+        with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+            result = self.module.main(
+                [
+                    "check-image-onboarding",
+                    "--version",
+                    "0.26.0",
+                    "--root",
+                    str(root),
+                ]
+            )
+        self.assertEqual(1, result)
+        self.assertIn("breg advisory baseline is missing", stderr.getvalue())
+        stdout = io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+            result = self.module.main(
+                [
+                    "check-image-onboarding",
+                    "--version",
+                    "0.26.0",
+                    "--root",
+                    str(root),
+                    "--allow-missing-baseline",
+                ]
+            )
+        self.assertEqual(0, result)
+        self.assertEqual(
+            "checked image onboarding for breg discovery evidence mint relay\n",
+            stdout.getvalue(),
+        )
+
+    def test_image_onboarding_rejects_a_malformed_baseline(self) -> None:
+        root = self.onboarding_repository()
+        baseline = root / "release/security/breg-advisory-baseline.json"
+        baseline.write_text("not JSON\n", encoding="utf-8")
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "cannot read JSON",
+        ):
+            self.module.check_image_onboarding(
+                root,
+                "0.26.0",
+                allow_missing_baseline=True,
+            )
+
+    def test_image_onboarding_requires_v4_for_the_exact_service(self) -> None:
+        for document, error in (
+            ({"version": 3, "service": "breg"}, "must be JSON v4"),
+            ({"version": 4, "service": "relay"}, "service must equal breg"),
+        ):
+            with self.subTest(document=document):
+                root = self.onboarding_repository()
+                baseline = root / "release/security/breg-advisory-baseline.json"
+                baseline.write_text(json.dumps(document), encoding="utf-8")
+                with self.assertRaisesRegex(self.module.CandidateError, error):
+                    self.module.check_image_onboarding(
+                        root,
+                        "0.26.0",
+                        allow_missing_baseline=True,
+                    )
+                shutil.rmtree(root)
+
+    def test_image_onboarding_requires_structural_cleanup_identities(self) -> None:
+        for entry, replacement, error in (
+            (
+                '    "breg-candidate",\n',
+                "    # breg-candidate appears only in a comment\n",
+                "CANDIDATE_PACKAGES must contain breg-candidate",
+            ),
+            (
+                '    "breg",\n',
+                "    # breg appears only in a comment\n",
+                "PUBLIC_PACKAGES must contain breg",
+            ),
+        ):
+            with self.subTest(entry=entry):
+                root = self.onboarding_repository()
+                cleanup = root / "release/scripts/cleanup-release-candidates.py"
+                cleanup.write_text(
+                    cleanup.read_text(encoding="utf-8").replace(entry, replacement),
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(self.module.CandidateError, error):
+                    self.module.check_image_onboarding(
+                        root,
+                        "0.26.0",
+                        allow_missing_baseline=True,
+                    )
+                shutil.rmtree(root)
 
     def test_v2_candidate_allows_only_current_in_progress_run_before_oidc(
         self,

@@ -1239,13 +1239,28 @@ class RegistryReleaseTest(TestCase):
             workflow,
         )
         self.assertIn('candidate_package="${package}-candidate"', workflow)
-        self.assertIn('elif [[ "${candidate_package_status}" != 404 ]]', workflow)
+        self.assertIn(
+            "GHCR package ${candidate_package} must be provisioned before release",
+            workflow,
+        )
+        self.assertNotIn("candidate_package_status", workflow)
+        candidate_visibility = workflow.index(
+            '--package "${candidate_package}" \\\n'
+            '              --visibility private'
+        )
+        self.assertLess(
+            workflow.index('candidate_package_metadata="${RUNNER_TEMP}/'),
+            candidate_visibility,
+        )
         self.assertIn('elif [[ "${package_status}" != 404 ]]', workflow)
         self.assertLess(
             workflow.index('elif [[ "${package_status}" != 404 ]]'),
             workflow.index("oras cp --from-oci-layout"),
         )
         self.assertIn("require-package-visibility", workflow)
+        onboarding = workflow.index("check-image-onboarding")
+        self.assertLess(onboarding, workflow.index("cargo metadata --locked"))
+        self.assertIn("--allow-missing-baseline", workflow[onboarding:])
 
     def test_publication_omits_legacy_image_lock_from_v0_19(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(
