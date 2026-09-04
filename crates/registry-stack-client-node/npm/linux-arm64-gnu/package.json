@@ -1,6 +1,6 @@
 {
   "name": "@registrystack/client-linux-arm64-gnu",
-  "version": "0.26.0",
+  "version": "0.26.1",
   "description": "Registry Stack unified native clients for Linux arm64 glibc.",
   "license": "Apache-2.0",
   "publishConfig": { "access": "public" },

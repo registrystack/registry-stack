@@ -1,6 +1,6 @@
 {
   "name": "@registrystack/breg-client-native",
-  "version": "0.26.0",
+  "version": "0.26.1",
   "description": "Internal Node.js native binding used by @registrystack/client.",
   "private": true,
   "license": "Apache-2.0",

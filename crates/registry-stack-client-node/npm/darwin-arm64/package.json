@@ -1,6 +1,6 @@
 {
   "name": "@registrystack/client-darwin-arm64",
-  "version": "0.26.0",
+  "version": "0.26.1",
   "description": "Registry Stack unified native clients for macOS arm64.",
   "license": "Apache-2.0",
   "publishConfig": { "access": "public" },

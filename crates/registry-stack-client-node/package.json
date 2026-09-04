@@ -1,6 +1,6 @@
 {
   "name": "@registrystack/client",
-  "version": "0.26.0",
+  "version": "0.26.1",
   "description": "Unified Node.js client for Registry Stack products.",
   "license": "Apache-2.0",
   "publishConfig": { "access": "public", "provenance": true },

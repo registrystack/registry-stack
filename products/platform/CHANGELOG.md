@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.26.1 - 2026-09-04
+
+- The shared platform crates have no user-visible changes in this release.
+
 ## v0.26.0 - 2026-09-03
 
 - `registry-platform-config` exposes a parsed `SecretReference` for the exact

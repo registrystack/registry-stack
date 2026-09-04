@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "registry-breg-client-native"
-version = "0.26.0"
+version = "0.26.1"
 description = "Internal Base Registry Engine binding used by registry-stack-client."
 readme = "README.md"
 license = { text = "Apache-2.0" }

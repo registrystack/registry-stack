@@ -1,6 +1,6 @@
 {
   "schema_version": "registry.cli-reference/v2",
-  "source_version": "0.26.0",
+  "source_version": "0.26.1",
   "binaries": [
     {
       "name": "breg",
