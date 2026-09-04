@@ -161,30 +161,18 @@ jobs:
               --package "${package}" \
               --visibility public
             candidate_package="${package}-candidate"
-            candidate_package_response="${RUNNER_TEMP}/${candidate_package}-response"
-            if gh api --include --silent \
+            candidate_package_metadata="${RUNNER_TEMP}/${candidate_package}-package.json"
+            if ! gh api \
                 "/orgs/${IMAGE_NAMESPACE}/packages/container/${candidate_package}" \
-                >"${candidate_package_response}" 2>&1; then
-              candidate_package_status=200
-            else
-              candidate_package_status="$(
-                python3 release/scripts/release_workflow_guard.py http-status \
-                  --response "${candidate_package_response}"
-              )"
-            fi
-            if [[ "${candidate_package_status}" == 200 ]]; then
-              candidate_package_metadata="${RUNNER_TEMP}/${candidate_package}-package.json"
-              gh api "/orgs/${IMAGE_NAMESPACE}/packages/container/${candidate_package}" \
-                > "${candidate_package_metadata}"
-              python3 release/scripts/release_workflow_guard.py \
-                require-package-visibility \
-                --metadata "${candidate_package_metadata}" \
-                --package "${candidate_package}" \
-                --visibility private
-            elif [[ "${candidate_package_status}" != 404 ]]; then
-              echo "Cannot prove ${candidate_package} is absent or private" >&2
+                > "${candidate_package_metadata}"; then
+              echo "GHCR package ${candidate_package} must be provisioned before release" >&2
               exit 1
             fi
+            python3 release/scripts/release_workflow_guard.py \
+              require-package-visibility \
+              --metadata "${candidate_package_metadata}" \
+              --package "${candidate_package}" \
+              --visibility private
             versions="${RUNNER_TEMP}/${package}-versions.json"
             gh api --paginate --slurp \
               "/orgs/${IMAGE_NAMESPACE}/packages/container/${package}/versions?per_page=100" \
@@ -229,6 +217,10 @@ jobs:
         run: |
           set -euo pipefail
           git checkout --detach "${{ steps.request.outputs.source_sha }}"
+          python3 release/scripts/release_candidate.py check-image-onboarding \
+            --version "${{ steps.request.outputs.version }}" \
+            --root . \
+            --allow-missing-baseline
           release/scripts/registry-release validate \
             "${{ steps.request.outputs.manifest }}"
           release/scripts/registry-release validate-docsets
@@ -723,6 +715,11 @@ jobs:
                   node "smoke-${client}-client-package.js"
               fi
             )
+            if [[ "${{ matrix.asset }}" == linux-amd64-glibc ]] &&
+                (( major > 0 || minor >= 21 )); then
+              cp "${root_package}" \
+                "${GITHUB_WORKSPACE}/candidate-client-package/clients/"
+            fi
           done
 
       - name: Upload native client packages
@@ -756,16 +753,6 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
           submodules: false
-
-      - name: Setup Node for deterministic package assembly
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22.12.0
-          cache: npm
-          cache-dependency-path: |
-            crates/registry-discovery-client-node/package-lock.json
-            crates/registry-evidence-client-node/package-lock.json
-            crates/registry-relay-client-node/package-lock.json
 
       - name: Download exact build products
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -1086,33 +1073,16 @@ jobs:
             if [[ "${include_discovery_clients}" -eq 1 ]]; then
               expected_client_assets=9
             fi
+            if [[ "${platform}" == linux-amd64-glibc ]] &&
+                [[ "${include_registry_packages}" -eq 1 ]]; then
+              expected_client_assets=$((expected_client_assets + 2))
+              if [[ "${include_discovery_clients}" -eq 1 ]]; then
+                expected_client_assets=$((expected_client_assets + 1))
+              fi
+            fi
             test "$(find "${client_root}" -maxdepth 1 -type f | wc -l)" -eq "${expected_client_assets}"
             cp "${client_root}"/* candidate/bundle-root/
           done
-          if [[ "${include_registry_packages}" -eq 1 ]]; then
-            for client in discovery evidence relay; do
-              if [[ "${client}" == discovery ]] &&
-                  [[ "${include_discovery_clients}" -ne 1 ]]; then
-                continue
-              fi
-              node_client="${GITHUB_WORKSPACE}/crates/registry-${client}-client-node"
-              (cd "${node_client}" && npm ci --ignore-scripts)
-              test -z "$(find "${node_client}" -maxdepth 1 -name '*.node' -print -quit)"
-              # The tree binds no platform versions, which is what keeps the
-              # `npm ci` above satisfiable once this release publishes. Bind
-              # them here, after the install and before the pack, so the
-              # published root package still resolves its native binary.
-              python3 release/scripts/client_registry.py bind-optional-deps \
-                --package-json "${node_client}/package.json" \
-                --version "${version}" \
-                --client "${client}"
-              (cd "${node_client}" && npm pack \
-                --ignore-scripts --pack-destination "${RUNNER_TEMP}")
-              root_package="registrystack-${client}-client-${version}.tgz"
-              test -f "${RUNNER_TEMP}/${root_package}"
-              cp "${RUNNER_TEMP}/${root_package}" candidate/bundle-root/
-            done
-          fi
           {
             for platform in linux-amd64-glibc linux-arm64-glibc macos-arm64; do
               echo "evidence-client-node-${{ needs.validate.outputs.tag }}-${platform}.tgz"

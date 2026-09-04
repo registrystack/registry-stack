@@ -27,9 +27,27 @@ class ReleaseRehearsalTest(unittest.TestCase):
         self.assertIn("required: true", trigger)
         self.assertEqual({"contents": "read"}, document["permissions"])
         self.assertEqual(
-            ["rehearse", "canonical-linux", "node-clients"],
+            ["validate", "rehearse", "canonical-linux", "node-clients"],
             list(document["jobs"]),
         )
+        validate = document["jobs"]["validate"]
+        self.assertEqual("ubuntu-24.04", validate["runs-on"])
+        self.assertLessEqual(validate["timeout-minutes"], 5)
+        self.assertEqual({"contents": "read"}, validate["permissions"])
+        self.assertEqual("Require a branch rehearsal", validate["steps"][0]["name"])
+        onboarding = next(
+            step
+            for step in validate["steps"]
+            if step.get("name") == "Check complete release image onboarding"
+        )
+        self.assertEqual("${{ inputs.version }}", onboarding["env"]["REHEARSAL_VERSION"])
+        self.assertIn("check-image-onboarding", onboarding["run"])
+        self.assertIn('--version "${REHEARSAL_VERSION}"', onboarding["run"])
+        self.assertNotIn("--allow-missing-baseline", onboarding["run"])
+        self.assertNotIn("${{ inputs.", onboarding["run"])
+        self.assertEqual(text.count("Require a branch rehearsal"), 1)
+        for job_name in ("rehearse", "canonical-linux", "node-clients"):
+            self.assertEqual("validate", document["jobs"][job_name]["needs"])
         job = document["jobs"]["rehearse"]
         self.assertEqual("ubuntu-24.04", job["runs-on"])
         self.assertLessEqual(job["timeout-minutes"], 15)
@@ -99,7 +117,7 @@ class ReleaseRehearsalTest(unittest.TestCase):
             ],
             clients["strategy"]["matrix"]["include"],
         )
-        self.assertEqual("Require a branch rehearsal", clients["steps"][0]["name"])
+        self.assertEqual("Checkout prepared branch", clients["steps"][0]["name"])
         self.assertFalse(
             any("upload-artifact@" in str(step) for step in clients["steps"])
         )

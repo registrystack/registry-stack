@@ -21,10 +21,12 @@ permissions:
   contents: read
 
 jobs:
-  rehearse:
-    name: Exercise future-tag release paths on Ubuntu
+  validate:
+    name: Validate release image onboarding before builds
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 5
+    permissions:
+      contents: read
     steps:
       - name: Require a branch rehearsal
         shell: bash
@@ -35,6 +37,29 @@ jobs:
             exit 1
           fi
 
+      - name: Checkout prepared branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Check complete release image onboarding
+        env:
+          REHEARSAL_VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 release/scripts/release_candidate.py check-image-onboarding \
+            --version "${REHEARSAL_VERSION}" \
+            --root .
+
+  rehearse:
+    name: Exercise future-tag release paths on Ubuntu
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
       - name: Checkout prepared branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -70,6 +95,7 @@ jobs:
 
   canonical-linux:
     name: Prove the canonical Linux payload
+    needs: validate
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
@@ -77,15 +103,6 @@ jobs:
     env:
       RELEASE_BUILDER_IMAGE: rust:1.95-trixie@sha256:f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3
     steps:
-      - name: Require a branch rehearsal
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ "${GITHUB_REF}" != refs/heads/* ]]; then
-            echo "release rehearsal must run from a prepared branch" >&2
-            exit 1
-          fi
-
       - name: Checkout prepared branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -116,6 +133,7 @@ jobs:
 
   node-clients:
     name: Prove Linux Node clients for ${{ matrix.asset }}
+    needs: validate
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 40
     env:
@@ -135,15 +153,6 @@ jobs:
             target: aarch64-unknown-linux-gnu
             napi_platform: linux-arm64-gnu
     steps:
-      - name: Require a branch rehearsal
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ "${GITHUB_REF}" != refs/heads/* ]]; then
-            echo "release rehearsal must run from a prepared branch" >&2
-            exit 1
-          fi
-
       - name: Checkout prepared branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

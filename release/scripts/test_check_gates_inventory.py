@@ -74,6 +74,44 @@ class GateInventoryTest(unittest.TestCase):
                 forbidden=self.module.FORBIDDEN_RELEASE_SECURITY_GATES,
             ),
         )
+
+    def test_candidate_image_onboarding_allowance_is_pinned(self) -> None:
+        policy_texts = self.module.policy_file_texts(
+            ROOT,
+            self.module.RELEASE_SECURITY_POLICY_PATHS,
+        )
+        candidate_path = ".github/workflows/release-candidate.yml"
+        policy_texts[candidate_path] = policy_texts[candidate_path].replace(
+            "            --allow-missing-baseline\n",
+            "",
+        )
+        self.assertIn(
+            "Candidate image onboarding bootstrap boundary",
+            self.module.workflow_policy_violations(
+                policy_texts,
+                required=self.module.REQUIRED_RELEASE_SECURITY_GATES,
+            ),
+        )
+
+    def test_rehearsal_image_onboarding_cannot_gain_the_allowance(self) -> None:
+        policy_texts = self.module.policy_file_texts(
+            ROOT,
+            self.module.RELEASE_SECURITY_POLICY_PATHS,
+        )
+        rehearsal_path = ".github/workflows/release-rehearsal.yml"
+        policy_texts[rehearsal_path] = policy_texts[rehearsal_path].replace(
+            "            --root .\n",
+            "            --root . \\\n"
+            "            --allow-missing-baseline\n",
+            1,
+        )
+        self.assertIn(
+            "Release rehearsal cannot allow a missing advisory baseline",
+            self.module.workflow_policy_violations(
+                policy_texts,
+                forbidden=self.module.FORBIDDEN_RELEASE_SECURITY_GATES,
+            ),
+        )
         self.assertEqual(
             [],
             self.module.security_workflow_classification_violations(

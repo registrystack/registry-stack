@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import base64
 import binascii
 import hashlib
@@ -116,6 +117,146 @@ def _candidate_image_names(version: str) -> set[str]:
     if parsed < BREG_RELEASE_MINIMUM_VERSION:
         return DISCOVERY_RUNTIME_IMAGE_NAMES
     return BREG_RUNTIME_IMAGE_NAMES
+
+
+def _literal_string_roster(path: Path, name: str) -> set[str]:
+    try:
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(path))
+    except (OSError, UnicodeError, SyntaxError) as exc:
+        raise CandidateError(f"cannot inspect {path}: {exc}") from exc
+    assignments = [
+        node
+        for node in tree.body
+        if isinstance(node, (ast.Assign, ast.AnnAssign))
+        and any(
+            isinstance(target, ast.Name) and target.id == name
+            for target in (
+                node.targets if isinstance(node, ast.Assign) else [node.target]
+            )
+        )
+    ]
+    if len(assignments) != 1:
+        raise CandidateError(f"{path} must assign {name} exactly once")
+    value_node = assignments[0].value
+    try:
+        value = ast.literal_eval(value_node)
+    except (ValueError, TypeError) as exc:
+        raise CandidateError(f"{path} {name} must be a literal string roster") from exc
+    if not isinstance(value, (list, tuple, set)) or not all(
+        isinstance(item, str) for item in value
+    ):
+        raise CandidateError(f"{path} {name} must be a literal string roster")
+    if len(set(value)) != len(value):
+        raise CandidateError(f"{path} {name} must not contain duplicates")
+    return set(value)
+
+
+def _supported_release_image_names(path: Path) -> set[str]:
+    try:
+        source = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise CandidateError(f"cannot inspect {path}: {exc}") from exc
+    case = re.search(
+        r'^\s*case\s+"\$\{name\}"\s+in\s*$',
+        source,
+        flags=re.MULTILINE,
+    )
+    if case is None:
+        raise CandidateError(f"{path} must dispatch on the exact image name")
+    end = re.search(r"^\s*esac\s*$", source[case.end() :], flags=re.MULTILINE)
+    if end is None:
+        raise CandidateError(f"{path} image name case is incomplete")
+    body = source[case.end() : case.end() + end.start()]
+    supported: set[str] = set()
+    for match in re.finditer(
+        r"^\s*([a-z0-9][a-z0-9_-]*(?:\|[a-z0-9][a-z0-9_-]*)*)\)\s*$",
+        body,
+        flags=re.MULTILINE,
+    ):
+        supported.update(match.group(1).split("|"))
+    return supported
+
+
+def _require_regular_file(path: Path, description: str) -> None:
+    if path.is_symlink():
+        raise CandidateError(f"{description} must not be a symlink: {path}")
+    if not path.is_file():
+        raise CandidateError(f"{description} is missing: {path}")
+
+
+def check_image_onboarding(
+    root: Path,
+    version: str,
+    *,
+    allow_missing_baseline: bool = False,
+) -> set[str]:
+    """Require every version-selected image to have complete release source state."""
+
+    if VERSION.fullmatch(version) is None:
+        raise CandidateError("version must be canonical semantic version text")
+    if not root.is_dir():
+        raise CandidateError(f"repository root does not exist: {root}")
+    image_names = _candidate_image_names(version)
+    binary_recipe_path = root / "release/scripts/build-release-binaries.sh"
+    image_recipe_path = root / "release/scripts/build-release-image.sh"
+    cleanup_path = root / "release/scripts/cleanup-release-candidates.py"
+    _require_regular_file(binary_recipe_path, "canonical binary recipe")
+    _require_regular_file(image_recipe_path, "release image recipe")
+    _require_regular_file(cleanup_path, "candidate cleanup policy")
+    binary_recipe = binary_recipe_path.read_text(encoding="utf-8")
+    supported_image_names = _supported_release_image_names(image_recipe_path)
+    candidate_packages = _literal_string_roster(cleanup_path, "CANDIDATE_PACKAGES")
+    public_packages = _literal_string_roster(cleanup_path, "PUBLIC_PACKAGES")
+
+    for image_name in sorted(image_names):
+        dockerfile = root / f"release/docker/Dockerfile.{image_name}"
+        _require_regular_file(dockerfile, f"{image_name} release Dockerfile")
+        staging_path = re.escape(f"dist/image-bin/{image_name}")
+        if re.search(
+            rf"^\s*cp\b[^\n]*{staging_path}(?:\s|$)",
+            binary_recipe,
+            flags=re.MULTILINE,
+        ) is None:
+            raise CandidateError(
+                f"canonical binary recipe must stage dist/image-bin/{image_name}"
+            )
+        if image_name not in supported_image_names:
+            raise CandidateError(
+                f"release image recipe does not recognize {image_name}"
+            )
+        baseline = (
+            root / "products/relay-v2/security/advisory-baseline.json"
+            if image_name == "relay"
+            else root / f"release/security/{image_name}-advisory-baseline.json"
+        )
+        if baseline.is_symlink():
+            raise CandidateError(
+                f"{image_name} advisory baseline must not be a symlink: {baseline}"
+            )
+        if not baseline.is_file():
+            if not (allow_missing_baseline and not baseline.exists()):
+                raise CandidateError(
+                    f"{image_name} advisory baseline is missing: {baseline}"
+                )
+        else:
+            document = read_json(baseline)
+            if not isinstance(document, dict) or document.get("version") != 4:
+                raise CandidateError(
+                    f"{image_name} advisory baseline must be JSON v4"
+                )
+            if document.get("service") != image_name:
+                raise CandidateError(
+                    f"{image_name} advisory baseline service must equal {image_name}"
+                )
+        candidate_package = f"{image_name}-candidate"
+        if candidate_package not in candidate_packages:
+            raise CandidateError(
+                f"CANDIDATE_PACKAGES must contain {candidate_package}"
+            )
+        if image_name not in public_packages:
+            raise CandidateError(f"PUBLIC_PACKAGES must contain {image_name}")
+    return image_names
 
 
 def _version_uses_release_docs(version: tuple[int, int, int]) -> bool:
@@ -1501,6 +1642,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     image_names = subparsers.add_parser("image-names")
     image_names.add_argument("--version", required=True)
 
+    check_onboarding = subparsers.add_parser("check-image-onboarding")
+    check_onboarding.add_argument("--version", required=True)
+    check_onboarding.add_argument("--root", type=Path, required=True)
+    check_onboarding.add_argument("--allow-missing-baseline", action="store_true")
+
     verify_candidate = subparsers.add_parser("verify-candidate")
     verify_candidate.add_argument("--manifest", type=Path, required=True)
     verify_candidate.add_argument("--bundle", type=Path)
@@ -1574,6 +1720,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "image-names":
             print(" ".join(sorted(_candidate_image_names(args.version))))
+            return 0
+        if args.command == "check-image-onboarding":
+            image_names = check_image_onboarding(
+                args.root,
+                args.version,
+                allow_missing_baseline=args.allow_missing_baseline,
+            )
+            print(f"checked image onboarding for {' '.join(sorted(image_names))}")
             return 0
         if args.command == "seal-candidate":
             write_candidate_manifest(args.draft, args.output)
