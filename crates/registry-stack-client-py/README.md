@@ -17,10 +17,10 @@ Each product remains in its own `registry_client.<product>` module namespace
 because its routing, authentication, errors, and verification rules are
 different. These namespaces also keep the unified distribution's files
 disjoint from earlier standalone client distributions, so installing or
-uninstalling either package cannot remove files owned by the other. The first
-public unified package is planned for the Registry Stack release after v0.26.0.
-Existing standalone client packages remain available for earlier versions, but
-later releases use this unified entry point.
+uninstalling either package cannot remove files owned by the other. The unified
+package is published beginning with Registry Stack v0.26.1. Existing standalone
+client packages remain available for earlier versions, but later releases use
+this unified entry point.
 
 This directory holds the public metadata and Python facade. It is not built
 directly. `release/scripts/assemble-registry-client-wheel.py` combines the four
