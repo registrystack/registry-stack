@@ -1198,6 +1198,15 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         self.assertIn("DISCOVERY_CLIENT_PACKAGE_MINIMUM_VERSION", candidate)
         self.assertIn("client_registry_matrix=", candidate)
         self.assertIn("client_registry_pypi_matrix=", candidate)
+        self.assertIn(
+            '{"client": "evidence", "environment": "pypi-evidence"}',
+            candidate,
+        )
+        for client in ("discovery", "relay"):
+            self.assertIn(
+                f'{{"client": "{client}", "environment": "pypi"}}',
+                candidate,
+            )
         self.assertEqual(npm["needs"], ["verify", "finalize-assets"])
         self.assertEqual(pypi["needs"], ["verify", "finalize-assets"])
         publish = document["jobs"]["publish"]
@@ -1210,17 +1219,52 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
             "publish_client_npm",
             "Reconcile platform packages, then publish the root package",
         )
+        self.assertEqual(npm["timeout-minutes"], 30)
+        self.assertEqual(pypi["timeout-minutes"], 15)
         self.assertIn("client_registry.py npm-state", npm_publish)
         self.assertIn('npm publish "./${tarball}"', npm_publish)
-        self.assertNotIn('npm publish "${tarball}"', npm_publish)
+        self.assertIn('npm publish "./${root_tarball}"', npm_publish)
+        self.assertEqual(npm_publish.count("--provenance"), 2)
+        self.assertNotIn("|| absent", npm_publish)
+        self.assertNotIn("NODE_AUTH_TOKEN", npm_publish)
         self.assertIn("require_unexpired_candidate", npm_publish)
+        platform_phase = npm_publish[: npm_publish.index("platform_deadline=")]
+        platform_classification = platform_phase[: platform_phase.index(
+            'for name in "${absent_platforms[@]}"'
+        )]
+        platform_publication = platform_phase[
+            platform_phase.index('for name in "${absent_platforms[@]}"') :
+        ]
+        platform_poll = npm_publish[
+            npm_publish.index("platform_deadline=") : npm_publish.index(
+                'root_tarball="dist/${root_package}"'
+            )
+        ]
+        root_phase = npm_publish[npm_publish.index('root_tarball="dist/${root_package}"') :]
+        for platform in ("darwin-arm64", "linux-arm64-gnu", "linux-x64-gnu"):
+            self.assertIn(
+                f"registrystack-${{client}}-client-{platform}-${{version}}.tgz",
+                platform_classification,
+            )
+        self.assertNotIn("npm publish", platform_classification)
+        self.assertEqual(platform_classification.count("client_registry.py npm-state"), 1)
+        self.assertIn('npm publish "./${tarball}"', platform_publication)
+        self.assertNotIn("root_state=", platform_phase)
+        self.assertIn("absent_platforms", platform_poll)
+        self.assertIn("platform_deadline=$((SECONDS + 600))", platform_poll)
+        self.assertIn("sleep 10", platform_poll)
+        self.assertIn("root_state=", root_phase)
+        self.assertIn("root_deadline=$((SECONDS + 600))", root_phase)
+        self.assertIn("sleep 10", root_phase)
+        self.assertIn('test "${observed}" = present', platform_poll)
+        self.assertNotIn("root_state=", platform_poll)
         self.assertLess(
-            npm_publish.rindex("require_unexpired_candidate"),
-            npm_publish.index("npm publish"),
+            platform_publication.index("require_unexpired_candidate"),
+            platform_publication.index('npm publish "./${tarball}"'),
         )
         self.assertLess(
-            npm_publish.index("registrystack-${client}-client-linux-x64-gnu"),
-            npm_publish.index('"registrystack-${client}-client-${version}.tgz"'),
+            root_phase.index("require_unexpired_candidate"),
+            root_phase.index('npm publish "./${root_tarball}"'),
         )
         pypi_publish = next(
             step
@@ -1229,6 +1273,15 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         )
         self.assertEqual(pypi_publish["with"]["packages-dir"], "dist")
         self.assertTrue(pypi_publish["with"]["skip-existing"])
+        pypi_verify = step_run(
+            document,
+            "publish_client_pypi",
+            "Verify the complete immutable PyPI release",
+        )
+        self.assertIn("deadline=$((SECONDS + 600))", pypi_verify)
+        self.assertIn("sleep 10", pypi_verify)
+        self.assertNotIn('test "${state}" = absent', pypi_verify)
+        self.assertNotIn("|| absent", pypi_verify)
         pypi_expiry_index = next(
             index
             for index, step in enumerate(pypi["steps"])

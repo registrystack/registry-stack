@@ -1206,7 +1206,7 @@ jobs:
       - verify
       - finalize-assets
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 30
     environment: npm
     strategy:
       fail-fast: false
@@ -1285,34 +1285,73 @@ jobs:
           }
           version="${{ needs.verify.outputs.version }}"
           client="${{ matrix.client }}"
-          packages=(
+          platform_packages=(
             "registrystack-${client}-client-darwin-arm64-${version}.tgz"
             "registrystack-${client}-client-linux-arm64-gnu-${version}.tgz"
             "registrystack-${client}-client-linux-x64-gnu-${version}.tgz"
-            "registrystack-${client}-client-${version}.tgz"
           )
-          for name in "${packages[@]}"; do
+          root_package="registrystack-${client}-client-${version}.tgz"
+          absent_platforms=()
+          for name in "${platform_packages[@]}"; do
             tarball="dist/${name}"
             state="$(python3 release/scripts/client_registry.py npm-state \
               --tarball "${tarball}")"
             if [[ "${state}" == absent ]]; then
-              require_unexpired_candidate
-              npm publish "./${tarball}" --access public --provenance
+              absent_platforms+=("${name}")
             else
               test "${state}" = present
             fi
-            for attempt in $(seq 1 12); do
+          done
+          for name in "${absent_platforms[@]}"; do
+            tarball="dist/${name}"
+            require_unexpired_candidate
+            npm publish "./${tarball}" --access public --provenance
+          done
+          platform_deadline=$((SECONDS + 600))
+          while true; do
+            absent_platforms=()
+            for name in "${platform_packages[@]}"; do
+              tarball="dist/${name}"
               observed="$(python3 release/scripts/client_registry.py npm-state \
                 --tarball "${tarball}")"
-              if [[ "${observed}" == present ]]; then
-                break
+              if [[ "${observed}" == absent ]]; then
+                absent_platforms+=("${name}")
+              else
+                test "${observed}" = present
               fi
-              if [[ "${attempt}" -eq 12 ]]; then
-                echo "npm did not expose exact ${name}" >&2
-                exit 1
-              fi
-              sleep 5
             done
+            if [[ "${#absent_platforms[@]}" -eq 0 ]]; then
+              break
+            fi
+            if (( SECONDS >= platform_deadline )); then
+              printf 'npm did not expose exact platform package %s\n' \
+                "${absent_platforms[@]}" >&2
+              exit 1
+            fi
+            sleep 10
+          done
+          root_tarball="dist/${root_package}"
+          root_state="$(python3 release/scripts/client_registry.py npm-state \
+            --tarball "${root_tarball}")"
+          if [[ "${root_state}" == absent ]]; then
+            require_unexpired_candidate
+            npm publish "./${root_tarball}" --access public --provenance
+          else
+            test "${root_state}" = present
+          fi
+          root_deadline=$((SECONDS + 600))
+          while true; do
+            observed="$(python3 release/scripts/client_registry.py npm-state \
+              --tarball "${root_tarball}")"
+            if [[ "${observed}" == present ]]; then
+              break
+            fi
+            test "${observed}" = absent
+            if (( SECONDS >= root_deadline )); then
+              echo "npm did not expose exact root package ${root_package}" >&2
+              exit 1
+            fi
+            sleep 10
           done
 
   publish_client_pypi:
@@ -1324,7 +1363,7 @@ jobs:
       - verify
       - finalize-assets
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     environment: ${{ matrix.environment }}
     strategy:
       fail-fast: false
@@ -1403,7 +1442,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for attempt in $(seq 1 12); do
+          deadline=$((SECONDS + 600))
+          while true; do
             state="$(python3 release/scripts/client_registry.py pypi-state \
               --directory dist \
               --version "${{ needs.verify.outputs.version }}" \
@@ -1411,11 +1451,11 @@ jobs:
             if [[ "${state}" == present ]]; then
               exit 0
             fi
-            if [[ "${attempt}" -eq 12 ]]; then
+            if (( SECONDS >= deadline )); then
               echo "PyPI did not expose the complete exact wheel set" >&2
               exit 1
             fi
-            sleep 5
+            sleep 10
           done
 
   dispatch-docs:
