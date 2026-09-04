@@ -21,7 +21,7 @@ uses one platform-specific native dependency containing all four bindings.
 Supported targets are macOS arm64, Linux arm64 with glibc, and Linux x64 with
 glibc. Install the exact client version that matches the deployment.
 
-The first public unified package is planned for the Registry Stack release
-after v0.26.0. Existing standalone client packages remain available for
-earlier versions, but the release process does not publish new standalone
-versions once this package is active.
+The unified package is published beginning with Registry Stack v0.26.1.
+Existing standalone client packages remain available for earlier versions,
+but the release process does not publish new standalone versions once this
+package is active.
