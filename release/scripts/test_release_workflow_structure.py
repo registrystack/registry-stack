@@ -103,7 +103,9 @@ class EvidenceDevelopmentWorkflowStructureTest(unittest.TestCase):
             '"$(git rev-parse refs/remotes/origin/main)" != "${GITHUB_SHA}"',
             validation,
         )
-        self.assertIn("actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}", validation)
+        self.assertIn(
+            "actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}", validation
+        )
         self.assertIn('.event == "push"', validation)
         self.assertIn(
             'tag="v${version}-dev.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"',
@@ -146,9 +148,7 @@ class EvidenceDevelopmentWorkflowStructureTest(unittest.TestCase):
         ):
             self.assertIn(f"-p {package}", build)
         self.assertIn("cargo build --release --locked", build)
-        self.assertIn(
-            "for binary in evidence evidencectl mint evidence-oid4vci", build
-        )
+        self.assertIn("for binary in evidence evidencectl mint evidence-oid4vci", build)
 
         assemble = step_run(
             document,
@@ -160,7 +160,7 @@ class EvidenceDevelopmentWorkflowStructureTest(unittest.TestCase):
             "assemble",
             "Smoke the development installer before publication",
         )
-        self.assertIn('$0 == "default_version=\\\"\\\""', assemble)
+        self.assertIn('$0 == "default_version=\\"\\""', assemble)
         self.assertIn("registry.evidence-development-build/v1", assemble)
         self.assertIn("sha256sum --", assemble)
         self.assertIn("EVIDENCECTL_ASSET_DIR", smoke)
@@ -179,8 +179,7 @@ class EvidenceDevelopmentWorkflowStructureTest(unittest.TestCase):
             "Smoke the development installer before publication",
         )
         expected = (
-            'test "${observed}" = '
-            '"${binary} ${{ needs.validate.outputs.version }}-dev"'
+            'test "${observed}" = "${binary} ${{ needs.validate.outputs.version }}-dev"'
         )
         self.assertIn(expected, build)
         self.assertIn(expected, smoke)
@@ -323,9 +322,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIsNotNone(spec.loader)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        self.assertEqual(
-            {"relay"}, module._candidate_image_names("0.20.1")
-        )
+        self.assertEqual({"relay"}, module._candidate_image_names("0.20.1"))
         self.assertEqual(
             {"evidence", "mint", "relay"},
             module._candidate_image_names("0.21.0"),
@@ -339,7 +336,10 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             module._candidate_image_names("0.26.0"),
         )
         self.assertFalse(
-            any("registry-notary" in name for name in module.SECURITY_EVIDENCE_REQUIRED_FILES)
+            any(
+                "registry-notary" in name
+                for name in module.SECURITY_EVIDENCE_REQUIRED_FILES
+            )
         )
 
     def test_pre_v0_19_requests_fail_before_release_discovery(self) -> None:
@@ -405,7 +405,9 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             "validate",
             "Validate request, source, CI, and destinations",
         )
-        self.assertIn('[[ "${REQUEST_SOURCE_SHA}" != "${workflow_revision}" ]]', validation)
+        self.assertIn(
+            '[[ "${REQUEST_SOURCE_SHA}" != "${workflow_revision}" ]]', validation
+        )
         self.assertIn("github.event.client_payload.request_id", text)
         self.assertIn('[[ ! "${REQUEST_ID}" =~ ^[0-9a-f]{32}$ ]]', validation)
         self.assertIn("refs/remotes/origin/main", validation)
@@ -463,7 +465,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             "assemble",
             "Assemble public payload and validate version-appropriate install inputs",
         )
-        self.assertIn('$0 == "default_version=\\\"\\\""', assemble)
+        self.assertIn('$0 == "default_version=\\"\\""', assemble)
         self.assertIn('version="${{ needs.validate.outputs.tag }}"', assemble)
         self.assertIn(
             'cp "candidate/bundle-root/${evidencectl_installer}" \\\n'
@@ -562,7 +564,9 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn("release/requirements/maturin-1.9.6.txt", cache_key)
         self.assertIn("release/scripts/zig-glibc-compiler", cache_key)
         self.assertIn("release/scripts/build-linux-node-client", cache_key)
-        self.assertIn("crates/registry-evidence-client-node/package-lock.json", cache_key)
+        self.assertIn(
+            "crates/registry-evidence-client-node/package-lock.json", cache_key
+        )
         self.assertIn("crates/registry-relay-client-node/package-lock.json", cache_key)
         wheel = step_run(document, "clients", "Build Python client wheels")
         self.assertIn("--compatibility linux", wheel)
@@ -591,9 +595,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         )
         normalize_loader = '(cd "${client_dir}" && npm run normalize:loader)'
         self.assertIn(
-            'if [[ "${client}" == discovery ]]; then\n'
-            f"    {normalize_loader}\n"
-            "  fi",
+            f'if [[ "${{client}}" == discovery ]]; then\n    {normalize_loader}\n  fi',
             node,
         )
         self.assertLess(node.index(helper_call), node.index(normalize_loader))
@@ -618,23 +620,23 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         ):
             self.assertIn(f"export {routed_variable}=", helper)
         for routed_variable in (
-            'CC_${target_env}',
-            'CXX_${target_env}',
-            'CARGO_TARGET_${cargo_target_env}_LINKER',
+            "CC_${target_env}",
+            "CXX_${target_env}",
+            "CARGO_TARGET_${cargo_target_env}_LINKER",
         ):
             self.assertIn(f'export "{routed_variable}=', helper)
         napi_build = "./node_modules/.bin/napi build"
         self.assertIn('--platform --release --target "${rust_target}"', helper)
         self.assertNotIn("--use-napi-cross", helper)
-        self.assertLess(helper.index('export HOST_CC='), helper.index(napi_build))
-        self.assertLess(helper.index('export HOST_CXX='), helper.index(napi_build))
+        self.assertLess(helper.index("export HOST_CC="), helper.index(napi_build))
+        self.assertLess(helper.index("export HOST_CXX="), helper.index(napi_build))
         self.assertIn(
             'unversioned_imports="$(\n'
             '  readelf --wide --dyn-syms "${addon}" \\\n'
-            "    | awk '$7 == \"UND\" && $5 != \"WEAK\" && "
+            '    | awk \'$7 == "UND" && $5 != "WEAK" && '
             "$8 !~ /@/ && $8 !~ /^(napi_|node_api_)/ { print $8 }' \\\n"
             "    | sort -u\n"
-            ")\"",
+            ')"',
             helper,
         )
         self.assertIn(
@@ -659,8 +661,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         predicate = helper[predicate_start:predicate_end]
         dynsym_fixtures = {
             "observed ISO C23 import": (
-                "  1: 0000000000000000 0 FUNC GLOBAL DEFAULT UND "
-                "__isoc23_sscanf\n",
+                "  1: 0000000000000000 0 FUNC GLOBAL DEFAULT UND __isoc23_sscanf\n",
                 ["__isoc23_sscanf"],
             ),
             "generic strong unversioned import": (
@@ -675,8 +676,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
                 [],
             ),
             "versioned import": (
-                "  5: 0000000000000000 0 FUNC GLOBAL DEFAULT UND "
-                "malloc@GLIBC_2.2.5\n",
+                "  5: 0000000000000000 0 FUNC GLOBAL DEFAULT UND malloc@GLIBC_2.2.5\n",
                 [],
             ),
             "weak import": (
@@ -707,14 +707,40 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             self.assertIn("smoke-${client}-client-package", smoke)
             self.assertIn("for client in discovery evidence relay", smoke)
         node_smoke = step_run(document, "clients", "Smoke Node client packages")
+        self.assertIn("node-root-registry", node_smoke)
+        self.assertIn("smoke-registry-client-package.js", node_smoke)
+        self.assertIn(
+            "node_modules/@registrystack/client-${{ matrix.napi_platform }}",
+            node_smoke,
+        )
+        self.assertIn(
+            'if [[ "${{ matrix.asset }}" == linux-amd64-glibc ]]; then',
+            node_smoke,
+        )
+        unified_root_copy = (
+            'cp "${root_package}" \\\n'
+            '      "${GITHUB_WORKSPACE}/candidate-client-package/clients/"'
+        )
+        self.assertIn(unified_root_copy, node_smoke)
+        self.assertLess(
+            node_smoke.index("node smoke-registry-client-package.js"),
+            node_smoke.index(unified_root_copy),
+        )
         self.assertIn("node-root-${client}", node_smoke)
         self.assertIn("root_package", node_smoke)
         self.assertIn("platform_package", node_smoke)
         self.assertIn('packages=("${root_package}" "${platform_package}")', node_smoke)
         self.assertIn("docker run --rm --network none", node_smoke)
         self.assertIn('"${NODE_GLIBC_BASELINE_IMAGE}"', node_smoke)
+        self.assertIn(
+            '"${NODE_GLIBC_BASELINE_IMAGE}" \\\n'
+            "      node smoke-registry-client-package.js",
+            node_smoke,
+        )
         baseline = clients["env"]["NODE_GLIBC_BASELINE_IMAGE"]
-        self.assertRegex(baseline, r"^node:22\.12\.0-bullseye-slim@sha256:[0-9a-f]{64}$")
+        self.assertRegex(
+            baseline, r"^node:22\.12\.0-bullseye-slim@sha256:[0-9a-f]{64}$"
+        )
         self.assertIn("-maxdepth 1 -name '*.node'", node_smoke)
         self.assertIn("node_modules/@registrystack/${client}-client-", node_smoke)
         root_copy = (
@@ -755,6 +781,13 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn("expected_client_assets=9", assemble)
         self.assertIn('"${platform}" == linux-amd64-glibc', assemble)
         self.assertIn(
+            'if [[ "${platform}" == linux-amd64-glibc ]]; then\n'
+            '    if [[ "${include_unified_client}" -eq 1 ]]; then\n'
+            "      expected_client_assets=$((expected_client_assets + 1))\n"
+            '    elif [[ "${include_registry_packages}" -eq 1 ]]; then',
+            assemble,
+        )
+        self.assertIn(
             "expected_client_assets=$((expected_client_assets + 2))",
             assemble,
         )
@@ -784,6 +817,13 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn("registry_discovery_client-*.whl", text)
         self.assertIn("registrystack-evidence-client-*.tgz", text)
         self.assertIn("registrystack-relay-client-*.tgz", text)
+        seal = step_run(
+            document,
+            "assemble",
+            "Seal compact candidate manifest and bundle",
+        )
+        self.assertIn("registrystack-client-*.tgz", seal)
+        self.assertIn("registry_stack_client-*.whl", seal)
         for forbidden in ("npm publish", "maturin publish", "twine upload"):
             self.assertNotIn(forbidden, text)
 
@@ -802,7 +842,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             "'release/docker/Dockerfile.builder') }}",
         )
         self.assertNotIn("restore-keys", cache["with"])
-        self.assertIn('created_at} + 7 days', text)
+        self.assertIn("created_at} + 7 days", text)
         final_upload = next(
             step
             for step in document["jobs"]["assemble"]["steps"]
@@ -912,7 +952,9 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
             verify,
         )
 
-    def test_checks_out_the_protected_workflow_before_running_repo_scripts(self) -> None:
+    def test_checks_out_the_protected_workflow_before_running_repo_scripts(
+        self,
+    ) -> None:
         _, document = workflow("release.yml")
         for job_name, job in document["jobs"].items():
             script_indexes = [
@@ -1051,7 +1093,9 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         )
         self.assertIn("contract/observed-assets", promote)
         self.assertIn("contract/retryable-final-assets", promote)
-        self.assertIn("diff -u contract/expected-assets contract/actual-assets", promote)
+        self.assertIn(
+            "diff -u contract/expected-assets contract/actual-assets", promote
+        )
         self.assertLess(
             finalize.index("require_bound_draft\n"),
             finalize.index("cat contract/retryable-final-assets"),
@@ -1150,20 +1194,16 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         dispatch = document["jobs"]["dispatch-docs"]
         self.assertIn("needs.verify.outputs.docs_sha256 != ''", dispatch["if"])
         self.assertIn("needs.publish.result == 'success'", dispatch["if"])
-        self.assertIn(
-            "needs.closeout-published.result == 'success'", dispatch["if"]
-        )
-        self.assertEqual(
-            dispatch["needs"], ["verify", "publish", "closeout-published"]
-        )
+        self.assertIn("needs.closeout-published.result == 'success'", dispatch["if"])
+        self.assertEqual(dispatch["needs"], ["verify", "publish", "closeout-published"])
         dispatch_run = step_run(
             document,
             "dispatch-docs",
             "Dispatch authenticated docs promotion",
         )
-        self.assertIn('released_tag=${{ needs.verify.outputs.tag }}', dispatch_run)
+        self.assertIn("released_tag=${{ needs.verify.outputs.tag }}", dispatch_run)
         self.assertIn(
-            'docs_sha256=${{ needs.verify.outputs.docs_sha256 }}',
+            "docs_sha256=${{ needs.verify.outputs.docs_sha256 }}",
             dispatch_run,
         )
 
@@ -1177,9 +1217,7 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
                 job["permissions"],
                 {"actions": "read", "contents": "read", "id-token": "write"},
             )
-            self.assertIn(
-                "needs.verify.outputs.client_registries == 'true'", job["if"]
-            )
+            self.assertIn("needs.verify.outputs.client_registries == 'true'", job["if"])
             self.assertIn(
                 "needs.verify.outputs.destination_state != 'published'", job["if"]
             )
@@ -1196,9 +1234,7 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
             pypi["permissions"],
             {"actions": "read", "contents": "read", "id-token": "write"},
         )
-        self.assertIn(
-            "needs.verify.outputs.client_registries == 'true'", pypi["if"]
-        )
+        self.assertIn("needs.verify.outputs.client_registries == 'true'", pypi["if"])
         self.assertIn(
             "needs.verify.outputs.destination_state != 'published'", pypi["if"]
         )
@@ -1241,9 +1277,9 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         self.assertNotIn("NODE_AUTH_TOKEN", npm_publish)
         self.assertIn("require_unexpired_candidate", npm_publish)
         platform_phase = npm_publish[: npm_publish.index("platform_deadline=")]
-        platform_classification = platform_phase[: platform_phase.index(
-            'for name in "${absent_platforms[@]}"'
-        )]
+        platform_classification = platform_phase[
+            : platform_phase.index('for name in "${absent_platforms[@]}"')
+        ]
         platform_publication = platform_phase[
             platform_phase.index('for name in "${absent_platforms[@]}"') :
         ]
@@ -1252,14 +1288,18 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
                 'root_tarball="dist/${root_package}"'
             )
         ]
-        root_phase = npm_publish[npm_publish.index('root_tarball="dist/${root_package}"') :]
+        root_phase = npm_publish[
+            npm_publish.index('root_tarball="dist/${root_package}"') :
+        ]
         for platform in ("darwin-arm64", "linux-arm64-gnu", "linux-x64-gnu"):
             self.assertIn(
                 f"registrystack-${{client}}-client-{platform}-${{version}}.tgz",
                 platform_classification,
             )
         self.assertNotIn("npm publish", platform_classification)
-        self.assertEqual(platform_classification.count("client_registry.py npm-state"), 1)
+        self.assertEqual(
+            platform_classification.count("client_registry.py npm-state"), 1
+        )
         self.assertIn('npm publish "./${tarball}"', platform_publication)
         self.assertNotIn("root_state=", platform_phase)
         self.assertIn("absent_platforms", platform_poll)
@@ -1416,9 +1456,7 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
         stale = verify_latest_release_fixture([release], "v1.3.0", digest)
         self.assertNotEqual(stale.returncode, 0)
         self.assertIn("is stale", stale.stderr)
-        mismatched_digest = verify_latest_release_fixture(
-            [release], "v1.4.0", "b" * 64
-        )
+        mismatched_digest = verify_latest_release_fixture([release], "v1.4.0", "b" * 64)
         self.assertNotEqual(mismatched_digest.returncode, 0)
         self.assertIn("does not match", mismatched_digest.stderr)
         incomplete = {
@@ -1434,18 +1472,14 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
             **release,
             "assets": [*release["assets"], release["assets"][0]],
         }
-        duplicate_docs = verify_latest_release_fixture(
-            [duplicated], "v1.4.0", digest
-        )
+        duplicate_docs = verify_latest_release_fixture([duplicated], "v1.4.0", digest)
         self.assertNotEqual(duplicate_docs.returncode, 0)
         self.assertIn("must carry exactly one", duplicate_docs.stderr)
         for field in ("draft", "prerelease"):
             with self.subTest(field=field):
                 invalid = dict(release)
                 invalid[field] = True
-                result = verify_latest_release_fixture(
-                    [invalid], "v1.4.0", digest
-                )
+                result = verify_latest_release_fixture([invalid], "v1.4.0", digest)
                 self.assertNotEqual(result.returncode, 0)
 
     def test_canary_is_async_and_has_no_public_write_permission(self) -> None:

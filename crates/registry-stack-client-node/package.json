@@ -1,0 +1,23 @@
+{
+  "name": "@registrystack/client",
+  "version": "0.26.0",
+  "description": "Unified Node.js client for Registry Stack products.",
+  "license": "Apache-2.0",
+  "publishConfig": { "access": "public", "provenance": true },
+  "repository": { "type": "git", "url": "https://github.com/registrystack/registry-stack" },
+  "main": "index.js",
+  "types": "index.d.ts",
+  "exports": { ".": { "types": "./index.d.ts", "default": "./index.js" } },
+  "files": ["index.js", "index.d.ts", "native.js", "discovery", "evidence", "relay", "breg"],
+  "engines": { "node": ">=22.12.0" },
+  "scripts": {
+    "sync": "python3 ../../release/scripts/sync-registry-client-node.py",
+    "sync:check": "python3 ../../release/scripts/sync-registry-client-node.py --check",
+    "test": "npm run sync:check && node --test __test__/*.test.js",
+    "check:types": "tsc --noEmit --strict --skipLibCheck false --types node --moduleResolution node16 --module node16 --target es2022 index.d.ts __test__/facade.test-d.ts"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.1",
+    "typescript": "6.0.3"
+  }
+}

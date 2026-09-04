@@ -39,6 +39,7 @@ RELAY_CLIENT_PACKAGE_MINIMUM_VERSION = (0, 19, 1)
 DISCOVERY_CLIENT_PACKAGE_MINIMUM_VERSION = (0, 23, 0)
 DISCOVERY_RUNTIME_MINIMUM_VERSION = (0, 24, 0)
 BREG_RELEASE_MINIMUM_VERSION = (0, 26, 0)
+UNIFIED_CLIENT_PACKAGE_MINIMUM_VERSION = (0, 26, 1)
 
 
 def run(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -80,10 +81,18 @@ def manifest(version: str, release_id: str, source_ref: str, status: str) -> dic
         for artifact in RELAY_V2_ARTIFACT_INVENTORY
         if artifact != "relay-installer" or version_tuple >= (0, 19, 1)
     )
-    if version_tuple >= RELAY_CLIENT_PACKAGE_MINIMUM_VERSION:
-        inventory += ("relay-client-node", "relay-client-python")
-    if version_tuple >= DISCOVERY_CLIENT_PACKAGE_MINIMUM_VERSION:
-        inventory += ("discovery-client-node", "discovery-client-python")
+    if version_tuple >= UNIFIED_CLIENT_PACKAGE_MINIMUM_VERSION:
+        inventory = tuple(
+            item
+            for item in inventory
+            if item not in {"evidence-client-node", "evidence-client-python"}
+        )
+        inventory += ("registry-client-node", "registry-client-python")
+    else:
+        if version_tuple >= RELAY_CLIENT_PACKAGE_MINIMUM_VERSION:
+            inventory += ("relay-client-node", "relay-client-python")
+        if version_tuple >= DISCOVERY_CLIENT_PACKAGE_MINIMUM_VERSION:
+            inventory += ("discovery-client-node", "discovery-client-python")
     if version_tuple >= DISCOVERY_RUNTIME_MINIMUM_VERSION:
         inventory += ("discovery",)
     if version_tuple >= BREG_RELEASE_MINIMUM_VERSION:
@@ -349,6 +358,10 @@ version = "1.1.0"
                 "crates/registry-relay-client-node",
                 "@registrystack/relay-client",
             ),
+            (
+                "crates/registry-breg-client-node",
+                "@registrystack/breg-client-native",
+            ),
         ):
             client_root = self.root / relative_root
             write_json(
@@ -380,6 +393,31 @@ version = "1.1.0"
                 client_root / "index.js",
                 "if (bindingPackageVersion !== '1.1.0') throw new Error();\n",
             )
+        unified_node = self.root / "crates/registry-stack-client-node"
+        write_json(
+            unified_node / "package.json",
+            {"name": "@registrystack/client", "version": "1.1.0"},
+        )
+        write_json(
+            unified_node / "package-lock.json",
+            {
+                "name": "@registrystack/client",
+                "version": "1.1.0",
+                "lockfileVersion": 3,
+                "packages": {
+                    "": {"name": "@registrystack/client", "version": "1.1.0"}
+                },
+            },
+        )
+        write(unified_node / "native.js", "const PACKAGE_VERSION = '1.1.0';\n")
+        for platform in ("darwin-arm64", "linux-arm64-gnu", "linux-x64-gnu"):
+            write_json(
+                unified_node / "npm" / platform / "package.json",
+                {
+                    "name": f"@registrystack/client-{platform}",
+                    "version": "1.1.0",
+                },
+            )
         for relative_root, name, dependency in (
             (
                 "crates/registry-discovery-client-py",
@@ -395,6 +433,11 @@ version = "1.1.0"
                 "crates/registry-relay-client-py",
                 "registry-relay-client",
                 "relay-client-sdk",
+            ),
+            (
+                "crates/registry-breg-client-py",
+                "registry-breg-client-native",
+                "registry-breg-client",
             ),
         ):
             client_root = self.root / relative_root
@@ -415,6 +458,18 @@ version.workspace = true
 {dependency} = {{ package = "{name}", path = "../{name}", version = "1.1.0" }}
 ''',
             )
+        write(
+            self.root / "crates/registry-stack-client-py/pyproject.toml",
+            '''[project]
+name = "registry-stack-client"
+version = "1.1.0"
+''',
+        )
+        write(
+            self.root
+            / "crates/registry-stack-client-py/python/registry_client/__init__.py",
+            '__version__ = "1.1.0"\n',
+        )
         for relative in (
             "products/manifest/fuzz/Cargo.lock",
             "products/platform/fuzz/Cargo.lock",

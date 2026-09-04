@@ -43,6 +43,12 @@ dependency runs one way only in production: no Evidence crate depends on
 | `crates/registry-discovery-client-node` | Node.js binding for `registry-discovery-client`, via napi-rs |
 | `crates/registry-discovery-client-py` | Python binding for `registry-discovery-client`, via PyO3 |
 | `crates/registry-discoveryctl` | Offline origin and mapping checks plus immutable index builds |
+| `crates/registry-breg-client` | Base Registry Engine client and its opaque authorization handles |
+| `crates/registry-breg-client-node` | Internal napi-rs binding used to assemble the unified Node.js client |
+| `crates/registry-breg-client-py` | Internal PyO3 binding used to assemble the unified Python client |
+| `crates/registry-stack-client` | Rust facade over the maintained Registry Stack product clients |
+| `crates/registry-stack-client-node` | Public `@registrystack/client` facade and platform package definitions |
+| `crates/registry-stack-client-py` | Public `registry-stack-client` Python facade assembled with all native bindings |
 | `crates/registry-evidence` | Single-crate Evidence runtime and `evidence` binary |
 | `crates/registry-evidence-verifier` | Portable Evidence response verification, shared by the runtime and client tooling |
 | `crates/registry-evidence-client` | Evidence relying-party SDK: requests assertions and verifies them via `registry-evidence-verifier` |
@@ -296,6 +302,19 @@ cargo build --locked -p registry-evidence-client-py --lib \
   --features registry-evidence-client-py/extension-module
 python3 -m unittest discover -s tests/python -v
 cmp ../../LICENSE LICENSE
+```
+
+The unified Node.js and Python packages are generated from all four product
+bindings. After changing a binding or facade, run:
+
+```bash
+python3 release/scripts/sync-registry-client-node.py --check
+cd crates/registry-stack-client-node
+npm ci
+npm test
+npm run check:types
+cd ../..
+python3 -m unittest release/scripts/test_assemble_registry_client_wheel.py
 ```
 
 Release source checks:

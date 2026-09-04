@@ -169,6 +169,8 @@ jobs:
             crates/registry-discovery-client-node/package-lock.json
             crates/registry-evidence-client-node/package-lock.json
             crates/registry-relay-client-node/package-lock.json
+            crates/registry-breg-client-node/package-lock.json
+            crates/registry-stack-client-node/package-lock.json
 
       - name: Install exact Zig toolchain
         shell: bash
@@ -185,7 +187,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for client in discovery evidence relay; do
+          IFS=. read -r major minor patch <<<"${CLIENT_VERSION}"
+          unified_client=0
+          if (( major > 0 || minor > 26 || (minor == 26 && patch >= 1) )); then
+            unified_client=1
+          fi
+          clients=(discovery evidence relay)
+          if [[ "${unified_client}" -eq 1 ]]; then
+            clients+=(breg)
+          fi
+          for client in "${clients[@]}"; do
             client_dir="${GITHUB_WORKSPACE}/crates/registry-${client}-client-node"
             (cd "${client_dir}" && npm ci)
             test "$(node -p "require('${client_dir}/package.json').version")" = \
@@ -196,6 +207,9 @@ jobs:
               --napi-platform "${{ matrix.napi_platform }}" \
               --zig-python "${RUNNER_TEMP}/maturin/bin/python"
 
+            if [[ "${unified_client}" -eq 1 ]]; then
+              continue
+            fi
             platform_dir="${client_dir}/npm/${{ matrix.napi_platform }}"
             test -f "${platform_dir}/package.json"
             cp "${client_dir}/LICENSE" "${platform_dir}/LICENSE"
@@ -241,3 +255,46 @@ jobs:
                 node "smoke-${client}-client-package.js"
             )
           done
+          if [[ "${unified_client}" -eq 1 ]]; then
+            client_dir="${GITHUB_WORKSPACE}/crates/registry-stack-client-node"
+            platform_dir="${client_dir}/npm/${{ matrix.napi_platform }}"
+            for client in discovery evidence relay breg; do
+              cp "${GITHUB_WORKSPACE}/crates/registry-${client}-client-node/${client}-client.${{ matrix.napi_platform }}.node" \
+                "${platform_dir}/"
+            done
+            (cd "${client_dir}" && npm pack \
+              "./npm/${{ matrix.napi_platform }}" \
+              --ignore-scripts --pack-destination "${RUNNER_TEMP}")
+            platform_package="${RUNNER_TEMP}/registrystack-client-${{ matrix.napi_platform }}-${CLIENT_VERSION}.tgz"
+            test -f "${platform_package}"
+
+            smoke="${RUNNER_TEMP}/node-rehearsal-registry"
+            root_stage="${RUNNER_TEMP}/node-root-registry"
+            mkdir -p "${smoke}" "${root_stage}"
+            cp -R "${client_dir}/." "${root_stage}/"
+            python3 release/scripts/client_registry.py bind-optional-deps \
+              --package-json "${root_stage}/package.json" \
+              --version "${CLIENT_VERSION}" \
+              --client stack
+            (cd "${root_stage}" && npm pack \
+              --ignore-scripts --pack-destination "${smoke}")
+            root_package="${smoke}/registrystack-client-${CLIENT_VERSION}.tgz"
+            test -f "${root_package}"
+            (
+              cd "${smoke}"
+              npm init --yes >/dev/null
+              npm install --no-audit --no-fund --ignore-scripts \
+                "${root_package}" "${platform_package}"
+              test -z "$(find node_modules/@registrystack/client \
+                -maxdepth 1 -name '*.node' -print -quit)"
+              test "$(find node_modules/@registrystack/client-${{ matrix.napi_platform }} \
+                -maxdepth 1 -name '*.node' | wc -l)" -eq 4
+              cp "${GITHUB_WORKSPACE}/release/scripts/smoke-registry-client-package.js" .
+              node smoke-registry-client-package.js
+              docker run --rm --network none \
+                --volume "${smoke}:${smoke}:ro" \
+                --workdir "${smoke}" \
+                "${NODE_GLIBC_BASELINE_IMAGE}" \
+                node smoke-registry-client-package.js
+            )
+          fi

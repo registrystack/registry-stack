@@ -248,12 +248,18 @@ jobs:
               "${{ steps.identity.outputs.version }}" <<'PY'
           import json
           import sys
-          from release_candidate import DISCOVERY_CLIENT_PACKAGE_MINIMUM_VERSION
+          from release_candidate import (
+              DISCOVERY_CLIENT_PACKAGE_MINIMUM_VERSION,
+              UNIFIED_CLIENT_PACKAGE_MINIMUM_VERSION,
+          )
 
           version = tuple(int(part) for part in sys.argv[1].split("."))
-          clients = ["evidence", "relay"]
-          if version >= DISCOVERY_CLIENT_PACKAGE_MINIMUM_VERSION:
-              clients.insert(0, "discovery")
+          if version >= UNIFIED_CLIENT_PACKAGE_MINIMUM_VERSION:
+              clients = ["stack"]
+          else:
+              clients = ["evidence", "relay"]
+              if version >= DISCOVERY_CLIENT_PACKAGE_MINIMUM_VERSION:
+                  clients.insert(0, "discovery")
           print(json.dumps({"client": clients}, separators=(",", ":")))
           PY
           )"
@@ -262,15 +268,21 @@ jobs:
               "${{ steps.identity.outputs.version }}" <<'PY'
           import json
           import sys
-          from release_candidate import DISCOVERY_CLIENT_PACKAGE_MINIMUM_VERSION
+          from release_candidate import (
+              DISCOVERY_CLIENT_PACKAGE_MINIMUM_VERSION,
+              UNIFIED_CLIENT_PACKAGE_MINIMUM_VERSION,
+          )
 
           version = tuple(int(part) for part in sys.argv[1].split("."))
-          clients = [
-              {"client": "evidence", "environment": "pypi-evidence"},
-              {"client": "relay", "environment": "pypi"},
-          ]
-          if version >= DISCOVERY_CLIENT_PACKAGE_MINIMUM_VERSION:
-              clients.insert(0, {"client": "discovery", "environment": "pypi"})
+          if version >= UNIFIED_CLIENT_PACKAGE_MINIMUM_VERSION:
+              clients = [{"client": "stack", "environment": "pypi"}]
+          else:
+              clients = [
+                  {"client": "evidence", "environment": "pypi-evidence"},
+                  {"client": "relay", "environment": "pypi"},
+              ]
+              if version >= DISCOVERY_CLIENT_PACKAGE_MINIMUM_VERSION:
+                  clients.insert(0, {"client": "discovery", "environment": "pypi"})
           print(json.dumps({"include": clients}, separators=(",", ":")))
           PY
           )"
@@ -1285,12 +1297,21 @@ jobs:
           }
           version="${{ needs.verify.outputs.version }}"
           client="${{ matrix.client }}"
-          platform_packages=(
-            "registrystack-${client}-client-darwin-arm64-${version}.tgz"
-            "registrystack-${client}-client-linux-arm64-gnu-${version}.tgz"
-            "registrystack-${client}-client-linux-x64-gnu-${version}.tgz"
-          )
-          root_package="registrystack-${client}-client-${version}.tgz"
+          if [[ "${client}" == stack ]]; then
+            platform_packages=(
+              "registrystack-client-darwin-arm64-${version}.tgz"
+              "registrystack-client-linux-arm64-gnu-${version}.tgz"
+              "registrystack-client-linux-x64-gnu-${version}.tgz"
+            )
+            root_package="registrystack-client-${version}.tgz"
+          else
+            platform_packages=(
+              "registrystack-${client}-client-darwin-arm64-${version}.tgz"
+              "registrystack-${client}-client-linux-arm64-gnu-${version}.tgz"
+              "registrystack-${client}-client-linux-x64-gnu-${version}.tgz"
+            )
+            root_package="registrystack-${client}-client-${version}.tgz"
+          fi
           absent_platforms=()
           for name in "${platform_packages[@]}"; do
             tarball="dist/${name}"

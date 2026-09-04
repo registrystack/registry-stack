@@ -27,3 +27,13 @@ from .registry_evidence_client import *  # noqa: F401,F403
 # import registry_evidence_client as sub` keeps working, since that form
 # falls back to `sys.modules` directly.
 globals().pop("registry_evidence_client", None)
+
+
+def _bind_public_module() -> None:
+    for value in tuple(globals().values()):
+        if isinstance(value, type) and value.__module__ == "registry_evidence_client":
+            value.__module__ = __name__
+
+
+_bind_public_module()
+del _bind_public_module

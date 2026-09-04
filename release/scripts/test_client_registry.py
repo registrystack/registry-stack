@@ -30,7 +30,7 @@ def write_npm_package(
     *,
     name: str,
     version: str,
-    binary: str | None = None,
+    binary: str | tuple[str, ...] | None = None,
     optional_dependencies: dict[str, str] | None = None,
 ) -> None:
     metadata: dict[str, object] = {"name": name, "version": version}
@@ -40,8 +40,11 @@ def write_npm_package(
         "package/package.json": json.dumps(metadata).encode(),
         "package/LICENSE": b"license\n",
     }
-    if binary is not None:
+    if isinstance(binary, str):
         entries[f"package/{binary}"] = b"native\n"
+    elif binary is not None:
+        for item in binary:
+            entries[f"package/{item}"] = b"native\n"
     with tarfile.open(path, mode="w:gz") as archive:
         for member_name, payload in entries.items():
             info = tarfile.TarInfo(member_name)
@@ -104,6 +107,23 @@ class ClientRegistryTest(unittest.TestCase):
         self.module.validate_distribution(self.directory, self.version, "discovery")
         self.module.validate_distribution(self.directory, self.version, "evidence")
         self.module.validate_distribution(self.directory, self.version, "relay")
+
+    def test_validates_the_unified_distribution_with_all_native_bindings(self) -> None:
+        self._write_distribution("stack")
+        self.module.validate_distribution(self.directory, self.version, "stack")
+        platform = self.module.npm_tarballs(
+            self.directory, self.version, "stack"
+        )[0]
+        _metadata, names = self.module.npm_package_metadata(platform)
+        self.assertEqual(
+            sorted(name for name in names if name.endswith(".node")),
+            [
+                "package/breg-client.darwin-arm64.node",
+                "package/discovery-client.darwin-arm64.node",
+                "package/evidence-client.darwin-arm64.node",
+                "package/relay-client.darwin-arm64.node",
+            ],
+        )
 
     def test_public_linux_wheels_use_manylinux_tags(self) -> None:
         names = {
@@ -375,9 +395,14 @@ class CheckedInClientManifestTest(unittest.TestCase):
         # branch from the moment that release publishes. The release binds
         # these when it packs the root package, so the tree carries none.
         repo = Path(__file__).resolve().parents[2]
-        for client in ("discovery", "evidence", "relay"):
+        roots = {
+            "discovery": repo / "crates/registry-discovery-client-node",
+            "evidence": repo / "crates/registry-evidence-client-node",
+            "relay": repo / "crates/registry-relay-client-node",
+            "stack": repo / "crates/registry-stack-client-node",
+        }
+        for client, root in roots.items():
             with self.subTest(client=client):
-                root = repo / f"crates/registry-{client}-client-node"
                 manifest = json.loads(
                     (root / "package.json").read_text(encoding="utf-8")
                 )

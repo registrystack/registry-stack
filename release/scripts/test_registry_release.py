@@ -1583,6 +1583,33 @@ class RegistryReleaseTest(TestCase):
         self.assertIn('${repo_root}" != "/workspace"', recipe)
         self.assertIn('--user "$(id -u):$(id -g)"', recipe)
 
+    def test_unified_client_manifest_surface_replaces_individual_clients(self) -> None:
+        module = load_registry_release()
+        base = {
+            name: "0.26.1"
+            for name in module.RELAY_V2_ARTIFACT_INVENTORY
+            if name not in {"evidence-client-node", "evidence-client-python"}
+        }
+        base.update(
+            {
+                "relay-installer": "0.26.1",
+                "registry-docs": "0.26.1",
+                "discovery": "0.26.1",
+                "breg": "0.26.1",
+                "bregctl": "0.26.1",
+                "breg-installer": "0.26.1",
+                "registry-client-node": "0.26.1",
+                "registry-client-python": "0.26.1",
+            }
+        )
+        self.assertEqual([], module.artifact_inventory_errors("0.26.1", base))
+        self.assertNotEqual(
+            [],
+            module.artifact_inventory_errors(
+                "0.26.1",
+                base | {"relay-client-node": "0.26.1"},
+            ),
+        )
     def test_release_packaging_excludes_retired_notary(self) -> None:
         binary_recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(
             encoding="utf-8"
@@ -2675,6 +2702,18 @@ def write_manifest(
         artifacts["breg"] = version
         artifacts["bregctl"] = version
         artifacts["breg-installer"] = version
+    if version_tuple >= (0, 26, 1):
+        for artifact in (
+            "evidence-client-node",
+            "evidence-client-python",
+            "relay-client-node",
+            "relay-client-python",
+            "discovery-client-node",
+            "discovery-client-python",
+        ):
+            artifacts.pop(artifact, None)
+        artifacts["registry-client-node"] = version
+        artifacts["registry-client-python"] = version
     manifest = {
         "stack": {
             "release": "beta-6",

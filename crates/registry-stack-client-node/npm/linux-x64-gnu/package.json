@@ -1,0 +1,14 @@
+{
+  "name": "@registrystack/client-linux-x64-gnu",
+  "version": "0.26.0",
+  "description": "Registry Stack unified native clients for Linux x64 glibc.",
+  "license": "Apache-2.0",
+  "publishConfig": { "access": "public" },
+  "repository": { "type": "git", "url": "https://github.com/registrystack/registry-stack" },
+  "main": "index.js",
+  "files": ["index.js", "*.node"],
+  "engines": { "node": ">=22.12.0" },
+  "os": ["linux"],
+  "cpu": ["x64"],
+  "libc": ["glibc"]
+}

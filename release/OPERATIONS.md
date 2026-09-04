@@ -143,36 +143,41 @@ the version is a decision to file one, not a tooling change.
 
 ### Provision client registries
 
-Registry Stack v0.22.0 promotes the exact candidate Evidence and Relay client
-packages to npm and PyPI before the GitHub Release becomes public. Registry
-Stack v0.23.0 and later also promote the Discovery clients. The npm and PyPI
-publication jobs use GitHub-hosted runners and OpenID Connect trusted
-publishing. Do not add npm or PyPI write tokens to the repository.
+Registry Stack v0.22.0 through v0.26.0 promoted separate Evidence, Relay, and,
+from v0.23.0, Discovery client projects. Those immutable versions remain
+supported release history. Starting with v0.26.1, a release promotes only the
+unified user-facing clients: `@registrystack/client` on npm and
+`registry-stack-client` on PyPI. Their `discovery`, `evidence`, `relay`, and
+`breg` namespaces carry the product APIs. BREG's native binding and all four
+product-specific bindings are build inputs, not additional public projects.
 
-On PyPI, register pending trusted publishers for `registry-discovery-client`,
-`registry-evidence-client`, and `registry-relay-client` with these exact values
-before requesting the first v0.23.0 or later candidate:
+The npm and PyPI publication jobs use GitHub-hosted runners and OpenID Connect
+trusted publishing. Do not add npm or PyPI write tokens to the repository.
+
+On PyPI, register a pending trusted publisher for `registry-stack-client`
+before requesting the first v0.26.1-or-later candidate:
 
 - Owner: `registrystack`
 - Repository: `registry-stack`
 - Workflow: `release.yml`
-- Environment: `pypi` for Discovery and Relay, and `pypi-evidence` for Evidence
+- Environment: `pypi`
 
-Configure the `pypi` and `pypi-evidence` GitHub environments with required
-reviewers. PyPI creates each project when its first trusted publication
-succeeds.
+Configure the `pypi` GitHub environment with required reviewers. PyPI creates
+the project when its first trusted publication succeeds. Keep the historical
+project publishers and `pypi-evidence` environment intact for exact recovery
+of releases through v0.26.0, but later releases do not select them.
 
 npm does not provide a pending trusted publisher for an uncreated package.
-Each client package therefore needs a one-time bootstrap before its first
-release. Evidence and Relay were provisioned for v0.22.0. Before the first
-v0.23.0-or-later candidate, provision only the Discovery root and platform
-packages:
+Each package identity therefore needs a one-time bootstrap before its first
+release. Before the first v0.26.1-or-later candidate, provision only these four
+new identities:
 
-1. Create inert `0.0.0` root and platform packages for
-   `@registrystack/discovery-client`. It has `darwin-arm64`,
-   `linux-arm64-gnu`, and `linux-x64-gnu` platform packages. Give every
+1. Create inert `0.0.0` packages for `@registrystack/client` and its
+   `@registrystack/client-darwin-arm64`,
+   `@registrystack/client-linux-arm64-gnu`, and
+   `@registrystack/client-linux-x64-gnu` implementation packages. Give every
    bootstrap package only a README, `package.json`, and Apache-2.0 license. Do
-   not include executable code.
+   not include executable code or product-specific package identities.
 2. Publish each package with `npm publish --access public --tag bootstrap` and
    a maintainer's two-factor authentication. Verify the resulting tags. npm
    can initialize `latest` when the first package version is created, even
@@ -211,7 +216,7 @@ checks pass. The merge commit is the intended candidate source. The exact
 protected-main revision accepted by `request-candidate` becomes the candidate
 source and future tag target. There is no finalization or closeout PR.
 
-The Node client manifests and their lockfiles deliberately bind no platform
+The unified Node client manifest and lockfile deliberately bind no platform
 package versions. Those versions name the release being prepared, which is
 unpublished for as long as the PR is open, so a tree that carries them records
 placeholder lock entries and leaves `npm ci` unsatisfiable on protected `main`
@@ -220,8 +225,9 @@ root package, smoke-tests that exact tarball with its native platform package,
 and makes the Linux AMD64 row its single artifact owner. Candidate assembly
 reuses that exact root tarball without rebuilding it. `client_registry.py
 validate-dist` remains the exact proof that the published root package carries
-the required platform dependency set. The planner rejects a prepared tree that
-binds those versions.
+the required platform dependency set. For the unified package, that proof also
+requires each implementation package to contain all four native bindings. The
+planner rejects a prepared tree that binds those versions.
 
 Before opening the release PR, push the prepared branch and run the read-only
 Ubuntu rehearsal from that branch:
@@ -520,9 +526,11 @@ Publication:
    mismatch stops publication.
 4. Adds `SHA256SUMS` and one keyless Sigstore bundle for the checksum file.
 5. Reconciles the exact version-appropriate client wheels on PyPI and root and
-   platform packages on npm. v0.22.x includes Evidence and Relay; v0.23.0 and
-   later also include Discovery. Absent packages use trusted short-lived
-   credentials; existing packages must match the candidate bytes.
+   platform packages on npm. v0.22.0 through v0.26.0 use the historical
+   product projects. v0.26.1 and later use only `registry-stack-client` and
+   `@registrystack/client` plus its three platform implementation packages.
+   Absent packages use trusted short-lived credentials; existing packages must
+   match the candidate bytes.
 6. Rechecks the full asset inventory, checksum signature, image digests, and
    completed client registry jobs, then publishes a public, non-prerelease
    GitHub Release.
@@ -549,8 +557,9 @@ every downloadable asset against GitHub's digest metadata, the exact
 manifest binding, every final OCI digest, and one maintained binary version
 smoke. For v0.22.0 and later, the publication workflow also verifies the npm
 SHA-512 integrity and PyPI SHA-256 digest of every version-appropriate client
-package before docs promotion. Discovery joins that set at v0.23.0. The public
-verifier is read-only and can be rerun independently.
+package before docs promotion. The verifier selects the historical individual
+projects through v0.26.0 and only the unified projects from v0.26.1. It is
+read-only and can be rerun independently.
 
 For an interrupted publication after the annotated tag exists, classify the
 exact recovery state before retrying:

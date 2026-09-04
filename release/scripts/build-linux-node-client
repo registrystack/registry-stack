@@ -28,9 +28,9 @@ while (( "$#" )); do
 done
 
 case "${client}" in
-  discovery|evidence|relay) ;;
+  discovery|evidence|relay|breg) ;;
   *)
-    printf 'client must be discovery, evidence, or relay\n' >&2
+    printf 'client must be discovery, evidence, relay, or breg\n' >&2
     exit 2
     ;;
 esac

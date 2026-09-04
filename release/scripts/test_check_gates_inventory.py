@@ -101,8 +101,7 @@ class GateInventoryTest(unittest.TestCase):
         rehearsal_path = ".github/workflows/release-rehearsal.yml"
         policy_texts[rehearsal_path] = policy_texts[rehearsal_path].replace(
             "            --root .\n",
-            "            --root . \\\n"
-            "            --allow-missing-baseline\n",
+            "            --root . \\\n            --allow-missing-baseline\n",
             1,
         )
         self.assertIn(
@@ -429,9 +428,7 @@ class GateInventoryTest(unittest.TestCase):
         protected_push = (
             "if: github.event_name == 'push' && github.ref == 'refs/heads/main'"
         )
-        upload_if = (
-            f"{protected_push} && needs.changes.outputs.platform == 'true'"
-        )
+        upload_if = f"{protected_push} && needs.changes.outputs.platform == 'true'"
         mutations = (
             (
                 "    steps:\n      - name: Checkout",
@@ -629,9 +626,7 @@ class GateInventoryTest(unittest.TestCase):
                 mutated = workflow.replace(marker, "removed-draft-barrier", 1)
                 self.assertEqual(
                     ["Final release mutations require the bound draft"],
-                    self.module.release_draft_mutation_barrier_violations(
-                        mutated
-                    ),
+                    self.module.release_draft_mutation_barrier_violations(mutated),
                 )
         for step_name in (
             "Clean retryable final additions and reverify exact staged assets",
@@ -654,9 +649,7 @@ class GateInventoryTest(unittest.TestCase):
                 mutated = workflow.replace(step, mutated_step, 1)
                 self.assertEqual(
                     ["Final release mutations require the bound draft"],
-                    self.module.release_draft_mutation_barrier_violations(
-                        mutated
-                    ),
+                    self.module.release_draft_mutation_barrier_violations(mutated),
                 )
 
     def test_real_repository_has_no_tracked_nested_workflows(self) -> None:
@@ -841,7 +834,22 @@ class GateInventoryTest(unittest.TestCase):
         self.assertIn('--napi-platform "${{ matrix.napi_platform }}"', proof)
         self.assertIn('--zig-python "${RUNNER_TEMP}/maturin/bin/python"', proof)
         self.assertIn("smoke-${client}-client-package.js", proof)
-        self.assertIn('(cd "${smoke}" && node "smoke-${client}-client-package.js")', proof)
+        self.assertIn(
+            '(cd "${smoke}" && node "smoke-${client}-client-package.js")', proof
+        )
+        platform_link = (
+            '"${client_dir}/node_modules/@registrystack/'
+            'client-${{ matrix.napi_platform }}"'
+        )
+        self.assertIn(platform_link, proof)
+        self.assertLess(
+            proof.index(platform_link),
+            proof.index("node smoke-registry-client-package.js"),
+        )
+        self.assertNotIn(
+            '"${smoke}/node_modules/@registrystack/client-${{ matrix.napi_platform }}"',
+            proof,
+        )
         self.assertNotIn("napi build", proof)
         self.assertNotIn("npm pack", proof)
         self.assertNotIn("docker run", proof)
@@ -983,13 +991,15 @@ class GateInventoryTest(unittest.TestCase):
                 "release/scripts/test_verify_public_release.py",
                 "Public release verifier tests",
             ),
+            (
+                "release/scripts/test_assemble_registry_client_wheel.py",
+                "Unified Python wheel assembly tests",
+            ),
         )
         for path, gate in tests:
             with self.subTest(path=path):
                 text = self.workflow.replace(path, path.replace("test_", "skip_"))
                 self.assertIn(gate, self.module.missing_gates(text))
-
-
 
     def test_missing_actionlint_gate_is_reported(self) -> None:
         text = self.workflow.replace(
@@ -1015,9 +1025,6 @@ class GateInventoryTest(unittest.TestCase):
                 text = self.workflow.replace(snippet, replacement)
                 self.assertIn(gate, self.module.missing_gates(text))
 
-
-
-
     def test_missing_affected_package_test_is_reported(self) -> None:
         text = self.workflow.replace(
             "run: python3 .github/scripts/run_cargo_packages.py test",
@@ -1025,11 +1032,9 @@ class GateInventoryTest(unittest.TestCase):
         )
         self.assertIn("Affected package tests", self.module.missing_gates(text))
 
-
     def test_missing_platform_coverage_threshold_is_reported(self) -> None:
         text = self.workflow.replace("--fail-under-lines 80", "--summary-only")
         self.assertIn("Platform coverage threshold", self.module.missing_gates(text))
-
 
     def test_missing_secret_scan_redaction_is_reported(self) -> None:
         text = self.workflow.replace("--redact", "--verbose")
@@ -1095,10 +1100,10 @@ class GateInventoryTest(unittest.TestCase):
         )
         self.assertIn("Release docset validation", self.module.missing_gates(text))
 
-    def test_release_manifest_validation_uses_only_the_maintained_manifest(self) -> None:
-        command = (
-            "release/scripts/registry-release validate-current"
-        )
+    def test_release_manifest_validation_uses_only_the_maintained_manifest(
+        self,
+    ) -> None:
+        command = "release/scripts/registry-release validate-current"
         self.assertIn(command, self.workflow)
         self.assertNotIn(
             "for manifest in release/manifests/registry-stack-*.yaml",
@@ -1107,24 +1112,6 @@ class GateInventoryTest(unittest.TestCase):
 
         text = self.workflow.replace(command, "release/scripts/registry-release skip")
         self.assertIn("Release manifest validation", self.module.missing_gates(text))
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     def test_missing_stable_error_registry_path_filter_is_reported(self) -> None:
         classifier = self.classifier.replace(

@@ -32,6 +32,8 @@ members = [
     "crates/registry-mint",
     "crates/registry-record",
     "crates/registry-breg-client",
+    "crates/registry-breg-client-node",
+    "crates/registry-breg-client-py",
     "crates/registry-relay-http-contract",
     "crates/registry-relay-client",
     "crates/registry-relay-client-node",
@@ -80,6 +82,8 @@ registry-manifest-core = { path = "crates/registry-manifest-core", version = "0.
 registry-mint = { path = "crates/registry-mint", version = "0.26.0" }
 registry-record = { path = "crates/registry-record", version = "0.26.0" }
 registry-breg-client = { path = "crates/registry-breg-client", version = "0.26.0" }
+registry-breg-client-node = { path = "crates/registry-breg-client-node", version = "0.26.0" }
+registry-breg-client-py = { path = "crates/registry-breg-client-py", version = "0.26.0" }
 registry-relay-http-contract = { path = "crates/registry-relay-http-contract", version = "0.26.0" }
 registry-relay-client = { path = "crates/registry-relay-client", version = "0.26.0" }
 registry-relay-client-node = { path = "crates/registry-relay-client-node", version = "0.26.0" }
