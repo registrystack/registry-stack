@@ -621,6 +621,9 @@ jobs:
               (cd "${client_dir}" && ./node_modules/.bin/napi build \
                 --platform --release --target "${{ matrix.target }}")
             fi
+            if [[ "${client}" == discovery ]]; then
+              (cd "${client_dir}" && npm run normalize:loader)
+            fi
             (cd "${client_dir}" && npm pack --pack-destination "${RUNNER_TEMP}")
             packed="${RUNNER_TEMP}/registrystack-${client}-client-${CLIENT_VERSION}.tgz"
             test -f "${packed}"

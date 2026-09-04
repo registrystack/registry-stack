@@ -589,6 +589,18 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertLess(
             node.index(helper_call), node.index('(cd "${client_dir}" && npm pack')
         )
+        normalize_loader = '(cd "${client_dir}" && npm run normalize:loader)'
+        self.assertIn(
+            'if [[ "${client}" == discovery ]]; then\n'
+            f"    {normalize_loader}\n"
+            "  fi",
+            node,
+        )
+        self.assertLess(node.index(helper_call), node.index(normalize_loader))
+        self.assertLess(
+            node.index(normalize_loader),
+            node.index('(cd "${client_dir}" && npm pack'),
+        )
         self.assertIn(
             '(cd "${client_dir}" && ./node_modules/.bin/napi build \\\n'
             '      --platform --release --target "${{ matrix.target }}")',
@@ -1220,7 +1232,7 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
             "Reconcile platform packages, then publish the root package",
         )
         self.assertEqual(npm["timeout-minutes"], 30)
-        self.assertEqual(pypi["timeout-minutes"], 15)
+        self.assertEqual(pypi["timeout-minutes"], 20)
         self.assertIn("client_registry.py npm-state", npm_publish)
         self.assertIn('npm publish "./${tarball}"', npm_publish)
         self.assertIn('npm publish "./${root_tarball}"', npm_publish)
