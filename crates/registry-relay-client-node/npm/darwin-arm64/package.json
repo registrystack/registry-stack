@@ -1,6 +1,6 @@
 {
   "name": "@registrystack/relay-client-darwin-arm64",
-  "version": "0.26.0",
+  "version": "0.26.1",
   "cpu": [
     "arm64"
   ],

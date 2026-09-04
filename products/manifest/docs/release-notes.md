@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.26.1
+
+- Registry Manifest has no user-visible format or rendering changes in this
+  release.
+
 ## 0.26.0
 
 - BREAKING: every `data_services[]` entry must list at least one existing

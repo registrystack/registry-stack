@@ -1,6 +1,6 @@
 {
   "name": "@registrystack/discovery-client-linux-arm64-gnu",
-  "version": "0.26.0",
+  "version": "0.26.1",
   "cpu": ["arm64"],
   "main": "discovery-client.linux-arm64-gnu.node",
   "files": ["discovery-client.linux-arm64-gnu.node"],

@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "registry-discovery-client"
-version = "0.26.0"
+version = "0.26.1"
 description = "Python binding for the Registry Discovery client, via PyO3."
 readme = "README.md"
 license = { text = "Apache-2.0" }
