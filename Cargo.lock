@@ -3424,6 +3424,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-breg-client-node"
+version = "0.26.0"
+dependencies = [
+ "napi",
+ "napi-build",
+ "napi-derive",
+ "registry-breg-client",
+ "registry-platform-crypto",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "registry-breg-client-py"
+version = "0.26.0"
+dependencies = [
+ "pyo3",
+ "pyo3-build-config",
+ "registry-breg-client",
+ "registry-platform-crypto",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "registry-bregctl"
 version = "0.26.0"
 dependencies = [

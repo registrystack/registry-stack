@@ -189,6 +189,17 @@ class BuildLinuxNodeClientTest(unittest.TestCase):
             ["-m", "ziglang", "cc", "-target", "x86_64-linux-gnu.2.17"],
         )
 
+    def test_accepts_internal_breg_binding_for_unified_package(self) -> None:
+        self.make_client("breg", "aarch64-unknown-linux-gnu", "linux-arm64-gnu")
+        result = self.run_build(client="breg")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(
+            (
+                self.root
+                / "crates/registry-breg-client-node/breg-client.linux-arm64-gnu.node"
+            ).is_file()
+        )
+
     def test_rejects_unpinned_zig_version_before_build(self) -> None:
         self.make_client("evidence", "aarch64-unknown-linux-gnu", "linux-arm64-gnu")
         result = self.run_build(env={**self.env, "ZIG_VERSION": "0.13.0"})

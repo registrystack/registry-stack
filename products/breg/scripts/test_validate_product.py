@@ -27,7 +27,9 @@ class BRegProductCatalogTests(unittest.TestCase):
         self.assertEqual([], VALIDATOR.validate_all())
 
     def test_rls_assurance_and_operator_credential_posture_are_exact(self) -> None:
-        decisions = (VALIDATOR.PRODUCT_ROOT / "DECISIONS.md").read_text(encoding="utf-8")
+        decisions = (VALIDATOR.PRODUCT_ROOT / "DECISIONS.md").read_text(
+            encoding="utf-8"
+        )
         assurance = (
             "Generated RLS policies defend against application mistakes and pooled-context\n"
             "  leakage. They do not constrain a party holding the runtime database\n"
@@ -36,9 +38,13 @@ class BRegProductCatalogTests(unittest.TestCase):
         )
         self.assertIn(assurance, decisions)
         self.assertNotIn("RLS protects the runtime database credential", decisions)
-        self.assertNotIn("Base Registry Engine rotates the runtime database credential", decisions)
+        self.assertNotIn(
+            "Base Registry Engine rotates the runtime database credential", decisions
+        )
 
-    def test_every_pre_w5_security_invariant_is_enforced_with_an_executable_negative(self) -> None:
+    def test_every_pre_w5_security_invariant_is_enforced_with_an_executable_negative(
+        self,
+    ) -> None:
         matrix = VALIDATOR.load_yaml(
             VALIDATOR.CONTRACTS / "security-invariant-matrix.yaml"
         )
@@ -76,12 +82,16 @@ class BRegProductCatalogTests(unittest.TestCase):
                 self.assertTrue(invariant["refusal"])
                 self.assertIn("negativeTest", invariant)
 
-    def test_w0_crate_boundary_is_three_crates_with_opt_in_runtime(self) -> None:
-        root = tomllib.loads((VALIDATOR.REPOSITORY_ROOT / "Cargo.toml").read_text(encoding="utf-8"))
+    def test_w0_crate_boundary_includes_clients_and_opt_in_runtime(self) -> None:
+        root = tomllib.loads(
+            (VALIDATOR.REPOSITORY_ROOT / "Cargo.toml").read_text(encoding="utf-8")
+        )
         members = root["workspace"]["members"]
         self.assertEqual(
             [
                 "crates/registry-breg-client",
+                "crates/registry-breg-client-node",
+                "crates/registry-breg-client-py",
                 "crates/registry-breg",
                 "crates/registry-bregctl",
             ],
@@ -89,7 +99,9 @@ class BRegProductCatalogTests(unittest.TestCase):
         )
 
         breg = tomllib.loads(
-            (VALIDATOR.REPOSITORY_ROOT / "crates/registry-breg/Cargo.toml").read_text(encoding="utf-8")
+            (VALIDATOR.REPOSITORY_ROOT / "crates/registry-breg/Cargo.toml").read_text(
+                encoding="utf-8"
+            )
         )
         self.assertEqual([], breg["features"]["default"])
         self.assertEqual(
@@ -155,14 +167,18 @@ class BRegProductCatalogTests(unittest.TestCase):
             self.assertTrue(breg["dependencies"][dependency]["optional"])
 
         ctl = tomllib.loads(
-            (VALIDATOR.REPOSITORY_ROOT / "crates/registry-bregctl/Cargo.toml").read_text(encoding="utf-8")
+            (
+                VALIDATOR.REPOSITORY_ROOT / "crates/registry-bregctl/Cargo.toml"
+            ).read_text(encoding="utf-8")
         )
         self.assertEqual(
             ["runtime", "tooling"],
             ctl["dependencies"]["registry-breg"]["features"],
         )
 
-    def test_postgres_entrypoint_refuses_to_silently_skip_without_database_url(self) -> None:
+    def test_postgres_entrypoint_refuses_to_silently_skip_without_database_url(
+        self,
+    ) -> None:
         script = VALIDATOR.POSTGRES_ENTRYPOINT
         self.assertTrue(os.access(script, os.X_OK))
         environment = os.environ.copy()
@@ -184,7 +200,9 @@ class BRegProductCatalogTests(unittest.TestCase):
         VALIDATOR.validate_postgres_entrypoint(errors)
         self.assertEqual([], errors)
 
-    def test_postgres_rhai_planner_follows_the_existing_pilot_acceptance_gate(self) -> None:
+    def test_postgres_rhai_planner_follows_the_existing_pilot_acceptance_gate(
+        self,
+    ) -> None:
         commands = list(VALIDATOR.POSTGRES_TEST_COMMANDS)
         pilot = (
             "cargo test --locked -p registry-breg --features postgres-test "
@@ -196,7 +214,9 @@ class BRegProductCatalogTests(unittest.TestCase):
         )
         self.assertEqual(commands.index(pilot) + 1, commands.index(rhai))
 
-    def test_postgres_constraint_races_follow_partial_unique_in_the_owned_gate(self) -> None:
+    def test_postgres_constraint_races_follow_partial_unique_in_the_owned_gate(
+        self,
+    ) -> None:
         commands = list(VALIDATOR.POSTGRES_TEST_COMMANDS)
         partial_unique = (
             "cargo test --locked -p registry-breg --features postgres-test "
@@ -211,7 +231,9 @@ class BRegProductCatalogTests(unittest.TestCase):
             commands.index(constraint_races),
         )
 
-    def test_postgres_migration_requires_tooling_and_follows_package_in_the_owned_gate(self) -> None:
+    def test_postgres_migration_requires_tooling_and_follows_package_in_the_owned_gate(
+        self,
+    ) -> None:
         commands = list(VALIDATOR.POSTGRES_TEST_COMMANDS)
         package = "cargo test --locked -p registry-breg --features postgres-test,tooling --test postgres_package"
         migration = (
@@ -230,9 +252,13 @@ class BRegProductCatalogTests(unittest.TestCase):
             "cargo test --locked -p registry-breg --features postgres-test "
             "--test postgres_webhook_outbox"
         )
-        self.assertEqual(commands.index(immediate_activation) + 1, commands.index(webhook_outbox))
+        self.assertEqual(
+            commands.index(immediate_activation) + 1, commands.index(webhook_outbox)
+        )
 
-    def test_postgres_immediate_action_examples_are_registered_after_core_action_gate(self) -> None:
+    def test_postgres_immediate_action_examples_are_registered_after_core_action_gate(
+        self,
+    ) -> None:
         commands = list(VALIDATOR.POSTGRES_TEST_COMMANDS)
         mutation = "cargo test --locked -p registry-breg --features postgres-test --test postgres_mutation"
         mutation_logical_names = (
@@ -255,13 +281,26 @@ class BRegProductCatalogTests(unittest.TestCase):
             "cargo test --locked -p registry-breg --features postgres-test "
             "--test postgres_webhook_outbox"
         )
-        self.assertEqual(commands.index(mutation) + 1, commands.index(mutation_logical_names))
-        self.assertEqual(commands.index(mutation_logical_names) + 1, commands.index(immediate_actions))
-        self.assertEqual(commands.index(immediate_actions) + 1, commands.index(immediate_examples))
-        self.assertEqual(commands.index(immediate_examples) + 1, commands.index(immediate_activation))
-        self.assertEqual(commands.index(immediate_activation) + 1, commands.index(webhook_outbox))
+        self.assertEqual(
+            commands.index(mutation) + 1, commands.index(mutation_logical_names)
+        )
+        self.assertEqual(
+            commands.index(mutation_logical_names) + 1,
+            commands.index(immediate_actions),
+        )
+        self.assertEqual(
+            commands.index(immediate_actions) + 1, commands.index(immediate_examples)
+        )
+        self.assertEqual(
+            commands.index(immediate_examples) + 1, commands.index(immediate_activation)
+        )
+        self.assertEqual(
+            commands.index(immediate_activation) + 1, commands.index(webhook_outbox)
+        )
 
-    def test_postgres_webhook_delivery_follows_atomic_capture_in_the_owned_gate(self) -> None:
+    def test_postgres_webhook_delivery_follows_atomic_capture_in_the_owned_gate(
+        self,
+    ) -> None:
         commands = list(VALIDATOR.POSTGRES_TEST_COMMANDS)
         webhook_outbox = (
             "cargo test --locked -p registry-breg --features postgres-test "
@@ -271,7 +310,9 @@ class BRegProductCatalogTests(unittest.TestCase):
             "cargo test --locked -p registry-breg --features postgres-test "
             "--test postgres_webhook_delivery"
         )
-        self.assertEqual(commands.index(webhook_outbox) + 1, commands.index(webhook_delivery))
+        self.assertEqual(
+            commands.index(webhook_outbox) + 1, commands.index(webhook_delivery)
+        )
 
     def test_postgres_data_journeys_follow_batch_in_the_owned_gate(self) -> None:
         commands = list(VALIDATOR.POSTGRES_TEST_COMMANDS)
@@ -287,7 +328,9 @@ class BRegProductCatalogTests(unittest.TestCase):
         self.assertEqual(commands.index(batch) + 1, commands.index(facility))
         self.assertEqual(commands.index(facility) + 1, commands.index(export))
 
-    def test_postgres_tls_entrypoint_refuses_to_silently_skip_without_container_id(self) -> None:
+    def test_postgres_tls_entrypoint_refuses_to_silently_skip_without_container_id(
+        self,
+    ) -> None:
         script = VALIDATOR.POSTGRES_TLS_ENTRYPOINT
         self.assertTrue(os.access(script, os.X_OK))
         environment = os.environ.copy()
@@ -304,7 +347,9 @@ class BRegProductCatalogTests(unittest.TestCase):
         self.assertIn("BREG_TEST_TLS_POSTGRES_CONTAINER_ID must be set", result.stderr)
         self.assertNotIn("docker", result.stdout + result.stderr)
 
-    def test_postgres_tls_entrypoint_keeps_its_exact_owned_command_and_ci_invocation(self) -> None:
+    def test_postgres_tls_entrypoint_keeps_its_exact_owned_command_and_ci_invocation(
+        self,
+    ) -> None:
         errors: list[str] = []
         VALIDATOR.validate_postgres_tls_entrypoint(errors)
         self.assertEqual([], errors)
@@ -322,7 +367,9 @@ class BRegProductCatalogTests(unittest.TestCase):
         errors: list[str] = []
         with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_with_test):
             VALIDATOR.validate_security({"W0", "W1", "W2", "W3", "W4", "W5"}, errors)
-        self.assertTrue(any("unknown keys negativeTest" in error for error in errors), errors)
+        self.assertTrue(
+            any("unknown keys negativeTest" in error for error in errors), errors
+        )
 
     def test_planned_invariant_requires_real_refusal(self) -> None:
         original = VALIDATOR.load_yaml
@@ -334,9 +381,13 @@ class BRegProductCatalogTests(unittest.TestCase):
             return value
 
         errors: list[str] = []
-        with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_without_refusal):
+        with mock.patch.object(
+            VALIDATOR, "load_yaml", side_effect=load_without_refusal
+        ):
             VALIDATOR.validate_security({"W0", "W1", "W2", "W3", "W4", "W5"}, errors)
-        self.assertTrue(any("missing keys refusal" in error for error in errors), errors)
+        self.assertTrue(
+            any("missing keys refusal" in error for error in errors), errors
+        )
 
     def test_duplicate_security_identifier_is_rejected(self) -> None:
         original = VALIDATOR.load_yaml
@@ -350,7 +401,9 @@ class BRegProductCatalogTests(unittest.TestCase):
         errors: list[str] = []
         with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_with_duplicate):
             VALIDATOR.validate_security({"W0", "W1", "W2", "W3", "W4", "W5"}, errors)
-        self.assertTrue(any("duplicate identifier" in error for error in errors), errors)
+        self.assertTrue(
+            any("duplicate identifier" in error for error in errors), errors
+        )
 
     def test_closed_security_range_rejects_a_missing_rhai_invariant(self) -> None:
         original = VALIDATOR.load_yaml
@@ -364,7 +417,9 @@ class BRegProductCatalogTests(unittest.TestCase):
             return value
 
         errors: list[str] = []
-        with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_without_final_invariant):
+        with mock.patch.object(
+            VALIDATOR, "load_yaml", side_effect=load_without_final_invariant
+        ):
             VALIDATOR.validate_security({"W0", "W1", "W2", "W3", "W4", "W5"}, errors)
         self.assertIn(
             "security matrix: must contain the complete closed product invariant identifiers",
@@ -377,14 +432,20 @@ class BRegProductCatalogTests(unittest.TestCase):
         def load_enforced_without_test(path: Path):
             value = copy.deepcopy(original(path))
             if path.name == "security-invariant-matrix.yaml":
-                row = next(row for row in value["invariants"] if row["state"] == "enforced")
+                row = next(
+                    row for row in value["invariants"] if row["state"] == "enforced"
+                )
                 row.pop("negativeTest")
             return value
 
         errors: list[str] = []
-        with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_enforced_without_test):
+        with mock.patch.object(
+            VALIDATOR, "load_yaml", side_effect=load_enforced_without_test
+        ):
             VALIDATOR.validate_security({"W0", "W1", "W2", "W3", "W4", "W5"}, errors)
-        self.assertTrue(any("missing keys negativeTest" in error for error in errors), errors)
+        self.assertTrue(
+            any("missing keys negativeTest" in error for error in errors), errors
+        )
 
     def test_helper_named_like_a_test_is_not_an_executable_test(self) -> None:
         def test_nested_helper() -> None:
@@ -411,9 +472,13 @@ class BRegProductCatalogTests(unittest.TestCase):
                 value["requirements"][0]["journeys"] = ["BREG-J99"]
             return value
 
-        with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_unknown_journey):
+        with mock.patch.object(
+            VALIDATOR, "load_yaml", side_effect=load_unknown_journey
+        ):
             errors = VALIDATOR.validate_all()
-        self.assertTrue(any("references unknown journey" in error for error in errors), errors)
+        self.assertTrue(
+            any("references unknown journey" in error for error in errors), errors
+        )
 
     def test_definition_of_done_cannot_omit_a_v1_requirement(self) -> None:
         original = VALIDATOR.load_yaml
@@ -427,8 +492,12 @@ class BRegProductCatalogTests(unittest.TestCase):
             return value
 
         errors: list[str] = []
-        with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_without_requirement):
-            VALIDATOR.validate_definition_of_done({f"W{index}" for index in range(6)}, errors)
+        with mock.patch.object(
+            VALIDATOR, "load_yaml", side_effect=load_without_requirement
+        ):
+            VALIDATOR.validate_definition_of_done(
+                {f"W{index}" for index in range(6)}, errors
+            )
         self.assertIn(
             "definition of done: must contain BREG-V1-01 through BREG-V1-44 exactly once in order",
             errors,
@@ -440,15 +509,23 @@ class BRegProductCatalogTests(unittest.TestCase):
         def load_with_duplicate_requirement(path: Path):
             value = copy.deepcopy(original(path))
             if path.name == "definition-of-done.yaml":
-                row = next(row for row in value["requirements"] if row["id"] == "BREG-V1-01")
+                row = next(
+                    row for row in value["requirements"] if row["id"] == "BREG-V1-01"
+                )
                 index = value["requirements"].index(row)
                 value["requirements"].insert(index + 1, copy.deepcopy(row))
             return value
 
         errors: list[str] = []
-        with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_with_duplicate_requirement):
-            VALIDATOR.validate_definition_of_done({f"W{index}" for index in range(6)}, errors)
-        self.assertTrue(any("duplicate identifier BREG-V1-01" in error for error in errors), errors)
+        with mock.patch.object(
+            VALIDATOR, "load_yaml", side_effect=load_with_duplicate_requirement
+        ):
+            VALIDATOR.validate_definition_of_done(
+                {f"W{index}" for index in range(6)}, errors
+            )
+        self.assertTrue(
+            any("duplicate identifier BREG-V1-01" in error for error in errors), errors
+        )
 
     def test_definition_of_done_rejects_a_nonexistent_evidence_test(self) -> None:
         original = VALIDATOR.load_yaml
@@ -456,14 +533,23 @@ class BRegProductCatalogTests(unittest.TestCase):
         def load_with_nonexistent_test(path: Path):
             value = copy.deepcopy(original(path))
             if path.name == "definition-of-done.yaml":
-                row = next(row for row in value["requirements"] if row["id"] == "BREG-V1-01")
+                row = next(
+                    row for row in value["requirements"] if row["id"] == "BREG-V1-01"
+                )
                 row["evidence"][0]["name"] = "test_that_does_not_exist"
             return value
 
         errors: list[str] = []
-        with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_with_nonexistent_test):
-            VALIDATOR.validate_definition_of_done({f"W{index}" for index in range(6)}, errors)
-        self.assertTrue(any("exact executable test does not resolve" in error for error in errors), errors)
+        with mock.patch.object(
+            VALIDATOR, "load_yaml", side_effect=load_with_nonexistent_test
+        ):
+            VALIDATOR.validate_definition_of_done(
+                {f"W{index}" for index in range(6)}, errors
+            )
+        self.assertTrue(
+            any("exact executable test does not resolve" in error for error in errors),
+            errors,
+        )
 
     def test_enforced_requirement_cannot_retain_a_partial_gap(self) -> None:
         original = VALIDATOR.load_yaml
@@ -471,13 +557,17 @@ class BRegProductCatalogTests(unittest.TestCase):
         def load_with_stale_gap(path: Path):
             value = copy.deepcopy(original(path))
             if path.name == "definition-of-done.yaml":
-                row = next(row for row in value["requirements"] if row["state"] == "enforced")
+                row = next(
+                    row for row in value["requirements"] if row["state"] == "enforced"
+                )
                 row["gap"] = "stale gap"
             return value
 
         errors: list[str] = []
         with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_with_stale_gap):
-            VALIDATOR.validate_definition_of_done({f"W{index}" for index in range(6)}, errors)
+            VALIDATOR.validate_definition_of_done(
+                {f"W{index}" for index in range(6)}, errors
+            )
         self.assertTrue(any("unknown keys gap" in error for error in errors), errors)
 
     def test_acceptance_matrix_cannot_omit_a_required_journey(self) -> None:
@@ -490,7 +580,9 @@ class BRegProductCatalogTests(unittest.TestCase):
             return value
 
         errors: list[str] = []
-        with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_without_journey):
+        with mock.patch.object(
+            VALIDATOR, "load_yaml", side_effect=load_without_journey
+        ):
             VALIDATOR.validate_acceptance(errors)
         self.assertIn(
             "acceptance matrix: must contain BREG-J01 through BREG-J19 exactly once in order",
@@ -507,9 +599,14 @@ class BRegProductCatalogTests(unittest.TestCase):
             return value
 
         errors: list[str] = []
-        with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_with_unknown_state):
+        with mock.patch.object(
+            VALIDATOR, "load_yaml", side_effect=load_with_unknown_state
+        ):
             VALIDATOR.validate_acceptance(errors)
-        self.assertTrue(any("expected enforced, partial, or planned" in error for error in errors), errors)
+        self.assertTrue(
+            any("expected enforced, partial, or planned" in error for error in errors),
+            errors,
+        )
 
     def test_shell_evidence_name_must_match_the_executable_filename(self) -> None:
         errors: list[str] = []
@@ -521,7 +618,10 @@ class BRegProductCatalogTests(unittest.TestCase):
             "shell evidence",
             errors,
         )
-        self.assertTrue(any("exact executable test does not resolve" in error for error in errors), errors)
+        self.assertTrue(
+            any("exact executable test does not resolve" in error for error in errors),
+            errors,
+        )
 
     def test_schedule_exit_criterion_must_resolve(self) -> None:
         original = VALIDATOR.load_yaml
@@ -532,38 +632,57 @@ class BRegProductCatalogTests(unittest.TestCase):
                 value["waves"][0]["exitCriteria"] = ["BREG-NOT-DECLARED"]
             return value
 
-        with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_unknown_criterion):
+        with mock.patch.object(
+            VALIDATOR, "load_yaml", side_effect=load_unknown_criterion
+        ):
             errors = VALIDATOR.validate_all()
-        self.assertTrue(any("exit criterion does not resolve" in error for error in errors), errors)
+        self.assertTrue(
+            any("exit criterion does not resolve" in error for error in errors), errors
+        )
 
     def test_asset_fixture_cannot_gain_a_business_entity(self) -> None:
         original = VALIDATOR.load_yaml
 
         def load_with_hardcoding(path: Path):
             value = copy.deepcopy(original(path))
-            if path.name == "registry.yaml" and path.parent.name == "asset-site-placement":
+            if (
+                path.name == "registry.yaml"
+                and path.parent.name == "asset-site-placement"
+            ):
                 value["entities"].append({"id": "business", "route": "businesses"})
             return value
 
         errors: list[str] = []
-        with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_with_hardcoding):
+        with mock.patch.object(
+            VALIDATOR, "load_yaml", side_effect=load_with_hardcoding
+        ):
             VALIDATOR.validate_fixture(errors)
-        self.assertTrue(any("complete non-person entity set" in error for error in errors), errors)
+        self.assertTrue(
+            any("complete non-person entity set" in error for error in errors), errors
+        )
 
     def test_asset_fixture_package_has_only_the_production_identity_keys(self) -> None:
         original = VALIDATOR.load_yaml
 
         def load_with_unknown_package_key(path: Path):
             value = copy.deepcopy(original(path))
-            if path.name == "registry.yaml" and path.parent.name == "asset-site-placement":
+            if (
+                path.name == "registry.yaml"
+                and path.parent.name == "asset-site-placement"
+            ):
                 value["package"]["repairMissingIdentity"] = True
             return value
 
         errors: list[str] = []
-        with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_with_unknown_package_key):
+        with mock.patch.object(
+            VALIDATOR, "load_yaml", side_effect=load_with_unknown_package_key
+        ):
             VALIDATOR.validate_fixture(errors)
         self.assertTrue(
-            any("asset fixture.package: unknown keys repairMissingIdentity" in error for error in errors),
+            any(
+                "asset fixture.package: unknown keys repairMissingIdentity" in error
+                for error in errors
+            ),
             errors,
         )
 
@@ -572,12 +691,17 @@ class BRegProductCatalogTests(unittest.TestCase):
 
         def load_with_implicit_sequence(path: Path):
             value = copy.deepcopy(original(path))
-            if path.name == "registry.yaml" and path.parent.name == "asset-site-placement":
+            if (
+                path.name == "registry.yaml"
+                and path.parent.name == "asset-site-placement"
+            ):
                 value["package"]["sequence"] = True
             return value
 
         errors: list[str] = []
-        with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_with_implicit_sequence):
+        with mock.patch.object(
+            VALIDATOR, "load_yaml", side_effect=load_with_implicit_sequence
+        ):
             VALIDATOR.validate_fixture(errors)
         self.assertIn("asset fixture.package.sequence: expected integer", errors)
 
@@ -593,9 +717,13 @@ class BRegProductCatalogTests(unittest.TestCase):
         errors: list[str] = []
         with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_without_entry):
             VALIDATOR.validate_package_layout(errors)
-        self.assertTrue(any("missing required entry tuples" in error for error in errors), errors)
+        self.assertTrue(
+            any("missing required entry tuples" in error for error in errors), errors
+        )
 
-    def test_package_layout_binds_fixture_journeys_as_required_reviewed_source(self) -> None:
+    def test_package_layout_binds_fixture_journeys_as_required_reviewed_source(
+        self,
+    ) -> None:
         original = VALIDATOR.load_yaml
 
         def load_with_wrong_fixture_role(path: Path):
@@ -607,12 +735,20 @@ class BRegProductCatalogTests(unittest.TestCase):
             return value
 
         errors: list[str] = []
-        with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_with_wrong_fixture_role):
+        with mock.patch.object(
+            VALIDATOR, "load_yaml", side_effect=load_with_wrong_fixture_role
+        ):
             VALIDATOR.validate_package_layout(errors)
-        self.assertTrue(any("missing required entry tuples" in error for error in errors), errors)
-        self.assertTrue(any("unexpected entry tuples" in error for error in errors), errors)
+        self.assertTrue(
+            any("missing required entry tuples" in error for error in errors), errors
+        )
+        self.assertTrue(
+            any("unexpected entry tuples" in error for error in errors), errors
+        )
 
-    def test_package_layout_binds_action_inventory_and_schemas_as_optional_generated_outputs(self) -> None:
+    def test_package_layout_binds_action_inventory_and_schemas_as_optional_generated_outputs(
+        self,
+    ) -> None:
         original = VALIDATOR.load_yaml
 
         def load_without_action_entries(path: Path):
@@ -621,14 +757,19 @@ class BRegProductCatalogTests(unittest.TestCase):
                 value["entries"] = [
                     entry
                     for entry in value["entries"]
-                    if entry["path"] not in {"inventories/actions.json", "action-schemas"}
+                    if entry["path"]
+                    not in {"inventories/actions.json", "action-schemas"}
                 ]
             return value
 
         errors: list[str] = []
-        with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_without_action_entries):
+        with mock.patch.object(
+            VALIDATOR, "load_yaml", side_effect=load_without_action_entries
+        ):
             VALIDATOR.validate_package_layout(errors)
-        self.assertTrue(any("missing required entry tuples" in error for error in errors), errors)
+        self.assertTrue(
+            any("missing required entry tuples" in error for error in errors), errors
+        )
 
     def test_package_layout_cannot_allow_embedded_signing_key(self) -> None:
         original = VALIDATOR.load_yaml
@@ -640,9 +781,13 @@ class BRegProductCatalogTests(unittest.TestCase):
             return value
 
         errors: list[str] = []
-        with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_without_signing_key):
+        with mock.patch.object(
+            VALIDATOR, "load_yaml", side_effect=load_without_signing_key
+        ):
             VALIDATOR.validate_package_layout(errors)
-        self.assertTrue(any("complete forbidden role set" in error for error in errors), errors)
+        self.assertTrue(
+            any("complete forbidden role set" in error for error in errors), errors
+        )
 
 
 if __name__ == "__main__":

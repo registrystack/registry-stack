@@ -45,6 +45,11 @@ def version_uses_client_registries(version: str) -> bool:
 
 
 def client_registry_clients(version: str) -> tuple[str, ...]:
+    if (
+        tuple(int(part) for part in version.split("."))
+        >= release_candidate.UNIFIED_CLIENT_PACKAGE_MINIMUM_VERSION
+    ):
+        return ("stack",)
     clients = ["evidence", "relay"]
     if (
         tuple(int(part) for part in version.split("."))

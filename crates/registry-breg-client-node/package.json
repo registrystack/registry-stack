@@ -1,0 +1,31 @@
+{
+  "name": "@registrystack/breg-client-native",
+  "version": "0.26.0",
+  "description": "Internal Node.js native binding used by @registrystack/client.",
+  "private": true,
+  "license": "Apache-2.0",
+  "repository": { "type": "git", "url": "https://github.com/registrystack/registry-stack" },
+  "main": "client.js",
+  "types": "client.d.ts",
+  "exports": { ".": { "types": "./client.d.ts", "default": "./client.js" } },
+  "napi": {
+    "binaryName": "breg-client",
+    "targets": [
+      "aarch64-apple-darwin",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-unknown-linux-gnu"
+    ]
+  },
+  "engines": { "node": ">=22.12.0" },
+  "scripts": {
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform",
+    "test": "node --test __test__/*.test.js",
+    "check:types": "napi build --platform --release --dts index.d.ts.check && cmp index.d.ts index.d.ts.check && rm -f index.d.ts.check && tsc --noEmit --strict --skipLibCheck false --types node --moduleResolution node16 --module node16 --target es2022 client.d.ts index.d.ts __test__/facade.test-d.ts"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "3.8.2",
+    "@types/node": "22.20.1",
+    "typescript": "6.0.3"
+  }
+}

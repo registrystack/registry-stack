@@ -43,6 +43,14 @@ class PublicReleaseVerifierTest(TestCase):
             ("discovery", "evidence", "relay"),
             self.module.client_registry_clients("0.23.0"),
         )
+        self.assertEqual(
+            ("discovery", "evidence", "relay"),
+            self.module.client_registry_clients("0.26.0"),
+        )
+        self.assertEqual(
+            ("stack",),
+            self.module.client_registry_clients("0.26.1"),
+        )
 
     def test_checksum_parser_requires_one_local_unique_asset_per_line(self) -> None:
         parsed = self.module.parse_sha256sums(
@@ -324,7 +332,7 @@ class PublicReleaseVerifierTest(TestCase):
             ),
         ):
             self.assertEqual(
-                6,
+                2,
                 self.module.verify_client_registries(Path(temporary), "1.2.3"),
             )
 

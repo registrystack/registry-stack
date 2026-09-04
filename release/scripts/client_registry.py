@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate and reconcile Discovery, Evidence, and Relay client packages."""
+"""Validate and reconcile historical and unified client packages."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from typing import Any, NamedTuple
 class ClientDefinition(NamedTuple):
     npm_root_package: str
     npm_tarball_stem: str
-    native_binary_stem: str
+    native_binary_stems: tuple[str, ...]
     pypi_project: str
     wheel_stem: str
 
@@ -30,23 +30,35 @@ CLIENTS = {
     "discovery": ClientDefinition(
         npm_root_package="@registrystack/discovery-client",
         npm_tarball_stem="registrystack-discovery-client",
-        native_binary_stem="discovery-client",
+        native_binary_stems=("discovery-client",),
         pypi_project="registry-discovery-client",
         wheel_stem="registry_discovery_client",
     ),
     "evidence": ClientDefinition(
         npm_root_package="@registrystack/evidence-client",
         npm_tarball_stem="registrystack-evidence-client",
-        native_binary_stem="evidence-client",
+        native_binary_stems=("evidence-client",),
         pypi_project="registry-evidence-client",
         wheel_stem="registry_evidence_client",
     ),
     "relay": ClientDefinition(
         npm_root_package="@registrystack/relay-client",
         npm_tarball_stem="registrystack-relay-client",
-        native_binary_stem="relay-client",
+        native_binary_stems=("relay-client",),
         pypi_project="registry-relay-client",
         wheel_stem="registry_relay_client",
+    ),
+    "stack": ClientDefinition(
+        npm_root_package="@registrystack/client",
+        npm_tarball_stem="registrystack-client",
+        native_binary_stems=(
+            "discovery-client",
+            "evidence-client",
+            "relay-client",
+            "breg-client",
+        ),
+        pypi_project="registry-stack-client",
+        wheel_stem="registry_stack_client",
     ),
 }
 NPM_PLATFORM_NAMES = ("darwin-arm64", "linux-arm64-gnu", "linux-x64-gnu")
@@ -87,10 +99,16 @@ def client_definition(client: str) -> ClientDefinition:
         raise ClientRegistryError(f"unknown client {client!r}") from exc
 
 
-def npm_platforms(client: str) -> tuple[tuple[str, str], ...]:
+def npm_platforms(client: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
     definition = client_definition(client)
     return tuple(
-        (platform, f"{definition.native_binary_stem}.{platform}.node")
+        (
+            platform,
+            tuple(
+                f"{stem}.{platform}.node"
+                for stem in definition.native_binary_stems
+            ),
+        )
         for platform in NPM_PLATFORM_NAMES
     )
 
@@ -99,7 +117,7 @@ def expected_optional_dependencies(client: str, version: str) -> dict[str, str]:
     definition = client_definition(client)
     return {
         f"{definition.npm_root_package}-{platform}": version
-        for platform, _binary in npm_platforms(client)
+        for platform, _binaries in npm_platforms(client)
     }
 
 
@@ -142,7 +160,7 @@ def npm_tarballs(directory: Path, version: str, client: str) -> list[Path]:
     return [
         *(
             directory / f"{definition.npm_tarball_stem}-{platform}-{version}.tgz"
-            for platform, _binary in npm_platforms(client)
+            for platform, _binaries in npm_platforms(client)
         ),
         directory / f"{definition.npm_tarball_stem}-{version}.tgz",
     ]
@@ -216,11 +234,11 @@ def validate_npm_packages(directory: Path, version: str, client: str) -> list[Pa
     for path in paths:
         metadata, names = npm_package_metadata(path)
         expected_name = definition.npm_root_package
-        expected_binary = None
-        for platform, binary in npm_platforms(client):
+        expected_binaries = None
+        for platform, binaries in npm_platforms(client):
             if path.name == f"{definition.npm_tarball_stem}-{platform}-{version}.tgz":
                 expected_name = f"{definition.npm_root_package}-{platform}"
-                expected_binary = binary
+                expected_binaries = binaries
                 break
         if metadata.get("name") != expected_name or metadata.get("version") != version:
             raise ClientRegistryError(
@@ -229,7 +247,7 @@ def validate_npm_packages(directory: Path, version: str, client: str) -> list[Pa
         if "package/LICENSE" not in names:
             raise ClientRegistryError(f"npm package {path.name} has no LICENSE")
         native_members = sorted(name for name in names if name.endswith(".node"))
-        if expected_binary is None:
+        if expected_binaries is None:
             if native_members:
                 raise ClientRegistryError(
                     "root npm package must not contain a native binary"
@@ -238,7 +256,9 @@ def validate_npm_packages(directory: Path, version: str, client: str) -> list[Pa
                 raise ClientRegistryError(
                     "root npm package does not bind the exact platform versions"
                 )
-        elif native_members != [f"package/{expected_binary}"]:
+        elif native_members != sorted(
+            f"package/{binary}" for binary in expected_binaries
+        ):
             raise ClientRegistryError(
                 f"platform npm package {path.name} has the wrong native payload"
             )

@@ -50,6 +50,7 @@ RELAY_V2_ARTIFACT_INVENTORY = {
 }
 DISCOVERY_RUNTIME_MINIMUM_VERSION = (0, 24, 0)
 BREG_RELEASE_MINIMUM_VERSION = (0, 26, 0)
+UNIFIED_CLIENT_PACKAGE_MINIMUM_VERSION = (0, 26, 1)
 RELEASE_PLAN_SCHEMA = "registry-release.plan.v1"
 RELEASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 STRICT_SEMVER = re.compile(
@@ -89,6 +90,10 @@ NODE_CLIENT_RELEASE_SURFACES = (
         "crates/registry-relay-client-node",
         "@registrystack/relay-client",
     ),
+    (
+        "crates/registry-breg-client-node",
+        "@registrystack/breg-client-native",
+    ),
 )
 PYTHON_CLIENT_RELEASE_SURFACES = (
     (
@@ -105,6 +110,11 @@ PYTHON_CLIENT_RELEASE_SURFACES = (
         "crates/registry-relay-client-py",
         "registry-relay-client",
         "relay-client-sdk",
+    ),
+    (
+        "crates/registry-breg-client-py",
+        "registry-breg-client-native",
+        "registry-breg-client",
     ),
 )
 FUZZ_LOCK_RELEASE_SURFACE_PATHS = (
@@ -157,10 +167,25 @@ def artifact_inventory_errors(version: str, artifacts: dict[Any, Any]) -> list[s
             expected_inventory.add("relay-installer")
         if parsed_version >= DOCS_RELEASE_RESUMPTION_VERSION:
             expected_inventory.add("registry-docs")
-        if parsed_version >= RELAY_CLIENT_PACKAGE_MINIMUM_VERSION:
-            expected_inventory.update({"relay-client-node", "relay-client-python"})
-        if parsed_version >= (0, 23, 0):
-            expected_inventory.update({"discovery-client-node", "discovery-client-python"})
+        if parsed_version >= UNIFIED_CLIENT_PACKAGE_MINIMUM_VERSION:
+            expected_inventory.difference_update(
+                {
+                    "evidence-client-node",
+                    "evidence-client-python",
+                    "relay-client-node",
+                    "relay-client-python",
+                    "discovery-client-node",
+                    "discovery-client-python",
+                }
+            )
+            expected_inventory.update(
+                {"registry-client-node", "registry-client-python"}
+            )
+        else:
+            if parsed_version >= RELAY_CLIENT_PACKAGE_MINIMUM_VERSION:
+                expected_inventory.update({"relay-client-node", "relay-client-python"})
+            if parsed_version >= (0, 23, 0):
+                expected_inventory.update({"discovery-client-node", "discovery-client-python"})
         if parsed_version >= DISCOVERY_RUNTIME_MINIMUM_VERSION:
             expected_inventory.add("discovery")
         if parsed_version >= BREG_RELEASE_MINIMUM_VERSION:
@@ -1365,6 +1390,73 @@ def validate_client_package_versions(repo: Path, version: str) -> list[Path]:
                     )
                 surfaces.append(platform_path)
 
+    unified_node_root = repo / "crates/registry-stack-client-node"
+    unified_package_path = unified_node_root / "package.json"
+    unified_lock_path = unified_node_root / "package-lock.json"
+    unified_loader_path = unified_node_root / "native.js"
+    unified_package = required_json(unified_package_path)
+    unified_lock = required_json(unified_lock_path)
+    unified_lock_packages = (
+        unified_lock.get("packages") if isinstance(unified_lock, dict) else None
+    )
+    unified_lock_root = (
+        unified_lock_packages.get("")
+        if isinstance(unified_lock_packages, dict)
+        else None
+    )
+    if (
+        not isinstance(unified_package, dict)
+        or unified_package.get("name") != "@registrystack/client"
+        or unified_package.get("version") != version
+        or "optionalDependencies" in unified_package
+    ):
+        raise ReleasePlanError(
+            "crates/registry-stack-client-node/package.json must identify "
+            f"@registrystack/client at version {version} without pre-bound "
+            "platform dependencies"
+        )
+    if (
+        not isinstance(unified_lock, dict)
+        or unified_lock.get("name") != "@registrystack/client"
+        or unified_lock.get("version") != version
+        or not isinstance(unified_lock_root, dict)
+        or unified_lock_root.get("name") != "@registrystack/client"
+        or unified_lock_root.get("version") != version
+        or "optionalDependencies" in unified_lock_root
+    ):
+        raise ReleasePlanError(
+            "crates/registry-stack-client-node/package-lock.json must bind the "
+            f"unified client at version {version} without platform dependencies"
+        )
+    try:
+        unified_loader = unified_loader_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ReleasePlanError(
+            f"required release surface is missing: {unified_loader_path}"
+        ) from exc
+    if f"const PACKAGE_VERSION = '{version}';" not in unified_loader:
+        raise ReleasePlanError(
+            "crates/registry-stack-client-node/native.js must use the exact "
+            f"release version {version}"
+        )
+    surfaces.extend(
+        (unified_package_path, unified_lock_path, unified_loader_path)
+    )
+    for platform in ("darwin-arm64", "linux-arm64-gnu", "linux-x64-gnu"):
+        platform_path = unified_node_root / "npm" / platform / "package.json"
+        platform_package = required_json(platform_path)
+        if (
+            not isinstance(platform_package, dict)
+            or platform_package.get("name")
+            != f"@registrystack/client-{platform}"
+            or platform_package.get("version") != version
+        ):
+            raise ReleasePlanError(
+                f"{relative_path(repo, platform_path)} must identify "
+                f"@registrystack/client-{platform} at version {version}"
+            )
+        surfaces.append(platform_path)
+
     for relative_root, expected_name, dependency_name in PYTHON_CLIENT_RELEASE_SURFACES:
         root = repo / relative_root
         project_path = root / "pyproject.toml"
@@ -1388,6 +1480,29 @@ def validate_client_package_versions(repo: Path, version: str) -> list[Path]:
                 f"must use version {version}"
             )
         surfaces.extend((project_path, cargo_path))
+
+    unified_python_project = repo / "crates/registry-stack-client-py/pyproject.toml"
+    unified_python_init = (
+        repo
+        / "crates/registry-stack-client-py/python/registry_client/__init__.py"
+    )
+    unified_python = required_toml(unified_python_project).get("project")
+    if (
+        not isinstance(unified_python, dict)
+        or unified_python.get("name") != "registry-stack-client"
+        or unified_python.get("version") != version
+    ):
+        raise ReleasePlanError(
+            "crates/registry-stack-client-py/pyproject.toml must identify "
+            f"registry-stack-client at version {version}"
+        )
+    if f'__version__ = "{version}"' not in unified_python_init.read_text(
+        encoding="utf-8"
+    ):
+        raise ReleasePlanError(
+            "registry_client.__version__ must match the release version"
+        )
+    surfaces.extend((unified_python_project, unified_python_init))
     return surfaces
 
 

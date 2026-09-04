@@ -488,6 +488,8 @@ jobs:
             crates/registry-discovery-client-node/package-lock.json
             crates/registry-evidence-client-node/package-lock.json
             crates/registry-relay-client-node/package-lock.json
+            crates/registry-breg-client-node/package-lock.json
+            crates/registry-stack-client-node/package-lock.json
 
       - name: Restore native client Cargo cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -496,7 +498,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: registry-stack-release-clients-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'release/requirements/maturin-1.9.6.txt', 'release/scripts/zig-glibc-compiler', 'release/scripts/build-linux-node-client', 'crates/registry-discovery-client-node/package-lock.json', 'crates/registry-evidence-client-node/package-lock.json', 'crates/registry-relay-client-node/package-lock.json') }}
+          key: registry-stack-release-clients-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'release/requirements/maturin-1.9.6.txt', 'release/scripts/zig-glibc-compiler', 'release/scripts/build-linux-node-client', 'release/scripts/assemble-registry-client-wheel.py', 'release/scripts/sync-registry-client-node.py', 'crates/registry-discovery-client-node/package-lock.json', 'crates/registry-evidence-client-node/package-lock.json', 'crates/registry-relay-client-node/package-lock.json', 'crates/registry-breg-client-node/package-lock.json', 'crates/registry-stack-client-node/package-lock.json') }}
           restore-keys: |
             registry-stack-release-clients-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-
 
@@ -511,9 +513,19 @@ jobs:
             --requirement "${GITHUB_WORKSPACE}/release/requirements/maturin-1.9.6.txt"
           export PATH="${RUNNER_TEMP}/maturin/bin:${PATH}"
           wheel_dir="${GITHUB_WORKSPACE}/candidate-client-package/clients"
-          mkdir -p "${wheel_dir}"
-          IFS=. read -r client_major client_minor _client_patch <<<"${CLIENT_VERSION}"
-          for client in discovery evidence relay; do
+          built_wheel_dir="${RUNNER_TEMP}/built-client-wheels"
+          mkdir -p "${wheel_dir}" "${built_wheel_dir}"
+          IFS=. read -r client_major client_minor client_patch <<<"${CLIENT_VERSION}"
+          unified_client=0
+          if (( client_major > 0 || client_minor > 26 ||
+                (client_minor == 26 && client_patch >= 1) )); then
+            unified_client=1
+          fi
+          clients=(discovery evidence relay)
+          if [[ "${unified_client}" -eq 1 ]]; then
+            clients+=(breg)
+          fi
+          for client in "${clients[@]}"; do
             if [[ "${client}" == discovery ]] &&
                 (( client_major == 0 && client_minor < 23 )); then
               continue
@@ -539,28 +551,44 @@ jobs:
             if [[ "${RUNNER_OS}" == Linux && "${registry_packages}" -eq 1 ]]; then
               (cd "${client_dir}" && "${RUNNER_TEMP}/maturin/bin/maturin" build \
                 --release --locked --compatibility manylinux_2_17 --zig \
-                --out "${wheel_dir}")
+                --out "${built_wheel_dir}")
             elif [[ "${RUNNER_OS}" == Linux ]]; then
               (cd "${client_dir}" && "${RUNNER_TEMP}/maturin/bin/maturin" build \
-                --release --locked --compatibility linux --out "${wheel_dir}")
+                --release --locked --compatibility linux --out "${built_wheel_dir}")
             else
               (cd "${client_dir}" && "${RUNNER_TEMP}/maturin/bin/maturin" build \
-                --release --locked --out "${wheel_dir}")
+                --release --locked --out "${built_wheel_dir}")
             fi
-            wheel="registry_${client}_client-${CLIENT_VERSION}-${wheel_tag}.whl"
-            if [[ ! -f "${wheel_dir}/${wheel}" ]]; then
+            wheel_stem="registry_${client}_client"
+            if [[ "${client}" == breg ]]; then
+              wheel_stem=registry_breg_client_native
+            fi
+            wheel="${wheel_stem}-${CLIENT_VERSION}-${wheel_tag}.whl"
+            if [[ ! -f "${built_wheel_dir}/${wheel}" ]]; then
               echo "maturin did not produce ${wheel}" >&2
-              find "${wheel_dir}" -maxdepth 1 -name '*.whl' >&2
+              find "${built_wheel_dir}" -maxdepth 1 -name '*.whl' >&2
               exit 1
             fi
           done
-          expected_wheels=1
-          if [[ ! "${CLIENT_VERSION}" =~ ^0\.([0-9]|1[0-8])\. ]] &&
-              [[ "${CLIENT_VERSION}" != "0.19.0" ]]; then
-            expected_wheels=2
-          fi
-          if (( client_major > 0 || client_minor >= 23 )); then
-            expected_wheels=3
+          if [[ "${unified_client}" -eq 1 ]]; then
+            python3 release/scripts/assemble-registry-client-wheel.py \
+              --version "${CLIENT_VERSION}" \
+              --output-dir "${wheel_dir}" \
+              --discovery-wheel "${built_wheel_dir}/registry_discovery_client-${CLIENT_VERSION}-${{ matrix.registry_wheel_tag }}.whl" \
+              --evidence-wheel "${built_wheel_dir}/registry_evidence_client-${CLIENT_VERSION}-${{ matrix.registry_wheel_tag }}.whl" \
+              --relay-wheel "${built_wheel_dir}/registry_relay_client-${CLIENT_VERSION}-${{ matrix.registry_wheel_tag }}.whl" \
+              --breg-wheel "${built_wheel_dir}/registry_breg_client_native-${CLIENT_VERSION}-${{ matrix.registry_wheel_tag }}.whl"
+            expected_wheels=1
+          else
+            cp "${built_wheel_dir}"/*.whl "${wheel_dir}/"
+            expected_wheels=1
+            if [[ ! "${CLIENT_VERSION}" =~ ^0\.([0-9]|1[0-8])\. ]] &&
+                [[ "${CLIENT_VERSION}" != "0.19.0" ]]; then
+              expected_wheels=2
+            fi
+            if (( client_major > 0 || client_minor >= 23 )); then
+              expected_wheels=3
+            fi
           fi
           test "$(find "${wheel_dir}" -maxdepth 1 -name '*.whl' | wc -l)" -eq "${expected_wheels}"
 
@@ -568,7 +596,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          IFS=. read -r client_major client_minor _client_patch <<<"${CLIENT_VERSION}"
+          IFS=. read -r client_major client_minor client_patch <<<"${CLIENT_VERSION}"
+          if (( client_major > 0 || client_minor > 26 ||
+                (client_minor == 26 && client_patch >= 1) )); then
+            wheel="registry_stack_client-${CLIENT_VERSION}-${{ matrix.registry_wheel_tag }}.whl"
+            smoke="${RUNNER_TEMP}/wheel-smoke-registry"
+            python3 -m venv "${smoke}"
+            "${smoke}/bin/pip" install --quiet \
+              "${GITHUB_WORKSPACE}/candidate-client-package/clients/${wheel}"
+            "${smoke}/bin/python" \
+              release/scripts/smoke-registry-client-package.py
+            exit 0
+          fi
           for client in discovery evidence relay; do
             if [[ "${client}" == discovery ]] &&
                 (( client_major == 0 && client_minor < 23 )); then
@@ -598,8 +637,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          IFS=. read -r client_major client_minor _client_patch <<<"${CLIENT_VERSION}"
-          for client in discovery evidence relay; do
+          IFS=. read -r client_major client_minor client_patch <<<"${CLIENT_VERSION}"
+          unified_client=0
+          if (( client_major > 0 || client_minor > 26 ||
+                (client_minor == 26 && client_patch >= 1) )); then
+            unified_client=1
+          fi
+          clients=(discovery evidence relay)
+          if [[ "${unified_client}" -eq 1 ]]; then
+            clients+=(breg)
+          fi
+          for client in "${clients[@]}"; do
             if [[ "${client}" == discovery ]] &&
                 (( client_major == 0 && client_minor < 23 )); then
               continue
@@ -620,6 +668,9 @@ jobs:
             else
               (cd "${client_dir}" && ./node_modules/.bin/napi build \
                 --platform --release --target "${{ matrix.target }}")
+            fi
+            if [[ "${unified_client}" -eq 1 ]]; then
+              continue
             fi
             if [[ "${client}" == discovery ]]; then
               (cd "${client_dir}" && npm run normalize:loader)
@@ -650,12 +701,66 @@ jobs:
                 "${GITHUB_WORKSPACE}/candidate-client-package/clients/${platform_package}"
             fi
           done
+          if [[ "${unified_client}" -eq 1 ]]; then
+            platform_dir="${GITHUB_WORKSPACE}/crates/registry-stack-client-node/npm/${{ matrix.napi_platform }}"
+            for client in discovery evidence relay breg; do
+              cp "${GITHUB_WORKSPACE}/crates/registry-${client}-client-node/${client}-client.${{ matrix.napi_platform }}.node" \
+                "${platform_dir}/"
+            done
+            (cd "${GITHUB_WORKSPACE}/crates/registry-stack-client-node" && npm pack \
+              "./npm/${{ matrix.napi_platform }}" \
+              --ignore-scripts --pack-destination "${RUNNER_TEMP}")
+            platform_package="registrystack-client-${{ matrix.napi_platform }}-${CLIENT_VERSION}.tgz"
+            test -f "${RUNNER_TEMP}/${platform_package}"
+            cp "${RUNNER_TEMP}/${platform_package}" \
+              "${GITHUB_WORKSPACE}/candidate-client-package/clients/${platform_package}"
+          fi
 
       - name: Smoke Node client packages
         shell: bash
         run: |
           set -euo pipefail
-          IFS=. read -r major minor _patch <<<"${CLIENT_VERSION}"
+          IFS=. read -r major minor patch <<<"${CLIENT_VERSION}"
+          if (( major > 0 || minor > 26 || (minor == 26 && patch >= 1) )); then
+            smoke="${RUNNER_TEMP}/node-smoke-registry"
+            root_stage="${RUNNER_TEMP}/node-root-registry"
+            mkdir -p "${smoke}" "${root_stage}"
+            cp -R crates/registry-stack-client-node/. "${root_stage}/"
+            python3 release/scripts/client_registry.py bind-optional-deps \
+              --package-json "${root_stage}/package.json" \
+              --version "${CLIENT_VERSION}" \
+              --client stack
+            (cd "${root_stage}" && npm pack \
+              --ignore-scripts --pack-destination "${smoke}")
+            root_package="${smoke}/registrystack-client-${CLIENT_VERSION}.tgz"
+            platform_package="${GITHUB_WORKSPACE}/candidate-client-package/clients/registrystack-client-${{ matrix.napi_platform }}-${CLIENT_VERSION}.tgz"
+            test -f "${root_package}"
+            test -f "${platform_package}"
+            (
+              cd "${smoke}"
+              npm init --yes >/dev/null
+              npm install --no-audit --no-fund \
+                "${root_package}" "${platform_package}"
+              test -z "$(find node_modules/@registrystack/client \
+                -maxdepth 1 -name '*.node' -print -quit)"
+              test "$(find node_modules/@registrystack/client-${{ matrix.napi_platform }} \
+                -maxdepth 1 -name '*.node' | wc -l)" -eq 4
+              cp "${GITHUB_WORKSPACE}/release/scripts/smoke-registry-client-package.js" .
+              node smoke-registry-client-package.js
+              if [[ "${RUNNER_OS}" == Linux ]]; then
+                docker run --rm --network none \
+                  --volume "${smoke}:${smoke}:ro" \
+                  --workdir "${smoke}" \
+                  "${NODE_GLIBC_BASELINE_IMAGE}" \
+                node smoke-registry-client-package.js
+              fi
+            )
+            if [[ "${{ matrix.asset }}" == linux-amd64-glibc ]]; then
+              cp "${root_package}" \
+                "${GITHUB_WORKSPACE}/candidate-client-package/clients/"
+            fi
+            exit 0
+          fi
           for client in discovery evidence relay; do
             if [[ "${client}" == discovery ]] &&
                 (( major == 0 && minor < 23 )); then
@@ -1051,7 +1156,12 @@ jobs:
               [[ "${version}" != "0.19.0" ]]; then
             include_relay_clients=1
           fi
-          IFS=. read -r client_major client_minor _client_patch <<<"${version}"
+          IFS=. read -r client_major client_minor client_patch <<<"${version}"
+          include_unified_client=0
+          if (( client_major > 0 || client_minor > 26 ||
+                (client_minor == 26 && client_patch >= 1) )); then
+            include_unified_client=1
+          fi
           include_registry_packages=0
           if ((
             client_major > 0 || client_minor >= 21
@@ -1066,30 +1176,49 @@ jobs:
           fi
           for platform in linux-amd64-glibc linux-arm64-glibc macos-arm64; do
             client_root="inputs/candidate-clients-${platform}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/clients"
-            expected_client_assets=2
-            if [[ "${include_relay_clients}" -eq 1 ]]; then
-              expected_client_assets=4
-            fi
-            if [[ "${include_registry_packages}" -eq 1 ]]; then
-              expected_client_assets=6
-            fi
-            if [[ "${include_discovery_clients}" -eq 1 ]]; then
-              expected_client_assets=9
-            fi
-            if [[ "${platform}" == linux-amd64-glibc ]] &&
-                [[ "${include_registry_packages}" -eq 1 ]]; then
-              expected_client_assets=$((expected_client_assets + 2))
+            if [[ "${include_unified_client}" -eq 1 ]]; then
+              expected_client_assets=2
+            else
+              expected_client_assets=2
+              if [[ "${include_relay_clients}" -eq 1 ]]; then
+                expected_client_assets=4
+              fi
+              if [[ "${include_registry_packages}" -eq 1 ]]; then
+                expected_client_assets=6
+              fi
               if [[ "${include_discovery_clients}" -eq 1 ]]; then
+                expected_client_assets=9
+              fi
+            fi
+            if [[ "${platform}" == linux-amd64-glibc ]]; then
+              if [[ "${include_unified_client}" -eq 1 ]]; then
                 expected_client_assets=$((expected_client_assets + 1))
+              elif [[ "${include_registry_packages}" -eq 1 ]]; then
+                expected_client_assets=$((expected_client_assets + 2))
+                if [[ "${include_discovery_clients}" -eq 1 ]]; then
+                  expected_client_assets=$((expected_client_assets + 1))
+                fi
               fi
             fi
             test "$(find "${client_root}" -maxdepth 1 -type f | wc -l)" -eq "${expected_client_assets}"
             cp "${client_root}"/* candidate/bundle-root/
           done
           {
-            for platform in linux-amd64-glibc linux-arm64-glibc macos-arm64; do
-              echo "evidence-client-node-${{ needs.validate.outputs.tag }}-${platform}.tgz"
-            done
+            if [[ "${include_unified_client}" -eq 1 ]]; then
+              echo "registrystack-client-${version}.tgz"
+              for platform in darwin-arm64 linux-arm64-gnu linux-x64-gnu; do
+                echo "registrystack-client-${platform}-${version}.tgz"
+              done
+              for wheel_platform in \
+                manylinux_2_17_x86_64.manylinux2014_x86_64 \
+                manylinux_2_17_aarch64.manylinux2014_aarch64 \
+                macosx_11_0_arm64; do
+                echo "registry_stack_client-${version}-cp310-abi3-${wheel_platform}.whl"
+              done
+            else
+              for platform in linux-amd64-glibc linux-arm64-glibc macos-arm64; do
+                echo "evidence-client-node-${{ needs.validate.outputs.tag }}-${platform}.tgz"
+              done
               wheel_platforms=(linux_x86_64 linux_aarch64 macosx_11_0_arm64)
               if [[ "${include_registry_packages}" -eq 1 ]]; then
                 wheel_platforms=(manylinux_2_17_x86_64.manylinux2014_x86_64 manylinux_2_17_aarch64.manylinux2014_aarch64 macosx_11_0_arm64)
@@ -1127,6 +1256,7 @@ jobs:
                 done
               fi
             fi
+            fi
           } | sort > "${RUNNER_TEMP}/expected-client-assets"
           find candidate/bundle-root -maxdepth 1 -type f \
             \( -name 'evidence-client-node-*.tgz' \
@@ -1137,12 +1267,19 @@ jobs:
                -o -name 'registry_relay_client-*.whl' \
                -o -name 'discovery-client-node-*.tgz' \
                -o -name 'registrystack-discovery-client-*.tgz' \
-               -o -name 'registry_discovery_client-*.whl' \) \
+               -o -name 'registry_discovery_client-*.whl' \
+               -o -name 'registrystack-client-*.tgz' \
+               -o -name 'registry_stack_client-*.whl' \) \
             -printf '%f\n' | sort > "${RUNNER_TEMP}/actual-client-assets"
           diff -u \
             "${RUNNER_TEMP}/expected-client-assets" \
             "${RUNNER_TEMP}/actual-client-assets"
-          if [[ "${include_registry_packages}" -eq 1 ]]; then
+          if [[ "${include_unified_client}" -eq 1 ]]; then
+            python3 release/scripts/client_registry.py validate-dist \
+              --directory candidate/bundle-root \
+              --version "${version}" \
+              --client stack
+          elif [[ "${include_registry_packages}" -eq 1 ]]; then
             for client in discovery evidence relay; do
               if [[ "${client}" == discovery ]] &&
                   [[ "${include_discovery_clients}" -ne 1 ]]; then
@@ -1307,7 +1444,7 @@ jobs:
                     *.sbom.spdx.json) kind=sbom ;;
                     *-security-evidence.tar.gz) kind=security-evidence ;;
                     *-install.sh) kind=installer ;;
-                    discovery-client-node-*.tgz|evidence-client-node-*.tgz|relay-client-node-*.tgz|registrystack-discovery-client-*.tgz|registrystack-evidence-client-*.tgz|registrystack-relay-client-*.tgz|registry_discovery_client-*.whl|registry_evidence_client-*.whl|registry_relay_client-*.whl) kind=client-package ;;
+                    discovery-client-node-*.tgz|evidence-client-node-*.tgz|relay-client-node-*.tgz|registrystack-discovery-client-*.tgz|registrystack-evidence-client-*.tgz|registrystack-relay-client-*.tgz|registrystack-client-*.tgz|registry_discovery_client-*.whl|registry_evidence_client-*.whl|registry_relay_client-*.whl|registry_stack_client-*.whl) kind=client-package ;;
                     *) kind=binary ;;
                   esac
                   jq -n \

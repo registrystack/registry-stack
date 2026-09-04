@@ -45,7 +45,13 @@ SHARDS = {
         "registry-relay-client-py",
     ),
     "relay-v2": ("registry-relay-v2", "registry-relayctl"),
-    "breg": ("registry-breg", "registry-breg-client", "registry-bregctl"),
+    "breg": (
+        "registry-breg",
+        "registry-breg-client",
+        "registry-breg-client-node",
+        "registry-breg-client-py",
+        "registry-bregctl",
+    ),
     "stack-client": ("registry-record", "registry-stack-client"),
     "evidence": (
         "registry-evidence",
@@ -228,14 +234,21 @@ RELAY_BINDING_PACKAGES = frozenset(
 DISCOVERY_BINDING_PACKAGES = frozenset(
     {"registry-discovery-client-node", "registry-discovery-client-py"}
 )
+BREG_BINDING_PACKAGES = frozenset(
+    {"registry-breg-client-node", "registry-breg-client-py"}
+)
 NATIVE_BINDING_PACKAGES = (
-    DISCOVERY_BINDING_PACKAGES | EVIDENCE_BINDING_PACKAGES | RELAY_BINDING_PACKAGES
+    DISCOVERY_BINDING_PACKAGES
+    | EVIDENCE_BINDING_PACKAGES
+    | RELAY_BINDING_PACKAGES
+    | BREG_BINDING_PACKAGES
 )
 LINUX_NODE_BINDING_PACKAGES = frozenset(
     {
         "registry-discovery-client-node",
         "registry-evidence-client-node",
         "registry-relay-client-node",
+        "registry-breg-client-node",
     }
 )
 
@@ -257,6 +270,9 @@ LINUX_NODE_RELEASE_RECIPE_INPUTS = frozenset(
         "release/scripts/smoke-discovery-client-package.js",
         "release/scripts/smoke-evidence-client-package.js",
         "release/scripts/smoke-relay-client-package.js",
+        "release/scripts/smoke-registry-client-package.js",
+        "release/scripts/assemble-registry-client-wheel.py",
+        "release/scripts/sync-registry-client-node.py",
         "release/scripts/test_build_linux_node_client.py",
         "release/scripts/test_zig_glibc_compiler.py",
         "release/scripts/zig-glibc-compiler",
@@ -566,7 +582,9 @@ def classify(
         if (package := workspace.package_for_path(path)) is not None
     }
     release_linux_node_clients = any(
-        path in LINUX_NODE_RELEASE_RECIPE_INPUTS or path.startswith(".cargo/")
+        path in LINUX_NODE_RELEASE_RECIPE_INPUTS
+        or path.startswith(".cargo/")
+        or path.startswith("crates/registry-stack-client-node/")
         for path in paths
     ) or bool(
         workspace.affected_packages(linux_node_seeds)
@@ -704,7 +722,16 @@ def classify(
     # Reverse dependents, not changed paths: bindings are Cargo path dependents
     # of each SDK, so an SDK or shared HTTP-contract change can move a native
     # surface without touching a binding crate.
-    client_bindings = complete or bool(affected & NATIVE_BINDING_PACKAGES)
+    unified_client_changed = any(
+        path.startswith("crates/registry-stack-client-node/")
+        or path.startswith("crates/registry-stack-client-py/")
+        for path in changed_paths
+    )
+    client_bindings = (
+        complete
+        or bool(affected & NATIVE_BINDING_PACKAGES)
+        or unified_client_changed
+    )
 
     evidence_tutorial = (
         complete

@@ -225,6 +225,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "run: python3 -m unittest release/scripts/test_client_registry.py",
     ),
     (
+        "Unified Python wheel assembly tests",
+        "run: python3 -m unittest release/scripts/test_assemble_registry_client_wheel.py",
+    ),
+    (
         "Release storage preflight tests",
         "run: python3 -m unittest release/scripts/test_check_release_storage.py",
     ),
@@ -536,6 +540,8 @@ REQUIRED_RELEASE_SECURITY_GATES = (
             "environment: npm",
             '{"client": "evidence", "environment": "pypi-evidence"}',
             '{"client": "relay", "environment": "pypi"}',
+            '{"client": "stack", "environment": "pypi"}',
+            '"registrystack-client-${version}.tgz"',
             "client_registry.py npm-state",
             "client_registry.py pypi-state",
             "npm publish",

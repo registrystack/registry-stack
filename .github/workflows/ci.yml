@@ -760,6 +760,9 @@ jobs:
       - name: Test client registry reconciliation
         run: python3 -m unittest release/scripts/test_client_registry.py
 
+      - name: Test unified Python wheel assembly
+        run: python3 -m unittest release/scripts/test_assemble_registry_client_wheel.py
+
       - name: Test release storage preflight
         run: python3 -m unittest release/scripts/test_check_release_storage.py
 
@@ -1179,18 +1182,22 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          node-version: 22.12.0
+          # napi-rs CLI 3.8.2 requires Node 22.13 or later. Candidate package
+          # smoke tests separately retain the Node 22.12 runtime floor.
+          node-version: 22.20.0
           cache: npm
           cache-dependency-path: |
             crates/registry-discovery-client-node/package-lock.json
             crates/registry-evidence-client-node/package-lock.json
             crates/registry-relay-client-node/package-lock.json
+            crates/registry-breg-client-node/package-lock.json
+            crates/registry-stack-client-node/package-lock.json
 
       - name: Build and test Node bindings
         shell: bash
         run: |
           set -euo pipefail
-          for client in registry-discovery-client-node registry-evidence-client-node registry-relay-client-node; do
+          for client in registry-discovery-client-node registry-evidence-client-node registry-relay-client-node registry-breg-client-node; do
             (
               cd "crates/${client}"
               npm ci
@@ -1200,12 +1207,19 @@ jobs:
               cmp ../../LICENSE LICENSE
             )
           done
+          (
+            cd crates/registry-stack-client-node
+            npm ci
+            npm test
+            npm run check:types
+            cmp ../../LICENSE LICENSE
+          )
 
       - name: Build and test Python bindings
         shell: bash
         run: |
           set -euo pipefail
-          for client in registry-discovery-client-py registry-evidence-client-py registry-relay-client-py; do
+          for client in registry-discovery-client-py registry-evidence-client-py registry-relay-client-py registry-breg-client-py; do
             cargo build --locked -p "${client}" --lib --features "${client}/extension-module"
             (
               cd "crates/${client}"
@@ -1252,6 +1266,8 @@ jobs:
             crates/registry-discovery-client-node/package-lock.json
             crates/registry-evidence-client-node/package-lock.json
             crates/registry-relay-client-node/package-lock.json
+            crates/registry-breg-client-node/package-lock.json
+            crates/registry-stack-client-node/package-lock.json
 
       - name: Install pinned Linux client build tools
         shell: bash
@@ -1267,7 +1283,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for client in discovery evidence relay; do
+          for client in discovery evidence relay breg; do
             client_dir="${GITHUB_WORKSPACE}/crates/registry-${client}-client-node"
             (cd "${client_dir}" && npm ci)
             release/scripts/build-linux-node-client \
@@ -1275,6 +1291,10 @@ jobs:
               --target "${{ matrix.target }}" \
               --napi-platform "${{ matrix.napi_platform }}" \
               --zig-python "${RUNNER_TEMP}/maturin/bin/python"
+            if [[ "${client}" == breg ]]; then
+              node -e "const { BaseRegistryClient } = require('${client_dir}/client'); new BaseRegistryClient({ baseUrl: 'https://registry.invalid' })"
+              continue
+            fi
             smoke="${RUNNER_TEMP}/node-smoke-${client}"
             mkdir -p "${smoke}/node_modules/@registrystack"
             ln -s "${client_dir}" \
@@ -1283,6 +1303,22 @@ jobs:
               "${smoke}/"
             (cd "${smoke}" && node "smoke-${client}-client-package.js")
           done
+          client_dir="${GITHUB_WORKSPACE}/crates/registry-stack-client-node"
+          platform_dir="${client_dir}/npm/${{ matrix.napi_platform }}"
+          for client in discovery evidence relay breg; do
+            cp "${GITHUB_WORKSPACE}/crates/registry-${client}-client-node/${client}-client.${{ matrix.napi_platform }}.node" \
+              "${platform_dir}/"
+          done
+          smoke="${RUNNER_TEMP}/node-smoke-registry"
+          mkdir -p "${smoke}/node_modules/@registrystack"
+          mkdir -p "${client_dir}/node_modules/@registrystack"
+          ln -s "${platform_dir}" \
+            "${client_dir}/node_modules/@registrystack/client-${{ matrix.napi_platform }}"
+          ln -s "${client_dir}" \
+            "${smoke}/node_modules/@registrystack/client"
+          cp "${GITHUB_WORKSPACE}/release/scripts/smoke-registry-client-package.js" \
+            "${smoke}/"
+          (cd "${smoke}" && node smoke-registry-client-package.js)
 
   ci-result:
     name: CI result

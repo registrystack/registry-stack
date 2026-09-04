@@ -49,6 +49,7 @@ DISCOVERY_CLIENT_PACKAGE_MINIMUM_VERSION = (0, 23, 0)
 DISCOVERY_RUNTIME_MINIMUM_VERSION = (0, 24, 0)
 DISCOVERY_RUNTIME_IMAGE_NAMES = OFFICIAL_RUNTIME_IMAGE_NAMES | {"discovery"}
 BREG_RELEASE_MINIMUM_VERSION = (0, 26, 0)
+UNIFIED_CLIENT_PACKAGE_MINIMUM_VERSION = (0, 26, 1)
 BREG_RUNTIME_IMAGE_NAMES = DISCOVERY_RUNTIME_IMAGE_NAMES | {
     "breg"
 }
@@ -287,8 +288,10 @@ def _relay_v2_payload_inventory(version: str) -> dict[str, str]:
             "evidence-oid4vci",
         ):
             inventory[f"{name}-{tag}-{platform}"] = "binary"
-    for platform in ("linux-amd64-glibc", "linux-arm64-glibc", "macos-arm64"):
-        inventory[f"evidence-client-node-{tag}-{platform}.tgz"] = "client-package"
+    unified_client = version_tuple >= UNIFIED_CLIENT_PACKAGE_MINIMUM_VERSION
+    if not unified_client:
+        for platform in ("linux-amd64-glibc", "linux-arm64-glibc", "macos-arm64"):
+            inventory[f"evidence-client-node-{tag}-{platform}.tgz"] = "client-package"
     wheel_platforms = ("linux_x86_64", "linux_aarch64", "macosx_11_0_arm64")
     if version_tuple >= CLIENT_REGISTRY_PACKAGE_MINIMUM_VERSION:
         wheel_platforms = (
@@ -296,10 +299,11 @@ def _relay_v2_payload_inventory(version: str) -> dict[str, str]:
             "manylinux_2_17_aarch64.manylinux2014_aarch64",
             "macosx_11_0_arm64",
         )
-    for platform in wheel_platforms:
-        inventory[
-            f"registry_evidence_client-{version}-cp310-abi3-{platform}.whl"
-        ] = "client-package"
+    if not unified_client:
+        for platform in wheel_platforms:
+            inventory[
+                f"registry_evidence_client-{version}-cp310-abi3-{platform}.whl"
+            ] = "client-package"
     inventory.update(
         {
             f"evidencectl-{tag}-install.sh": "installer",
@@ -321,6 +325,7 @@ def _relay_v2_payload_inventory(version: str) -> dict[str, str]:
         inventory[f"registry-docs-{tag}.tar.gz"] = "docs"
     if (
         version_tuple >= RELAY_CLIENT_PACKAGE_MINIMUM_VERSION
+        and not unified_client
     ):
         for platform in ("linux-amd64-glibc", "linux-arm64-glibc", "macos-arm64"):
             inventory[f"relay-client-node-{tag}-{platform}.tgz"] = "client-package"
@@ -330,6 +335,7 @@ def _relay_v2_payload_inventory(version: str) -> dict[str, str]:
             ] = "client-package"
     if (
         version_tuple >= CLIENT_REGISTRY_PACKAGE_MINIMUM_VERSION
+        and not unified_client
     ):
         for client in ("evidence", "relay"):
             inventory[f"registrystack-{client}-client-{version}.tgz"] = (
@@ -339,7 +345,7 @@ def _relay_v2_payload_inventory(version: str) -> dict[str, str]:
                 inventory[
                     f"registrystack-{client}-client-{platform}-{version}.tgz"
                 ] = "client-package"
-    if version_tuple >= DISCOVERY_CLIENT_PACKAGE_MINIMUM_VERSION:
+    if version_tuple >= DISCOVERY_CLIENT_PACKAGE_MINIMUM_VERSION and not unified_client:
         for platform in ("linux-amd64-glibc", "linux-arm64-glibc", "macos-arm64"):
             inventory[f"discovery-client-node-{tag}-{platform}.tgz"] = "client-package"
         for platform in wheel_platforms:
@@ -350,6 +356,16 @@ def _relay_v2_payload_inventory(version: str) -> dict[str, str]:
         for platform in ("darwin-arm64", "linux-arm64-gnu", "linux-x64-gnu"):
             inventory[
                 f"registrystack-discovery-client-{platform}-{version}.tgz"
+            ] = "client-package"
+    if unified_client:
+        inventory[f"registrystack-client-{version}.tgz"] = "client-package"
+        for platform in ("darwin-arm64", "linux-arm64-gnu", "linux-x64-gnu"):
+            inventory[f"registrystack-client-{platform}-{version}.tgz"] = (
+                "client-package"
+            )
+        for platform in wheel_platforms:
+            inventory[
+                f"registry_stack_client-{version}-cp310-abi3-{platform}.whl"
             ] = "client-package"
     if version_tuple >= DISCOVERY_RUNTIME_MINIMUM_VERSION:
         inventory[f"discovery-{tag}-linux-amd64"] = "binary"

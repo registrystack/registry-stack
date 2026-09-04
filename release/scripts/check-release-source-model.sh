@@ -77,6 +77,11 @@ require_path "registry-mint crate" "${stack_root}/crates/registry-mint"
 require_path "registry-evidence-oid4vci crate" "${stack_root}/crates/registry-evidence-oid4vci"
 require_path "registry-breg crate" "${stack_root}/crates/registry-breg"
 require_path "registry-bregctl crate" "${stack_root}/crates/registry-bregctl"
+require_path "registry-breg client crate" "${stack_root}/crates/registry-breg-client"
+require_path "registry-breg Node client binding" "${stack_root}/crates/registry-breg-client-node"
+require_path "registry-breg Python client binding" "${stack_root}/crates/registry-breg-client-py"
+require_path "unified Node client package" "${stack_root}/crates/registry-stack-client-node"
+require_path "unified Python client package" "${stack_root}/crates/registry-stack-client-py"
 if [[ "${stack_git_root}" != "${stack_root}" ]]; then
 	echo "release source model failed: registry-stack source dir must be the monorepo root, got ${stack_root} inside ${stack_git_root}" >&2
 	exit 2

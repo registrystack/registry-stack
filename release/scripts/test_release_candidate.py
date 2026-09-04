@@ -751,6 +751,30 @@ class ReleaseCandidateTest(TestCase):
         )
         self.assertEqual("installer", current["breg-install.sh"])
 
+    def test_unified_client_replaces_individual_packages_after_v0_26_0(self) -> None:
+        historical = self.module._relay_v2_payload_inventory("0.26.0")
+        current = self.module._relay_v2_payload_inventory("0.26.1")
+
+        self.assertIn("registrystack-relay-client-0.26.0.tgz", historical)
+        self.assertNotIn("registrystack-relay-client-0.26.1.tgz", current)
+        self.assertNotIn(
+            "registry_relay_client-0.26.1-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+            current,
+        )
+        self.assertEqual(
+            "client-package", current["registrystack-client-0.26.1.tgz"]
+        )
+        self.assertEqual(
+            "client-package",
+            current["registrystack-client-linux-x64-gnu-0.26.1.tgz"],
+        )
+        self.assertEqual(
+            "client-package",
+            current[
+                "registry_stack_client-0.26.1-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+            ],
+        )
+
     def test_v2_security_evidence_members_follow_candidate_images(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
