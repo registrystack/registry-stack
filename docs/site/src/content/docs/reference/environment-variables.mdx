@@ -149,7 +149,7 @@ The install script reads these variables. They are read by the script, not by th
 | --- | --- | --- |
 | `BREG_VERSION` | Base Registry Engine tag to install. A published installer asset embeds its own tag and refuses an override that does not match it. | Defaults to the installer's pinned tag. |
 | `BREG_INSTALL_DIR` | Directory the script installs into. | Defaults to `~/.local/bin`. |
-| `BREG_ASSET_DIR` | Directory of already-downloaded release assets to read instead of downloading. Use it after verifying a release with [`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/v0.26.0/release/VERIFY.md). | Optional. |
+| `BREG_ASSET_DIR` | Directory of already-downloaded release assets to read instead of downloading. Use it after verifying a release with [`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/v0.26.1/release/VERIFY.md). | Optional. |
 
 The script verifies the downloaded `breg` and `bregctl` binaries against the release
 `SHA256SUMS` before anything reaches the install directory. It installs both binaries together or
