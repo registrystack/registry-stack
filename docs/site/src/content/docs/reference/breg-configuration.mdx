@@ -27,7 +27,7 @@ Types, required fields, accepted values, defaults, and constraints come from the
 Descriptions appear where the Rust definition supplies them.
 Internal compatibility fields and test-journey documents are outside this reference.
 
-Use [configure your registry](../../configure/breg/) for worked configurations and
+Use [author a registry project](../../configure/breg/) for worked configurations and
 deployment steps. A schema-valid document still needs the compiler and runtime checks:
 `bregctl check <project>` validates the combined model;
 `bregctl doctor --runtime-config <absolute-file>` checks deployment configuration.
@@ -72,7 +72,7 @@ it generates record schemas for that project's API, not configuration schemas.
 
 ## Next
 
-- [Configure your registry](../../configure/breg/) for models, permissions, and webhooks.
+- [Author a registry project](../../configure/breg/) for models, permissions, and webhooks.
 - [Events and webhooks](../breg-api/#events-and-webhooks) for payloads, signatures, retries, and replay.
 - [Create and query your first registry](../../tutorials/first-breg/) to try the API.
-- [Base Registry Engine overview](../../explanation/configuration-defined-registry/) for the product boundaries.
+- [How a configured registry works](../../explanation/configuration-defined-registry/) for the product boundaries.

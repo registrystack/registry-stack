@@ -1,13 +1,13 @@
 ---
 title: Retention and persistent state
-description: What Registry Relay, Evidence Gateway, and Registry Mint retain, what expires, and what operators must preserve or ship off host.
+description: What Registry Relay, Evidence Gateway, Registry Mint, and Base Registry Engine retain, what expires, and what operators must preserve or ship off host.
 status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
   - registry-evidence
   - registry-mint
-last_reviewed: "2026-08-11"
+last_reviewed: "2026-09-04"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -15,9 +15,11 @@ standards_referenced: []
 
 Use this page to decide which Registry Stack state needs backup, off-host shipping, expiry,
 or deletion policy outside the products.
-It documents current Registry Relay, Evidence Gateway, and Registry Mint behavior.
-Retention enforcement, record-level erasure, and data-subject-rights workflows are outside the
-1.0 product boundary.
+It documents current Registry Relay, Evidence Gateway, Registry Mint, and Base Registry Engine
+behavior.
+Retention enforcement and data-subject-rights workflows are outside the 1.0 product boundary, and
+so is record-level erasure everywhere except Base Registry Engine, which carries operator commands
+that erase retained history, change-request detail, and the oldest part of its audit journal.
 
 ## Operator boundary
 
@@ -39,16 +41,17 @@ Two consequences follow from that boundary:
 
 | Store | What it can contain | Expiry or rotation | Operator control |
 |---|---|---|---|
-| Relay audit sink | Chained attempt, terminal, and refusal envelopes binding the registry, resource, operation, access profile, disclosure profile, selected-field identifiers, contract revision, and source revision. It excludes tokens, selectors, raw principals, source values, response values, and raw identifiers. | Relay uses the same segmented, hash-chained JSONL sink Evidence Gateway and Registry Mint use. The active segment seals at a fixed `64 MiB` threshold and reopens under the next ascending sequence; Relay does not expose a configurable segment size or a retained-file count, and it never deletes a sealed segment itself. | Configure `audit.sink` and `audit.integrityKeyRef` in `runtime.yaml`. Archive sealed segments off host oldest sequence first; the shipping mechanics are identical to [Ship Evidence Gateway audit records off host](#ship-evidence-gateway-audit-records-off-host) below, since both sinks share the same segment-naming and hash-chain scheme. |
+| Relay audit sink | Chained attempt, terminal, and refusal envelopes binding the registry, resource, operation, access profile, disclosure profile, selected-field identifiers, contract revision, and source revision. It excludes tokens, selectors, raw principals, source values, response values, and raw identifiers. | Relay uses the same segmented, hash-chained JSONL sink Evidence Gateway and Registry Mint use. The active segment seals at a fixed `64 MiB` threshold and reopens under the next ascending sequence; Relay does not expose a configurable segment size or a retained-file count, and it never deletes a sealed segment itself. | Configure `audit.sink` and `audit.integrityKeyRef` in `runtime.yaml`. Archive sealed segments off host oldest sequence first; the shipping mechanics are identical to [Ship Evidence Gateway audit records off host](#ship-evidence-gateway-audit-records-off-host), since both sinks share the same segment-naming and hash-chain scheme. |
 | Evidence Gateway audit chain | A keyed, hash-chained JSONL log of the access-attempt event before every source read and the disclosure-release event before every response. Audit carries reviewed identifiers and decision categories, never raw selector values, source values, credentials, tokens, or raw subject identifiers. | `auditStorage.maximumFileBytes` is a per-segment rotation threshold, not a total ceiling. When an append would exceed it, the runtime seals the active segment as `<auditStorage.path>.<sequence>` and opens a new active segment online, with no operator action. Nothing in the runtime deletes or compacts a sealed segment; total retention is entirely operator-owned. | Set `auditStorage.path`, `auditStorage.maximumFileBytes`, and the hash secret in `runtime.yaml`. Archive sealed segments to cold storage oldest sequence first, never touch the active segment while the service runs, and run `evidence verify-audit` on the cadence the deployment's audit policy requires. |
 | Mint audit chain | A keyed, hash-chained JSONL log of token releases and denials. Records use keyed pseudonyms and omit raw assertions, access tokens, client ids, principals, authority values, actors, and subject values. | `audit.maximumFileBytes` is a per-segment threshold, not a total ceiling. Registry Mint seals full segments as `<audit.path>.<sequence>` online and never deletes or compacts them. | Set `audit.path`, `audit.maximumFileBytes`, and the hash key in `mint.yaml`. Archive sealed segments oldest first, never touch the active segment while Registry Mint runs, and run `mint verify-audit` on the deployment's verification cadence. |
-| Operator-owned config, source, and secret paths | Relay's `runtime.yaml`, the sealed package at `packagePath`, and the bound SQLite source path; Evidence Gateway's governed bundle and runtime document; Registry Mint's governed public keys, signer configuration, and client registry; secret references for all three. Source files can contain personal data. | Registry Stack does not expire these files, except through the specific audit and cache mechanics above. | Mount source data read-only where possible; back up config, packages, and secrets through your platform controls. |
+| Base Registry Engine PostgreSQL database | The registry's own database. `registry_data` holds the current row of every record, `registry_internal` holds the retained revisions, the hash-chained audit journal and its head row, the webhook outbox, the change-request proposal and target snapshots, and the cached idempotency results, and `registry_source`, `registry_derived`, and `registry_context` hold views and functions the compiler generates. Records, their revisions, and proposal snapshots carry whatever the project's entities declare, personal data included. | Only a retained webhook payload expires on a schedule: `eventDelivery.payloadRetentionDays` in `runtime.yaml` defaults to `7` days and is capped at `30`, and the runtime clears a payload on the first successful delivery or once its expiry has passed. Revisions, audit records, and proposal snapshots are kept until an operator command removes them. | Back up the database; Base Registry Engine writes no local copy of it. `bregctl history erase`, `request-retention erase`, and `audit prune` are the only commands that remove retained bytes, and `audit export` is the only portable copy of the journal. [Retain, erase, and audit](../breg-retention/) states what each one destroys and what it leaves. |
+| Operator-owned config, source, and secret paths | Relay's `runtime.yaml`, the sealed package at `packagePath`, and the bound SQLite source path; Evidence Gateway's governed bundle and runtime document; Registry Mint's governed public keys, signer configuration, and client registry; Base Registry Engine's signed package root, runtime file, project sources, module locks, generated files, test receipt, signature documents, and the `bregctl data` checkpoint, sidecar, and export output files on the operator host; secret references for all four. Source files and a `bregctl data export` output can contain personal data. | Registry Stack does not expire these files, except through the specific audit and cache mechanics listed for each store. | Mount source data read-only where possible; back up config, packages, and secrets through your platform controls. |
 
 Relay V2 keeps no other durable, product-owned state beyond the audit sink and the operator-owned
-paths above: no shipper-acknowledgement cursor file, no server-side ingest cache, no
-configuration-signing or anti-rollback state, and no separate consultation database. Relay V1 had
-all four; the [Relay recovery state](#relay-recovery-state) section explains why none of them carry
-forward.
+paths in [Durable state and externally retained records](#durable-state-and-externally-retained-records):
+no shipper-acknowledgement cursor file, no server-side ingest cache, no configuration-signing or
+anti-rollback state, and no separate consultation database. Relay V1 had all four; the
+[Relay recovery state](#relay-recovery-state) section explains why none of them carry forward.
 
 ## Process-local caches and client-held state
 
@@ -158,6 +161,60 @@ active segment was verified. A running writer keeps the active segment out of th
 pass and produces `active-segment: not verified`; stop Registry Mint for a complete retained-chain
 pass.
 
+## Base Registry Engine retention
+
+A Base Registry Engine registry keeps its durable state in one PostgreSQL database rather than in
+local files, so its audit journal, record history, and webhook outbox are backed up and restored
+with the database itself. There is no segment rotation and no audit file to archive:
+`bregctl audit export` writes the only portable copy of the chain, and it is a copy rather than a
+rotation.
+
+`registry_internal.registry_revisions` holds the retained revisions of a record and `registry_data`
+holds its current row. `bregctl history erase` is the only command that removes retained revisions.
+It erases them for one record up to a revision number, scrubs the affected correction context and
+retained outbox payloads, and replaces the affected cached idempotency responses with refusal
+tombstones, so a retried mutation key cannot replay an erased body. It leaves the current record,
+every later revision, and the audit journal in place. Snapshot references at or after the earliest
+erased commit become unavailable until `bregctl history rebaseline` writes a new baseline commit.
+
+Change-request detail is separate from record history. `bregctl request-retention erase` removes
+the proposal and target snapshots, request revision snapshots, idempotency results, outbox
+payloads, and intake rows of one proposal version, and leaves the value-free lifecycle rows of the
+request. It applies only where the request entity declared `retention.mode: operator_erase`; the
+default, `retain`, keeps every proposal version and refuses operator erasure.
+
+The audit journal is a hash-chained table with its own head row, not a rotating file, and nothing
+expires it. `bregctl audit prune --before` removes the longest run of records at the start of the
+chain whose creation time precedes the boundary you give, appends one retention record stating
+what left, and refuses a boundary later than the database transaction time. Export before you
+prune: a pruned prefix leaves no copy behind, and the earliest retained record's previous hash is
+its only trace.
+
+The webhook outbox is the one Base Registry Engine store with a scheduled expiry. The runtime
+clears a retained payload on the first successful delivery, and clears an undelivered payload once
+its expiry has passed, which is also the point after which that delivery can no longer be
+replayed. The delivery rows themselves stay; only the payload goes.
+
+Import and export checkpoints live on the operator host, not in the database. `bregctl data import`
+writes a checkpoint file beside a `.state` sidecar it owns, and `bregctl data export` writes its
+output file beside a checkpoint that binds the package revision, schema fingerprint, entity,
+profile, and operation. Both refuse a run whose files no longer match rather than resuming it, so
+keep each pair together and unedited or start both afresh. An export output holds record values and
+needs the handling any other extract gets.
+
+Package files are operator-owned and nothing in Base Registry Engine expires them. Keep the project
+sources, module locks, generated files, test receipt, signature documents, and runtime file for
+every activation, and store secrets separately.
+
+{/* Evidence: crates/registry-breg/src/postgres/schema.rs;
+    crates/registry-breg/src/history_erasure.rs;
+    crates/registry-breg/src/request_retention.rs;
+    crates/registry-breg/src/audit_tooling.rs;
+    crates/registry-breg/src/webhook.rs;
+    crates/registry-breg/src/runtime_config.rs, DEFAULT_WEBHOOK_PAYLOAD_RETENTION_DAYS
+    and MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS;
+    crates/registry-bregctl/src/data_lifecycle.rs. */}
+
 ## Relay recovery state
 
 Relay V2 keeps no PostgreSQL-backed correctness state. It has no `consultation` lane, dispatch
@@ -177,14 +234,16 @@ the exact steps.
 ## What remains outside the product
 
 Registry Stack does not implement a general erasure workflow for source records, audit records, or
-cache entries.
+cache entries, beyond the bounded Base Registry Engine commands described in
+[Base Registry Engine retention](#base-registry-engine-retention).
 It also does not prune operator-owned config files, source files, or old release artifacts after
-the product-level expiry checks above have run.
+the product-level expiry checks have run.
 Those controls belong in the operator's storage, backup, incident-response, and data-protection
 processes.
 
 ## Next
 
-- [Operate Relay: replace complete revisions](../relay/#replace-complete-revisions)
+- [Operate Registry Relay: replace complete revisions](../relay/#replace-complete-revisions)
+- [Retain, erase, and audit](../breg-retention/) for the Base Registry Engine erasure, rebaseline, and audit commands
 - [Harden a production deployment](../../security/hardening-checklist/)
 - [Known limitations and non-guarantees](../../explanation/known-limitations/)

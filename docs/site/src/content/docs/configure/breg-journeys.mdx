@@ -1,0 +1,229 @@
+---
+title: Test with journeys
+description: Prove a registry project behaves before it reaches a database, with check and its findings, explain, generate, and the journeys in tests/journeys.yaml that bregctl test replays over HTTP.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-04"
+doc_type: how-to
+locale: en
+standards_referenced:
+  - openapi
+  - json-schema
+---
+
+You have a model and its profiles, and you want proof that the project behaves before it reaches a database.
+This page covers the offline checks first: `check` compiles the project and reports findings, `explain` prints what the compiler derived, and `generate` writes the artifacts a client will see.
+It then covers journeys, the scenarios in `tests/journeys.yaml` that `bregctl test` replays over HTTP against a throwaway database, because a row boundary, a query bound, or a review workflow is only proven by a request that runs.
+At the end you know what each command proves, what only a journey can prove, and what a failure of each looks like.
+
+## Check the project
+
+```sh
+bregctl check ./my-registry
+```
+
+`check` compiles the project without a database and prints the compiled revision, a content digest of everything the compiler read:
+
+```text
+check succeeded
+revision: sha256:<digest>
+finding access.profile.unrestricted_collection at entities[id=record].accessProfiles[id=operator].rowBoundaries: this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
+```
+
+Two people holding the same revision hold the same project.
+An error is a declaration the compiler cannot compile, printed as `error <code> at <path>: <message>`, and the command exits with status 1.
+A finding is an advisory attached to a document path: the project compiles, but a reviewer must read it.
+The project `init` wrote reports the `access.profile.unrestricted_collection` finding on purpose, because its `operator` profile lists every record.
+
+Two flags change what counts as a failure, and a review gate wants both:
+
+```sh
+bregctl check ./my-registry --deny-findings
+bregctl check ./my-registry --production
+```
+
+`--deny-findings` turns every finding into an error, so the first command prints `error access.profile.unrestricted_collection at ...` and exits with status 1 until the finding is resolved or the profile is changed.
+`--production` applies the production closure rules: package identity, a lock entry with a pinned digest for every module, a loaded source for every lock, and a webhook for every event must all be present, and a project missing one fails with `package.identity.required`, `module.lock.missing`, `module.lock.digest_required`, `module.source.required`, or `event.delivery.required`.
+The project `init` wrote already carries all of them, so `check --production` succeeds on it.
+`explain` and `generate` accept `--production` as well; `--deny-findings` belongs to `check` alone.
+
+{/* Evidence: crates/registry-bregctl/src/lib.rs, check(); crates/registry-breg/src/compiler.rs. */}
+
+## Explain what the compiler derived
+
+```sh
+bregctl explain model ./my-registry
+bregctl explain routes ./my-registry
+bregctl explain queries ./my-registry
+```
+
+`explain` takes one subject, prints the revision and findings the way `check` does, then the report: JSON for every subject except `access`, whose report is written for reading.
+`model` prints every entity, field, and profile as compiled.
+`routes` prints every HTTP route with its method, path, operation, and the profiles that may select it, including the default.
+`queries` prints, per entity and operation, the fields a response may carry, the filterable fields with example `$filter` expressions, and the query bounds a request stays within.
+`access` prints the compiled grants per profile in a human-readable form and, with `--scenario`, previews admission; [control access per profile](../breg-access/) covers it.
+`change-requests` and `actions` are covered on [declare change requests and actions](../breg-change-control/), and `events` on [author a registry project](../breg/).
+
+Read `explain queries` before you write a client or a journey: a request that filters on a field the profile cannot filter is refused, not empty.
+
+{/* Evidence: crates/registry-bregctl/src/lib.rs, ExplainArgs and explain(). */}
+
+## Generate artifacts
+
+```sh
+mkdir -p ./generated
+bregctl generate openapi ./my-registry --output ./generated/openapi
+bregctl generate schemas ./my-registry --output ./generated/schemas
+```
+
+`generate` writes one artifact family into a new directory: `openapi`, `schemas`, `actions`, `manifest`, `metadata`, or `sql`.
+The output directory's parent must exist, and the directory itself must not: a missing parent fails with `output.parent.invalid`, and an existing directory, or a path containing `..`, fails with `output.destination.invalid`, so a run can never overwrite artifacts you already reviewed.
+The command creates the directory and writes under a `generated/` subdirectory inside it, so the two commands produce `./generated/openapi/generated/openapi.json` and `./generated/schemas/generated/schemas/<entity>.schema.json`.
+
+Output is deterministic: the same project produces the same bytes, so commit the generated documents and, in review, generate into a fresh directory and diff it against the committed copy.
+The running server publishes the same OpenAPI document at `/openapi.json` and the same schemas under `/v1/schemas/`.
+
+{/* Evidence: crates/registry-bregctl/src/lib.rs, generate() and write_files_with_before_publish(). */}
+
+## Findings
+
+These are all the findings the compiler can report, each attached to the document path it applies to:
+
+| Finding | Meaning | What to do |
+|---|---|---|
+| `access.profile.anonymous_collection` | `list` is granted to unauthenticated callers, so every row the profile can read is public. | Confirm the whole collection is meant to be public. |
+| `access.profile.data_export` | Bulk export is enabled, and disabling it later cannot recall downloaded data. | Review the readable fields and row boundaries first. |
+| `access.profile.higher_classification` | A readable field is more sensitive than its entity's classification. | Verify the profile's scope and purpose before disclosing it. |
+| `access.profile.no_required_scope` | No scope restricts who may select the profile. | Add a required scope unless that is intended. |
+| `access.profile.no_writable_fields` | The profile grants `create` or `patch` and names no writable field. | List the writable fields, or remove the write operations. |
+| `access.profile.related_disclosure` | A read path discloses related records under the root profile rather than the target entity's own profiles. | Review its fields and the target entity's access requirements. |
+| `access.profile.revision_history` | History can disclose values removed from the current record. | Review historical disclosure separately. |
+| `access.profile.snapshot_history` | Snapshot reads reproduce retained historical rows under current authorization. | Review stored-field projection, filters, and row boundaries separately. |
+| `access.profile.unrestricted_collection` | The profile can list every row; caller filters are not authorization. | Add a claim-bound row boundary, or accept a registry-wide role knowingly. |
+| `access.profile.writable_row_boundary` | `patch` can change a field a row boundary depends on, within the caller's allowed values. | Remove it from the writable fields unless moving records is intended. |
+| `manifest_projection.missing` | No Registry Manifest projection is declared. | Declare one to clear the finding. `check --production` passes without it, and `package` builds a package without one. |
+| `module.lock.digest_missing` | A module lock entry has no production digest. | Run `project lock` before a production package. |
+| `module.lock.missing` | A module source has no lock entry. | Run `project lock`. |
+| `module.source.missing` | A lock entry names a module whose source is not loaded. | Restore the module file or remove the lock entry. |
+| `package.identity.missing` | No package identity is declared. | Declare one before a production package. |
+
+Under `--production`, the `module.*` and `package.*` findings become errors; `manifest_projection.missing` is reported only in authoring mode, so resolve it before you leave this page.
+
+{/* Evidence: crates/registry-breg/src/access.rs; crates/registry-breg/src/compiler.rs. */}
+
+## Write journeys
+
+A journey is a list of steps; each step names an entity, a profile, the claims the synthetic token carries, one request, and the outcome it expects.
+`bregctl test` replays them over real HTTP against an empty PostgreSQL database, binding one credential per step from its own credentials file, so the journey file never holds a credential.
+Every entity, profile, field, and claim in a journey is resolved against the compiled project first, so a journey can never reach past what a profile already allows.
+
+The journey `init` wrote proves the `record-reader` row boundary by moving a record out of the reader's rows and counting; these steps add a refusal:
+
+```yaml
+apiVersion: registry.registrystack.org/breg-journeys/v1
+journeys:
+  - id: record-lifecycle
+    steps:
+      - id: create-record-group
+        entity: record-group
+        accessProfile: operator
+        claims: &operator_claims
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
+        request:
+          operation: create
+          data:
+            code: group-a
+            label: Example group
+        expect:
+          outcome: success
+          status: 201
+          fields:
+            code: group-a
+        capture: example-group
+      - id: create-record
+        entity: record
+        accessProfile: operator
+        claims: *operator_claims
+        request:
+          operation: create
+          data:
+            code: example
+            label: Example record
+            group:
+              recordRef: example-group
+            status: active
+        expect:
+          outcome: success
+          status: 201
+        capture: example-record
+      - id: retire-record
+        entity: record
+        accessProfile: operator
+        claims: *operator_claims
+        request:
+          operation: patch
+          recordRef: example-record
+          etagRef: example-record
+          changes:
+            - field: status
+              value: retired
+        expect:
+          outcome: success
+          status: 200
+          fields:
+            status: retired
+      - id: reader-outside-the-claim-sees-nothing
+        entity: record
+        accessProfile: record-reader
+        claims:
+          principal: generic-registry-reader
+          scopes: [registry:generic:read]
+          purpose: registry-reporting
+          directClaims:
+            registry_record_status: active
+        request:
+          operation: get
+          recordRef: example-record
+        expect:
+          outcome: refusal
+          status: 404
+          problemCode: resource.not_found
+```
+
+| Step member | Meaning |
+|---|---|
+| `claims` | `principal`, `scopes`, `purpose`, and the `directClaims` row boundaries and claim lookups read. Values are synthetic. |
+| `request.operation` | `create`, `get`, `list`, `query`, `lookup`, `read_path`, `patch`, `batch`, `target_conditions`, `invoke`, or a change-request action: `submit_request`, `approve_request`, `reject_request`, and `request_revision` with a `stage`, `revise_request`, `cancel_request`, or `apply_request`. |
+| `recordRef`, `etagRef` | A record and ETag captured by an earlier step. `etagRef` sends the ETag as `If-Match`, so a patch fails rather than overwrite a concurrent change. |
+| `data`, `changes`, `items`, `selector` and `values`, `path`, `select`, `top`, `count`, `bbox`, `input`, `preconditions` | The request body or query for the operation. |
+| `expect` | `outcome` is `success` or `refusal`; `status` is the HTTP status; `fields` asserts returned values; `count` asserts the item count; `problemCode` asserts the problem code of a refusal. |
+| `capture`, `captureResults` | Store the returned record and ETag, or an action's named results, under a name for later steps. |
+
+A read outside the caller's boundary returns 404 with `resource.not_found`, because the server conceals what the caller may not know exists.
+Write a refusal step for every boundary you rely on: the compiler cannot prove a row boundary works, only a journey can.
+
+Running the journeys needs more than the project: an empty PostgreSQL database, a runtime configuration, a credentials file binding one credential per step, and a path for the receipt `bregctl test` writes.
+[Build a production candidate](../../tutorials/build-a-breg-production-candidate/) runs them step by step, and [deploy a registry](../../operate/breg/) covers the runtime configuration they read.
+
+{/* Evidence: products/breg/acceptance/asset-site-placement-change-requests/tests/journeys.yaml; products/breg/acceptance/person-name-change-rhai/tests/journeys.yaml; crates/registry-breg/src/fixtures.rs; crates/registry-bregctl/src/lib.rs, TestArgs. */}
+
+## Troubleshooting
+
+| Symptom | Cause and next move |
+|---|---|
+| `check` passes but `check --deny-findings` fails. | A finding is present. Read it and either change the project or accept the finding knowingly. |
+| `generate` fails with `output.parent.invalid`. | The output directory's parent does not exist. Create it, or give a destination inside a directory that exists. |
+| `generate` fails with `output.destination.invalid`. | The output directory already exists, or the path contains `..`. Give a new path; remove the old directory first if you meant to regenerate. |
+| A journey step fails with 404 where you expected data. | The profile's row boundary or purpose excluded the caller. Compare the step's `claims` with the grant, or preview them with `explain access --scenario` ([control access per profile](../breg-access/)). |
+| A journey filters or sorts on a field and is refused. | The profile's `filterableFields` or `sortableFields` do not list it. Check `explain queries` for the forms the profile may use. |
+
+## Next
+
+- [Build a production candidate](../../tutorials/build-a-breg-production-candidate/): run `check --production` and `bregctl test` against a PostgreSQL you start, then package and sign.
+- [Deploy a registry](../../operate/breg/): the runtime configuration, database, and token requirements the journeys depend on.
+- [Base Registry Engine API reference](../../reference/breg-api/): the routes, query options, and problem documents the journeys exercise.
+- [Base Registry Engine configuration reference](../../reference/breg-configuration/): every journey and project key.

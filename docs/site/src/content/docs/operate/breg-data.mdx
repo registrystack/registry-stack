@@ -1,0 +1,150 @@
+---
+title: Move data in bulk
+description: Validate, import, and export many records of a Base Registry Engine registry through its authenticated batch and list routes, with checkpoints that resume an interrupted run without re-sending a committed chunk.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-04"
+doc_type: how-to
+persona:
+  - operator
+locale: en
+standards_referenced: []
+---
+
+You operate an active registry, deployed as [deploy a registry](../breg/) describes, and need to
+load many records from a file or copy many records out through the same authenticated routes an
+application uses. At the end of this page an import has committed every chunk and its report says
+it is complete, or an export file holds every page the profile may read, and either run can be
+interrupted and resumed from its checkpoint.
+
+`data import` and `data export` drive the ordinary authenticated batch and list routes, so every
+row passes the same grants, validation, and audit as an interactive client. Nothing here bypasses
+a profile: an import needs a profile that may create or patch the entity, and an export needs one
+that is export-enabled. A chunk is one batch request the import commits as a unit; a page is one
+list response the export appends as a unit; a checkpoint is the file each command writes after
+every unit so a rerun continues where the last one stopped.
+
+## Prepare the inputs
+
+Each command needs the activated package directory and, for the two networked commands, the server
+URL and a file holding one bearer token and nothing else. The token file is an absolute path to a
+regular file; a trailing newline is ignored, and any other whitespace or control character refuses
+it. `--breg-url` must be `https`; `http` is accepted only for a loopback host. Each import line is
+one JSON object naming the operation and the record data:
+
+```json
+{"operation": "create", "data": {"code": "AA", "label": "First"}}
+```
+
+The input is a regular file of at most 256 MiB holding at most 1,000,000 lines, and a patch line
+carries at most 128 operations. An empty file, a symbolic link, or a file over either bound is
+refused before any network use. Paths given to `--package`, `--input`, `--checkpoint`, and
+`--output` must be absolute.
+
+{/* Evidence: crates/registry-breg/src/data.rs, MAX_DATA_IMPORT_INPUT_BYTES, MAX_INPUT_ITEMS,
+    and MAX_PATCH_OPERATIONS;
+    crates/registry-bregctl/src/data_lifecycle.rs, read_access_token() and parse_breg_url();
+    crates/registry-bregctl/src/lib.rs, DataCommand. */}
+
+## Validate the input
+
+`data validate` checks every line against the compiled plan without a network, so a shape error
+surfaces before a single request is sent:
+
+```sh
+bregctl data validate \
+  --package /srv/registry/build-1/package \
+  --entity record --profile operator --operation create \
+  --input /srv/registry/import/records.jsonl
+```
+
+The report names the package revision and schema fingerprint it validated against, the entity,
+profile, and operation, the input length, and the item and chunk counts the import would use. A
+line that does not fit the entity's shape or the profile's grants is reported without record
+values.
+
+{/* Evidence: crates/registry-bregctl/src/data_lifecycle.rs;
+    crates/registry-bregctl/src/lib.rs, DataValidateArgs. */}
+
+## Import with a checkpoint
+
+An import commits one bounded chunk at a time and records progress in the checkpoint file beside
+a `.state` sidecar the command owns, so a rerun with the same checkpoint resumes after the last
+committed chunk and never re-sends a committed one. `--max-chunks` bounds one operator run, which
+lets you watch the first chunks land before committing the rest:
+
+```sh
+bregctl data import \
+  --package /srv/registry/build-1/package \
+  --breg-url https://registry.example.org \
+  --access-token-file /srv/registry/private/import-token \
+  --entity record --profile operator --operation create \
+  --input /srv/registry/import/records.jsonl \
+  --checkpoint /srv/registry/import/records.checkpoint --max-chunks 20
+```
+
+Run the same command again to continue. The report carries the number of completed chunks, the
+number of committed items, and whether the import is complete; a run that stops at `--max-chunks`
+reports it as incomplete, which is the signal to run again. The checkpoint binds the package
+revision, schema fingerprint, entity, profile, and operation, so a rerun with any of them changed
+is refused rather than resumed. Do not edit the checkpoint or the sidecar: a checkpoint without
+its sidecar, or one whose contents no longer match, is refused, and `--max-chunks 0` is refused as
+an invalid binding. A server refusal stops the run, and the checkpoint still names the last
+committed chunk, so the rerun starts after it.
+
+{/* Evidence: crates/registry-bregctl/src/data_lifecycle.rs, load_or_start_import();
+    crates/registry-bregctl/src/lib.rs, DataImportArgs;
+    crates/registry-bregctl/tests/cli.rs. */}
+
+## Export with a checkpoint
+
+An export appends one bounded page at a time to the output file, then records the output length,
+digest, record count, and server cursor in its checkpoint. `--field` names each field to export,
+and the profile must be export-enabled for the entity:
+
+```sh
+bregctl data export \
+  --package /srv/registry/build-1/package \
+  --breg-url https://registry.example.org \
+  --access-token-file /srv/registry/private/export-token \
+  --entity record --profile operator --field code --field label \
+  --output /srv/registry/export/records.jsonl \
+  --checkpoint /srv/registry/export/records.checkpoint --max-pages 50
+```
+
+The first run creates both files and refuses to start when either already exists on its own. A
+rerun validates the entire existing output against the checkpoint, length and digest included,
+before requesting the next server-validated cursor, so an output edited by hand is refused
+rather than extended. The report names the requested fields, the completed page count, the record
+count, the output length, and whether the export is complete. `--max-pages` bounds one run the
+way `--max-chunks` bounds an import, and `--max-pages 0` is refused. Each server response is
+bounded at 2 MiB.
+
+{/* Evidence: crates/registry-bregctl/src/data_lifecycle.rs, load_or_start_export()
+    and read_export_output_state();
+    crates/registry-breg/src/data.rs, MAX_DATA_HTTP_RESPONSE_BYTES;
+    crates/registry-bregctl/src/lib.rs, DataExportArgs. */}
+
+## Troubleshooting
+
+| Symptom | Next move |
+| --- | --- |
+| `--breg-url` is refused | Use `https`, or `http` with a loopback host only. |
+| The token file is refused | It must be an absolute path to a regular file holding one token and nothing else; strip everything but a trailing newline. |
+| The input is refused before any request | Check for an empty file, a symbolic link, more than 256 MiB, more than 1,000,000 lines, or a patch line with more than 128 operations. |
+| An import refuses its checkpoint | The sidecar is missing, or the package, entity, profile, or operation differs from the run that created it. Start a new checkpoint path for a new input. |
+| An export refuses to start | Exactly one of the output and checkpoint files exists, or the existing output no longer matches its checkpoint. Keep both files together and unedited, or start both afresh. |
+| The report says the run is incomplete | `--max-chunks` or `--max-pages` bounded it. Run the same command again to continue. |
+
+## Next
+
+- [Base Registry Engine API reference](../../reference/breg-api/) for the batch and list routes
+  these commands drive and the problems they return.
+- [Query a registry from Python and Node](../../tutorials/query-breg-client/) for the client
+  library that reads the same routes one request at a time.
+- [Control access per profile](../../configure/breg-access/) for the profile grants an import or
+  export must hold.
+- [Retain, erase, and audit](../breg-retention/) for the audit journal every imported row is
+  recorded in.

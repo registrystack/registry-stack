@@ -1,0 +1,162 @@
+---
+title: Base Registry Engine overview
+description: What Base Registry Engine is, what runs where, and which page an author, an operator, or an application developer opens first.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-04"
+doc_type: explanation
+locale: en
+standards_referenced: []
+---
+
+Base Registry Engine is a PostgreSQL system of record whose data model and REST API are compiled
+from a registry project. The runtime carries no built-in domain types: a business, a plot, a
+permit, or an asset exists only when the active package declares it. This page tells you what runs
+where and which page to open first for your role.
+
+Three terms recur on every page that follows. A registry project is a directory of YAML files,
+`registry.yaml` plus optional modules and journeys, that declares the entities, fields,
+relationships, access profiles, change requests, and events one registry exposes. A package is
+the compiled and verified form of one project: `bregctl` builds it, `breg` serves it, and a
+production package carries detached signatures from keys the deployment trusts. An access profile
+is a named grant inside the project that states which scopes, purposes, and claims a token must
+carry and which operations, fields, and rows the caller may reach; a request selects one with the
+`accessProfile` query option.
+
+{/* Evidence: products/breg/README.md; crates/registry-breg/src/contract.rs, RegistryProject and RegistryModule;
+    products/breg/contracts/package-layout.yaml; crates/registry-breg/src/access.rs. */}
+
+```mermaid
+sequenceDiagram
+    participant A as Application
+    participant T as Token issuer
+    participant B as Base Registry Engine
+    participant P as PostgreSQL
+
+    A->>T: Request an access token
+    T-->>A: Return a signed bearer token
+    A->>B: Send a request with the token and an access profile
+    B->>B: Verify the token and select the profile
+    B->>P: Run the compiled query as the runtime role
+    P-->>B: Return the rows the row boundary admits
+    B->>P: Append one chained audit record
+    B-->>A: Return the Registry Record envelope
+    Note over T: Your OpenID Connect provider, or Registry Mint
+```
+
+The token issuer is your OpenID Connect provider, or [Registry Mint](../../configure/mint/) when
+you have none; Base Registry Engine verifies tokens and issues none. PostgreSQL is a database you
+provision with two roles: a migration role that owns the schema and applies packages, and a
+runtime role the serving process uses. `breg` verifies the active package at startup, serves the
+compiled routes, and appends every admitted request to a hash-chained audit journal in the same
+database. The process keeps no state of its own outside PostgreSQL.
+
+Three people take part, and one person may hold all three roles on a pilot. The author writes the
+project and runs `bregctl` checks and journeys. The operator provisions PostgreSQL, writes the
+runtime configuration, activates a signed package with the migration credential, and runs `breg`.
+The application developer obtains tokens from the issuer and calls the REST API directly or
+through a client library.
+
+{/* Evidence: crates/registry-breg/src/auth.rs, RegistryAuthenticator; crates/registry-breg/src/runtime_config.rs, SqlRoles;
+    crates/registry-breg/src/audit.rs; release/docker/Dockerfile.breg; products/breg/README.md. */}
+
+## Vocabulary
+
+Six more terms recur across the section. Each names something the product has, not a metaphor.
+
+- A trust anchor is the file the runtime configuration names, listing the public keys whose
+  signatures a package may carry and how many of them must sign, bound to one environment, one
+  deployment instance, and one database.
+- The outbox is a table in the registry's own database that takes one row per configured event,
+  written inside the same transaction as the record change that raised it, which the webhook
+  worker inside `breg` then reads and delivers.
+- A receipt is the JSON document a fully successful `bregctl test` run writes, recording the
+  candidate package revision, the source closure, the deployment and database identity, the target
+  schema fingerprint, and the journeys that passed, so packaging can refuse a receipt taken for
+  anything else.
+- A planner is a bounded Rhai script a change-request entity declares in place of fixed effects,
+  which reads one submitted request and returns the record writes to apply and, where the project
+  allows it, whether to apply the request or queue it.
+- A rebaseline is the maintenance run that restores snapshot coverage after a history erasure, by
+  proving every live row still matches its retained journal head and installing one baseline
+  commit at that head.
+- A row boundary is a rule in an access profile that binds one record field to a verified claim in
+  the caller's token with `equals` or `in`, so a request reaches only the rows whose field matches
+  what the token carries.
+
+{/* Evidence: crates/registry-breg/src/package.rs, PackageTrustAnchor and TrustAnchorKey;
+    crates/registry-breg/src/outbox.rs, insert_configured_events(); crates/registry-breg/src/fixtures.rs, SchemaTestReceipt;
+    crates/registry-breg/src/model.rs, CompiledChangeRequestPlanner; crates/registry-breg/src/history_rebaseline.rs;
+    crates/registry-breg/src/contract.rs, RowBoundarySource; crates/registry-breg/src/api/context.rs, VerifiedRowBoundary. */}
+
+## Make your first request
+
+[Create and query your first registry](../../tutorials/first-breg/) starts disposable PostgreSQL
+and Registry Mint on your machine, initializes a domain-neutral project with `bregctl init`,
+activates an unsigned local package, and creates and reads one record over HTTP with a short-lived
+token. You need Linux on amd64 or arm64 or macOS on Apple Silicon, Git and Bash, Docker, OpenSSL,
+Python 3.11 or later with uv, and curl 7.76 or later.
+
+The local path keeps authentication, access profiles, row boundaries, and audit active. It is not a
+substitute for production package signing, operated database roles, TLS to the database,
+migration review, or secret custody; those arrive in the deploy phase.
+
+{/* Evidence: products/breg/quickstart/run.sh; products/breg/quickstart/README.md;
+    docs/site/src/content/docs/tutorials/first-breg.mdx. */}
+
+## Choose your role
+
+### Author a registry
+
+The sidebar phase "Model your registry" is yours. Start with
+[Author a registry project](../../configure/breg/) for `registry.yaml`, entities, fields, related
+records, and modules, then [Control access per profile](../../configure/breg-access/) and
+[Declare change requests and actions](../../configure/breg-change-control/). `bregctl check`,
+`explain`, and `generate` open no database, so the modeling loop needs no infrastructure.
+[Test with journeys](../../configure/breg-journeys/) adds the scenario tests that `bregctl test`
+runs against a schema-test database before anything is packaged.
+
+### Operate a registry
+
+The phases "Prepare and deploy" and "Operate a running registry" are yours. Start with
+[Build a production candidate](../../tutorials/build-a-breg-production-candidate/), which takes a
+project through `check --production`, `test`, `package`, signing, and `verify` on your machine.
+[Deploy a registry](../../operate/breg/) then covers PostgreSQL provisioning, the runtime
+configuration, what a token must carry, activation with the migration credential, and metrics.
+The pages after it cover successor packages, retention and erasure, the audit journal, and bulk
+data moves.
+
+### Call a registry from an application
+
+The phase "Call a registry from an application" is yours. Start with
+[Query a registry from Python and Node](../../tutorials/query-breg-client/), which reads, lists,
+and creates records through the client packages with a bearer token and needs a registry on
+Registry Stack v0.26.1 or later, then keep the
+[Base Registry Engine client API reference](../../reference/breg-client-api/) open for the full
+surface. If you call the REST API directly, the
+[Base Registry Engine API reference](../../reference/breg-api/) describes every route, the
+Registry Record envelope, the query options, and the problem codes.
+
+{/* Evidence: crates/registry-bregctl/src/lib.rs, Command; crates/registry-breg-client/src/lib.rs;
+    crates/registry-breg/src/api/mod.rs. */}
+
+## Where the product stops
+
+Base Registry Engine ships no business, facility, authority, permit, or asset model: every entity,
+route, and profile comes from the active package. It issues no tokens and stores no users;
+identity belongs to your OpenID Connect provider or to Registry Mint. It is not a proxy over data
+held elsewhere: it owns its records in its own PostgreSQL database, and Registry Relay and
+Evidence Gateway remain the products for sources that already exist.
+[How a configured registry works](../../explanation/configuration-defined-registry/) explains the
+compiled model, the three write paths, history, and events behind that boundary.
+
+{/* Evidence: products/breg/README.md; crates/registry-breg/src/auth.rs; crates/registry-breg/src/postgres/mutation.rs. */}
+
+## Next
+
+- [Create and query your first registry](../../tutorials/first-breg/)
+- [How a configured registry works](../../explanation/configuration-defined-registry/)
+- [Evaluate Base Registry Engine](../evaluate-breg/)
+- [Which product fits your problem](../when-to-use/)
