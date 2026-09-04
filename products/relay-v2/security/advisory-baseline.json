@@ -27,7 +27,7 @@
       "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614"
     ],
     "application_layer_ids": [
-      "sha256:753b9fb0d92961dfac809c9338af4da0cae9360e7f75fd918ff42845d362f4a3",
+      "sha256:09f15108ffc6e06dc7b3d8087ae30c15cd59ef95df063358ea7f9eca45735652",
       "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
     ],
     "config": {
@@ -52,7 +52,7 @@
       "exposed_ports": ["8080/tcp"],
       "stop_signal": ""
     },
-    "definition_digest": "sha256:5d4778c28a757951aa132bae444460348318d49cfe42474d0226a40084a8d67b"
+    "definition_digest": "sha256:4691a407b98e5ebcf560c2b488bd79d5e09bd3ec2ab3393ed9b4eb2e8354e39d"
   },
   "policies": [
     {
@@ -75,9 +75,9 @@
       "severity": "Critical",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The official v0.26.0 Linux AMD64 Relay candidate had exactly two __isoc23_sscanf call sites using fixed-format %lu and %lx conversions and no allocating-character scanf conversion in the reviewed bytes. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound executable closure digests.",
-      "reviewed_at": "2026-09-03",
-      "expires_at": "2026-09-17",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The official v0.26.1 Linux AMD64 Relay candidate had exactly two __isoc23_sscanf call sites using fixed-format %lu and %lx conversions and no allocating-character scanf conversion in the reviewed bytes. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed file digests.",
+      "reviewed_at": "2026-09-04",
+      "expires_at": "2026-09-18",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
         "candidate_rootfs_changed",
@@ -93,14 +93,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:5d4778c28a757951aa132bae444460348318d49cfe42474d0226a40084a8d67b",
+      "runtime_definition_digest": "sha256:4691a407b98e5ebcf560c2b488bd79d5e09bd3ec2ab3393ed9b4eb2e8354e39d",
       "component_layer_id": "sha256:3a7299f559d987305122c7669fc3643095eb0955f8ff4a38c9430d54d0b4452e",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:64052a8a9aa86f7e68559f4343dfa22ac7d4b19c244fc2989ae3f0d967ec99a4",
-        "reference_source_revision": "e7bd7aa3c7ab72d240f60a5fffa93d39265bc0e4",
+        "reference_image_digest": "sha256:ff8e8d84143d3af01930d0ddc65c8b894f367b31b66f0b5d163854cd7d28dea8",
+        "reference_source_revision": "3e655214558e4479a72a2049ebf72bf5721a303e",
         "reference_provenance": "official_candidate",
-        "runtime_definition_digest": "sha256:5d4778c28a757951aa132bae444460348318d49cfe42474d0226a40084a8d67b",
+        "runtime_definition_digest": "sha256:4691a407b98e5ebcf560c2b488bd79d5e09bd3ec2ab3393ed9b4eb2e8354e39d",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -120,10 +120,10 @@
           },
           {
             "path": "/usr/local/bin/relay",
-            "sha256": "sha256:9b11cedbd6157818f8c69748b06cfe72e7d1d550d44867cd979a0a8a8f991b01"
+            "sha256": "sha256:81417e719f4fb66d32b9b642d8077b37a02c37312db0de92f8da615a26b06124"
           }
         ],
-        "definition_digest": "sha256:31bd2c31158006c1f8b30d07414fb9af596e34014d19acf71fd1342c555d125a"
+        "definition_digest": "sha256:178e530b0214a1567de96f775578584214bf3be5af617271659b2d950d2ea8ae"
       }
     },
     {
@@ -133,9 +133,9 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The official v0.26.0 Linux AMD64 Relay candidate imported no ungetwc, getwc, fgetwc, wscanf, fwscanf, or swscanf symbol and had no effective wide-character input path in the reviewed bytes. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound executable closure digests.",
-      "reviewed_at": "2026-09-03",
-      "expires_at": "2026-09-17",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The official v0.26.1 Linux AMD64 Relay candidate imported no ungetwc, getwc, fgetwc, wscanf, fwscanf, or swscanf symbol and had no effective wide-character input path in the reviewed bytes. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed file digests.",
+      "reviewed_at": "2026-09-04",
+      "expires_at": "2026-09-18",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
         "candidate_rootfs_changed",
@@ -151,14 +151,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:5d4778c28a757951aa132bae444460348318d49cfe42474d0226a40084a8d67b",
+      "runtime_definition_digest": "sha256:4691a407b98e5ebcf560c2b488bd79d5e09bd3ec2ab3393ed9b4eb2e8354e39d",
       "component_layer_id": "sha256:3a7299f559d987305122c7669fc3643095eb0955f8ff4a38c9430d54d0b4452e",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:64052a8a9aa86f7e68559f4343dfa22ac7d4b19c244fc2989ae3f0d967ec99a4",
-        "reference_source_revision": "e7bd7aa3c7ab72d240f60a5fffa93d39265bc0e4",
+        "reference_image_digest": "sha256:ff8e8d84143d3af01930d0ddc65c8b894f367b31b66f0b5d163854cd7d28dea8",
+        "reference_source_revision": "3e655214558e4479a72a2049ebf72bf5721a303e",
         "reference_provenance": "official_candidate",
-        "runtime_definition_digest": "sha256:5d4778c28a757951aa132bae444460348318d49cfe42474d0226a40084a8d67b",
+        "runtime_definition_digest": "sha256:4691a407b98e5ebcf560c2b488bd79d5e09bd3ec2ab3393ed9b4eb2e8354e39d",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -178,10 +178,10 @@
           },
           {
             "path": "/usr/local/bin/relay",
-            "sha256": "sha256:9b11cedbd6157818f8c69748b06cfe72e7d1d550d44867cd979a0a8a8f991b01"
+            "sha256": "sha256:81417e719f4fb66d32b9b642d8077b37a02c37312db0de92f8da615a26b06124"
           }
         ],
-        "definition_digest": "sha256:31bd2c31158006c1f8b30d07414fb9af596e34014d19acf71fd1342c555d125a"
+        "definition_digest": "sha256:178e530b0214a1567de96f775578584214bf3be5af617271659b2d950d2ea8ae"
       }
     },
     {
@@ -191,9 +191,9 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no fixed Trixie version. The official v0.26.0 Linux AMD64 Relay candidate imported __res_init and none of the deprecated resolver-printing helpers fp_nquery, fp_query, p_query, ns_sprintrr, or ns_sprintrrf. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound executable closure digests.",
-      "reviewed_at": "2026-09-03",
-      "expires_at": "2026-09-17",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no fixed Trixie version. The official v0.26.1 Linux AMD64 Relay candidate imported __res_init and none of the deprecated resolver-printing helpers fp_nquery, fp_query, p_query, ns_sprintrr, or ns_sprintrrf. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed file digests.",
+      "reviewed_at": "2026-09-04",
+      "expires_at": "2026-09-18",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
         "candidate_rootfs_changed",
@@ -209,14 +209,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:5d4778c28a757951aa132bae444460348318d49cfe42474d0226a40084a8d67b",
+      "runtime_definition_digest": "sha256:4691a407b98e5ebcf560c2b488bd79d5e09bd3ec2ab3393ed9b4eb2e8354e39d",
       "component_layer_id": "sha256:3a7299f559d987305122c7669fc3643095eb0955f8ff4a38c9430d54d0b4452e",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:64052a8a9aa86f7e68559f4343dfa22ac7d4b19c244fc2989ae3f0d967ec99a4",
-        "reference_source_revision": "e7bd7aa3c7ab72d240f60a5fffa93d39265bc0e4",
+        "reference_image_digest": "sha256:ff8e8d84143d3af01930d0ddc65c8b894f367b31b66f0b5d163854cd7d28dea8",
+        "reference_source_revision": "3e655214558e4479a72a2049ebf72bf5721a303e",
         "reference_provenance": "official_candidate",
-        "runtime_definition_digest": "sha256:5d4778c28a757951aa132bae444460348318d49cfe42474d0226a40084a8d67b",
+        "runtime_definition_digest": "sha256:4691a407b98e5ebcf560c2b488bd79d5e09bd3ec2ab3393ed9b4eb2e8354e39d",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -236,10 +236,68 @@
           },
           {
             "path": "/usr/local/bin/relay",
-            "sha256": "sha256:9b11cedbd6157818f8c69748b06cfe72e7d1d550d44867cd979a0a8a8f991b01"
+            "sha256": "sha256:81417e719f4fb66d32b9b642d8077b37a02c37312db0de92f8da615a26b06124"
           }
         ],
-        "definition_digest": "sha256:31bd2c31158006c1f8b30d07414fb9af596e34014d19acf71fd1342c555d125a"
+        "definition_digest": "sha256:178e530b0214a1567de96f775578584214bf3be5af617271659b2d950d2ea8ae"
+      }
+    },
+    {
+      "vulnerability_id": "CVE-2026-85091",
+      "package": "zlib1g",
+      "installed_version": "1:1.3.dfsg+really1.3.1-1+b1",
+      "severity": "High",
+      "status": "accepted_risk",
+      "owner": "@jeremi",
+      "rationale": "Debian Trixie has no fixed package and Grype reports no fix. The official v0.26.1 Linux AMD64 Relay candidate from run 33873930773 attempt 1 neither links libz nor contains libz.so, gz_vacate, gzwrite, gzprintf, or gzvprintf in the reviewed executable bytes, so the vulnerable stalled non-blocking gzwrite followed by gzprintf/gzvprintf path is absent. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed file digests.",
+      "reviewed_at": "2026-09-04",
+      "expires_at": "2026-09-18",
+      "invalidation_triggers": [
+        "candidate_image_identity_mismatch",
+        "candidate_rootfs_changed",
+        "component_layer_changed",
+        "expired",
+        "exposure_assertion_changed",
+        "exposure_assertion_false",
+        "exposure_assertion_unevaluable",
+        "fix_available",
+        "material_finding_changed",
+        "package_version_changed",
+        "rootfs_evidence_mismatch",
+        "runtime_config_changed",
+        "runtime_base_changed"
+      ],
+      "runtime_definition_digest": "sha256:4691a407b98e5ebcf560c2b488bd79d5e09bd3ec2ab3393ed9b4eb2e8354e39d",
+      "component_layer_id": "sha256:e4ba966d7f0527dfe0fcb559e4e18d4da42c4e6beae924719255e0dedb554ed0",
+      "exposure_assertion": {
+        "kind": "whole_image_fingerprint_equals",
+        "reference_image_digest": "sha256:ff8e8d84143d3af01930d0ddc65c8b894f367b31b66f0b5d163854cd7d28dea8",
+        "reference_source_revision": "3e655214558e4479a72a2049ebf72bf5721a303e",
+        "reference_provenance": "official_candidate",
+        "runtime_definition_digest": "sha256:4691a407b98e5ebcf560c2b488bd79d5e09bd3ec2ab3393ed9b4eb2e8354e39d",
+        "files": [
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+            "sha256": "sha256:438c546d8e8cc48496bf3a95f753051afd9db66a629a74e31a9ded71586b56e0"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+            "sha256": "sha256:fa430b8f298f817a266046af84a77533185ad6fc4406c7d3787b5a0a0c207826"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "sha256": "sha256:30c61ab012a4241bed033725a09b61f5fdd3bb7df95ee852d0b096520524c7af"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libm.so.6",
+            "sha256": "sha256:6d567d53e895273ca14a1f9dc164fc6c8d39aed2f60aa46a733c2784228915f3"
+          },
+          {
+            "path": "/usr/local/bin/relay",
+            "sha256": "sha256:81417e719f4fb66d32b9b642d8077b37a02c37312db0de92f8da615a26b06124"
+          }
+        ],
+        "definition_digest": "sha256:178e530b0214a1567de96f775578584214bf3be5af617271659b2d950d2ea8ae"
       }
     }
   ]
