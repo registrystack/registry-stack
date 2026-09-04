@@ -1,32 +1,30 @@
 ---
 title: Create and query your first registry
-description: Create and update records over HTTP, try refused requests, and extend a project with a configuration module.
-status: draft
+description: Start a local registry, create and update a record over HTTP, and see which requests the server refuses and why.
+status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: unreviewed
+last_reviewed: "2026-09-04"
 doc_type: tutorial
 persona:
   - data publisher
 locale: en
-standards_referenced:
-  - openapi
-  - json-schema
+standards_referenced: []
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-If you are evaluating Base Registry Engine, start with a small business directory.
-You will create a business record, change its label, try requests the server refuses, and extend
-an editable project with a configuration module. The records use two required fields, `code` and
-`label`, plus an optional group reference and status;
-business registration is the example you supply, not a built-in server type.
-An optional final exercise sends a signed webhook to a local receiver.
+If you are a data publisher evaluating Base Registry Engine, start with a small business directory.
+You will start a local registry, create a business record, change its label, and try requests the server refuses.
+The records use two required fields, `code` and `label`, plus an optional group and status;
+the business directory is the example you supply, not a built-in type.
+Everything you keep goes into one directory, `tutorial-work`, and the next tutorial,
+[Extend a registry with a module](../extend-a-registry-with-a-module/), continues in that directory.
 
 <QuickstartMeta
-  outcome="Records created and updated over HTTP, plus a changed module and the generated API schema for its field."
-  time="About 30 minutes, plus the image download"
+  outcome="A record created and updated over HTTP, with refused requests showing authentication, field permissions, version checks, and required fields at work."
+  time="About 20 minutes, plus the image download"
   level="Local evaluation only"
   prerequisites={['Linux amd64 or arm64, or macOS on Apple Silicon', 'Git and a Bash shell', 'Running Docker', 'OpenSSL', 'Python 3.11 or later and uv', 'curl 7.76 or later', 'An editor and two terminals']}
 />
@@ -47,23 +45,23 @@ bregctl --version
 mint --version
 ```
 
+The URLs name `latest`, which this tutorial takes on purpose so an evaluation starts on the newest
+release; a deployment pins a version instead, so the binary that was tested is the binary that runs.
 Each installer checks its binaries against the release `SHA256SUMS` before anything reaches
-`~/.local/bin`, and installs them together or not at all. Keep that directory on your `PATH` in both
-terminals, because the launcher finds all three binaries there.
+`~/.local/bin`, and installs them together or not at all.
+Keep that directory on your `PATH` in both terminals.
 
-The commands pipe a script from GitHub straight into `bash`, so replace `| bash` with `| less` first if you
-would rather read it before it runs. On a tutorial machine that is your own call, but before these binaries
-reach a host that serves anyone else, check them against the signed `SHA256SUMS` chain described in
-[OpenSSF and release trust](../../security/openssf-evidence/), or follow
-[release verification](https://github.com/registrystack/registry-stack/blob/v0.26.1/release/VERIFY.md)
-and rerun the installer with `BREG_ASSET_DIR` pointing at the verified directory.
+The commands pipe a script from GitHub straight into `bash`; replace `| bash` with `| less` to read it first.
+Before these binaries reach a host that serves anyone else, verify the release as described in
+[OpenSSF and release trust](../../security/openssf-evidence/), then rerun the installer with
+`BREG_ASSET_DIR` pointing at the verified directory.
 
 {/* Evidence: crates/registry-breg/install.sh; crates/registry-evidencectl/install.sh. */}
 
 ## Get the quickstart files
 
-The launcher, its support scripts, and the fixtures live in the repository. Clone it at the version you
-installed, not at the default branch:
+The launcher and its fixtures live in the repository.
+Clone it at the version you installed:
 
 ```sh
 installed="$(bregctl --version | awk '{print $2}')"
@@ -71,17 +69,16 @@ git clone --depth 1 --branch "v$installed" https://github.com/registrystack/regi
 cd breg-tutorial
 ```
 
-This project is pre-1.0, so the default branch may carry configuration and API changes the installed
-binaries do not implement; pinning the checkout keeps the launcher and the binaries on one contract.
+The project is pre-1.0, so the default branch may carry changes the installed binaries do not implement;
+pinning the checkout keeps the launcher and the binaries on one contract.
 Run the commands from this checkout's root in both terminals.
-The launcher supplies PostgreSQL and Registry Mint.
 
 ## Start the registry
 
 :::caution[Use synthetic data only]
-The launcher creates a disposable database and local keys. Stopping it removes the database
-container. Starting it again replaces `products/breg/quickstart/.run/`, including its
-keys, tokens, and logs. Keep your edited project outside that directory.
+The launcher creates a disposable database and local keys.
+Stopping it removes the database container.
+Starting it again replaces `products/breg/quickstart/.run/`, including its keys, tokens, and logs.
 :::
 
 In the first terminal, start the services:
@@ -91,17 +88,16 @@ products/breg/quickstart/run.sh --installed
 ```
 
 The flag tells the launcher to use the `breg`, `bregctl`, and `mint` on your `PATH` rather than
-compiling them from the checkout. It names the three binaries it resolved before it starts anything,
-so a stale build of the same name elsewhere on your `PATH` is visible at once.
+compiling them from the checkout.
 Wait for this line; setup output is omitted:
 
 ```text
 Base Registry Engine generic quickstart is ready.
 ```
 
-Leave this terminal running. The launcher has created one record with code `QS-001`.
-BReg and Mint listen on loopback addresses printed by the launcher, with ports chosen for this run.
-The unsigned package and disposable credentials are for local testing.
+Leave this terminal running.
+The launcher has created one record with code `QS-001`, and BReg and Mint listen on loopback addresses
+it printed, with ports chosen for this run.
 
 {/* Evidence: products/breg/quickstart/run.sh;
     products/breg/quickstart/support/quickstart.py, prepare() and enrich_local_package(). */}
@@ -119,8 +115,7 @@ sed 's/^/Authorization: Bearer /' "$registry_run/secrets/operator-token" \
   > tutorial-work/authorization.header
 ```
 
-The header file contains a token and is readable only by your user.
-Keep it out of version control and support messages.
+The header file holds a token and is readable only by your user; keep it out of version control and support messages.
 If a request returns `401` after a pause, [renew the token](#renew-an-expired-token) and retry.
 
 Read the records using the `operator` access profile:
@@ -131,7 +126,7 @@ curl --silent --show-error --fail-with-body \
   "$registry_url/v1/records/records?accessProfile=operator" | python3 -m json.tool
 ```
 
-The `items` array contains one record. Its `data.domainData` object holds the configured fields:
+The `items` array contains one record, and its `domainData` object holds the configured fields:
 
 ```json
 {
@@ -142,14 +137,13 @@ The `items` array contains one record. Its `data.domainData` object holds the co
 }
 ```
 
-The launcher set only `code` and `label`. `group` and `status` are optional fields of the same
-entity, so they read as `null` until a record supplies them.
+`group` and `status` are optional fields of the same entity and read as `null` until a record supplies them.
+Beside `domainData`, `recordIdentifier` and `revisionIdentifier` identify the record and its version,
+and `meta` names the registry, dataset, and entity type.
 
-Beside it, `data.recordIdentifier` and `data.revisionIdentifier` identify the record and its
-version, and the response's `meta` object names the registry, dataset, and entity type.
-
-`/v1/records/` is the API prefix; the second `records` comes from the project's `route: records`.
-The `operator` profile permits these reads when the token has the required scope and purpose.
+What happened: you read a Registry Record envelope, the shape every response on this API shares,
+with the record's fields and identifiers in the item and `meta` saying where the record lives.
+You chose an access profile, a named set of permissions a token may use, with the `accessProfile` query parameter.
 
 Try the same request without the header:
 
@@ -164,9 +158,9 @@ HTTP 404
 ```
 
 Open `tutorial-work/problem.json`: its code is `resource.not_found`.
-BReg conceals this protected route from an unauthenticated caller.
-Naming the profile did not grant access.
-The refused requests in this tutorial omit `--fail-with-body` so you can inspect their HTTP status.
+
+What happened: BReg conceals a protected route from an unauthenticated caller by answering as if the
+route did not exist, and naming a profile in the query granted nothing.
 
 {/* Evidence: crates/registry-breg/src/auth.rs; crates/registry-breg/src/api/mod.rs;
     crates/registry-breg/tests/http_auth.rs; crates/registry-bregctl/src/lib.rs, init_files(). */}
@@ -200,32 +194,33 @@ The server generates the identifier, shown as `<record-id>`:
 ```json
 {
   "data": {
-    "recordIdentifier": "<record-id>",
-    "revisionIdentifier": "1",
-    "snapshot": "<snapshot-token>",
     "domainData": {
       "code": "DEMO-002",
       "group": null,
       "label": "North Quay Engineering",
       "status": null
-    }
+    },
+    "recordIdentifier": "<record-id>",
+    "revisionIdentifier": "1",
+    "snapshot": "<snapshot-token>"
   },
   "meta": {
-    "registryIdentifier": "generic-registry",
     "datasetIdentifier": "generic-registry",
-    "entityTypeIdentifier": "record"
+    "entityTypeIdentifier": "record",
+    "registryIdentifier": "generic-registry"
   }
 }
 ```
 
-`data.snapshot` only appears on create, patch, and tombstone responses. It is an opaque
-token for a later `:snapshot` read, described in the
-[Base Registry Engine API](../../reference/breg-api/) reference.
+A single record sits under `data`; a list carries the same fields in each item.
+`data.snapshot` appears only on create, patch, and tombstone responses: an opaque token for a later
+`:snapshot` read, described in the [Base Registry Engine API reference](../../reference/breg-api/).
 
 Run the create command again unchanged, then read the response again.
 You get `201` with the same identifier and revision, not a second record.
-`Idempotency-Key` identifies a single write so a client can retry after losing a response.
-Use a different key for a different write.
+
+What happened: `Idempotency-Key` identifies a single write, so a client that lost the first response
+can retry without creating a duplicate; use a different key for a different write.
 
 {/* Evidence: crates/registry-breg/src/idempotency.rs; crates/registry-breg/src/mutation.rs, held_response();
     crates/registry-breg/src/record_profile.rs, record_member();
@@ -244,12 +239,11 @@ curl --silent --show-error --fail-with-body \
   "$registry_url/v1/records/records" | python3 -m json.tool
 ```
 
-Each item's `domainData` now contains only `label`. The identifiers stay in the envelope:
-`$select` names configured fields only and refuses `recordIdentifier`.
-Change `$select=label` to `$select=code,label` and repeat the request to restore both fields.
-Single quotes prevent the shell from expanding `$select` and `$top`.
+Each item's `domainData` now contains only `label`.
+The identifiers stay in the envelope: `$select` names configured fields only and refuses `recordIdentifier`.
 
-Reading a field does not necessarily permit filtering by it. Try a filter on `label`:
+Reading a field does not permit filtering by it.
+Try a filter on `label`:
 
 ```sh
 curl --silent --show-error \
@@ -265,10 +259,18 @@ HTTP 400
 ```
 
 The problem code is `query.invalid`.
-Open `products/breg/quickstart/.run/project/registry.yaml` in your editor.
-The operator grant lists `label` under `readableFields` and `writableFields`, but its
-`filterableFields` names only `code` and `status`. Each list is a separate permission.
+Open `products/breg/quickstart/.run/project/registry.yaml` and find the `operator` grant for `record`:
+
+```yaml
+readableFields: [code, label, group, status]
+writableFields: [code, label, group, status]
+filterableFields: [code, status]
+```
+
 Repeat the request with `code` in place of `label` and it returns the record you created.
+
+What happened: a grant carries three separate permission lists, and `label` is readable and writable
+but not filterable, so `$select` may name it and `$filter` may not.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, init_files();
     crates/registry-breg/src/query.rs; crates/registry-breg/src/api/mod.rs;
@@ -286,14 +288,14 @@ curl --silent --show-error --fail-with-body \
   "$registry_url/v1/records/records/$record_id?accessProfile=operator" | python3 -m json.tool
 ```
 
-The response still shows `"revisionIdentifier": "1"`.
-Its `ETag` header identifies the version you read. Save the exact value, including its quotes:
+The response still shows `"revisionIdentifier": "1"`, and its `ETag` header identifies that version.
+Save the exact value, including its quotes:
 
 ```sh
 record_etag=$(awk 'tolower($1) == "etag:" {print $2}' tutorial-work/record.headers | tr -d '\r')
 ```
 
-Change the label with JSON Patch. `If-Match` prevents the update if the record has changed since your read:
+Change the label with JSON Patch; `If-Match` refuses the update if the record changed since your read:
 
 ```sh
 curl --silent --show-error --fail-with-body \
@@ -307,8 +309,8 @@ curl --silent --show-error --fail-with-body \
 ```
 
 The response has the same identifier, `"revisionIdentifier": "2"`, and label `North Quay Engineering Ltd`.
-Patch paths address the object you send at creation, so `/data/label` names the label; the
-response nests stored fields under `data.domainData`, which is not a patch target.
+Patch paths address the object you sent at creation, so `/data/label` names the label;
+`domainData` in responses is not a patch target.
 Try a different update while still using the old ETag:
 
 ```sh
@@ -328,8 +330,9 @@ HTTP 412
 ```
 
 The problem code is `precondition.failed`; the label remains `North Quay Engineering Ltd`.
-In an application, fetch the current record and let the user reconcile the change before retrying.
-A new idempotency key does not bypass the version check.
+
+What happened: the `ETag` names the version you read and `If-Match` makes the server compare it before
+writing, so a stale client cannot overwrite a change it never saw, and a new idempotency key does not bypass that check.
 
 {/* Evidence: crates/registry-breg/src/api/mod.rs, patch_dispatch();
     crates/registry-breg/src/mutation.rs;
@@ -355,127 +358,12 @@ HTTP 400
 
 The problem code is `request.invalid`; no record was created.
 In the project's `registry.yaml`, find `required: true` on the `code` field.
-The same definition supplies the validation rule and generated request schema.
+
+What happened: the same `required: true` that validated this request also shapes the project's
+generated request schema, so the model decides what a record needs, not application code.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, init_files();
     crates/registry-breg/src/mutation.rs; crates/registry-breg/src/artifacts.rs. */}
-
-## Change a field in a module
-
-Create an editable project outside the launcher's disposable directory:
-
-```sh
-bregctl init tutorial-work/project
-```
-
-The command prints `init succeeded` and writes a working project: `registry.yaml`, one module
-under `modules/`, `tests/journeys.yaml`, a `runtime.example.yaml`, and a `README.md` listing them.
-It reports one finding, which does not block authoring:
-
-- `access.profile.unrestricted_collection`: the operator profile can list every row. That is
-  intended for a registry-wide operator; the project's second profile, `record-reader`, shows the
-  claim-bound row restriction that closes it.
-
-Open `tutorial-work/project/modules/record-notes/module.yaml`. The module extends the `record`
-entity the project owns:
-
-```yaml
-extendEntities:
-  - entity: record
-    fields:
-      - {id: internal-note, type: string, maxLength: 500, classification: internal}
-```
-
-A field without `required: true` is optional. Its classification matches the entity's default,
-`internal`. A more sensitive value such as `restricted` adds a second finding,
-`access.profile.higher_classification`, once a grant exposes the field; it asks you to confirm
-the profile's scope and purpose first.
-
-Adding a field to the model does not grant access to it, and no profile lists this one yet.
-In `tutorial-work/project/registry.yaml`, add it to the operator grant for `record`, keeping the
-indentation:
-
-```yaml
-readableFields: [code, label, group, status, internal-note]
-writableFields: [code, label, group, status, internal-note]
-filterableFields: [code, status]
-```
-
-Now change the module itself: raise its `maxLength` to `1000` and its `version` to `0.2.0`.
-Re-pin it and check the combined project:
-
-```sh
-bregctl project lock tutorial-work/project
-bregctl check tutorial-work/project
-```
-
-Look for `project lock succeeded`, a `modules` list showing the module as `updated`, and
-`check succeeded`. Both commands repeat the one finding.
-The `modules` entry in `registry.yaml` records the module's version and content digest, and
-`project lock` rewrote both. A stale digest is an error, so rerun `project lock` after every
-module edit and review the changed digest with its source.
-
-Inspect the query permissions:
-
-```sh
-bregctl explain queries tutorial-work/project
-```
-
-The operator's list operation over `record` has `filterable` entries for `code` and `status`,
-each with examples such as `$filter=code eq 'example'`, and `internalNote` among its `apiFields`.
-This describes your edited project; the running quickstart still uses its original package.
-
-{/* Evidence: crates/registry-breg/src/contract.rs, RegistryModule and EntityExtensionSource;
-    crates/registry-bregctl/src/lib.rs, init_files(), project_lock(), and ExplainSubject;
-    crates/registry-breg/src/compiler.rs; crates/registry-breg/src/query.rs. */}
-
-## Generate the API schema
-
-Generate JSON Schema and OpenAPI from the edited project:
-
-```sh
-bregctl generate schemas tutorial-work/project --output tutorial-work/schemas
-bregctl generate openapi tutorial-work/project --output tutorial-work/api
-```
-
-Both commands print `generate succeeded`.
-Read the record schema:
-
-```sh
-python3 -m json.tool tutorial-work/schemas/generated/schemas/record.schema.json
-```
-
-Find `internalNote` under `properties`. An optional field accepts `null`, so the generator wraps
-its type in `anyOf`:
-
-```json
-{
-  "internalNote": {
-    "anyOf": [
-      {
-        "maxLength": 1000,
-        "minLength": 0,
-        "type": "string"
-      },
-      {
-        "type": "null"
-      }
-    ]
-  }
-}
-```
-
-The authored `internal-note` becomes `internalNote` in JSON, and the length you raised in the
-module reached the schema.
-The `required` list still contains only `code` and `label`.
-Open `tutorial-work/api/generated/openapi.json` to see the create and PATCH request shapes.
-Generated files are outputs: edit YAML and regenerate into a fresh directory to change them.
-
-You have compiled an extension, not installed it into the running database.
-Testing and activating a changed package is covered in [deploy and operate a registry](../../operate/breg/).
-
-{/* Evidence: crates/registry-breg/src/artifacts.rs; crates/registry-breg/src/logical_names.rs;
-    crates/registry-bregctl/src/lib.rs, generate(). */}
 
 ## Stop the services
 
@@ -484,10 +372,10 @@ Pressing `Ctrl+C` in the first terminal stops BReg and Mint and removes the Post
 including the records you created.
 :::
 
-Stop the launcher now. The `.run/` files remain until the next launch and contain disposable secrets.
-Your `tutorial-work/project/` directory and generated schemas remain unchanged.
-Keep the project if you plan to continue. The checkout's `.gitignore` excludes `tutorial-work/`,
-so the header file stays out of commits; keep it out of support messages too.
+Stop the launcher now.
+The `.run/` files remain until the next launch and contain disposable secrets.
+Keep `tutorial-work/`: the next tutorial creates a project inside it, and the checkout's `.gitignore`
+excludes the directory, so the header file stays out of commits.
 
 {/* Evidence: products/breg/quickstart/run.sh, cleanup(). */}
 
@@ -495,181 +383,14 @@ so the header file stays out of commits; keep it out of support messages too.
 
 You created and updated a record, retried a write, narrowed a read, and saw authentication,
 query permissions, version checks, and required fields affect real requests.
-Your separate project extends the model through a module and generates the schema applications will use.
-
-## Try a webhook (optional)
-
-Allow another ten minutes for this exercise. Use the same checkout and terminals.
-The business demo supplies a configured establishment model and a receiver that checks webhook signatures.
-
-:::caution[This is a separate disposable database]
-The demo replaces `products/breg/demo/.run/` on each launch.
-Stopping it removes its database. Use synthetic records and keep your own project outside `.run/`.
-:::
-
-In the first terminal, after stopping the generic quickstart, run:
-
-```sh
-products/breg/demo/run.sh --installed --webhook
-```
-
-Wait for these lines; other setup output is omitted:
-
-```text
-Webhook delivery, retry, dead-letter inspection, and replay passed.
-Base Registry Engine business demo is ready.
-```
-
-The launcher created eight establishments. Seven are operating and emit the configured event;
-the suspended depot does not match the condition.
-Its receiver deliberately refused some attempts so you can inspect retries and a replay.
-Leave this terminal running.
-
-### Inspect the event
-
-In the second terminal, inspect the compiled event:
-
-```sh
-webhook_run="$PWD/products/breg/demo/.run"
-bregctl explain events "$webhook_run/project"
-```
-
-Find `operating-created-v1`. Open
-`products/breg/demo/.run/project/modules/business-establishment-summary/module.yaml`
-and compare its `events` entry with the report. The list sits under the entity extension:
-
-```yaml
-extendEntities:
-  - entity: business
-    events:
-      - id: operating-created-v1
-        trigger: created
-        projection: [establishment-code, operating-status]
-        when:
-          kind: fields
-          afterEquals:
-            operating-status: operating
-        webhook:
-          destinationId: business-event-receiver
-```
-
-The condition selects new operating establishments. The projection sends two fields, not the establishment's name
-or opening date. Open `products/breg/demo/.run/runtime.yaml` to find the matching
-`eventDestinations.business-event-receiver`: that is where the URL, key reference, and retry limits live.
-Do not edit these running deployment files; changes need a checked package and restart.
-
-Preview the request without sending it:
-
-```sh
-bregctl --format json webhook sample "$webhook_run/project" \
-  --event operating-created-v1
-```
-
-The report shows CloudEvents headers and a JSON body. The `values` keys use the authored
-`establishment-code` and `operating-status` spellings. Its signature is a placeholder; the running
-worker signs actual deliveries with the shared key.
-
-### Cause a delivery
-
-Obtain a fresh token from this demo's Mint client and keep it in an owner-only header file:
-
-```sh
-webhook_url=$(cat "$webhook_run/breg-origin")
-umask 077
-mint token \
-  --url "$(cat "$webhook_run/mint-origin")/token" \
-  --client-id business-demo \
-  --key "$webhook_run/keys/operator/signing-p256-private-jwk" \
-  > "$webhook_run/secrets/operator-token" &&
-sed 's/^/Authorization: Bearer /' "$webhook_run/secrets/operator-token" \
-  > tutorial-work/webhook-authorization.header
-```
-
-Success prints nothing. This token lasts five minutes; repeat this command if a later request
-returns `401`. Keep the first terminal running so Mint can issue the replacement.
-Create another synthetic establishment:
-
-```sh
-curl --silent --show-error --fail-with-body \
-  --header @tutorial-work/webhook-authorization.header \
-  --header 'Content-Type: application/json' \
-  --header 'Idempotency-Key: tutorial-establishment-9' \
-  --data '{"data":{"establishmentCode":"ESTABLISHMENT-TUTORIAL-009","siteName":"North Quay Annex","establishmentKind":"warehouse","operatingStatus":"operating"}}' \
-  --output tutorial-work/establishment.json --write-out 'HTTP %{http_code}\n' \
-  "$webhook_url/v1/records/establishments?accessProfile=business-operator"
-```
-
-```text
-HTTP 201
-```
-
-Count the events received:
-
-```sh
-python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["events"]))' \
-  "$webhook_run/webhook-receiver-state.json"
-```
-
-The count reaches `8`. Delivery is asynchronous; if you still see `7`, repeat the count command.
-Repeat the same create request with its original idempotency key. It returns the same record;
-the event count stays `8`.
-
-### Read delivery history
-
-Open the receiver's metadata report:
-
-```sh
-python3 -m json.tool "$webhook_run/webhook-receiver-state.json"
-```
-
-`verificationFailures` is `0`. Each event has attempts with a `generation`, `attempt`, and
-`accepted` result. Find an automatic retry: the attempt increases within generation `1`.
-Then find the replay: its generation increases to `2`, with a different idempotency key.
-The report records no establishment values.
-
-Inspect the dead-letter snapshot saved before the launcher's replay:
-
-```sh
-python3 -m json.tool "$webhook_run/webhook-list.json"
-```
-
-Compare that saved report with the current queue. This CLI command connects to PostgreSQL
-directly, so give it the demo's certificate authority (CA) file:
-
-```sh
-SSL_CERT_FILE="$webhook_run/tls/ca.pem" bregctl --format json webhook list \
-  --runtime-config "$webhook_run/runtime.yaml"
-```
-
-Once delivery finishes, the current `deliveries` list is empty.
-Successful payloads have been erased; this command lists outstanding or expired work, not
-a history of successful deliveries. The receiver's report lets you inspect what happened.
-
-Stop the demo with `Ctrl+C` in the first terminal. Its database is removed; the reports remain
-under `.run/` until the next launch. Do not commit `tutorial-work/webhook-authorization.header`.
-Use [author a registry project](../../configure/breg/) to declare your own events, and
-[deploy and operate a registry](../../operate/breg/) to bind a receiver and replay an
-eligible dead letter. The [Base Registry Engine API](../../reference/breg-api/) reference
-describes the delivery a receiver validates, verifies, and deduplicates.
-
-{/* Evidence: products/breg/demo/run.sh;
-    products/breg/demo/support/demo.py, WEBHOOK_MODULE_SOURCE and WebhookReceiver;
-    crates/registry-bregctl/src/lib.rs, WebhookCommand;
-    crates/registry-breg/src/outbox.rs; crates/registry-breg/src/webhook.rs. */}
-
-## Next
-
-- [Review changes before updating records](../review-registry-changes/) to test a configurable approval workflow.
-- [Author a registry project](../../configure/breg/) to model relationships and permissions.
-- [Deploy and operate a registry](../../operate/breg/) to test, package, and activate your project.
-- [Read the Base Registry Engine overview](../../explanation/configuration-defined-registry/) for storage and integration choices.
-- [Configure Registry Mint](../../configure/mint/) when your deployment needs its own token issuer.
+All of that came from one project the launcher compiled; the next tutorial puts a copy in your hands.
 
 ## Troubleshooting
 
 ### Renew an expired token
 
-The local token lasts five minutes. While Mint is still running, renew it and replace the header file:
+The local token lasts five minutes.
+While Mint is still running, renew it and replace the header file:
 
 ```sh
 umask 077
@@ -682,8 +403,8 @@ sed 's/^/Authorization: Bearer /' "$registry_run/secrets/operator-token" \
   > tutorial-work/authorization.header
 ```
 
-Success produces no terminal output. Retry the failed request.
-If renewal fails, check that the first terminal is still running and inspect its Mint log.
+Success prints nothing; retry the request.
+If renewal fails, check that the first terminal is still running.
 
 {/* Evidence: products/breg/quickstart/support/quickstart.py, prepare();
     crates/registry-mint/src/main.rs. */}
@@ -692,11 +413,16 @@ If renewal fails, check that the first terminal is still running and inspect its
 
 | Symptom | Next move |
 | --- | --- |
-| A prerequisite is missing or Docker cannot start a container | Install the named tool or start Docker, then rerun the launcher. A rerun replaces the previous disposable run. |
-| The launcher stops because `breg`, `bregctl`, or `mint` is not on `PATH` | Add the installers' directory, `~/.local/bin` unless you changed it, to `PATH` in that terminal, or rerun the installer that provides the missing binary. |
-| The first run pauses before the ready message | Docker is downloading the PostgreSQL image. Wait for the ready message. |
+| The launcher stops because `breg`, `bregctl`, or `mint` is not on `PATH` | Add the installers' directory, `~/.local/bin` unless you changed it, to `PATH` in that terminal. |
 | A service does not become ready | Inspect `.run/logs/` under the quickstart directory. Do not share tokens, keys, or database URL files. |
-| A create request returns `409` with code `idempotency.conflict` | The key was already used with a different body. Reuse the exact body to retry, or choose a new key for a new write. |
-| A create request returns `409` with code `mutation.conflict` | The code is already taken; codes are unique in this project. Choose a new code and a new key. |
-| Generation refuses an output directory | Choose a directory that does not already exist. |
+| A create returns `409` with code `idempotency.conflict` | The key was already used with a different body. Reuse the exact body, or choose a new key for a new write. |
+| A create returns `409` with code `mutation.conflict` | The code is already taken; codes are unique in this project. Choose a new code and a new key. |
 | You opened a fresh second terminal | Run the `registry_run` and `registry_url` assignments again. Keep the existing `tutorial-work` directory. |
+
+## Next
+
+- [Extend a registry with a module](../extend-a-registry-with-a-module/) to create a project of your own and change a field.
+- [Review changes before updating a registry](../review-registry-changes/) to test a configurable approval workflow.
+- [How a configured registry works](../../explanation/configuration-defined-registry/) for the compile model behind what you saw.
+- [Query a registry from Python and Node](../query-breg-client/) to make the same requests from an application.
+- [Evaluate Base Registry Engine](../../start/evaluate-breg/) for the operating requirements before you commit to it.

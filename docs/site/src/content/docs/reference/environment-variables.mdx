@@ -132,7 +132,7 @@ The `breg` binary reads one fixed variable.
 
 `breg` expands `${NAME}` expressions in `runtime.yaml` before parsing it. A bare `${NAME}` refuses the file when the variable is unset or empty, `${NAME:-fallback}` substitutes the fallback in that case, and `${NAME:?message}` refuses the file with that message. A value that fills a whole YAML scalar is inserted as a quoted scalar. A value embedded in a longer scalar is refused when it carries anything YAML could read as structure: a line break, a quote or backtick, a brace or bracket, a comma, `|` or `>`, a colon followed by a space, a space followed by `#`, or a leading `#`, `&`, `*`, `!`, `%`, `@`, `---`, or `...`. A refused expansion stops the process at startup.
 
-Secret references use the same two grammars as Relay: `secret:env/<NAME>` names an operator-chosen environment variable and `secret:file/<name>` a file under the `secretProviders.file.root` directory. `secret:env/<NAME>` resolves only when `runtime.yaml` declares `secretProviders.environment`; without that declaration the reference is refused. See [Deploy and operate a registry](../../operate/breg/#write-the-runtime-configuration) for the fields that take a reference.
+Secret references use the same two grammars as Relay: `secret:env/<NAME>` names an operator-chosen environment variable and `secret:file/<name>` a file under the `secretProviders.file.root` directory. `secret:env/<NAME>` resolves only when `runtime.yaml` declares `secretProviders.environment`; without that declaration the reference is refused. See [Deploy a registry](../../operate/breg/#write-the-runtime-configuration) for the fields that take a reference.
 
 ### Bregctl
 

@@ -1,0 +1,210 @@
+---
+title: Change an active registry
+description: Compare an edited project with the active package, test and sign the successor against the active baseline, activate it with reviewed migration evidence, and recover a registry that a failed activation pinned.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-04"
+doc_type: how-to
+persona:
+  - operator
+locale: en
+standards_referenced: []
+---
+
+You operate an active registry, deployed as [deploy a registry](../breg/) describes, and hold an
+edited project or a candidate a signer is ready to approve. At the end of this page the successor
+package is active, the runtime file names it, and the process serves it; or a failed activation has
+been assessed and resolved without editing migration state by hand.
+
+A successor goes through the same test, package, sign, and apply sequence as the first package, with
+the active package as its baseline. The extra work is the comparison before you start, the migration
+evidence a reviewed change needs, and the recovery path when an activation fails. Every command reads
+`--help`, and paths given to `--runtime-config`, `--package`, `--backup`, and `--output` must be
+absolute.
+
+## Compare the candidate with the active package
+
+Start by comparing the edited project with the package the runtime file names, so the review covers
+exactly the changes the successor would carry:
+
+```sh
+bregctl --format json diff ./my-registry \
+  --runtime-config /etc/breg/runtime.yaml
+```
+
+`--package <directory>` in place of `--runtime-config` takes a closed package directory as the
+baseline and checks only its integrity, so a signer can review a candidate without runtime
+credentials or activation authority; the report labels that baseline `integrity_only` rather than
+`runtime_bound`.
+
+The diff lists model, access, and route changes with their change codes and, for access changes,
+their direction: a scope, purpose, row-boundary, field, count, history, or export change is marked
+as widening or narrowing, and mixed changes are marked for review. Set `package.sequence` in
+`registry.yaml` to the next sequence. `registry.version` is bound to the database for its
+lifetime: a package that changes it can only initialize a new database.
+
+{/* Evidence: crates/registry-bregctl/src/lib.rs, DiffArgs;
+    crates/registry-breg/src/tooling.rs, AccessChangeDirection;
+    crates/registry-breg/src/migration.rs, apply_verified_package(). */}
+
+## Test and package the successor
+
+Pass the active runtime file as `--baseline-runtime-config` to both `test` and `package`, so the
+receipt and the package bind to the baseline they will succeed. A change the migration planner
+classifies as additive, such as a new optional field or a widened grant, needs no further evidence.
+When `test` or `package` reports `migration.review.required`, prepare a reviewed migration
+directory and pass it to both commands as `--reviewed-migrations`:
+
+```text
+reviewed-migrations/
+  modules/<module-id>/migrations/<migration-id>/
+    descriptor.json
+    rehearsal.json
+    steps/<step-id>.sql             when the descriptor declares SQL steps
+    assertions/<assertion-id>.sql   when the descriptor declares assertions
+    fixtures/<fixture-id>.jsonl     when the rehearsal references fixtures
+    backup.json                     for destructive changes
+```
+
+The descriptor names the change class, the exact change codes and targets from `diff --format
+json`, timeouts, recovery mode, and its evidence paths. The rehearsal receipt binds the prior
+package and schema, the descriptor and SQL hashes, the measured target schema, and the timeout
+and recovery proofs. Your rehearsal process produces that evidence against the exact candidate;
+the command line validates it and does not generate it. JSON artifacts use canonical JSON: sorted
+keys, no extra whitespace. Keep only referenced files in the directory; symbolic links and
+unrelated files are refused. A metadata-only change can declare empty steps and assertions and
+still needs rehearsal evidence. A field added as required is created without its constraint, your
+reviewed steps backfill it, and the plan constrains the column afterwards.
+
+```sh
+bregctl --format json test ./my-registry \
+  --baseline-runtime-config /etc/breg/runtime.yaml \
+  --reviewed-migrations ./reviewed-migrations \
+  --runtime-config /srv/registry/runtime-test.yaml \
+  --credentials /srv/registry/schema-test-credentials.yaml \
+  --database-id civil-registry-db-1 \
+  --signature-threshold 1 --signature-key-id registry-signer-2026 \
+  --output /srv/registry/schema-test-receipt-2.json
+```
+
+Package and sign as [deploy a registry](../breg/) describes, with the same
+`--baseline-runtime-config` and `--reviewed-migrations` arguments. If any source, reviewed
+artifact, baseline, or signature-policy input changes afterwards, repeat the test and the signing.
+A refusal names its cause: for `migration.review.refused`, check the change coverage and the
+artifact hashes; for `migration.review.fingerprint_mismatch`, rehearse the exact candidate again.
+Reviewed artifacts cannot authorize a change the planner classifies as unsupported.
+
+{/* Evidence: crates/registry-bregctl/src/lib.rs, PackageCandidateArgs;
+    crates/registry-bregctl/src/reviewed_migrations.rs;
+    crates/registry-breg/src/migration_plan.rs;
+    crates/registry-bregctl/tests/cli/reviewed_migrations.rs;
+    products/breg/scripts/test-adopter-workflow.sh. */}
+
+## Activate the successor
+
+For a successor, the runtime file given to `apply` still names the active package; the target
+comes from `--package`. A destructive change also needs its reviewed backup artifact, bound by its
+descriptor path:
+
+```sh
+bregctl --format json apply \
+  --runtime-config /etc/breg/runtime.yaml \
+  --package /srv/registry/build-2/package \
+  --backup modules/core/migrations/0002/backup.json=/srv/registry/backups/0002.dump
+```
+
+:::caution[A failed activation pins its target]
+Activation enters maintenance and may change persistent data, which is why a destructive change
+carries a reviewed backup. If `apply` fails after maintenance begins, readiness stays
+unavailable, a restart does not repair it, and the target stays pinned: no other successor can
+activate until that target is resolved. Resolving the reported cause and retrying the same target
+package is the ordinary answer. When it is not available, `migration reconcile` reports what the
+database actually holds and names the one transition that is safe. Do not run generated SQL by
+hand or edit migration state. Take a backup before every `apply`.
+:::
+
+A successful report carries the activated revision, sequence, and schema fingerprint. Update the
+runtime file to the successor's package directory, revision, and sequence, run
+`bregctl verify --runtime-config /etc/breg/runtime.yaml`, and restart the server. Editing the
+runtime file does not change the active process: until the restart, the process keeps serving the
+package it started with.
+
+{/* Evidence: crates/registry-bregctl/src/lib.rs, ApplyArgs;
+    crates/registry-bregctl/src/apply_lifecycle.rs;
+    crates/registry-breg/src/migration.rs, apply_verified_package();
+    crates/registry-breg/src/postgres/interlock.rs;
+    crates/registry-breg/tests/postgres_migration.rs. */}
+
+## Recover a failed activation
+
+`migration reconcile` assesses a pinned registry and changes nothing without `--execute`:
+
+```sh
+bregctl --format json migration reconcile \
+  --runtime-config /etc/breg/runtime.yaml \
+  --package /srv/registry/build-2/package \
+  --operator-reference "<change reference>"
+```
+
+It takes the same exclusive migration lock an activation takes, so it never reads a half-applied
+package, and it compares the live managed catalog against both the pinned target's expected catalog
+and the active package's using the verification an activation performs. It reports exactly one
+outcome:
+
+| Outcome | What the database holds | Next move |
+| --- | --- | --- |
+| `ready` | Nothing is pinned. | Nothing to reconcile. |
+| `in_progress` | Another session holds the migration lock. | Wait for that activation to finish, then assess again. |
+| `completable` | Every durable step of the pinned target succeeded and the catalog is exactly the target's. Only the activation transition is missing. | Rerun with `--execute` to finish the activation. |
+| `revertible` | The pinned target reached no durable step and the catalog is still exactly the active package's. | Rerun with `--execute` to abandon the target. |
+| `unresolvable` | The catalog matches neither package, or a reviewed migration committed steps only the same target can finish. | Restore the pre-activation backup. The report names the catalog invariant that differs. |
+
+`--execute` performs only the transition the assessment named, refuses every other outcome, and
+records the transition in the audit chain inside that transition's own transaction. Completing an
+activation writes the same ledger, history baseline, and postconditions a successful `apply`
+writes, so update the runtime
+file and restart as you would after any activation. Abandoning a target clears the pin and leaves
+the active revision untouched, and it retires that target revision: the abandoned package keeps
+its failed ledger row, so a later attempt needs a newly built package revision.
+
+{/* Evidence: crates/registry-bregctl/src/lib.rs, MigrationCommand and MigrationReconcileArgs;
+    crates/registry-breg/src/migration_reconcile.rs;
+    crates/registry-bregctl/src/reconcile_lifecycle.rs;
+    crates/registry-breg/src/postgres/interlock.rs. */}
+
+## Inspect the migration plan
+
+`migration explain --runtime-config <file>` describes the configured package's migration plan
+without executing it; it does not report live database status. New schema fingerprints identify
+columns by name, so a fresh installation and an in-place upgrade match even when PostgreSQL stores
+columns in a different order. A package measured with the updated algorithm needs the updated
+server binary, and earlier packages keep verifying under their recorded rules.
+
+{/* Evidence: crates/registry-bregctl/src/lib.rs, MigrationExplainArgs;
+    crates/registry-breg/src/package.rs;
+    crates/registry-breg/src/postgres/catalog.rs, CatalogFingerprintVersion. */}
+
+## Troubleshooting
+
+| Symptom | Next move |
+| --- | --- |
+| `diff` reports the baseline as `integrity_only` | You passed `--package`. That is the signer's view; pass `--runtime-config` for the comparison against the activated package and its trust. |
+| `test` or `package` reports `migration.review.required` | The planner classified a change as needing review. Rehearse it, write the reviewed migration directory, and pass `--reviewed-migrations` to both commands. |
+| `test` or `package` reports `migration.review.refused` | The directory does not cover every reviewed change, or an artifact hash does not match its descriptor. Check the change coverage and the hashes. |
+| `test` or `package` reports `migration.review.fingerprint_mismatch` | The rehearsal receipt was taken for a different candidate or baseline. Rehearse the exact candidate again. |
+| `apply` fails after maintenance begins | Read the report, fix the cause, and retry the same target. If that is not available, run `migration reconcile` to assess the pinned target, execute the transition it names, and restore the pre-activation backup only when it reports `unresolvable`. |
+| `migration reconcile` reports `in_progress` | Another session holds the migration lock. Wait for it to finish, then assess again. |
+| The process still serves the old package after `apply` | Activation changes the database, not the process. Update the runtime file and restart the server. |
+
+## Next
+
+- [Review changes before updating a registry](../../tutorials/review-registry-changes/) to
+  practise `diff` and a successor on a local registry.
+- [Deploy a registry](../breg/) for the test, package, sign, and activate commands the successor
+  reuses.
+- [Retain, erase, and audit](../breg-retention/) for the audit journal every activation and
+  reconciliation writes to.
+- [Base Registry Engine configuration reference](../../reference/breg-configuration/) for the
+  `package` keys the runtime file binds.

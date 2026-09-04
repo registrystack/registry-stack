@@ -27,8 +27,9 @@ it emits. Every registry serves the same route shapes; the entity routes, fields
 actions come from your project. The contract is not a frozen compatibility promise.
 
 For the authoring grammar, use [author a registry project](../../configure/breg/).
-For deployment, receivers, and recovery, use
-[deploy and operate a registry](../../operate/breg/).
+For deployment and recovery, use [deploy a registry](../../operate/breg/).
+For receivers, delivery, and replay, use
+[bind webhook receivers](../../operate/breg-webhooks/).
 For every YAML key, use the [configuration reference](../breg-configuration/).
 A running server publishes its own OpenAPI document at `/openapi.json`; the schemas there are
 the exact ones its package compiled.
@@ -567,8 +568,8 @@ operator replay. Receiving a lifecycle event grants no authority to approve or a
 ### Signature
 
 `X-Registry-Signature` is an HMAC-SHA-256 over the request, keyed with the exact bytes resolved
-by `hmacSha256KeyRef`, at least 32 bytes, neither trimmed nor hex-decoded. This is a Registry
-BReg format, not a CloudEvents signing standard.
+by `hmacSha256KeyRef`, at least 32 bytes, neither trimmed nor hex-decoded.
+This is a Base Registry Engine format, not a CloudEvents signing standard.
 
 The signing input starts with the ASCII bytes `breg-webhook-signature-v1`. Each later
 value is prefixed with its byte length as an unsigned 64-bit big-endian integer, in this order:
@@ -635,7 +636,9 @@ Command prefix `bregctl`; add `--format json` for a machine-readable report.
 
 <EventReferenceTable id="commands" />
 
-`list` and `replay` connect directly to PostgreSQL through the runtime configuration. The public
+`list` and `replay` connect directly to PostgreSQL through the runtime configuration, and
+[bind webhook receivers](../../operate/breg-webhooks/) is the operator procedure that runs them
+against a bound destination. The public
 record API has no outbox, payload, delivery, or replay endpoint. A replay needs a retained,
 unexpired dead letter and the matching generation and activated destination binding. The JSON
 result of `list` is a `deliveries` array whose entries carry these fields and no record values:
@@ -672,7 +675,8 @@ maintained data checked against that implementation.
 
 ## Next
 
-- [Deploy and operate a registry](../../operate/breg/) for runtime configuration, receivers, replay, and erasure.
+- [Deploy a registry](../../operate/breg/) for runtime configuration and erasure.
+- [Bind webhook receivers](../../operate/breg-webhooks/) for destinations, the signing key, and replay.
 - [Author a registry project](../../configure/breg/) for entities, profiles, change requests, and actions.
-- [Configuration reference](../breg-configuration/) for every project, module, and runtime key.
+- [Base Registry Engine configuration reference](../breg-configuration/) for every project, module, and runtime key.
 - [Create and query your first registry](../../tutorials/first-breg/) to see the envelope and headers in a running server.

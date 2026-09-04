@@ -1,18 +1,22 @@
 ---
 title: Modeling patterns for registries
 description: Model identifiers, dated relationships, declarations, provenance, and document references with explicit local rules.
-status: draft
+status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: unreviewed
+last_reviewed: "2026-09-04"
 doc_type: explanation
 locale: en
 standards_referenced: []
 ---
 
-Use these patterns when designing business, facility, or public-organisation registries with Base Registry Engine.
-They describe common record structures and the choices you need to make before configuring them.
+If you have worked through [Author a registry project](../../configure/breg/) and now face a domain of
+your own, this page is the catalogue you reach for next. It is written for the author who can already
+declare entities, fields, references, and profiles, and who wants to know how other registries have
+shaped identifiers, dated relationships, declarations, provenance, and document references before
+committing to a model.
+Each pattern describes a record structure and the choices you need to make before configuring it.
 The YAML examples use BReg's current configuration syntax, but are fragments, not installable
 modules or complete projects. Merge their list entries into your own configuration.
 References assume you have defined the target entities and created the referenced records.
@@ -749,7 +753,13 @@ accessProfiles:
 
 ## Next
 
-- [Author a registry project](../../configure/breg/) to express your model and permissions.
-- [Base Registry Engine API](../../reference/breg-api/) for the record envelope and query options.
-- [Configuration reference](../../reference/breg-configuration/) for the authoring fields.
-- [Create and query your first registry](../../tutorials/first-breg/) for a runnable project.
+- [Author a registry project](../../configure/breg/) to express the entities, references, and
+  validity time a pattern assumes.
+- [Control access per profile](../../configure/breg-access/) to turn a pattern's example reader
+  profile into grants your own callers can select.
+- [Declare change requests and actions](../../configure/breg-change-control/) when a pattern's
+  corrections need review before they reach a record.
+- [Test with journeys](../../configure/breg-journeys/) to check the fragments you merged and replay
+  them over HTTP before a database exists.
+- [Base Registry Engine configuration reference](../../reference/breg-configuration/) for every
+  authoring field a fragment names.
