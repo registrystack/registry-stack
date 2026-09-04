@@ -1,0 +1,304 @@
+---
+title: Evaluate Base Registry Engine
+description: A cost accounting of running Base Registry Engine, what it needs to start, what it does not depend on, how it deploys today, and what operating it demands, for someone deciding whether to commit to it.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-04"
+doc_type: explanation
+locale: en
+standards_referenced: []
+---
+
+This page is for someone sizing up Base Registry Engine before committing a database, a token
+issuer, a signing process, and operational capacity to it. It assumes the fit question in
+[Which product fits your problem](../when-to-use/) is settled and asks the next one: what does
+running it cost. The [Base Registry Engine overview](../breg-quickstart/) defines the terms this
+page uses.
+
+## Runtime footprint
+
+Base Registry Engine is one crate, `registry-breg`, and one binary, `breg`. One process verifies
+one package and serves its compiled REST API against one PostgreSQL database, with no control
+plane or worker process beside it. The crate is unpublished, so a source build means building the
+Registry Stack workspace.
+
+{/* Evidence: products/breg/README.md; crates/registry-breg/Cargo.toml;
+    crates/registry-breg/src/runtime_config.rs, RuntimeConfig. */}
+
+At startup the process reads one runtime configuration file, `kind: BRegRuntimeConfig` under
+`registry.registrystack.org/breg-runtime/v1alpha1`. It binds a listener, a deployment identity, a
+package directory with its trust anchor (the public keys a package signature may come from, and
+how many must sign), two database connection references, an OpenID Connect verifier, an audit key
+reference, a cursor secret reference, and one binding per declared webhook
+destination. The file holds references, never secret values: a `database`
+block carrying a `url`, `password`, or `plaintext` member is refused. Secrets resolve through a
+file provider (owner-only files under one root) or, when declared, an environment provider.
+
+{/* Evidence: crates/registry-breg/src/runtime_config.rs, RUNTIME_CONFIG_API_VERSION, RUNTIME_CONFIG_KIND, DatabaseConfig, and SecretProvidersConfig;
+    crates/registry-platform-config/src/secrets.rs, SecretReference. */}
+
+The process keeps no local state. The audit journal, revision history, outbox (the table holding
+one row per configured event until it is delivered), and change-request rows live in PostgreSQL,
+and the release image carries no writable directory. Metrics are opt-in:
+a second listener on a loopback or private address serves `GET /metrics` in Prometheus text
+format; a public, unspecified, or shared address is refused.
+
+{/* Evidence: release/docker/Dockerfile.breg; crates/registry-breg/src/metrics.rs;
+    crates/registry-breg/src/runtime_config.rs, MetricsListenerConfig. */}
+
+`bregctl` is the second binary. Its authoring commands (`init`, `check`, `explain`, `generate`,
+`project`) open no database, so the modeling loop runs on a laptop. `test` needs an empty
+schema-test database and real tokens; `apply`, `doctor`, `migration`, `history`, `audit`,
+`webhook list`, `webhook replay`, and `request-retention` read the runtime configuration and open
+the database; `verify` reads the same file but opens no runtime dependency; `data import` and
+`data export` talk to a running server over HTTP.
+
+{/* Evidence: crates/registry-bregctl/src/lib.rs, Command; crates/registry-bregctl/README.md. */}
+
+## Dependencies
+
+**PostgreSQL** is the only database; SQLite is not a compatibility target. The runtime refuses a
+server older than 15, and a project with spatial
+fields needs 16 or newer for its bounding-box role plus PostGIS 3.5 or later. PostGIS is required
+only for spatial predicates: ordinary Point storage and GeoJSON reads work without it. The
+quickstart pins PostgreSQL 17.11. The administrator installs `btree_gist`, and PostGIS where
+needed, in a schema neither registry role owns; neither role creates a schema, an extension, or a
+role.
+
+{/* Evidence: products/breg/DECISIONS.md; crates/registry-breg/src/postgres/schema.rs;
+    crates/registry-breg/src/postgres/roles.rs; products/breg/SPATIAL-QUERIES.md;
+    products/breg/quickstart/run.sh; products/breg/README.md. */}
+
+The connection path is fixed: `tokio-postgres` 0.7.18, `deadpool-postgres` 0.14.2, and
+`tokio-postgres-rustls` 0.14.0, with TLS verified against the host's native roots or an
+operator-supplied certificate authority; plaintext is confined to the test harness. Two login
+roles are required, migration (owns the schema, applies packages) and runtime (serves), and the
+configuration refuses one role or one connection reference for both. Startup verifies ownership,
+privilege, and extension boundaries for both roles and refuses to serve when they are wrong;
+generated row-level security policies run under the runtime role. Those policies defend against
+application mistakes, not against a party holding the runtime credential, so credential custody
+stays with you.
+
+{/* Evidence: products/breg/DECISIONS.md; crates/registry-breg/Cargo.toml;
+    crates/registry-breg/src/runtime_config.rs, SqlRoles and DatabaseConfig;
+    products/breg/contracts/security-invariant-matrix.yaml; crates/registry-breg/tests/postgres_kernel.rs. */}
+
+**A token issuer.** The server verifies bearer access tokens and issues none. The verifier is
+OpenID Connect: one issuer, one audience, one algorithm, a maximum token lifetime, and the claim
+names that carry the principal and purpose. Keys come from issuer discovery or from a static JWKS
+document held behind a secret
+reference; static keys load once at startup and rotate through a restart. Deployments without an
+identity provider can run
+[Registry Mint](../../configure/mint/), which the first tutorial uses; a registry depends on Mint
+only when Mint is its issuer.
+
+{/* Evidence: crates/registry-breg/src/auth.rs, RegistryAuthenticator and AuthorityClaimConfig;
+    crates/registry-breg/src/runtime_config.rs, OidcVerifierConfig and JwksCacheConfig;
+    crates/registry-platform-oidc/src/lib.rs; products/breg/README.md; products/breg/DECISIONS.md;
+    crates/registry-breg/tests/runtime_config.rs. */}
+
+**Signing keys for production packages.** `bregctl package` compiles a production package and
+stops at `awaiting_signatures`; it never accepts a private key. An external signer produces a
+detached Ed25519 signature over `signing-input.json`, and a second `package` run with the signature
+document publishes the package. The trust anchor the runtime file names lists the accepted public
+keys and a threshold, bound to the deployment identity. A threshold of
+zero is valid only for the `local` environment; production needs at least one. Who holds those
+keys, and how they sign, is a decision the product leaves to you.
+
+{/* Evidence: crates/registry-breg/src/package.rs, SignaturePolicy and validate_signature_policy();
+    crates/registry-bregctl/src/lib.rs, PackageArgs; products/breg/contracts/package-layout.yaml;
+    products/breg/README.md. */}
+
+**Nothing else at runtime.** Webhook delivery runs inside the `breg` process from an outbox table
+written in the same transaction as the change, so there is no message broker. No cache, object
+store, or second service takes part in a request. Registry Relay and Evidence Gateway are separate
+products, not dependencies.
+
+{/* Evidence: crates/registry-breg/src/outbox.rs; crates/registry-breg/src/webhook.rs;
+    crates/registry-breg/Cargo.toml; products/breg/README.md. */}
+
+## Deployment options today
+
+Base Registry Engine ships first in Registry Stack v0.26.0, published 2026-09-04. The Python and
+Node client packages arrive one patch release later, in v0.26.1, so an application that will call
+the registry through a client library needs a v0.26.1 or later deployment, not this one. Registry
+Stack v0.26.0 carries three artifacts for the product:
+
+- `breg` and `bregctl` binaries for Linux amd64, Linux arm64, and macOS on Apple Silicon, with a
+  `SHA256SUMS` file.
+- An installer, `breg-install.sh`, that verifies both binaries against the checksums before
+  anything reaches the install directory and installs both or neither. `~/.local/bin` is the
+  default directory, `BREG_INSTALL_DIR` changes it, and `BREG_ASSET_DIR` reads already-verified
+  assets. It does not verify release authenticity;
+  [OpenSSF and release trust](../../security/openssf-evidence/) covers the chain that does.
+- A container image, `ghcr.io/registrystack/breg`, built on distroless `nonroot` (uid 65532). Its
+  entrypoint runs `breg --config /etc/breg/runtime.yaml`, it exposes port 8080, and it contains
+  the runtime binary and the license only. Configuration, package, trust anchor, and secrets
+  mount read-only under `/etc/breg`. There is no shell and no healthcheck subcommand; probe
+  `GET /health` or `GET /healthz` for liveness and `GET /ready` for readiness.
+
+{/* Evidence: release/manifests/registry-stack-beta-37.yaml; release/notes/v0.26.0.md;
+    crates/registry-breg/install.sh; release/docker/Dockerfile.breg; crates/registry-breg/src/api/mod.rs. */}
+
+The release ships no Helm chart, Compose file, or hosted offering; scheduling, TLS termination,
+and the reverse proxy in front of the listener are yours. The listener derives no authority from
+the request `Host` or forwarded headers; generated links use the configured `publicOrigin`. The
+quickstart's Docker use is a loopback
+development path, not a deployment pattern. Keep `bregctl` and `breg` on one release: the
+installer installs the pair from one tag, and both binaries must compute the schema fingerprint a
+[test receipt](../breg-quickstart/#vocabulary) binds the same way.
+
+{/* Evidence: release/notes/v0.26.0.md; crates/registry-breg/src/runtime_config.rs, PublicOrigin;
+    products/breg/quickstart/README.md; crates/registry-breg/install.sh;
+    crates/registry-breg/src/postgres/catalog.rs, CatalogFingerprintVersion. */}
+
+The Rust client crate, `registry-breg-client`, is unpublished (`publish = false`), so a Rust
+consumer pins the workspace by git tag.
+[Query a registry from Python and Node](../../tutorials/query-breg-client/) covers the client
+packages an application installs.
+
+{/* Evidence: crates/registry-breg-client/Cargo.toml; release/notes/v0.26.0.md. */}
+
+## Operational burden
+
+### Keys and secrets
+
+You hold six kinds of secret material: two database connection strings (runtime and migration),
+the audit hash key, the cursor secret, one HMAC-SHA-256 key per webhook destination, and the
+OpenID Connect key material when you pin a static JWKS. Package signing keys stay with the signer
+and never reach `bregctl` or the server. The audit key and the cursor secret must outlive the
+journal and any cursor still in a client's hands. A package may not embed a trust anchor, a
+runtime secret, a migration credential, or a signing key; the layout contract forbids those roles.
+
+{/* Evidence: crates/registry-breg/src/runtime_config.rs, AuditConfig, CursorConfig, and DatabaseConfig;
+    crates/registry-breg/src/cursor.rs; crates/registry-breg/src/event_destination.rs, RawEventDestinationConfig;
+    products/breg/contracts/package-layout.yaml. */}
+
+### Package signing policy
+
+Every production change, including a one-line access widening, goes through `check --production`,
+`test` against a schema-test database with real tokens, `package`, external signing, and `apply`.
+The test receipt binds the candidate source, database identity, schema fingerprint, and signature
+policy, and `package` refuses a receipt taken for anything else. Budget for a signer who is not
+the author: the split between authoring, signing, and migration authority is deliberate.
+
+{/* Evidence: products/breg/README.md; crates/registry-bregctl/src/test_lifecycle.rs;
+    crates/registry-bregctl/src/package_lifecycle.rs; crates/registry-bregctl/src/lib.rs, TestArgs and PackageArgs. */}
+
+### Migration authority
+
+Activation runs under the migration credential, which the serving host does not need between
+activations. A successor package starts from `diff` against the active runtime configuration. A
+change that `diff` classifies as additive needs no further evidence; a change it marks for review
+needs a reviewed migration directory with a descriptor, a rehearsal receipt, SQL steps, and, for a
+destructive change, a backup artifact, all validated by `test` and `package` and never generated
+by them. A failed activation leaves the database in maintenance with readiness unavailable and
+the target pinned; `migration reconcile` reports the one safe transition, and the remaining case
+is restoring your pre-activation backup. No command clears a failed maintenance state on its own.
+
+{/* Evidence: products/breg/README.md; crates/registry-bregctl/src/lib.rs, ApplyArgs, DiffArgs, and MigrationCommand;
+    crates/registry-bregctl/src/reviewed_migrations.rs; crates/registry-breg/src/migration_plan.rs;
+    crates/registry-breg/src/migration_reconcile.rs. */}
+
+### Audit journal
+
+Every admitted request and every refusal that names a principal appends one hash-chained record
+to the journal in PostgreSQL. Refusals of unauthenticated requests are counted on the metrics
+listener instead, so an anonymous caller cannot grow the chain. `bregctl audit verify` walks the
+chain, `audit export` writes it as JSON Lines, and `audit prune` removes the prefix older than a
+boundary after a dry run. A prune leaves no copy behind, so export first; after a prune,
+verification proves the retained links, not completeness.
+
+{/* Evidence: crates/registry-breg/src/audit.rs; crates/registry-breg/src/audit_tooling.rs;
+    crates/registry-bregctl/src/lib.rs, AuditCommand; crates/registry-breg/src/metrics.rs, AnonymousRefusalReason;
+    crates/registry-breg/tests/postgres_audit_tooling.rs. */}
+
+### Retention and erasure
+
+Retention obligations are met by bounded operator commands, not API permissions. `history erase`
+removes the retained revisions of one record up to a
+revision number, at most 10,000 revisions per transaction, with no dry run and no undo; it also
+scrubs affected correction context, retained webhook payloads, and cached idempotency responses.
+Snapshot references at or after the erased commit become unavailable until a
+[rebaseline](../breg-quickstart/#vocabulary) re-establishes coverage, and `history rebaseline`
+refuses a registry with more than 1,000 live rows, so a larger registry cannot restore snapshot
+coverage after an erasure. Change-request detail has its own retention
+mode per request entity, and `request-retention erase` works only where the mode is
+`operator_erase`. Retained webhook payloads expire after `payloadRetentionDays`, 7 by default and
+at most 30.
+
+{/* Evidence: crates/registry-breg/src/history_erasure.rs, MAX_ERASURE_REVISIONS;
+    crates/registry-breg/src/history_rebaseline.rs, MAX_REBASELINE_LIVE_ROWS;
+    crates/registry-breg/src/request_retention.rs;
+    crates/registry-breg/src/runtime_config.rs, EventDeliveryConfig and MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS. */}
+
+### Backups
+
+The product has no backup command and restores nothing itself. Your PostgreSQL backup, taken
+before every `apply`, is the recovery path for a failed activation that reconcile reports as
+unresolvable, and a destructive migration must name its backup artifact on the `apply` command
+line. Erased history is gone from the database; account for backups, exports, and copies
+delivered to consumers under your own retention policy.
+
+{/* Evidence: products/breg/README.md; crates/registry-bregctl/src/lib.rs, ApplyArgs;
+    crates/registry-breg/src/migration_reconcile.rs; crates/registry-breg/src/history_erasure.rs. */}
+
+## Performance posture
+
+No throughput or latency figure is committed for Base Registry Engine, and this page states
+none. What exists is a k6 load-test harness that runs against a disposable PostgreSQL 17,
+Registry Mint, the `business-establishments` acceptance fixture, and the private metrics
+listener. The `steady` profile asks whether 50 mixed operations
+per second hold for 10 minutes with p99 under 250 ms; `sweep`, `burst`, `herd`, and `token-soak`
+step, spike, stampede, and soak the same registry, and `cursor-smoke` is the end-to-end check.
+Runs write a k6 summary, one-second server telemetry, and a report with p50, p95, and p99 by
+operation.
+The README's own caveat applies: figures from Docker on macOS are directional, and capacity claims
+are to be re-run on a representative Linux host before anyone cites them.
+
+{/* Evidence: products/breg/loadtest/README.md; products/breg/loadtest/run.sh. */}
+
+What is bounded by construction is easier to state. Every request runs under operator-set
+timeouts: HTTP requests at most 60 seconds, record locks at most 30, migration locks at most 300,
+and migration statements at most one hour. The connection pool has a configured maximum size, and
+its occupancy gauges are published on the metrics listener.
+GeoJSON and bounding-box responses are capped at 2 MiB of canonical output and refuse rather than
+truncate. Metrics label sets are closed, so a scrape cannot grow with traffic. The runtime applies
+no request-rate limit of its own; a registry that admits anonymous reads belongs behind an
+upstream limiter.
+
+{/* Evidence: crates/registry-breg/src/runtime_config.rs, OperationalTimeouts;
+    crates/registry-breg/src/postgres/config.rs, PoolBounds; crates/registry-breg/src/metrics.rs;
+    products/breg/SPATIAL-QUERIES.md. */}
+
+## Support window and stability
+
+Registry Stack is pre-1.0. The compatibility promise in
+[API stability and versioning](../../reference/api-stability/) takes effect at v1.0.0; until then
+a minor release may contain breaking changes, each announced with a `BREAKING:` entry in the
+release note, and a patch release stays compatible with the latest minor.
+Security fixes follow the roll-forward model in [Support window](../../security/support-window/):
+pre-1.0 releases receive fixes only in the latest `v0.x` release, so a deployment pinned to an
+earlier minor has to upgrade to be covered.
+
+{/* Evidence: docs/site/src/content/docs/reference/api-stability.mdx;
+    docs/site/src/content/docs/security/support-window.mdx; release/notes/v0.26.0.md. */}
+
+The product's own contracts carry that status: the runtime configuration is `v1alpha1`, and
+v0.26.0 is its first release. The security posture is already fixed: the invariant matrix names
+31 invariants, each `enforced` with a named negative test, covering package verification, role and
+row-security boundaries, claim handling, connection-context cleanup, and value-free refusals.
+
+{/* Evidence: crates/registry-breg/src/runtime_config.rs, RUNTIME_CONFIG_API_VERSION;
+    release/notes/v0.26.0.md; release/manifests/registry-stack-beta-37.yaml;
+    products/breg/contracts/security-invariant-matrix.yaml. */}
+
+## Next
+
+- [Which product fits your problem](../when-to-use/)
+- [Base Registry Engine overview](../breg-quickstart/)
+- [Create and query your first registry](../../tutorials/first-breg/)
+- [Build a production candidate](../../tutorials/build-a-breg-production-candidate/)
+- [Deploy a registry](../../operate/breg/)

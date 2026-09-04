@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-11"
+last_reviewed: "2026-09-04"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -52,42 +52,21 @@ sources, token issuers, audit retention, and revision replacement.
 
 ## Build a writable registry with Base Registry Engine
 
-Use Base Registry Engine when you need a system of record, including create and update operations.
-Your project defines entities, relationships, constraints, and caller permissions; the compiler
-generates the storage and REST contract. Holdings, plots, businesses, and assets are configured
-models, not built-in BReg types.
-
-Start with the [Base Registry Engine overview](explanation/configuration-defined-registry/), then
-[create and query your first registry](tutorials/first-breg/). Continue with
-[configure your registry](configure/breg/) to extend the model and prepare a tested
-deployment handoff.
-
-Follow [review changes before updating records](tutorials/review-registry-changes/) to configure
-change requests, approval stages, and controlled writes.
-
-Use [query a spatial registry from QGIS](tutorials/query-a-spatial-registry-from-qgis/) to start
-the supplied PostGIS fixture, connect a protected Point layer, and verify a map refresh after an
-authenticated write.
-
-Use [modeling patterns](explanation/registry-modeling-patterns/) to choose identifier, relationship,
-declaration, provenance, and document-reference structures for your registry.
-
-Follow [bind webhook receivers](operate/breg/#bind-webhook-receivers) to notify another
-service.
-Use the [configuration reference](reference/breg-configuration/) to look up keys,
-defaults, and constraints.
-Use the [API reference](reference/breg-api/#history-reads) for saved snapshots,
-effective-time queries, and correction context, and the
-[events and webhooks section](reference/breg-api/#events-and-webhooks) for the receiver
-contract, signatures, and delivery behavior. Use the
-[BReg client API reference](reference/breg-client-api/) for the Rust client surface. For
-retained-history erasure, see
-[erase retained history](operate/breg/#erase-retained-history).
+Use Base Registry Engine when the institution needs a system of record it does not hold yet,
+with create and update operations. A registry project declares the entities, relationships,
+constraints, access profiles, and events; the compiler turns it into a PostgreSQL schema, a REST
+API, per-profile permissions, revision history, and an audit journal. Holdings, plots,
+businesses, and assets are configured models, not built-in types.
+[Base Registry Engine overview](start/breg-quickstart/) explains what runs where and which path
+fits your role. Continue with [create and query your first registry](tutorials/first-breg/) to
+make a verified request against a local registry. When the model is ready,
+[build a production candidate](tutorials/build-a-breg-production-candidate/) tests, packages,
+and signs it, and [query a registry from Python and Node](tutorials/query-breg-client/) calls it
+from an application.
 
 {/* Evidence: crates/registry-breg/src/contract.rs, RegistryProject and RegistryModule;
-    crates/registry-breg/tests/postgres_pilot_acceptance.rs;
-    crates/registry-breg/tests/postgres_historical.rs;
-    crates/registry-breg/tests/postgres_history_erasure.rs. */}
+    crates/registry-breg/src/compiler.rs; crates/registry-breg/src/api/mod.rs;
+    products/breg/README.md. */}
 
 ## Keep the product boundaries clear
 

@@ -138,7 +138,7 @@ test('publishes one overview route for every task-flow section that has one', ()
     ['Start', "link: '/'"],
     ['Answer a bounded question', "slug: 'start/evidence-quickstart'"],
     ['Connect an existing registry', "slug: 'configure'"],
-    ['Build a registry', "slug: 'explanation/configuration-defined-registry'"],
+    ['Build a registry', "slug: 'start/breg-quickstart'"],
     ['Operate and secure', "slug: 'operate/advanced'"],
     ['Reference', "slug: 'reference'"],
   ]) {
@@ -239,38 +239,93 @@ test('gives Evidence Gateway a lane on both front doors without a retired Notary
   assert.doesNotMatch(homepageSource, /Expose Notary|verify-claim-registry-api/);
 });
 
+// The BReg section follows the shape the Evidence Gateway section proved: an
+// overview, one first tutorial in the open, then each later phase behind the
+// group it belongs to. A reader who has finished one phase finds the next one
+// beside it, and a reader who has not is not shown its vocabulary yet.
 test('keeps the BReg guide and references in one adoption path', () => {
   const breg = topLevelSection(sidebarSource, 'Build a registry');
+  assert.ok(breg, 'could not isolate Build a registry');
   const slugs = [...breg.matchAll(/slug: '([^']+)'/g)].map((match) => match[1]);
   assert.deepEqual(slugs, [
-    'explanation/configuration-defined-registry',
+    'start/breg-quickstart',
     'tutorials/first-breg',
+    'explanation/configuration-defined-registry',
+    'tutorials/extend-a-registry-with-a-module',
     'tutorials/review-registry-changes',
+    'tutorials/send-registry-events-to-a-webhook',
     'tutorials/query-a-spatial-registry-from-qgis',
     'configure/breg',
-    'operate/breg',
+    'configure/breg-access',
+    'configure/breg-change-control',
+    'configure/breg-journeys',
     'explanation/registry-modeling-patterns',
+    'tutorials/build-a-breg-production-candidate',
+    'operate/breg',
+    'operate/breg-webhooks',
+    'operate/breg-changes',
+    'operate/breg-retention',
+    'operate/breg-data',
+    'tutorials/query-breg-client',
+    'reference/breg-client-api',
     'reference/breg-configuration',
     'reference/breg-api',
-    'reference/breg-client-api',
   ]);
   for (const slug of slugs) {
     assert.ok(hasDocForSlug(slug), `${slug} must be reachable from the BReg journey`);
-    // A link may land on a section of the page rather than its top, so allow
-    // an optional `#fragment` after the trailing slash.
+  }
+  assertOrdered(
+    breg,
+    [
+      "slug: 'tutorials/first-breg'",
+      "label: 'Learn locally'",
+      "label: 'Model your registry'",
+      "label: 'Prepare and deploy'",
+      "label: 'Operate a running registry'",
+      "label: 'Call a registry from an application'",
+      "slug: 'reference/breg-configuration'",
+    ],
+    'Build a registry',
+  );
+
+  // The homepage names the doors into the path, not every room: the overview,
+  // the first tutorial, the bridge to a deployable package, and the tutorial
+  // an application developer arrives for. Requiring every BReg slug there
+  // produced an eleven-link wall that read as a feature list, not a way in.
+  for (const slug of [
+    'start/breg-quickstart',
+    'tutorials/first-breg',
+    'tutorials/build-a-breg-production-candidate',
+    'tutorials/query-breg-client',
+  ]) {
     const escaped = slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     assert.match(
       homepageSource,
-      new RegExp(`\\]\\(${escaped}/(#[-a-z]+)?\\)`),
+      new RegExp(`\\]\\(${escaped}/\\)`),
       `${slug} must be linked from the homepage`,
     );
   }
 });
 
+// Base Registry Engine asks an adopter for PostgreSQL, a token issuer, and a
+// package signing policy before it serves anything, so like Evidence Gateway
+// its case is made in Start, before the first command, beside the Evidence
+// evaluation and after it.
+test('evaluates Base Registry Engine in Start beside Evidence Gateway', () => {
+  const start = topLevelSection(sidebarSource, 'Start');
+  assert.ok(start, 'could not isolate Start');
+  assertOrdered(
+    start,
+    ["slug: 'start/evaluate-evidence'", "slug: 'start/evaluate-breg'", "slug: 'reference/glossary'"],
+    'Start',
+  );
+  assert.ok(hasDocForSlug('start/evaluate-breg'), 'start/evaluate-breg must be a published page');
+});
+
 test('redirects the retired Server webhook, history, and event pages to their merged pages', () => {
   assert.match(
     configSource,
-    /'\/configure\/breg-webhooks\/': internalRedirect\('\/operate\/breg\/'\)/,
+    /'\/configure\/breg-webhooks\/': internalRedirect\('\/operate\/breg-webhooks\/'\)/,
   );
   assert.match(
     configSource,

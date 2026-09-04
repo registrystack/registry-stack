@@ -1,12 +1,14 @@
 ---
 title: Review changes before updating a registry
 description: Test an approval workflow, change a review stage, and check that direct writes cannot bypass review.
-status: draft
+status: current
 owner: registry-docs
-source_repos: [registry-stack]
-last_reviewed: unreviewed
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-04"
 doc_type: tutorial
-persona: [data publisher]
+persona:
+  - data publisher
 locale: en
 standards_referenced: []
 ---
@@ -15,6 +17,10 @@ import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 If you are evaluating Base Registry Engine for data that needs approval, this tutorial takes you through
 an asset-location correction: propose a different site, collect two approvals, and apply the change.
+A change request is a record that proposes a write to another record and carries it out only after the
+review its configuration requires, and a review stage is one named round of that review with its own
+approval count and its own deciding profiles, both declared in
+[declare change requests and actions](../../configure/breg-change-control/).
 You will run the supplied workflow against PostgreSQL, adapt its configuration, and check a refusal.
 
 <QuickstartMeta
@@ -22,65 +28,42 @@ You will run the supplied workflow against PostgreSQL, adapt its configuration, 
   time="About 25 minutes, plus the PostgreSQL image download"
   level="Local evaluation only"
   prerequisites={[
-    'Linux or macOS, Bash, and two terminals',
-    'Git and curl',
-    'Running Docker',
-    'OpenSSL, PostgreSQL client tools (psql), and Python 3.11+',
-    'uv and a text editor',
+    'The checkout and binaries from Create and query your first registry',
+    'Running Docker, and two terminals',
+    'PostgreSQL client tools (psql) and OpenSSL',
+    'Python 3.11 or later, uv, and an editor',
   ]}
 />
 
 ## Before you start
 
-Install Base Registry Engine and its command-line tool:
+[Create and query your first registry](../first-breg/) installs `breg`, `bregctl`, and `mint` and
+clones the repository at the tag that matches them.
+Open a terminal at the root of that `breg-tutorial` checkout and confirm the binaries answer:
 
 ```sh
-curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/breg-install.sh | bash
 bregctl --version
 ```
 
-The installer places `breg` and `bregctl` together in `~/.local/bin` after checking both
-downloads against the release `SHA256SUMS`.
-It supports Linux on amd64 and arm64 and macOS on Apple Silicon.
-Replace `| bash` with `| less` to read the installer before you run it on a host you operate.
-Before these binaries reach a host that serves anyone else, check them against the signed
-release chain described in [OpenSSF and release trust](../../security/openssf-evidence/).
-If the installer ends by asking you to add its directory to `PATH`, do that in both terminals
-before you continue.
-
-The quickstart you borrow a database from in step 3 also runs Registry Mint, which the Evidence
-Gateway installer provides:
+This tutorial adds two requirements to that setup.
+The example runner calls `psql` directly, so confirm the PostgreSQL client tools are installed:
 
 ```sh
-curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/evidencectl-install.sh | bash
-mint --version
+psql --version
 ```
 
-The workflow example, the quickstart launcher, and the example runner live in the repository, so
-clone it at the tag that matches your installed binaries:
-
-```sh
-installed="$(bregctl --version | awk '{print $2}')"
-git clone --depth 1 --branch "v$installed" https://github.com/registrystack/registry-stack.git breg-tutorial
-cd breg-tutorial
-```
-
-This project is pre-1.0, so its default branch may already carry configuration or API changes
-the installed binaries do not implement.
-Pinning the checkout to the installed version keeps the examples and the binaries on one contract.
-If you already have a checkout, use it instead of cloning, after confirming its `version` in
-`Cargo.toml` matches `bregctl --version`.
+It also needs a disposable PostgreSQL database, which you borrow from the quickstart launcher in
+step 3 rather than from any database you already run.
 
 Run commands from the root of that clone unless a step says otherwise.
 The workflow runs through `bregctl test`, which sends requests through the real HTTP
 router with separate caller credentials and a disposable database.
 It does not leave the change-request example running as an HTTP service.
 
-{/* Evidence: crates/registry-breg/install.sh;
-    crates/registry-evidencectl/install.sh;
-    products/breg/scripts/test-change-request-examples.sh;
+{/* Evidence: products/breg/scripts/test-change-request-examples.sh, require_tool;
     crates/registry-bregctl/src/test_lifecycle.rs;
-    crates/registry-breg/src/fixtures.rs. */}
+    crates/registry-breg/src/fixtures.rs;
+    crates/registry-breg/src/change_request.rs. */}
 
 ## 1. Check your first request type
 
@@ -94,6 +77,8 @@ bregctl check tutorial-work/asset-corrections
 ```
 
 The check succeeds, prints the compiled configuration's digest, and lists eighteen findings:
+seven `access.profile.no_required_scope` and eleven `access.profile.unrestricted_collection`.
+The block shows the first of each kind and omits the rest:
 
 ```text
 check succeeded
@@ -115,8 +100,8 @@ No database has changed yet.
 Ask the CLI to describe what it compiled:
 
 ```sh
-bregctl explain change-requests tutorial-work/asset-corrections \
-  --format json > tutorial-work/change-requests.json
+bregctl --format json explain change-requests tutorial-work/asset-corrections \
+  > tutorial-work/change-requests.json
 python3 - tutorial-work/change-requests.json <<'PY'
 import json
 import sys
@@ -150,8 +135,14 @@ The example requires one approval at each of two stages.
 Every action needs an `Idempotency-Key` and an `If-Match`; a decision or an apply also binds to
 the `proposalVersion` and `effectDigest` the caller read.
 The JSON file also lists the compiled effects, the planner and application policy, the grants of each role, and the request bounds.
+A planner is the script that computes a request's effects when they depend on the request's own
+content, declared in place of a fixed `effects` list; this example declares `effects`, so the JSON
+reports its planner `kind` as `declarative`.
+See [plan effects with a Rhai script](../../configure/breg-change-control/#plan-effects-with-a-rhai-script)
+for the alternative.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, explain_change_requests;
+    crates/registry-breg/src/rhai_planner.rs;
     products/breg/acceptance/asset-site-placement-change-requests/registry.yaml. */}
 
 ## 2. Read the rule you are testing
@@ -299,9 +290,12 @@ running change-request fixture: asset-site-placement-change-requests
 change-request fixture passed: asset-site-placement-change-requests
 running change-request fixture: publicschema-household-change-requests
 change-request fixture passed: publicschema-household-change-requests
+running change-request fixture: person-name-change-rhai
+change-request fixture passed: person-name-change-rhai
 ```
 
-The runner checks and tests your copy and the unchanged household example.
+The runner checks and tests your copy, the unchanged household example, and a third example whose
+effects a Rhai planner computes.
 Each run creates its own test databases and roles and removes them on exit.
 The quickstart's generic registry stays separate from those test databases.
 
@@ -377,8 +371,8 @@ products/breg/scripts/test-change-request-examples.sh --installed \
   --env tutorial-work/test.env --asset-project "$PWD/tutorial-work/asset-corrections"
 ```
 
-The check reports a different configuration digest with the same findings, and both fixtures pass
-again.
+The check reports a different configuration digest with the same findings, and all three fixtures
+pass again.
 You changed the stage name, its authority grant, and the caller's action without changing server
 code.
 For a new stage rather than a rename, you would also add its GET and approval steps to the journey.
@@ -438,19 +432,6 @@ You changed one stage and verified that an ordinary write grant cannot override 
 These are local authoring and database tests; packaging and activating the configuration for your
 deployment are separate steps.
 
-## Next
-
-- [Author a registry project](../../configure/breg/#change-requests) for every member
-  of `changeRequest` and `changeControl`.
-- [Base Registry Engine API reference](../../reference/breg-api/#change-requests) for the
-  seven request states, the action routes, and the `request.actions[]` shape.
-- [Deploy and operate a registry](../../operate/breg/) to package and activate your
-  project, to review a later revision with `bregctl diff`, and to erase proposal detail under
-  `operator_erase`.
-- Open `products/breg/CHANGE_REQUEST_EXAMPLES.md` in your clone for the household
-  example and stale-proposal recovery.
-- Use [Registry Mint](../../configure/mint/) when connecting callers to your own deployment.
-
 ## Troubleshooting
 
 | Symptom | Next move |
@@ -462,4 +443,17 @@ deployment are separate steps.
 | Renaming the stage makes `check` fail | Match the stage `id` to the supervisor's `reviewStages` entry. |
 | The runner reports `test.step.failed` | Its path `journeys[0].steps[<n>]` counts the steps of `tests/journeys.yaml` from zero. Check that step's `stage` and expected status. |
 | `change-requests` is not a recognized explain subject | Your `bregctl` predates the checkout. Confirm that `bregctl --version` matches the checkout's tag, then reinstall or clone again so they agree. |
-| `command not found` for `bregctl` or `mint` | The installer's directory is not on your `PATH`, or you skipped one of the two installers. Add `~/.local/bin` to `PATH` in this terminal and rerun the installer you skipped. |
+| `command not found` for `bregctl` or `mint` | The installers in [Create and query your first registry](../first-breg/) place all three binaries in `~/.local/bin`. Add that directory to `PATH` in this terminal, or rerun the installer you skipped. |
+
+## Next
+
+- [Declare change requests and actions](../../configure/breg-change-control/#change-requests) for every
+  member of `changeRequest` and `changeControl`.
+- [Base Registry Engine API reference](../../reference/breg-api/#change-requests) for the
+  seven request states, the action routes, and the `request.actions[]` shape.
+- [Deploy a registry](../../operate/breg/) to package and activate your
+  project, to review a later revision with `bregctl diff`, and to erase proposal detail under
+  `operator_erase`.
+- Open `products/breg/CHANGE_REQUEST_EXAMPLES.md` in your clone for the household
+  example and stale-proposal recovery.
+- [Configure Registry Mint](../../configure/mint/) when connecting callers to your own deployment.

@@ -1,11 +1,11 @@
 ---
 title: Query a spatial registry from QGIS
 description: Start a synthetic PostGIS registry, connect QGIS with an installation credential, and refresh the map after an authenticated write.
-status: draft
+status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: unreviewed
+last_reviewed: "2026-09-04"
 doc_type: tutorial
 persona:
   - data publisher
@@ -19,7 +19,10 @@ standards_referenced:
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 If you are evaluating Base Registry Engine's spatial read path, this tutorial starts a synthetic
-service-site registry on PostGIS and connects QGIS as a read-only installation client. You will
+service-site registry on PostGIS and connects QGIS as a read-only installation client. PostGIS is the
+PostgreSQL extension that adds geometry types and spatial predicates. Base Registry Engine requires it
+only when a profile that lists records also declares a bounding box query, and the `--spatial` launcher
+flag supplies it by starting a PostGIS image in place of the plain PostgreSQL one. You will
 display authorized Point records, pan within a bounded map area, import one record through the
 normal API, and see the new Point after QGIS renews its Registry Mint credential.
 
@@ -28,10 +31,9 @@ normal API, and see the new Point after QGIS renews its Registry Mint credential
   time="About 35 minutes, plus the PostGIS image download"
   level="Local evaluation with synthetic data on loopback"
   prerequisites={[
-    'Linux or macOS, Bash, and two terminals',
-    'Git and curl',
+    'The checkout and binaries from Create and query your first registry',
     'QGIS 4.2.1 with GDAL 3.12.4',
-    'Running Docker',
+    'Running Docker, and two terminals',
     'OpenSSL, Python 3.11 or later, and uv',
     'A text editor',
   ]}
@@ -39,43 +41,18 @@ normal API, and see the new Point after QGIS renews its Registry Mint credential
 
 ## Before you start
 
-Install Base Registry Engine and its command-line tool:
+[Create and query your first registry](../first-breg/) installs `breg`, `bregctl`, and `mint` and clones
+the repository at the tag that matches them. Open a terminal at the root of that `breg-tutorial`
+checkout and confirm the binaries answer:
 
 ```sh
-curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/breg-install.sh | bash
 bregctl --version
-```
-
-The installer places `breg` and `bregctl` together in `~/.local/bin` after checking both downloads
-against the release `SHA256SUMS`. It supports Linux on amd64 and arm64 and macOS on Apple Silicon.
-Replace `| bash` with `| less` to read the installer before you run it on a host you operate.
-Before these binaries reach a host that serves anyone else, check them against the signed release
-chain described in [OpenSSF and release trust](../../security/openssf-evidence/). If the installer
-ends by asking you to add its directory to `PATH`, do that in both terminals before you continue.
-
-The quickstart also runs Registry Mint, which the Evidence Gateway installer provides:
-
-```sh
-curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/evidencectl-install.sh | bash
 mint --version
 ```
 
-The quickstart launcher and the synthetic service-site project live in the repository, so clone it
-at the tag that matches your installed binaries:
-
-```sh
-installed="$(bregctl --version | awk '{print $2}')"
-git clone --depth 1 --branch "v$installed" https://github.com/registrystack/registry-stack.git breg-tutorial
-cd breg-tutorial
-```
-
-This project is pre-1.0, so its default branch may already carry configuration or API changes the
-installed binaries do not implement. Pinning the checkout to the installed version keeps the
-project and the binaries on one contract. If you already have a checkout, use it instead of
-cloning, after confirming its `version` in `Cargo.toml` matches `bregctl --version`.
-
 Run every shell command from the root of that clone. Keep two terminals open: the first runs Base
-Registry Engine and Registry Mint, while the second performs the refresh write.
+Registry Engine and Registry Mint, while the second performs the refresh write. What this tutorial
+adds to that setup is QGIS, which needs a desktop session.
 
 :::caution[Use synthetic data only]
 The quickstart creates local keys, tokens, and a disposable database under
@@ -83,7 +60,8 @@ The quickstart creates local keys, tokens, and a disposable database under
 Do not put production data or credentials in this exercise.
 :::
 
-{/* Evidence: crates/registry-breg/install.sh; crates/registry-evidencectl/install.sh. */}
+{/* Evidence: products/breg/quickstart/run.sh, spatial_postgres_image;
+    crates/registry-breg/src/generated_ddl.rs, requires_postgis(). */}
 
 ## Start the spatial registry
 
@@ -339,6 +317,17 @@ database.
 - An authenticated API write that appeared after QGIS Refresh
 - A protected layer reload after the short-lived access token expired
 
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| The first run takes several minutes on Apple Silicon | The pinned PostGIS image uses `linux/amd64`, so Docker Desktop may run it under emulation | Leave the launcher running; later runs reuse the downloaded image |
+| The launcher exits before the banner and names `breg`, `bregctl`, or `mint` as required in `--installed` mode | The installer's directory is not on your `PATH`, or you skipped one of the installers in [Create and query your first registry](../first-breg/) | Add `~/.local/bin` to `PATH` in this terminal, rerun the installer you skipped, then start the launcher again |
+| QGIS reports `query.invalid` while adding or panning the layer | The visible extent exceeds the profile's bounding box cap, often after QGIS adjusts the canvas aspect ratio | Return to `100.55,13.75`, set scale to `1:2500`, confirm the displayed spans are less than `0.24` and `0.19`, then press `F5` |
+| QGIS asks for credentials or reports an OAuth2 error | The token URL, client ID, secret, or authentication selection does not match the current quickstart | Confirm the printed ports, use client ID `qgis-installation-central`, copy the current owner-only secret, leave Scope empty, and keep the first terminal running |
+| The connection opens but no Point appears | The project starts at a world extent or outside the synthetic fixture area | Set project CRS to `OGC:CRS84`, locate `100.55,13.75`, reduce the scale, and reload |
+| Refresh does not add `SVC-QGIS-REFRESH` | The import did not complete, QGIS still has an attribute filter, or the layer cache has not reloaded | Confirm `complete: true`, clear table filters, select the layer, and press `F5` |
+
 ## Next
 
 - [Create and query your first registry](../first-breg/) covers Base Registry Engine
@@ -347,18 +336,7 @@ database.
   supplied fixture with your own entities, access profiles, and spatial grants.
 - [Base Registry Engine API reference](../../reference/breg-api/#spatial-adapter) describes
   the `/v1/gis` routes, the bounding box rules, and the GeoJSON encoding.
-- [Deploy and operate a registry](../../operate/breg/) covers running Base Registry Engine
+- [Deploy a registry](../../operate/breg/) covers running Base Registry Engine
   against your own PostgreSQL with PostGIS.
 - [QGIS authentication](https://docs.qgis.org/4.2/en/docs/user_manual/auth_system/auth_overview.html)
   describes the client credential store used by this tutorial.
-
-## Troubleshooting
-
-| Symptom | Cause | Fix |
-| --- | --- | --- |
-| The first run takes several minutes on Apple Silicon | The pinned PostGIS image uses `linux/amd64`, so Docker Desktop may run it under emulation | Leave the launcher running; later runs reuse the downloaded image |
-| The launcher exits before the banner and names `breg`, `bregctl`, or `mint` as required in `--installed` mode | The installer's directory is not on your `PATH`, or you skipped one of the two installers | Add `~/.local/bin` to `PATH` in this terminal, rerun the installer you skipped, then start the launcher again |
-| QGIS reports `query.invalid` while adding or panning the layer | The visible extent exceeds the profile's bounding box cap, often after QGIS adjusts the canvas aspect ratio | Return to `100.55,13.75`, set scale to `1:2500`, confirm the displayed spans are less than `0.24` and `0.19`, then press `F5` |
-| QGIS asks for credentials or reports an OAuth2 error | The token URL, client ID, secret, or authentication selection does not match the current quickstart | Confirm the printed ports, use client ID `qgis-installation-central`, copy the current owner-only secret, leave Scope empty, and keep the first terminal running |
-| The connection opens but no Point appears | The project starts at a world extent or outside the synthetic fixture area | Set project CRS to `OGC:CRS84`, locate `100.55,13.75`, reduce the scale, and reload |
-| Refresh does not add `SVC-QGIS-REFRESH` | The import did not complete, QGIS still has an attribute filter, or the layer cache has not reloaded | Confirm `complete: true`, clear table filters, select the layer, and press `F5` |
