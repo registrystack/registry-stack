@@ -62,6 +62,9 @@ init succeeded
 revision: sha256:<digest>
 finding access.profile.unrestricted_collection at entities[id=record].accessProfiles[id=operator].rowBoundaries: this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
 artifacts: 5
+next: read tutorial-work/project/README.md, then run 'bregctl check tutorial-work/project'
+next: leave the finding above as it is; the example operator profile lists a whole collection on purpose, and tutorial-work/project/README.md says where to narrow it
+next: replace canonicalBaseIri in tutorial-work/project/registry.yaml before you build a production package; the example value is a reserved .invalid name that never resolves
 ```
 
 The five artifacts are `registry.yaml`, one module under `modules/`, `tests/journeys.yaml`,
@@ -74,6 +77,9 @@ A finding is advice the compiler attaches to a result that succeeded: an error s
 This one says the `operator` profile can list every row, which is intended for a registry-wide operations team;
 the project's second profile, `record-reader`, shows the claim-bound row restriction that closes it.
 Every command in this tutorial repeats the finding, so treat it as expected and read past it to the result.
+The `next:` lines close the same gap for the rest of the output: they name the command to run after
+the README, the finding the example keeps on purpose, and the placeholder `canonicalBaseIri` that has
+to be replaced before a production package. Only `init` prints them.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, init_files(); crates/registry-breg/src/access.rs. */}
 
