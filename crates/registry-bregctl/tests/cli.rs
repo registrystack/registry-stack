@@ -1569,6 +1569,144 @@ modules:
 }
 
 #[test]
+fn init_prints_the_next_command_and_what_the_example_leaves_open() {
+    let project = TestProject::asset_fixture();
+    let destination = project.path().join("initialized");
+    let destination_argument = path(&destination).to_owned();
+
+    let output = bregctl(&["init", &destination_argument]);
+
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).expect("init stdout is UTF-8");
+    let readme = destination.join("README.md");
+    let registry = destination.join("registry.yaml");
+    assert!(
+        stdout.contains(&format!(
+            "next: read {}, then run 'bregctl check {destination_argument}'",
+            readme.display()
+        )),
+        "init names the next command: {stdout}"
+    );
+    assert!(
+        stdout.contains("next: leave the finding above as it is;"),
+        "init says the reported finding belongs to the example: {stdout}"
+    );
+    assert!(
+        stdout.contains(&format!(
+            "next: replace canonicalBaseIri in {} before you build a production package;",
+            registry.display()
+        )),
+        "init says the example base IRI is not shippable: {stdout}"
+    );
+
+    let json_destination = project.path().join("initialized-json");
+    let reported = bregctl(&["--format", "json", "init", path(&json_destination)]);
+    assert!(reported.status.success(), "{reported:?}");
+    let report = json_stdout(&reported);
+    let steps = report["nextSteps"]
+        .as_array()
+        .expect("nextSteps is an array")
+        .iter()
+        .map(|step| step.as_str().expect("step is a string").to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(steps.len(), 3, "{report}");
+
+    let checked = bregctl(&["--format", "json", "check", &destination_argument]);
+    assert!(checked.status.success(), "{checked:?}");
+    assert!(
+        json_stdout(&checked).get("nextSteps").is_none(),
+        "only init carries next steps"
+    );
+}
+
+#[test]
+fn the_scaffold_links_only_documentation_pages_that_ship() {
+    let project = TestProject::asset_fixture();
+    let destination = project.path().join("initialized");
+
+    let output = bregctl(&["init", path(&destination)]);
+    assert!(output.status.success(), "{output:?}");
+
+    let documentation =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/site/src/content/docs");
+    let mut checked = 0usize;
+    for relative in [
+        "README.md",
+        "modules/record-notes/module.yaml",
+        "registry.yaml",
+        "runtime.example.yaml",
+        "tests/journeys.yaml",
+    ] {
+        let content = fs::read_to_string(destination.join(relative))
+            .unwrap_or_else(|error| panic!("{relative} reads: {error}"));
+        for link in documentation_links(&content) {
+            checked += 1;
+            let (route, anchor) = match link.split_once('#') {
+                Some((route, anchor)) => (route, Some(anchor)),
+                None => (link.as_str(), None),
+            };
+            let route = route.trim_matches('/');
+            let page = [
+                documentation.join(format!("{route}.mdx")),
+                documentation.join(format!("{route}.md")),
+                documentation.join(route).join("index.mdx"),
+            ]
+            .into_iter()
+            .find(|candidate| candidate.is_file())
+            .unwrap_or_else(|| panic!("{relative} links {link}, which has no page"));
+            let source = fs::read_to_string(&page).expect("documentation page reads");
+            let frontmatter = source
+                .split("---")
+                .nth(1)
+                .expect("documentation page has frontmatter");
+            assert!(
+                !frontmatter.contains("draft: true"),
+                "{relative} links {link}, whose page is not published"
+            );
+            if let Some(anchor) = anchor {
+                assert!(
+                    source
+                        .lines()
+                        .filter(|line| line.starts_with('#'))
+                        .any(|line| heading_slug(line) == anchor),
+                    "{relative} links {link}, whose page has no such heading"
+                );
+            }
+        }
+    }
+    assert!(checked > 0, "the scaffold links the documentation");
+}
+
+/// Collects every published documentation URL a scaffold file carries.
+fn documentation_links(content: &str) -> Vec<String> {
+    const PREFIX: &str = "https://docs.registrystack.org/";
+    let mut links = Vec::new();
+    let mut rest = content;
+    while let Some(start) = rest.find(PREFIX) {
+        rest = &rest[start + PREFIX.len()..];
+        let end = rest
+            .find(|character: char| character.is_whitespace() || ">)\"'".contains(character))
+            .unwrap_or(rest.len());
+        links.push(rest[..end].to_owned());
+        rest = &rest[end..];
+    }
+    links
+}
+
+/// Renders a Markdown heading the way the documentation site anchors it.
+fn heading_slug(heading: &str) -> String {
+    let mut slug = String::new();
+    for character in heading.trim_start_matches('#').trim().chars() {
+        if character.is_ascii_alphanumeric() {
+            slug.push(character.to_ascii_lowercase());
+        } else if !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    slug.trim_matches('-').to_owned()
+}
+
+#[test]
 fn init_writes_a_bare_relative_destination_into_the_working_directory() {
     let project = TestProject::asset_fixture();
     let output = Command::new(env!("CARGO_BIN_EXE_bregctl"))
