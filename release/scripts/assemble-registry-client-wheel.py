@@ -28,6 +28,9 @@ def digest(data: bytes) -> str:
 
 
 def metadata(version: str) -> bytes:
+    # PyPI renders the facade README, so the page that a Python developer reads
+    # first carries the install name, the import name, and a working example.
+    description = (FACADE / "README.md").read_text(encoding="utf-8")
     return (
         "Metadata-Version: 2.4\n"
         "Name: registry-stack-client\n"
@@ -40,8 +43,9 @@ def metadata(version: str) -> bytes:
         "Project-URL: Repository, https://github.com/registrystack/registry-stack\n"
         "Classifier: Development Status :: 4 - Beta\n"
         "Classifier: License :: OSI Approved :: Apache Software License\n"
-        "Classifier: Programming Language :: Python :: 3\n\n"
-        "One versioned Python entry point for Registry Stack client APIs.\n"
+        "Classifier: Programming Language :: Python :: 3\n"
+        "Description-Content-Type: text/markdown\n\n"
+        f"{description}"
     ).encode()
 
 

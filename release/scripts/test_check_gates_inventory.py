@@ -846,6 +846,11 @@ class GateInventoryTest(unittest.TestCase):
             proof.index(platform_link),
             proof.index("node smoke-registry-client-package.js"),
         )
+        self.assertIn("node smoke-registry-client-package.mjs", proof)
+        self.assertLess(
+            proof.index("node smoke-registry-client-package.js"),
+            proof.index("node smoke-registry-client-package.mjs"),
+        )
         self.assertNotIn(
             '"${smoke}/node_modules/@registrystack/client-${{ matrix.napi_platform }}"',
             proof,
@@ -888,6 +893,11 @@ class GateInventoryTest(unittest.TestCase):
                 "      - release-linux-node-clients",
                 "      - disabled-linux-node-clients",
                 "Release Linux Node client CI aggregate",
+            ),
+            (
+                '(cd "${smoke}" && node smoke-registry-client-package.mjs)',
+                '(cd "${smoke}" && true)',
+                "Unified Node client ESM entry point smoke",
             ),
         )
         for snippet, replacement, gate in mutations:

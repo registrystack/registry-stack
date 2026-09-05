@@ -763,6 +763,9 @@ jobs:
       - name: Test unified Python wheel assembly
         run: python3 -m unittest release/scripts/test_assemble_registry_client_wheel.py
 
+      - name: Test local client package assembly
+        run: python3 -m unittest release/scripts/test_assemble_registry_client_packages.py
+
       - name: Test release storage preflight
         run: python3 -m unittest release/scripts/test_check_release_storage.py
 
@@ -1317,8 +1320,10 @@ jobs:
           ln -s "${client_dir}" \
             "${smoke}/node_modules/@registrystack/client"
           cp "${GITHUB_WORKSPACE}/release/scripts/smoke-registry-client-package.js" \
+            "${GITHUB_WORKSPACE}/release/scripts/smoke-registry-client-package.mjs" \
             "${smoke}/"
           (cd "${smoke}" && node smoke-registry-client-package.js)
+          (cd "${smoke}" && node smoke-registry-client-package.mjs)
 
   ci-result:
     name: CI result

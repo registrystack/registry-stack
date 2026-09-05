@@ -205,6 +205,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "      - release-linux-node-clients",
     ),
     (
+        "Unified Node client ESM entry point smoke",
+        '(cd "${smoke}" && node smoke-registry-client-package.mjs)',
+    ),
+    (
         "Release helper tests",
         "run: python3 -m unittest release/scripts/test_registry_release.py",
     ),
@@ -227,6 +231,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     (
         "Unified Python wheel assembly tests",
         "run: python3 -m unittest release/scripts/test_assemble_registry_client_wheel.py",
+    ),
+    (
+        "Local client package assembly tests",
+        "run: python3 -m unittest release/scripts/test_assemble_registry_client_packages.py",
     ),
     (
         "Release storage preflight tests",
