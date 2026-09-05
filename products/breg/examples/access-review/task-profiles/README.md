@@ -70,8 +70,9 @@ Other scenario files cover owned editing, a supervisor, history, an auditor's
 refused edit, and reviewer admission. No scenario contains a real token or
 record. An admitted preview has not checked a row, verified a credential,
 applied a mutation, or checked a workflow's current stage or actor exclusions.
-The action-only grant is visible in the compiled explanation; the entity
-admission preview does not simulate invoking it.
+The action-only grant appears under `actions` in `explain access --format json`
+output, not in the plain-text report; the entity admission preview does not
+simulate invoking it.
 
 ## Bind real identities and verify records
 
