@@ -18,7 +18,7 @@ Suggest source configuration from an OpenAPI document.
 
 ## Contract status
 
-This page is generated from the public Clap command tree for Registry Stack source version `0.26.1` and catalog SHA-256 `079c4b00e55a12d92f3f115032bdc5b87195d9a4f623beafda35a7787a4b1998`. Hidden implementation commands are omitted.
+This page is generated from the public Clap command tree for Registry Stack source version `0.26.1` and catalog SHA-256 `45ce86807f99ebdcd12ed4e5d51f911c9bc55f5606bcd045c80536f942cc2977`. Hidden implementation commands are omitted.
 
 ## Usage
 
@@ -45,8 +45,8 @@ evidencectl source suggest [OPTIONS] <--openapi <OPENAPI>|--project <PROJECT>>
 | `--sample <SAMPLE>` | No | No | n/a | n/a | n/a | Sample response JSON file used to suggest bounds. Read only; nothing from it is copied into any artifact except derived bounds |
 | `--source-id <SOURCE_ID>` | No | No | n/a | n/a | n/a | Source identifier for the generated artifacts |
 | `--base-url <BASE_URL>` | No | No | n/a | n/a | n/a | Reviewed source origin to write into a newly created source draft |
-| `--project <PROJECT>` | No | No | n/a | n/a | n/a | Deployment project to write the draft into; print-only if absent |
-| `-h, --help` | No | No | n/a | n/a | n/a | Print help |
+| `--project <PROJECT>` | No | No | n/a | n/a | n/a | Evidence project directory; the draft is printed when this is absent. This command needs an editable project: one holding questions/ and sources/ beside evidence-project.yaml. |
+| `-h, --help` | No | No | n/a | n/a | n/a | Print help (see a summary with '-h') |
 
 ## Generation contract
 

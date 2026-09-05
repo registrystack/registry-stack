@@ -68,8 +68,12 @@ const GATED_ACQUISITION_CAPABILITIES: [&str; 2] = ["search-then-fetch-set", "sou
 
 #[derive(Debug, Args)]
 pub struct DoctorArgs {
-    /// Deployment project directory containing runtime.yaml and bundle/.
-    #[arg(long)]
+    /// Evidence project directory; defaults to the current directory.
+    ///
+    /// This command needs a deployment project: one holding runtime.yaml
+    /// beside bundle/. `evidencectl build` compiles an editable project into
+    /// one.
+    #[arg(long, default_value = ".")]
     pub project: PathBuf,
 
     /// Mechanically compare this Registry Mint configuration with Evidence
@@ -95,6 +99,10 @@ struct Check {
     name: &'static str,
     passed: bool,
     inspected: usize,
+    /// What the check looked at, or deliberately did not, when the artifact
+    /// count alone would leave the reader with a green line and no subject.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    note: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     findings: Vec<Finding>,
 }
@@ -118,10 +126,7 @@ pub fn run(args: DoctorArgs) -> Result<ExitCode> {
     let project = args.project.as_path();
     let runtime_path = project.join("runtime.yaml");
     if !runtime_path.is_file() {
-        bail!(
-            "runtime configuration not found at {} (expected a deployment project directory containing runtime.yaml)",
-            runtime_path.display()
-        );
+        bail!(missing_runtime_message(project, &runtime_path));
     }
     let runtime = read_yaml(&runtime_path)?;
     let bundle_directory = resolve_bundle_directory(&runtime, &runtime_path, project)?;
@@ -133,6 +138,7 @@ pub fn run(args: DoctorArgs) -> Result<ExitCode> {
         check_bundle(project, &bundle_directory),
     ];
     checks.extend(check_secrets(project, &runtime, &runtime_path, &bundle));
+    checks.push(check_signer(project, &runtime, &runtime_path));
     checks.push(check_audit(project, &runtime, &runtime_path));
     let (acquisition, acquisition_plans) = check_acquisition(
         project,
@@ -172,6 +178,41 @@ pub fn run(args: DoctorArgs) -> Result<ExitCode> {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
+    })
+}
+
+/// What to say when the directory holds no `runtime.yaml`.
+///
+/// `doctor` is the command an adopter reaches for first, and the project they
+/// have just authored is not the shape it walks. Naming the shape alone leaves
+/// them to find the command that produces one, so the refusal names it, and
+/// names the command that checks an editable project as it stands.
+fn missing_runtime_message(project: &Path, runtime_path: &Path) -> String {
+    let project = project.display();
+    let build = format!(
+        "`evidencectl build --project {project} --target <deployment-target> --output <candidate>`"
+    );
+    if project_is_editable(runtime_path) {
+        format!(
+            "runtime configuration not found at {}; doctor walks a deployment project and {project} is an editable project. Compile a candidate with {build}, or check the editable project as it stands with `evidencectl fixtures run --project {project}`",
+            runtime_path.display()
+        )
+    } else {
+        format!(
+            "runtime configuration not found at {}; doctor walks a deployment project, one holding runtime.yaml beside bundle/. Compile a candidate from an editable project with {build}",
+            runtime_path.display()
+        )
+    }
+}
+
+/// Whether the directory beside the missing runtime file is an editable
+/// project. The marker file is what `evidencectl new` writes and what every
+/// authoring command reads, so its presence is the same answer they give.
+fn project_is_editable(runtime_path: &Path) -> bool {
+    runtime_path.parent().is_some_and(|project| {
+        project
+            .join(registry_evidence_authoring::PROJECT_MARKER_FILE)
+            .is_file()
     })
 }
 
@@ -269,6 +310,62 @@ fn check_secrets(
     }
 
     vec![root_run.finish(), secret_run.finish()]
+}
+
+/// The signer this deployment declares, and what settling it needs beyond this
+/// walk.
+///
+/// The private key a `local-jwk` signer names is inspected with every other
+/// file secret, because the secret check reads the runtime document as well as
+/// the bundle. What an operator could not see anywhere is which signer the
+/// runtime file declares at all, so an all-green report read as a ready target
+/// host. A `transit` signer resolves against a provider on that host, which
+/// this walk contacts as it contacts nothing else, so the report says so and
+/// names the command that does reach it.
+fn check_signer(project: &Path, runtime: &YamlValue, runtime_path: &Path) -> Check {
+    let mut run = CheckRun::new("signer", project);
+    run.read_declaration();
+    let Some(signer) = runtime.get("signer") else {
+        run.refuse(
+            runtime_path,
+            "declares no signer, and Evidence requires one".to_owned(),
+        );
+        return run.finish();
+    };
+    match signer.get("kind").and_then(YamlValue::as_str) {
+        Some("local-jwk") => match signer.get("privateKeyRef").and_then(YamlValue::as_str) {
+            Some(reference) if reference.starts_with(SECRET_REFERENCE_PREFIX) => {
+                run.note(format!(
+                    "local-jwk, signing with {reference}, inspected with the other file secrets"
+                ));
+            }
+            Some(_) => run.refuse(
+                runtime_path,
+                format!("names a local-jwk signing key that is not a {SECRET_REFERENCE_PREFIX} reference"),
+            ),
+            None => run.refuse(
+                runtime_path,
+                "declares a local-jwk signer and no privateKeyRef".to_owned(),
+            ),
+        },
+        Some("transit") => match signer.get("unixSocketPath").and_then(YamlValue::as_str) {
+            Some(socket) => {
+                run.note(format!(
+                    "transit over {socket}, which this walk does not contact; `evidence check` on the target host reaches the signing provider"
+                ));
+            }
+            None => run.refuse(
+                runtime_path,
+                "declares a transit signer and no unixSocketPath".to_owned(),
+            ),
+        },
+        Some(kind) => run.refuse(
+            runtime_path,
+            format!("declares signer kind {kind}, which is neither local-jwk nor transit"),
+        ),
+        None => run.refuse(runtime_path, "declares a signer with no kind".to_owned()),
+    }
+    run.finish()
 }
 
 /// The audit chain and its lock companion, when they exist. Absence is not a
@@ -830,6 +927,7 @@ struct CheckRun<'a> {
     name: &'static str,
     project: &'a Path,
     inspected: usize,
+    note: Option<String>,
     findings: Vec<Finding>,
 }
 
@@ -839,8 +937,19 @@ impl<'a> CheckRun<'a> {
             name,
             project,
             inspected: 0,
+            note: None,
             findings: Vec::new(),
         }
+    }
+
+    /// Record what this check looked at, beside the count of artifacts.
+    fn note(&mut self, note: String) {
+        self.note = Some(note);
+    }
+
+    /// Count one document member as inspected without reading a file for it.
+    fn read_declaration(&mut self) {
+        self.inspected += 1;
     }
 
     /// Read one artifact's own metadata, counting it as inspected. Symbolic
@@ -877,6 +986,7 @@ impl<'a> CheckRun<'a> {
             name: self.name,
             passed: self.findings.is_empty(),
             inspected: self.inspected,
+            note: self.note,
             findings: self.findings,
         }
     }
@@ -1072,6 +1182,9 @@ fn print_diagnostics(report: &DoctorReport, to_stderr: bool) {
             "{status}: {} ({} inspected)",
             check.name, check.inspected
         ));
+        if let Some(note) = &check.note {
+            lines.push(format!("    {note}"));
+        }
         for finding in &check.findings {
             lines.push(format!("    {}: {}", finding.path, finding.problem));
         }

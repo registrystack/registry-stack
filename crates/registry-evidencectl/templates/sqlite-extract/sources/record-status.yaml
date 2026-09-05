@@ -1,28 +1,61 @@
+# A source: where a fact comes from and every bound the reading runs under.
+# The question names this file; it never reaches past what is declared here.
+
+# The transport decides the shape of the rest of this file. `sqlite-extract`
+# reads one published extract file through one fixed statement.
 transport: sqlite-extract
+
+# `source-derived` says the answer is read from the source, not asserted by
+# this deployment on its own authority.
 posture: source-derived
+
+# The extract this source expects, and how old a published extract may be
+# before a request is refused as stale (seven days here).
 extractProfile: record-status-extract
 maximumExtractAgeSeconds: 604800
+
 request:
+  # The one statement that runs, and the columns it may return. A caller never
+  # sends SQL, and a column the statement returns but does not declare here is
+  # refused.
   statement: queries/record-status.sql
   columns:
     - {name: qualifying_record_count, type: integer}
+
+  # Which selector profiles may fill each role. A request that carries none of
+  # the alternatives is refused before the statement runs.
   selectorInputs:
     - role: subject
       alternatives:
         - {profile: record-reference-v1, fields: [record_reference]}
+
+  # How a selector field becomes a bound statement parameter. This binding is
+  # the only path from caller input into the statement, and it binds a value,
+  # never text the statement parses.
   parameterBindings:
     record_reference:
       kind: selector
       role: subject
       profile: record-reference-v1
       field: record_reference
+
+  # The part of the statement result extraction is allowed to see. Everything
+  # outside the projection stays in the source.
   projection: [/rows/*/qualifying_record_count]
+
+  # The bounds the statement runs under: how much it may return, how long it
+  # may run, and how many requests may run at once. A statement that exceeds
+  # any of them fails the request rather than truncating an answer.
   maximumRows: 2
   maximumCellBytes: 64
   maximumStatementSteps: 100000
   timeoutMilliseconds: 2000
   maximumResponseBytes: 8192
   concurrencyLimit: 8
+
+# The three files that bound what leaves the source: the shape the statement
+# result must have, the script that reduces it to facts, and the shape those
+# facts must have before a question reasons over them.
 responseSchema: schemas/record-status-response.schema.yaml
 extractScript: adapters/record-status-extract.rhai
 factSchema: schemas/record-status-facts.schema.yaml

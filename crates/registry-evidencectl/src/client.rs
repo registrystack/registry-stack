@@ -101,8 +101,8 @@ pub struct ProfileCreateArgs {
     expected_provider: Option<String>,
 
     /// New owner-only profile file.
-    #[arg(long)]
-    out: PathBuf,
+    #[arg(long, alias = "out")]
+    output: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -112,8 +112,8 @@ pub struct ContractsFetchArgs {
     pub(crate) profile: PathBuf,
 
     /// New owner-only contract-candidate file.
-    #[arg(long)]
-    pub(crate) out: PathBuf,
+    #[arg(long, alias = "out")]
+    pub(crate) output: PathBuf,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -180,7 +180,7 @@ pub fn run(command: ClientCommand) -> Result<ExitCode> {
 }
 
 fn create_profile(args: ProfileCreateArgs) -> Result<ExitCode> {
-    validate_new_output(&args.out).context("client profile output is unsafe")?;
+    validate_new_output(&args.output).context("client profile output is unsafe")?;
     validate_base_url(&args.base_url, args.local_loopback_discovery)?;
     validate_bounded_identifier(&args.client_id, MAX_CLIENT_ID_BYTES, "client identifier")?;
     if !(1..=31_536_000).contains(&args.maximum_assertion_lifetime_seconds) {
@@ -251,13 +251,13 @@ fn create_profile(args: ProfileCreateArgs) -> Result<ExitCode> {
     EvidenceClientProfile::from_slice(&bytes)
         .map_err(|_| anyhow::anyhow!("generated client profile is invalid"))?;
     bytes.push(b'\n');
-    write_owner_only_new(&args.out, &bytes).context("failed to write client profile")?;
+    write_owner_only_new(&args.output, &bytes).context("failed to write client profile")?;
     println!("Created client profile");
     Ok(ExitCode::SUCCESS)
 }
 
 fn fetch_contracts(args: ContractsFetchArgs) -> Result<ExitCode> {
-    validate_new_output(&args.out).context("client contract output is unsafe")?;
+    validate_new_output(&args.output).context("client contract output is unsafe")?;
     validate_owner_only_input(&args.profile)
         .context("client profile is not a safe owner-only file")?;
     let mut profile = EvidenceClientProfile::from_file(&args.profile)
@@ -278,7 +278,8 @@ fn fetch_contracts(args: ContractsFetchArgs) -> Result<ExitCode> {
         .map_err(|_| anyhow::anyhow!("client contract discovery failed"))?;
     let mut bytes = canonicalize_json(&serde_json::to_value(contracts)?)?;
     bytes.push(b'\n');
-    write_owner_only_new(&args.out, &bytes).context("failed to write client contract candidate")?;
+    write_owner_only_new(&args.output, &bytes)
+        .context("failed to write client contract candidate")?;
     println!("Fetched client contract candidate");
     Ok(ExitCode::SUCCESS)
 }

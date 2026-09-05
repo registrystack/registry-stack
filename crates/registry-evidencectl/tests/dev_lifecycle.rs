@@ -695,16 +695,10 @@ fn catchable_supervisor_signals_stop_owned_children_and_publish_terminal_state()
 fn every_pre_socket_supervisor_failure_rolls_back_without_wedging_the_project() {
     let fixture = Project::new();
     fixture.generate_evidence_keys();
-    let check_only = fixture.root.join("check-only-tool");
-    fs::write(
-        &check_only,
-        "#!/bin/sh\ncase \"$*\" in *check*) exit 0;; *) exit 1;; esac\n",
-    )
-    .expect("write check-only tool");
-    fs::set_permissions(&check_only, fs::Permissions::from_mode(0o700)).expect("tool mode");
+    let check_only = fixture.tool_that_never_serves();
 
     let missing_supervisor = fixture.root.join("missing-supervisor");
-    let failed = fixture.dev_start_with_env(
+    let failed = fixture.dev_start_on_free_ports_with_env(
         &check_only,
         &check_only,
         "EVIDENCECTL_TEST_SUPERVISOR_BIN",
@@ -714,7 +708,7 @@ fn every_pre_socket_supervisor_failure_rolls_back_without_wedging_the_project() 
     assert!(!fixture.root.join(".evidence/dev").exists());
 
     for stage in ["before-setsid", "before-socket", "after-socket"] {
-        let failed = fixture.dev_start_with_env(
+        let failed = fixture.dev_start_on_free_ports_with_env(
             &check_only,
             &check_only,
             "EVIDENCECTL_TEST_SUPERVISOR_FAIL_STAGE",
@@ -726,6 +720,103 @@ fn every_pre_socket_supervisor_failure_rolls_back_without_wedging_the_project() 
             "{stage} rollback must permit the next fresh start"
         );
     }
+}
+
+/// A port another process already holds is the first thing a newcomer hits,
+/// and it surfaces as a readiness timeout several seconds later that names
+/// neither the port nor a way out. The refusal has to name the port, say what
+/// is wrong with it, and give the flag that moves the session elsewhere.
+#[test]
+fn a_busy_local_port_is_refused_by_name_with_the_flag_that_moves_it() {
+    let fixture = Project::new();
+    fixture.generate_evidence_keys();
+    let tool = fixture.tool_that_never_serves();
+    let (free_evidence, free_mint) = unused_port_pair();
+    let busy = TcpListener::bind("127.0.0.1:0").expect("hold a local port");
+    let busy_port = busy.local_addr().expect("busy address").port();
+
+    let output = fixture.dev_start_on_ports(&tool, &tool, busy_port, free_mint);
+    assert!(!output.status.success(), "a busy Evidence port must fail");
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(stderr.contains(&busy_port.to_string()), "{stderr}");
+    assert!(stderr.contains("already in use"), "{stderr}");
+    assert!(stderr.contains("--evidence-port"), "{stderr}");
+    assert!(
+        !fixture.root.join(".evidence/dev").exists(),
+        "a refused port must leave no session behind"
+    );
+
+    let output = fixture.dev_start_on_ports(&tool, &tool, free_evidence, busy_port);
+    assert!(!output.status.success(), "a busy Mint port must fail");
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(stderr.contains(&busy_port.to_string()), "{stderr}");
+    assert!(stderr.contains("already in use"), "{stderr}");
+    assert!(
+        stderr.contains("--mint-port"),
+        "each port names its own flag: {stderr}"
+    );
+    assert!(
+        busy.local_addr().is_ok(),
+        "the unrelated listener must survive"
+    );
+}
+
+/// The rollback that keeps the next start fresh also removed the only record
+/// of why this one failed. The logs move up beside the session instead, and
+/// the failure says where they are.
+#[test]
+fn a_failed_start_keeps_its_startup_logs_and_names_where_they_are() {
+    let fixture = Project::new();
+    fixture.generate_evidence_keys();
+    let tool = fixture.tool_that_never_serves();
+
+    let failed = fixture.dev_start_on_free_ports_with_env(
+        &tool,
+        &tool,
+        "EVIDENCECTL_TEST_SUPERVISOR_FAIL_STAGE",
+        OsStr::new("before-socket"),
+    );
+    assert!(!failed.status.success(), "the injected fault must fail");
+    let stderr = String::from_utf8_lossy(&failed.stderr).into_owned();
+    let kept = fixture.root.join(".evidence/failed-start");
+    assert!(
+        stderr.contains(&kept.to_string_lossy().into_owned()),
+        "the failure must name where its logs are: {stderr}"
+    );
+    assert!(
+        !stderr.contains("Some("),
+        "a recorded program value is not a diagnostic: {stderr}"
+    );
+    assert!(
+        !fixture.root.join(".evidence/dev").exists(),
+        "the incomplete session is still rolled back"
+    );
+
+    assert_mode(&kept, 0o700);
+    let supervisor_log = kept.join("supervisor.log");
+    assert_mode(&supervisor_log, 0o600);
+    assert!(
+        !fs::read_to_string(&supervisor_log)
+            .expect("kept supervisor log")
+            .trim()
+            .is_empty(),
+        "the kept log must carry the supervisor's own diagnostic"
+    );
+
+    // One record, of the last failed start: an attempt per directory would
+    // grow without bound and leave the reader choosing between them.
+    let failed = fixture.dev_start_on_free_ports_with_env(
+        &tool,
+        &tool,
+        "EVIDENCECTL_TEST_SUPERVISOR_FAIL_STAGE",
+        OsStr::new("before-setsid"),
+    );
+    assert!(!failed.status.success(), "the second fault must fail");
+    assert_eq!(sorted_names(&kept), vec!["supervisor.log".to_owned()]);
+
+    // Keeping the logs must not wedge the project the way an incomplete
+    // session would.
+    assert!(!fixture.root.join(".evidence/dev").exists());
 }
 
 #[test]
@@ -820,6 +911,20 @@ impl Project {
         }
     }
 
+    /// A stand-in for both service binaries that answers every compile and
+    /// check step and refuses only to serve, so a start reaches the
+    /// supervisor without ever binding a port.
+    fn tool_that_never_serves(&self) -> PathBuf {
+        let path = self.root.join("never-serves-tool");
+        fs::write(
+            &path,
+            "#!/bin/sh\ncase \"$*\" in\n  render-discovery-description*) printf '{}\\n';;\n  *serve*) exit 1;;\nesac\n",
+        )
+        .expect("write the never-serving tool");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).expect("tool mode");
+        path
+    }
+
     fn generate_evidence_keys(&self) {
         let secrets = self.root.join("secrets");
         assert_success(
@@ -891,6 +996,24 @@ impl Project {
         value: &OsStr,
     ) -> Output {
         self.dev_start_command(evidence, mint)
+            .env(name, value)
+            .output()
+            .expect("dev --detach with test fault")
+    }
+
+    /// The fixed tutorial ports are an exact gate of their own, so a fault
+    /// that never reaches a listener asks for ports nobody else owns.
+    fn dev_start_on_free_ports_with_env(
+        &self,
+        evidence: &Path,
+        mint: &Path,
+        name: &str,
+        value: &OsStr,
+    ) -> Output {
+        let (evidence_port, mint_port) = unused_port_pair();
+        self.dev_start_command(evidence, mint)
+            .args(["--evidence-port", &evidence_port.to_string()])
+            .args(["--mint-port", &mint_port.to_string()])
             .env(name, value)
             .output()
             .expect("dev --detach with test fault")
