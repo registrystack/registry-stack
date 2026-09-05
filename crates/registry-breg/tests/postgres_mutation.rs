@@ -1052,15 +1052,13 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
         let body = body_json(response).await;
         assert_eq!(body["code"], code, "{label}");
         match field_path {
-            // A missing required header names itself so the fix does not require
-            // reading the generated OpenAPI: the header name is fixed, known
-            // constant, never request content.
+            // A missing required header names itself in `fieldPath` so the fix
+            // does not require reading the generated OpenAPI: the header name
+            // is a fixed, known constant, never request content. The detail
+            // stays the registered one, because typed clients match it exactly.
             Some(expected_field_path) => {
                 assert_eq!(body["fieldPath"], expected_field_path, "{label}");
-                assert_eq!(
-                    body["detail"], "The Idempotency-Key header is required.",
-                    "{label}"
-                );
+                assert_eq!(body["detail"], "The request is invalid.", "{label}");
             }
             None => {
                 assert!(body.get("fieldPath").is_none(), "{label}");

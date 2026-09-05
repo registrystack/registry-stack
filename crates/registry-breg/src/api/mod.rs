@@ -5009,14 +5009,16 @@ fn invalid_request() -> Response {
     )
 }
 
-/// A required mutation header was absent. Names the header so the fix is
-/// discoverable from the response instead of the generated OpenAPI: the
-/// header name is a fixed, known constant, not request content.
+/// A required mutation header was absent. The problem keeps the registered
+/// `request.invalid` detail, which typed clients match exactly, and names the
+/// header in `fieldPath` so the fix is discoverable from the response instead
+/// of the generated OpenAPI: the header name is a fixed, known constant, not
+/// request content.
 fn missing_idempotency_key() -> Response {
     crate::correlation::problem_response_with_field_path(
         StatusCode::BAD_REQUEST,
         "Bad Request",
-        "The Idempotency-Key header is required.",
+        "The request is invalid.",
         "request.invalid",
         "Idempotency-Key",
     )
