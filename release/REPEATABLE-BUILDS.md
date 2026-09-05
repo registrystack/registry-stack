@@ -63,11 +63,17 @@ at the floor. Without it the builder's own much newer GNU libc decides the
 requirement by accident: the binaries start inside the container and refuse to
 start on a supported distribution.
 
-The floor is a build input like the packages above. One source commit fixes the
-builder image, the additional Debian packages, the C compiler and linker, and
-the oldest GNU libc a published binary can start on. A change to the floor file
-or to the pinned Zig file names a different builder image, because the local
-builder tag is the hash of the recipe and of the files it installs from.
+The floor is a build input, but it does not name the builder image the way the
+packages above do. `release/scripts/build-release-binaries.sh` reads
+`release/glibc-floor.env` fresh at the start of every build instead of baking
+it into the image, so a floor change reuses the same builder image and takes
+effect through the file it reads. The local builder tag is the hash of
+`release/docker/Dockerfile.builder` and the pinned Zig requirements file only;
+changing either of those names a different image, changing the floor does
+not. The Cargo and target-directory caches in the release workflows hash the
+floor file alongside those same recipe inputs, so a floor change still
+invalidates a cached build instead of silently reusing binaries built to the
+older contract.
 
 Before the payload is checksummed, `release/scripts/check-glibc-floor.sh` reads
 every staged binary and fails the build when one requires a newer GNU libc than
@@ -75,6 +81,12 @@ the floor, or imports a strong symbol with no version at all. The three
 published installer scripts refuse the same two cases before they download
 anything, and carry the floor as a generated block written by
 `release/scripts/render-installer-libc-preflight.py`.
+
+The arm64 path reaches the same floor differently. Instead of cross-compiling
+through Zig, it builds natively on a runner already pinned to the floor's GNU
+libc (`ubuntu-22.04-arm`, glibc 2.35), and a dedicated workflow step runs
+`check-glibc-floor.sh` over the produced binaries before they reach the
+payload.
 
 ### Local observation on Apple Silicon
 
