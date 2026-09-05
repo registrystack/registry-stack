@@ -50,8 +50,8 @@ The token issuer is your OpenID Connect provider, or [Registry Mint](../../confi
 you have none; Base Registry Engine verifies tokens and issues none. PostgreSQL is a database you
 provision with two roles: a migration role that owns the schema and applies packages, and a
 runtime role the serving process uses. `breg` verifies the active package at startup, serves the
-compiled routes, and appends every admitted request to a hash-chained audit journal in the same
-database. The process keeps no state of its own outside PostgreSQL.
+compiled routes, and appends every admitted request to a hash-chained
+[audit journal](../../reference/glossary/#audit-journal) in the same database. The process keeps no state of its own outside PostgreSQL.
 
 Three people take part, and one person may hold all three roles on a pilot. The author writes the
 project and runs `bregctl` checks and journeys. The operator provisions PostgreSQL, writes the
