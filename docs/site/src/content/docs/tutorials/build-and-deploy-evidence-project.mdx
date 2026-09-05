@@ -166,7 +166,10 @@ The candidate contains the runtime document and closed bundle:
 ```
 
 The build validates the generated bundle through the real `evidence` binary and every referenced
-fixture before it publishes the candidate. It does not contact an identity provider, Mint, or a
+fixture before it publishes the candidate. It asks that binary for its version first and refuses one
+that is not this evidencectl's, so the candidate is always the one the matching runtime shaped:
+`evidencectl build` takes the binary from `EVIDENCE_BIN` or the first `evidence` on `PATH`, and
+`evidencectl fixtures run` accepts `--evidence-bin` for the same handshake. It does not contact an identity provider, Mint, or a
 source endpoint. It validates governed public-key semantics without contacting Transit or
 generating an unrelated signing key. The target-host check performs the provider self-test. Record
 the printed bundle revision with the approved candidate path.
