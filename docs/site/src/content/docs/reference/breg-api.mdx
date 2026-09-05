@@ -452,7 +452,7 @@ A refusal is an RFC 9457 problem document with `Content-Type: application/proble
 
 ```json
 {
-  "type": "urn:breg:problem:precondition.failed",
+  "type": "https://id.registrystack.org/problems/registry-breg/precondition/failed",
   "title": "Precondition failed",
   "status": 412,
   "detail": "The If-Match header does not match the current revision.",
@@ -469,10 +469,16 @@ admission is counted on the metrics listener rather than journaled, so its `trac
 request log only; see [Scrape metrics](../../operate/breg/#scrape-metrics).
 `fieldPath` names the offending body member when the refusal is about one.
 
+`type` is the published identifier for the code, and `code` is the same fact in the short form a
+program branches on: the type is the code with each dot read as a path segment, under
+`https://id.registrystack.org/problems/registry-breg/`. Branch on `code`; resolve `type` when you
+want the published description of a refusal you have not seen before.
+
 <ApiReferenceTable id="problem-codes" />
 
 {/* Evidence: crates/registry-breg/src/api/mod.rs, fixed_problem(), lookup_unresolved(), cursor_invalid(), and precondition_required();
     crates/registry-breg/src/auth.rs;
+    crates/registry-breg/src/problem.rs, ProblemCode;
     crates/registry-breg/src/artifacts.rs, problem_schema. */}
 
 ## Events and webhooks
