@@ -250,18 +250,73 @@ export async function normalizePagefindGzipMetadata(outputRoot) {
   return { files, normalized };
 }
 
-async function git(command, args, cwd) {
-  try {
-    return await execFileAsync(command, args, {
-      cwd,
-      encoding: 'buffer',
-      maxBuffer: 16 * 1024 * 1024,
-    });
-  } catch (error) {
-    const stderr = Buffer.isBuffer(error?.stderr)
-      ? error.stderr.toString('utf8').trim()
-      : String(error?.stderr ?? '').trim();
-    throw new Error(`${command} ${args.join(' ')} failed: ${stderr || error.message}`);
+// `stagePinnedGeneratedArtifacts` reads pinned archive inputs from history that
+// a shallow or partial checkout may still need to fetch on demand, so a single
+// dropped connection here fails the whole docs gate. Retry a bounded number of
+// times with backoff, but only for a failure that looks transient: a real
+// content problem (missing ref, bad path) must still fail on the first try.
+const gitRetryAttempts = 3;
+const gitRetryBaseDelayMs = 200;
+
+const transientGitErrorCodes = new Set([
+  'EAGAIN',
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'EPIPE',
+  'ETIMEDOUT',
+]);
+
+const transientGitStderrPattern = new RegExp(
+  [
+    'could not resolve host',
+    'could not read from remote repository',
+    "couldn't connect to server",
+    'connection (?:reset|refused|timed out)',
+    'the remote end hung up unexpectedly',
+    'early eof',
+    'rpc failed',
+    'unable to access',
+    "unable to create '.*index\\.lock'",
+    'operation timed out',
+    'temporary failure in name resolution',
+    'transfer closed with .* bytes remaining',
+  ].join('|'),
+  'i',
+);
+
+function isTransientGitFailure(error, stderr) {
+  if (typeof error?.code === 'string' && transientGitErrorCodes.has(error.code)) return true;
+  return transientGitStderrPattern.test(stderr);
+}
+
+function waitBeforeGitRetry(delayMs) {
+  return new Promise((resolveWait) => setTimeout(resolveWait, delayMs));
+}
+
+export async function git(command, args, cwd, {
+  execFileImpl = execFileAsync,
+  wait = waitBeforeGitRetry,
+  attempts = gitRetryAttempts,
+} = {}) {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await execFileImpl(command, args, {
+        cwd,
+        encoding: 'buffer',
+        maxBuffer: 16 * 1024 * 1024,
+      });
+    } catch (error) {
+      const stderr = Buffer.isBuffer(error?.stderr)
+        ? error.stderr.toString('utf8').trim()
+        : String(error?.stderr ?? '').trim();
+      const failure = new Error(`${command} ${args.join(' ')} failed: ${stderr || error.message}`);
+      if (attempt === attempts || !isTransientGitFailure(error, stderr)) {
+        throw failure;
+      }
+      await wait(gitRetryBaseDelayMs * 2 ** (attempt - 1));
+    }
   }
 }
 
