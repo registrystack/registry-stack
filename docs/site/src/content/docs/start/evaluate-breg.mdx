@@ -62,13 +62,16 @@ the database; `verify` reads the same file but opens no runtime dependency; `dat
 **PostgreSQL** is the only database; SQLite is not a compatibility target. The runtime refuses a
 server older than 15, and a project with spatial
 fields needs 16 or newer for its bounding-box role plus PostGIS 3.5 or later. PostGIS is required
-only for spatial predicates: ordinary Point storage and GeoJSON reads work without it. The
+only for spatial predicates: ordinary Point storage and GeoJSON reads work without it. Geometry
+support is CRS84 points with bounding-box queries; polygons and other geometry types are not a
+field type the schema offers, so store them elsewhere and reference them by identifier. The
 quickstart pins PostgreSQL 17.11. The administrator installs `btree_gist`, and PostGIS where
 needed, in a schema neither registry role owns; neither role creates a schema, an extension, or a
 role.
 
 {/* Evidence: products/breg/DECISIONS.md; crates/registry-breg/src/postgres/schema.rs;
     crates/registry-breg/src/postgres/roles.rs; products/breg/SPATIAL-QUERIES.md;
+    crates/registry-breg/src/contract.rs, RawFieldKind;
     products/breg/quickstart/run.sh; products/breg/README.md. */}
 
 The connection path is fixed: `tokio-postgres` 0.7.18, `deadpool-postgres` 0.14.2, and
@@ -227,7 +230,8 @@ refuses a registry with more than 1,000 live rows, so a larger registry cannot r
 coverage after an erasure. Change-request detail has its own retention
 mode per request entity, and `request-retention erase` works only where the mode is
 `operator_erase`. Retained webhook payloads expire after `payloadRetentionDays`, 7 by default and
-at most 30.
+at most 30. [Retain, erase, and audit](../../operate/breg-retention/) walks through each retention
+command end to end.
 
 {/* Evidence: crates/registry-breg/src/history_erasure.rs, MAX_ERASURE_REVISIONS;
     crates/registry-breg/src/history_rebaseline.rs, MAX_REBASELINE_LIVE_ROWS;
