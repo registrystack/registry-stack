@@ -263,13 +263,17 @@ decision.
 9. Where a deployment has callers and no identity provider, Registry Mint issues the short-lived
    access tokens a resource server verifies. Both Evidence Gateway and Base Registry Engine are
    such resource servers: a Base Registry Engine runtime file must name an OIDC issuer, an
-   audience, and an accepted algorithm, and the product has no unauthenticated path. The dependency
+   audience, and an accepted algorithm, regardless of what any compiled access profile grants. A
+   compiled profile can still admit an anonymous caller to a public directory, but the compiler
+   refuses a profile that lets an anonymous caller reach a mutation; see
+   [how access works](../configuration-defined-registry/#how-access-works). The dependency
    runs one way: `registry-mint` carries `registry-evidence` as a development dependency so its
    tests drive Evidence Gateway's authenticator, and `registry-evidence` depends on no other
    product crate.
    {/* Evidence: authentication is a required, closed member of the Base Registry Engine runtime
         file, crates/registry-breg/src/runtime_config.rs, RawAuthenticationConfig and
-        RawOidcVerifierConfig. */}
+        RawOidcVerifierConfig; crates/registry-breg/src/compiler.rs, "an anonymous access profile
+        cannot grant a mutation operation". */}
 10. A consumer receives the returned assertion. The decision owner applies any
     consumer-specific requirement, decision, workflow, or action rules outside Base Registry
     Engine, Relay, and Evidence Gateway.
