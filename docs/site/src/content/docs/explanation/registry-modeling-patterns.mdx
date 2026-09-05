@@ -702,6 +702,7 @@ accessProfiles:
     requiredPurposes: [registry-operations]
     grants:
       - entity: business-identifier
+        rowBoundaries: []
         operations: [list]
         readableFields:
           - holder
@@ -710,6 +711,7 @@ accessProfiles:
           - replaces
         filterableFields: [namespace, value]
       - entity: operator-assignment
+        rowBoundaries: []
         operations: [list]
         readableFields:
           - establishment
@@ -718,6 +720,7 @@ accessProfiles:
           - valid-to
         filterableFields: [establishment]
       - entity: discharge-declaration
+        rowBoundaries: []
         operations: [list]
         readableFields:
           - facility
@@ -729,6 +732,7 @@ accessProfiles:
           - correction-of
         filterableFields: [reporting-period]
       - entity: facility-source-contribution
+        rowBoundaries: []
         operations: [list]
         readableFields:
           - facility
@@ -738,6 +742,7 @@ accessProfiles:
           - mapping-version
         filterableFields: [source-system, source-record-id]
       - entity: inspection-document
+        rowBoundaries: []
         operations: [list]
         readableFields:
           - inspection
