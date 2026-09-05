@@ -27,6 +27,16 @@ pub enum Command {
         /// Strict deployment binding for the sealed package and local resources.
         #[arg(long, env = "RELAY_RUNTIME", default_value = DEFAULT_RUNTIME_PATH)]
         runtime: PathBuf,
+        /// Also prove the configured audit sink resolves inside this absolute
+        /// directory, which the deployment declares persistent.
+        ///
+        /// The declared root is a storage boundary, not a second audit setting.
+        /// Relay resolves the runtime audit binding exactly as startup resolves
+        /// it and refuses when the result is not at or below the root, which is
+        /// what stops a container from mounting durable storage at the
+        /// conventional prefix while writing the chain somewhere ephemeral.
+        #[arg(long, value_name = "ABSOLUTE_DIRECTORY")]
+        require_audit_under: Option<PathBuf>,
     },
     /// Verify and activate one sealed Registry package, then serve it.
     Serve {
@@ -74,6 +84,38 @@ mod tests {
             url.get_default_values(),
             [OsStr::new(DEFAULT_HEALTHCHECK_URL)]
         );
+    }
+
+    #[test]
+    fn check_can_require_an_operator_declared_persistent_audit_root() {
+        let parsed = Cli::try_parse_from([
+            "relay",
+            "check",
+            "--require-audit-under",
+            "/var/lib/relay/audit",
+        ])
+        .expect("the declared audit root parses");
+        let Command::Check {
+            require_audit_under,
+            ..
+        } = parsed.command
+        else {
+            panic!("check parsed as another command");
+        };
+        assert_eq!(
+            Some(PathBuf::from("/var/lib/relay/audit")),
+            require_audit_under
+        );
+
+        // The claim is an addition to the existing check, never a replacement.
+        let plain = Cli::try_parse_from(["relay", "check"]).expect("check parses without it");
+        assert!(matches!(
+            plain.command,
+            Command::Check {
+                require_audit_under: None,
+                ..
+            }
+        ));
     }
 
     #[test]
