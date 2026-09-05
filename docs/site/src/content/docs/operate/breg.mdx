@@ -280,7 +280,7 @@ are never accepted by a running server.
 | --- | --- |
 | `alg`, `typ`, `kid` headers | `alg` equals `allowedAlgorithm`; `typ` equals `accessTokenType`; `kid` is present in the JWKS and absent from `deniedKids`. |
 | `iss` | Equals `issuer`. |
-| `aud` | A string equal to `audience`, or an array of 1–16 distinct nonempty strings containing that exact resource audience. |
+| `aud` | A string equal to `audience`, or an array of 1 to 16 distinct nonempty strings containing that exact resource audience. |
 | `exp`, `iat`, `nbf` | The lifetime is at most `maxTokenLifetimeSeconds`; clock skew up to `leewayMilliseconds` is tolerated. |
 | `azp` or `client_id` | Listed in `allowedClients` when that list is not empty. |
 | `scope` | The single claim named by `scopeClaim` covers every required permission. It is a string split on `scopeSeparator`, or a JSON array of permission strings. Other shapes are refused; permissions from several claims are not merged. |
@@ -339,6 +339,7 @@ Disabling an account or changing a group at the issuer does not update claims in
 For a compromised signing key, add its identifier to `deniedKids` and restart every serving instance with that configuration.
 That rejects all tokens signed with the denied key, including otherwise legitimate tokens.
 Static JWKS documents also require a configuration change and restart to rotate.
+[Rotate credentials, keys, certificates, and trust](../advanced/rotate-credentials-and-trust/) covers the same rotation discipline for Relay, Evidence Gateway, and Mint.
 
 ### Change the issuer without losing request context
 

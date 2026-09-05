@@ -1,7 +1,7 @@
 # Identity-provider portability journey
 
 This opt-in local journey obtains actual tokens from Registry Mint and a
-digest-pinned Keycloak 26.7.3 container, then passes them through BREG's real
+digest-pinned Keycloak 26.7.3 container, then passes them through BReg's real
 authenticator and HTTP router. It uses generated credentials and synthetic
 identities only. Docker, Cargo, and `uv` are required.
 
@@ -24,7 +24,7 @@ uv run products/breg/scripts/test-issuer-portability.py --with-postgres
 ```
 
 This additional case records the first approval using a real Mint token,
-reconstructs BREG with Keycloak trust against the same database, refuses the
+reconstructs BReg with Keycloak trust against the same database, refuses the
 old Mint token and the same service principal's attempt to approve another
 stage, then accepts the independent human's Keycloak token. The runner never
 creates or resets the supplied database. Builds finish before token issuance.
@@ -49,8 +49,8 @@ assignment. It authorizes GET only, for assigned districts. The proof covers:
 
 Mint issues its registered scopes and configured audience. It does not offer
 request-time scope downscoping or resource selection. Keycloak uses an optional
-`registry.read` client scope and a BREG audience mapper. Both therefore issue
-the same BREG permission and resource contract through different provisioning
+`registry.read` client scope and a BReg audience mapper. Both therefore issue
+the same BReg permission and resource contract through different provisioning
 mechanisms. No production authentication dependency on either issuer is added.
 
 The default router test uses a recording backend. The optional PostgreSQL
@@ -58,7 +58,7 @@ case adds persisted approval continuity. Broader database enforcement, hosted
 login UX, revocation operations, and production TLS are separate verification
 surfaces. The approval fixture also consumes the same `tenant_claim` assignment
 from both issuers.
-Issuer JWKS are fetched from each live provider and then passed to BREG's
+Issuer JWKS are fetched from each live provider and then passed to BReg's
 existing static-key-source interface. This journey does not prove remote-JWKS
 refresh or key rotation. Local HTTP is restricted to this disposable exercise.
 The scripted login client preserves secure cookies for the exact loopback

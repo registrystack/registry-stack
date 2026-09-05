@@ -180,7 +180,7 @@ Requirements grant no exemption based on a profile's name.
 bregctl explain access ./my-registry
 ```
 
-The report includes entity profiles, action grants, and nested workflow permissions, including each grant's row restrictions.
+The plain-text report lists entity profiles with each grant's row restrictions; `--format json` adds action grants, nested workflow permissions, and the row reach of every target.
 For the `record-reader` profile of the project `init` wrote, the block reads:
 
 ```text
