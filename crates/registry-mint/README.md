@@ -424,6 +424,18 @@ audit writer. Before first startup or a replacement deployment, add
 `--require-runtime-dependencies` to prove the signer and writable audit chain
 through the same initialization path as `mint serve`.
 
+Add `--require-audit-under <absolute-directory>` alongside it to also prove
+that the configured audit sink resolves at or below a directory the deployment
+declares persistent. Mint resolves `audit.path` exactly as it loads it,
+against the configuration file's directory when the setting is relative, then
+canonicalizes the declared root and the deepest existing ancestor of the sink
+before comparing. A sink outside the root, and a symlink inside the root that
+leads to ephemeral storage, both fail closed. The option relaxes nothing: the
+signer and audit chain proofs still run. Deciding whether the declared root is
+durable storage belongs to the deployment that mounts it; Mint only proves
+where its own configured sink resolves, and reports the failing side without
+naming a path.
+
 `mint healthcheck` probes a numeric loopback or private-address `/ready`
 endpoint with a bounded, proxy-free HTTP client and accepts only Mint's exact
 minimal ready response. Set `MINT_HEALTHCHECK_URL` when the container binds a
