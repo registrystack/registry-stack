@@ -126,8 +126,8 @@ and Node client packages follow in v0.26.1, published the same day, so an applic
 call the registry through a client library needs a v0.26.1 or later deployment. A release carries
 three runtime artifacts for the product:
 
-- `breg` and `bregctl` binaries for Linux amd64, Linux arm64, and macOS on Apple Silicon, with a
-  `SHA256SUMS` file.
+- `breg` and `bregctl` binaries for each platform in [platform support](../../explanation/known-limitations/#platform-support),
+  with a `SHA256SUMS` file.
 - An installer, `breg-install.sh`, that verifies both binaries against the checksums before
   anything reaches the install directory and installs both or neither. `~/.local/bin` is the
   default directory, `BREG_INSTALL_DIR` changes it, and `BREG_ASSET_DIR` reads already-verified
