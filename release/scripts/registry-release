@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 import release_candidate
+import verify_latest_published_release
 import verify_public_release
 
 
@@ -461,10 +462,80 @@ def validate_current(manifest_dir: Path) -> int:
     return validate(current_paths[0])
 
 
+def published_release_selector_errors(
+    docsets_data: Any,
+    published_releases_path: Path,
+) -> list[str]:
+    """Check the docs released selector against the published release list.
+
+    The release manifest's own ``stack.status`` is set by hand while preparing
+    the next release, so it says what a human remembered, not what is
+    published. A prepared release note or manifest is written before its tag
+    exists, so neither can stand in for the published release either. The one
+    signal that only moves when a release is actually public is the release
+    list this resolver reads.
+    """
+
+    try:
+        metadata = json.loads(published_releases_path.read_text(encoding="utf-8"))
+        resolved = verify_latest_published_release.resolve_latest_published_docs_release(
+            metadata
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        return [f"published release metadata is unusable: {exc}"]
+
+    published_tag = resolved["tag_name"]
+    published_version = release_version_tuple(published_tag[1:])
+    errors: list[str] = []
+    selector = docsets_data.get("released") if isinstance(docsets_data, dict) else None
+    if selector != published_tag:
+        errors.append(
+            "docsets.yaml released selector must be "
+            f"{published_tag!r}, the newest published release carrying a docs "
+            f"archive, not {selector!r}"
+        )
+
+    docsets = docsets_data.get("docsets", []) if isinstance(docsets_data, dict) else []
+    if not isinstance(docsets, list):
+        return errors
+    for docset in docsets:
+        if not isinstance(docset, dict):
+            continue
+        docset_id = str(docset.get("id", ""))
+        if SEMVER_TAG.fullmatch(docset_id) is None:
+            continue
+        if docset_id == published_tag:
+            if docset.get("status") != "archived":
+                errors.append(
+                    f"docset {published_tag} must be 'archived' because its "
+                    "release is published"
+                )
+            if docset.get("availability") != "released":
+                errors.append(
+                    f"docset {published_tag} availability must be 'released' "
+                    "because its release is published"
+                )
+            continue
+        version = release_version_tuple(docset_id[1:])
+        if (
+            version is not None
+            and published_version is not None
+            and version > published_version
+            and docset.get("availability") == "released"
+        ):
+            errors.append(
+                f"docset {docset_id} claims availability 'released' but no "
+                f"such release is published; the newest published release is "
+                f"{published_tag}"
+            )
+    return errors
+
+
 def validate_docsets(
     manifest_dir: Path,
     docsets_path: Path,
     archive_lock_path: Path | None = None,
+    published_releases_path: Path | None = None,
 ) -> int:
     errors: list[str] = []
     if archive_lock_path is None:
@@ -651,6 +722,11 @@ def validate_docsets(
                 f"not {released_selector!r}"
             )
 
+    if published_releases_path is not None:
+        errors.extend(
+            published_release_selector_errors(docsets_data, published_releases_path)
+        )
+
     if errors:
         for error in errors:
             print(f"error: {error}", file=sys.stderr)
@@ -659,6 +735,11 @@ def validate_docsets(
         print("error: no versioned docsets matched release manifests", file=sys.stderr)
         return 1
     print(f"validated {checked} versioned docsets against release manifests")
+    if published_releases_path is not None:
+        print(
+            "validated the docsets.yaml released selector against the "
+            "published release list"
+        )
     return 0
 
 
@@ -3013,6 +3094,7 @@ def main() -> int:
     )
     docsets_parser.add_argument("--docsets", type=Path, default=DOCSETS_PATH)
     docsets_parser.add_argument("--archive-lock", type=Path)
+    docsets_parser.add_argument("--published-releases", type=Path)
     source_parser = subparsers.add_parser("validate-source")
     source_parser.add_argument("manifest", type=Path)
     source_parser.add_argument("--tag", required=True)
@@ -3087,7 +3169,12 @@ def main() -> int:
     if args.command == "validate-current":
         return validate_current(args.manifest_dir)
     if args.command == "validate-docsets":
-        return validate_docsets(args.manifest_dir, args.docsets, args.archive_lock)
+        return validate_docsets(
+            args.manifest_dir,
+            args.docsets,
+            args.archive_lock,
+            args.published_releases,
+        )
     if args.command == "validate-source":
         return validate_source(args.manifest, args.tag, args.repo, args.default_branch)
     if args.command == "audit":

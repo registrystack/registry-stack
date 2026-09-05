@@ -1430,6 +1430,29 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
         self.assertEqual(recheck + 1, deployment)
         self.assertEqual(deploy_steps[deployment]["with"]["timeout"], 600_000)
 
+    def test_docs_gates_the_released_docset_on_the_published_release(self) -> None:
+        _, document = workflow("docs-pages.yml")
+        build_steps = document["jobs"]["build"]["steps"]
+        resolve = next(
+            index
+            for index, step in enumerate(build_steps)
+            if step.get("name") == "Resolve latest published docs release"
+        )
+        gate = next(
+            index
+            for index, step in enumerate(build_steps)
+            if step.get("name")
+            == "Gate the released docset selector on the published release"
+        )
+        self.assertLess(resolve, gate)
+        run = build_steps[gate]["run"]
+        self.assertIn("registry-release validate-docsets", run)
+        self.assertIn("--published-releases", run)
+        # The published release list is the only signal that moves when a
+        # release becomes public. A prepared release note is written before
+        # its tag exists, so the gate must never read one.
+        self.assertNotIn("release/notes", run)
+
     def test_latest_docs_release_fixture_rejects_stale_or_nonpublished_dispatches(
         self,
     ) -> None:
