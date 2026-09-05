@@ -106,6 +106,8 @@ def wait_ready(url: str, deadline_seconds: int = 120, process=None) -> None:
                 if response.status == 200:
                     return
         except (OSError, urllib.error.URLError):
+            # The service is not accepting connections yet; poll again until
+            # the deadline.
             pass
         time.sleep(0.5)
     raise RuntimeError("disposable issuer did not become ready")
