@@ -809,10 +809,21 @@ pub(crate) mod race_fixture {
         /// Arm the swap on the resolution race hook. It runs once, however many
         /// paths the surface resolves.
         pub(crate) fn arm(&self) -> RaceHookGuard {
+            self.arm_after(0)
+        }
+
+        /// Arm the swap to run after `skip` further resolutions, for a surface
+        /// that resolves several paths before the operation under test.
+        pub(crate) fn arm_after(&self, skip: usize) -> RaceHookGuard {
             let root = self.root.clone();
+            let mut remaining = skip;
             let mut swapped = false;
             install_race_hook(move || {
                 if swapped {
+                    return;
+                }
+                if remaining > 0 {
+                    remaining -= 1;
                     return;
                 }
                 swapped = true;
