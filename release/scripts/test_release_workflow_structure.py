@@ -709,6 +709,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         node_smoke = step_run(document, "clients", "Smoke Node client packages")
         self.assertIn("node-root-registry", node_smoke)
         self.assertIn("smoke-registry-client-package.js", node_smoke)
+        self.assertIn("smoke-registry-client-package.mjs", node_smoke)
         self.assertIn(
             "node_modules/@registrystack/client-${{ matrix.napi_platform }}",
             node_smoke,
@@ -736,6 +737,15 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             '"${NODE_GLIBC_BASELINE_IMAGE}" \\\n'
             "      node smoke-registry-client-package.js",
             node_smoke,
+        )
+        self.assertIn(
+            '"${NODE_GLIBC_BASELINE_IMAGE}" \\\n'
+            "      node smoke-registry-client-package.mjs",
+            node_smoke,
+        )
+        self.assertLess(
+            node_smoke.index("node smoke-registry-client-package.mjs"),
+            node_smoke.index(unified_root_copy),
         )
         baseline = clients["env"]["NODE_GLIBC_BASELINE_IMAGE"]
         self.assertRegex(

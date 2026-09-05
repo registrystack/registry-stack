@@ -162,6 +162,8 @@ class ReleaseRehearsalTest(unittest.TestCase):
         host_smoke = 'node "smoke-${client}-client-package.js"'
         docker_smoke = "docker run --rm --network none"
         self.assertLess(build.index(host_smoke), build.index(docker_smoke))
+        self.assertIn("node smoke-registry-client-package.js", build)
+        self.assertIn("node smoke-registry-client-package.mjs", build)
         self.assertIn('"${NODE_GLIBC_BASELINE_IMAGE}"', build)
         self.assertRegex(
             clients["env"]["NODE_GLIBC_BASELINE_IMAGE"],
