@@ -809,25 +809,30 @@ pub(crate) mod race_fixture {
         /// Arm the swap on the resolution race hook. It runs once, however many
         /// paths the surface resolves.
         pub(crate) fn arm(&self) -> RaceHookGuard {
-            self.arm_after(0)
-        }
-
-        /// Arm the swap to run after `skip` further resolutions, for a surface
-        /// that resolves several paths before the operation under test.
-        pub(crate) fn arm_after(&self, skip: usize) -> RaceHookGuard {
             let root = self.root.clone();
-            let mut remaining = skip;
             let mut swapped = false;
             install_race_hook(move || {
                 if swapped {
                     return;
                 }
-                if remaining > 0 {
-                    remaining -= 1;
+                swapped = true;
+                swap(&root);
+            })
+        }
+
+        /// Arm a swap that moves the tree the operator never named into the
+        /// resolved ancestor's place as a real directory rather than a symbolic
+        /// link, so a surface that resolves the same pathname again reaches it
+        /// without meeting a symbolic link on the way.
+        pub(crate) fn arm_directory_swap(&self) -> RaceHookGuard {
+            let root = self.root.clone();
+            let mut swapped = false;
+            install_race_hook(move || {
+                if swapped {
                     return;
                 }
                 swapped = true;
-                swap(&root);
+                swap_directory(&root);
             })
         }
 
@@ -845,6 +850,11 @@ pub(crate) mod race_fixture {
     fn swap(root: &Path) {
         fs::rename(root.join("genuine"), root.join("genuine-moved")).expect("ancestor renamed");
         symlink(root.join("attacker"), root.join("genuine")).expect("ancestor replaced");
+    }
+
+    fn swap_directory(root: &Path) {
+        fs::rename(root.join("genuine"), root.join("genuine-moved")).expect("ancestor renamed");
+        fs::rename(root.join("attacker"), root.join("genuine")).expect("ancestor replaced");
     }
 
     fn collect(directory: &Path, prefix: PathBuf, found: &mut Vec<String>) {
