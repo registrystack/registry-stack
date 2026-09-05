@@ -109,10 +109,11 @@ A placement that starts next month is recorded today, and a query for the placem
 The `asOf` query option reads by valid time, and the snapshot options read by recorded time.
 
 History is append-only, but retention obligations exist.
-An operator can erase the detail of a revision through `bregctl`; the revision stays in the chain with an erasure marker, so later reads and audits remain consistent.
-Change-request retention rules use the same mechanism.
+The migration authority can erase a record's retained revisions through `bregctl`: the erasure deletes that revision detail outright rather than marking it, and scrubs the correction context of the commits it touched.
+Change-request retention rules follow the same pattern, through a separate command.
+[Retain, erase, and audit](../../operate/breg-retention/) is the one page that states what each retention command removes, what it leaves in place, and how to restore snapshot coverage afterward.
 
-{/* Evidence: crates/registry-breg/src/postgres/revision_read.rs; crates/registry-breg/src/request_retention.rs. */}
+{/* Evidence: crates/registry-breg/src/postgres/revision_read.rs; crates/registry-breg/src/history_erasure.rs, delete_revisions; crates/registry-breg/src/request_retention.rs. */}
 
 ## From project to production
 
