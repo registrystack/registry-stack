@@ -2361,6 +2361,34 @@ async fn real_postgres_http_change_request_cancel_belongs_to_the_request_owner()
     let owner_draft = get_record(&app, &uri, owner.clone()).await;
     let draft_cancel = action(&owner_draft.body, "cancel_request", None);
 
+    // A missing required header names itself so the fix does not require
+    // reading the generated OpenAPI: the header name is fixed, known
+    // constant, never request content.
+    let missing_idempotency = response_parts(
+        send(
+            &app,
+            Method::POST,
+            &draft_cancel.href,
+            Some(owner.clone()),
+            &[
+                ("content-type", "application/json"),
+                ("if-match", &draft_cancel.if_match),
+            ],
+            serde_json::to_vec(&json!({})).expect("action body serializes"),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(missing_idempotency.status, StatusCode::BAD_REQUEST);
+    assert_eq!(missing_idempotency.body["code"], "request.invalid");
+    assert_eq!(missing_idempotency.body["fieldPath"], "Idempotency-Key");
+    let still_draft_before_cancel = get_record(&app, &uri, owner.clone()).await;
+    assert_eq!(
+        action(&still_draft_before_cancel.body, "cancel_request", None).if_match,
+        draft_cancel.if_match,
+        "a header refusal leaves the record and workflow revisions where they were"
+    );
+
     let other_draft = get_record(&app, &uri, other.clone()).await;
     assert_eq!(
         other_draft.body["request"]["bregState"], "draft",
