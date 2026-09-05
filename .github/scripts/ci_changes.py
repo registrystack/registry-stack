@@ -154,6 +154,7 @@ EVIDENCE_TUTORIAL_INPUTS = frozenset(
         "docs/site/scripts/evidence-tutorial-fence.sh",
         "docs/site/scripts/fixtures/fhir-tutorial-mock.py",
         "docs/site/src/content/docs/tutorials/assert-a-role-bound-relationship.mdx",
+        "docs/site/src/content/docs/tutorials/connect-a-sqlite-extract.mdx",
         "docs/site/src/content/docs/tutorials/control-who-can-request-evidence.mdx",
         "docs/site/src/content/docs/tutorials/first-evidence-assertion.mdx",
         "docs/site/src/content/docs/tutorials/issue-fhir-evidence-as-vcs.mdx",
@@ -175,6 +176,22 @@ EVIDENCE_TUTORIAL_INPUTS = frozenset(
         "release/scripts/assemble-registry-client-packages.py",
         "release/scripts/assemble-registry-client-wheel.py",
     }
+)
+
+# Every input the Base Registry Engine tutorial gate replays or is built from.
+# The gate starts the quickstart launcher the page tells a reader to run, so
+# the launcher and the Registry Mint key helper it reaches are inputs to the
+# replay exactly as the page is: a change to either changes what a reader gets.
+BREG_TUTORIAL_INPUTS = (
+    "Cargo.lock",
+    "Cargo.toml",
+    "crates/registry-mint/demo/support/key_material.py",
+    "docs/site/package-lock.json",
+    "docs/site/package.json",
+    "docs/site/scripts/check-breg-tutorial.sh",
+    "docs/site/scripts/check-breg-tutorial.test.mjs",
+    "docs/site/src/content/docs/tutorials/first-breg.mdx",
+    "products/breg/quickstart/**",
 )
 
 # This guide explains the authoring form across three intentionally separate
@@ -302,6 +319,14 @@ EVIDENCE_TUTORIAL_EXEMPT_PACKAGES = frozenset({"registry-evidence-client-node"})
 EVIDENCE_TUTORIAL_PACKAGES = (
     EVIDENCE_PACKAGES - EVIDENCE_TUTORIAL_EXEMPT_PACKAGES
 ) | frozenset(SHARDS["mint"])
+
+# The gate builds and runs exactly these: the registry, the tool that applies
+# its package, and Registry Mint, because the launcher the tutorial starts
+# issues the operator token the reader's first authenticated call carries. The
+# clients in the Base Registry Engine shard are not on the replayed path.
+BREG_TUTORIAL_PACKAGES = frozenset({"registry-breg", "registry-bregctl"}) | frozenset(
+    SHARDS["mint"]
+)
 
 ROOT_RUST_INPUTS = {
     "Cargo.lock",
@@ -746,6 +771,12 @@ def classify(
         or bool(affected & EVIDENCE_TUTORIAL_PACKAGES)
     )
 
+    breg_tutorial = (
+        complete
+        or any(matches(path, *BREG_TUTORIAL_INPUTS) for path in paths)
+        or bool(affected & BREG_TUTORIAL_PACKAGES)
+    )
+
     matrix = []
     for shard_name, shard_packages in SHARDS.items():
         selected = sorted(affected.intersection(shard_packages))
@@ -782,6 +813,7 @@ def classify(
         "client_bindings": client_bindings,
         "release_linux_node_clients": release_linux_node_clients,
         "evidence_tutorial": evidence_tutorial,
+        "breg_tutorial": breg_tutorial,
         "identifiers": identifiers,
     }
 

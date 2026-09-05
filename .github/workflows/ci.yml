@@ -1011,6 +1011,70 @@ jobs:
             rust:1.95-trixie@sha256:f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3 \
             bash /work/docs/site/scripts/check-evidence-tutorials.sh
 
+  breg-tutorial:
+    name: Base Registry Engine tutorial from source
+    needs: changes
+    if: needs.changes.outputs.breg_tutorial == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22.12.0
+          cache: npm
+          cache-dependency-path: docs/site/package-lock.json
+
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.11.16"
+
+      - name: Test the tutorial gate helpers
+        working-directory: docs/site
+        run: npm run test:tutorial:breg
+
+      - name: Check tutorial command drift
+        working-directory: docs/site
+        run: npm run check:tutorial:breg:dry-run
+
+      - name: Build the Base Registry Engine toolset under test
+        shell: bash
+        run: |
+          set -euo pipefail
+          CARGO_TARGET_DIR="target/breg-tutorial-source" \
+            cargo build --locked --profile ci \
+            -p registry-breg --features registry-breg/runtime \
+            -p registry-bregctl -p registry-mint --bins
+
+      - name: Execute the Base Registry Engine tutorial from a reader directory
+        shell: bash
+        env:
+          BREG_BIN: ${{ github.workspace }}/target/breg-tutorial-source/ci/breg
+          BREGCTL_BIN: ${{ github.workspace }}/target/breg-tutorial-source/ci/bregctl
+          MINT_BIN: ${{ github.workspace }}/target/breg-tutorial-source/ci/mint
+        run: |
+          set -euo pipefail
+          # This replay does not run in a clean read-only container the way the
+          # Evidence one does: the quickstart launcher the tutorial starts runs
+          # PostgreSQL in a disposable container of its own and owns a run
+          # directory inside the checkout it was started from. The gate stages
+          # a writable copy of that checkout for the reader instead.
+          bash docs/site/scripts/check-breg-tutorial.sh
+
   evidence-anchors:
     # The documentation anchors cite source across the whole workspace, so this check
     # runs on every pull request rather than behind the changed-path classifier: a
@@ -1363,6 +1427,7 @@ jobs:
       - release-tool
       - release-source-proof
       - evidence-tutorials
+      - breg-tutorial
       - evidence-anchors
       - docs
       - editor-extensions

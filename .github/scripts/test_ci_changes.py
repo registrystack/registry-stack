@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from ci_changes import (
+    BREG_TUTORIAL_INPUTS,
     CLI_REFERENCE_INPUTS,
     DISCOVERY_PROVIDER_IMPLEMENTATION_INPUTS,
     DISCOVERY_PROVIDER_INPUTS,
@@ -553,6 +554,79 @@ class CiChangesTest(unittest.TestCase):
                     "publish-governed-sqlite-registry.mdx",
                 ),
             )["evidence_tutorial"]
+        )
+
+    def test_breg_tutorial_inputs_cover_every_registered_tutorial(self) -> None:
+        # The gate's registry is the source of truth for which tutorials it
+        # replays. A tutorial missing here would not trigger the job that
+        # replays it, so it could break without any pull request noticing.
+        gate = (
+            Path(__file__).resolve().parents[2]
+            / "docs/site/scripts/check-breg-tutorial.sh"
+        )
+        registry = re.search(
+            r"^BREG_TUTORIALS=\((.*?)^\)", gate.read_text(), re.DOTALL | re.MULTILINE
+        )
+        if registry is None:
+            self.fail("the gate must declare BREG_TUTORIALS")
+        slugs = registry.group(1).split()
+        self.assertTrue(slugs, "the gate must register at least one tutorial")
+        for slug in slugs:
+            with self.subTest(slug=slug):
+                page = f"docs/site/src/content/docs/{slug}.mdx"
+                self.assertTrue(
+                    any(
+                        fnmatch.fnmatchcase(page, pattern)
+                        for pattern in BREG_TUTORIAL_INPUTS
+                    )
+                )
+
+    def test_breg_tutorial_routing(self) -> None:
+        infrastructure = (
+            "docs/site/scripts/check-breg-tutorial.sh",
+            "docs/site/scripts/check-breg-tutorial.test.mjs",
+            "docs/site/src/content/docs/tutorials/first-breg.mdx",
+            "docs/site/package.json",
+        )
+        for path in infrastructure:
+            with self.subTest(path=path):
+                self.assertTrue(classify(self.workspace, (path,))["breg_tutorial"])
+        # The journey starts the quickstart launcher, so the launcher and the
+        # support it runs decide what the reader gets.
+        for path in (
+            "products/breg/quickstart/run.sh",
+            "products/breg/quickstart/support/quickstart.py",
+            "crates/registry-mint/demo/support/key_material.py",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(classify(self.workspace, (path,))["breg_tutorial"])
+        self.assertTrue(
+            classify(self.workspace, ("crates/registry-breg/src/api/mod.rs",))[
+                "breg_tutorial"
+            ]
+        )
+        self.assertTrue(
+            classify(self.workspace, ("crates/registry-bregctl/src/main.rs",))[
+                "breg_tutorial"
+            ]
+        )
+        # The launcher mints the operator token the tutorial's first
+        # authenticated call carries.
+        self.assertTrue(
+            classify(self.workspace, ("crates/registry-mint/src/lib.rs",))[
+                "breg_tutorial"
+            ]
+        )
+        # An Evidence page shares the tutorials directory and reaches none of
+        # the Base Registry Engine replay.
+        self.assertFalse(
+            classify(
+                self.workspace,
+                (
+                    "docs/site/src/content/docs/tutorials/"
+                    "first-evidence-assertion.mdx",
+                ),
+            )["breg_tutorial"]
         )
 
     def test_reverse_dependencies_are_included(self) -> None:
