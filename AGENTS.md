@@ -1,36 +1,41 @@
 # Registry Stack Agent Guidance
 
-This is the Registry Stack monorepo: registry-facing services over data
-institutions already hold. Pre-1.0; APIs and deployment contracts may change.
+This is the Registry Stack monorepo: registry-facing services over the data
+institutions already hold and the registries they do not hold yet. Pre-1.0;
+APIs and deployment contracts may change.
 
-Two independent runtime patterns are relevant:
+Three independent runtime products are relevant:
 
+- **Base Registry Engine** compiles a declared registry project into a
+  PostgreSQL-backed writable registry: schema, REST API, per-profile
+  permissions, revision history, and audit journal.
 - **Registry Relay** exposes protected, scoped, read-only HTTP APIs over
   existing sources.
 - **Evidence** returns signed, minimum-disclosure assertions from fixed
   requests to authoritative sources.
 
-The two patterns compose without merging their product boundaries: Evidence
-may use a Relay-protected API as a fixed HTTP source.
+The three compose without merging their product boundaries: Evidence may use a
+Base Registry Engine route or a Relay-protected API as a fixed HTTP source, and
+inherits neither one's authorization.
 
 Registry Manifest describes sources portably; Relay is its consumer in code
 and `registry-platform-*` crates are shared primitives. `relayctl` is Relay
 adopter tooling; `registry-evidencectl` is Evidence adopter tooling.
 
-Registry Mint is a supporting service, not a third pattern: it issues the
-access tokens a resource server such as Evidence verifies, for deployments with
-no identity provider. The dependency runs one way only in production: no
-Evidence crate depends on Mint at runtime. Mint's tests drive Evidence's
-authenticator, and Evidence test code may drive a real Mint instance to prove a
-client against a real authorization server.
+Registry Mint is a supporting service, not a runtime product of its own: it
+issues the access tokens a resource server such as Evidence or Base Registry
+Engine verifies, for deployments with no identity provider. The dependency runs
+one way only in production: no Evidence crate depends on Mint at runtime. Mint's
+tests drive Evidence's authenticator, and Evidence test code may drive a real
+Mint instance to prove a client against a real authorization server.
 
 `registry-evidence-oid4vci` is a supporting service in the same sense, not a
-third pattern: it delivers Evidence credentials to a wallet over OID4VCI 1.0
-Final, the wallet-facing protocol Evidence deliberately refuses to speak. It
-never signs a credential, Evidence signs; it never holds a holder private key,
-it receives holder public keys inside wallet-signed proofs and passes them to
-Evidence unchanged; and it adds no Evidence semantics of its own. The
-dependency runs one way only in production: no Evidence crate depends on
+runtime product of its own: it delivers Evidence credentials to a wallet over
+OID4VCI 1.0 Final, the wallet-facing protocol Evidence deliberately refuses to
+speak. It never signs a credential, Evidence signs; it never holds a holder
+private key, it receives holder public keys inside wallet-signed proofs and
+passes them to Evidence unchanged; and it adds no Evidence semantics of its own.
+The dependency runs one way only in production: no Evidence crate depends on
 `registry-evidence-oid4vci` at runtime.
 
 ## Repository map
@@ -43,6 +48,8 @@ dependency runs one way only in production: no Evidence crate depends on
 | `crates/registry-discovery-client-node` | Node.js binding for `registry-discovery-client`, via napi-rs |
 | `crates/registry-discovery-client-py` | Python binding for `registry-discovery-client`, via PyO3 |
 | `crates/registry-discoveryctl` | Offline origin and mapping checks plus immutable index builds |
+| `crates/registry-breg` | Base Registry Engine runtime, the registry-project compiler, and the `breg` binary |
+| `crates/registry-bregctl` | Base Registry Engine adopter tooling and the `bregctl` binary |
 | `crates/registry-breg-client` | Base Registry Engine client and its opaque authorization handles |
 | `crates/registry-breg-client-node` | Internal napi-rs binding used to assemble the unified Node.js client |
 | `crates/registry-breg-client-py` | Internal PyO3 binding used to assemble the unified Python client |
@@ -72,6 +79,12 @@ dependency runs one way only in production: no Evidence crate depends on
 Relay V2 is implemented by `registry-relay-v2` and `registry-relayctl`. Its
 approved contracts, coequal acceptance projects, and gates live under
 `products/relay-v2`.
+
+Base Registry Engine is implemented by `registry-breg` and `registry-bregctl`.
+Its approved contracts, acceptance journeys, quickstart, generated examples, and
+gates live under `products/breg`. A registry project is configuration: the
+runtime has no built-in business, facility, authority, permit, or asset model,
+and none may become a Rust type, built-in operation, or special route.
 
 Registry Discovery is a curated index over public provider descriptions, not
 a trust broker, authorization service, protocol adapter, or data proxy.
