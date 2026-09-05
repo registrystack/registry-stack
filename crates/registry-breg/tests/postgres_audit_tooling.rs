@@ -612,7 +612,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               "entity":"membership",
               "operations":["create","get","list","patch"],
               "readableFields":["person","household"],
-              "writableFields":["person","household"]
+              "writableFields":["person","household"],
+              "rowBoundaries": []
             }]
           }]
         }"#,

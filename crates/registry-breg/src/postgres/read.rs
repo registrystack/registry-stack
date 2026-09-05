@@ -2720,7 +2720,7 @@ mod tests {
                   }],
                   "accessProfiles":[{
                     "id":"public","default":true,"anonymous":true,
-                    "grants":[{"entity":"site","operations":["get","list"],"readableFields":["code","location"]}]
+                    "grants":[{"entity":"site","operations":["get","list"],"readableFields":["code","location"], "rowBoundaries": []}]
                   }]
                 }"#,
             )
@@ -2774,7 +2774,8 @@ mod tests {
                       "entity":"site",
                       "operations":["list"],
                       "readableFields":["code","location"],
-                      "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.3,"maximumLatitudeSpanDegrees":0.2}}
+                      "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.3,"maximumLatitudeSpanDegrees":0.2}},
+                      "rowBoundaries": []
                     }]
                   }]
                 }"#,
@@ -2854,7 +2855,8 @@ mod tests {
                     "id":"public","default":true,"anonymous":true,
                     "grants":[{
                       "entity":"case","operations":["list"],
-                      "readableFields":["label"],"filterableFields":["label"],"sortableFields":["label"]
+                      "readableFields":["label"],"filterableFields":["label"],"sortableFields":["label"],
+                      "rowBoundaries": []
                     }]
                   }]
                 }"#,
@@ -3123,7 +3125,8 @@ mod tests {
                       "entity":"site",
                       "operations":["list"],
                       "readableFields":["code","location"],
-                      "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":1,"maximumLatitudeSpanDegrees":1}}
+                      "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":1,"maximumLatitudeSpanDegrees":1}},
+                      "rowBoundaries": []
                     }]
                   }]
                 }"#,

@@ -477,3 +477,33 @@ impl RecordReadService for NoopRecords {
         Box::pin(async { Ok(()) })
     }
 }
+
+#[test]
+fn action_without_default_requires_explicit_profile_even_when_token_has_authority() {
+    let source = PROJECT.replace("    default: true\n", "");
+    let project = parse_project_yaml(source.as_bytes()).unwrap();
+    let registry = Arc::new(compile_project(&project, &[], CompileProfile::Authoring).unwrap());
+    let service = service_for(registry.clone(), true);
+    let route = registry
+        .actions()
+        .routes
+        .iter()
+        .find(|route| route.kind == ActionRouteKind::Invoke)
+        .unwrap();
+    assert!(route.default_access_profile.is_none());
+    let authorized = claims(
+        "registry_principal",
+        ["case.rename"],
+        Some("case-management"),
+        true,
+    );
+    assert!(authorize_action(&service, route, &authorized, &QueryOptions::default()).is_none());
+    let explicit = QueryOptions::parse(Some("accessProfile=registrar"), false).unwrap();
+    assert_eq!(
+        authorize_action(&service, route, &authorized, &explicit)
+            .unwrap()
+            .context
+            .selected_profile(),
+        "registrar"
+    );
+}

@@ -286,6 +286,9 @@ pub struct CompiledChangeRequestStage {
     pub id: String,
     pub approvals: u16,
     pub exclude_submitter: bool,
+    // Preserve the canonical bytes of frozen stages that predate this rule.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exclude_previous_reviewers: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -457,7 +460,8 @@ pub struct CompiledActionRoute {
     pub path: String,
     pub operation: Operation,
     pub access_profiles: Vec<String>,
-    pub default_access_profile: String,
+    /// Absent when callers must explicitly select among multiple eligible profiles.
+    pub default_access_profile: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -467,7 +471,7 @@ pub struct CompiledActionAccessEntry {
     pub action_id: String,
     pub operation: Operation,
     pub profile_ids: BTreeSet<String>,
-    pub default_profile_id: String,
+    pub default_profile_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -665,7 +669,8 @@ pub struct CompiledRoute {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub maximum_records: Option<u16>,
     pub access_profiles: Vec<String>,
-    pub default_access_profile: String,
+    /// Absent when callers must explicitly select among multiple eligible profiles.
+    pub default_access_profile: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -742,7 +747,7 @@ pub struct CompiledAccessEntry {
     pub entity_id: String,
     pub operation: Operation,
     pub profile_ids: BTreeSet<String>,
-    pub default_profile_id: String,
+    pub default_profile_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

@@ -504,15 +504,19 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"principal","requiredPurposes":["operations"],
             "grants":[{
-              "entity":"parent","operations":["create","get"],"readableFields":["name"],"writableFields":["name"]
+              "entity":"parent","operations":["create","get"],"readableFields":["name"],"writableFields":["name"],
+              "rowBoundaries": []
             },{
-              "entity":"child","operations":["create","get"],"readableFields":["parent","alternate-parent","name"],"writableFields":["parent","alternate-parent","name"]
+              "entity":"child","operations":["create","get"],"readableFields":["parent","alternate-parent","name"],"writableFields":["parent","alternate-parent","name"],
+              "rowBoundaries": []
             },{
-              "entity":"unique-entry","operations":["create","get"],"readableFields":["scope","code"],"writableFields":["scope","code"]
+              "entity":"unique-entry","operations":["create","get"],"readableFields":["scope","code"],"writableFields":["scope","code"],
+              "rowBoundaries": []
             },{
               "entity":"period","operations":["create","get"],
               "readableFields":["scope","valid-from","valid-to"],
-              "writableFields":["scope","valid-from","valid-to"]
+              "writableFields":["scope","valid-from","valid-to"],
+              "rowBoundaries": []
             }]
           }]
         }"#,

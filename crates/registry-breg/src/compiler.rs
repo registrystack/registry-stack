@@ -147,6 +147,10 @@ pub fn compile_project_with_assets(
     let action_inventory =
         compile_immediate_actions(&action_sources, &entities, &project.access_profiles)
             .map_err(CompileFailure::from_errors)?;
+    findings.extend(crate::access::compiled_access_findings(
+        &entities,
+        &action_inventory,
+    ));
     let (route_inventory, access_inventory) = compile_routes_and_access(&entities)?;
     let metadata_inventory = compile_metadata_inventory(
         &project.registry.id,
@@ -3046,13 +3050,16 @@ fn validate_profiles(
         }
     }
     for operation in all_operations() {
+        if is_request_operation(operation) {
+            continue;
+        }
         let profiles: Vec<&AccessProfileSource> = entity
             .access_profiles
             .iter()
             .filter(|access| access.operations.contains(&operation))
             .collect();
         validate_single_default(
-            entity,
+            &entity.id,
             &format!("operation `{}`", operation_id(operation)),
             &profiles,
             errors,
@@ -3065,7 +3072,7 @@ fn validate_profiles(
             .filter(|access| access.read_paths.iter().any(|grant| grant.path == path.id))
             .collect();
         validate_single_default(
-            entity,
+            &entity.id,
             &format!("read-path route `{}`", path.id),
             &profiles,
             errors,
@@ -3073,10 +3080,10 @@ fn validate_profiles(
     }
 }
 
-/// Refuse an exposed route that no profile or several profiles claim as the
-/// default, naming the entity, the route, and every profile involved.
+/// Refuse multiple defaults. With no default, an ambiguous route requires
+/// the caller to select its profile explicitly.
 fn validate_single_default(
-    entity: &EntitySource,
+    entity_id: &str,
     route: &str,
     profiles: &[&AccessProfileSource],
     errors: &mut Vec<Diagnostic>,
@@ -3090,20 +3097,6 @@ fn validate_single_default(
         .map(|access| access.id.as_str())
         .collect();
     let Some((claimed, duplicates)) = defaults.split_first() else {
-        let candidates = profiles
-            .iter()
-            .map(|access| format!("`{}`", access.id))
-            .collect::<Vec<_>>()
-            .join(", ");
-        errors.push(Diagnostic::error(
-            "access_profile.default.invalid",
-            format!("entities[id={}].accessProfiles[].default", entity.id),
-            &format!(
-                "{route} on entity `{}` is exposed by {} profiles and none sets `default: true`; set it on exactly one of {candidates}",
-                entity.id,
-                profiles.len()
-            ),
-        ));
         return;
     };
     for duplicate in duplicates {
@@ -3111,11 +3104,11 @@ fn validate_single_default(
             "access_profile.default.invalid",
             format!(
                 "entities[id={}].accessProfiles[id={duplicate}].default",
-                entity.id
+                entity_id
             ),
             &format!(
                 "{route} on entity `{}` accepts one default profile and `{claimed}` already claims it; clear `default: true` on `{duplicate}`",
-                entity.id
+                entity_id
             ),
         ));
     }
@@ -4409,15 +4402,7 @@ fn compile_routes_and_access(
             if profiles.is_empty() {
                 continue;
             }
-            let default = if profiles.len() == 1 {
-                profiles[0]
-            } else {
-                profiles
-                    .iter()
-                    .copied()
-                    .find(|profile| profile.default)
-                    .expect("default profile was validated")
-            };
+            let default = route_default_profile(&profiles);
             let profile_ids: BTreeSet<String> =
                 profiles.iter().map(|profile| profile.id.clone()).collect();
             let (method, path) = route_shape(entity, operation);
@@ -4438,7 +4423,7 @@ fn compile_routes_and_access(
                 request_stage: None,
                 maximum_records: None,
                 access_profiles: profile_ids.iter().cloned().collect(),
-                default_access_profile: default.id.clone(),
+                default_access_profile: default.map(|profile| profile.id.clone()),
             };
             if operation == Operation::Revisions {
                 routes.push(CompiledRoute {
@@ -4470,7 +4455,7 @@ fn compile_routes_and_access(
                         request_stage: None,
                         maximum_records: None,
                         access_profiles: profile_ids.iter().cloned().collect(),
-                        default_access_profile: default.id.clone(),
+                        default_access_profile: default.map(|profile| profile.id.clone()),
                     });
                 }
             }
@@ -4479,7 +4464,7 @@ fn compile_routes_and_access(
                 entity_id: entity.id.clone(),
                 operation,
                 profile_ids,
-                default_profile_id: default.id.clone(),
+                default_profile_id: default.map(|profile| profile.id.clone()),
             });
         }
         if let Some(plan) = &entity.change_request {
@@ -4505,15 +4490,7 @@ fn compile_routes_and_access(
             if profiles.is_empty() {
                 continue;
             }
-            let default = if profiles.len() == 1 {
-                profiles[0]
-            } else {
-                profiles
-                    .iter()
-                    .copied()
-                    .find(|profile| profile.default)
-                    .expect("default profile was validated")
-            };
+            let default = route_default_profile(&profiles);
             let profile_ids: BTreeSet<String> =
                 profiles.iter().map(|profile| profile.id.clone()).collect();
             let route_id = format!("records.{}.path.{}", entity.id, read_path.id);
@@ -4531,14 +4508,14 @@ fn compile_routes_and_access(
                 request_stage: None,
                 maximum_records: None,
                 access_profiles: profile_ids.iter().cloned().collect(),
-                default_access_profile: default.id.clone(),
+                default_access_profile: default.map(|profile| profile.id.clone()),
             });
             entries.push(CompiledAccessEntry {
                 route_id,
                 entity_id: entity.id.clone(),
                 operation: Operation::List,
                 profile_ids,
-                default_profile_id: default.id.clone(),
+                default_profile_id: default.map(|profile| profile.id.clone()),
             });
         }
     }
@@ -4581,9 +4558,8 @@ fn compile_change_request_routes_and_access(
         if profiles.is_empty() {
             continue;
         }
-        let Some(default) = route_default_profile(&profiles, &route_id, errors) else {
-            continue;
-        };
+        validate_single_default(&entity.id, &route_id, &profiles, errors);
+        let default = route_default_profile(&profiles);
         let profile_ids: BTreeSet<String> =
             profiles.iter().map(|profile| profile.id.clone()).collect();
         routes.push(CompiledRoute {
@@ -4601,14 +4577,14 @@ fn compile_change_request_routes_and_access(
             request_stage: action.review_stage.clone(),
             maximum_records: Some(1),
             access_profiles: profile_ids.iter().cloned().collect(),
-            default_access_profile: default.id.clone(),
+            default_access_profile: default.map(|profile| profile.id.clone()),
         });
         entries.push(CompiledAccessEntry {
             route_id,
             entity_id: entity.id.clone(),
             operation,
             profile_ids,
-            default_profile_id: default.id.clone(),
+            default_profile_id: default.map(|profile| profile.id.clone()),
         });
     }
 }
@@ -4670,21 +4646,12 @@ fn apply_route_profile_covers_targets(
 
 fn route_default_profile<'a>(
     profiles: &[&'a AccessProfileSource],
-    _route_id: &str,
-    errors: &mut Vec<Diagnostic>,
 ) -> Option<&'a AccessProfileSource> {
     if profiles.len() == 1 {
-        return Some(profiles[0]);
+        Some(profiles[0])
+    } else {
+        profiles.iter().copied().find(|profile| profile.default)
     }
-    if let Some(default) = profiles.iter().copied().find(|profile| profile.default) {
-        return Some(default);
-    }
-    errors.push(Diagnostic::error(
-        "change_request.route_access.default_missing",
-        "entities[].accessProfiles[].default",
-        "request action route has multiple profiles but no route-eligible default",
-    ));
-    None
 }
 
 fn change_request_route_id(

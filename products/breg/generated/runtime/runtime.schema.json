@@ -76,7 +76,6 @@
               "exp",
               "iat",
               "nbf",
-              "sub",
               "client_id",
               "azp",
               "jti",
@@ -588,7 +587,7 @@
         },
         "maxTokenLifetimeSeconds": {
           "format": "uint64",
-          "maximum": 3600,
+          "maximum": 7200,
           "minimum": 1,
           "type": "integer"
         },

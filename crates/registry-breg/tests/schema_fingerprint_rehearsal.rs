@@ -418,7 +418,7 @@ fn project_bytes(environment: &str, instance_id: &str, source_revision: &str) ->
     "id": "reader",
     "principalClaim": "principal",
     "grants": [{{
-      "entity": "case",
+      "rowBoundaries": [], "entity": "case",
       "operations": ["get", "list"],
       "readableFields": ["code"]
     }}]

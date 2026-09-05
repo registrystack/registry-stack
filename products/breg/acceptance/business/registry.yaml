@@ -219,6 +219,7 @@ accessProfiles:
     anonymous: true
     grants:
       - entity: legal-entity
+        rowBoundaries: []
         operations:
           - get
           - list
@@ -234,6 +235,7 @@ accessProfiles:
         sortableFields:
           - legal-name
       - entity: officer-appointment
+        rowBoundaries: []
         operations:
           - get
           - list
@@ -255,6 +257,7 @@ accessProfiles:
       - business-registry
     grants:
       - entity: legal-entity
+        rowBoundaries: []
         operations:
           - create
           - get
@@ -283,6 +286,7 @@ accessProfiles:
           - registration-number
           - entity-status
       - entity: filing
+        rowBoundaries: []
         operations:
           - create
           - get
@@ -311,6 +315,7 @@ accessProfiles:
           - filed-date
           - source-system
       - entity: officer-appointment
+        rowBoundaries: []
         operations:
           - create
           - get

@@ -2950,7 +2950,8 @@ mod tests {
                 "id":"typed","default":true,"principalClaim":"registry_principal",
                 "grants":[
                   {
-                    "entity":"parent-entry","operations":["get"],"readableFields":["name"]
+                    "entity":"parent-entry","operations":["get"],"readableFields":["name"],
+                    "rowBoundaries": []
                   },
                   {
                     "entity":"typed-entry","operations":["get"],
@@ -3217,7 +3218,8 @@ mod tests {
                     "entity":"asset-placement",
                     "operations":["get","list"],
                     "readableFields":["tenant","site"],
-                    "requestPresence":[{"requestType":"placement-correction-request","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}]
+                    "requestPresence":[{"requestType":"placement-correction-request","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}],
+                    "rowBoundaries": []
                   }]
                 },
                 {
@@ -3226,7 +3228,8 @@ mod tests {
                     "entity":"placement-correction-request",
                     "operations":["create","get","list","patch","submit_request","revise_request"],
                     "readableFields":["placement","proposed-site","reason"],
-                    "writableFields":["placement","proposed-site","reason"]
+                    "writableFields":["placement","proposed-site","reason"],
+                    "rowBoundaries": []
                   }]
                 },
                 {
@@ -3242,7 +3245,8 @@ mod tests {
                         "readableFields":["site"],
                         "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
                       }]
-                    }]
+                    }],
+                    "rowBoundaries": []
                   }]
                 },
                 {
@@ -3254,7 +3258,8 @@ mod tests {
                     "applyTargets":[{
                       "entity":"asset-placement",
                       "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
-                    }]
+                    }],
+                    "rowBoundaries": []
                   }]
                 }
               ]

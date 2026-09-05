@@ -574,7 +574,7 @@ fn rhai_planner_contract_fingerprint_binds_governed_meaning_only() {
     ]);
     submitter_grant["reviewStages"] = json!([{
         "stage": "review",
-        "targets": [{"entity": "person", "readableFields": ["display-name"]}]
+        "targets": [{"entity": "person", "readableFields": ["display-name"], "rowBoundaries": []}]
     }]);
     assert_ne!(
         original,
@@ -823,7 +823,8 @@ fn anonymous_presence_rejects_a_non_public_rhai_target_link() {
                 "entity": "person",
                 "operations": ["get", "list"],
                 "readableFields": ["person-code"],
-                "requestPresence": [{"requestType": "person-name-change-request"}]
+                "requestPresence": [{"requestType": "person-name-change-request", "rowBoundaries": []}],
+              "rowBoundaries": []
             }]
         }));
     let project = registry_breg::contract::parse_project_json(
@@ -923,8 +924,9 @@ fn staged_planner_final_review_cannot_borrow_a_separate_apply_profile() {
             "readableFields": ["person", "given-name", "family-name", "handling"],
             "reviewStages": [{
                 "stage": "final",
-                "targets": [{"entity": "person", "readableFields": ["display-name"]}]
-            }]
+                "targets": [{"entity": "person", "readableFields": ["display-name"], "rowBoundaries": []}]
+            }],
+          "rowBoundaries": []
         }]
     }));
     profiles.push(json!({
@@ -934,7 +936,8 @@ fn staged_planner_final_review_cannot_borrow_a_separate_apply_profile() {
             "entity": "person-name-change-request",
             "operations": ["get", "apply_request"],
             "readableFields": ["person", "given-name", "family-name", "handling"],
-            "applyTargets": [{"entity": "person", "rowBoundaries": []}]
+            "applyTargets": [{"entity": "person", "rowBoundaries": []}],
+          "rowBoundaries": []
         }]
     }));
     let project = registry_breg::contract::parse_project_json(

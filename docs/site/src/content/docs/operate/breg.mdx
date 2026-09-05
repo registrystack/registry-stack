@@ -280,19 +280,91 @@ are never accepted by a running server.
 | --- | --- |
 | `alg`, `typ`, `kid` headers | `alg` equals `allowedAlgorithm`; `typ` equals `accessTokenType`; `kid` is present in the JWKS and absent from `deniedKids`. |
 | `iss` | Equals `issuer`. |
-| `aud` | The single string `audience`. Configure the issuer to emit one audience for this resource; a list is refused. |
+| `aud` | A string equal to `audience`, or an array of 1–16 distinct nonempty strings containing that exact resource audience. |
 | `exp`, `iat`, `nbf` | The lifetime is at most `maxTokenLifetimeSeconds`; clock skew up to `leewayMilliseconds` is tolerated. |
 | `azp` or `client_id` | Listed in `allowedClients` when that list is not empty. |
-| `scope` | The claim named by `scopeClaim`, split on `scopeSeparator`, covers the profile's `requiredScopes`. |
-| principal claim | The claim named by `authorityClaims.principal` carries the caller identity that row boundaries compare against. |
+| `scope` | The single claim named by `scopeClaim` covers every required permission. It is a string split on `scopeSeparator`, or a JSON array of permission strings. Other shapes are refused; permissions from several claims are not merged. |
+| principal claim | The claim named by `authorityClaims.principal` carries the identity recorded in audit and workflow decisions. It must match each authenticated profile's `principalClaim`. |
 | purpose claim | The claim named by `authorityClaims.purpose` is required when the profile lists `requiredPurposes`. |
+| assignment claims | Each row boundary or claim-backed lookup names its own claim. An `equals` boundary needs a scalar; an `in` boundary needs a JSON array. An identity claim does not imply district or team assignments. |
 
-Deployments without an identity provider can run [Registry Mint](../../configure/mint/) as the
-issuer.
+Set `maxTokenLifetimeSeconds` to your deployment's chosen limit, up to 7200 seconds.
+The limit bounds the accepted difference between issuance and expiry; increasing it extends how long an already issued token may carry old permissions.
+Match the issuer's token settings and test both accepted and refused lifetimes.
+Use a resource audience dedicated to this registry API, distinct from your application's login client identifier.
+Obtain access tokens for that resource; an ID token issued to the login client is not an API credential.
+
+### Choose identities that survive operations
+
+Select the principal claim explicitly. `sub` is supported when selected in both the runtime and profiles;
+the server never falls back to another identity claim if the selected claim is missing.
+An issuer's `sub` usually belongs to that issuer's identity namespace.
+For an issuer migration, prefer an institutional identifier carried in a custom claim by both issuers,
+and document who guarantees that its values remain unique, stable, and never reassigned.
+Base Registry Engine treats the selected value as an opaque identity and does not link accounts across issuers.
+Changing it can change whether someone is recognized as a submitter or a previous reviewer.
+
+Use the same principal claim in an ownership row boundary when the record's owner field stores that identifier.
+Use separate assignment claims for district, tenant, or team membership.
+Configure the issuer to derive these claims from trusted assignments rather than caller-supplied values.
+
+Deployments without an identity provider can run [Registry Mint](../../configure/mint/) as the issuer for registered machine clients.
+Mint's client-credentials flow represents a service, not an individual signing in.
+Human login, account lifecycle, and multifactor authentication belong to your identity provider and application.
+When replacing an issuer, verify the same permitted and refused requests with real tokens before changing the serving configuration.
+Compare issuer, resource audience, token headers, permission source, principal identity, purpose, and assignment claim shapes.
 
 {/* Evidence: crates/registry-breg/src/auth.rs;
     crates/registry-breg/tests/http_auth.rs;
+    crates/registry-breg/src/runtime_config.rs;
+    crates/registry-mint/src/lib.rs;
     crates/registry-platform-oidc/src/lib.rs. */}
+
+### Rotate signing keys and handle issuer outages
+
+With discovery, `jwksCache.cacheTtlSeconds` defaults to 600 seconds.
+An unfamiliar `kid` can trigger a refresh, subject to `refreshCooldownSeconds` (30 seconds by default) and the bounded negative cache.
+Publish a new public key before issuing tokens with it, then verify a token using that key against the registry.
+Keep the previous public key available while its legitimate tokens remain valid.
+Removing a key from the issuer does not immediately remove an already cached key from the registry.
+
+During a fetch failure, a known cached key may remain usable until its age reaches the cache TTL plus `outageToleranceSeconds`, which defaults to 900 seconds.
+The default total allowance is therefore 1500 seconds from the last successful key-set fetch, not from the start of the outage.
+Unknown keys cannot use this allowance, and the server cannot obtain keys for a cold start from an unavailable issuer.
+After the allowance, verification requiring those stale keys fails until fetching succeeds.
+Token expiry and every other verification rule continue to apply during the allowance.
+
+Short token lifetimes bound how long issued permission and assignment claims remain usable.
+Disabling an account or changing a group at the issuer does not update claims in an already issued token.
+For a compromised signing key, add its identifier to `deniedKids` and restart every serving instance with that configuration.
+That rejects all tokens signed with the denied key, including otherwise legitimate tokens.
+Static JWKS documents also require a configuration change and restart to rotate.
+
+### Change the issuer without losing request context
+
+The runtime trusts one configured issuer and reads its configuration at startup.
+Plan a coordinated restart and client token change; one process does not provide an overlap period accepting both issuers.
+Keep the selected principal values stable if existing ownership and review decisions should continue to recognize the same actors.
+Test new tokens before the serving cutover, including refused permissions and assignment shapes.
+
+Resolve uncertain writes before changing issuer mappings, profiles, or packages.
+After a timeout, retry the same request with its original idempotency key and the same effective principal, profile, purpose, and row context.
+A replacement token can satisfy those conditions; changing identity or authority context can produce `idempotency.conflict` instead of a replay.
+The binding also covers the request and package revision, so issuing a fresh key blindly can duplicate a write whose first response was lost.
+[Mutation retry rules](../../reference/breg-api/#idempotency) explain the request contract.
+
+Pagination cursors bind the principal, profile, purpose, row scope, query, projection, and compiled registry identity.
+They also expire, with `cursor.maxAgeSeconds` defaulting to 300 seconds.
+A token renewal alone does not require starting over when the effective context is unchanged, but changed mappings, policy, package, or cursor secret can invalidate an existing cursor.
+Restart the query from its first page when that happens; do not treat a cursor as portable authority between deployments.
+
+{/* Evidence: crates/registry-platform-oidc/src/lib.rs, JwksFetcher and tolerated_age();
+    crates/registry-breg/src/runtime_config.rs, JwksCacheConfig and DEFAULT_CURSOR_MAX_AGE_SECONDS;
+    crates/registry-breg/src/startup.rs, prepare();
+    crates/registry-breg/src/auth.rs;
+    crates/registry-breg/src/idempotency.rs, canonical_claim_context();
+    crates/registry-breg/src/cursor.rs, CursorBinding;
+    crates/registry-breg/src/api/mod.rs, cursor_binding(). */}
 
 ## Test the candidate
 

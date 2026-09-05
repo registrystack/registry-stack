@@ -5,6 +5,7 @@
 pub mod access;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 pub mod access_preview;
+pub mod authority;
 
 #[cfg(feature = "runtime")]
 pub mod api;

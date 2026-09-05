@@ -71,6 +71,7 @@ accessProfiles:
     anonymous: true
     grants:
       - entity: public-record
+        rowBoundaries: []
         operations: [list]
         readableFields: [label]
 "#;

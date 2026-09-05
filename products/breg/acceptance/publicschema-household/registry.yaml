@@ -141,8 +141,9 @@ accessProfiles:
     requiredScopes: [registry:household:operate]
     requiredPurposes: [household-administration]
     grants:
-      - {entity: person, operations: [create, get, list, patch], readableFields: [person-code, legal-name, family-name, date-of-birth, person-sex, residency-status, preferred-language], writableFields: [person-code, legal-name, family-name, date-of-birth, person-sex, residency-status, preferred-language], filterableFields: [person-code, person-sex, residency-status], sortableFields: [person-code]}
+      - {entity: person, operations: [create, get, list, patch], readableFields: [person-code, legal-name, family-name, date-of-birth, person-sex, residency-status, preferred-language], writableFields: [person-code, legal-name, family-name, date-of-birth, person-sex, residency-status, preferred-language], filterableFields: [person-code, person-sex, residency-status], sortableFields: [person-code], rowBoundaries: []}
       - entity: household
+        rowBoundaries: []
         operations: [create, get, lookup, list, patch]
         readableFields: [household-code, local-household-number, household-name, administrative-area, household-type, head-count, child-count, child-under-5-count, elderly-count, single-headed, woman-headed]
         writableFields: [household-code, local-household-number, household-name, administrative-area, household-type]
@@ -158,7 +159,7 @@ accessProfiles:
             filterableFields: [person-sex, residency-status]
             sortableFields: [person-code]
             allowCount: true
-      - {entity: group-membership, operations: [create, get, list, patch], readableFields: [person, household, relationship, valid-from, valid-to], writableFields: [person, household, relationship, valid-from, valid-to], filterableFields: [person, household, relationship, valid-from]}
+      - {entity: group-membership, operations: [create, get, list, patch], readableFields: [person, household, relationship, valid-from, valid-to], writableFields: [person, household, relationship, valid-from, valid-to], filterableFields: [person, household, relationship, valid-from], rowBoundaries: []}
   - id: household-viewer
     principalClaim: registry_principal
     requiredScopes: [registry:household:view]

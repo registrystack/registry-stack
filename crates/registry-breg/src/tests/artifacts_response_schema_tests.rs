@@ -813,21 +813,24 @@ fn compiled_registry() -> CompiledRegistry {
                   "readableFields":["site"],
                   "rowBoundaries":[{"field":"site","claim":"site_claim","operator":"equals"}]
                 }]
-              }]
+              }],
+              "rowBoundaries": []
             }]
           },{
             "id":"request-submitter","principalClaim":"principal","grants":[{
               "entity":"placement-correction-request",
               "operations":["get","create","patch","submit_request"],
               "readableFields":["placement","proposed-site"],
-              "writableFields":["placement","proposed-site"]
+              "writableFields":["placement","proposed-site"],
+              "rowBoundaries": []
             }]
           },{
             "id":"request-applier","principalClaim":"principal","grants":[{
               "entity":"placement-correction-request",
               "operations":["get","apply_request"],
               "readableFields":["placement"],
-              "applyTargets":[{"entity":"placement"}]
+              "applyTargets":[{"entity":"placement", "rowBoundaries": []}],
+              "rowBoundaries": []
             }]
           },{
             "id":"placement-viewer","principalClaim":"principal","grants":[{
@@ -837,7 +840,8 @@ fn compiled_registry() -> CompiledRegistry {
               "requestPresence":[{
                 "requestType":"placement-correction-request",
                 "rowBoundaries":[{"field":"placement","claim":"placement_claim","operator":"equals"}]
-              }]
+              }],
+              "rowBoundaries": []
             }]
           }]
         }"#,
@@ -911,9 +915,9 @@ fn compiled_action_registry() -> CompiledRegistry {
               "action":"register-household-contact",
               "operations":["invoke"],
               "targets":[
-                {"entity":"household"},
-                {"entity":"person"},
-                {"entity":"group-membership"}
+                {"entity":"household", "rowBoundaries": []},
+                {"entity":"person", "rowBoundaries": []},
+                {"entity":"group-membership", "rowBoundaries": []}
               ],
               "results":["person","membership","household"]
             }]
@@ -926,9 +930,9 @@ fn compiled_action_registry() -> CompiledRegistry {
               "action":"register-household-contact",
               "operations":["invoke"],
               "targets":[
-                {"entity":"household"},
-                {"entity":"person"},
-                {"entity":"group-membership"}
+                {"entity":"household", "rowBoundaries": []},
+                {"entity":"person", "rowBoundaries": []},
+                {"entity":"group-membership", "rowBoundaries": []}
               ],
               "results":["household"]
             }]
@@ -982,8 +986,8 @@ fn compiled_asset_result_action_registry() -> CompiledRegistry {
               "action":"register-asset",
               "operations":["invoke"],
               "targets":[
-                {"entity":"asset"},
-                {"entity":"inspection"}
+                {"entity":"asset", "rowBoundaries": []},
+                {"entity":"inspection", "rowBoundaries": []}
               ],
               "results":["asset"]
             }]

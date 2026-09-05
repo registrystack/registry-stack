@@ -804,7 +804,7 @@ impl MutationPlan {
                 request_stage: None,
                 maximum_records: None,
                 access_profiles: vec![profile_id.to_owned()],
-                default_access_profile: profile_id.to_owned(),
+                default_access_profile: Some(profile_id.to_owned()),
             },
             entity: self.entity.clone(),
             event_deliveries: self.event_deliveries.clone(),

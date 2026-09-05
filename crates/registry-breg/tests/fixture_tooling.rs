@@ -728,17 +728,20 @@ fn compiled_request_fixture() -> registry_breg::CompiledRegistry {
           }],
           "accessProfiles":[{
             "id":"submitter","default":true,"principalClaim":"registry_principal","grants":[{
-              "entity":"correction-request","operations":["create","submit_request","revise_request","cancel_request"],"readableFields":["target","value"],"writableFields":["target","value"]
+              "entity":"correction-request","operations":["create","submit_request","revise_request","cancel_request"],"readableFields":["target","value"],"writableFields":["target","value"],
+              "rowBoundaries": []
             }]
           },{
             "id":"reviewer","default":true,"principalClaim":"registry_principal","grants":[{
               "entity":"correction-request","operations":["get","list","approve_request","reject_request","request_revision"],"readableFields":["target","value"],
-              "reviewStages":[{"stage":"review","targets":[{"entity":"target","readableFields":["label"],"rowBoundaries":[]}]}]
+              "reviewStages":[{"stage":"review","targets":[{"entity":"target","readableFields":["label"],"rowBoundaries":[]}]}],
+              "rowBoundaries": []
             }]
           },{
             "id":"applier","default":true,"principalClaim":"registry_principal","grants":[{
               "entity":"correction-request","operations":["apply_request"],"readableFields":["target"],
-              "applyTargets":[{"entity":"target","rowBoundaries":[]}]
+              "applyTargets":[{"entity":"target","rowBoundaries":[]}],
+              "rowBoundaries": []
             }]
           }]
         }"#,
@@ -882,10 +885,12 @@ fn compiled_spatial_fixture() -> registry_breg::CompiledRegistry {
           "accessProfiles":[
             {"id":"map-reader","default":true,"anonymous":true,"grants":[{
               "entity":"site","operations":["get","list"],"readableFields":["code","location"],
-              "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":1,"maximumLatitudeSpanDegrees":1}}
+              "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":1,"maximumLatitudeSpanDegrees":1}},
+              "rowBoundaries": []
             }]},
             {"id":"directory-reader","anonymous":true,"grants":[{
-              "entity":"site","operations":["list"],"readableFields":["code"]
+              "entity":"site","operations":["list"],"readableFields":["code"],
+              "rowBoundaries": []
             }]}
           ]
         }"#,

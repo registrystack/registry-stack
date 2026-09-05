@@ -1,0 +1,18 @@
+{
+  "entity": "label-correction",
+  "accessProfile": "correction-reviewer",
+  "operation": "approve_request",
+  "claims": {
+    "principalClaim": "registry_principal",
+    "principal": "synthetic-clerk",
+    "scopes": [
+      "correction:review"
+    ],
+    "purpose": "record-administration",
+    "directClaims": {
+      "assigned_districts": [
+        "north"
+      ]
+    }
+  }
+}

@@ -496,22 +496,30 @@ fn default_profile_refusals_name_the_entity_the_operation_and_the_profiles() {
         .as_array_mut()
         .unwrap()
         .push(second_reader());
-    let failure = compile(&without_default).unwrap_err();
-    let diagnostic = diagnostic_for(
-        &failure,
-        "access_profile.default.invalid",
-        "operation `get`",
-    );
-    assert_eq!(
-        diagnostic.path,
-        "entities[id=entry].accessProfiles[].default"
-    );
-    assert!(
-        diagnostic.message.contains("entity `entry`"),
-        "{diagnostic:?}"
-    );
-    assert!(diagnostic.message.contains("`reader`"), "{diagnostic:?}");
-    assert!(diagnostic.message.contains("`auditor`"), "{diagnostic:?}");
+    let registry = compile(&without_default).expect("explicit selection needs no default");
+    assert!(registry
+        .access()
+        .entries
+        .iter()
+        .all(|entry| entry.default_profile_id.is_none()));
+    let openapi: Value = serde_json::from_slice(
+        &registry
+            .artifacts()
+            .get("generated/openapi.json")
+            .unwrap()
+            .bytes,
+    )
+    .unwrap();
+    for route in &registry.routes().routes {
+        let parameters = openapi["paths"][&route.path]["get"]["parameters"]
+            .as_array()
+            .unwrap();
+        let selector = parameters
+            .iter()
+            .find(|parameter| parameter["name"] == "accessProfile")
+            .unwrap();
+        assert_eq!(selector["required"], true);
+    }
 
     let mut two_defaults = without_default.clone();
     two_defaults["accessProfiles"][0]["default"] = json!(true);
@@ -544,7 +552,7 @@ fn anonymous_source() -> Value {
           "fields":[{"id":"code","type":"string","maxLength":32,"classification":"public"},
                     {"id":"note","type":"string","maxLength":32,"classification":"internal"}]}],
         "accessProfiles":[{"id":"public-map","default":true,"anonymous":true,
-          "grants":[{"entity":"place","operations":["list"],"readableFields":["code"]}]}]
+          "grants":[{"entity":"place","operations":["list"],"readableFields":["code"], "rowBoundaries": []}]}]
     })
 }
 
@@ -636,4 +644,59 @@ fn write_grants_without_writable_fields_and_anonymous_collections_are_reported()
         .findings()
         .iter()
         .any(|d| d.code == "access.profile.anonymous_collection"));
+}
+
+#[test]
+fn sole_profile_is_implicit_default_and_workflow_routes_may_require_explicit_selection() {
+    let registry = compile(&source()).unwrap();
+    assert!(registry
+        .access()
+        .entries
+        .iter()
+        .all(|entry| entry.default_profile_id.as_deref() == Some("reader")));
+
+    let mut project =
+        registry_breg::parse_project_yaml(include_bytes!("fixtures/authority-mapping.yaml"))
+            .unwrap();
+    let reviewer = project
+        .access_profiles
+        .iter_mut()
+        .find(|profile| profile.id == "reviewer")
+        .unwrap();
+    reviewer.default = false;
+    let mut second = reviewer.clone();
+    second.id = "second-reviewer".to_owned();
+    project.access_profiles.push(second);
+    let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
+    let routes = registry
+        .routes()
+        .routes
+        .iter()
+        .filter(|route| route.id.contains(".request."))
+        .collect::<Vec<_>>();
+    assert!(!routes.is_empty());
+    assert!(routes
+        .iter()
+        .all(|route| route.default_access_profile.is_none()));
+    for profile in project
+        .access_profiles
+        .iter_mut()
+        .filter(|profile| profile.id.contains("reviewer"))
+    {
+        profile.default = true;
+        // Reach stage-specific route validation rather than the shared GET route.
+        for grant in &mut profile.grants {
+            grant
+                .operations
+                .remove(&registry_breg::contract::Operation::Get);
+        }
+    }
+    let failure = compile_project(&project, &[], CompileProfile::Authoring).unwrap_err();
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(
+            |diagnostic| diagnostic.code == "access_profile.default.invalid"
+                && diagnostic.message.contains(".request.")
+        ));
 }

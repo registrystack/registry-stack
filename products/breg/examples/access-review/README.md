@@ -39,24 +39,34 @@ are never printed.
 
 ## Catch an omitted restriction
 
-Copy the project to your own directory. In the copy, remove the grant's
-`rowBoundaries`, leaving the entity's `accessRequirements` intact. Run `check`
+Copy the project to your own directory. In the copy, replace the grant's
+`rowBoundaries` with `[]`, leaving the entity's `accessRequirements` intact. Run `check`
 against the copy. Compilation refuses the profile with
 `access.requirements.row_boundary_missing` and identifies the entity, profile,
 and field. Restore the exact binding to make the check pass.
 
-Then, in the copy, remove both the entity requirements and the grant's row
-boundaries. Ordinary `check` accepts the model but reports
+Then, in the copy, remove the entity requirements and leave `rowBoundaries: []`. Ordinary `check` accepts the model but reports
 `access.profile.unrestricted_collection`; `check --deny-findings` exits
 unsuccessfully. This distinguishes a declared invariant from an intentionally
 reviewable design choice. The flag covers all compiler findings, including
 incomplete package identity, not only access warnings.
 
+Omitting `rowBoundaries` is a configuration error, even without entity requirements.
+Use an explicit empty list to distinguish intentional registry-wide access from a missing restriction.
+
+## Compare task profiles
+
+The [task-profile project](task-profiles/README.md) adds a clerk, supervisor,
+auditor, action-only registrar, and reviewed correction to a small registry.
+It demonstrates how to use existing grants for different tasks without merging profiles.
+
 ## Requirements and limits
 
 `accessRequirements` is optional and requires authenticated access when present.
 It grants nothing. Every direct profile, including module contributions, must
-explicitly include its mandatory scopes and exact row bindings. When
+explicitly include its mandatory scopes and exact row bindings. Action targets
+and workflow review, application, and request-presence grants also preserve the
+requirements of the entities they touch. When
 `allowedPurposes` is nonempty, profiles must restrict purpose to a nonempty subset
 of it. An empty or omitted list imposes no purpose requirement. Profiles may be stricter.
 Empty requirements are refused. An extension may add requirements to an entity

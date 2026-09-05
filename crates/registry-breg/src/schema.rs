@@ -771,7 +771,7 @@ mod tests {
             "OIDC maximum token lifetime",
             |instance| {
                 instance["authentication"]["oidc"]["maxTokenLifetimeSeconds"] =
-                    Value::from(3_601_u64);
+                    Value::from(7_201_u64);
             },
         );
         assert_schema_rejects_parser_refused_runtime(&schema, "OIDC leeway", |instance| {

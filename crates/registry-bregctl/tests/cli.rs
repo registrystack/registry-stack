@@ -75,6 +75,7 @@ accessProfiles:
     requiredScopes: [registry.read]
     grants:
       - entity: record
+        rowBoundaries: []
         operations: [get, list]
         readableFields: [label]
 "#,
@@ -97,7 +98,8 @@ entities:
         maxLength: 50
         classification: internal
     accessProfiles:
-      - id: reader
+      - rowBoundaries: []
+        id: reader
         principalClaim: sub
         operations: [get, list]
         readableFields: [label]
@@ -2255,6 +2257,59 @@ fn explain_routes_includes_served_immediate_action_routes() {
 }
 
 #[test]
+fn explain_access_includes_action_only_grants_and_target_reach() {
+    let project = TestProject::from_registry_source(action_fixture());
+    let output = bregctl(&[
+        "--format",
+        "json",
+        "explain",
+        "access",
+        project.path().to_str().expect("path is UTF-8"),
+    ]);
+    assert!(output.status.success(), "{output:?}");
+    let report = json_stdout(&output);
+    let explanation = &report["explanation"];
+    assert!(explanation["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|entity| entity["profiles"].as_array().unwrap().is_empty()));
+    let action = &explanation["actions"]["actions"][0];
+    assert_eq!(action["id"], "register-household-contact");
+    let registrar = action["grants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|grant| grant["profileId"] == "contact-registrar")
+        .unwrap();
+    assert_eq!(
+        registrar["requiredScopes"],
+        json!(["registry:contact:register"])
+    );
+    assert_eq!(
+        registrar["requiredPurposes"],
+        json!(["contact-registration"])
+    );
+    assert_eq!(
+        explanation["actions"]["routes"].as_array().unwrap().len(),
+        2
+    );
+    assert!(explanation["claimContract"]["purposeRequired"]
+        .as_bool()
+        .unwrap());
+    let targets = explanation["rowReach"].as_array().unwrap();
+    assert_eq!(targets.len(), 6);
+    assert!(targets
+        .iter()
+        .all(|target| target["surface"] == "action_target" && target["rows"] == "all"));
+    assert!(report["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|finding| finding["code"] == "access.target.unrestricted_rows"));
+}
+
+#[test]
 fn explain_actions_reports_compiled_effects_conditions_results_and_grants() {
     let project = TestProject::from_registry_source(action_fixture());
 
@@ -2415,6 +2470,7 @@ accessProfiles:
     principalClaim: principal
     grants:
       - entity: typed-record
+        rowBoundaries: []
         operations: [list]
         readableFields: [label, score, enabled, observed-on, observed-at]
         filterableFields: [label, score, enabled, observed-on, observed-at]
@@ -2484,6 +2540,7 @@ accessProfiles:
     principalClaim: principal
     grants:
       - entity: service-site
+        rowBoundaries: []
         operations: [get, list]
         readableFields: [location]
         spatialQueries:
@@ -2491,7 +2548,7 @@ accessProfiles:
   - id: geometry-reader
     principalClaim: principal
     grants:
-      - {entity: service-site, operations: [get, list], readableFields: [location]}
+      - {entity: service-site, operations: [get, list], readableFields: [location], rowBoundaries: []}
 "#,
     );
     let output = bregctl(&[
@@ -2570,7 +2627,8 @@ entities:
             maxLength: 16
             classification: internal
     accessProfiles:
-      - id: reader
+      - rowBoundaries: []
+        id: reader
         principalClaim: principal
         operations: [list]
         readableFields: [code, summary]
@@ -4898,7 +4956,8 @@ entities:
         maxLength: 16
         classification: internal
     accessProfiles:
-      - id: reader
+      - rowBoundaries: []
+        id: reader
         principalClaim: principal
         operations: [get, list]
         readableFields: [code]
@@ -4919,7 +4978,8 @@ entities:
         maxLength: 16
         classification: internal
     accessProfiles:
-      - id: reader
+      - rowBoundaries: []
+        id: reader
         principalClaim: principal
         operations: [get, list]
         readableFields: [code]
@@ -4927,12 +4987,12 @@ entities:
 }
 
 fn package_module_bytes() -> Vec<u8> {
-    br#"{"id":"core","version":"1","entities":[{"id":"record","primaryDataset":"verify-registry","route":"records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":16,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}]}]}"#
+    br#"{"id":"core","version":"1","entities":[{"id":"record","primaryDataset":"verify-registry","route":"records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":16,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"], "rowBoundaries": []}]}]}"#
         .to_vec()
 }
 
 fn data_package_fixture() -> (TestProject, PathBuf) {
-    let module_bytes = br#"{"id":"core","version":"1","entities":[{"id":"record","primaryDataset":"data-registry","route":"records","mutationMode":"create_only","batch":{"maximumItems":2,"maximumBytes":400},"fields":[{"id":"code","type":"string","minLength":2,"maxLength":16,"required":true,"classification":"internal"}],"accessProfiles":[{"id":"operator","principalClaim":"principal","operations":["create","batch","list"],"readableFields":["code"],"writableFields":["code"],"allowDataExport":true}]}]}"#.to_vec();
+    let module_bytes = br#"{"id":"core","version":"1","entities":[{"id":"record","primaryDataset":"data-registry","route":"records","mutationMode":"create_only","batch":{"maximumItems":2,"maximumBytes":400},"fields":[{"id":"code","type":"string","minLength":2,"maxLength":16,"required":true,"classification":"internal"}],"accessProfiles":[{"id":"operator","principalClaim":"principal","operations":["create","batch","list"],"readableFields":["code"],"writableFields":["code"],"allowDataExport":true, "rowBoundaries": []}]}]}"#.to_vec();
     let module = parse_module_json(&module_bytes).expect("data module parses");
     let module_digest = module_digest(&module);
     let project = TestProject::from_registry_source(

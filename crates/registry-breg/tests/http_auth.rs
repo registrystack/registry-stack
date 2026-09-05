@@ -12,7 +12,8 @@ use axum::http::header::AUTHORIZATION;
 use axum::http::{HeaderValue, Request, StatusCode};
 use registry_breg::api::{
     authenticated_router, HeldReadResponse, HttpService, ReadRuntimeIdentity, ReadServiceError,
-    ReadinessProbe, RecordReadRequest, RecordReadService, ServiceFuture, VerifiedRequestClaims,
+    ReadinessProbe, RecordReadRequest, RecordReadService, ServiceFuture, VerifiedClaimValue,
+    VerifiedRequestClaims,
 };
 use registry_breg::auth::{
     AuthenticationConfigError, AuthenticationError, AuthorityClaimConfig, RegistryAuthenticator,
@@ -65,6 +66,7 @@ accessProfiles:
       - entity: case
         operations: [get]
         readableFields: [label]
+        rowBoundaries: []
   - id: caseworker
     principalClaim: registry_principal
     requiredScopes: [registry.read]
@@ -183,7 +185,10 @@ struct Harness {
 
 impl Harness {
     async fn new() -> Self {
-        let registry = compiled_registry();
+        Self::with_registry(compiled_registry()).await
+    }
+
+    async fn with_registry(registry: Arc<CompiledRegistry>) -> Self {
         let idp = MockIdp::start().await;
         let authenticator = authenticator(&registry, &idp, authority_claims())
             .expect("authentication config is valid");
@@ -424,17 +429,51 @@ async fn repeated_values_in_a_multi_valued_claim_collapse_to_one_authority() {
     assert_refused_without_record_call(&harness, &distinct_token).await;
 }
 
-/// The deployment binds exactly one audience, and the mapping does not widen
-/// it: an array audience is refused even when it contains the bound value.
-/// Multi-audience access tokens are a deliberate non-goal of this profile.
+/// The resource still requires its exact audience, including in a bounded array.
 #[tokio::test]
-async fn an_array_audience_is_refused_even_when_it_carries_the_bound_audience() {
+async fn an_array_audience_requires_exact_membership_and_well_formed_bounds() {
     let harness = Harness::new().await;
-    for audience in [json!([AUDIENCE]), json!([AUDIENCE, "urn:example:other"])] {
+    for audience in [json!([AUDIENCE]), json!(["urn:example:other", AUDIENCE])] {
         let mut claims = valid_claims();
         claims["aud"] = audience;
         let token = harness.signed_token(claims, "JWT");
-        assert_refused_without_record_call(&harness, &token).await;
+        let response = harness
+            .send(
+                "/v1/records/cases/00000000-0000-4000-8000-000000000001?accessProfile=caseworker",
+                &[bearer(&token)],
+                None,
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    for audience in [
+        json!([]),
+        json!(["urn:example:other"]),
+        json!([AUDIENCE, ""]),
+        json!([AUDIENCE, "  "]),
+        json!([AUDIENCE, AUDIENCE]),
+        json!([AUDIENCE, 4]),
+        json!((0..17)
+            .map(|index| if index == 0 {
+                AUDIENCE.to_owned()
+            } else {
+                format!("urn:aud:{index}")
+            })
+            .collect::<Vec<_>>()),
+    ] {
+        let mut claims = valid_claims();
+        claims["aud"] = audience;
+        let token = harness.signed_token(claims, "JWT");
+        let calls = harness.records.calls.load(Ordering::SeqCst);
+        let response = harness
+            .send(
+                "/v1/records/cases/00000000-0000-4000-8000-000000000001?accessProfile=caseworker",
+                &[bearer(&token)],
+                None,
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(harness.records.calls.load(Ordering::SeqCst), calls);
     }
 }
 
@@ -666,7 +705,7 @@ async fn constructor_rejects_empty_duplicate_reserved_and_incomplete_mappings() 
     let harness = Harness::new().await;
     let invalid = [
         AuthorityClaimConfig::new("", Some("purpose".to_owned())),
-        AuthorityClaimConfig::new("sub", Some("purpose".to_owned())),
+        AuthorityClaimConfig::new("client_id", Some("purpose".to_owned())),
         AuthorityClaimConfig::new("registry_principal", Some("registry_principal".to_owned())),
     ];
     for claims in invalid {
@@ -898,4 +937,307 @@ async fn body_json(response: axum::response::Response) -> Value {
         .await
         .expect("response body");
     serde_json::from_slice(&bytes).expect("JSON response")
+}
+
+#[tokio::test]
+async fn explicitly_selected_subject_can_also_supply_scalar_ownership_without_fallback() {
+    let source = CANONICAL_ID_BOUNDARY_PROJECT
+        .replace("principalClaim: registry_principal", "principalClaim: sub")
+        .replace("claim: record_id", "claim: sub");
+    let project = parse_project_yaml(source.as_bytes()).unwrap();
+    let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
+    let idp = MockIdp::start().await;
+    let auth = authenticator(&registry, &idp, AuthorityClaimConfig::new("sub", None)).unwrap();
+    let token = idp.mint_token(json!({"aud": AUDIENCE, "sub": RECORD_ID}));
+    let actual = auth.authenticate(&token).await.unwrap();
+    let expected = VerifiedRequestClaims::authenticated(
+        "sub",
+        RECORD_ID,
+        BTreeSet::<String>::new(),
+        None,
+        BTreeMap::from([(
+            "sub".to_owned(),
+            VerifiedClaimValue::direct_string(RECORD_ID).unwrap(),
+        )]),
+    )
+    .unwrap();
+    assert_eq!(actual, expected);
+    for payload in [
+        json!({"aud": AUDIENCE, "registry_principal": RECORD_ID, "client_id": RECORD_ID, "azp": RECORD_ID}),
+        json!({"aud": AUDIENCE, "sub": "not-a-uuid"}),
+        json!({"aud": AUDIENCE, "sub": [RECORD_ID]}),
+    ] {
+        assert!(auth.authenticate(&idp.mint_token(payload)).await.is_err());
+    }
+    let custom = source
+        .replace("principalClaim: sub", "principalClaim: registry_principal")
+        .replace("claim: sub", "claim: registry_principal");
+    let project = parse_project_yaml(custom.as_bytes()).unwrap();
+    let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
+    let auth = authenticator(
+        &registry,
+        &idp,
+        AuthorityClaimConfig::new("registry_principal", None),
+    )
+    .unwrap();
+    assert!(auth
+        .authenticate(&idp.mint_token(json!({"aud": AUDIENCE, "registry_principal": RECORD_ID})))
+        .await
+        .is_ok());
+    assert!(auth
+        .authenticate(&idp.mint_token(json!({"aud": AUDIENCE, "sub": RECORD_ID})))
+        .await
+        .is_err());
+
+    // Principal reuse preserves the exact selected string. Every string-encoded
+    // scalar field applies its ordinary validation, without an identifier whitelist.
+    let dated = CANONICAL_ID_BOUNDARY_PROJECT
+        .replace(
+            "type: string, required: true, maxLength: 100",
+            "type: date, required: true",
+        )
+        .replace(
+            "field: id, claim: record_id",
+            "field: label, claim: registry_principal",
+        );
+    let project = parse_project_yaml(dated.as_bytes()).unwrap();
+    let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
+    let auth = authenticator(
+        &registry,
+        &idp,
+        AuthorityClaimConfig::new("registry_principal", None),
+    )
+    .unwrap();
+    let date_principal = "2026-09-05";
+    let actual = auth
+        .authenticate(
+            &idp.mint_token(json!({"aud": AUDIENCE, "registry_principal": date_principal})),
+        )
+        .await
+        .unwrap();
+    let expected = VerifiedRequestClaims::authenticated(
+        "registry_principal",
+        date_principal,
+        BTreeSet::<String>::new(),
+        None,
+        BTreeMap::from([(
+            "registry_principal".to_owned(),
+            VerifiedClaimValue::direct_string(date_principal).unwrap(),
+        )]),
+    )
+    .unwrap();
+    assert_eq!(actual, expected);
+    for malformed in ["2026-02-30", "2026-09-05T00:00:00Z", "not-a-date"] {
+        assert_eq!(
+            auth.authenticate(
+                &idp.mint_token(json!({"aud": AUDIENCE, "registry_principal": malformed}))
+            )
+            .await
+            .unwrap_err(),
+            AuthenticationError::InvalidClaims,
+        );
+    }
+}
+
+#[tokio::test]
+async fn action_only_purpose_and_target_claims_are_discovered_from_signed_tokens() {
+    let project =
+        parse_project_yaml(include_bytes!("fixtures/action-authority-mapping.yaml")).unwrap();
+    let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
+    assert!(registry
+        .entities()
+        .values()
+        .all(|entity| entity.access_profiles.is_empty()));
+    let idp = MockIdp::start().await;
+    let auth = authenticator(&registry, &idp, authority_claims()).unwrap();
+    let base = json!({"aud": AUDIENCE, "registry_principal": PRINCIPAL, "scope": "case.rename", "purpose": "case-management", "regions": ["north"]});
+    let actual = auth
+        .authenticate(&idp.mint_token(base.clone()))
+        .await
+        .unwrap();
+    let expected = VerifiedRequestClaims::authenticated(
+        "registry_principal",
+        PRINCIPAL,
+        BTreeSet::from(["case.rename".to_owned()]),
+        Some("case-management".to_owned()),
+        BTreeMap::from([(
+            "regions".to_owned(),
+            VerifiedClaimValue::direct_string_set(["north"]).unwrap(),
+        )]),
+    )
+    .unwrap();
+    assert_eq!(actual, expected);
+    let mut missing = base.clone();
+    missing.as_object_mut().unwrap().remove("regions");
+    let expected = VerifiedRequestClaims::authenticated(
+        "registry_principal",
+        PRINCIPAL,
+        BTreeSet::from(["case.rename".to_owned()]),
+        Some("case-management".to_owned()),
+        BTreeMap::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        auth.authenticate(&idp.mint_token(missing)).await.unwrap(),
+        expected
+    );
+    for value in [json!("north"), json!([17]), json!([])] {
+        let mut wrong = base.clone();
+        wrong["regions"] = value;
+        assert_eq!(
+            auth.authenticate(&idp.mint_token(wrong)).await.unwrap_err(),
+            AuthenticationError::InvalidClaims
+        );
+    }
+}
+
+#[tokio::test]
+async fn nested_workflow_and_lookup_claims_are_mapped_without_requiring_unrelated_claims() {
+    let project = parse_project_yaml(include_bytes!("fixtures/authority-mapping.yaml")).unwrap();
+    let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
+    let inventory = registry_breg::authority::authority_inventory(&registry).unwrap();
+    assert_eq!(
+        inventory
+            .direct_claims
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        [
+            "apply_label",
+            "lookup_label",
+            "presence_label",
+            "review_labels"
+        ]
+    );
+    let idp = MockIdp::start().await;
+    let auth = authenticator(
+        &registry,
+        &idp,
+        AuthorityClaimConfig::new("registry_principal", None),
+    )
+    .unwrap();
+    let base = json!({"aud": AUDIENCE, "registry_principal": PRINCIPAL,
+        "apply_label": "A", "lookup_label": "L", "presence_label": "P", "review_labels": ["R"]});
+    let direct = BTreeMap::from([
+        (
+            "apply_label".to_owned(),
+            VerifiedClaimValue::direct_string("A").unwrap(),
+        ),
+        (
+            "lookup_label".to_owned(),
+            VerifiedClaimValue::direct_string("L").unwrap(),
+        ),
+        (
+            "presence_label".to_owned(),
+            VerifiedClaimValue::direct_string("P").unwrap(),
+        ),
+        (
+            "review_labels".to_owned(),
+            VerifiedClaimValue::direct_string_set(["R"]).unwrap(),
+        ),
+    ]);
+    let expected = VerifiedRequestClaims::authenticated(
+        "registry_principal",
+        PRINCIPAL,
+        BTreeSet::<String>::new(),
+        None,
+        direct.clone(),
+    )
+    .unwrap();
+    assert_eq!(
+        auth.authenticate(&idp.mint_token(base.clone()))
+            .await
+            .unwrap(),
+        expected
+    );
+    for name in direct.keys() {
+        let mut missing = base.clone();
+        missing.as_object_mut().unwrap().remove(name);
+        let mut expected_direct = direct.clone();
+        expected_direct.remove(name);
+        let expected = VerifiedRequestClaims::authenticated(
+            "registry_principal",
+            PRINCIPAL,
+            BTreeSet::<String>::new(),
+            None,
+            expected_direct,
+        )
+        .unwrap();
+        assert_eq!(
+            auth.authenticate(&idp.mint_token(missing)).await.unwrap(),
+            expected
+        );
+        let mut wrong = base.clone();
+        wrong[name] = json!(27);
+        assert_eq!(
+            auth.authenticate(&idp.mint_token(wrong)).await.unwrap_err(),
+            AuthenticationError::InvalidClaims
+        );
+    }
+}
+
+#[tokio::test]
+async fn cross_surface_shapes_and_set_valued_principal_reuse_are_refused_at_startup() {
+    let idp = MockIdp::start().await;
+    let conflicting = include_str!("fixtures/authority-mapping.yaml")
+        .replace("claim: apply_label", "claim: review_labels");
+    let project = parse_project_yaml(conflicting.as_bytes()).unwrap();
+    let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
+    let error = authenticator(
+        &registry,
+        &idp,
+        AuthorityClaimConfig::new("registry_principal", None),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error,
+        AuthenticationConfigError::ConflictingClaimExpectation
+    );
+
+    let conflicting = CANONICAL_ID_BOUNDARY_PROJECT.replace(
+        "claim: record_id, operator: equals",
+        "claim: registry_principal, operator: in",
+    );
+    let project = parse_project_yaml(conflicting.as_bytes()).unwrap();
+    let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
+    let error = authenticator(
+        &registry,
+        &idp,
+        AuthorityClaimConfig::new("registry_principal", None),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error,
+        AuthenticationConfigError::ConflictingClaimExpectation
+    );
+}
+
+#[tokio::test]
+async fn ambiguous_route_without_default_requires_explicit_selection_without_guessing_authority() {
+    let source = PROJECT.replace("    default: true\n", "");
+    let project = parse_project_yaml(source.as_bytes()).unwrap();
+    let registry = Arc::new(compile_project(&project, &[], CompileProfile::Authoring).unwrap());
+    assert!(registry
+        .access()
+        .entries
+        .iter()
+        .all(|entry| entry.default_profile_id.is_none()));
+    let harness = Harness::with_registry(registry).await;
+    let token = harness.valid_token();
+    let path = "/v1/records/cases/00000000-0000-4000-8000-000000000001";
+    let response = harness.send(path, &[bearer(&token)], None).await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(harness.records.calls.load(Ordering::SeqCst), 0);
+    let response = harness
+        .send(
+            &format!("{path}?accessProfile=caseworker"),
+            &[bearer(&token)],
+            None,
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = harness
+        .send(&format!("{path}?accessProfile=public"), &[], None)
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
 }
