@@ -216,6 +216,45 @@ fn successful_build_copies_runtime_exactly_and_excludes_local_and_validation_sec
 }
 
 #[test]
+fn an_empty_publication_description_leaves_no_candidate() {
+    let fixture = Fixture::new();
+    fixture.declare_publication();
+
+    let output = fixture
+        .command(&fixture.project, &fixture.target, &fixture.output)
+        .env("FAKE_EVIDENCE_EMPTY_DESCRIPTION", "1")
+        .output()
+        .expect("evidencectl build starts");
+
+    assert_failed(
+        &output,
+        "an empty publication description must fail the build",
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("publication"),
+        "the refusal names the publication the bundle declares: {stderr}"
+    );
+    assert!(!fixture.output.exists());
+    fixture.assert_no_staging_residue();
+}
+
+#[test]
+fn a_bundle_without_publication_carries_no_catalog_description() {
+    let fixture = Fixture::new();
+
+    let output = fixture
+        .command(&fixture.project, &fixture.target, &fixture.output)
+        .env("FAKE_EVIDENCE_EMPTY_DESCRIPTION", "1")
+        .output()
+        .expect("evidencectl build starts");
+
+    assert_success(&output, "build of a bundle that declares no publication");
+    assert!(!fixture.output.join("bundle/catalog.jsonld").exists());
+    fixture.assert_no_staging_residue();
+}
+
+#[test]
 fn sqlite_extract_build_copies_the_statement_without_http_only_artifacts() {
     let fixture = Fixture::new();
     fixture.use_sqlite_source();
@@ -697,6 +736,15 @@ impl Fixture {
         fs::write(&self.runtime, runtime).expect("runtime extract binding");
     }
 
+    /// Declare a provider publication in the deployment target, the shape
+    /// that makes `evidence render-discovery-description` produce a catalog
+    /// description rather than nothing.
+    fn declare_publication(&self) {
+        let mut governance = fs::read_to_string(&self.governance).expect("target governance");
+        governance.push_str(PUBLICATION);
+        fs::write(&self.governance, governance).expect("target governance with publication");
+    }
+
     fn remove_governance(&self) {
         let path = self.project.join("questions/answer.yaml");
         let mut contents = fs::read_to_string(&path).expect("question reads");
@@ -970,6 +1018,14 @@ authorityProfiles:
         audienceFrom: authenticated-requester
         responseFormats: [signed-jws]
         subjects: [{role: subject, selectorProfile: subject-reference-v1, valueOrigin: request}]
+"#;
+
+const PUBLICATION: &str = r#"publication:
+  serviceId: urn:example:services:evidence
+  title: Governed Evidence service
+  description: Governed minimum-disclosure Evidence service
+  endpointUrl: https://evidence.invalid
+  jurisdictions: [urn:example:jurisdictions:governed]
 "#;
 
 const TARGET_RUNTIME: &str = r#"version: 1

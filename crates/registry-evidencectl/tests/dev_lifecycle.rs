@@ -918,7 +918,7 @@ impl Project {
         let path = self.root.join("never-serves-tool");
         fs::write(
             &path,
-            "#!/bin/sh\ncase \"$*\" in *serve*) exit 1;; *) exit 0;; esac\n",
+            "#!/bin/sh\ncase \"$*\" in\n  render-discovery-description*) printf '{}\\n';;\n  *serve*) exit 1;;\nesac\n",
         )
         .expect("write the never-serving tool");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).expect("tool mode");

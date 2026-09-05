@@ -2820,6 +2820,17 @@ fn write_bundle(
     let config_path = bundle.join("evidence.yaml");
     write_private_file(&config_path, &yaml_bytes(&plan.bundle)?)?;
     let description = render_discovery_description(evidence_bin, &config_path)?;
+    // Evidence prints a description only for a bundle that declares a
+    // publication, and prints nothing for one that does not. Which of the two
+    // this is was decided by the bundle written just above, so nothing back
+    // from a publishing bundle is a rendering that did not happen, not a
+    // bundle without a publication, and a candidate published without its
+    // catalog would advertise nothing while looking complete.
+    if plan.bundle.get("publication").is_some() && description.is_empty() {
+        bail!(
+            "Evidence returned no provider publication description for a bundle that declares publication; the candidate would carry no catalog.jsonld"
+        );
+    }
     if !description.is_empty() {
         write_private_file(&bundle.join("catalog.jsonld"), &description)?;
     }
