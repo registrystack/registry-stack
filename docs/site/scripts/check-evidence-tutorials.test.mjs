@@ -53,10 +53,11 @@ test('the dry-run gate resolves every registered Evidence tutorial', async () =>
     'verify-an-assertion-as-a-consumer',
     'control-who-can-request-evidence',
     'issue-fhir-evidence-as-vcs',
+    'connect-a-sqlite-extract',
   ]) {
     assert.match(output, new RegExp(`${slug}: \\d+ sh fences, \\d+ executed`, 'u'));
   }
-  assert.match(output, /Checked 10 tutorials\./u);
+  assert.match(output, /Checked 11 tutorials\./u);
 });
 
 // The unexecuted surface is information a reviewer needs, not a rule: the
