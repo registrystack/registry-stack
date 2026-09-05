@@ -2984,7 +2984,7 @@
                   "invocation": "evidencectl client profile create",
                   "about": "Create a strict profile containing only references to local key material",
                   "long_about": null,
-                  "usage": "evidencectl client profile create [OPTIONS] --base-url <BASE_URL> --client-id <CLIENT_ID> --out <OUT> <--private-key-file <PATH>|--private-key-env <VARIABLE>>",
+                  "usage": "evidencectl client profile create [OPTIONS] --base-url <BASE_URL> --client-id <CLIENT_ID> --output <OUTPUT> <--private-key-file <PATH>|--private-key-env <VARIABLE>>",
                   "arguments": [],
                   "options": [
                     {
@@ -3100,7 +3100,7 @@
                       "environment": null
                     },
                     {
-                      "display": "--out <OUT>",
+                      "display": "--output <OUTPUT>",
                       "description": "New owner-only profile file",
                       "always_required": true,
                       "repeatable": false,
@@ -3173,7 +3173,7 @@
                   "invocation": "evidencectl client contracts fetch",
                   "about": "Fetch a closed requester-scoped contract candidate",
                   "long_about": null,
-                  "usage": "evidencectl client contracts fetch --profile <PROFILE> --out <OUT>",
+                  "usage": "evidencectl client contracts fetch --profile <PROFILE> --output <OUTPUT>",
                   "arguments": [],
                   "options": [
                     {
@@ -3186,7 +3186,7 @@
                       "environment": null
                     },
                     {
-                      "display": "--out <OUT>",
+                      "display": "--output <OUTPUT>",
                       "description": "New owner-only contract-candidate file",
                       "always_required": true,
                       "repeatable": false,
@@ -3464,11 +3464,11 @@
               "invocation": "evidencectl keygen signing",
               "about": "P-256 ES256 signing keypair as private and public JWK files",
               "long_about": null,
-              "usage": "evidencectl keygen signing [OPTIONS] --out-dir <OUT_DIR>",
+              "usage": "evidencectl keygen signing [OPTIONS] --output-dir <OUTPUT_DIR>",
               "arguments": [],
               "options": [
                 {
-                  "display": "--out-dir <OUT_DIR>",
+                  "display": "--output-dir <OUTPUT_DIR>",
                   "description": "Secret directory receiving the private JWK file (created 0700)",
                   "always_required": true,
                   "repeatable": false,
@@ -3477,7 +3477,7 @@
                   "environment": null
                 },
                 {
-                  "display": "--public-out <PUBLIC_OUT>",
+                  "display": "--public-output <PUBLIC_OUTPUT>",
                   "description": "Public JWK output path; defaults to a file inside the secret directory",
                   "always_required": false,
                   "repeatable": false,
@@ -3503,11 +3503,11 @@
               "invocation": "evidencectl keygen secret",
               "about": "One random raw secret file, 32 bytes (audit or subject-binding HMAC)",
               "long_about": "One random raw secret file, 32 bytes (audit or subject-binding HMAC). This is HMAC key material, not a credential a source will accept: the bytes are arbitrary and an HTTP header value rejects most of them. Use `keygen token` for a bearer token.",
-              "usage": "evidencectl keygen secret --out <OUT>",
+              "usage": "evidencectl keygen secret --output <OUTPUT>",
               "arguments": [],
               "options": [
                 {
-                  "display": "--out <OUT>",
+                  "display": "--output <OUTPUT>",
                   "description": "Output file for the raw secret (written 0600)",
                   "always_required": true,
                   "repeatable": false,
@@ -3533,11 +3533,11 @@
               "invocation": "evidencectl keygen token",
               "about": "One random bearer token file, printable and header-safe",
               "long_about": null,
-              "usage": "evidencectl keygen token --out <OUT>",
+              "usage": "evidencectl keygen token --output <OUTPUT>",
               "arguments": [],
               "options": [
                 {
-                  "display": "--out <OUT>",
+                  "display": "--output <OUTPUT>",
                   "description": "Output file for the bearer token (written 0600)",
                   "always_required": true,
                   "repeatable": false,
@@ -3563,11 +3563,11 @@
               "invocation": "evidencectl keygen holder",
               "about": "P-256 ES256 holder keypair for SD-JWT VC confirmation binding",
               "long_about": null,
-              "usage": "evidencectl keygen holder [OPTIONS] --out-dir <OUT_DIR>",
+              "usage": "evidencectl keygen holder [OPTIONS] --output-dir <OUTPUT_DIR>",
               "arguments": [],
               "options": [
                 {
-                  "display": "--out-dir <OUT_DIR>",
+                  "display": "--output-dir <OUTPUT_DIR>",
                   "description": "Directory receiving the holder private JWK file (created 0700)",
                   "always_required": true,
                   "repeatable": false,
@@ -3576,7 +3576,7 @@
                   "environment": null
                 },
                 {
-                  "display": "--public-out <PUBLIC_OUT>",
+                  "display": "--public-output <PUBLIC_OUTPUT>",
                   "description": "Public JWK output path; defaults to a file inside the secret directory",
                   "always_required": false,
                   "repeatable": false,
@@ -3602,11 +3602,11 @@
               "invocation": "evidencectl keygen client-assertion",
               "about": "Keypair a source's `clientAssertionKeyRef` points at, for a token endpoint that authenticates the client by signed assertion",
               "long_about": null,
-              "usage": "evidencectl keygen client-assertion [OPTIONS] --out-dir <OUT_DIR>",
+              "usage": "evidencectl keygen client-assertion [OPTIONS] --output-dir <OUTPUT_DIR>",
               "arguments": [],
               "options": [
                 {
-                  "display": "--out-dir <OUT_DIR>",
+                  "display": "--output-dir <OUTPUT_DIR>",
                   "description": "Secret directory receiving the private JWK file (created 0700)",
                   "always_required": true,
                   "repeatable": false,
@@ -3615,7 +3615,7 @@
                   "environment": null
                 },
                 {
-                  "display": "--public-out <PUBLIC_OUT>",
+                  "display": "--public-output <PUBLIC_OUTPUT>",
                   "description": "Public JWK output path; defaults to a file inside the secret directory",
                   "always_required": false,
                   "repeatable": false,
@@ -3666,7 +3666,7 @@
           "invocation": "evidencectl jwks",
           "about": "Assemble a public JWKS document from public JWK files",
           "long_about": null,
-          "usage": "evidencectl jwks [OPTIONS] --out <OUT> <PUBLIC_JWK_FILES>...",
+          "usage": "evidencectl jwks [OPTIONS] --output <OUTPUT> <PUBLIC_JWK_FILES>...",
           "arguments": [
             {
               "display": "<PUBLIC_JWK_FILES>",
@@ -3680,7 +3680,7 @@
           ],
           "options": [
             {
-              "display": "--out <OUT>",
+              "display": "--output <OUTPUT>",
               "description": "Output JWKS document path",
               "always_required": true,
               "repeatable": false,
@@ -3799,7 +3799,7 @@
           "options": [
             {
               "display": "--project <PROJECT>",
-              "description": "Editable Evidence Gateway project; defaults to the current directory",
+              "description": "Evidence project directory; defaults to the current directory. This command needs an editable project: one holding questions/ and sources/ beside evidence-project.yaml.",
               "always_required": false,
               "repeatable": false,
               "default_values": [
@@ -3828,7 +3828,7 @@
             },
             {
               "display": "-h, --help",
-              "description": "Print help",
+              "description": "Print help (see a summary with '-h')",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -3864,15 +3864,17 @@
               "invocation": "evidencectl fixtures run",
               "about": "Run `evidence check` and every bundle fixture through `evidence evaluate`",
               "long_about": null,
-              "usage": "evidencectl fixtures run [OPTIONS] --project <PROJECT>",
+              "usage": "evidencectl fixtures run [OPTIONS]",
               "arguments": [],
               "options": [
                 {
                   "display": "--project <PROJECT>",
-                  "description": "Deployment project directory containing runtime.yaml and bundle/",
-                  "always_required": true,
+                  "description": "Evidence project directory; defaults to the current directory. This command accepts either shape: an editable project holding questions/ and sources/, or a deployment project holding runtime.yaml beside bundle/.",
+                  "always_required": false,
                   "repeatable": false,
-                  "default_values": [],
+                  "default_values": [
+                    "."
+                  ],
                   "possible_values": [],
                   "environment": null
                 },
@@ -3923,7 +3925,7 @@
                 },
                 {
                   "display": "-h, --help",
-                  "description": "Print help",
+                  "description": "Print help (see a summary with '-h')",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -4050,7 +4052,7 @@
                 },
                 {
                   "display": "--project <PROJECT>",
-                  "description": "Deployment project to write the draft into; print-only if absent",
+                  "description": "Evidence project directory; the draft is printed when this is absent. This command needs an editable project: one holding questions/ and sources/ beside evidence-project.yaml.",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -4059,7 +4061,7 @@
                 },
                 {
                   "display": "-h, --help",
-                  "description": "Print help",
+                  "description": "Print help (see a summary with '-h')",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -4135,7 +4137,7 @@
                     },
                     {
                       "display": "--project <PROJECT>",
-                      "description": "Explicit Evidence authoring project; the current directory is used when omitted",
+                      "description": "Evidence project directory; defaults to the current directory. This command needs an editable project: one holding questions/ and sources/ beside evidence-project.yaml.",
                       "always_required": false,
                       "repeatable": false,
                       "default_values": [],
@@ -4189,7 +4191,7 @@
                     },
                     {
                       "display": "-h, --help",
-                      "description": "Print help",
+                      "description": "Print help (see a summary with '-h')",
                       "always_required": false,
                       "repeatable": false,
                       "default_values": [],
@@ -4294,7 +4296,7 @@
                     },
                     {
                       "display": "--project <PROJECT>",
-                      "description": "Explicit Evidence authoring project; the current directory is used when omitted",
+                      "description": "Evidence project directory; defaults to the current directory. This command needs an editable project: one holding questions/ and sources/ beside evidence-project.yaml.",
                       "always_required": false,
                       "repeatable": false,
                       "default_values": [],
@@ -4357,7 +4359,7 @@
                     },
                     {
                       "display": "-h, --help",
-                      "description": "Print help",
+                      "description": "Print help (see a summary with '-h')",
                       "always_required": false,
                       "repeatable": false,
                       "default_values": [],
@@ -4457,7 +4459,7 @@
                     },
                     {
                       "display": "--project <PROJECT>",
-                      "description": "Explicit Evidence authoring project; the current directory is used when omitted",
+                      "description": "Evidence project directory; defaults to the current directory. This command needs an editable project: one holding questions/ and sources/ beside evidence-project.yaml.",
                       "always_required": false,
                       "repeatable": false,
                       "default_values": [],
@@ -4466,7 +4468,7 @@
                     },
                     {
                       "display": "-h, --help",
-                      "description": "Print help",
+                      "description": "Print help (see a summary with '-h')",
                       "always_required": false,
                       "repeatable": false,
                       "default_values": [],
@@ -4495,15 +4497,17 @@
           "invocation": "evidencectl doctor",
           "about": "Report every project artifact whose mode or owner the runtime refuses",
           "long_about": null,
-          "usage": "evidencectl doctor [OPTIONS] --project <PROJECT>",
+          "usage": "evidencectl doctor [OPTIONS]",
           "arguments": [],
           "options": [
             {
               "display": "--project <PROJECT>",
-              "description": "Deployment project directory containing runtime.yaml and bundle/",
-              "always_required": true,
+              "description": "Evidence project directory; defaults to the current directory. This command needs a deployment project: one holding runtime.yaml beside bundle/. `evidencectl build` compiles an editable project into one.",
+              "always_required": false,
               "repeatable": false,
-              "default_values": [],
+              "default_values": [
+                "."
+              ],
               "possible_values": [],
               "environment": null
             },
@@ -4527,7 +4531,7 @@
             },
             {
               "display": "-h, --help",
-              "description": "Print help",
+              "description": "Print help (see a summary with '-h')",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -4789,8 +4793,8 @@
             {
               "name": "verify",
               "invocation": "evidencectl request verify",
-              "about": "Verify one retained Evidence Gateway response offline",
-              "long_about": null,
+              "about": "Deprecated alias for `evidencectl verify`",
+              "long_about": "Deprecated alias for `evidencectl verify`. `evidencectl verify` is the one verification command, and it takes the same arguments. This spelling keeps working so a script that already calls it is not broken by the rename.",
               "usage": "evidencectl request verify --context <CONTEXT> --output <OUTPUT> <RESPONSE>",
               "arguments": [
                 {
@@ -4824,7 +4828,7 @@
                 },
                 {
                   "display": "-h, --help",
-                  "description": "Print help",
+                  "description": "Print help (see a summary with '-h')",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -4976,7 +4980,7 @@
               "options": [
                 {
                   "display": "--project <PROJECT>",
-                  "description": "Editable Evidence Gateway project; defaults to the current directory",
+                  "description": "Evidence project directory; defaults to the current directory. This command needs an editable project: one holding questions/ and sources/ beside evidence-project.yaml.",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [
@@ -4987,7 +4991,7 @@
                 },
                 {
                   "display": "-h, --help",
-                  "description": "Print help",
+                  "description": "Print help (see a summary with '-h')",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],

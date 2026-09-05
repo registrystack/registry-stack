@@ -18,20 +18,20 @@ Keypair a source's `clientAssertionKeyRef` points at, for a token endpoint that 
 
 ## Contract status
 
-This page is generated from the public Clap command tree for Registry Stack source version `0.26.1` and catalog SHA-256 `079c4b00e55a12d92f3f115032bdc5b87195d9a4f623beafda35a7787a4b1998`. Hidden implementation commands are omitted.
+This page is generated from the public Clap command tree for Registry Stack source version `0.26.1` and catalog SHA-256 `45ce86807f99ebdcd12ed4e5d51f911c9bc55f5606bcd045c80536f942cc2977`. Hidden implementation commands are omitted.
 
 ## Usage
 
 ```text
-evidencectl keygen client-assertion [OPTIONS] --out-dir <OUT_DIR>
+evidencectl keygen client-assertion [OPTIONS] --output-dir <OUTPUT_DIR>
 ```
 
 ## Options
 
 | Option | Always required | Default | Values | Environment | Description |
 | --- | --- | --- | --- | --- | --- |
-| `--out-dir <OUT_DIR>` | Yes | n/a | n/a | n/a | Secret directory receiving the private JWK file (created 0700) |
-| `--public-out <PUBLIC_OUT>` | No | n/a | n/a | n/a | Public JWK output path; defaults to a file inside the secret directory |
+| `--output-dir <OUTPUT_DIR>` | Yes | n/a | n/a | n/a | Secret directory receiving the private JWK file (created 0700) |
+| `--public-output <PUBLIC_OUTPUT>` | No | n/a | n/a | n/a | Public JWK output path; defaults to a file inside the secret directory |
 | `--private-name <PRIVATE_NAME>` | No | n/a | n/a | n/a | Name of the private JWK file, which is the `secret:file/NAME` a source's `clientAssertionKeyRef` points at; defaults to one naming the algorithm. The public half follows it as `NAME-public.jwk.json` |
 | `--algorithm <ALGORITHM>` | No | `es384` | `es384`, `rs384` | n/a | Signature algorithm the assertion is signed with |
 | `-h, --help` | No | n/a | n/a | n/a | Print help (see a summary with '-h') |
