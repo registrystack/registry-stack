@@ -458,6 +458,36 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         )
         self.assertIn("release/scripts/build-release-binaries.sh", canonical)
 
+    def test_arm64_platform_runner_matches_the_glibc_floor_and_is_checked(
+        self,
+    ) -> None:
+        _, document = workflow("release-candidate.yml")
+        matrix = document["jobs"]["build-platforms"]["strategy"]["matrix"]["include"]
+        self.assertEqual(
+            {(entry["runner"], entry["target"], entry["asset"]) for entry in matrix},
+            {
+                ("macos-14", "aarch64-apple-darwin", "macos-arm64"),
+                ("ubuntu-22.04-arm", "aarch64-unknown-linux-gnu", "linux-arm64"),
+            },
+        )
+        steps = document["jobs"]["build-platforms"]["steps"]
+        floor_check = next(
+            step
+            for step in steps
+            if step.get("name")
+            == "Check arm64 Linux binaries against the glibc floor"
+        )
+        self.assertEqual(
+            floor_check.get("if"), "matrix.target == 'aarch64-unknown-linux-gnu'"
+        )
+        self.assertIn("release/scripts/check-glibc-floor.sh", floor_check["run"])
+        upload_index = next(
+            index
+            for index, step in enumerate(steps)
+            if step.get("name") == "Upload native platform payload"
+        )
+        self.assertLess(steps.index(floor_check), upload_index)
+
     def test_release_embeds_evidencectl_tag_and_publishes_latest_alias(self) -> None:
         _, document = workflow("release-candidate.yml")
         assemble = step_run(
