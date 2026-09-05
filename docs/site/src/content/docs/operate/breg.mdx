@@ -894,6 +894,7 @@ edit either file. `--max-chunks` and `--max-pages` bound one operator run.
 | `history rebaseline` reports `history.rebaseline.live_rows.unverified` | A live row and its journal head disagree, and the refusal names no record. Read the revisions of the records you suspect, or compare live rows with their journal heads under the migration role. |
 | `request-retention erase` is refused | The request entity's retention mode is `retain`, or the version is pinned. |
 | `audit verify` reports `audit.chain.broken` or `audit.head.mismatch` | The journal no longer links to its head. Export what is still reachable, keep the database as it is, and treat it as an integrity incident. |
+| `audit verify`, `audit export`, or `audit prune` reports `audit.envelope.invalid` | A reachable journal record holds an envelope no reader accepts, or names a link no record follows. Nothing is pruned. Keep the database as it is and treat it as an integrity incident, like a broken chain. |
 | `audit prune` reports `audit.boundary.future` | `--before` is later than the database transaction time. Choose a boundary in the past. |
 | `audit export` is refused with `audit.operation.refused` | The runtime configuration path or `--output` is relative, the destination already holds a file, or the database is unreachable. |
 | An operator command cannot reach PostgreSQL | Check the migration URL secret, the role names, and `SSL_CERT_FILE` for a private authority. |
