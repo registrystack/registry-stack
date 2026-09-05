@@ -73,14 +73,16 @@ pub(crate) struct PublicProblem {
 
 /// Build one value-free public problem. The boundary replaces this provisional
 /// body with [`ProblemBody`] carrying the request's effective trace ID.
+///
+/// The type is resolved from the code, so every refusal names a type on the
+/// shared Registry Stack identifier host and no caller can spell its own.
 pub(crate) fn problem_response(
     status: StatusCode,
-    type_uri: impl Into<String>,
     title: &'static str,
     detail: &'static str,
     code: &'static str,
 ) -> Response {
-    let type_uri = type_uri.into();
+    let type_uri = crate::problem::type_uri(code);
     let problem = PublicProblem {
         type_uri: type_uri.clone(),
         title,
@@ -103,13 +105,12 @@ pub(crate) fn problem_response(
 /// public names that were already admitted for this action surface.
 pub(crate) fn problem_response_with_field_path(
     status: StatusCode,
-    type_uri: impl Into<String>,
     title: &'static str,
     detail: &'static str,
     code: &'static str,
     field_path: impl Into<String>,
 ) -> Response {
-    let type_uri = type_uri.into();
+    let type_uri = crate::problem::type_uri(code);
     let field_path = field_path.into();
     let problem = PublicProblem {
         type_uri: type_uri.clone(),

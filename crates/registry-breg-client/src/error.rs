@@ -203,8 +203,14 @@ impl BRegProblemCode {
         }
     }
 
+    /// The type URI the service names for this code, resolved the same way the
+    /// service builds it: each dot in the code separates a path segment under
+    /// the shared Registry Stack product prefix.
     pub(crate) fn type_uri(self) -> String {
-        format!("urn:breg:problem:{}", self.code())
+        format!(
+            "https://id.registrystack.org/problems/registry-breg/{}",
+            self.code().replace('.', "/")
+        )
     }
 }
 
@@ -371,7 +377,28 @@ mod tests {
             assert_eq!(code.code(), "request.plan_refused");
             assert_eq!(code.status(), 400);
             assert_eq!(code.title(), "Bad Request");
-            assert_eq!(code.type_uri(), "urn:breg:problem:request.plan_refused");
+            assert_eq!(
+                code.type_uri(),
+                "https://id.registrystack.org/problems/registry-breg/request/plan_refused"
+            );
+        }
+    }
+
+    /// The client resolves a problem type the same way the service builds it,
+    /// on the shared Registry Stack identifier host, with each dot in the code
+    /// read as a path separator. A type the client cannot rebuild is a problem
+    /// it refuses to map.
+    #[test]
+    fn every_problem_type_resolves_on_the_shared_identifier_host() {
+        for code in BRegProblemCode::ALL {
+            assert_eq!(
+                code.type_uri(),
+                format!(
+                    "https://id.registrystack.org/problems/registry-breg/{}",
+                    code.code().replace('.', "/")
+                ),
+                "{code}"
+            );
         }
     }
 

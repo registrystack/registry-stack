@@ -5015,7 +5015,6 @@ fn invalid_request() -> Response {
 fn missing_idempotency_key() -> Response {
     crate::correlation::problem_response_with_field_path(
         StatusCode::BAD_REQUEST,
-        "urn:breg:problem:request.invalid",
         "Bad Request",
         "The Idempotency-Key header is required.",
         "request.invalid",
@@ -5101,7 +5100,6 @@ const fn planner_failure_problem(
 fn fixed_problem(status: StatusCode, code: &'static str, detail: &'static str) -> Response {
     crate::correlation::problem_response(
         status,
-        format!("urn:breg:problem:{code}"),
         status.canonical_reason().unwrap_or("Request failed"),
         detail,
         code,

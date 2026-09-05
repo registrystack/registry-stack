@@ -2583,7 +2583,7 @@ async fn assert_unique_violation_conflict_is_value_free(
     assert_eq!(
         problem,
         json!({
-            "type": "urn:breg:problem:mutation.conflict",
+            "type": "https://id.registrystack.org/problems/registry-breg/mutation/conflict",
             "title": "Conflict",
             "status": 409,
             "detail": "The mutation conflicts with current state.",

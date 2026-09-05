@@ -854,7 +854,6 @@ async fn request_timeout(
 fn timeout_problem() -> Response {
     let mut response = crate::correlation::problem_response(
         StatusCode::GATEWAY_TIMEOUT,
-        "urn:breg:problem:request.timeout",
         "Gateway Timeout",
         "The request timed out.",
         "request.timeout",

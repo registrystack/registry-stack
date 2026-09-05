@@ -537,7 +537,6 @@ fn mapped_scalar_claim(
 fn authentication_refused() -> Response {
     crate::correlation::problem_response(
         StatusCode::UNAUTHORIZED,
-        "urn:breg:problem:authentication.refused",
         "Unauthorized",
         "The bearer credential is missing or refused.",
         "authentication.refused",

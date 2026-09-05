@@ -3697,23 +3697,10 @@ fn problem_schema() -> Value {
             "fieldPath": {"type": "string", "maxLength": 256},
             "code": {
                 "type": "string",
-                "enum": [
-                    "authentication.refused",
-                    "idempotency.conflict",
-                    "lookup.unresolved",
-                    "mutation.conflict",
-                    "precondition.failed",
-                    "precondition.required",
-                    "query.cursor_invalid",
-                    "query.invalid",
-                    "request.invalid",
-                    "request.plan_refused",
-                    "request.timeout",
-                    "resource.not_found",
-                    "service.unavailable",
-                    "source.unavailable",
-                    "unsupported.media_type"
-                ]
+                "enum": crate::problem::ProblemCode::DOCUMENTED
+                    .iter()
+                    .map(|code| code.code())
+                    .collect::<Vec<_>>()
             }
         }
     })
@@ -3721,7 +3708,7 @@ fn problem_schema() -> Value {
 
 fn problem_example(status: &str, code: &str, detail: &str) -> Value {
     json!({
-        "type": format!("urn:breg:problem:{code}"),
+        "type": crate::problem::type_uri(code),
         "title": match status {
             "400" => "Bad Request",
             "401" => "Unauthorized",
