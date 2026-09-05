@@ -66,6 +66,16 @@ states the reason: a schema written by hand for one of the other parts would be
 the drift the generated pair exists to prevent. The key-path inventory at the
 end of this page is therefore the marker and the question, and nothing else.
 
+`evidencectl tooling editor` maps those two schemas onto
+`evidence-project.yaml` and `questions/*.yaml`, and maps nothing else. No
+schema artifact exists for a
+source, a selector, a derivation, an answer schema, a fixture, or an access
+policy, so an editor draws no schema diagnostics while an author writes one, and
+that silence is expected rather than a broken editor setup.
+`evidencectl tooling language-server` resolves the references between those
+parts and reports an unknown or duplicated one, and their content is checked
+when `evidencectl` compiles the project.
+
 ### Parsing, form validation, and compilation
 
 The generated schemas describe the JSON-compatible shape that can be parsed
@@ -538,6 +548,87 @@ evidencectl access policy add age-checks \
 When at least one explicit policy exists, local compilation replaces the
 single implicit all-question caller profile with one authority profile per
 policy. A project that has `access/clients/` but no access policy is rejected.
+
+## Rules that block a build
+
+Five refusals stop a project every rule above has accepted, because each comes
+from a check that runs after the form: the compiler, the bundle check, or the
+fixture runner. Each is stated once here, in the sentence the tool prints, with
+the change that clears it.
+
+**An `http-json` source declares a parameters schema.** A source under
+`sources/` that reads over HTTP declares both `request.prepareScript` and
+`request.adapterParametersSchema`; a `sqlite-extract` source declares
+`request.statement` and may declare either of the other two. A compile that
+cannot find the second stops with the pointer it looked for:
+
+```text
+referenced source is missing `/request/adapterParametersSchema`
+```
+
+The bundle check then validates `request.adapterParameters` against that schema,
+and the schema is held to the bounded-properties rule below, so a source that
+takes no reviewed parameter at all cannot be written down. Declare the one
+parameter the source really takes, require it, and give it a value. The empty
+stub `evidencectl` generates beside `adapterParameters: {}` is refused until it
+carries a parameter.
+
+**Every schema object declares bounded properties.** A schema the project owns
+under `schemas/` is read as a closed subset of JSON Schema, and an object node
+that offers nothing to bound is refused:
+
+```text
+schema objects must declare bounded properties
+```
+
+The refusal names the artifact it was reading, so the failing file is in the
+message. Each object node, the root included, writes
+`additionalProperties: false`, 1 to 64 entries under `properties`, and a
+`required` list naming exactly those properties. A source response schema is the
+one place a declared property may be left out of `required`, because projection
+drops a leaf the source did not send.
+
+**A question hands off its governance before the first fixture run.** The
+fixture runner compiles the editable project the way a production build compiles
+it, so a fixture run is already held to the production rules
+[Governance](#governance) states:
+
+```text
+every production question requires governance
+every production answer requires one stable concept id
+deployment governance must not use disposable local identifiers
+```
+
+Give every question a `governance` block and every answer a stable `id`, and
+replace the disposable `urn:registrystack:evidence:local:` identifiers a local
+generation issues. A project that only ever ran locally satisfies none of this.
+
+**A fixture identifier stays in the reserved namespace.** A fixture is approved
+when its own `fixture` identifier begins `registry.evidence.reference.` and ends
+`/v1`, or when the document declares `coequal_acceptance_definition: true`.
+Nothing else is approved, so renaming that identifier into an adopter's own
+namespace stops the evaluation:
+
+```text
+fixture is not an approved synthetic acceptance definition
+```
+
+The identifier `evidencectl new` writes is already approved. Replace the example
+requirement, concepts, schema, and rows around it and leave that one key as
+generated. A document that does not declare `synthetic_only: true` is refused
+for that alone.
+
+**A SQLite project is not served locally.** `evidencectl dev` binds an HTTP
+source and refuses a project whose source reads a published extract:
+
+```text
+local serving does not bind SQLite extracts; prove this editable project with `evidencectl fixtures run --project <dir>`
+```
+
+Fixtures are the proof loop for that transport. The first time such an answer
+travels over HTTP is after `evidencectl build` against a deployment target, so a
+project on this transport reaches HTTP a step later than an authored HTTP source
+does.
 
 ## Bounds at a glance
 
