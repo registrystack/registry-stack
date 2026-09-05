@@ -1,0 +1,8 @@
+# The Zig cross-compiler the release builds use as their C compiler and linker,
+# so every product binary links against the glibc stubs of the supported floor
+# instead of the builder container's much newer glibc.
+# --require-hashes rejects any file added to or substituted in the index later.
+# Both Linux wheels are listed: the release builder runs on amd64 and arm64.
+ziglang==0.12.1 ; sys_platform == "linux" \
+    --hash=sha256:dcde948140b9e5776c2295b9b808fb4950df7ecadaecb54623dd701502be2017 \
+    --hash=sha256:945ea8ac157373e8437b377f7eac39f16fe63cd21b2b27fb4e518466e1cd561d

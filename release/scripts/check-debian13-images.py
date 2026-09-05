@@ -17,6 +17,13 @@ RUST_BUILDER = (
 RUST_BUILDER_SNAPSHOT = "20250810T000000Z"
 RUST_BUILDER_LIBCLANG = "libclang-19-dev=1:19.1.7-3+b1"
 RUST_BUILDER_PROTOC = "protobuf-compiler=3.21.12-11"
+RUST_BUILDER_PIP = "python3-pip=25.1.1+dfsg-1"
+# The builder compiles and links the product binaries with Zig so they bind the
+# glibc symbols of the release floor rather than the builder's own newer ones.
+# Zig arrives from the Python index, so its file is pinned by hash the way the
+# Debian packages above are pinned by version.
+RUST_BUILDER_ZIG_REQUIREMENTS = "release/requirements/ziglang-0.12.1.txt"
+RUST_BUILDER_HASHED_INSTALL = "--require-hashes"
 DEBIAN_PREPARATION = (
     "debian:trixie-slim@sha256:"
     "3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258"
@@ -335,6 +342,27 @@ def check_repository(root: Path = ROOT) -> list[str]:
             RUST_BUILDER_LIBCLANG,
             relative,
             "exact libclang build package",
+            failures,
+        )
+        require(
+            text,
+            RUST_BUILDER_PIP,
+            relative,
+            "exact pip build package",
+            failures,
+        )
+        require(
+            text,
+            RUST_BUILDER_ZIG_REQUIREMENTS,
+            relative,
+            "hash-pinned Zig requirements file",
+            failures,
+        )
+        require(
+            text,
+            RUST_BUILDER_HASHED_INSTALL,
+            relative,
+            "hash-checked Python install",
             failures,
         )
         require(

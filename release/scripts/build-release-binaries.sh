@@ -24,8 +24,66 @@ if ((version_major > 0 || version_minor >= 26)); then
   include_breg=1
 fi
 
+# Compile and link every product binary through Zig against the glibc stubs of
+# the release floor. The builder carries a much newer glibc, and without this
+# the highest symbol version it happens to export becomes the floor by
+# accident: the binaries start here and refuse to start on a supported
+# distribution, with a dynamic linker error at the adopter's first run.
+release_zig_wrapper_root=""
+cleanup_zig_toolchain() {
+  if [[ -n "${release_zig_wrapper_root}" ]]; then
+    rm -rf -- "${release_zig_wrapper_root}"
+  fi
+}
+
+prepare_zig_toolchain() {
+  # shellcheck source-path=SCRIPTDIR
+  # shellcheck source=../glibc-floor.env
+  . "${repo_root}/release/glibc-floor.env"
+  local floor="${REGISTRY_GLIBC_FLOOR:?REGISTRY_GLIBC_FLOOR is required}"
+
+  local machine zig_arch
+  machine="$(uname -m)"
+  case "${machine}" in
+    x86_64) zig_arch=x86_64 ;;
+    aarch64 | arm64) zig_arch=aarch64 ;;
+    *)
+      printf 'no approved zig glibc target for %s\n' "${machine}" >&2
+      exit 2
+      ;;
+  esac
+
+  # The wrapper directory outlives this function, so the trap that removes it
+  # reads a variable that is still set when the shell exits.
+  release_zig_wrapper_root="$(mktemp -d /tmp/registry-release-zig.XXXXXX)"
+  trap cleanup_zig_toolchain EXIT
+  ln -s "${script_dir}/zig-glibc-compiler" "${release_zig_wrapper_root}/zig-cc"
+  ln -s "${script_dir}/zig-glibc-compiler" "${release_zig_wrapper_root}/zig-cxx"
+
+  local rust_target="${zig_arch}-unknown-linux-gnu"
+  local target_env="${rust_target//-/_}"
+  local cargo_target_env
+  cargo_target_env="$(printf '%s' "${target_env}" | tr '[:lower:]' '[:upper:]')"
+
+  # Zig picks its cache from HOME, which the builder points at the mounted
+  # checkout, so an unset cache directory fills the working tree with build
+  # artefacts. Both live under the wrapper root the exit trap removes.
+  export ZIG_GLOBAL_CACHE_DIR="${release_zig_wrapper_root}/cache-global"
+  export ZIG_LOCAL_CACHE_DIR="${release_zig_wrapper_root}/cache-local"
+  export REGISTRY_ZIG_PYTHON=/usr/bin/python3
+  export REGISTRY_ZIG_TARGET="${zig_arch}-linux-gnu.${floor}"
+  export HOST_CC="${release_zig_wrapper_root}/zig-cc"
+  export HOST_CXX="${release_zig_wrapper_root}/zig-cxx"
+  export TARGET_CC="${release_zig_wrapper_root}/zig-cc"
+  export TARGET_CXX="${release_zig_wrapper_root}/zig-cxx"
+  export "CC_${target_env}=${release_zig_wrapper_root}/zig-cc"
+  export "CXX_${target_env}=${release_zig_wrapper_root}/zig-cxx"
+  export "CARGO_TARGET_${cargo_target_env}_LINKER=${release_zig_wrapper_root}/zig-cc"
+}
+
 build_payload() {
   export RUSTFLAGS="${RELEASE_RUSTFLAGS:?RELEASE_RUSTFLAGS is required}"
+  prepare_zig_toolchain
 
   cargo build --release --locked \
     -p registry-manifest-cli
@@ -75,6 +133,13 @@ build_payload() {
     cp target/release/bregctl "dist/bin/bregctl-${RELEASE_TAG}-linux-amd64"
     cp target/release/breg dist/image-bin/breg
   fi
+
+  # Nothing but the staged payload is in these directories yet: the checksum
+  # files and the builder image record are written by the outer invocation
+  # after this container exits. Every staged binary is checked, so a build that
+  # slipped past the Zig toolchain fails here instead of at an adopter's first
+  # run.
+  "${script_dir}/check-glibc-floor.sh" dist/bin/* dist/image-bin/*
 }
 
 # The outer invocation prepares the pinned container. The inner invocation is
@@ -99,7 +164,15 @@ if [[ -n "${RELEASE_BUILDER_IMAGE:-}" && "${RELEASE_BUILDER_IMAGE}" != "${defaul
   exit 2
 fi
 release_builder_recipe="${repo_root}/release/docker/Dockerfile.builder"
-release_builder_recipe_sha="$(sha256sum "${release_builder_recipe}" | cut -d ' ' -f 1)"
+# The recipe is the Dockerfile plus every file it installs from, so a change to
+# either names a different builder image.
+release_builder_recipe_sha="$(
+  cat \
+    "${release_builder_recipe}" \
+    "${repo_root}/release/requirements/ziglang-0.12.1.txt" \
+    | sha256sum \
+    | cut -d ' ' -f 1
+)"
 release_builder_image="registry-stack-release-builder:${release_builder_recipe_sha}"
 release_cargo_home="${RELEASE_CARGO_HOME:-${repo_root}/.cargo-home}"
 release_target_dir="${RELEASE_TARGET_DIR:-${repo_root}/target}"

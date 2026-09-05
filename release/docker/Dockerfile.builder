@@ -13,4 +13,17 @@ RUN rm -f /etc/apt/sources.list.d/debian.sources \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         libclang-19-dev=1:19.1.7-3+b1 \
         protobuf-compiler=3.21.12-11 \
+        python3-pip=25.1.1+dfsg-1 \
     && rm -rf /var/lib/apt/lists/*
+
+# The release binaries are compiled and linked with Zig so each one binds only
+# the glibc symbols of the floor in release/glibc-floor.env. Without it the
+# builder's own much newer glibc decides the floor by accident, and a binary
+# that starts here refuses to start on a supported distribution. Zig arrives
+# from the Python index against recorded file hashes, so a file substituted
+# there later is rejected rather than installed.
+COPY release/requirements/ziglang-0.12.1.txt /tmp/ziglang-requirements.txt
+RUN python3 -m pip install --no-cache-dir --break-system-packages --require-hashes \
+        --requirement /tmp/ziglang-requirements.txt \
+    && rm -f /tmp/ziglang-requirements.txt \
+    && test "$(python3 -m ziglang version)" = 0.12.1

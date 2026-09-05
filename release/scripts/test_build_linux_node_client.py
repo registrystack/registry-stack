@@ -13,6 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 BUILD = ROOT / "release/scripts/build-linux-node-client"
 COMPILER = ROOT / "release/scripts/zig-glibc-compiler"
+FLOOR = ROOT / "release/glibc-floor.env"
 
 
 class BuildLinuxNodeClientTest(unittest.TestCase):
@@ -25,6 +26,9 @@ class BuildLinuxNodeClientTest(unittest.TestCase):
             destination = scripts / source.name
             shutil.copy2(source, destination)
             destination.chmod(0o755)
+        # The compiler reads the release glibc floor beside the scripts, so the
+        # fixture tree carries the same file the repository does.
+        shutil.copy2(FLOOR, self.root / "release" / FLOOR.name)
         self.build = scripts / BUILD.name
 
         self.bin = self.root / "bin"
