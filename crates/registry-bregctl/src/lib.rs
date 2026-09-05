@@ -984,6 +984,7 @@ enum SuggestedAction {
 struct DoctorSuccessReport {
     ok: bool,
     command: &'static str,
+    checked: &'static [&'static str],
 }
 
 #[derive(Serialize)]
@@ -7528,13 +7529,19 @@ fn write_doctor_success(
     let report = DoctorSuccessReport {
         ok: true,
         command: "doctor",
+        checked: &doctor::CHECKED_DEPENDENCIES,
     };
     let result = if format == OutputFormat::Json {
         serde_json::to_writer_pretty(&mut *stdout, &report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
-        writeln!(stdout, "doctor succeeded")
+        writeln!(stdout, "doctor succeeded").and_then(|()| {
+            for dependency in report.checked {
+                writeln!(stdout, "checked {dependency}: pass")?;
+            }
+            Ok(())
+        })
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -9147,10 +9154,21 @@ mod tests {
     #[test]
     fn doctor_success_output_is_stable_in_human_and_machine_formats() {
         for (format, expected) in [
-            (OutputFormat::Human, "doctor succeeded\n"),
+            (
+                OutputFormat::Human,
+                "doctor succeeded\n\
+                 checked runtimeConfig: pass\n\
+                 checked package: pass\n\
+                 checked database: pass\n\
+                 checked audit: pass\n\
+                 checked cursor: pass\n\
+                 checked authentication.oidc: pass\n\
+                 checked eventDestinations: pass\n\
+                 checked authentication: pass\n",
+            ),
             (
                 OutputFormat::Json,
-                "{\n  \"ok\": true,\n  \"command\": \"doctor\"\n}\n",
+                "{\n  \"ok\": true,\n  \"command\": \"doctor\",\n  \"checked\": [\n    \"runtimeConfig\",\n    \"package\",\n    \"database\",\n    \"audit\",\n    \"cursor\",\n    \"authentication.oidc\",\n    \"eventDestinations\",\n    \"authentication\"\n  ]\n}\n",
             ),
         ] {
             let mut stdout = Vec::new();

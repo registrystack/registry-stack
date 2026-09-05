@@ -7,6 +7,20 @@ use registry_breg::runtime_config::RuntimeConfigError;
 use registry_breg::startup::{prepare, StartupError};
 use registry_breg::{Diagnostic, DiagnosticSeverity};
 
+/// The startup dependencies `prepare()` checks, in the order it checks them.
+/// Doctor only reports success once every one of these has passed, so this is
+/// what a `doctor succeeded` report names as checked.
+pub(crate) const CHECKED_DEPENDENCIES: [&str; 8] = [
+    "runtimeConfig",
+    "package",
+    "database",
+    "audit",
+    "cursor",
+    "authentication.oidc",
+    "eventDestinations",
+    "authentication",
+];
+
 /// Run startup preparation without binding a listener and discard its unbound
 /// prepared state. This verifies only the dependencies preparation currently
 /// opens and intentionally owns no parallel readiness logic.
