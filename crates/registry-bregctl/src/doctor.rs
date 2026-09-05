@@ -143,6 +143,73 @@ fn diagnostic(code: &str, path: &str, message: &str) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn checked_dependencies_is_pinned_to_startups_own_vocabulary() {
+        // `CHECKED_DEPENDENCIES` is a hand-typed success-report vocabulary.
+        // Tie it to `startup_diagnostic`'s own failure-path vocabulary so the
+        // two cannot silently drift apart: collect the path every distinctly
+        // checked `StartupError` variant reports, and assert the resulting
+        // set is exactly `CHECKED_DEPENDENCIES`'s set. The `RuntimeConfig`
+        // case contributes the literal "runtimeConfig": it covers all 27
+        // `RuntimeConfigError` causes as one stage, already exercised by
+        // `runtime_config_causes_are_named_the_way_verify_already_names_them`.
+        //
+        // Three `StartupError` variants are left out of the iterated set
+        // because `prepare()` never constructs them as a distinct check:
+        // - `Shutdown` is only constructed inside `serve_until_shutdown`,
+        //   `shutdown_signal`, and `first_shutdown_signal` (startup.rs); none
+        //   of those run inside `prepare()`, and doctor never calls `serve()`.
+        // - `Logging` is only constructed inside `operational_log_level`
+        //   (startup.rs), which only `main.rs` calls, before `prepare()` or
+        //   `serve()` run.
+        // - `Listener` is reachable from `prepare()`, but only through
+        //   `map_runtime_config_error`'s
+        //   `RuntimeConfigError::InvalidMetricsListener => StartupError::Listener`
+        //   arm, fired during the same `load_runtime_config()` parse that
+        //   produces every other `RuntimeConfigError`. It names no check
+        //   `prepare()` performs separately from `runtimeConfig`, so counting
+        //   it here would double-count that one stage under a second name.
+        let distinctly_checked = [
+            StartupError::PackageRefused,
+            StartupError::DatabaseConnection,
+            StartupError::DatabaseUnready,
+            StartupError::Audit,
+            StartupError::Cursor,
+            StartupError::Oidc,
+            StartupError::Authentication,
+            StartupError::EventDestinations,
+        ];
+
+        let reported_paths: HashSet<String> = distinctly_checked
+            .into_iter()
+            .map(|error| startup_diagnostic(error).path)
+            .chain(std::iter::once("runtimeConfig".to_owned()))
+            .collect();
+        let checked_dependencies: HashSet<String> = CHECKED_DEPENDENCIES
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+
+        assert_eq!(
+            reported_paths, checked_dependencies,
+            "CHECKED_DEPENDENCIES must name exactly the checks prepare() can \
+             distinctly fail; update it (or the exclusions documented above) \
+             when they diverge"
+        );
+    }
+
+    #[test]
+    fn checked_dependencies_has_no_duplicate_entries() {
+        let mut seen = HashSet::new();
+        for dependency in CHECKED_DEPENDENCIES {
+            assert!(
+                seen.insert(dependency),
+                "duplicate entry in CHECKED_DEPENDENCIES: {dependency}"
+            );
+        }
+    }
 
     #[test]
     fn startup_value_disclosure_threat_is_enforced_by_a_closed_negative_class_mapping() {
