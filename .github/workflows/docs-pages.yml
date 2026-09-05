@@ -94,6 +94,22 @@ jobs:
             echo "docs_sha256=$(jq -er .docs_sha256 "${RUNNER_TEMP}/resolved-docs-release.json")"
           } >> "${GITHUB_OUTPUT}"
 
+      - name: Gate the released docset selector on the published release
+        env:
+          PUBLISHED_RELEASES: ${{ runner.temp }}/published-releases.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          # docsets.yaml names the release the version banner, the archive
+          # indexable flag, and the canonical selector point a reader at.
+          # Release preparation never moves it and the manifest status that
+          # the offline gate reads is written by hand, so check the selector
+          # against the release list this job already fetched. A prepared
+          # release note or manifest precedes its tag and cannot stand in for
+          # a published release.
+          release/scripts/registry-release validate-docsets \
+            --published-releases "${PUBLISHED_RELEASES}"
+
       - name: Authenticate public release and checksum inventory
         env:
           GH_TOKEN: ${{ github.token }}
