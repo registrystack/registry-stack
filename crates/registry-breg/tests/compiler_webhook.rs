@@ -130,7 +130,8 @@ fn change_request_event_project() -> Value {
                 "entity":"placement-correction-request",
                 "operations":["create","get","list","patch","submit_request","revise_request","cancel_request"],
                 "readableFields":["placement","proposed-site","reason"],
-                "writableFields":["placement","proposed-site","reason"]
+                "writableFields":["placement","proposed-site","reason"],
+              "rowBoundaries": []
             }]
         },{
             "id":"reviewer",
@@ -142,7 +143,8 @@ fn change_request_event_project() -> Value {
                 "reviewStages":[{
                     "stage":"review",
                     "targets":[{"entity":"asset-placement","readableFields":["site"],"rowBoundaries":[]}]
-                }]
+                }],
+              "rowBoundaries": []
             }]
         },{
             "id":"applier",
@@ -151,7 +153,8 @@ fn change_request_event_project() -> Value {
                 "entity":"placement-correction-request",
                 "operations":["get","list","apply_request"],
                 "readableFields":["placement","proposed-site","reason"],
-                "applyTargets":[{"entity":"asset-placement","rowBoundaries":[]}]
+                "applyTargets":[{"entity":"asset-placement","rowBoundaries":[]}],
+              "rowBoundaries": []
             }]
         }]
     })

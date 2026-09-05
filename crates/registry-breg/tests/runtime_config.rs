@@ -961,13 +961,59 @@ fn invalid_bounds_roles_paths_and_oidc_inputs_are_refused() {
                 &fixture.package_root,
                 &fixture.trust_anchor,
             )
-            .replace("principal: registry_principal", "principal: sub"),
+            .replace("principal: registry_principal", "principal: client_id"),
             RuntimeConfigError::InvalidOidc,
         ),
     ] {
         assert_eq!(
             parse_runtime_config_with_env(&raw, env_lookup).expect_err("invalid runtime refused"),
             expected
+        );
+    }
+}
+
+#[test]
+fn explicit_subject_principal_and_operator_selected_token_lifetime_are_admitted() {
+    let fixture = RuntimeFixture::new();
+    let baseline = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+    for seconds in [1, 300, 3600, 5400, 7200] {
+        let raw = baseline
+            .replace("principal: registry_principal", "principal: sub")
+            .replace(
+                "maxTokenLifetimeSeconds: 300",
+                &format!("maxTokenLifetimeSeconds: {seconds}"),
+            );
+        let config =
+            parse_runtime_config_with_env(&raw, env_lookup).expect("explicit issuer contract");
+        assert_eq!(
+            config
+                .authentication()
+                .oidc()
+                .token_verifier_config()
+                .max_token_lifetime,
+            Some(Duration::from_secs(seconds))
+        );
+    }
+    for seconds in [0, 7201] {
+        let raw = baseline.replace(
+            "maxTokenLifetimeSeconds: 300",
+            &format!("maxTokenLifetimeSeconds: {seconds}"),
+        );
+        assert!(parse_runtime_config_with_env(&raw, env_lookup).is_err());
+    }
+    for (before, after) in [
+        ("principal: registry_principal", "principal: client_id"),
+        ("principal: registry_principal", "principal: azp"),
+        ("purpose: registry_purpose", "purpose: sub"),
+    ] {
+        assert_eq!(
+            parse_runtime_config_with_env(&baseline.replace(before, after), env_lookup)
+                .expect_err("registered claims do not become fallback authority"),
+            RuntimeConfigError::InvalidOidc
         );
     }
 }

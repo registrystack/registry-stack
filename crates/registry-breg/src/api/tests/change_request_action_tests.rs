@@ -269,14 +269,16 @@ fn compiled_registry() -> Arc<CompiledRegistry> {
                   "readableFields":["site"],
                   "rowBoundaries":[{"field":"site","claim":"site_claim","operator":"equals"}]
                 }]
-              }]
+              }],
+              "rowBoundaries": []
             }]
           },{
             "id":"request-applier","principalClaim":"principal","grants":[{
               "entity":"placement-correction-request",
               "operations":["get","apply_request"],
               "readableFields":["placement"],
-              "applyTargets":[{"entity":"placement"}]
+              "applyTargets":[{"entity":"placement", "rowBoundaries": []}],
+              "rowBoundaries": []
             }]
           }]
         }"#,

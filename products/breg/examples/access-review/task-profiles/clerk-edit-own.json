@@ -1,0 +1,18 @@
+{
+  "entity": "record",
+  "accessProfile": "clerk-editor",
+  "operation": "patch",
+  "claims": {
+    "principalClaim": "registry_principal",
+    "principal": "synthetic-clerk",
+    "scopes": [
+      "record:edit-own"
+    ],
+    "purpose": "record-administration",
+    "directClaims": {
+      "assigned_districts": [
+        "north"
+      ]
+    }
+  }
+}

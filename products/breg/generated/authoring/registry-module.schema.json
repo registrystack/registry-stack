@@ -693,6 +693,11 @@
           "minimum": 0,
           "type": "integer"
         },
+        "excludePreviousReviewers": {
+          "default": false,
+          "description": "Refuse an actor who already decided another stage of this proposal version.",
+          "type": "boolean"
+        },
         "excludeSubmitter": {
           "default": false,
           "type": "boolean"

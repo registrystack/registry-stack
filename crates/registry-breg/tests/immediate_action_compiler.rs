@@ -200,7 +200,7 @@ fn household_contact_action_compiles_routes_effects_and_authority() {
         route.kind == ActionRouteKind::Invoke
             && route.path == "/v1/actions/register-household-contact"
             && route.access_profiles == vec!["contact-registrar".to_owned()]
-            && route.default_access_profile == "contact-registrar"
+            && route.default_access_profile.as_deref() == Some("contact-registrar")
     }));
     assert!(inventory.routes.iter().any(|route| {
         route.kind == ActionRouteKind::TargetConditions
@@ -280,7 +280,8 @@ fn immediate_actions_preserve_review_control_and_request_lifecycle_boundaries() 
           "operations":["get","submit_request","approve_request","apply_request"],
           "readableFields":["record","label"],
           "reviewStages":[{"stage":"review","targets":[{"entity":"record","readableFields":["label"],"rowBoundaries":[]}]}],
-          "applyTargets":[{"entity":"record","rowBoundaries":[]}]
+          "applyTargets":[{"entity":"record","rowBoundaries":[]}],
+          "rowBoundaries": []
         },{
           "action":"create-record-change-directly",
           "operations":["invoke"],
@@ -541,4 +542,48 @@ fn action_field_and_snapshot_ceilings_refuse_otherwise_valid_plans() {
             vec![expected_code]
         );
     }
+}
+
+#[test]
+fn ambiguous_action_can_require_explicit_profile_but_cannot_have_two_defaults() {
+    let mut project =
+        registry_breg::parse_project_yaml(include_bytes!("fixtures/action-authority-mapping.yaml"))
+            .unwrap();
+    project
+        .access_profiles
+        .iter_mut()
+        .for_each(|profile| profile.default = false);
+    let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
+    assert!(registry
+        .actions()
+        .routes
+        .iter()
+        .all(|route| route.default_access_profile.is_none()));
+    let openapi: serde_json::Value = serde_json::from_slice(
+        &registry
+            .artifacts()
+            .get("generated/openapi.json")
+            .unwrap()
+            .bytes,
+    )
+    .unwrap();
+    for route in &registry.actions().routes {
+        let parameters = openapi["paths"][&route.path]["post"]["parameters"]
+            .as_array()
+            .unwrap();
+        let selector = parameters
+            .iter()
+            .find(|parameter| parameter["name"] == "accessProfile")
+            .unwrap();
+        assert_eq!(selector["required"], true);
+    }
+    project
+        .access_profiles
+        .iter_mut()
+        .for_each(|profile| profile.default = true);
+    let error = compile_project(&project, &[], CompileProfile::Authoring).unwrap_err();
+    assert!(error
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "action.route_access.default_multiple"));
 }

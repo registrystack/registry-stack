@@ -87,6 +87,7 @@ accessProfiles:
     requiredPurposes: [service-site-administration]
     grants:
       - entity: service-site
+        rowBoundaries: []
         operations: [create, get, list, patch, batch]
         readableFields: [native-id, site-code, label, zone, service-kind, location, map-label]
         writableFields: [native-id, site-code, label, zone, service-kind, installation-client-id, location]
@@ -97,6 +98,7 @@ accessProfiles:
     anonymous: true
     grants:
       - entity: service-site
+        rowBoundaries: []
         operations: [get, list]
         readableFields: [native-id, site-code, label, zone, service-kind, location]
         filterableFields: [site-code, zone, service-kind]
@@ -127,6 +129,7 @@ accessProfiles:
     anonymous: true
     grants:
       - entity: service-site
+        rowBoundaries: []
         operations: [get, list]
         readableFields: [native-id, site-code, label, zone, service-kind]
         filterableFields: [site-code, zone, service-kind]
@@ -138,6 +141,7 @@ accessProfiles:
     requiredPurposes: [service-site-directory]
     grants:
       - entity: service-site
+        rowBoundaries: []
         operations: [get, list]
         readableFields: [native-id, site-code, label, zone, service-kind, map-label]
         filterableFields: [site-code, zone, service-kind]
@@ -148,6 +152,7 @@ accessProfiles:
     requiredPurposes: [service-site-map]
     grants:
       - entity: service-site
+        rowBoundaries: []
         operations: [get]
         readableFields: [native-id, site-code, label, zone, service-kind, location, map-label]
 vocabularies:

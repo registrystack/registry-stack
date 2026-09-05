@@ -8,10 +8,10 @@ use serde::Serialize;
 use crate::compiler::operation_id;
 use crate::contract::{
     AccessProfileSource, AccessRequirementsSource, Classification, EntitySource, FieldTypeSource,
-    Operation,
+    Operation, RowBoundarySource,
 };
 use crate::diagnostics::Diagnostic;
-use crate::model::CompiledRegistry;
+use crate::model::{CompiledActionInventory, CompiledEntity, CompiledRegistry};
 
 fn profile_path(entity: &str, profile: &str) -> String {
     format!("entities[id={entity}].accessProfiles[id={profile}]")
@@ -153,9 +153,24 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
             if entity.classification != Classification::Public
                 && profile.operations.contains(&Operation::List)
                 && profile.row_boundaries.is_empty()
+                && profile.request_visibility.is_none()
             {
                 findings.push(Diagnostic::finding("access.profile.unrestricted_collection", format!("{path}.rowBoundaries"),
                     "this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access"));
+            }
+            let unrestricted_non_read = profile.request_visibility.is_some()
+                && profile
+                    .operations
+                    .iter()
+                    .any(|operation| !matches!(operation, Operation::Get | Operation::List));
+            if entity.classification != Classification::Public
+                && profile.row_boundaries.is_empty()
+                && ((!profile.operations.contains(&Operation::List)
+                    && profile.request_visibility.is_none())
+                    || unrestricted_non_read)
+            {
+                findings.push(Diagnostic::finding("access.profile.unrestricted_rows", format!("{path}.rowBoundaries"),
+                    "this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access"));
             }
             if profile.anonymous
                 && profile.operations.contains(&Operation::List)
@@ -218,6 +233,38 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
     findings
 }
 
+/// Findings on target grants after their types and referenced entities have compiled.
+pub(crate) fn compiled_access_findings(
+    entities: &BTreeMap<String, CompiledEntity>,
+    actions: &CompiledActionInventory,
+) -> Vec<Diagnostic> {
+    let mut findings = Vec::new();
+    for reach in row_reach(entities, actions) {
+        // Ordinary grants retain their existing finding codes above.
+        if reach.surface == "entity" {
+            continue;
+        }
+        if reach.rows == "all"
+            && entities
+                .get(&reach.entity)
+                .is_some_and(|entity| entity.classification != Classification::Public)
+        {
+            findings.push(Diagnostic::finding("access.target.unrestricted_rows", &reach.source_path,
+                "this target grant has no claim-bound row restriction, within its configured operation and field limits. Review this registry-wide target authority"));
+        }
+    }
+    for action in &actions.actions {
+        for grant in &action.grants {
+            if !grant.anonymous && grant.required_scopes.is_empty() {
+                findings.push(Diagnostic::finding("access.action.no_required_scope",
+                    format!("actions[id={}].grants[profile={}].requiredScopes", action.id, grant.profile_id),
+                    "no scope restricts who may select this action profile; any authenticated principal satisfying its purpose and target claims qualifies. Add a required scope unless this is intended"));
+            }
+        }
+    }
+    findings
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccessExplanation {
@@ -225,8 +272,15 @@ pub struct AccessExplanation {
     pub purpose_matching: &'static str,
     pub row_matching: &'static str,
     pub profile_selection: &'static str,
+    pub relationship_matching: &'static str,
+    pub missing_claims: &'static str,
+    pub evaluation: &'static str,
     pub routes: crate::model::CompiledAccessInventory,
     pub entities: Vec<EntityAccessExplanation>,
+    pub actions: CompiledActionInventory,
+    pub row_reach: Vec<RowReachExplanation>,
+    pub claim_contract: Option<crate::authority::AuthorityInventory>,
+    pub claim_contract_error: Option<crate::authority::AuthorityInventoryError>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -238,18 +292,142 @@ pub struct EntityAccessExplanation {
     pub profiles: Vec<AccessProfileSource>,
 }
 
-/// Explain the effective profiles, not just route-to-profile identifiers.
+/// Configuration locations identify compiled grants, not original file line numbers.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RowReachExplanation {
+    pub entity: String,
+    pub profile: String,
+    pub source_path: String,
+    pub surface: &'static str,
+    pub rows: &'static str,
+    pub row_boundaries: Vec<RowBoundarySource>,
+    pub owner_only_request_reads: bool,
+}
+
+fn row_reach(
+    entities: &BTreeMap<String, CompiledEntity>,
+    actions: &CompiledActionInventory,
+) -> Vec<RowReachExplanation> {
+    let mut reach = Vec::new();
+    let mut add = |entity: &str,
+                   profile: &str,
+                   source_path: String,
+                   surface,
+                   boundaries: &[RowBoundarySource],
+                   owner| {
+        reach.push(RowReachExplanation {
+            entity: entity.to_owned(),
+            profile: profile.to_owned(),
+            source_path,
+            surface,
+            rows: if boundaries.is_empty() {
+                "all"
+            } else {
+                "claim_bound"
+            },
+            row_boundaries: boundaries.to_vec(),
+            owner_only_request_reads: owner,
+        });
+    };
+    for entity in entities.values() {
+        for profile in entity.access_profiles.values() {
+            let path = profile_path(&entity.id, &profile.id);
+            add(
+                &entity.id,
+                &profile.id,
+                format!("{path}.rowBoundaries"),
+                "entity",
+                &profile.row_boundaries,
+                profile.request_visibility.is_some(),
+            );
+            for stage in &profile.review_stages {
+                for target in &stage.targets {
+                    add(
+                        &target.entity,
+                        &profile.id,
+                        format!(
+                            "{path}.reviewStages[stage={}].targets[entity={}].rowBoundaries",
+                            stage.stage, target.entity
+                        ),
+                        "review_target",
+                        &target.row_boundaries,
+                        false,
+                    );
+                }
+            }
+            for target in &profile.apply_targets {
+                add(
+                    &target.entity,
+                    &profile.id,
+                    format!(
+                        "{path}.applyTargets[entity={}].rowBoundaries",
+                        target.entity
+                    ),
+                    "apply_target",
+                    &target.row_boundaries,
+                    false,
+                );
+            }
+            for target in &profile.request_presence {
+                add(
+                    &target.request_type,
+                    &profile.id,
+                    format!(
+                        "{path}.requestPresence[requestType={}].rowBoundaries",
+                        target.request_type
+                    ),
+                    "request_presence",
+                    &target.row_boundaries,
+                    false,
+                );
+            }
+        }
+    }
+    for action in &actions.actions {
+        for grant in &action.grants {
+            for target in &grant.targets {
+                add(
+                    &target.entity_id,
+                    &grant.profile_id,
+                    format!(
+                        "actions[id={}].grants[profile={}].targets[entity={}].rowBoundaries",
+                        action.id, grant.profile_id, target.entity_id
+                    ),
+                    "action_target",
+                    &target.row_boundaries,
+                    false,
+                );
+            }
+        }
+    }
+    reach
+}
+
+/// Explain compiled authority without verifying credentials or evaluating records.
 pub fn explain_access(registry: &CompiledRegistry) -> AccessExplanation {
+    let (claim_contract, claim_contract_error) =
+        match crate::authority::authority_inventory(registry) {
+            Ok(inventory) => (Some(inventory), None),
+            Err(error) => (None, Some(error)),
+        };
     AccessExplanation {
         scope_matching: "all required scopes must be present",
         purpose_matching: "one allowed purpose must match; empty means unrestricted",
-        row_matching: "all claim-bound row predicates must hold; empty means no row restriction",
+        row_matching: "all claim-bound row predicates must hold; explicit empty boundaries mean no claim-bound row restriction; requestVisibility owner additionally limits request reads",
         profile_selection: "one profile per request; selecting its name never grants authority and profiles are not merged",
+        relationship_matching: "relationship paths use the root profile row boundaries and the path's target field permissions; target direct profiles do not apply",
+        missing_claims: "missing required direct claims cannot satisfy their row boundary or verified-claim lookup; types and scalar/set shape are listed in claimContract",
+        evaluation: "configuration inspection only; credentials and record access are not evaluated",
         routes: registry.access().clone(),
         entities: registry.entities().values().map(|entity| EntityAccessExplanation {
             entity: entity.id.clone(), classification: entity.classification,
             requirements: entity.access_requirements.clone(),
             profiles: entity.access_profiles.values().cloned().collect(),
         }).collect(),
+        actions: registry.actions().clone(),
+        row_reach: row_reach(registry.entities(), registry.actions()),
+        claim_contract,
+        claim_contract_error,
     }
 }

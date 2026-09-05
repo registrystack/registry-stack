@@ -3939,7 +3939,8 @@ mod tests {
               "accessProfiles":[{
                 "id":"map-reader","default":true,"principalClaim":"principal","grants":[{
                   "entity":"site","operations":["get","list"],"readableFields":["code","location"],
-                  "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.25,"maximumLatitudeSpanDegrees":1.5}}
+                  "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.25,"maximumLatitudeSpanDegrees":1.5}},
+                  "rowBoundaries": []
                 }]
               }]
             }"#,

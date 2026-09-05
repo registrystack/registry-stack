@@ -2333,7 +2333,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             "id":"anonymous-reader","anonymous":true,
             "grants":[{
               "entity":"widget","operations":["get","list"],
-              "readableFields":["label"]
+              "readableFields":["label"],
+              "rowBoundaries": []
             }]
           },{
             "id":"label-editor","principalClaim":"registry_principal",

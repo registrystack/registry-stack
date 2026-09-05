@@ -203,6 +203,7 @@ accessProfiles:
       - facility-inspection
     grants:
       - entity: inspection
+        rowBoundaries: []
         operations:
           - create
           - get
@@ -224,6 +225,7 @@ accessProfiles:
           - inspection-code
           - facility-code
       - entity: inspection-observation
+        rowBoundaries: []
         operations:
           - create
           - get
@@ -246,6 +248,7 @@ accessProfiles:
           - inspection
           - inspection-domain
       - entity: permit
+        rowBoundaries: []
         operations:
           - create
           - get
@@ -277,6 +280,7 @@ accessProfiles:
           - permit-status
           - valid-from
       - entity: public-authority
+        rowBoundaries: []
         operations:
           - create
           - get

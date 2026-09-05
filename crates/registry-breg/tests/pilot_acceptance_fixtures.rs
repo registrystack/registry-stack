@@ -486,7 +486,10 @@ fn business_pilot_fixture_compiles_composite_identifiers_temporal_appointments_a
         .iter()
         .find(|entry| entry.entity_id == "legal-entity" && entry.operation == Operation::Get)
         .expect("legal entity read access compiles");
-    assert_eq!(get_access.default_profile_id, "public-register");
+    assert_eq!(
+        get_access.default_profile_id.as_deref(),
+        Some("public-register")
+    );
     assert!(get_access.profile_ids.contains("business-registrar"));
     assert!(get_access.profile_ids.contains("public-register"));
 

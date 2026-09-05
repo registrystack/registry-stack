@@ -71,6 +71,7 @@ accessProfiles:
     anonymous: true
     grants:
       - entity: public-unit
+        rowBoundaries: []
         operations: [get, list]
         readableFields: [label]
   - id: protected-reader
@@ -80,6 +81,7 @@ accessProfiles:
     requiredPurposes: [bounded-read]
     grants:
       - entity: protected-unit
+        rowBoundaries: []
         operations: [get, list]
         readableFields: [label]
   - id: fixture-writer
@@ -89,10 +91,12 @@ accessProfiles:
     requiredPurposes: [fixture-setup]
     grants:
       - entity: public-unit
+        rowBoundaries: []
         operations: [create]
         readableFields: [label]
         writableFields: [label]
       - entity: protected-unit
+        rowBoundaries: []
         operations: [create]
         readableFields: [label]
         writableFields: [label]

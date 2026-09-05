@@ -1,0 +1,66 @@
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry: {id: authority-mapping, version: "1", defaultLanguage: en, canonicalBaseIri: https://authority.example.test}
+entities:
+  - id: asset
+    primaryDataset: test-dataset
+    route: assets
+    mutationMode: mutable
+    changeControl: {requiredFor: [patch]}
+    classification: internal
+    fields:
+      - {id: label, type: string, maxLength: 32, required: true, classification: internal}
+    selectorProfiles:
+      - id: label
+        fields: [label]
+    constraints:
+      - {kind: unique, fields: [label]}
+  - id: correction
+    primaryDataset: test-dataset
+    route: corrections
+    mutationMode: mutable
+    classification: internal
+    fields:
+      - {id: asset, type: reference, target: asset, required: true, classification: internal}
+      - {id: label, type: string, maxLength: 32, required: true, classification: internal}
+    changeRequest:
+      effects:
+        - id: relabel
+          target: {fromField: asset}
+          operation: patch
+          set: {label: {fromField: label}}
+      review:
+        stages: [{id: review, approvals: 1}]
+accessProfiles:
+  - id: operator
+    default: true
+    principalClaim: registry_principal
+    grants:
+      - entity: asset
+        operations: [get, lookup]
+        readableFields: [label]
+        rowBoundaries: []
+        lookups:
+          - selector: label
+            valueOrigin: verified_claim
+            claimMapping: {label: lookup_label}
+        requestPresence:
+          - requestType: correction
+            rowBoundaries: [{field: label, claim: presence_label, operator: equals}]
+  - id: reviewer
+    default: true
+    principalClaim: registry_principal
+    grants:
+      - entity: correction
+        operations: [get, submit_request, approve_request, reject_request, request_revision, apply_request]
+        readableFields: [asset, label]
+        rowBoundaries: []
+        reviewStages:
+          - stage: review
+            targets:
+              - entity: asset
+                readableFields: [label]
+                rowBoundaries: [{field: label, claim: review_labels, operator: in}]
+        applyTargets:
+          - entity: asset
+            rowBoundaries: [{field: label, claim: apply_label, operator: equals}]

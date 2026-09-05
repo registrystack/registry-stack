@@ -61,6 +61,7 @@ accessProfiles:
     anonymous: true
     grants:
       - entity: case
+        rowBoundaries: []
         operations: [get, list]
         readableFields: [label]
         filterableFields: [label]

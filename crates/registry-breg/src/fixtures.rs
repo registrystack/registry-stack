@@ -6569,12 +6569,13 @@ journeys:
             request_stage: None,
             maximum_records: Some(1),
             access_profiles: vec!["submitter".to_owned()],
-            default_access_profile: "submitter".to_owned(),
+            default_access_profile: Some("submitter".to_owned()),
         };
         let profile: AccessProfileSource = serde_json::from_value(json!({
             "id": "submitter",
             "principalClaim": "principal",
-            "operations": ["submit_request"]
+            "operations": ["submit_request"],
+            "rowBoundaries": []
         }))
         .expect("test profile parses");
         let step = ValidatedStep {
@@ -6728,12 +6729,13 @@ journeys:
             request_stage: None,
             maximum_records: Some(1),
             access_profiles: vec!["submitter".to_owned()],
-            default_access_profile: "submitter".to_owned(),
+            default_access_profile: Some("submitter".to_owned()),
         };
         let profile: AccessProfileSource = serde_json::from_value(json!({
             "id": "submitter",
             "principalClaim": "principal",
-            "operations": ["submit_request"]
+            "operations": ["submit_request"],
+            "rowBoundaries": []
         }))
         .expect("test profile parses");
         ValidatedStep {

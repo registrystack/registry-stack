@@ -513,7 +513,7 @@ fn review_decision_available(
     }
     !workflow.decisions().iter().any(|decision| {
         decision.version() == proposal.version()
-            && decision.stage_id() == stage
+            && (decision.stage_id() == stage || pending_stage.exclude_previous_reviewers)
             && decision.actor().as_str() == actor
     })
 }
@@ -1289,15 +1289,18 @@ mod tests {
               }],
               "accessProfiles":[{
                 "id":"reader","principalClaim":"principal","grants":[{
-                  "entity":"request","operations":["get"],"readableFields":["label"]
+                  "entity":"request","operations":["get"],"readableFields":["label"],
+                  "rowBoundaries": []
                 }]
               },{
                 "id":"empty-editor","principalClaim":"principal","grants":[{
-                  "entity":"request","operations":["get","patch"],"readableFields":["label"]
+                  "entity":"request","operations":["get","patch"],"readableFields":["label"],
+                  "rowBoundaries": []
                 }]
               },{
                 "id":"editor","default":true,"principalClaim":"principal","grants":[{
-                  "entity":"request","operations":["get","patch"],"readableFields":["label"],"writableFields":["label"]
+                  "entity":"request","operations":["get","patch"],"readableFields":["label"],"writableFields":["label"],
+                  "rowBoundaries": []
                 }]
               }]
             }"#,
@@ -1467,7 +1470,8 @@ mod tests {
               }],
               "accessProfiles":[{
                 "id":"operator","default":true,"principalClaim":"principal","grants":[{
-                  "entity":"target","operations":["get"],"readableFields":["proposed-site"]
+                  "entity":"target","operations":["get"],"readableFields":["proposed-site"],
+                  "rowBoundaries": []
                 }]
               }]
             }"#,
@@ -1541,6 +1545,7 @@ mod tests {
                 id: "review".to_owned(),
                 approvals,
                 exclude_submitter,
+                exclude_previous_reviewers: false,
             }],
             vec![PreparedEffect::new(
                 EffectId::new("effect").expect("effect id"),
