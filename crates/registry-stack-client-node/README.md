@@ -24,7 +24,17 @@ npm install --save-dev "@types/node"
 ```
 
 The package does not declare that dependency itself, because a JavaScript
-consumer does not need it.
+consumer does not need it. Installing `@types/node` is not sufficient on its
+own: if `tsconfig.json` sets `compilerOptions.types` to an explicit list,
+`Buffer` still reports `TS2591` unless that list includes `"node"`:
+
+```json
+{
+  "compilerOptions": {
+    "types": ["node"]
+  }
+}
+```
 
 Each product remains in its own namespace because its routing,
 authentication, errors, and verification rules are different. The package

@@ -66,6 +66,16 @@ npm install --save-dev "@types/node"
 ```
 
 The package does not declare that dependency itself, because a JavaScript consumer does not need it.
+Installing `@types/node` is not sufficient on its own: if `tsconfig.json` sets `compilerOptions.types`
+to an explicit list, `Buffer` still reports `TS2591` unless that list includes `"node"`:
+
+```json
+{
+  "compilerOptions": {
+    "types": ["node"]
+  }
+}
+```
 
 A Rust application takes the source crate from the matching release tag. `registry-stack-client` is
 the facade that re-exports the four product clients under `breg`, `discovery`, `evidence`, and
@@ -117,10 +127,18 @@ The naming convention is fixed across the bindings:
   bundle as `bytes` in Python; `trustedRootCertificates` accepts it as a string in Node, except in
   the Discovery namespace, where it is a `Buffer`.
 
-Every method performs at most one service exchange. A configured private-key-JWT provider can make a
-separate token-endpoint exchange when it needs to acquire or refresh a bearer. No client follows
-redirects, reads ambient proxy configuration, retries an exchange, fetches referenced schemas, or
-advances pagination on its own.
+A method that sends an already-prepared request performs at most one service exchange. A configured
+private-key-JWT provider can make a separate token-endpoint exchange when it needs to acquire or
+refresh a bearer. No client follows redirects, reads ambient proxy configuration, retries an
+exchange, fetches referenced schemas, or advances pagination on its own.
+
+The Evidence client's profile-driven methods are the exception. `request`, `prepare_progressive`,
+`contracts_candidate`, and `refresh_metadata` assemble or refresh a cached service snapshot first,
+which can cost a protected-resource metadata fetch, an authorization-server metadata fetch, and, for
+the `https-discovery` and `local-loopback-discovery` trust profiles, a service JWKS fetch. `request`,
+`prepare_progressive`, and `contracts_candidate` also fetch the published definitions catalog when
+the profile's contracts are `published` rather than a reviewed file. A cached, unexpired snapshot
+skips all of it.
 
 Base URLs may carry a deployment prefix. HTTPS is required except for loopback HTTP, and the URL
 cannot contain credentials, a query, a fragment, or ambiguous empty path segments.
@@ -232,8 +250,12 @@ Python raises `discovery.DiscoveryClientError` and Node throws the same named cl
 ## Evidence Gateway
 
 The Evidence client requests minimum-disclosure assertions over the public Evidence HTTP contract
-and verifies every response against a pinned key set. Verification is the point of the client: the
-deployment's own published key set is never fetched to judge a response it also produced.
+and verifies every response. Verification is the point of the client: a client built directly with
+`EvidenceClientConfig::new`, or read `from_profile` with the `pinned-jwks` trust profile, verifies
+against only a key set the caller pinned out of band; the deployment's own published key set is
+never fetched to judge a response it also produced. A profile using the default `https-discovery`
+trust (or `local-loopback-discovery`) instead fetches that published key set itself before verifying
+against it.
 
 ### Construct an Evidence client
 
@@ -320,11 +342,15 @@ Use a pre-acquired short-lived static bearer when an issuer requires those membe
 ### Read a client from a profile
 
 `from_profile` and `fromProfile` read an application-owned Evidence client profile, which carries
-the base URL, the pinned key set, and the credential configuration in one file. The profile is the
-owner-only JSON document `evidencectl client profile create --output` writes. The optional second
-argument is a private JWK held in memory, for an application that reads its key from a secret
-manager rather than from disk. It is never retained by the wrapper, and profile paths and
-file-backed secrets are redacted from every error.
+the base URL, a trust configuration, a contracts configuration, and the credential configuration in
+one file; each is a reference to material, never the material itself. The profile is the owner-only
+JSON document `evidencectl client profile create --output` writes. The trust configuration decides
+whether the deployment's published key set is fetched: the default `https-discovery` trust (and
+`local-loopback-discovery`) fetches and verifies against it, while `pinned-jwks` instead points to a
+reviewed local key set file, so nothing is fetched. The optional second argument is a private JWK
+held in memory, for an application that reads its key from a secret manager rather than from disk.
+It is never retained by the wrapper, and profile paths and file-backed secrets are redacted from
+every error.
 
 ```python
 client = evidence.EvidenceClient.from_profile("evidence-client.json")
@@ -450,7 +476,7 @@ them `status`, `code`, `traceId`, `retryAfterSeconds`, `transportKind`, and `tok
     crates/registry-evidence-client-py/python/registry_evidence_client/__init__.pyi,
     crates/registry-evidence-client/src/client.rs,
     crates/registry-evidence-client/src/config.rs,
-    crates/registry-evidence-client/src/profile.rs, EvidenceClientProfile::from_file */}
+    crates/registry-evidence-client/src/profile.rs, EvidenceClientProfile::from_file, TrustProfile */}
 
 ## Registry Relay
 
