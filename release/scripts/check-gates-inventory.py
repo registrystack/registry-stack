@@ -313,6 +313,18 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ("Docs dependency install", "run: npm ci"),
     ("Docs tests", "run: npm test"),
     ("Production-shaped docs build check", "run: npm run check:production"),
+    (
+        "Base Registry Engine tutorial replay",
+        "bash docs/site/scripts/check-breg-tutorial.sh",
+    ),
+    (
+        "Base Registry Engine tutorial command drift",
+        "run: npm run check:tutorial:breg:dry-run",
+    ),
+    (
+        "Base Registry Engine tutorial path filter",
+        '"docs/site/scripts/check-breg-tutorial.sh",',
+    ),
 )
 
 RELEASE_SECURITY_POLICY_PATHS = (
@@ -565,6 +577,16 @@ REQUIRED_RELEASE_SECURITY_GATES = (
             "python3 release/scripts/verify_latest_published_release.py",
             "name: Recheck latest published docs release immediately before deployment",
             "name: Deploy to GitHub Pages",
+        ),
+    ),
+    (
+        "Released docset selector gated on the published release",
+        ".github/workflows/docs-pages.yml",
+        (
+            "name: Resolve latest published docs release",
+            "name: Gate the released docset selector on the published release",
+            "release/scripts/registry-release validate-docsets \\",
+            '--published-releases "${PUBLISHED_RELEASES}"',
         ),
     ),
     (
