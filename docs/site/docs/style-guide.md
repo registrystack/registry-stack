@@ -1,7 +1,7 @@
 # Registry Docs writing style guide
 
 **Status:** current
-**Last reviewed:** 2026-08-19
+**Last reviewed:** 2026-09-05
 **Applies to:** every page under `src/content/docs/` and every contributor or agent that writes them.
 
 This guide tells you how to write for Registry Docs. It is short on purpose. When in doubt, prefer clarity over cleverness, evidence over assertion, and the reader's task over the writer's voice. Borrowed from GitLab's documentation style guide, then trimmed and adapted to a 20-page institutional docs site.
@@ -100,10 +100,13 @@ Preferred terms.
 | Domain                | Preferred                                            |
 | --------------------- | ---------------------------------------------------- |
 | Product family        | `registry stack` (lowercase) for the concept; `Registry Docs` for the site and repo |
-| Formal product names  | `Registry Platform`, `Registry Manifest`, `Registry Relay`, and `Evidence Gateway` (Title Case); `Registry Mint` is a supporting service, not one of the four |
+| Formal product names  | `Base Registry Engine`, `Evidence Gateway`, `Registry Discovery`, `Registry Manifest`, `Registry Platform`, and `Registry Relay` (Title Case); `Registry Mint` is a supporting service that issues access tokens, not one of them |
+| Short forms           | Write the formal name on the page's first use, then the short form for the rest of that page: `BReg`, introduced as `Base Registry Engine (BReg)`; `Evidence` for Evidence Gateway; `Relay` for Registry Relay; `Discovery` for Registry Discovery; `Mint` for Registry Mint. A page may keep the formal name throughout. `Relay V2` names the runtime generation, not the product, so use it only where the page is about that generation. |
+| The two `registry.yaml` documents | Base Registry Engine and Registry Relay each compile a file named `registry.yaml`, and the two grammars are unrelated. Relay's is the Registry contract (`kind: RegistryContract`); BReg's is the root of a registry project. Where both products are in view, write `the BReg registry document` and `the Relay registry document`. |
+| Names that never appear | `BREG`, `Breg`, `bReg`, `B-Reg`, `EG`, `Relay2`, and `RelayV2`. `Registry Server` was renamed to Base Registry Engine and survives only in an explicit rename note. `Protected Registry APIs` names a runtime pattern, never the Relay product; the pattern reads `protected registry API` in lowercase prose. Binaries stay lowercase and monospace, `breg`, `bregctl`, `relay`, `relayctl`, `evidence`, `evidencectl`, `mint`, `discovery`, and `discoveryctl`, and none of them is the product name. |
 | Retired product       | `Registry Notary` keeps its Title Case name, but only where the page says in the same block that it is retired |
 | External adopter demo | `Solmara Lab` (Title Case); not a formal Registry Stack product |
-| Repo slugs            | `registry-platform`, `registry-manifest`, `registry-relay`, `registry-evidence`, and `registry-mint`; `solmara-lab` for the external adopter demo (monospace) |
+| Repo slugs            | `registry-platform`, `registry-manifest`, `registry-relay`, `registry-evidence`, `registry-mint`, `registry-breg`, and `registry-discovery`; `solmara-lab` for the external adopter demo (monospace) |
 | Legacy identifiers    | `registry-evidence-gateway-pdp/v1` is a Relay PDP profile identifier. It does not name or connect to the Evidence Gateway product. |
 | Legacy repo paths     | `registry_relay` and `decentralized-evidence-demo` appear only in historical pages or `rename_status` fields. Never in prose on a `current` page without explicit rename context. |
 | Standards             | Use the official acronym after spelling on first use. `DCAT`, `SHACL`, `OGC API Records`, `SD-JWT VC`, `CCCEV`. Never translate. |
