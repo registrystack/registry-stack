@@ -97,6 +97,11 @@ pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
         b"secrets/\n.evidence/\n",
         0o644,
     )?;
+    // A project a reader can edit needs a page naming what was written and what
+    // comes next, and the two authoring paths leave different things standing:
+    // the starter is a working example, the retained description is an empty
+    // frame around one operation not yet selected.
+    write_new_file(&staged_root.join("README.md"), source.readme(), 0o644)?;
     if let Some(document) = retained_openapi.as_ref() {
         write_new_file(
             &staged_root.join(RETAINED_OPENAPI_FILE),
@@ -145,6 +150,10 @@ pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
         "Created an editable {} authoring project in {}",
         source.label(),
         args.directory.display()
+    );
+    println!(
+        "  README: {} (what each file holds, and what comes next)",
+        args.directory.join("README.md").display()
     );
     if matches!(source, AuthoringSource::OpenApi(_)) {
         println!(
@@ -207,6 +216,13 @@ impl AuthoringSource<'_> {
         match self {
             Self::OpenApi(_) => "OpenAPI",
             Self::SqliteExtract => "SQLite-extract",
+        }
+    }
+
+    fn readme(self) -> &'static [u8] {
+        match self {
+            Self::OpenApi(_) => include_bytes!("../templates/openapi/README.md"),
+            Self::SqliteExtract => include_bytes!("../templates/sqlite-extract/README.md"),
         }
     }
 }
