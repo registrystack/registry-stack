@@ -1831,3 +1831,67 @@ fn publish_fails_closed_when_site_root_is_a_file() {
         "publish must exit non-zero when --site-root is a file"
     );
 }
+
+#[test]
+fn validate_and_render_multi_vocabulary_field_concepts() {
+    let manifest = manifest_product_root()
+        .join("fixtures/semantic-concepts/aligned-person-concepts.metadata.yaml");
+    let output = Command::new(bin())
+        .args(["validate", manifest.to_str().unwrap()])
+        .output()
+        .expect("run cli");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = Command::new(bin())
+        .args(["render", manifest.to_str().unwrap(), "--format", "shacl"])
+        .output()
+        .expect("run cli");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let rendered = String::from_utf8(output.stdout).expect("stdout utf8");
+    assert!(
+        !rendered.contains("skos:exactMatch"),
+        "listing several concepts on one field must not render an equivalence claim"
+    );
+
+    let shacl: serde_json::Value = serde_json::from_str(&rendered).expect("shacl json");
+    let properties = shacl["@graph"]
+        .as_array()
+        .expect("@graph")
+        .iter()
+        .find(|node| node["@type"] == "sh:NodeShape")
+        .expect("node shape")["sh:property"]
+        .as_array()
+        .expect("property shapes")
+        .clone();
+    let path_for = |name: &str| {
+        properties
+            .iter()
+            .find(|property| property["sh:name"] == name)
+            .unwrap_or_else(|| panic!("property shape for {name}"))["sh:path"]
+            .as_str()
+            .expect("sh:path")
+            .to_string()
+    };
+    assert_eq!(
+        path_for("birth_date"),
+        "https://publicschema.org/date_of_birth",
+        "the first concept must supply the generated property identifier"
+    );
+    assert_eq!(
+        path_for("given_name"),
+        "https://publicschema.org/given_name"
+    );
+    assert_eq!(
+        path_for("person_id"),
+        "https://person-register.example.gov/metadata/datasets/person-register/entities/person/fields/person_id",
+        "a field with no concept must fall back to its deterministic manifest URI"
+    );
+}

@@ -7,6 +7,24 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- Documented the ordering and authority semantics of `fields[].concepts` in the
+  Registry Manifest reference: the first entry is the generated property
+  identifier rendered as SHACL `sh:path` and JSON Schema `x-concept-uri`, every
+  entry is preserved in author order in catalog JSON, and an empty list falls
+  back to a deterministic manifest URI. The reference also records what a
+  concept reference does not do: it asserts no mapping between concepts, grants
+  no access and triggers no safeguard, is not validated against the vocabulary
+  it names, and is never resolved.
+- Added `fixtures/semantic-concepts/aligned-person-concepts.metadata.yaml`, a
+  non-normative example that binds one field to a PublicSchema term and to an EU
+  SEMIC Core Person Vocabulary term without asserting equivalence, alongside a
+  field with no concept and a field with one concept.
+
+Generated output is unchanged. The tests added with this entry pin the existing
+behavior.
+
 ## [0.26.1] - 2026-09-04
 
 ### Changed

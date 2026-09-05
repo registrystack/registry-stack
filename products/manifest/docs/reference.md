@@ -123,6 +123,97 @@ Source:
 | `public_services` | Dataset-scoped public registry services, when a dataset is itself the produced registry resource. |
 | `codelists` | List of codelist IDs referenced by this dataset's fields. |
 
+### Semantic concept keys
+
+| Key | Type | Required | Description |
+| --- | --- | --- | --- |
+| `datasets[].entities[].concept_uri` | IRI or configured CURIE | No | Class concept for the entity. Rendered as the node shape `sh:targetClass` and as `concept_uri` in catalog JSON. |
+| `datasets[].entities[].fields[].concepts` | ordered list of IRI or configured CURIE | No | Semantic concepts the field carries. See [Ordering and authority of `fields[].concepts`](#ordering-and-authority-of-fieldsconcepts). |
+| `datasets[].entities[].relationships[].concept_uri` | IRI or configured CURIE | No | Property concept for the relationship. Rendered as the relationship property shape `sh:path`. |
+
+#### Ordering and authority of `fields[].concepts`
+
+`fields[].concepts` is an ordered list and the order is part of the published
+contract:
+
+- The **first entry is the generated property identifier** for the field. SHACL
+  renders it as the property shape `sh:path`, and the entity JSON Schema renders
+  it as `x-concept-uri`.
+- **Every entry is preserved in author order** in catalog JSON under
+  `datasets[].entities[].fields[].concepts`. Entries after the first are
+  additional references. They change no generated identifier.
+- **An empty list falls back to a deterministic manifest URI**,
+  `<base_url>/metadata/datasets/<dataset>/entities/<entity>/fields/<field>`. The
+  entity JSON Schema then omits `x-concept-uri`, and catalog JSON reports an
+  empty `concepts` list rather than the fallback.
+
+Reordering the list moves the generated property identifier and changes SHACL
+and JSON Schema output. Appending a concept does not. Treat a reorder as a
+breaking metadata change and an append as an additive one.
+
+#### What a concept reference does not do
+
+A concept IRI describes the meaning of published metadata. It carries no
+authority of its own.
+
+- **It asserts no relation between concepts.** Listing several concepts on one
+  field records several independent vocabulary references. Registry Manifest
+  renders no `skos:exactMatch`, `skos:closeMatch`, `owl:sameAs`, or other
+  mapping predicate between them, and the first entry has no precedence over the
+  rest beyond supplying the generated property identifier. Where two vocabulary
+  terms are equivalent, that claim belongs to the vocabularies that publish it,
+  not to the manifest that references both.
+- **It grants no access and triggers no safeguard.** Concepts do not activate
+  Registry Relay authorization, redaction, filtering, purpose handling, or
+  privacy classification, and no Registry Stack service changes its disclosure
+  decisions because a field names a particular concept. `concepts` is not a
+  classification field.
+- **It is not validated against the vocabulary it names.** Validation checks
+  that each entry is a well-formed `http`/`https` IRI, a `urn:`/`did:` IRI, or a
+  CURIE whose prefix is declared in `vocabularies` or built in. It does not check
+  that the term exists, that its domain matches the entity, or that its range
+  matches the field type.
+- **It is never resolved.** Vocabulary prefix expansion concatenates the
+  declared namespace with the suffix and checks the result is a well-formed IRI.
+  Nothing is fetched, dereferenced, or reasoned over at validate, compile,
+  render, or publish time, so a manifest validates and renders identically
+  offline.
+
+#### Multi-vocabulary example
+
+[`products/manifest/fixtures/semantic-concepts/aligned-person-concepts.metadata.yaml`](../fixtures/semantic-concepts/aligned-person-concepts.metadata.yaml)
+is a non-normative example that binds one `birth_date` field to a PublicSchema
+term and to an EU SEMIC Core Person Vocabulary term:
+
+```yaml
+- name: birth_date
+  type: date
+  concepts:
+    - https://publicschema.org/date_of_birth
+    - http://data.europa.eu/m8g/birthDate
+```
+
+That renders one property shape with `sh:path` set to
+`https://publicschema.org/date_of_birth`, and catalog JSON publishes both IRIs
+in that order. No equivalence between the two terms is rendered or implied.
+
+The example also carries a field with no concept and a field with one concept,
+so it shows all three generated outcomes in one manifest.
+
+Vocabulary references in that example were checked on 2026-09-06:
+
+- PublicSchema publishes `https://publicschema.org/manifest.json`, which reports
+  version `0.3.0` with maturity `draft` and base URI `https://publicschema.org/`.
+  Terms are rooted directly at that base URI, so `https://publicschema.org/Person`
+  and `https://publicschema.org/date_of_birth` are the canonical forms. The
+  vocabulary publishes no stable release tag, so the example is pinned to that
+  draft snapshot and is non-normative.
+- The EU SEMIC Core Person Vocabulary 2.00, published 2022-04-01, defines
+  `http://www.w3.org/ns/person#Person` and `http://data.europa.eu/m8g/birthDate`.
+
+Registry Manifest makes no PublicSchema or SEMIC conformance claim on behalf of
+a manifest that references their terms.
+
 ### DistributionManifest keys
 
 | Key | Type | Required | Description |
