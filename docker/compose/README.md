@@ -51,8 +51,14 @@ target-context check before starting the service:
 
 ```sh
 docker compose -f docker-compose.yaml run --rm evidence \
-  --runtime /etc/registry-evidence/runtime.yaml check --require-runtime-dependencies
+  --runtime /etc/registry-evidence/runtime.yaml check \
+  --require-runtime-dependencies \
+  --require-audit-under /var/lib/registry-evidence
 ```
+
+`--require-audit-under` names the directory this deployment mounts as
+persistent storage. Evidence resolves its own configured audit destination and
+refuses when the result does not canonicalize to that directory or below it.
 
 Or run the supported container preflight from the repository root. It first
 checks the digest-pinned image, nonroot/read-only posture, secret declaration,
@@ -89,8 +95,11 @@ that removes them, whether the run passed or failed.
 The preflight accepts only Docker-managed local named audit volumes without
 driver options, or explicit bind mounts outside known ephemeral host paths. It
 rejects service-level tmpfs and every long-form tmpfs other than exactly one
-read-only `/dev/shm`. This closes the implicit ephemeral file lane before the
-native check opens and locks the configured audit sink.
+read-only `/dev/shm`. This closes the implicit ephemeral file lane, and the
+preflight then passes the audit root it validated to every native check as
+`--require-audit-under`. The preflight proves the root is durable storage and
+reads no product configuration to do it; the product proves its own configured
+sink resolves inside that root, and still has to open and lock it.
 It passes the already validated rendered Compose JSON to every native check, so
 changes to the source Compose or environment files cannot change the checked
 containers between phases. Host storage durability, daemon state, and changes
