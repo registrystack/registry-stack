@@ -16,9 +16,9 @@ standards_referenced:
 One package carries every maintained Registry Stack client API: `@registrystack/client` on npm and
 `registry-stack-client` on PyPI. It holds four namespaces, one per product: `discovery` for Registry
 Discovery, `evidence` for Evidence Gateway, `relay` for Registry Relay, and `breg` for Base Registry
-Engine. Each namespace keeps its own routes, authentication, errors, and verification rules, because
-those contracts differ. Relay and BReg share only the neutral `registry-record` types they decode
-Registry Record responses into.
+Engine (BReg). Each namespace keeps its own routes, authentication, errors, and verification rules,
+because those contracts differ. Relay and BReg share only the neutral `registry-record` types they
+decode Registry Record responses into.
 
 Rust is the canonical implementation. The Python and Node packages are thin bindings over it: they
 convert native values, construct the Rust client, run one method, and map the validated result or

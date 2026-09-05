@@ -11,14 +11,16 @@ locale: en
 standards_referenced: []
 ---
 
-Base Registry Engine is a PostgreSQL system of record whose data model and REST API are compiled
-from a registry project. The runtime carries no built-in domain types: a business, a plot, a
+Base Registry Engine (BReg) is a PostgreSQL system of record whose data model and REST API are
+compiled from a registry project. The runtime carries no built-in domain types: a business, a plot, a
 permit, or an asset exists only when the active package declares it. This page tells you what runs
 where and which page to open first for your role.
 
 Three terms recur on every page that follows. A registry project is a directory of YAML files,
 `registry.yaml` plus optional modules and journeys, that declares the entities, fields,
-relationships, access profiles, change requests, and events one registry exposes. A package is
+relationships, access profiles, change requests, and events one registry exposes. Registry Relay
+compiles a file with the same name and an unrelated grammar, so where both products are in view
+this one is the BReg [registry document](../../reference/glossary/#registry-document). A package is
 the compiled and verified form of one project: `bregctl` builds it, `breg` serves it, and a
 production package carries detached signatures from keys the deployment trusts. An access profile
 is a named grant inside the project that states which scopes, purposes, and claims a token must
@@ -64,14 +66,21 @@ through a client library.
 
 ## Vocabulary
 
-Six more terms recur across the section. Each names something the product has, not a metaphor.
+Eight more terms recur across the section. Each names something the product has, not a metaphor.
 
+- The Registry Record envelope is the single shape every response carries: `data.recordIdentifier`,
+  `data.revisionIdentifier`, and `data.domainData` for one record, `items` and a `pageInfo` object
+  for a collection, and `meta` with the registry, dataset, and entity identifiers the package
+  compiled.
 - A trust anchor is the file the runtime configuration names, listing the public keys whose
   signatures a package may carry and how many of them must sign, bound to one environment, one
   deployment instance, and one database.
 - The outbox is a table in the registry's own database that takes one row per configured event,
   written inside the same transaction as the record change that raised it, which the webhook
   worker inside `breg` then reads and delivers.
+- A journey is one of the scenarios in `tests/journeys.yaml` that `bregctl test` replays over HTTP
+  against a throwaway database, because a row boundary, a query bound, or a review workflow is only
+  proven by a request that runs.
 - A receipt is the JSON document a fully successful `bregctl test` run writes, recording the
   candidate package revision, the source closure, the deployment and database identity, the target
   schema fingerprint, and the journeys that passed, so packaging can refuse a receipt taken for
@@ -86,7 +95,8 @@ Six more terms recur across the section. Each names something the product has, n
   the caller's token with `equals` or `in`, so a request reaches only the rows whose field matches
   what the token carries.
 
-{/* Evidence: crates/registry-breg/src/package.rs, PackageTrustAnchor and TrustAnchorKey;
+{/* Evidence: crates/registry-breg/src/artifacts.rs, record_member_schema();
+    crates/registry-breg/src/package.rs, PackageTrustAnchor and TrustAnchorKey;
     crates/registry-breg/src/outbox.rs, insert_configured_events(); crates/registry-breg/src/fixtures.rs, SchemaTestReceipt;
     crates/registry-breg/src/model.rs, CompiledChangeRequestPlanner; crates/registry-breg/src/history_rebaseline.rs;
     crates/registry-breg/src/contract.rs, RowBoundarySource; crates/registry-breg/src/api/context.rs, VerifiedRowBoundary. */}
