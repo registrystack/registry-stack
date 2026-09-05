@@ -56,6 +56,21 @@ class AssembleClientPackagesTest(unittest.TestCase):
             self.assertIn("--pack-destination /out", line)
         self.assertIn("./npm/darwin-arm64", pack[1])
 
+    def test_the_staged_copy_is_recreated_on_every_run(self) -> None:
+        removals = [
+            index
+            for index, line in enumerate(self.rendered)
+            if "rm -rf /work/node-root)" in line
+        ]
+        self.assertEqual(1, len(removals), "the staged copy is not discarded")
+        copies = [
+            index
+            for index, line in enumerate(self.rendered)
+            if "cp -R" in line and "/work/node-root" in line
+        ]
+        self.assertTrue(copies, "nothing is copied into the staged copy")
+        self.assertLess(removals[0], min(copies))
+
     def test_the_platform_package_receives_every_product_addon(self) -> None:
         for product in self.module.PRODUCTS:
             addon = (

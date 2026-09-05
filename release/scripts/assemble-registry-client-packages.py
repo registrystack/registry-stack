@@ -111,6 +111,11 @@ def node_steps(
     staging = work_dir / "node-root"
     steps = [
         Step(
+            "discard the previous staged copy so removed files do not linger",
+            ("rm", "-rf", str(staging)),
+            root,
+        ),
+        Step(
             "make the staging and output directories",
             ("mkdir", "-p", str(staging), str(output_dir)),
             root,
