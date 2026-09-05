@@ -19,8 +19,8 @@ const OUTPUT_FILE_MODE: u32 = 0o644;
 #[derive(Debug, Args)]
 pub struct JwksArgs {
     /// Output JWKS document path.
-    #[arg(long)]
-    pub out: PathBuf,
+    #[arg(long, alias = "out")]
+    pub output: PathBuf,
 
     /// Overwrite an existing output file.
     #[arg(long)]
@@ -32,10 +32,10 @@ pub struct JwksArgs {
 }
 
 pub fn run(args: JwksArgs) -> Result<ExitCode> {
-    if args.out.exists() && !args.force {
+    if args.output.exists() && !args.force {
         bail!(
             "refusing to overwrite existing output without --force: {}",
-            args.out.display()
+            args.output.display()
         );
     }
 
@@ -78,9 +78,9 @@ pub fn run(args: JwksArgs) -> Result<ExitCode> {
         .context("failed to render the JWKS document")?;
     document.push('\n');
 
-    write_owner_file(&args.out, document.as_bytes(), args.force)?;
+    write_owner_file(&args.output, document.as_bytes(), args.force)?;
 
-    println!("wrote {}", args.out.display());
+    println!("wrote {}", args.output.display());
 
     Ok(ExitCode::SUCCESS)
 }

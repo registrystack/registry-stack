@@ -39,48 +39,48 @@ pub enum KeygenCommand {
 #[derive(Debug, Args)]
 pub struct SigningArgs {
     /// Secret directory receiving the private JWK file (created 0700).
-    #[arg(long)]
-    pub out_dir: PathBuf,
+    #[arg(long, alias = "out-dir")]
+    pub output_dir: PathBuf,
 
     /// Public JWK output path; defaults to a file inside the secret directory.
-    #[arg(long)]
-    pub public_out: Option<PathBuf>,
+    #[arg(long, alias = "public-out")]
+    pub public_output: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
 pub struct SecretArgs {
     /// Output file for the raw secret (written 0600).
-    #[arg(long)]
-    pub out: PathBuf,
+    #[arg(long, alias = "out")]
+    pub output: PathBuf,
 }
 
 #[derive(Debug, Args)]
 pub struct TokenArgs {
     /// Output file for the bearer token (written 0600).
-    #[arg(long)]
-    pub out: PathBuf,
+    #[arg(long, alias = "out")]
+    pub output: PathBuf,
 }
 
 #[derive(Debug, Args)]
 pub struct HolderArgs {
     /// Directory receiving the holder private JWK file (created 0700).
-    #[arg(long)]
-    pub out_dir: PathBuf,
+    #[arg(long, alias = "out-dir")]
+    pub output_dir: PathBuf,
 
     /// Public JWK output path; defaults to a file inside the secret directory.
-    #[arg(long)]
-    pub public_out: Option<PathBuf>,
+    #[arg(long, alias = "public-out")]
+    pub public_output: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
 pub struct ClientAssertionArgs {
     /// Secret directory receiving the private JWK file (created 0700).
-    #[arg(long)]
-    pub out_dir: PathBuf,
+    #[arg(long, alias = "out-dir")]
+    pub output_dir: PathBuf,
 
     /// Public JWK output path; defaults to a file inside the secret directory.
-    #[arg(long)]
-    pub public_out: Option<PathBuf>,
+    #[arg(long, alias = "public-out")]
+    pub public_output: Option<PathBuf>,
 
     /// Name of the private JWK file, which is the `secret:file/NAME` a source's
     /// `clientAssertionKeyRef` points at; defaults to one naming the algorithm.
@@ -161,8 +161,8 @@ pub fn run(command: KeygenCommand) -> Result<ExitCode> {
     match command {
         KeygenCommand::Signing(args) => run_keypair(
             generate_p256_keypair()?,
-            &args.out_dir,
-            args.public_out.as_deref(),
+            &args.output_dir,
+            args.public_output.as_deref(),
             SIGNING_PRIVATE_FILENAME,
             SIGNING_PUBLIC_FILENAME,
         ),
@@ -170,8 +170,8 @@ pub fn run(command: KeygenCommand) -> Result<ExitCode> {
         KeygenCommand::Token(args) => run_token(&args),
         KeygenCommand::Holder(args) => run_keypair(
             generate_p256_keypair()?,
-            &args.out_dir,
-            args.public_out.as_deref(),
+            &args.output_dir,
+            args.public_output.as_deref(),
             HOLDER_PRIVATE_FILENAME,
             HOLDER_PUBLIC_FILENAME,
         ),
@@ -181,8 +181,8 @@ pub fn run(command: KeygenCommand) -> Result<ExitCode> {
             let (private_filename, public_filename) = client_assertion_filenames(&args)?;
             run_keypair(
                 generate_client_assertion_keypair(args.algorithm)?,
-                &args.out_dir,
-                args.public_out.as_deref(),
+                &args.output_dir,
+                args.public_output.as_deref(),
                 &private_filename,
                 &public_filename,
             )
@@ -254,7 +254,7 @@ pub(crate) fn generate_scaffold_key_material(out_dir: &Path) -> Result<()> {
     for filename in [AUDIT_HMAC_FILENAME, SUBJECT_BINDING_HMAC_FILENAME] {
         run_secret_impl(
             &SecretArgs {
-                out: out_dir.join(filename),
+                output: out_dir.join(filename),
             },
             false,
         )?;
@@ -465,21 +465,21 @@ fn run_secret(args: &SecretArgs) -> Result<ExitCode> {
 }
 
 fn run_secret_impl(args: &SecretArgs, report: bool) -> Result<ExitCode> {
-    reject_existing(&[&args.out])?;
+    reject_existing(&[&args.output])?;
 
     let secret = generate_secret()?;
 
     if let Some(parent) = args
-        .out
+        .output
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
     {
         ensure_secret_parent_dir(parent)?;
     }
-    write_owner_file(&args.out, secret.as_slice(), PRIVATE_FILE_MODE)?;
+    write_owner_file(&args.output, secret.as_slice(), PRIVATE_FILE_MODE)?;
 
     if report {
-        println!("wrote {}", args.out.display());
+        println!("wrote {}", args.output.display());
     }
 
     Ok(ExitCode::SUCCESS)
@@ -493,7 +493,7 @@ fn run_secret_impl(args: &SecretArgs, report: bool) -> Result<ExitCode> {
 /// neighbour, and the wrong tool, because its raw bytes reach an HTTP header
 /// that rejects most of them.
 fn run_token(args: &TokenArgs) -> Result<ExitCode> {
-    reject_existing(&[&args.out])?;
+    reject_existing(&[&args.output])?;
 
     let mut entropy = Zeroizing::new([0_u8; TOKEN_ENTROPY_BYTES]);
     getrandom::fill(entropy.as_mut_slice()).context("failed to generate random key material")?;
@@ -504,15 +504,15 @@ fn run_token(args: &TokenArgs) -> Result<ExitCode> {
     let token = Zeroizing::new(URL_SAFE_NO_PAD.encode(entropy.as_slice()));
 
     if let Some(parent) = args
-        .out
+        .output
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
     {
         ensure_secret_parent_dir(parent)?;
     }
-    write_owner_file(&args.out, token.as_bytes(), PRIVATE_FILE_MODE)?;
+    write_owner_file(&args.output, token.as_bytes(), PRIVATE_FILE_MODE)?;
 
-    println!("wrote {}", args.out.display());
+    println!("wrote {}", args.output.display());
 
     Ok(ExitCode::SUCCESS)
 }
