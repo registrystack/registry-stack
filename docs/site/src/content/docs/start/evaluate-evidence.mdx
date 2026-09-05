@@ -20,7 +20,8 @@ the next one: what does running it actually cost.
 
 Evidence Gateway is one crate, `registry-evidence`, and one binary, `evidence`. There is no separate control plane or worker process: one
 Evidence Gateway process serves one operator-controlled trust domain. Production and evidence-grade
-signing also requires an operator-managed workload-local Transit proxy
+signing also requires an operator-managed workload-local
+[Transit proxy](../../reference/glossary/#transit-proxy)
 ([Evidence Gateway product overview](../../products/registry-evidence/)).
 
 At startup the process reads two inputs, both mounted read-only: a closed
