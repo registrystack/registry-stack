@@ -117,7 +117,11 @@ authorization is most often assumed rather than enforced:
 
 Evidence Gateway has no notion of a Relay operation or a compiled evidence mode selecting one. It
 declares a closed single or search-then-fetch acquisition, and the acquisition kind places no
-constraint on which of the two coequal transports a stage uses.
+constraint on which of the two coequal transports a stage uses. That freedom belongs to the
+serving runtime, not to the current offline evaluator, which executes a SQLite statement only
+when it is the initial source and refuses a later SQLite stage; a requirement whose stages mix
+sources in an order the evaluator refuses cannot complete the supported production/evidence-grade
+build journey even though the serving runtime accepts the configuration.
 An HTTP JSON stage is fixed by its origin, which a production bundle must state as HTTPS and only a
 local unauthenticated source may state as a numeric loopback address, plus its method, its fixed or
 tagged selector or prior-fact-bound path, its fixed non-secret headers, its denied redirects, and
@@ -137,7 +141,9 @@ boundary belongs entirely to Evidence Gateway and its authoritative sources.
      runtime binds each logical name to a process-local path under `sourceExtracts`,
      products/evidence/contracts/runtime.schema.yaml (frozen); the statement transport reaches no
      origin and holds no credential, `transport_absences` in
-     products/evidence/contracts/sqlite-extract-source-contract.yaml (frozen). */}
+     products/evidence/contracts/sqlite-extract-source-contract.yaml (frozen); the current offline
+     evaluator's inability to prove every transport order, `fixture_status` in the same contract
+     file (frozen). */}
 
 ## Record freshness has no counterpart in either product
 
@@ -147,8 +153,12 @@ freshness field on an assertion, and no accepted-observation-age setting on an H
 One narrower bound does exist, and only on the statement transport. A statement source must declare
 `maximumExtractAgeSeconds`, and the runtime compares it against the `publishedAt` instant the
 extract itself publishes, before a single row is read, so an extract past its declared age fails as
-an unavailable dependency rather than yielding a confidently signed assertion. That bounds how
-stale the extract file may be, not how stale the record inside it is.
+an unavailable dependency rather than yielding a confidently signed assertion. `publishedAt` is
+asserted by the extract's own metadata, not observed independently by the runtime, so the bound
+constrains the age a publisher claims rather than the file's actual age: a `publishedAt` set after
+the evaluation instant yields a negative age, which always passes regardless of how stale the file
+actually is. That bounds how stale the extract claims to be, not how stale the extract file or the
+record inside it actually is.
 The request nonce is uninterpreted correlation data and is explicitly not a freshness proof
 (`products/evidence/contracts/cccev-field-mapping.yaml`).
 
