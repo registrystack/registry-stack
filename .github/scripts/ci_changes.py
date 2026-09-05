@@ -289,6 +289,7 @@ LINUX_NODE_RELEASE_RECIPE_INPUTS = frozenset(
         ".github/workflows/release-rehearsal.yml",
         "Cargo.lock",
         "Cargo.toml",
+        "release/glibc-floor.env",
         "release/requirements/maturin-1.9.6.txt",
         "release/scripts/build-linux-node-client",
         "release/scripts/smoke-discovery-client-package.js",

@@ -994,6 +994,7 @@ class CiChangesTest(unittest.TestCase):
             ".cargo/config.toml",
             "rust-toolchain",
             "rust-toolchain.toml",
+            "release/glibc-floor.env",
             "release/requirements/maturin-1.9.6.txt",
             "release/scripts/build-linux-node-client",
             "release/scripts/smoke-discovery-client-package.js",

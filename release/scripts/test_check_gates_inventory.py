@@ -930,6 +930,13 @@ class GateInventoryTest(unittest.TestCase):
         )
         self.assertIn("Debian 13 image contract", self.module.missing_gates(text))
 
+    def test_missing_glibc_floor_gate_tests_is_reported(self) -> None:
+        text = self.workflow.replace(
+            "run: python3 -m unittest release/scripts/test_glibc_floor.py",
+            "run: true",
+        )
+        self.assertIn("GNU libc floor gate tests", self.module.missing_gates(text))
+
     def test_missing_pull_request_concurrency_group_is_reported(self) -> None:
         text = self.workflow.replace(
             "format('pr-{0}', github.event.pull_request.number)",

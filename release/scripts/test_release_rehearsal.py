@@ -73,10 +73,12 @@ class ReleaseRehearsalTest(unittest.TestCase):
             if step.get("name") == "Restore reusable Cargo cache"
         )
         self.assertNotIn("restore-keys", canonical_cache["with"])
-        self.assertIn(
+        for recipe_input in (
             "'release/docker/Dockerfile.builder'",
-            canonical_cache["with"]["key"],
-        )
+            "'release/requirements/ziglang-0.12.1.txt'",
+            "'release/glibc-floor.env'",
+        ):
+            self.assertIn(recipe_input, canonical_cache["with"]["key"])
         canonical_build = next(
             step["run"]
             for step in canonical["steps"]
