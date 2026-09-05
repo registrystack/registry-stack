@@ -72,8 +72,11 @@ The descriptor names the change class, the exact change codes and targets from `
 json`, timeouts, recovery mode, and its evidence paths. The rehearsal receipt binds the prior
 package and schema, the descriptor and SQL hashes, the measured target schema, and the timeout
 and recovery proofs. Your rehearsal process produces that evidence against the exact candidate;
-the command line validates it and does not generate it. JSON artifacts use canonical JSON: sorted
-keys, no extra whitespace. Keep only referenced files in the directory; symbolic links and
+the command line validates it and does not generate it. The only worked example of the exact
+descriptor and rehearsal receipt fields is the review construction in
+[`test-adopter-workflow.sh`](https://github.com/registrystack/registry-stack/blob/v0.26.1/products/breg/scripts/test-adopter-workflow.sh),
+which builds both documents for a metadata-only access change and passes them to `test`. JSON
+artifacts use canonical JSON: sorted keys, no extra whitespace. Keep only referenced files in the directory; symbolic links and
 unrelated files are refused. A metadata-only change can declare empty steps and assertions and
 still needs rehearsal evidence. A field added as required is created without its constraint, your
 reviewed steps backfill it, and the plan constrains the column afterwards.
