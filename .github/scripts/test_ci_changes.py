@@ -533,6 +533,18 @@ class CiChangesTest(unittest.TestCase):
                 ("crates/registry-evidence-oid4vci/src/service.rs",),
             )["evidence_tutorial"]
         )
+        # The application tutorial imports the assembled client package, so the
+        # scripts and the pinned build tool that produce it decide what the
+        # replay imports.
+        for path in (
+            "release/requirements/maturin-1.9.6.txt",
+            "release/scripts/assemble-registry-client-packages.py",
+            "release/scripts/assemble-registry-client-wheel.py",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(
+                    classify(self.workspace, (path,))["evidence_tutorial"]
+                )
         self.assertFalse(
             classify(
                 self.workspace,

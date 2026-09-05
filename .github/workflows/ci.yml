@@ -950,13 +950,36 @@ jobs:
           [[ -n "$test_binary" ]]
           cp "$test_binary" \
             target/evidence-tutorial-source/ci/inji-oid4vci-interop-test
-          # The application tutorial imports the Python client. It is built for
-          # the stable ABI, so the container step below imports this same file
-          # rather than building inside a read-only mount.
-          CARGO_TARGET_DIR="target/evidence-tutorial-source" \
-            cargo build --locked --profile ci \
-            -p registry-evidence-client-py --lib \
-            --features registry-evidence-client-py/extension-module
+
+      - name: Assemble the client package the application tutorial imports
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The tutorial installs the maintained client package, so the replay
+          # imports that same package, assembled from this commit. maturin gets
+          # the pinned environment the release workflows build the published
+          # wheel with, so a packaging regression fails here too.
+          python3 -m venv "${RUNNER_TEMP}/maturin"
+          "${RUNNER_TEMP}/maturin/bin/pip" install --quiet \
+            --require-hashes --only-binary=:all: \
+            --requirement "${GITHUB_WORKSPACE}/release/requirements/maturin-1.9.6.txt"
+          # The output stays inside the workspace, because the container step
+          # below mounts the workspace and nothing else.
+          out_dir="${GITHUB_WORKSPACE}/target/evidence-tutorial-client"
+          python3 release/scripts/assemble-registry-client-packages.py \
+            --artifacts python \
+            --output-dir "${out_dir}" \
+            --work-dir "${RUNNER_TEMP}/client-assembly" \
+            --maturin "${RUNNER_TEMP}/maturin/bin/maturin"
+          wheel="$(find "${out_dir}" -maxdepth 1 -name 'registry_stack_client-*.whl')"
+          if [[ "$(printf '%s\n' "${wheel}" | wc -l)" -ne 1 || ! -f "${wheel}" ]]; then
+            echo "expected exactly one assembled client wheel in ${out_dir}" >&2
+            find "${out_dir}" -maxdepth 1 -name '*.whl' >&2
+            exit 1
+          fi
+          # The gate reads it inside the container, at the mounted path.
+          printf 'TUTORIAL_CLIENT_WHEEL=/work/%s\n' \
+            "${wheel#"${GITHUB_WORKSPACE}/"}" >>"${GITHUB_ENV}"
 
       - name: Test the exact local Evidence lifecycle
         shell: bash
@@ -984,7 +1007,7 @@ jobs:
             --env EVIDENCE_OID4VCI_BIN=/work/target/evidence-tutorial-source/ci/evidence-oid4vci \
             --env EVIDENCE_OID4VCI_INTEROP_TEST_BIN=/work/target/evidence-tutorial-source/ci/inji-oid4vci-interop-test \
             --env MINT_BIN=/work/target/evidence-tutorial-source/ci/mint \
-            --env EVIDENCE_CLIENT_PY_LIB=/work/target/evidence-tutorial-source/ci/libregistry_evidence_client.so \
+            --env "REGISTRY_CLIENT_PY_WHEEL=${TUTORIAL_CLIENT_WHEEL}" \
             rust:1.95-trixie@sha256:f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3 \
             bash /work/docs/site/scripts/check-evidence-tutorials.sh
 
