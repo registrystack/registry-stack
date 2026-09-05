@@ -646,6 +646,9 @@ async fn trace_and_problem_contracts_are_exact_and_concealment_has_no_fallback()
         error.problem_code(),
         Some(BRegProblemCode::ResourceNotFound)
     );
+    // app-developer-22: a missing record is its own error kind, not a generic
+    // `"problem"` a caller must also check `status == 404` to recognize.
+    assert_eq!(error.kind(), "not_found");
     assert_eq!(captured.lock().expect("captured requests").len(), 1);
     let rendered = format!("{error:?} {error}");
     assert!(!rendered.contains(RECORD_ID));

@@ -321,6 +321,10 @@ impl BaseRegistryClientError {
             Self::InvalidRequest { .. } => "invalid_request",
             Self::Token(_) => "token",
             Self::Transport { .. } => "transport",
+            Self::Problem {
+                code: BRegProblemCode::ResourceNotFound,
+                ..
+            } => "not_found",
             Self::Problem { .. } => "problem",
             Self::Protocol { .. } => "protocol",
         }
@@ -346,6 +350,7 @@ impl BaseRegistryClientError {
 #[cfg(test)]
 mod tests {
     use super::{BRegPlanRefusal, BRegProblemCode};
+    use super::{BaseRegistryClientError, TraceId};
 
     #[test]
     fn every_planner_refusal_detail_resolves_to_its_kind() {
@@ -378,6 +383,33 @@ mod tests {
                 .filter(|candidate| candidate.detail() == code.detail())
                 .count();
             assert_eq!(sharing, 1, "{code} shares its detail with another problem");
+        }
+    }
+
+    // app-developer-22: a missing record answered with `kind: "problem"` and
+    // `status: 404` forces every caller to write a two-field test for the most
+    // common failure in any CRUD application. `ResourceNotFound` is the one
+    // problem code naming that exact case, so it alone is promoted to its own
+    // kind. `LookupUnresolved` is deliberately excluded: it also carries status
+    // 404, but it means a lookup matched zero or more than one record, not that
+    // a known resource is absent, and folding it into `not_found` would mislead
+    // a caller who could instead disambiguate.
+    #[test]
+    fn only_a_missing_resource_reports_kind_not_found() {
+        let trace_id = TraceId::parse("0123456789abcdef0123456789abcdef")
+            .expect("a canonical trace identifier");
+        for code in BRegProblemCode::ALL {
+            let error = BaseRegistryClientError::Problem {
+                status: code.status(),
+                code,
+                trace_id: trace_id.clone(),
+            };
+            let expected = if code == BRegProblemCode::ResourceNotFound {
+                "not_found"
+            } else {
+                "problem"
+            };
+            assert_eq!(error.kind(), expected, "{code} reported an unexpected kind");
         }
     }
 }
