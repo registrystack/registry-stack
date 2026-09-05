@@ -69,11 +69,15 @@ init succeeded
 revision: sha256:<digest>
 finding access.profile.unrestricted_collection at entities[id=record].accessProfiles[id=operator].rowBoundaries: this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
 artifacts: 5
+next: read ./my-registry/README.md, then run 'bregctl check ./my-registry'
+next: leave the finding above as it is; the example operator profile lists a whole collection on purpose, and ./my-registry/README.md says where to narrow it
+next: replace canonicalBaseIri in ./my-registry/registry.yaml before you build a production package; the example value is a reserved .invalid name that never resolves
 ```
 
 A finding is an advisory the compiler attaches to a document path; it does not fail `check`, and [Test with journeys](../breg-journeys/) lists every finding the compiler can report and explains `--deny-findings` and `--production`.
 This one says the `operator` profile can list every row, which is right for a registry-wide operations role and wrong once the registry holds more than one caller's data.
 The project's `record-reader` profile shows the row boundary that closes it.
+The `next:` lines name the command to run after the README, the finding the example keeps on purpose, and the placeholder `canonicalBaseIri` that has to be replaced before a production package. Only `init` prints them.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, init() and write_files_with_before_publish(); products/breg/acceptance/asset-site-placement-change-requests/registry.yaml. */}
 
