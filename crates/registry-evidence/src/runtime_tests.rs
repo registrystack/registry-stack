@@ -4004,6 +4004,74 @@ async fn accept_negotiation_is_closed_and_fails_before_source_access() {
 }
 
 #[tokio::test]
+async fn absent_and_malformed_bearer_tokens_agree_when_the_request_body_is_otherwise_valid() {
+    // cli-errors-23 compared a header-free request against a malformed-header
+    // request that both carried an invalid `{}` body, so the comparison also
+    // measured validation order rather than authentication alone. With an
+    // otherwise-valid body, the two failures must be indistinguishable: a
+    // caller who forgets the header and a caller whose token will never
+    // verify both learn only that their bearer credential is invalid, never
+    // which validation layer noticed first.
+    let fixture = acceptance_runtime().await;
+    let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
+    let body = serde_json::to_value(adult_request()).expect("request serializes");
+
+    let missing_header = http.post("/v1/evidence").json(&body).await;
+    assert_eq!(
+        missing_header.status_code(),
+        axum::http::StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        missing_header.json::<Value>()["code"],
+        json!("auth.invalid_credential")
+    );
+
+    let malformed_token = http
+        .post("/v1/evidence")
+        .add_header("authorization", "Bearer not-a-token")
+        .json(&body)
+        .await;
+    assert_eq!(
+        malformed_token.status_code(),
+        axum::http::StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        malformed_token.json::<Value>()["code"],
+        json!("auth.invalid_credential")
+    );
+
+    // Compared whole, not just by code: a title or detail that differed by
+    // layer would still tell the two callers apart. The per-request trace ID
+    // is the one member expected to vary, so it is removed rather than
+    // assumed equal.
+    let mut missing_body = missing_header.json::<Value>();
+    let mut malformed_body = malformed_token.json::<Value>();
+    for denial in [&mut missing_body, &mut malformed_body] {
+        denial
+            .as_object_mut()
+            .expect("a problem body is an object")
+            .remove("traceId");
+    }
+    assert_eq!(
+        missing_body, malformed_body,
+        "an absent and a malformed bearer token must be indistinguishable"
+    );
+
+    assert!(
+        fixture
+            .server
+            .received_requests()
+            .await
+            .expect("request journal is available")
+            .is_empty(),
+        "authentication failure must precede source access"
+    );
+    assert!(fs::read_to_string(&fixture.audit_path)
+        .expect("audit is readable")
+        .is_empty());
+}
+
+#[tokio::test]
 async fn unsigned_output_requires_both_bundle_and_grant_permission() {
     // Grant permits unsigned but the immutable bundle does not enable it.
     let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
