@@ -5064,11 +5064,13 @@ accessProfiles:
     requiredPurposes: [registry-operations]
     grants:
       - entity: record-group
+        rowBoundaries: []
         operations: [create, get, list]
         readableFields: [code, label]
         writableFields: [code, label]
         filterableFields: [code]
       - entity: record
+        rowBoundaries: []
         operations: [create, get, list, patch]
         readableFields: [code, label, group, status]
         writableFields: [code, label, group, status]
@@ -9268,6 +9270,7 @@ accessProfiles:
     requiredPurposes: [operations]
     grants:
       - entity: record
+        rowBoundaries: []
         operations: [create, get, list, patch]
         readableFields: [code]
         writableFields: [code]

@@ -234,21 +234,24 @@ fn compiled_registry() -> Arc<CompiledRegistry> {
                   "readableFields":["site"],
                   "rowBoundaries":[{"field":"site","claim":"site_claim","operator":"equals"}]
                 }]
-              }]
+              }],
+              "rowBoundaries": []
             }]
           },{
             "id":"request-submitter","principalClaim":"principal","grants":[{
               "entity":"placement-correction-request",
               "operations":["get","create","patch","submit_request"],
               "readableFields":["placement","proposed-site"],
-              "writableFields":["placement","proposed-site"]
+              "writableFields":["placement","proposed-site"],
+              "rowBoundaries": []
             }]
           },{
             "id":"request-applier","principalClaim":"principal","grants":[{
               "entity":"placement-correction-request",
               "operations":["get","apply_request"],
               "readableFields":["placement"],
-              "applyTargets":[{"entity":"placement"}]
+              "applyTargets":[{"entity":"placement", "rowBoundaries": []}],
+              "rowBoundaries": []
             }]
           },{
             "id":"placement-viewer","principalClaim":"principal","grants":[{
@@ -258,7 +261,8 @@ fn compiled_registry() -> Arc<CompiledRegistry> {
               "requestPresence":[{
                 "requestType":"placement-correction-request",
                 "rowBoundaries":[{"field":"placement","claim":"placement_claim","operator":"equals"}]
-              }]
+              }],
+              "rowBoundaries": []
             }]
           }]
         }"#,

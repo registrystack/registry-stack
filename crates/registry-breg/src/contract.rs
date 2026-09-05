@@ -693,6 +693,9 @@ pub struct ChangeRequestReviewStageSource {
     pub approvals: u16,
     #[serde(default)]
     pub exclude_submitter: bool,
+    /// Refuse an actor who already decided another stage of this proposal version.
+    #[serde(default)]
+    pub exclude_previous_reviewers: bool,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1871,7 +1874,7 @@ pub struct AccessProfileSource {
     pub sortable_fields: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spatial_queries: Option<SpatialQueryGrantSource>,
-    #[serde(default)]
+    /// Explicit row reach; an empty array intentionally permits all rows.
     pub row_boundaries: Vec<RowBoundarySource>,
     /// Restricts change-request reads to rows owned by the authenticated principal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2075,7 +2078,7 @@ pub struct ProjectAccessProfileSource {
     pub grants: Vec<AccessGrantSource>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AccessGrantSource {
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -2122,6 +2125,92 @@ pub struct AccessGrantSource {
     pub allow_data_export: bool,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct RawAccessGrantSource {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    entity: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    action: Option<String>,
+    operations: BTreeSet<Operation>,
+    #[serde(default)]
+    readable_fields: BTreeSet<String>,
+    #[serde(default)]
+    writable_fields: BTreeSet<String>,
+    #[serde(default)]
+    filterable_fields: BTreeSet<String>,
+    #[serde(default)]
+    sortable_fields: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    spatial_queries: Option<SpatialQueryGrantSource>,
+    #[serde(default)]
+    row_boundaries: Option<Vec<RowBoundarySource>>,
+    /// Restricts change-request reads to rows owned by the authenticated principal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    request_visibility: Option<RequestVisibilitySource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    lookups: Vec<LookupGrantSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    read_paths: Vec<ReadPathGrantSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    review_stages: Vec<ReviewStageGrantSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    apply_targets: Vec<ApplyTargetGrantSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    request_presence: Vec<RequestPresenceGrantSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    targets: Vec<ActionTargetGrantSource>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    results: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    allow_count: bool,
+    #[serde(default)]
+    revision_access: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    provenance_fields: Vec<ProvenanceFieldSource>,
+    #[serde(default)]
+    allow_data_export: bool,
+}
+
+// Entity grants must state their row reach. Action invocation itself has no
+// rows; its target grants carry the independently required declarations.
+impl<'de> Deserialize<'de> for AccessGrantSource {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = RawAccessGrantSource::deserialize(deserializer)?;
+        if !raw.entity.is_empty() && raw.row_boundaries.is_none() {
+            return Err(D::Error::custom(
+                "entity grants require rowBoundaries; use an explicit empty array for intentional all-row access",
+            ));
+        }
+        Ok(Self {
+            entity: raw.entity,
+            action: raw.action,
+            operations: raw.operations,
+            readable_fields: raw.readable_fields,
+            writable_fields: raw.writable_fields,
+            filterable_fields: raw.filterable_fields,
+            sortable_fields: raw.sortable_fields,
+            spatial_queries: raw.spatial_queries,
+            row_boundaries: raw.row_boundaries.unwrap_or_default(),
+            request_visibility: raw.request_visibility,
+            lookups: raw.lookups,
+            read_paths: raw.read_paths,
+            review_stages: raw.review_stages,
+            apply_targets: raw.apply_targets,
+            request_presence: raw.request_presence,
+            targets: raw.targets,
+            results: raw.results,
+            allow_count: raw.allow_count,
+            revision_access: raw.revision_access,
+            provenance_fields: raw.provenance_fields,
+            allow_data_export: raw.allow_data_export,
+        })
+    }
+}
+
 #[cfg(feature = "schema")]
 impl schemars::JsonSchema for AccessGrantSource {
     fn schema_name() -> std::borrow::Cow<'static, str> {
@@ -2163,7 +2252,6 @@ struct EntityAccessGrantSourceSchema {
     sortable_fields: BTreeSet<String>,
     #[serde(default)]
     spatial_queries: Option<SpatialQueryGrantSource>,
-    #[serde(default)]
     row_boundaries: Vec<RowBoundarySource>,
     #[serde(default)]
     request_visibility: Option<RequestVisibilitySource>,
@@ -2263,7 +2351,7 @@ pub struct ReviewStageTargetGrantSource {
     pub entity: String,
     #[serde(default)]
     pub readable_fields: BTreeSet<String>,
-    #[serde(default)]
+    /// Explicit row reach; an empty array intentionally permits all rows.
     pub row_boundaries: Vec<RowBoundarySource>,
 }
 
@@ -2272,7 +2360,7 @@ pub struct ReviewStageTargetGrantSource {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ApplyTargetGrantSource {
     pub entity: String,
-    #[serde(default)]
+    /// Explicit row reach; an empty array intentionally permits all rows.
     pub row_boundaries: Vec<RowBoundarySource>,
 }
 
@@ -2281,7 +2369,7 @@ pub struct ApplyTargetGrantSource {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RequestPresenceGrantSource {
     pub request_type: String,
-    #[serde(default)]
+    /// Explicit row reach; an empty array intentionally permits all rows.
     pub row_boundaries: Vec<RowBoundarySource>,
 }
 
@@ -2298,7 +2386,7 @@ pub enum RequestVisibilitySource {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ActionTargetGrantSource {
     pub entity: String,
-    #[serde(default)]
+    /// Explicit row reach; an empty array intentionally permits all rows.
     pub row_boundaries: Vec<RowBoundarySource>,
 }
 

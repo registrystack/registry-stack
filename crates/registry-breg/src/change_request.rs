@@ -905,6 +905,7 @@ fn compile_stages(
             id: stage.id.clone(),
             approvals: stage.approvals,
             exclude_submitter: stage.exclude_submitter,
+            exclude_previous_reviewers: stage.exclude_previous_reviewers,
         });
     }
     stages

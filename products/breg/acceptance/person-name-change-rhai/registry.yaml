@@ -83,7 +83,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredPurposes: [person-maintenance]
     grants:
-      - {entity: person, operations: [create, get, list], readableFields: [person-code, display-name], writableFields: [person-code, display-name]}
+      - {entity: person, operations: [create, get, list], readableFields: [person-code, display-name], writableFields: [person-code, display-name], rowBoundaries: []}
   - id: name-change-submitter
     default: true
     principalClaim: registry_principal
@@ -91,6 +91,7 @@ accessProfiles:
     requiredPurposes: [person-name-change]
     grants:
       - entity: person-name-change-request
+        rowBoundaries: []
         operations: [create, get, submit_request, apply_request]
         readableFields: [person, given-name, family-name, handling]
         writableFields: [person, given-name, family-name, handling]
@@ -102,6 +103,7 @@ accessProfiles:
     requiredPurposes: [person-name-apply]
     grants:
       - entity: person-name-change-request
+        rowBoundaries: []
         operations: [get, list, apply_request]
         readableFields: [person, given-name, family-name, handling]
         applyTargets:

@@ -297,7 +297,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             "grants":[{
               "entity":"membership","operations":["create","get","patch","batch"],
               "readableFields":["subject","group","valid-from","valid-to"],
-              "writableFields":["subject","group","valid-from","valid-to","source-reference"]
+              "writableFields":["subject","group","valid-from","valid-to","source-reference"],
+              "rowBoundaries": []
             }]
           }],
           "vocabularies":[{"id":"membership-group","values":["A","B"]}]

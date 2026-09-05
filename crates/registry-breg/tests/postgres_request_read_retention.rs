@@ -991,7 +991,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               "grants":[{
                 "entity":"correction-request",
                 "operations":["get","list"],
-                "readableFields":["tenant","placement","proposed-site","reason"]
+                "readableFields":["tenant","placement","proposed-site","reason"],
+                "rowBoundaries": []
               }]
             },
             {
@@ -1000,7 +1001,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                 "entity":"correction-request",
                 "operations":["snapshot"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
-                "allowCount":true
+                "allowCount":true,
+                "rowBoundaries": []
               }]
             }
           ]

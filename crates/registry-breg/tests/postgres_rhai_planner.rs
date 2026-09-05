@@ -669,9 +669,10 @@ fn staged_rhai_registry() -> registry_breg::CompiledRegistry {
                 "readableFields": ["person", "given-name", "family-name", "handling"],
                 "reviewStages": [{
                     "stage": "final",
-                    "targets": [{"entity": "person", "readableFields": ["display-name"]}]
+                    "targets": [{"entity": "person", "readableFields": ["display-name"], "rowBoundaries": []}]
                 }],
-                "applyTargets": [{"entity": "person", "rowBoundaries": []}]
+                "applyTargets": [{"entity": "person", "rowBoundaries": []}],
+              "rowBoundaries": []
             }]
         }));
     let project =

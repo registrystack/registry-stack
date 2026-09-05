@@ -1293,14 +1293,14 @@ fn change_request_project(
               "operations":["get","list","submit_request","approve_request","reject_request","request_revision"],
               "readableFields":["tenant","placement","proposed-site","reason"],
               "rowBoundaries":[{{"field":"tenant","claim":"tenant","operator":"equals"}}],
-              "reviewStages":[{{"stage":"review","targets":[{{"entity":"placement","readableFields":["site","label"]}}]}}]
+              "reviewStages":[{{"stage":"review","targets":[{{"rowBoundaries": [], "entity":"placement","readableFields":["site","label"]}}]}}]
             }}]
           }},{{
             "id":"request-applier","principalClaim":"principal","grants":[{{
               "entity":"placement-correction-request","operations":["get","apply_request"],
               "readableFields":["tenant","placement"],
               "rowBoundaries":[{{"field":"tenant","claim":"tenant","operator":"equals"}}],
-              "applyTargets":[{{"entity":"placement"}}]
+              "applyTargets":[{{"rowBoundaries": [], "entity":"placement"}}]
             }}]
           }}]
         }}"#

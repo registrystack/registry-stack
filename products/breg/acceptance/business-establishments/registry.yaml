@@ -175,6 +175,7 @@ accessProfiles:
       - business-administration
     grants:
       - entity: establishment
+        rowBoundaries: []
         operations:
           - create
           - get
@@ -204,6 +205,7 @@ accessProfiles:
         sortableFields:
           - establishment-code
       - entity: business
+        rowBoundaries: []
         operations:
           - create
           - get
@@ -266,6 +268,7 @@ accessProfiles:
               - establishment-code
             allowCount: true
       - entity: operator-assignment
+        rowBoundaries: []
         operations:
           - create
           - get

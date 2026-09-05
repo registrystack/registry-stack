@@ -2267,7 +2267,7 @@ async fn audited_mutation_concealment(
             .iter()
             .any(|candidate| candidate == profile)
             .then_some(profile.as_str()),
-        None => Some(route.default_access_profile.as_str()),
+        None => route.default_access_profile.as_deref(),
     };
     match mutations
         .record_refusal(crate::audit::HttpRefusalAudit {
@@ -2441,7 +2441,7 @@ fn authorize_direct_route_base<'a>(
     let selected_profile = options
         .access_profile()
         .map(String::as_str)
-        .unwrap_or(&access.default_profile_id);
+        .or(access.default_profile_id.as_deref())?;
     if !access.profile_ids.contains(selected_profile)
         || !route
             .access_profiles
@@ -2524,7 +2524,7 @@ fn authorize_read_path_route<'a>(
     let selected_profile = options
         .access_profile()
         .map(String::as_str)
-        .unwrap_or(&access.default_profile_id);
+        .or(access.default_profile_id.as_deref())?;
     if !access.profile_ids.contains(selected_profile)
         || !route
             .access_profiles

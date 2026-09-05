@@ -821,10 +821,10 @@ fn metadata_only_access_or_disclosure_changes_create_empty_applicable_plans() {
 fn complete_extension_surface_modules_are_order_independent() {
     let field_module = parse_module_yaml(br#"{"id":"field-extension","version":"1","extendEntities":[{"entity":"asset","fields":[{"id":"status","type":"string","maxLength":16,"classification":"internal"}],"constraints":[{"kind":"unique","id":"status-unique","fields":["status"]}],"indexes":[{"id":"status-idx","fields":["status"]}]}]}"#)
         .expect("field extension parses");
-    let event_module = parse_module_yaml(br#"{"id":"event-extension","version":"1","extendEntities":[{"entity":"asset","accessProfiles":[{"id":"auditor","principalClaim":"principal","operations":["get","list"],"readableFields":["code","status"],"writableFields":[]}],"events":[{"id":"asset-created","trigger":"created","projection":["code","status"],"webhook":{"destinationId":"package-change-events"}}]}],"entities":[{"id":"site","primaryDataset":"neutral-registry","route":"sites","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}]}]}"#)
+    let event_module = parse_module_yaml(br#"{"id":"event-extension","version":"1","extendEntities":[{"entity":"asset","accessProfiles":[{"id":"auditor","principalClaim":"principal","operations":["get","list"],"readableFields":["code","status"],"writableFields":[], "rowBoundaries": []}],"events":[{"id":"asset-created","trigger":"created","projection":["code","status"],"webhook":{"destinationId":"package-change-events"}}]}],"entities":[{"id":"site","primaryDataset":"neutral-registry","route":"sites","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"], "rowBoundaries": []}]}]}"#)
         .expect("event extension parses");
     let project_bytes = format!(
-        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"environment":"local","instanceId":"{INSTANCE}","sequence":2,"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"entities":[{{"id":"asset","primaryDataset":"neutral-registry","route":"assets","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}}]}}],"accessProfiles":[{{"id":"reader","default":true,"principalClaim":"principal","grants":[{{"entity":"asset","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}}],"modules":[{{"id":"field-extension","version":"1","digest":"{}"}},{{"id":"event-extension","version":"1","digest":"{}"}}]}}"#,
+        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"environment":"local","instanceId":"{INSTANCE}","sequence":2,"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"entities":[{{"id":"asset","primaryDataset":"neutral-registry","route":"assets","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}}]}}],"accessProfiles":[{{"id":"reader","default":true,"principalClaim":"principal","grants":[{{"rowBoundaries": [], "entity":"asset","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}}],"modules":[{{"id":"field-extension","version":"1","digest":"{}"}},{{"id":"event-extension","version":"1","digest":"{}"}}]}}"#,
         module_digest(&field_module),
         module_digest(&event_module)
     );
@@ -1428,7 +1428,7 @@ fn project_bytes(sequence: u64, module_digest: &str) -> Vec<u8> {
 }
 
 fn derived_source_for_sql(sequence: u64, sql: &[u8]) -> DerivedSourceFixture {
-    let module_bytes = br#"{"id":"core","version":"1","entities":[{"id":"asset","primaryDataset":"neutral-registry","route":"assets","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}],"derived":[{"id":"summary","sql":"sql/summary.sql","key":"id","fields":[{"id":"summary","type":"string","maxLength":16,"classification":"internal"}]}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code","summary"]}]}]}"#.to_vec();
+    let module_bytes = br#"{"id":"core","version":"1","entities":[{"id":"asset","primaryDataset":"neutral-registry","route":"assets","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}],"derived":[{"id":"summary","sql":"sql/summary.sql","key":"id","fields":[{"id":"summary","type":"string","maxLength":16,"classification":"internal"}]}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code","summary"], "rowBoundaries": []}]}]}"#.to_vec();
     let module = parse_module_yaml(&module_bytes).expect("derived module parses");
     let digest = module_digest_with_assets(
         &module,
@@ -1712,20 +1712,20 @@ fn asset_entity_with_mode(
     temporal: &str,
 ) -> String {
     format!(
-        r#"{{"id":"asset","primaryDataset":"neutral-registry",{route},"mutationMode":"{mutation_mode}","fields":[{fields}]{constraints}{indexes},"accessProfiles":[{{{access}}}]{temporal}}}"#
+        r#"{{"id":"asset","primaryDataset":"neutral-registry",{route},"mutationMode":"{mutation_mode}","fields":[{fields}]{constraints}{indexes},"accessProfiles":[{{"rowBoundaries":[],{access}}}]{temporal}}}"#
     )
 }
 
 fn site_entity() -> &'static str {
-    r#"{"id":"site","primaryDataset":"neutral-registry","route":"sites","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}]}"#
+    r#"{"id":"site","primaryDataset":"neutral-registry","route":"sites","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"], "rowBoundaries": []}]}"#
 }
 
 fn location_entity() -> &'static str {
-    r#"{"id":"location","primaryDataset":"neutral-registry","route":"locations","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}]}"#
+    r#"{"id":"location","primaryDataset":"neutral-registry","route":"locations","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"], "rowBoundaries": []}]}"#
 }
 
 fn placement_entity() -> &'static str {
-    r#"{"id":"placement","primaryDataset":"neutral-registry","route":"placements","mutationMode":"create_only","fields":[{"id":"asset","type":"reference","target":"asset","required":true,"classification":"internal"},{"id":"site","type":"reference","target":"site","required":true,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["asset","site"],"writableFields":["asset","site"]}]}"#
+    r#"{"id":"placement","primaryDataset":"neutral-registry","route":"placements","mutationMode":"create_only","fields":[{"id":"asset","type":"reference","target":"asset","required":true,"classification":"internal"},{"id":"site","type":"reference","target":"site","required":true,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["asset","site"],"writableFields":["asset","site"], "rowBoundaries": []}]}"#
 }
 
 fn build_request(
@@ -1791,10 +1791,10 @@ fn project_planner_build_request() -> PackageBuildRequest {
           }}],
           "accessProfiles":[{{
             "id":"operator","default":true,"principalClaim":"principal","grants":[
-              {{"entity":"target","operations":["get","list"],"readableFields":["label"]}},
-              {{"entity":"request","operations":["create","patch","get","list","submit_request","revise_request","cancel_request","approve_request","reject_request","request_revision","apply_request"],"readableFields":["target","label"],"writableFields":["target","label"],
-                "reviewStages":[{{"stage":"review","targets":[{{"entity":"target","readableFields":["label"]}}]}}],
-                "applyTargets":[{{"entity":"target"}}]
+              {{"rowBoundaries": [], "entity":"target","operations":["get","list"],"readableFields":["label"]}},
+              {{"rowBoundaries": [], "entity":"request","operations":["create","patch","get","list","submit_request","revise_request","cancel_request","approve_request","reject_request","request_revision","apply_request"],"readableFields":["target","label"],"writableFields":["target","label"],
+                "reviewStages":[{{"stage":"review","targets":[{{"rowBoundaries": [], "entity":"target","readableFields":["label"]}}]}}],
+                "applyTargets":[{{"rowBoundaries": [], "entity":"target"}}]
               }}
             ]
           }}]
@@ -1834,7 +1834,7 @@ fn module_planner_build_request() -> PackageBuildRequest {
       "id":"core","version":"1","entities":[{
         "id":"target","primaryDataset":"planner-package","route":"targets","mutationMode":"mutable","changeControl":{"requiredFor":["patch"]},
         "fields":[{"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"}],
-        "accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["label"]}]
+        "accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["label"], "rowBoundaries": []}]
       },{
         "id":"request","primaryDataset":"planner-package","route":"requests","mutationMode":"mutable",
         "fields":[
@@ -1847,8 +1847,9 @@ fn module_planner_build_request() -> PackageBuildRequest {
           "application":{"mode":"planner","allowedDispositions":["apply"]}
         },
         "accessProfiles":[{"id":"operator","principalClaim":"principal","operations":["create","patch","get","list","submit_request","revise_request","cancel_request","approve_request","reject_request","request_revision","apply_request"],"readableFields":["target","label"],"writableFields":["target","label"],
-          "reviewStages":[{"stage":"review","targets":[{"entity":"target","readableFields":["label"]}]}],
-          "applyTargets":[{"entity":"target"}]
+          "reviewStages":[{"stage":"review","targets":[{"entity":"target","readableFields":["label"], "rowBoundaries": []}]}],
+          "applyTargets":[{"entity":"target", "rowBoundaries": []}],
+          "rowBoundaries": []
         }]
       }]
     }"#

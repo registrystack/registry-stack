@@ -145,7 +145,8 @@ fn compiled_spatial_registry() -> registry_breg::CompiledRegistry {
                 "id":"map-reader","default":true,"principalClaim":"principal","grants":[{
                   "entity":"site","operations":["create","get","list","patch","tombstone"],
                   "readableFields":["code","location"],"writableFields":["code","location"],
-                  "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.25,"maximumLatitudeSpanDegrees":1.5}}
+                  "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.25,"maximumLatitudeSpanDegrees":1.5}},
+                  "rowBoundaries": []
                 }]
               }]
             }"#,
@@ -182,7 +183,8 @@ fn compiled_spatial_derived_registry() -> registry_breg::CompiledRegistry {
               "writableFields":["code","location"],
               "filterableFields":["map-label"],
               "sortableFields":["map-label"],
-              "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.25,"maximumLatitudeSpanDegrees":1.5}}
+              "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.25,"maximumLatitudeSpanDegrees":1.5}},
+              "rowBoundaries": []
             }]
           }]
         }"#,
@@ -229,14 +231,16 @@ fn compiled_spatial_cross_entity_derived_registry() -> registry_breg::CompiledRe
           "accessProfiles":[{
             "id":"map-reader","default":true,"principalClaim":"principal","grants":[{
               "entity":"zone","operations":["create","get","list"],
-              "readableFields":["code","label"],"writableFields":["code","label"]
+              "readableFields":["code","label"],"writableFields":["code","label"],
+              "rowBoundaries": []
             },{
               "entity":"site","operations":["create","get","list","patch"],
               "readableFields":["code","zone","location","map-label"],
               "writableFields":["code","zone","location"],
               "filterableFields":["map-label"],
               "sortableFields":["map-label"],
-              "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.25,"maximumLatitudeSpanDegrees":1.5}}
+              "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.25,"maximumLatitudeSpanDegrees":1.5}},
+              "rowBoundaries": []
             }]
           }]
         }"#,
@@ -374,7 +378,8 @@ fn crs84_point_without_bbox_keeps_non_gis_ddl_and_inventory_stable() {
               }],
               "accessProfiles":[{
                 "id":"reader","default":true,"principalClaim":"principal","grants":[{
-                  "entity":"site","operations":["get","list"],"readableFields":["code","location"]
+                  "entity":"site","operations":["get","list"],"readableFields":["code","location"],
+                  "rowBoundaries": []
                 }]
               }]
             }"#,

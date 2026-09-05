@@ -1194,7 +1194,8 @@ fn additive_catalog_registry(variant: AdditiveCatalogVariant) -> registry_breg::
                 "entity": "entry",
                 "operations": ["create", "get", "list", "patch"],
                 "readableFields": writable_fields,
-                "writableFields": writable_fields
+                "writableFields": writable_fields,
+              "rowBoundaries": []
             }]
         }]
     });
@@ -1242,7 +1243,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                 },
                 {
                   "entity":"event","operations":["create","get","list"],
-                  "readableFields":["tenant"],"writableFields":["tenant"]
+                  "readableFields":["tenant"],"writableFields":["tenant"],
+                  "rowBoundaries": []
                 }
               ]
             },

@@ -82,6 +82,7 @@ entities:
           - id: final-approval
             approvals: 1
             excludeSubmitter: true
+            excludePreviousReviewers: true
       retention:
         mode: operator_erase
 ```
@@ -90,7 +91,7 @@ entities:
 |---|---|
 | `changeControl.requiredFor` | The operations on the target that must go through a request. With `[patch]`, a direct patch of a placement is refused even for a profile that holds `patch`: the operation is absent from ordinary grants, and only applying a request performs it. |
 | `changeRequest.effects` | What applying the request writes. `target` names the record from a reference field, `operation` is `create` or `patch`, `set` maps target fields to request fields, and `clear` lists target fields to null. A request entity declares either `effects` or a `planner`, never both. |
-| `review.stages` | Stages run in order. Each needs `approvals` distinct approvers, and `excludeSubmitter` keeps the submitter out of that stage. A request that needs no review declares `review.mode: none` instead of stages; submitting it moves it straight to `approved`. |
+| `review.stages` | Stages run in order. Each needs `approvals` distinct approvers. `excludeSubmitter` keeps the submitter out of that stage; `excludePreviousReviewers` keeps actors who decided an earlier stage of the current proposal out of this one. A request that needs no review declares `review.mode: none` instead of stages; submitting it moves it straight to `approved`. |
 | `application.mode` | Who applies. The default, `manual`, waits for an applier. `automatic` applies inside the submit, or inside the final approval when stages exist; one profile must then hold that action together with `apply_request` and `applyTargets` for every target. `planner` leaves the choice to a script: `allowedDispositions` lists which of `apply` and `queue` it may return, and a queued request names one of `queueReasons`. |
 | `retention.mode` | `retain` or `operator_erase`. With `operator_erase`, an operator can erase the proposal detail of an applied or canceled request while the record and its state remain. |
 
@@ -101,24 +102,43 @@ Decide `retention.mode` before the first request is submitted, because a proposa
 ```yaml
 accessProfiles:
   - id: correction-submitter
+    default: true
     principalClaim: registry_principal
     requiredScopes: [registry:corrections:submit]
     requiredPurposes: [asset-correction]
     grants:
       - entity: placement-correction-request
+        rowBoundaries: []
         operations: [create, get, patch, submit_request, revise_request, cancel_request]
         readableFields: [placement, proposed-site, reason]
         writableFields: [placement, proposed-site, reason]
+        requestVisibility: owner
   - id: correction-reviewer
     principalClaim: registry_principal
     requiredScopes: [registry:corrections:review]
     requiredPurposes: [asset-correction-review]
     grants:
       - entity: placement-correction-request
+        rowBoundaries: []
         operations: [get, list, approve_request, reject_request, request_revision]
         readableFields: [placement, proposed-site, reason]
         reviewStages:
           - stage: review
+            targets:
+              - entity: asset-placement
+                readableFields: [site]
+                rowBoundaries: []
+  - id: correction-final-approver
+    principalClaim: registry_principal
+    requiredScopes: [registry:corrections:final-approve]
+    requiredPurposes: [asset-correction-review]
+    grants:
+      - entity: placement-correction-request
+        rowBoundaries: []
+        operations: [get, approve_request, reject_request, request_revision]
+        readableFields: [placement, proposed-site, reason]
+        reviewStages:
+          - stage: final-approval
             targets:
               - entity: asset-placement
                 readableFields: [site]
@@ -129,12 +149,23 @@ accessProfiles:
     requiredPurposes: [asset-correction-apply]
     grants:
       - entity: placement-correction-request
+        rowBoundaries: []
         operations: [get, apply_request]
         readableFields: [placement, proposed-site, reason]
         applyTargets:
           - entity: asset-placement
             rowBoundaries: []
 ```
+
+The submitter is the default for shared request reads.
+Each review stage has its own route and one eligible profile in this example, so that profile is selected automatically.
+An explicit profile is required only when the particular route has several eligible profiles and no default.
+
+This example requires three distinct identities: the submitter, a reviewer, and a final approver.
+Separate profile names alone do not establish that separation; one person might hold both review permissions.
+The stage exclusions enforce it using the verified principal identity.
+Both exclusions default to `false`, so set them explicitly where independence is required.
+The manual applier may also have participated in review; applying is a separately granted operation, not an additional independent approval.
 
 A reviewer's `reviewStages` names the stages the profile may decide and the target fields it may see while deciding.
 An applier's `applyTargets` names the entities the profile may write when it applies, with row boundaries of its own.

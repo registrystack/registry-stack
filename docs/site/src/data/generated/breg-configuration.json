@@ -8,7 +8,7 @@
       "file": "products/breg/generated/authoring/registry-project.schema.json",
       "status": "beta",
       "reference": "docs/site/src/content/docs/configure/breg.mdx",
-      "field_count": 449,
+      "field_count": 450,
       "fields": [
         {
           "key_path": "accessProfiles",
@@ -189,10 +189,8 @@
           "values_conditional": false,
           "constraints": [],
           "conditional_constraints": [],
-          "description": null,
-          "defaults": [
-            "[]"
-          ],
+          "description": "Explicit row reach; an empty array intentionally permits all rows.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -662,10 +660,8 @@
           "values_conditional": false,
           "constraints": [],
           "conditional_constraints": [],
-          "description": null,
-          "defaults": [
-            "[]"
-          ],
+          "description": "Explicit row reach; an empty array intentionally permits all rows.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -895,10 +891,8 @@
           "values_conditional": false,
           "constraints": [],
           "conditional_constraints": [],
-          "description": null,
-          "defaults": [
-            "[]"
-          ],
+          "description": "Explicit row reach; an empty array intentionally permits all rows.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -981,9 +975,7 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
-          "defaults": [
-            "[]"
-          ],
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -1177,10 +1169,8 @@
           "values_conditional": false,
           "constraints": [],
           "conditional_constraints": [],
-          "description": null,
-          "defaults": [
-            "[]"
-          ],
+          "description": "Explicit row reach; an empty array intentionally permits all rows.",
+          "defaults": [],
           "runtime_validation": null
         },
         {
@@ -2886,6 +2876,21 @@
           "conditional_constraints": [],
           "description": null,
           "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.review.stages[].excludePreviousReviewers",
+          "kind": "property",
+          "type": "boolean",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": "Refuse an actor who already decided another stage of this proposal version.",
+          "defaults": [
+            "false"
+          ],
           "runtime_validation": null
         },
         {
@@ -6510,7 +6515,7 @@
       "file": "products/breg/generated/authoring/registry-module.schema.json",
       "status": "beta",
       "reference": "docs/site/src/content/docs/configure/breg.mdx",
-      "field_count": 407,
+      "field_count": 409,
       "fields": [
         {
           "key_path": "actions",
@@ -8051,6 +8056,21 @@
           "conditional_constraints": [],
           "description": null,
           "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "entities[].changeRequest.review.stages[].excludePreviousReviewers",
+          "kind": "property",
+          "type": "boolean",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": "Refuse an actor who already decided another stage of this proposal version.",
+          "defaults": [
+            "false"
+          ],
           "runtime_validation": null
         },
         {
@@ -10810,6 +10830,21 @@
           "runtime_validation": null
         },
         {
+          "key_path": "extendEntities[].changeRequest.review.stages[].excludePreviousReviewers",
+          "kind": "property",
+          "type": "boolean",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": "Refuse an actor who already decided another stage of this proposal version.",
+          "defaults": [
+            "false"
+          ],
+          "runtime_validation": null
+        },
+        {
           "key_path": "extendEntities[].changeRequest.review.stages[].excludeSubmitter",
           "kind": "property",
           "type": "boolean",
@@ -13093,7 +13128,7 @@
           "constraints": [
             [
               "format: uint64",
-              "maximum: 3600",
+              "maximum: 7200",
               "minimum: 1"
             ]
           ],

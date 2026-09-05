@@ -36,8 +36,9 @@ fn fixture(effects: Value) -> CompiledRegistry {
         }],
         "accessProfiles":[{"id":"submitter","default":true,"principalClaim":"sub","grants":[{
             "entity":"request","operations":["get","submit_request","approve_request","apply_request"],"readableFields":["one","two","value"],
-            "reviewStages":[{"stage":"review","targets":[{"entity":"target","readableFields":["first","second","parent"]}]}],
-            "applyTargets":[{"entity":"target"}]
+            "reviewStages":[{"stage":"review","targets":[{"entity":"target","readableFields":["first","second","parent"], "rowBoundaries": []}]}],
+            "applyTargets":[{"entity":"target", "rowBoundaries": []}],
+          "rowBoundaries": []
         }]}]
     });
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
@@ -139,8 +140,9 @@ fn declarative_and_rhai_paths_produce_byte_equivalent_canonical_effects() {
             "accessProfiles":[{"id":"submitter","default":true,"principalClaim":"sub","grants":[{
                 "entity":"request","operations":["get","submit_request","approve_request","apply_request"],
                 "readableFields":["one","value"],
-                "reviewStages":[{"stage":"review","targets":[{"entity":"target","readableFields":["first"]}]}],
-                "applyTargets":[{"entity":"target"}]
+                "reviewStages":[{"stage":"review","targets":[{"entity":"target","readableFields":["first"], "rowBoundaries": []}]}],
+                "applyTargets":[{"entity":"target", "rowBoundaries": []}],
+              "rowBoundaries": []
             }]}]
         })
     };
@@ -397,8 +399,9 @@ fn rhai_planner_refuses_authority_ceiling_escape_before_target_locks() {
         "accessProfiles":[{"id":"submitter","default":true,"principalClaim":"sub","grants":[{
             "entity":"request","operations":["get","submit_request","approve_request","apply_request"],
             "readableFields":["target-ref","value"],
-            "reviewStages":[{"stage":"review","targets":[{"entity":"target","readableFields":["allowed"]}]}],
-            "applyTargets":[{"entity":"target"}]
+            "reviewStages":[{"stage":"review","targets":[{"entity":"target","readableFields":["allowed"], "rowBoundaries": []}]}],
+            "applyTargets":[{"entity":"target", "rowBoundaries": []}],
+          "rowBoundaries": []
         }]}]
     });
     let project = parse_project_json(&serde_json::to_vec(&source).expect("source serializes"))

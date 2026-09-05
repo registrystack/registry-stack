@@ -44,7 +44,8 @@ fn compiled(allow_data_export: bool) -> registry_breg::CompiledRegistry {
                 "operations": ["create", "patch", "batch", "list"],
                 "readableFields": ["code", "count", "readonly"],
                 "writableFields": ["code", "count"],
-                "allowDataExport": allow_data_export
+                "allowDataExport": allow_data_export,
+              "rowBoundaries": []
             }]
         }]
     });
@@ -100,7 +101,7 @@ fn data_export_requires_explicit_nonanonymous_profile_permission() {
                 "id": PROFILE, "anonymous": anonymous,
                 "principalClaim": if anonymous { Value::Null } else { json!("principal") },
                 "grants": [{
-                    "entity": ENTITY,
+                    "rowBoundaries": [], "entity": ENTITY,
                     "operations": operations, "readableFields": readable,
                     "allowDataExport": true
                 }]
@@ -132,7 +133,7 @@ fn data_export_requires_explicit_nonanonymous_profile_permission() {
         "accessProfiles": [{
             "id": "project-exporter", "principalClaim": "principal",
             "grants": [{"entity": ENTITY, "operations": ["list"],
-                        "readableFields": ["code"], "allowDataExport": true}]
+                        "readableFields": ["code"], "allowDataExport": true, "rowBoundaries": []}]
         }],
         "entities": [{
             "id": ENTITY, "primaryDataset": "test-dataset", "route": "records", "mutationMode": "create_only",
@@ -265,7 +266,7 @@ fn data_validate_and_chunk_plan_reuse_runtime_rules_and_compiled_batch_bounds() 
             "accessProfiles":[{"id":PROFILE,"principalClaim":"principal","grants":[{
                     "entity":ENTITY,
                     "operations":["create","batch"],"readableFields":["code"],
-                    "writableFields":["code"]}]}]
+                    "writableFields":["code"], "rowBoundaries": []}]}]
         });
         compile_source(source).unwrap()
     };
@@ -318,7 +319,8 @@ fn data_lifecycle_uses_exact_compiled_api_names() {
                 "operations": ["create", "patch", "batch", "list"],
                 "readableFields": ["record-code"],
                 "writableFields": ["record-code"],
-                "allowDataExport": true
+                "allowDataExport": true,
+              "rowBoundaries": []
             }]
         }]
     }))

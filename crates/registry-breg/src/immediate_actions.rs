@@ -1115,15 +1115,13 @@ fn compile_action_routes(
     if route_profiles.is_empty() {
         return Vec::new();
     }
-    let Some(default) = route_default_profile(
+    let default = route_default_profile(
         &route_profiles
             .iter()
             .map(|(_, profile)| *profile)
             .collect::<Vec<_>>(),
         errors,
-    ) else {
-        return Vec::new();
-    };
+    );
     let profile_ids = route_profiles
         .iter()
         .map(|(_, profile)| profile.id.clone())
@@ -1136,7 +1134,7 @@ fn compile_action_routes(
         path: action.route.clone(),
         operation: Operation::Invoke,
         access_profiles: profile_ids.iter().cloned().collect(),
-        default_access_profile: default.id.clone(),
+        default_access_profile: default.map(|profile| profile.id.clone()),
     }];
     if let Some(path) = &action.condition_route {
         routes.push(CompiledActionRoute {
@@ -1147,7 +1145,7 @@ fn compile_action_routes(
             path: path.clone(),
             operation: Operation::Invoke,
             access_profiles: profile_ids.iter().cloned().collect(),
-            default_access_profile: default.id.clone(),
+            default_access_profile: default.map(|profile| profile.id.clone()),
         });
     }
     routes
@@ -1165,15 +1163,14 @@ fn route_default_profile<'a>(
         .copied()
         .filter(|profile| profile.default)
         .collect::<Vec<_>>();
-    if defaults.len() == 1 {
-        return Some(defaults[0]);
+    if defaults.len() > 1 {
+        errors.push(Diagnostic::error(
+            "action.route_access.default_multiple",
+            "project.accessProfiles[].default",
+            "an action route accepts at most one default profile; clear default on the other profiles",
+        ));
     }
-    errors.push(Diagnostic::error(
-        "action.route_access.default_missing",
-        "project.accessProfiles[].default",
-        "action routes with multiple profiles require exactly one route-eligible default",
-    ));
-    None
+    defaults.first().copied()
 }
 
 fn entity_grant_fields_empty(grant: &crate::contract::AccessGrantSource) -> bool {

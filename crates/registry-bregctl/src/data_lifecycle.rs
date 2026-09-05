@@ -964,7 +964,8 @@ mod tests {
                     "operations": ["create", "batch", "list"],
                     "readableFields": ["code"],
                     "writableFields": ["code"],
-                    "allowDataExport": true
+                    "allowDataExport": true,
+                  "rowBoundaries": []
                 }]
             }]
         });

@@ -61,7 +61,7 @@ class BRegProductCatalogTests(unittest.TestCase):
                 self.assertIn("path", invariant["negativeTest"])
                 self.assertIn("name", invariant["negativeTest"])
 
-    def test_security_range_is_closed_through_rhai_planner_invariants(self) -> None:
+    def test_security_range_includes_planner_and_access_invariants(self) -> None:
         matrix = VALIDATOR.load_yaml(
             VALIDATOR.CONTRACTS / "security-invariant-matrix.yaml"
         )
@@ -69,12 +69,12 @@ class BRegProductCatalogTests(unittest.TestCase):
             list(VALIDATOR.SECURITY_INVARIANT_IDS),
             [invariant["id"] for invariant in matrix["invariants"]],
         )
-        planner_rows = matrix["invariants"][-7:]
+        planner_and_access_rows = matrix["invariants"][24:]
         self.assertEqual(
-            [f"BREG-NEG-{index:02d}" for index in range(25, 32)],
-            [invariant["negativeId"] for invariant in planner_rows],
+            [f"BREG-NEG-{index:02d}" for index in range(25, 35)],
+            [invariant["negativeId"] for invariant in planner_and_access_rows],
         )
-        for invariant in planner_rows:
+        for invariant in planner_and_access_rows:
             with self.subTest(invariant=invariant["id"]):
                 self.assertEqual("enforced", invariant["state"])
                 self.assertTrue(invariant["threat"])

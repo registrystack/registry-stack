@@ -1156,6 +1156,7 @@ accessProfiles:
     requiredScopes: [registry:sites:read]
     grants:
       - entity: service-site
+        rowBoundaries: []
         operations: [get, list]
         readableFields: [code, label, location]
         spatialQueries:
@@ -1166,12 +1167,14 @@ accessProfiles:
     principalClaim: principal
     grants:
       - entity: service-site
+        rowBoundaries: []
         operations: [get]
         readableFields: [code, label, location]
   - id: no-bbox
     principalClaim: principal
     grants:
       - entity: service-site
+        rowBoundaries: []
         operations: [get, list]
         readableFields: [code, label, location]
 "#;

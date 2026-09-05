@@ -1,0 +1,18 @@
+{
+  "entity": "record",
+  "accessProfile": "auditor",
+  "operation": "patch",
+  "claims": {
+    "principalClaim": "registry_principal",
+    "principal": "synthetic-clerk",
+    "scopes": [
+      "record:audit"
+    ],
+    "purpose": "record-audit",
+    "directClaims": {
+      "assigned_districts": [
+        "north"
+      ]
+    }
+  }
+}

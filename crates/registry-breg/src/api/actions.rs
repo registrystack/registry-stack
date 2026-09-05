@@ -113,7 +113,7 @@ fn authorize_action<'a>(
     let selected = options
         .access_profile()
         .map(String::as_str)
-        .unwrap_or(&access.default_profile_id);
+        .or(access.default_profile_id.as_deref())?;
     if !access.profile_ids.contains(selected)
         || !route.access_profiles.iter().any(|id| id == selected)
     {
@@ -276,7 +276,7 @@ async fn action_refusal(
             .iter()
             .any(|candidate| candidate == profile)
             .then_some(profile.as_str()),
-        None => Some(route.default_access_profile.as_str()),
+        None => route.default_access_profile.as_deref(),
     };
     match mutations
         .record_action_refusal(

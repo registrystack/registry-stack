@@ -2261,7 +2261,8 @@ fn plain_geojson_registry_source() -> &'static str {
           "entity":"plain-site",
           "operations":["create","get","list"],
           "readableFields":["code","location"],
-          "writableFields":["code","location"]
+          "writableFields":["code","location"],
+          "rowBoundaries": []
         }]
       }]
     }"#
