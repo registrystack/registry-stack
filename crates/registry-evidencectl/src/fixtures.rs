@@ -104,6 +104,7 @@ pub fn run(command: FixturesCommand) -> Result<ExitCode> {
 fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
     let runtime_path = args.project.join("runtime.yaml");
     let evidence_bin = evidence_binary::resolve(args.evidence_bin.as_deref())?;
+    evidence_binary::ensure_matching_version(&evidence_bin)?;
     let target = if runtime_path.is_file() {
         let bundle_directory = resolve_bundle_directory(&runtime_path, &args.project)?;
         let bundle_config_path = bundle_directory.join("evidence.yaml");
@@ -161,11 +162,15 @@ fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
         }
     }
 
-    let overall_passed = check_passed && fixtures.iter().all(|fixture| fixture.passed);
-    let evaluated_cases = fixtures
+    let evaluated_cases: usize = fixtures
         .iter()
         .filter_map(|fixture| fixture.evaluated_cases)
         .sum();
+    // A run that evaluated nothing has proven nothing. Every step passing is
+    // exactly how such a run reads as one that exercised the deployment, so
+    // the empty count is a verdict of its own rather than a footnote.
+    let overall_passed =
+        check_passed && fixtures.iter().all(|fixture| fixture.passed) && evaluated_cases > 0;
     let report = RunReport {
         check: CheckReport {
             passed: check_passed,
@@ -490,6 +495,14 @@ fn print_diagnostics(report: &RunReport, to_stderr: bool) {
         "{passed_count} passed, {failed_count} failed ({} cases evaluated)",
         report.evaluated_cases
     ));
+    // Said only where it is the reason for the verdict: beside a failing step
+    // it would read as a second problem rather than the same one.
+    if failed_count == 0 && report.evaluated_cases == 0 {
+        lines.push(
+            "no case was evaluated, so this run proves nothing: every fixture the project references must declare at least one case"
+                .to_owned(),
+        );
+    }
 
     for line in lines {
         if to_stderr {
