@@ -54,6 +54,37 @@ function ownGetterNames(prototype) {
   );
 }
 
+function clientDeclaration() {
+  return fs.readFileSync(path.join(__dirname, '..', 'client.d.ts'), 'utf8');
+}
+
+function interfaceFields(name) {
+  const declaration = clientDeclaration();
+  const start = declaration.indexOf(`export interface ${name} {`);
+  assert.notEqual(start, -1, `${name} is missing from client.d.ts`);
+  const body = declaration.slice(start, declaration.indexOf('\n}', start));
+  return [...body.matchAll(/^  (\w+)[?:]/gm)].map((match) => match[1]);
+}
+
+// The configuration members `client.d.ts` names by hand are only honest while
+// they are the members `src/convert.rs` actually reads out of the object a
+// caller passes. Both readers name every key as a string literal, either as
+// the second argument to a `required_*`/`optional_*` helper or as a direct
+// `.get("...")`, so the function body is the list.
+function configurationKeysRead(functionName) {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'convert.rs'), 'utf8');
+  const start = source.indexOf(`fn ${functionName}(`);
+  assert.notEqual(start, -1, `${functionName} is missing from src/convert.rs`);
+  const end = source.indexOf('\n}\n', start);
+  assert.notEqual(end, -1, `${functionName} has no closing brace in src/convert.rs`);
+  const body = source.slice(start, end);
+  const keys = new Set();
+  for (const match of body.matchAll(/object, "(\w+)"|\.get\("(\w+)"\)/g)) {
+    keys.add(match[1] ?? match[2]);
+  }
+  return [...keys].sort();
+}
+
 test('every native EvidenceClient method is accounted for as sync or async', () => {
   const actual = ownMethodNames(native.EvidenceClient.prototype).sort();
   const expected = [...SYNC_METHODS, ...ASYNC_METHODS].sort();
@@ -143,14 +174,6 @@ test('every class client.js exports is declared in client.d.ts or the index.d.ts
 });
 
 test('the handwritten request-batch input types preserve the common and item field boundary', () => {
-  const declaration = fs.readFileSync(path.join(__dirname, '..', 'client.d.ts'), 'utf8');
-  const interfaceFields = (name) => {
-    const start = declaration.indexOf(`export interface ${name} {`);
-    assert.notEqual(start, -1, `${name} is missing from client.d.ts`);
-    const body = declaration.slice(start, declaration.indexOf('\n}', start));
-    return [...body.matchAll(/^  (\w+)[?:]/gm)].map((match) => match[1]);
-  };
-
   assert.deepEqual(interfaceFields('EvidenceRequestBatchItemSpec'), [
     'subjects',
     'subjectExpectations',
@@ -169,6 +192,32 @@ test('the handwritten request-batch input types preserve the common and item fie
     'clockSkewSeconds',
     'items',
   ]);
+});
+
+test('the handwritten client configuration names exactly the keys the binding reads', () => {
+  // `token` is read by `token_provider_from_json`, which `config_from_json`
+  // delegates to, so it is added here rather than found in that body.
+  const read = [...configurationKeysRead('config_from_json'), 'token'].sort();
+  assert.deepEqual(interfaceFields('EvidenceClientConfig').sort(), read);
+});
+
+test('the handwritten token configuration covers exactly the sources the binding accepts', () => {
+  const sources = configurationKeysRead('token_provider_from_json').filter(
+    (key) => key !== 'token',
+  );
+  const declaration = clientDeclaration();
+  const start = declaration.indexOf('export type EvidenceTokenConfig =');
+  assert.notEqual(start, -1, 'EvidenceTokenConfig is missing from client.d.ts');
+  const union = declaration.slice(start).split('\n\n')[0];
+  const declared = [...union.matchAll(/\| \{ (\w+):/g)].map((match) => match[1]).sort();
+  assert.deepEqual(declared, sources);
+});
+
+test('the handwritten private-key-JWT configuration names exactly the keys the binding reads', () => {
+  assert.deepEqual(
+    interfaceFields('PrivateKeyJwtConfig').sort(),
+    configurationKeysRead('private_key_jwt_provider_from_json'),
+  );
 });
 
 test('the generated request-batch result remains an available/notAvailable union', () => {
