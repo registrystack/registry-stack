@@ -31,6 +31,8 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fs,
+    io::ErrorKind,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, PoisonError},
 };
@@ -94,10 +96,32 @@ pub(crate) struct Description {
     leaves: BTreeMap<(String, String), Option<Arc<BTreeSet<String>>>>,
 }
 
-/// A required retained description that the compiler cannot read or version-check.
+/// A retained description that the compiler cannot read or version-check, and the one that is not
+/// there at all.
 pub(crate) struct DescriptionFailure {
     path: PathBuf,
     message: String,
+}
+
+/// What a build found at a project's `source.openapi.yaml`.
+///
+/// The three answers are the three the compiler gives the same file, and they are kept apart
+/// because only one of them is a refusal for every project. `read_inputs` in
+/// `crates/registry-evidencectl/src/authoring.rs` reads the description when the name is there,
+/// treats `NotFound` as a description of nothing, and fails on any other reason it could not
+/// inspect the path. A project whose questions all name sources compiles with no description at
+/// all, which is what `evidencectl new --transport sqlite-extract` writes, so an editor that
+/// refused every root without one would report a project its own build accepts.
+pub(crate) enum DescriptionReading {
+    /// A description this module read. `None` is one it read and could not analyse into operations
+    /// it may publish, which is the quiet degradation the module header describes.
+    Read(Option<Description>),
+    /// There is no file of that name under the root. Whether that is a refusal depends on the
+    /// questions: only a question written in the compact form names an operation to resolve.
+    Absent(DescriptionFailure),
+    /// There is a file of that name, and the compiler stops at it before reading dependent
+    /// inputs. This is a refusal whatever the questions say.
+    Refused(DescriptionFailure),
 }
 
 impl DescriptionFailure {
@@ -119,36 +143,50 @@ struct Analysis {
 }
 
 impl Description {
-    /// The description of the project at `root`, when there is one this module can read.
+    /// The description of the project at `root`, and which of the three answers that is.
     ///
-    /// An unreadable document or one without a supported OpenAPI version is an error because the
-    /// compiler stops there before reading dependent inputs. `Ok(None)` is reserved for later
-    /// structural analysis that cannot safely publish operations.
-    pub(crate) fn read(root: &Path) -> Result<Option<Self>, DescriptionFailure> {
+    /// An unreadable document or one without a supported OpenAPI version is a refusal because the
+    /// compiler stops there before reading dependent inputs. A name that is not there at all is
+    /// [`DescriptionReading::Absent`], which the caller weighs against the questions.
+    /// [`DescriptionReading::Read`] carrying `None` is reserved for later structural analysis that
+    /// cannot safely publish operations.
+    pub(crate) fn read(root: &Path) -> DescriptionReading {
         let path = root.join(OPENAPI_FILE);
+        // Absence is decided before containment, on the same question `read_inputs` asks: whether
+        // a name of this kind is there at all, following nothing to answer it. A name that is
+        // there and is not a regular file the walk below admits is a refusal, exactly as it is for
+        // the compiler, which reads whatever `symlink_metadata` found and fails on it.
+        if matches!(fs::symlink_metadata(&path), Err(error) if error.kind() == ErrorKind::NotFound)
+        {
+            return DescriptionReading::Absent(description_failure(
+                path,
+                "The required source.openapi.yaml is missing",
+            ));
+        }
         // The gate every read in this server goes through. A path it refuses and a path it could
         // not decide are both paths this module does not open.
-        let file =
-            match secure_regular_file(root, &path) {
-                Ok(Some(file)) => file,
-                Ok(None) => return Err(description_failure(
+        let file = match secure_regular_file(root, &path) {
+            Ok(Some(file)) => file,
+            Ok(None) => {
+                return DescriptionReading::Refused(description_failure(
                     path,
-                    "The required source.openapi.yaml is missing or is not a regular project file",
-                )),
-                Err(_) => {
-                    return Err(description_failure(
-                        path,
-                        "The required source.openapi.yaml could not be read; check its permissions",
-                    ))
-                }
-            };
+                    "The retained OpenAPI description is not a regular project file",
+                ))
+            }
+            Err(_) => {
+                return DescriptionReading::Refused(description_failure(
+                    path,
+                    "The required source.openapi.yaml could not be read; check its permissions",
+                ))
+            }
+        };
         // Both ceilings begin with the descriptor's size before its bytes are read. The bounded
         // read and the actual byte count still check growth after the descriptor was opened.
         let index_positions = file.len() <= MAX_POSITION_BYTES;
         let bytes = match file.read_bounded(MAX_OPENAPI_BYTES) {
             Ok(SecureFileRead::Bytes(bytes)) => bytes,
             Ok(SecureFileRead::TooLarge) => {
-                return Err(description_failure(
+                return DescriptionReading::Refused(description_failure(
                     path,
                     format!(
                     "The retained OpenAPI description exceeds its {MAX_OPENAPI_BYTES}-byte limit"
@@ -156,7 +194,7 @@ impl Description {
                 ))
             }
             Err(_) => {
-                return Err(description_failure(
+                return DescriptionReading::Refused(description_failure(
                     path,
                     "The retained OpenAPI description could not be read; check its permissions",
                 ))
@@ -164,18 +202,19 @@ impl Description {
         };
         let index_positions = index_positions
             && u64::try_from(bytes.len()).is_ok_and(|bytes| bytes <= MAX_POSITION_BYTES);
-        let text = String::from_utf8(bytes).map_err(|_| {
-            description_failure(
-                path.clone(),
+        let Ok(text) = String::from_utf8(bytes) else {
+            return DescriptionReading::Refused(description_failure(
+                path,
                 "The retained OpenAPI description is not valid UTF-8",
-            )
-        })?;
-        let analysis = analysis_for(&path, &text, index_positions)
-            .map_err(|message| description_failure(path, message))?;
-        Ok(analysis.map(|analysis| Self {
-            analysis,
-            leaves: BTreeMap::new(),
-        }))
+            ));
+        };
+        match analysis_for(&path, &text, index_positions) {
+            Ok(analysis) => DescriptionReading::Read(analysis.map(|analysis| Self {
+                analysis,
+                leaves: BTreeMap::new(),
+            })),
+            Err(message) => DescriptionReading::Refused(description_failure(path, message)),
+        }
     }
 
     /// The file the description was read from, which is where its operations are defined.

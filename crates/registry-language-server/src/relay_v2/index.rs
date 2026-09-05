@@ -29,13 +29,66 @@ use crate::{
     yaml::{ParsedDocument, YamlScalar, YamlValue},
 };
 
-use super::PROJECT_FILE;
+use super::{API_VERSION_PREFIX, CONTRACT_KIND, PROJECT_FILE};
 
 pub(crate) const RUNTIME_FILE: &str = "runtime.yaml";
 const MAX_DOCUMENT_BYTES: u64 = 1024 * 1024;
 
+/// Whether a directory is a Relay V2 authoring project root.
+///
+/// The file name is not the answer on its own. `registry.yaml` is also what the Base Registry
+/// Engine calls its project document, so a directory holding one may belong to either product, and
+/// a root claimed on the name alone gives an author of the other product a page of sentences about
+/// a grammar their build never applies. The document says which product wrote it: a governed
+/// contract declares `kind: RegistryContract` at an `apiVersion` under
+/// `relay.registrystack.org/`, and a Base Registry Engine project declares neither.
+///
+/// Either key is enough. An author part way through writing a contract may have typed one and not
+/// the other, and a root that waits for both would leave that project with no feedback until the
+/// second line arrived.
+///
+/// Everything else reads as "not this family". A `registry.yaml` too large to read, one that is not
+/// UTF-8, one whose text names no discriminator at all: none of them is a document this family can
+/// prove is its own, and claiming a root on a file it could not read is how the false diagnostic
+/// above is produced. The read is bounded by the same ceiling the loader applies a moment later, so
+/// a file this refuses is a file the loader would have refused to index anyway.
+///
+/// A symbolic link declares nothing, at the directory or at the file: [`plain_file`] answers before
+/// anything is opened, and the open itself follows no name in the path.
 pub(crate) fn declares_root(directory: &Path) -> bool {
-    plain_file(&directory.join(PROJECT_FILE))
+    let path = directory.join(PROJECT_FILE);
+    if !plain_file(&path) {
+        return false;
+    }
+    let Ok(Some(file)) = secure_regular_file(directory, &path) else {
+        return false;
+    };
+    let Ok(SecureFileRead::Bytes(bytes)) = file.read_bounded(MAX_DOCUMENT_BYTES) else {
+        return false;
+    };
+    let Ok(source) = String::from_utf8(bytes) else {
+        return false;
+    };
+    names_relay_v2(&source)
+}
+
+/// Whether the text of a `registry.yaml` carries the Relay V2 contract discriminator.
+///
+/// The parse is the error-tolerant one the rest of the server reads authored documents with, so a
+/// contract whose lower half does not parse yet still declares the family from the two keys at its
+/// top.
+fn names_relay_v2(source: &str) -> bool {
+    let Ok(document) = crate::yaml::parse_yaml(source) else {
+        return false;
+    };
+    document
+        .value
+        .get_scalar("kind")
+        .is_some_and(|kind| kind.value == CONTRACT_KIND)
+        || document
+            .value
+            .get_scalar("apiVersion")
+            .is_some_and(|version| version.value.starts_with(API_VERSION_PREFIX))
 }
 
 /// Whether `path` is one of the documents the current Relay V2 project resolves.
@@ -1006,6 +1059,91 @@ fn zero_range() -> Range {
 mod tests {
     use super::*;
     use crate::refs::SymbolKind;
+
+    /// The two documents the two products scaffold under the same file name, and what root
+    /// discovery has to make of each. The Base Registry Engine entry is the head of what
+    /// `bregctl init` writes, and the Relay V2 entry is the head of what `relayctl init` writes.
+    #[test]
+    fn a_root_is_declared_by_the_contract_discriminator_and_not_by_the_file_name() {
+        let cases = [
+            (
+                "the Relay V2 starter",
+                true,
+                "apiVersion: relay.registrystack.org/v2alpha1\nkind: RegistryContract\nmetadata: {id: registry}\n",
+            ),
+            (
+                "a contract at a later grammar version",
+                true,
+                "apiVersion: relay.registrystack.org/v3\nkind: RegistryContract\n",
+            ),
+            (
+                "a contract whose kind is not typed yet",
+                true,
+                "apiVersion: relay.registrystack.org/v2alpha1\nresources:\n",
+            ),
+            (
+                "a contract whose apiVersion is not typed yet",
+                true,
+                "kind: RegistryContract\nresources:\n",
+            ),
+            (
+                "a contract whose lower half does not parse yet",
+                true,
+                "apiVersion: relay.registrystack.org/v2alpha1\nkind: RegistryContract\nresources:\n  - id: people\n   properties: [\n",
+            ),
+            (
+                "the Base Registry Engine starter",
+                false,
+                "apiVersion: registry.registrystack.org/v1alpha1\nkind: RegistryProject\nregistry:\n  id: business\n",
+            ),
+            ("a document naming neither key", false, "resources: []\n"),
+            ("an empty document", false, ""),
+        ];
+
+        for (why, declares, document) in cases {
+            let project = tempfile::tempdir().unwrap();
+            std::fs::write(project.path().join(PROJECT_FILE), document).unwrap();
+            assert_eq!(
+                declares_root(project.path()),
+                declares,
+                "{why}: {document:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_contract_past_the_document_ceiling_declares_no_root() {
+        let project = tempfile::tempdir().unwrap();
+        let padded = format!(
+            "apiVersion: relay.registrystack.org/v2alpha1\nkind: RegistryContract\n{}\n",
+            "#".repeat(MAX_DOCUMENT_BYTES as usize)
+        );
+        std::fs::write(project.path().join(PROJECT_FILE), padded).unwrap();
+
+        assert!(
+            !declares_root(project.path()),
+            "a document the loader would refuse to index declares no root for it to index"
+        );
+    }
+
+    #[test]
+    fn an_absent_or_linked_contract_declares_no_root() {
+        let project = tempfile::tempdir().unwrap();
+        assert!(!declares_root(project.path()));
+
+        let elsewhere = project.path().join("elsewhere.yaml");
+        std::fs::write(
+            &elsewhere,
+            "apiVersion: relay.registrystack.org/v2alpha1\nkind: RegistryContract\n",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(&elsewhere, project.path().join(PROJECT_FILE)).unwrap();
+
+        assert!(
+            !declares_root(project.path()),
+            "a link is how a directory borrows a shape it does not have"
+        );
+    }
 
     #[test]
     fn an_oversized_marker_returns_its_document_diagnostic() {
