@@ -96,6 +96,10 @@ namespace stops the run with `evidence: fixture is not an approved synthetic acc
 definition`. Fixtures are also the only way to exercise this project, because `evidencectl dev`
 refuses a SQLite source with `local serving does not bind SQLite extracts`.
 
+Both rules, and the three the fixture runner applies before it evaluates a case, are stated once
+in the Evidence authoring form reference under
+[Rules that block a build](../../products/registry-evidence/authoring-form/#rules-that-block-a-build).
+
 ## Publish the real extract
 
 Create the SQLite file on the publisher side with the authority's own export tooling. Evidence
