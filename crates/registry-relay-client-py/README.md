@@ -6,19 +6,24 @@ a configured private-key-JWT provider may perform a separate token acquisition
 or refresh exchange. The binding does not implement HTTP routing,
 authentication, retries, pagination, or Relay Problem Details itself.
 
-Starting with Registry Stack v0.22.0, install the exact client version that
-matches the Relay deployment:
+This crate publishes through the unified `registry-stack-client`
+distribution, which imports as `registry_client`. Install the exact client
+version that matches the Relay deployment, and use its `relay` namespace:
 
 ```sh
-python -m pip install "registry-relay-client==<version>"
+python -m pip install "registry-stack-client==<version>"
 ```
 
 PyPI carries manylinux wheels requiring glibc 2.17 or newer for Linux amd64 and
-Linux arm64, plus a macOS arm64 wheel. Registry Stack v0.20.0 and v0.20.1
-remain available only as wheels attached to their GitHub Releases.
+Linux arm64, plus a macOS arm64 wheel.
+
+Registry Stack v0.22.0 through v0.26.0 published this binding on its own, as
+the `registry-relay-client` distribution imported as `registry_relay_client`.
+Those versions stay published and unchanged, and no later version joins them:
+from v0.26.1 the maintained Python client is `registry-stack-client`.
 
 ```python
-from registry_relay_client import RelayClient
+from registry_client.relay import RelayClient
 
 client = RelayClient(base_url="https://relay.example")
 result = client.service_metadata()

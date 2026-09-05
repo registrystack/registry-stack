@@ -6,18 +6,26 @@ preparation, sending, and verification) is the wrapped Rust crate's own; this
 crate is a thin `#[pymodule]` surface plus a JSON conversion layer, and
 re-implements none of it.
 
-The package is named `registry-evidence-client` and imported as
-`registry_evidence_client` (matching the crate's own `[lib]` name). Starting
-with Registry Stack v0.22.0, install the exact client version that matches the
-Evidence deployment:
+This crate publishes through the unified `registry-stack-client`
+distribution, which imports as `registry_client`. Install the exact client
+version that matches the Evidence deployment, and use its `evidence` namespace:
 
 ```sh
-python -m pip install "registry-evidence-client==<version>"
+python -m pip install "registry-stack-client==<version>"
+```
+
+```python
+from registry_client.evidence import EvidenceClient
 ```
 
 PyPI carries manylinux wheels requiring glibc 2.17 or newer for Linux amd64 and
-Linux arm64, plus a macOS arm64 wheel. Earlier versions remain available as
-wheels attached to their GitHub Releases.
+Linux arm64, plus a macOS arm64 wheel.
+
+Registry Stack v0.22.0 through v0.26.0 published this binding on its own, as
+the `registry-evidence-client` distribution imported as
+`registry_evidence_client` (matching the crate's own `[lib]` name). Those
+versions stay published and unchanged, and no later version joins them: from
+v0.26.1 the maintained Python client is `registry-stack-client`.
 
 ## Python surface
 
@@ -27,7 +35,7 @@ network call, releasing the GIL for the duration (via `py.detach`) so other
 Python threads keep running.
 
 ```python
-from registry_evidence_client import EvidenceClient
+from registry_client.evidence import EvidenceClient
 
 client = EvidenceClient(base_url, trusted_jwks, revoked_key_ids, token)
 
