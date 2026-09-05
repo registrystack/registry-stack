@@ -122,9 +122,12 @@ fn startup_value_disclosure_and_listener_activation_threats_are_enforced_by_prep
     assert!(!stdout.contains(CONFIG_VALUE_CANARY));
     assert!(!stdout.contains(runtime_config.to_str().expect("path is UTF-8")));
     let report: Value = serde_json::from_str(&stdout).expect("failure is JSON");
+    // The document is structurally invalid (an unrecognized field with the
+    // required members absent), so doctor names that specific configuration
+    // cause instead of a generic runtime-configuration refusal.
     assert_eq!(
         report["diagnostics"][0]["code"],
-        "startup.runtime_config.refused"
+        "startup.runtime_config.document"
     );
     assert_tool_diagnostic(
         &report["diagnostics"][0],
@@ -135,6 +138,72 @@ fn startup_value_disclosure_and_listener_activation_threats_are_enforced_by_prep
     let listener = TcpListener::bind(address)
         .expect("startup preparation refuses without binding the configured listener");
     drop(listener);
+}
+
+#[test]
+fn doctor_names_the_specific_configuration_cause_instead_of_a_generic_refusal() {
+    let directory = TestDirectory::create();
+    let runtime_config = directory.path.join("runtime.yaml");
+    fs::write(&runtime_config, "not: [valid\n").expect("unparseable document is written");
+
+    let (status, stdout, stderr) = run(&runtime_config);
+
+    assert_eq!(status, 1);
+    assert!(stderr.is_empty());
+    let report: Value = serde_json::from_str(&stdout).expect("failure is JSON");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "startup.runtime_config.document"
+    );
+    assert_eq!(report["diagnostics"][0]["path"], "/");
+    assert_tool_diagnostic(
+        &report["diagnostics"][0],
+        "runtime_configuration",
+        "correct_runtime_configuration",
+    );
+}
+
+#[test]
+fn doctor_names_a_missing_package_root_distinctly_from_other_configuration_causes() {
+    let directory = TestDirectory::create();
+    let runtime_config = directory.path.join("runtime.yaml");
+    let secrets_root = directory.path.join("secrets");
+    fs::create_dir(&secrets_root).expect("secret provider root is created");
+    fs::write(
+        &runtime_config,
+        format!(
+            "apiVersion: registry.registrystack.org/breg-runtime/v1alpha1\n\
+kind: BRegRuntimeConfig\n\
+listener:\n  bind: 127.0.0.1:0\n\
+identity:\n  environment: development\n  instanceId: generic-registry-1\n  databaseId: generic-registry-db-1\n  databaseInitializationEnvironment: development\n\
+secretProviders:\n  file:\n    root: {secrets}\n\
+database:\n  runtimeUrlRef: secret:file/runtime-database-url\n  migrationUrlRef: secret:file/migration-database-url\n  pool:\n    maxSize: 8\n  roles:\n    migration: registry_migration\n    runtime: registry_runtime\n\
+package:\n  root: {missing}\n  trustAnchorPath: {missing}/trust-anchor.json\n  compilerSourceRevision: generic-registry-0.1.0\n  activeRevision: sha256:0000000000000000000000000000000000000000000000000000000000000\n  activeSequence: 1\n\
+authentication:\n  oidc:\n    issuer: https://issuer.example.invalid\n    audience: generic-registry\n    allowedAlgorithm: ES256\n    accessTokenType: at+jwt\n    scopeClaim: scope\n    scopeSeparator: \" \"\n    allowedClients: [generic-registry-client]\n    deniedKids: []\n    maxTokenLifetimeSeconds: 300\n    leewayMilliseconds: 30000\n    jwksSource:\n      kind: discovery\n  authorityClaims:\n    principal: registry_principal\n    purpose: registry_purpose\n\
+audit:\n  hashKeyRef: secret:file/audit-key\n\
+cursor:\n  secretRef: secret:file/cursor-key\n\
+eventDestinations: {{}}\n",
+            secrets = secrets_root.display(),
+            missing = directory.path.join("does-not-exist").display(),
+        ),
+    )
+    .expect("runtime configuration with a missing package root is written");
+
+    let (status, stdout, stderr) = run(&runtime_config);
+
+    assert_eq!(status, 1);
+    assert!(stderr.is_empty());
+    let report: Value = serde_json::from_str(&stdout).expect("failure is JSON");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "startup.runtime_config.package_root_unavailable"
+    );
+    assert_eq!(report["diagnostics"][0]["path"], "/package/root");
+    assert_tool_diagnostic(
+        &report["diagnostics"][0],
+        "runtime_configuration",
+        "correct_runtime_configuration",
+    );
 }
 
 fn assert_tool_diagnostic(diagnostic: &Value, artifact: &str, suggested_action: &str) {
