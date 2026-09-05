@@ -2,7 +2,9 @@ stack:
   release: beta-38
   version: 0.26.1
   source_repo: registrystack/registry-stack
+  source_ref: 48e4b1cfd92d26eec42784ac2a626b787de3f396
   source_tag: v0.26.1
+  status: released
 
 artifacts:
   registry-manifest: 0.26.1
