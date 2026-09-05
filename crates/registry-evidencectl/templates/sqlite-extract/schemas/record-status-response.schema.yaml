@@ -1,3 +1,7 @@
+# The shape the statement result must have before extraction reads it. It is a
+# closed shape on purpose, and its row ceiling matches the source's
+# `maximumRows`, so a result that grew past the bound is refused rather than
+# read.
 type: object
 additionalProperties: false
 required: [rows]

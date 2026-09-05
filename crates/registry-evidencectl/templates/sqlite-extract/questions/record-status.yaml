@@ -1,19 +1,41 @@
+# A question: one fixed request a caller may make, and the one answer it may
+# get back. Everything a caller can ask of this deployment is a question file.
+
+# The identifier a caller names in a request, the sentence the question
+# answers, and the purpose the request must declare to be admitted.
 id: record-status
 question: Does the selected record satisfy the reviewed condition?
 purpose: record-status-check
+
+# The subject: which selector role and profile identify what is being asked
+# about, and which field of that profile carries the reference.
 subject:
   role: subject
   selector: record_reference
   profile: record-reference-v1
+
+# The source this question reads. It reads that one and no other.
 source:
   ref: record-status
+
+# The answers the assertion may carry, each with the concept it is stated in
+# and the type it must have. The derivation may produce these and nothing else.
 answers:
   - concept: condition_satisfied
     id: urn:example:concept:record-condition-satisfied:v1
     type: boolean
+
+# The bounded script that turns the extracted facts into those answers.
 derivation: derivations/record-status.rhai
+
+# Minimum disclosure: what may leave this deployment. An answer that is not
+# allowed here is withheld even when the derivation produced it.
 disclosure:
   allow: [condition_satisfied]
+
+# Governance: what the assertion claims to be, how long it stays valid, the
+# timezone its observation is read in, the fixtures that prove it, and the
+# disclosure family it is counted against for anti-reconstruction.
 governance:
   requirement: urn:example:requirement:record-status:v1
   kind: criterion

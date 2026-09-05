@@ -334,6 +334,211 @@ fn sqlite_extract_refuses_existing_and_symlink_destinations_without_changes() {
     assert_no_staging_directories(workspace.path());
 }
 
+#[test]
+fn the_starter_ships_a_readme_that_names_every_file_it_wrote() {
+    let workspace = TempDir::new().expect("temporary directory");
+    let project = workspace.path().join("project");
+    assert!(sqlite_new(&project, &[]).status.success());
+
+    let readme = fs::read_to_string(project.join("README.md")).expect("starter README reads");
+    for named in [
+        "evidence-project.yaml",
+        "selectors/record-reference-v1.yaml",
+        "sources/record-status.yaml",
+        "queries/record-status.sql",
+        "adapters/record-status-extract.rhai",
+        "schemas/record-status-response.schema.yaml",
+        "schemas/record-status-facts.schema.yaml",
+        "questions/record-status.yaml",
+        "derivations/record-status.rhai",
+        "fixtures/record-status.yaml",
+        "secrets/",
+    ] {
+        assert!(readme.contains(named), "the README names {named}");
+    }
+    assert!(
+        readme.contains("evidencectl fixtures run --project ."),
+        "the README names the next command: {readme}"
+    );
+}
+
+#[test]
+fn the_retained_openapi_project_ships_a_readme_that_says_what_is_empty() {
+    let workspace = TempDir::new().expect("temporary directory");
+    let project = workspace.path().join("project");
+    let specification = write_spec(workspace.path(), OPENAPI.as_bytes());
+    assert!(openapi_new(&project, path(&specification), &[])
+        .status
+        .success());
+
+    let readme = fs::read_to_string(project.join("README.md")).expect("retained README reads");
+    for named in [
+        "evidence-project.yaml",
+        "source.openapi.yaml",
+        "selectors/",
+        "sources/",
+        "questions/",
+        "fixtures/",
+        "secrets/",
+    ] {
+        assert!(readme.contains(named), "the README names {named}");
+    }
+    assert!(
+        readme.contains("evidencectl source suggest --project ."),
+        "the README names the next command: {readme}"
+    );
+}
+
+#[test]
+fn every_generated_starter_file_says_what_its_blocks_do() {
+    let workspace = TempDir::new().expect("temporary directory");
+    let project = workspace.path().join("project");
+    assert!(sqlite_new(&project, &[]).status.success());
+
+    // One comment per block of the generated question, source, and fixture is
+    // what separates a starter a reader can edit from one they can only run.
+    for (relative, blocks) in [
+        ("selectors/record-reference-v1.yaml", 2),
+        ("sources/record-status.yaml", 8),
+        ("queries/record-status.sql", 1),
+        ("adapters/record-status-extract.rhai", 2),
+        ("schemas/record-status-response.schema.yaml", 1),
+        ("schemas/record-status-facts.schema.yaml", 1),
+        ("questions/record-status.yaml", 7),
+        ("derivations/record-status.rhai", 2),
+        ("fixtures/record-status.yaml", 5),
+    ] {
+        let content = fs::read_to_string(project.join(relative))
+            .unwrap_or_else(|error| panic!("{relative} reads: {error}"));
+        let marker = if relative.ends_with(".rhai") {
+            "//"
+        } else if relative.ends_with(".sql") {
+            "--"
+        } else {
+            "#"
+        };
+        let counted = content
+            .lines()
+            .filter(|line| line.trim_start().starts_with(marker))
+            .count();
+        assert!(
+            counted >= blocks,
+            "{relative} explains {counted} of its {blocks} blocks"
+        );
+    }
+}
+
+#[test]
+fn the_starter_links_only_documentation_pages_that_ship() {
+    let workspace = TempDir::new().expect("temporary directory");
+    let project = workspace.path().join("project");
+    assert!(sqlite_new(&project, &[]).status.success());
+    let retained = workspace.path().join("retained");
+    let specification = write_spec(workspace.path(), OPENAPI.as_bytes());
+    assert!(openapi_new(&retained, path(&specification), &[])
+        .status
+        .success());
+
+    let documentation =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/site/src/content/docs");
+    let mut checked = 0usize;
+    for root in [&project, &retained] {
+        for relative in generated_files(root) {
+            let Ok(content) = fs::read_to_string(root.join(&relative)) else {
+                continue;
+            };
+            for link in documentation_links(&content) {
+                checked += 1;
+                let (route, anchor) = match link.split_once('#') {
+                    Some((route, anchor)) => (route, Some(anchor)),
+                    None => (link.as_str(), None),
+                };
+                let route = route.trim_matches('/');
+                let page = [
+                    documentation.join(format!("{route}.mdx")),
+                    documentation.join(format!("{route}.md")),
+                    documentation.join(route).join("index.mdx"),
+                ]
+                .into_iter()
+                .find(|candidate| candidate.is_file())
+                .unwrap_or_else(|| panic!("{relative} links {link}, which has no page"));
+                let source = fs::read_to_string(&page).expect("documentation page reads");
+                let frontmatter = source
+                    .split("---")
+                    .nth(1)
+                    .expect("documentation page has frontmatter");
+                assert!(
+                    !frontmatter.contains("draft: true"),
+                    "{relative} links {link}, whose page is not published"
+                );
+                if let Some(anchor) = anchor {
+                    assert!(
+                        source
+                            .lines()
+                            .filter(|line| line.starts_with('#'))
+                            .any(|line| heading_slug(line) == anchor),
+                        "{relative} links {link}, whose page has no such heading"
+                    );
+                }
+            }
+        }
+    }
+    assert!(checked > 0, "the starter links the documentation");
+}
+
+/// Every ordinary file a scaffolded project holds, relative to its root.
+fn generated_files(root: &Path) -> Vec<String> {
+    let mut files = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(&directory).expect("scaffolded directory reads") {
+            let entry = entry.expect("scaffolded entry reads");
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                files.push(
+                    path.strip_prefix(root)
+                        .expect("scaffolded path is inside the project")
+                        .display()
+                        .to_string(),
+                );
+            }
+        }
+    }
+    files.sort();
+    files
+}
+
+/// Collects every published documentation URL a generated file carries.
+fn documentation_links(content: &str) -> Vec<String> {
+    const PREFIX: &str = "https://docs.registrystack.org/";
+    let mut links = Vec::new();
+    let mut rest = content;
+    while let Some(start) = rest.find(PREFIX) {
+        rest = &rest[start + PREFIX.len()..];
+        let end = rest
+            .find(|character: char| character.is_whitespace() || ">)\"'".contains(character))
+            .unwrap_or(rest.len());
+        links.push(rest[..end].to_owned());
+        rest = &rest[end..];
+    }
+    links
+}
+
+/// Renders a Markdown heading the way the documentation site anchors it.
+fn heading_slug(heading: &str) -> String {
+    let mut slug = String::new();
+    for character in heading.trim_start_matches('#').trim().chars() {
+        if character.is_ascii_alphanumeric() {
+            slug.push(character.to_ascii_lowercase());
+        } else if !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    slug.trim_matches('-').to_owned()
+}
+
 fn assert_minimal_project(project: &Path, with_keys: bool) {
     let expected = if with_keys {
         vec![
@@ -341,6 +546,7 @@ fn assert_minimal_project(project: &Path, with_keys: bool) {
             ".gitignore",
             ".vscode",
             ".zed",
+            "README.md",
             "adapters",
             "derivations",
             "evidence-project.yaml",
@@ -358,6 +564,7 @@ fn assert_minimal_project(project: &Path, with_keys: bool) {
             ".gitignore",
             ".vscode",
             ".zed",
+            "README.md",
             "adapters",
             "derivations",
             "evidence-project.yaml",
@@ -382,7 +589,7 @@ fn assert_minimal_project(project: &Path, with_keys: bool) {
         fs::read_to_string(project.join(".gitignore")).expect("gitignore"),
         "secrets/\n.evidence/\n"
     );
-    for absent in ["bundle", "runtime.yaml", "evidence.yaml", "README.md"] {
+    for absent in ["bundle", "runtime.yaml", "evidence.yaml", "queries"] {
         assert!(
             !project.join(absent).exists(),
             "unexpected generated {absent}"
@@ -444,6 +651,7 @@ fn assert_sqlite_project(project: &Path) {
             ".gitignore",
             ".vscode",
             ".zed",
+            "README.md",
             "adapters",
             "derivations",
             "evidence-project.yaml",
