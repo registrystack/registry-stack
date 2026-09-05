@@ -1114,6 +1114,18 @@ access-token JWKS endpoint to provide a usable key set. This fail-closed
 preflight does not change normal
 serving readiness, which retains its bounded issuer-outage behavior.
 
+Adding `--require-audit-under <absolute-directory>` proves one further
+property: that `auditStorage.path` resolves at or below a directory the
+deployment declares persistent. Evidence canonicalizes the declared root and
+the deepest existing ancestor of the configured destination before comparing,
+so a destination outside the root, and a symlink inside the root that leads to
+ephemeral storage, both fail closed. The option requires
+`--require-runtime-dependencies` and relaxes nothing: the audit writer still
+has to open, lock, and verify. Whether the declared root is durable storage is
+the deployment's responsibility, not Evidence's; Evidence resolves its own
+configured destination and never inspects mounts. Failures name which side
+failed and no path.
+
 For `assuranceProfile: local`, supervised Mint may use the exact canonical
 issuer origin `http://127.0.0.1:<non-zero-port>` only when `jwksUri` is the
 same origin plus `/.well-known/jwks.json`. Production and evidence-grade, and

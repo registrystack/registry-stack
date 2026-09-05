@@ -99,12 +99,23 @@ writability, signer readiness, source credentials, and JWKS reachability:
 
 ```sh
 docker run --rm -v "$PWD/deploy/evidence:/etc/registry-evidence:ro" \
-  registry-evidence check --require-runtime-dependencies
+  -v evidence-audit:/var/lib/registry-evidence \
+  registry-evidence check --require-runtime-dependencies \
+  --require-audit-under /var/lib/registry-evidence
 ```
+
+`--require-audit-under ABSOLUTE_DIRECTORY` adds one further proof: the
+configured audit sink has to resolve at or below the directory the deployment
+declares persistent. Evidence resolves its own configured destination exactly
+as startup does and canonicalizes both sides, so a sink configured outside the
+declared root, and a symlink inside the root that leads out of it, both fail
+closed. The option proves containment only; the writability and chain proofs
+still have to pass.
 
 Relay provides the equivalent `relay check --runtime
 /etc/relay/runtime.yaml`; Mint provides `mint check
---require-runtime-dependencies`. For a Compose deployment containing any
+--require-runtime-dependencies`. Both accept the same
+`--require-audit-under`. For a Compose deployment containing any
 combination of the three official products, use
 `docker/runtime-preflight.py` to verify the common container posture first and
 then run each product's native check in its actual mounts and network. The
@@ -122,9 +133,13 @@ volume hide an ephemeral configured sink. With `/dev/shm` read-only, the fixed
 nonroot identity, and the read-only root filesystem, the audit root is the only
 usable regular-file write lane. It may be a Docker-managed local named volume
 with no driver options or an explicit bind outside known ephemeral host paths.
-The native check then proves that the configured audit sink can open and lock
-through that lane, rather than through an unused durable mount beside ephemeral
-storage.
+The preflight then hands that validated root to each
+native check as `--require-audit-under`, which splits the proof along the
+ownership boundary: the adapter owns storage persistence and never reads
+product configuration, while the product owns configuration resolution and
+never infers which mounts are durable. Neither a durable mount sitting unused
+beside an ephemeral configured sink nor a symlink leading out of the mount
+satisfies both halves.
 
 Every native check runs under a bounded deadline. It defaults to 1800 seconds
 because validating a retained audit chain can legitimately take longer than a

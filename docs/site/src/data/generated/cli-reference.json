@@ -2429,6 +2429,15 @@
               "environment": null
             },
             {
+              "display": "--require-audit-under <ABSOLUTE_DIRECTORY>",
+              "description": "Also prove the configured audit sink resolves inside this absolute directory, which the deployment declares persistent. The declared root is a storage boundary, not a second audit setting. Evidence resolves its own configured destination exactly as startup resolves it and refuses when the result is not at or below the root, which is what stops a container from mounting durable storage at the conventional prefix while writing the chain somewhere ephemeral.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--runtime <RUNTIME>",
               "description": "One closed operator runtime file that binds the governed bundle",
               "always_required": false,
@@ -2441,7 +2450,7 @@
             },
             {
               "display": "-h, --help",
-              "description": "Print help",
+              "description": "Print help (see a summary with '-h')",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -2449,7 +2458,15 @@
               "environment": null
             }
           ],
-          "constraints": [],
+          "constraints": [
+            {
+              "kind": "requires_all",
+              "when": "--require-audit-under <ABSOLUTE_DIRECTORY>",
+              "arguments": [
+                "--require-runtime-dependencies"
+              ]
+            }
+          ],
           "subcommands": []
         },
         {
@@ -5079,8 +5096,17 @@
               "environment": null
             },
             {
+              "display": "--require-audit-under <ABSOLUTE_DIRECTORY>",
+              "description": "Also prove the configured audit sink resolves inside this absolute directory, which the deployment declares persistent. The declared root is a storage boundary, not a second audit setting. Mint resolves `audit.path` against the configuration file exactly as startup resolves it and refuses when the result is not at or below the root, which is what stops a container from mounting durable storage at the conventional prefix while writing the chain somewhere ephemeral.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "-h, --help",
-              "description": "Print help",
+              "description": "Print help (see a summary with '-h')",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -5088,7 +5114,15 @@
               "environment": null
             }
           ],
-          "constraints": [],
+          "constraints": [
+            {
+              "kind": "requires_all",
+              "when": "--require-audit-under <ABSOLUTE_DIRECTORY>",
+              "arguments": [
+                "--require-runtime-dependencies"
+              ]
+            }
+          ],
           "subcommands": []
         },
         {
@@ -5405,8 +5439,17 @@
               "environment": "RELAY_RUNTIME"
             },
             {
+              "display": "--require-audit-under <ABSOLUTE_DIRECTORY>",
+              "description": "Also prove the configured audit sink resolves inside this absolute directory, which the deployment declares persistent. The declared root is a storage boundary, not a second audit setting. Relay resolves the runtime audit binding exactly as startup resolves it and refuses when the result is not at or below the root, which is what stops a container from mounting durable storage at the conventional prefix while writing the chain somewhere ephemeral.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "-h, --help",
-              "description": "Print help",
+              "description": "Print help (see a summary with '-h')",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
