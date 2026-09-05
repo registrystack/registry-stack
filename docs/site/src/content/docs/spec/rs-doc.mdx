@@ -8,7 +8,7 @@ source_repos:
   - registry-evidence
   - registry-platform
   - registry-manifest
-last_reviewed: "2026-08-11"
+last_reviewed: "2026-09-06"
 doc_type: specification
 doc_id: RS-DOC
 category: normative
@@ -30,6 +30,7 @@ It is the anchor the other specifications cite. Where another document says "the
 | --- | --- | --- | --- |
 | 0.1.0 | 2026-06-13 | draft | Initial framework: layers, identifiers, metadata axes, document structure, register, cross-link rule, lifecycle. |
 | 0.2.0 | 2026-07-07 | draft | Corrected REQ-DOC-012 to order version-history tables oldest first with the current version last, added layer and audience frontmatter definitions, documented the -G suffix convention, and replaced positional references with named sections. |
+| 0.3.0 | 2026-09-06 | draft | Tightened REQ-DOC-014: a `verified` specification now has to trace each load-bearing claim to an inspectable artifact of the stack itself, and a site page, another specification, or a register entry corroborates such an artifact rather than standing in for one. The evidence-anchor check enforces the mechanical part. |
 
 ## 1. Scope and layers
 
@@ -92,7 +93,7 @@ A specification's canonical metadata is its frontmatter. The register surfaces i
 
 **Evidence Gateway** is how true the document is against shipped code:
 
-- `verified` is backed by code, tests, fixtures, or generated artifacts that a reader can inspect. A `verified` document carries evidence references to those artifacts (REQ-DOC-014); a claim a reader cannot trace to one is not `verified`.
+- `verified` is backed by code, tests, fixtures, generated artifacts, or released machine-readable contracts that a reader can inspect. A `verified` document carries evidence references to those artifacts (REQ-DOC-014); a claim a reader cannot trace to one is not `verified`.
 - `partial` mixes shipped behavior with target behavior. The document marks which sections are which.
 - `aspirational` describes a target state that is not built yet.
 
@@ -102,7 +103,7 @@ REQ-DOC-006: A specification MUST declare `doc_id`, `category`, and `evidence` i
 
 REQ-DOC-007: A document whose `evidence` is `aspirational` or `partial` MUST say so in its opening, and a `partial` document MUST mark which requirements are not yet met by shipped code. A reader MUST NOT have to read the code to learn that a requirement is unbuilt.
 
-REQ-DOC-014: A specification whose `evidence` is `verified` MUST carry evidence references: an Evidence section, or per-requirement references, that link the inspectable artifacts substantiating its claims. Acceptable artifacts include published site pages, generated API references, the standards register, and repository sources a reader can open. This holds the formal layer to at least the evidence bar the standards register already meets with its per-entry evidence links.
+REQ-DOC-014: A specification whose `evidence` is `verified` MUST carry evidence references: an Evidence section, per-requirement references, or evidence anchors in the page source. Each load-bearing claim MUST trace to at least one inspectable artifact of the stack itself: source code, a test, a fixture, a generated artifact, or a released machine-readable contract. A published site page, another specification, or a register entry MAY corroborate such an artifact, and MUST NOT be the only evidence a claim carries, because a document that proves itself by citing another document says nothing about shipped behavior. A `verified` specification MUST therefore carry at least one evidence anchor naming an artifact outside the documentation site's own content; the evidence-anchor check enforces that much and resolves every path and symbol an anchor names. A specification that cannot meet this bar MUST declare `partial` or `aspirational` and mark the claims shipped code does not back (REQ-DOC-007).
 
 Two optional frontmatter keys declare further facets outside the three axes. **Layer** names the stack layer or layers a page documents: `metadata`, `consultation`, `evaluation`, `credential`, `federation`, `administration`, or `operations`. **Audience** names the reader role or roles a page serves: `integrator`, `operator`, `maintainer`, `specification editor`, or `tooling`. Both take a list, because a specification is frequently cross-cutting; a specification that spans every layer omits `layer` rather than list all of them.
 
@@ -150,14 +151,22 @@ REQ-DOC-013: When a specification is superseded, its `status` becomes `historica
 
 ## Conformance
 
-A document conforms to RS-DOC when it: is a distilled public contract, not copied internal evidence (REQ-DOC-001); carries a unique, well-formed `doc_id` and the `category` and `evidence` axes (REQ-DOC-004, REQ-DOC-006); states its evidence honestly, including the unbuilt case (REQ-DOC-007); backs a `verified` evidence level with evidence references (REQ-DOC-014); carries a version-history table that records normative changes (REQ-DOC-012); and interprets normative keywords per Section 2. The frontmatter check enforces the mechanical requirements; the rest is a review responsibility.
+A document conforms to RS-DOC when it: is a distilled public contract, not copied internal evidence (REQ-DOC-001); carries a unique, well-formed `doc_id` and the `category` and `evidence` axes (REQ-DOC-004, REQ-DOC-006); states its evidence honestly, including the unbuilt case (REQ-DOC-007); backs a `verified` evidence level with inspectable artifacts of the stack rather than with other documents (REQ-DOC-014); carries a version-history table that records normative changes (REQ-DOC-012); and interprets normative keywords per Section 2. The frontmatter check enforces the mechanical requirements; the rest is a review responsibility.
 
 ## Evidence Gateway
 
 This specification is `verified`: the mechanisms it defines exist and run, and a reader can inspect them.
 
+{/* Evidence: docs/site/scripts/check-doc-frontmatter.mjs holds validCategory and validEvidence, the
+    frontmatter vocabulary Sections 3 and 4 fix, and refuses a specification that declares neither.
+    docs/site/scripts/check-evidence-anchors.mjs holds checkEvidenceAnchors, which resolves every
+    path and symbol an anchor cites and refuses a verified specification whose anchors reach no
+    artifact outside the site's own content. Its cases are in
+    docs/site/scripts/check-evidence-anchors.test.mjs. */}
+
 - The [register](../) renders from each specification's frontmatter at build time, demonstrating the generated-register rule (Section 6) and the three axes (Section 4).
 - `scripts/check-doc-frontmatter.mjs` enforces the `doc_id`, `category`, and `evidence` fields for `doc_type: specification` (Sections 3 and 4).
+- `scripts/check-evidence-anchors.mjs` resolves every path and symbol an evidence anchor cites, and refuses a `verified` specification whose anchors reach no artifact outside this site (Section 4, REQ-DOC-014).
 - `styles/RegistryDocsSpec/` and the `[src/content/docs/spec/**]` Vale section enforce the honest-conformance discipline (Section 2).
 - `src/content.config.ts` defines the specification frontmatter; `astro.config.mjs` defines the sidebar group.
 

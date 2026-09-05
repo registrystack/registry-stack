@@ -75,6 +75,13 @@ const SKIPPED_DIRECTORIES = new Set(['target', 'node_modules', '.git', 'dist', '
 // Where a continuation with no full path before it is read from: the site the anchor
 // itself lives in, whose own src/ tree the docs pages cite.
 const DOCS_SITE_ROOT = 'docs/site';
+// The narrative content the site itself holds. A specification that declares
+// `evidence: verified` claims its requirements describe shipped behavior (spec/RS-DOC
+// REQ-DOC-014), so at least one of its anchors has to reach an artifact outside this
+// tree: source, a test, a fixture, a generated artifact, or a released contract. A page
+// cited beside that artifact corroborates the claim; cited alone it proves nothing about
+// the code, because the page it cites is evidence of nothing but its own author.
+const NARRATIVE_CONTENT = 'docs/site/src/content/';
 
 const ANCHOR_PATTERN = /\{\/\*\s*Evidence:([\s\S]*?)\*\/\}/g;
 // A bare sibling that names a Rust source file is one the repository owns: an adopter of
@@ -482,6 +489,26 @@ function pluralLines(count) {
   return count === 1 ? '1 line' : `${count} lines`;
 }
 
+// The page's own declaration of what it is: the `doc_type` and the `evidence` axis
+// (spec/RS-DOC Section 4). Both are plain top-level scalars, and check-doc-frontmatter.mjs
+// owns their vocabulary and the frontmatter's YAML shape, so the two lines are read where
+// they sit rather than through a parser this check would have to install: it runs on a
+// bare checkout with no dependencies fetched.
+function declaresVerifiedSpecification(text) {
+  if (!text.startsWith('---\n')) {
+    return false;
+  }
+  const end = text.indexOf('\n---\n', 4);
+  if (end === -1) {
+    return false;
+  }
+  const block = text.slice(4, end);
+  return (
+    /^doc_type:[ \t]*(['"]?)specification\1[ \t]*$/m.test(block) &&
+    /^evidence:[ \t]*(['"]?)verified\1[ \t]*$/m.test(block)
+  );
+}
+
 function mdxPages(directory) {
   const pages = [];
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
@@ -540,7 +567,11 @@ export function checkEvidenceAnchors({
 
   for (const page of mdxPages(contentRoot)) {
     const location = relative(contentRoot, page).replaceAll('\\', '/');
-    for (const anchor of extractAnchors(readFileSync(page, 'utf8'))) {
+    const text = readFileSync(page, 'utf8');
+    const verifiedSpecification = declaresVerifiedSpecification(text);
+    // Whether an anchor on this page reached past the site's own content.
+    let citesArtifact = false;
+    for (const anchor of extractAnchors(text)) {
       anchors += 1;
       const { citations, symbols: cited } = parseAnchor(anchor.body);
       const at = `${location}:${anchor.line}`;
@@ -640,6 +671,9 @@ export function checkEvidenceAnchors({
           errors.push(`${at} cites ${candidates[0]}${range}, which does not exist`);
           continue;
         }
+        if (!resolved.startsWith(NARRATIVE_CONTENT)) {
+          citesArtifact = true;
+        }
         // A sibling names no directory to read the next citation against, so it leaves the
         // anchor where it is, the same rule the parse applies to the candidate chain.
         if (citation.form !== 'sibling') {
@@ -703,6 +737,14 @@ export function checkEvidenceAnchors({
           errors.push(`${at} cites ${symbol}, which no cited path contains`);
         }
       }
+    }
+
+    if (verifiedSpecification && !citesArtifact) {
+      errors.push(
+        `${location} declares evidence: verified but cites no source, test, fixture, generated ` +
+          `artifact, or released contract outside ${NARRATIVE_CONTENT}; RS-DOC REQ-DOC-014 refuses ` +
+          'a specification that proves itself with other pages',
+      );
     }
   }
 
