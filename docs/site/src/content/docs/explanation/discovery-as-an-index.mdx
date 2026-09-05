@@ -117,8 +117,9 @@ performs native input and output only after that acceptance.
 The maintained clients expose the same boundary in each language: resolve an Evidence requirement
 when needed, search with exact filters, convert one exact record into a serializable selection,
 validate its structure, then apply synchronous adopter-owned acceptance.
-Node.js applications use `@registrystack/discovery-client`; Python applications use
-`registry-discovery-client`; Rust applications use `registry-discovery-client`.
+Node.js applications take the `discovery` namespace of `@registrystack/client`; Python
+applications take the `discovery` namespace of `registry-stack-client`, which imports as
+`registry_client`; Rust applications take the `registry-discovery-client` crate.
 
 ```js
 const {
@@ -128,7 +129,7 @@ const {
   selectEvidenceAlternative,
   selectEvidenceService,
   validateSelectionStructure,
-} = require('@registrystack/discovery-client');
+} = require('@registrystack/client').discovery;
 
 const expectedEvidence = {
   serviceKind: 'evidence',
@@ -217,14 +218,14 @@ for (const evidenceTypeId of context.evidenceTypeIds) {
 ```
 
 ```python
-from registry_discovery_client import (
+from registry_client.discovery import (
     DiscoveryClient,
     accept_selection,
     renew_unchanged_selection,
     select_relay_service,
     validate_selection_structure,
 )
-from registry_relay_client import RelayClient
+from registry_client.relay import RelayClient
 
 EXPECTED_RELAY = {
     "serviceKind": "relay",
