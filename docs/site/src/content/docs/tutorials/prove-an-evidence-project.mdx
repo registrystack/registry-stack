@@ -22,9 +22,12 @@ those belong to the candidate `evidencectl build` produces later. If you need to
 executable claims about your own Evidence Gateway project. They are not sample data for a first
 run and they must not be generated from an unrelated domain.
 
-Use them when your source, requirement, and derivation are ready for review. Local assurance may
-omit them while you iterate. Production and evidence-grade assurance require complete fixture
-coverage before the bundle loads.
+Use them when your source, requirement, and derivation are ready for review. Local assurance lets a
+project load without them, but the run below is not a formality you can pass with an empty suite: a
+run that evaluated no case refuses with `no case was evaluated, so this run proves nothing: every
+fixture the project references must declare at least one case`, because a run that decided nothing
+proved nothing. Production and evidence-grade assurance require complete fixture coverage before the
+bundle loads.
 
 ## Add the governance each question hands off
 
