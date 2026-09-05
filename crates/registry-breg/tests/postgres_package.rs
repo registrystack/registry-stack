@@ -3574,7 +3574,7 @@ fn module_bytes(plan: PlanChoice) -> Vec<u8> {
         plan,
         PlanChoice::SecondTable | PlanChoice::ThirdTable | PlanChoice::WebhookSecondTable
     ) {
-        r#",{"id":"second-record","primaryDataset":"neutral-registry","route":"second-records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}],"accessProfiles":[{"id":"writer","principalClaim":"principal","operations":["get","create"],"readableFields":["code"],"writableFields":["code"]}]}"#
+        r#",{"id":"second-record","primaryDataset":"neutral-registry","route":"second-records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}],"accessProfiles":[{"id":"writer","principalClaim":"principal","operations":["get","create"],"readableFields":["code"],"writableFields":["code"], "rowBoundaries": []}]}"#
     } else {
         ""
     };
