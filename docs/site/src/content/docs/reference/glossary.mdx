@@ -5,12 +5,14 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-relay
+  - registry-breg
+  - registry-discovery
   - registry-platform
   - registry-manifest
   - registry-evidence
   - registry-mint
   - solmara-lab
-last_reviewed: "2026-08-11"
+last_reviewed: "2026-09-05"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -47,19 +49,34 @@ Product names are always in English, including on future translated pages.
   <dd>One complete authored answer path in an Evidence Gateway deployment project: a source with its request and response schema, the extraction script, the fact schema and any codelist, the derivation, the requirement with its concept and disclosure guard, the authority grant that permits it, and the synthetic fixture cases that prove it before anything is served. Evidence Gateway Version 1 freezes four coequal acceptance definitions: adult status, residence region, professional licence status, and legal-parent relationship. None is privileged in the runtime, so there is no domain type, built-in operation, or special route for any of them.</dd>
 
   <dt id="access-profile">access profile</dt>
-  <dd>A named pairing of one access rule and one disclosure profile on a Registry Relay resource. The access rule is either `public` or a protected rule naming the required scope and, optionally, a purpose constraint and an authority row binding. A caller selects a profile with the `accessProfile` request parameter, and the profile it selects is both the authorization decision and the maximum disclosure the response may carry: no parameter, header, or token claim widens it. Statistical datasets carry one fixed access rule instead and do not accept the parameter. Declared in `registry.yaml` (`crates/registry-relay-v2/src/contract.rs`).</dd>
+  <dd>A named pairing of one access rule and one disclosure profile on a Registry Relay resource. The access rule is either `public` or a protected rule naming the required scope and, optionally, a purpose constraint and an authority row binding. A caller selects a profile with the `accessProfile` request parameter, and the profile it selects is both the authorization decision and the maximum disclosure the response may carry: no parameter, header, or token claim widens it. Statistical datasets carry one fixed access rule instead and do not accept the parameter. Declared in `registry.yaml` (`crates/registry-relay-v2/src/contract.rs`). Base Registry Engine uses the same two words and the same `accessProfile` request parameter for a different object: a named grant inside the <a href="#registry-project">registry project</a> stating which scopes, purposes, and claims a token must carry and which operations, fields, and rows the caller may reach. See <a href="../../configure/breg-access/">Control access per profile</a>.</dd>
 
   <dt>access token</dt>
   <dd>The bearer credential a caller presents to Evidence Gateway. Evidence Gateway runs one authentication kind, `oidc-access-token`, whose issuer, audiences, accepted token types, algorithms, JWKS URI, and claim names are fixed in the immutable bundle, and it reads authority only from those configured claim names. <a href="../mint/">Registry Mint</a> issues such tokens for deployments with no identity provider. Any issuer may be used only when it satisfies that complete configured token profile and signs with a key accepted from the configured JWKS; matching claim names alone is insufficient.</dd>
 
-  <dt>assertion</dt>
+  <dt id="assertion">assertion</dt>
   <dd>Evidence Gateway's output: one stateless signed payload that answers a requirement and carries no source record. Its member set is closed by `products/evidence/contracts/evidence.schema.yaml`: the requirement it supports, the Evidence Type it conforms to, issuer and provider, issue, observation, and validity instants, purpose, audience, configuration revision, role-bound subject bindings, and the supported values. A holder-bound assertion carries neither audience nor request nonce, because it names no relying party to echo them to. Signed flattened JSON Web Signature (JWS) is the default serialization; the SD-JWT VC serialization carries the same assertion and adds no credential lifecycle.</dd>
+
+  <dt id="audit-journal">audit journal</dt>
+  <dd>The hash-chained record of admitted work that Base Registry Engine keeps in the registry's own PostgreSQL database. Every write path appends one audit record, and the journal keeps its own head. `bregctl audit verify` walks that chain from the recorded head backwards, `audit export` takes a portable copy, and `audit prune` retires its oldest part under a retention boundary. All three read envelope bytes, hashes, envelope identifiers, and timestamps only, so no record value reaches a report or a refusal, and an <a href="#erasure">erasure</a> never removes audit records. See <a href="../../operate/breg-retention/">Retain, erase, and audit</a>.</dd>
 
   <dt>BRegDCAT-AP</dt>
   <dd>SEMIC profile of DCAT-AP for base registries. Registry Manifest emits BRegDCAT-AP-shaped registry and data-service metadata. Registry Relay emits no DCAT-family document.</dd>
 
   <dt id="authoring-project">authoring project</dt>
-  <dd>The local directory an adopter writes for one Registry Relay deployment: `registry.yaml`, `runtime.yaml`, reviewed governance documents, codelists, and fixture inputs. `relayctl init` writes a starter project, `relayctl check` compiles it, `relayctl generate` writes its reviewable artifacts, and `relayctl package` seals it. The project is the reviewed input; the sealed package is what an operator deploys. See the <a href="../relayctl/">relayctl command reference</a>.</dd>
+  <dd>The local directory an adopter writes for one deployment, and the reviewed input a package is sealed from. For Registry Relay it holds `registry.yaml`, `runtime.yaml`, reviewed governance documents, codelists, and fixture inputs; `relayctl init` writes a starter project, `relayctl check` compiles it, `relayctl generate` writes its reviewable artifacts, and `relayctl package` seals it. `bregctl` uses the same two words for a Base Registry Engine <a href="#registry-project">registry project</a>. In both products the project is the reviewed input and the package is what an operator deploys. See the <a href="../relayctl/">relayctl command reference</a>.</dd>
+
+  <dt id="authoring-workspace">authoring workspace</dt>
+  <dd>The editable Evidence Gateway project `evidencectl new` starts from exactly one OpenAPI or SQLite source: the sources, questions, schemas, derivations, and fixtures an author writes. OpenAPI mode leaves the source, question, and fixture directories empty for authoring; SQLite mode supplies a complete synthetic starter. Both generate disposable Evidence Gateway keys. `evidencectl build` compiles one workspace and one explicit target into a production candidate, which an operator mounts as a <a href="#deployment-project">deployment project</a>. `evidencectl build --help` calls the workspace an editable Evidence Gateway project.</dd>
+
+  <dt id="base-registry-engine">Base Registry Engine (product)</dt>
+  <dd>The governed writable system of record in this monorepo. Base Registry Engine (BReg) is a PostgreSQL system of record whose data model and REST API are compiled from a <a href="#registry-project">registry project</a>. The runtime carries no built-in domain types, so a business, a plot, a permit, or an asset exists only when the active <a href="#package">package</a> declares it. It verifies bearer tokens and issues none, enforces <a href="#access-profile">access profiles</a> and <a href="#row-boundary">row boundaries</a> on every request, and appends each admitted request to the <a href="#audit-journal">audit journal</a> in the same database. Crate: `crates/registry-breg`; binaries `breg` (runtime) and `bregctl` (adopter tooling); repo slug: `registry-breg`. It was named `Registry Server` before the naming decision, and that name survives only in an explicit rename note.</dd>
+
+  <dt id="breg">BReg</dt>
+  <dd>The short technical family name for <a href="#base-registry-engine">Base Registry Engine</a>, and the stem its binaries, crate, client module, and configuration keys use. Write the formal name on a page's first use, `Base Registry Engine (BReg)`, then `BReg` for the rest of that page. `BREG`, `Breg`, and `B-Reg` are not spellings of it.</dd>
+
+  <dt id="bounded-question">bounded question</dt>
+  <dd>The kind of question Evidence Gateway answers: one predefined, versioned question with a closed set of supported values, evaluated against a source and answered without returning the source record. Bounded is what makes the product safe to point at sensitive data, because a caller can ask only what the deployment already declared and what the caller's grant already permits, and no request parameter, header, or token claim widens the answer. An author writes a bounded question under `questions/<name>.yaml`; after `evidencectl` compiles it, the same object is a <a href="#requirement">requirement</a>.</dd>
 
   <dt>CCCEV</dt>
   <dd>Core Criterion and Core Evidence Vocabulary. Registry Manifest emits CCCEV-shaped requirement, evidence type, and evidence type list metadata. Evidence Gateway maps its assertion payload onto CCCEV terms under the frozen mapping in `products/evidence/contracts/cccev-field-mapping.yaml`, with named Evidence Gateway extensions where CCCEV has no counterpart.</dd>
@@ -67,8 +84,14 @@ Product names are always in English, including on future translated pages.
   <dt>caller</dt>
   <dd>The technical client that invokes Registry Relay or Evidence Gateway. A caller can be the evidence consumer or an intermediary, portal, or workflow connector acting for it.</dd>
 
+  <dt id="change-request">change request</dt>
+  <dd>In Base Registry Engine, a record of its own that proposes a change to another entity's record, waits for review, and is applied later by a profile that holds apply authority. A change-request entity declares its review stages, application policy, and retention, and it may declare a <a href="#planner">planner</a> in place of fixed effects. See <a href="../../configure/breg-change-control/">Declare change requests and actions</a>.</dd>
+
   <dt>claim level</dt>
   <dd>The evidence discipline these docs use for standards claims: `implements`, `emits`, `maps_to`, `aligns_with`, `inspired_by`, or `compares_against`.</dd>
+
+  <dt id="configuration-revision">`configurationRevision`</dt>
+  <dd>The `sha256:` digest an Evidence Gateway assertion carries for the configuration and artifact closure that requirement's evaluation reached (`products/evidence/contracts/evidence.schema.yaml`). It is scoped to the requirement, not to the whole deployment, so an edit that cannot change an assertion leaves that assertion's revision alone. Changing container paths or listener bindings moves the runtime revision instead.</dd>
 
   <dt>consultation</dt>
   <dd>Registry Relay's Record-oriented read surface: the operations that answer a question about governed Registry Records, as against the SDMX statistical surface. One consultation follows one of three patterns, `list`, `retrieve`, or `search`. Consultation-specific refusals use `consultation.invalid_request`, `consultation.denied`, `consultation.unresolved`, `consultation.response_too_large`, or `consultation.rate_limited`. Shared request, authentication, resource, format, source, audit, service, and internal failures retain their own code families. Consultations belong to Relay and are not an Evidence Gateway source contract.</dd>
@@ -88,6 +111,9 @@ Product names are always in English, including on future translated pages.
   <dt>crosswalk</dt>
   <dd>Retired Relay 1.0 feature that mapped source field names and values to canonical domain terms using configured CEL expressions. The current Relay runs no expression language: a source column reaches a response only through a declared property with a reviewed classification, or it does not reach one at all.</dd>
 
+  <dt id="dataset">dataset</dt>
+  <dd>In a Base Registry Engine project, the value of an entity's required `primaryDataset`, naming the dataset its records belong to. The compiler checks that value against `manifestProjection.datasets[]` only when the project declares a `manifestProjection` block; a project without one may use any non-empty string, and `bregctl check` accepts it as written. Registry Manifest catalogs and Registry Relay <a href="#statistical-dataset">statistical datasets</a> use the same word for their own unrelated shapes.</dd>
+
   <dt id="disclosure-profile">disclosure profile</dt>
   <dd>A named property list on a Registry Relay resource, naming exactly which of that resource's declared properties a response may carry. A disclosure profile grants nothing on its own; an access profile pairs it with an access rule, and the response is the intersection of the two. Because the list is enumerated in `registry.yaml` rather than derived, adding a source column to a database cannot widen an existing profile.</dd>
 
@@ -97,8 +123,8 @@ Product names are always in English, including on future translated pages.
   <dt>deployment</dt>
   <dd>An operated set of Registry Relay or Evidence Gateway product instances. Each product stages and activates its own separately verified configuration; there is no cross-product activation coordinator, and this is not atomic project activation.</dd>
 
-  <dt>deployment project</dt>
-  <dd>The directory an Evidence Gateway operator mounts: a `runtime.yaml` file holding process-local bindings, and a `bundle/` directory holding the governed configuration, scripts, schemas, codelists, and fixtures. `evidencectl new` starts a local authoring workspace from exactly one OpenAPI or SQLite source. OpenAPI mode leaves the source, question, and fixture directories empty for authoring; SQLite mode supplies a complete synthetic starter. Both generate disposable Evidence Gateway keys. `evidencectl build` compiles that workspace and one explicit target into a new production candidate. Evidence Gateway loads a completed bundle read-only at startup; a new revision is a new deployment, not a live change.</dd>
+  <dt id="deployment-project">deployment project</dt>
+  <dd>The directory an Evidence Gateway operator mounts: a `runtime.yaml` file holding process-local bindings, and a `bundle/` directory holding the governed configuration, scripts, schemas, codelists, and fixtures. It is the compiled output an operator deploys, not the thing an author edits: that is the <a href="#authoring-workspace">authoring workspace</a>, and `evidencectl build` compiles one workspace and one explicit target into a production candidate. Evidence Gateway loads a completed bundle read-only at startup; a new revision is a new deployment, not a live change.</dd>
 
   <dt>decision owner</dt>
   <dd>The institution accountable for the requirements, rules, decisions, and actions that use evidence. The decision owner can operate the evidence consumer directly or rely on a separate caller or intermediary.</dd>
@@ -112,7 +138,7 @@ Product names are always in English, including on future translated pages.
   <dt>distributed custody</dt>
   <dd>The architectural premise that each authority retains control of its own registry data. The registry stack provides the API surface for lawful exchange between authorities; it does not aggregate data into a central system. Equivalent terms include data sovereignty (Gaia-X, IDS, EU dataspaces vocabulary), subsidiarity (governance literature), and federated custody.</dd>
 
-  <dt>Evidence Gateway (product)</dt>
+  <dt id="evidence-gateway">Evidence Gateway (product)</dt>
   <dd>The minimum-disclosure assertion service in this monorepo. Crate: `crates/registry-evidence`; product material: `products/evidence/`. Given authenticated authority, an authorized purpose, and a predefined requirement, Evidence Gateway serves a signed assertion that answers the requirement, not the source record, plus an SD-JWT VC serialization of that same stateless assertion under a frozen Version 1 profile. The SD-JWT VC format is never a credential lifecycle: no issuance session, holder-binding ceremony, status list, or revocation. Evidence Gateway is a separate greenfield product, not a reduced configuration of anything that came before it.</dd>
 
   <dt>Evidence Gateway toolset</dt>
@@ -123,6 +149,9 @@ Product names are always in English, including on future translated pages.
 
   <dt>ecosystem binding</dt>
   <dd>Manifest-level binding that connects an external ecosystem profile or governed evidence pack to a Registry Stack runtime surface. A governed evidence ecosystem binding names the evidence pack metadata and policy identity. It is metadata that Registry Manifest validates and publishes; no maintained runtime in the current release consumes it.</dd>
+
+  <dt id="erasure">erasure</dt>
+  <dd>The irreversible removal of retained detail from a Base Registry Engine registry under an approved retention request. `bregctl history erase` removes the retained revisions of one record up to a revision number, the correction context and retained outbox payloads that referenced them, and the cached idempotency responses that could replay them. `bregctl request-retention erase` removes the payload detail of one change-request proposal version. Neither touches the current record, later revisions, or the <a href="#audit-journal">audit journal</a>, and neither has a dry run. A <a href="#rebaseline">rebaseline</a> restores snapshot coverage afterwards.</dd>
 
   <dt>eSignet</dt>
   <dd>Open-source identity and authentication service (part of MOSIP). No current Registry Stack service integrates with it. Evidence Gateway authenticates callers against one configured OIDC issuer and key set named in its immutable bundle, and names no specific identity product.</dd>
@@ -160,6 +189,9 @@ Product names are always in English, including on future translated pages.
   <dt>JSON-LD</dt>
   <dd>JSON-based linked data format. W3C recommendation (JSON-LD 1.1). Used for catalog and policy render output. A Relay `application/ld+json` response references a context the deployment's own Registry contract names, generated per registry rather than shared across deployments.</dd>
 
+  <dt id="journey">journey</dt>
+  <dd>One of the scenarios in `tests/journeys.yaml` that `bregctl test` replays over HTTP against a throwaway database, because a row boundary, a query bound, or a review workflow is only proven by a request that runs. A fully successful run writes a <a href="#receipt">receipt</a>. See <a href="../../configure/breg-journeys/">Test with journeys</a>.</dd>
+
   <dt>metadata manifest</dt>
   <dd>Portable `metadata.yaml` document (schema version `registry-manifest/v1`) that describes a registry through its catalog and defined collections. The <a href="../../products/registry-manifest/reference/">Registry Manifest reference</a> is authoritative for the current top-level keys and field schemas. Must not include Relay runtime bindings such as source paths, table names, or scopes.</dd>
 
@@ -169,8 +201,11 @@ Product names are always in English, including on future translated pages.
   <dt>minimized evidence</dt>
   <dd>Registry Stack product term for an evidence response shaped by data minimization, selective disclosure, or verifiable attestation. The response can be narrower than the full source record when the configured use case supports that pattern.</dd>
 
-  <dt>minimum disclosure</dt>
+  <dt id="minimum-disclosure">minimum disclosure</dt>
   <dd>Evidence Gateway's design rule: one response carries the smallest sufficient answer to one requirement, never the source record. The assertion payload is closed and rejects additional properties, subject selector profiles and selector values never appear in it, the output gate admits only the exact declared concept identifiers and value forms, and purpose does not narrow disclosure, so a purpose that justifies a coarser answer needs its own requirement. See <a href="../../spec/rs-pr-evidence/">RS-PR-EVIDENCE</a> Section 6.</dd>
+
+  <dt id="module">module</dt>
+  <dd>A reusable file under `modules/<id>/module.yaml` that contributes entities, vocabularies, events, and extensions to entities declared elsewhere, so a part of a Base Registry Engine model can be reviewed and versioned separately from the <a href="#registry-project">registry project</a> that adopts it.</dd>
 
   <dt>ODRL</dt>
   <dd>Open Digital Rights Language. W3C recommendation. Registry Manifest emits ODRL Offer documents for dataset-scoped descriptive policies. Publishing an ODRL document is a description, not enforcement, and no maintained runtime in the current release evaluates ODRL terms.</dd>
@@ -190,8 +225,14 @@ Product names are always in English, including on future translated pages.
   <dt id="oid4vci">OID4VCI</dt>
   <dd>OpenID for Verifiable Credential Issuance. The historical credential-issuance flow is retired. The current `registry-evidence-oid4vci` supporting service implements the frozen OID4VCI 1.0 Final profile for holder-bound `dc+sd-jwt` delivery, with protected offer creation, pre-authorized-code token exchange, nonce, and credential endpoints. Evidence Gateway signs the credential and the adapter transports it; deferred issuance, notification, persistence, and draft-13 compatibility remain outside the profile.</dd>
 
+  <dt id="outbox">outbox</dt>
+  <dd>A table in a Base Registry Engine registry's own database that takes one row per configured event, written inside the same transaction as the record change that raised it, which the webhook worker inside `breg` then reads and delivers.</dd>
+
   <dt id="operation">operation</dt>
   <dd>One declared capability on a Registry Relay resource, and the unit an access profile is attached to. A resource declares at most one `list` and one `read`, plus any number of named `lookup` and `search` operations. Each operation compiles to its own route and its own entry in the deployment's generated OpenAPI description, and each carries its own stable operation identifier in audit records. An undeclared operation has no route: a resource is reachable only through what its contract names.</dd>
+
+  <dt id="package">package</dt>
+  <dd>The compiled and verified form of one Base Registry Engine <a href="#registry-project">registry project</a>: `bregctl` builds it, `breg` serves it, and a production package carries detached signatures from keys the deployment's <a href="#trust-anchor">trust anchor</a> names. `breg` verifies the active package at startup and answers only the routes that package compiled. Registry Relay's counterpart is the <a href="#sealed-package">sealed package</a>, which `relayctl` builds and which is unsigned.</dd>
 
   <dt id="package-revision">package revision</dt>
   <dd>The `packageRevision` member of a sealed package's `relay-package.json`: a digest over the canonical JSON of the manifest without that member. It identifies the exact bytes of one sealed package, so two operators can confirm they run the same reviewed contract. It is an integrity digest, not an authenticity proof; Relay packages are unsigned, and the operator's own transport and storage are what bind a package to its author.</dd>
@@ -205,6 +246,9 @@ Product names are always in English, including on future translated pages.
   <dt>PDP gate</dt>
   <dd>A named policy decision point check, such as policy identity, ODRL terms, purpose, jurisdiction, assurance, source freshness, legal basis, consent, and redaction. Registry Manifest still validates the required-gate list a governed evidence pack declares; the gates are metadata that describes an intended enforcement, and no maintained runtime evaluates them.</dd>
 
+  <dt id="planner">planner</dt>
+  <dd>A bounded <a href="#rhai">Rhai</a> script a Base Registry Engine <a href="#change-request">change-request</a> entity declares in place of fixed effects, which reads one submitted request and returns the record writes to apply and, where the project allows it, whether to apply the request or queue it.</dd>
+
   <dt>policy hash</dt>
   <dd>Lowercase `sha256:` digest that binds a governed evidence policy identity to canonical policy bytes or an externally supplied policy artifact. Registry Manifest verifies it when an inline evidence pack policy object is present.</dd>
 
@@ -212,9 +256,9 @@ Product names are always in English, including on future translated pages.
   <dd>Registry Stack runtime pattern for exposing existing registry source data through scoped, read-only HTTP routes with authentication, authorization, metadata, and audit. Registry Relay implements this pattern.</dd>
 
   <dt>registry stack</dt>
-  <dd>The formal stack products: Registry Platform, Registry Relay, Registry Manifest, and Evidence Gateway, with Registry Mint as supporting token issuance. Use lowercase when referring to the concept.</dd>
+  <dd>The formal stack products: Registry Platform, Registry Manifest, Registry Relay, <a href="#base-registry-engine">Base Registry Engine</a>, Evidence Gateway, and <a href="#registry-discovery">Registry Discovery</a>, with Registry Mint as supporting token issuance. Use lowercase when referring to the concept.</dd>
 
-  <dt>purpose</dt>
+  <dt id="purpose">purpose</dt>
   <dd>The authorized reason a caller gives for one Evidence Gateway singular request or request batch. A purpose is a configured code drawn from the requirement's declared `purposes` list and from the caller's grant, never caller-defined prose. It is part of each complete authorization decision, is echoed into each assertion, and does not narrow disclosure. A declared purpose is an authorized selection from the granted set, not an identity-provider attestation.</dd>
 
   <dt>purpose-bound request</dt>
@@ -229,13 +273,25 @@ Product names are always in English, including on future translated pages.
   <dt>Solmara Lab</dt>
   <dd>Separately maintained adopter demo for the fictional Republic of Solmara. It runs published Registry Stack images in local and hosted topologies and is not a formal Registry Stack product. Repo slug: `solmara-lab`.</dd>
 
+  <dt id="rebaseline">rebaseline</dt>
+  <dd>The Base Registry Engine maintenance run that restores snapshot coverage after a history <a href="#erasure">erasure</a>, by proving every live row still matches its retained journal head and installing one baseline commit at that head.</dd>
+
   <dt id="record-context">record context</dt>
   <dd>The four bindings every Registry Relay resource declares so a caller can tell one answer from another over time: the record identifier, the revision identifier, the lifecycle state with the codelist that constrains it, and the recorded-at instant. Record context is required, not optional metadata: a resource cannot be published without it, and it is what lets a consumer say which version of a record it acted on.</dd>
+
+  <dt id="receipt">receipt</dt>
+  <dd>The JSON document a fully successful `bregctl test` run writes, recording the candidate package revision, the source closure, the deployment and database identity, the target schema fingerprint, and the <a href="#journey">journeys</a> that passed, so packaging can refuse a receipt taken for anything else.</dd>
+
+  <dt id="registry-discovery">Registry Discovery</dt>
+  <dd>The read-only public index in this monorepo. A catalog operator maintains provider URLs and evidence-type mappings for the Evidence Gateway and Registry Relay providers that operator has chosen to index, `discoveryctl check` and `discoveryctl build` produce one immutable index offline, and the `discovery` binary serves that index until it is restarted with a newer one. Discovery carries inert public metadata: it makes no authorization decision, serves no record, and answers no question. Crate: `crates/registry-discovery`; binaries `discovery` and `discoveryctl`; repo slug: `registry-discovery`. Write `Registry Discovery` on a page's first use and `Discovery` after it. See <a href="../../configure/discovery/">Build and run a Registry Discovery index</a>.</dd>
+
+  <dt id="registry-document">registry document</dt>
+  <dd>Disambiguation. Base Registry Engine and Registry Relay each compile a file named `registry.yaml`, and the two grammars are unrelated. Relay's is the <a href="#registry-contract">Registry contract</a> (`kind: RegistryContract`), compiled by `relayctl`; BReg's is the root of a <a href="#registry-project">registry project</a>, compiled by `bregctl`, and declares entities, fields, relationships, access profiles, change requests, and events. Both use the words access profile for different objects. Where both products are in view, prose writes the BReg registry document and the Relay registry document. A snippet copied from the other product's page does not compile.</dd>
 
   <dt>Registry Manifest</dt>
   <dd>Portable Rust library and CLI for modeling, validating, and rendering standards-facing service, registry, form, and policy metadata without running Registry Relay. Provides `registry-manifest-core` and `registry-manifest-cli`.</dd>
 
-  <dt>Registry Mint</dt>
+  <dt id="registry-mint">Registry Mint</dt>
   <dd>Small supporting service, not a fourth registry stack pattern, that issues short-lived, audience-bound access tokens to registered machine clients using the `client_credentials` grant, so a resource server such as Evidence Gateway or Registry Relay can require signed tokens without standing up a general-purpose identity provider. `private_key_jwt` is the client-authentication default; a standard authorization client may explicitly select `client_secret_basic` or `client_secret_post` compatibility. The client registry binds each client id to its authentication material and to the authority Registry Mint asserts for it. Registry Mint's tests drive Evidence Gateway's authenticator; the dependency runs one way only, and Evidence Gateway does not depend on Registry Mint. Crate: `crates/registry-mint`; binary: `mint`.</dd>
 
   <dt id="registry-platform">Registry Platform</dt>
@@ -245,9 +301,15 @@ Product names are always in English, including on future translated pages.
   <dd>The document an institution authors to describe its own registry: `registry.yaml`, `kind: RegistryContract`, `apiVersion: relay.registrystack.org/v2alpha1`. It names the resources, their properties and classifications, the operations Registry Relay will answer, the access and disclosure profiles that bound each answer, and any statistical datasets. It is a closed shape: an unrecognized key is a parse failure, not an ignored field. Its deployment-local half, `runtime.yaml` (`kind: RelayRuntime`), stays separate so the reviewed contract carries no secret and no local path.</dd>
 
   <dt id="registry-record">Registry Record</dt>
-  <dd>The unit Registry Relay serves on its consultation surface: one row of a governed resource, projected through a disclosure profile and carrying its record context. It is not a copy of the source row. A property reaches a Registry Record only when the Registry contract declares it and the selected access profile admits it.</dd>
+  <dd>The unit Registry Relay serves on its consultation surface: one row of a governed resource, projected through a disclosure profile and carrying its record context. It is not a copy of the source row. A property reaches a Registry Record only when the Registry contract declares it and the selected access profile admits it. Base Registry Engine serves the records of its own registry under the same shared Registry Record profile, in the <a href="#registry-record-envelope">Registry Record envelope</a>.</dd>
 
-  <dt>Registry Relay</dt>
+  <dt id="registry-record-envelope">Registry Record envelope</dt>
+  <dd>The single shape every Base Registry Engine read, create, patch, tombstone, revision, and snapshot response returns. `data.recordIdentifier` is the record's stable UUID, `data.revisionIdentifier` a string revision counter starting at `1`, and `data.domainData` the entity's fields under their `apiName`, narrowed to the grant's readable fields and to `$select`. Mutation responses add `data.snapshot`, change-request records add `data.request`, and a grant declaring `requestPresence` adds `data.requestPresence`. `meta` carries the registry, dataset, and entity identifiers from the compiled <a href="#package">package</a>, and a collection read returns `items` and a `pageInfo` object instead of a single `data`. A field name that would collide with an envelope member is refused at compile time. See the <a href="../breg-api/#record-envelope">Base Registry Engine API reference</a>.</dd>
+
+  <dt id="registry-project">registry project</dt>
+  <dd>The directory of YAML files an adopter writes for one Base Registry Engine registry, `registry.yaml` plus optional <a href="#module">modules</a> and <a href="#journey">journeys</a>, declaring the entities, fields, relationships, access profiles, change requests, and events that registry exposes. `bregctl init` writes a starter project; `bregctl check`, `explain`, and `generate` compile and inspect it without opening a database; `bregctl test` replays its journeys against a throwaway database; `bregctl package` builds the <a href="#package">package</a> an operator activates. `bregctl --help` also calls it an <a href="#authoring-project">authoring project</a>. See <a href="../../configure/breg/">Author a registry project</a>.</dd>
+
+  <dt id="registry-relay">Registry Relay</dt>
   <dd>The governed read service in this monorepo. An institution authors a Registry contract over its own SQLite registry, `relayctl` compiles and seals it into a package, and the `relay` binary verifies that package before it serves anything. Relay stores no data of its own, writes nothing back to the source, runs no expression language, and exposes no route the contract did not declare. Crate: `crates/registry-relay-v2`; binary: `relay`; repo slug: `registry-relay`. The config-driven Relay 1.0 runtime, with its HTTP and script source adaptation and its policy decision point path, was retired at v0.19.0.</dd>
 
   <dt>Registry Stack project</dt>
@@ -256,14 +318,20 @@ Product names are always in English, including on future translated pages.
   <dt id="relayctl">relayctl</dt>
   <dd>Registry Relay adopter tooling and the `relayctl` binary. It initializes an authoring project, inspects SQLite structure without reading row values, compiles and validates the project, generates reviewable artifacts, runs offline fixture cases, classifies changes between two project revisions, seals a deployment package, writes editor configuration, and provides a language-server protocol. It serves no request, starts no listener, never starts `relay`, and defines no product-specific environment-variable configuration. Its fixture runner may use the host's temporary-directory selection only to materialize internal fixture state. Crate: `crates/registry-relayctl`. It replaced `registryctl` at v0.19.0. See the <a href="../relayctl/">relayctl command reference</a>.</dd>
 
-  <dt>requirement</dt>
-  <dd>The predefined, versioned question one Evidence Gateway request names. A requirement is declared in the immutable bundle with its identifier, kind, closed single or search-then-fetch acquisition, authorized purposes, subject roles and selector profiles, reference frameworks, Evidence Type, validity, derivation script, concepts, fixtures, and disclosure guard (`products/evidence/contracts/bundle.schema.yaml`). Only predefined requirements can be evaluated, and to a caller lacking authorization an unknown identifier is indistinguishable from an unauthorized one. The word is CCCEV's, adopted for the same idea.</dd>
+  <dt id="requirement">requirement</dt>
+  <dd>The predefined, versioned question one Evidence Gateway request names. A requirement is declared in the immutable bundle with its identifier, kind, closed single or search-then-fetch acquisition, authorized purposes, subject roles and selector profiles, reference frameworks, Evidence Type, validity, derivation script, concepts, fixtures, and disclosure guard (`products/evidence/contracts/bundle.schema.yaml`). Only predefined requirements can be evaluated, and to a caller lacking authorization an unknown identifier is indistinguishable from an unauthorized one. The word is CCCEV's, adopted for the same idea. An author writes the same object as a <a href="#bounded-question">question</a> under `questions/<name>.yaml`; requirement is what that question is called after `evidencectl` compiles it.</dd>
 
   <dt>request batch</dt>
   <dd>An Evidence Gateway envelope that asks `POST /v1/evidence/batch` to evaluate between one and sixteen ordered audience-scoped subject sets for one common requirement and purpose. Each item has its own request nonce and complete subject-role set. The response preserves order and contains either one independently signed flattened JWS or `evidence_not_available` for each item; any other failure aborts the complete request. This envelope is distinct from the holder-bound issuance batch on `POST /v1/evidence`, which performs one subject evaluation and emits one credential per holder key.</dd>
 
   <dt id="resource">resource</dt>
   <dd>One governed thing a Registry contract publishes, bound to one named source and one view inside it: the resource carries its semantic class, its declared properties and their classifications, its record context, its disclosure profiles, its access profiles, and the operations that answer questions about it. A resource is the authored intent; the view is storage, and the two are deliberately not the same name.</dd>
+
+  <dt id="rhai">Rhai</dt>
+  <dd>The bounded scripting language both Evidence Gateway and Base Registry Engine embed for adopter-authored logic, reviewed with the rest of the configuration. Evidence Gateway uses it for requirement-specific derivations, which read the facts, selectors, and context the host gathered and return the answer. Base Registry Engine uses it for change-request <a href="#planner">planners</a>, which see only the submitted request's fields and may write only what the project's YAML declares.</dd>
+
+  <dt id="row-boundary">row boundary</dt>
+  <dd>A rule in a Base Registry Engine <a href="#access-profile">access profile</a> that binds one record field to a verified claim in the caller's token with `equals` or `in`, so a request reaches only the rows whose field matches what the token carries.</dd>
 
   <dt id="sealed-package">sealed package</dt>
   <dd>The directory `relayctl package` produces and the `relay` binary verifies before it activates anything: the compiled contract, the generated artifacts, the observed source schemas, and a `relay-package.json` manifest carrying the package format version, the contract revision, the package revision, and a digest for every file. Format version `relay.registrystack.org/package/v1alpha3`. Relay refuses a package whose format version is not the one that binary was built against, and it refuses one whose recomputed digests do not match. Packages are unsigned: verification proves integrity, not authorship.</dd>
@@ -321,6 +389,12 @@ Product names are always in English, including on future translated pages.
 
   <dt>SKOS</dt>
   <dd>Simple Knowledge Organization System. Registry Manifest currently emits flat SKOS-shaped `skos:ConceptScheme` and `skos:Concept` nodes for codelists inside SHACL and BRegDCAT/DCAT-shaped outputs. It does not yet publish a standalone SKOS artifact.</dd>
+
+  <dt id="transit-proxy">Transit proxy</dt>
+  <dd>The workload-local Vault or OpenBao Transit proxy an Evidence Gateway deployment reaches over a Unix socket to sign assertions in production and evidence-grade mode. The operator runs it beside the service, so Evidence Gateway holds no signing key of its own in those modes. Local assurance may use an owner-only P-256 private JWK under the secret root instead.</dd>
+
+  <dt id="trust-anchor">trust anchor</dt>
+  <dd>The file a Base Registry Engine runtime configuration names, listing the public keys whose signatures a <a href="#package">package</a> may carry and how many of them must sign, bound to one environment, one deployment instance, and one database.</dd>
 
   <dt>trust domain</dt>
   <dd>The institutional boundary whose operators, runtime identities, policy, and deployment approval govern one authored deployment. A country can contain several trust domains, and a trust domain does not need to represent a country. One Registry Relay serving process serves exactly one sealed package, and one Evidence Gateway serving process serves exactly one operator-controlled trust domain.</dd>
