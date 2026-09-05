@@ -89,7 +89,10 @@ auditing separately.
             which issues a short-lived access token, to the caller, to Evidence Gateway, and then to
             Evidence Gateway's configured authoritative source, which it reaches over a fixed HTTP
             request or a read-only SQLite extract. Registry Relay has a separate
-            protected-read path to its own sources. Dashed rules mark authenticated service edges.
+            protected-read path to its own sources. The dashed rule above Evidence Gateway marks
+            the authenticated service edge; the dashed rule below it marks the source edge, which
+            is authenticated only when the source is HTTP, since a statement source has no origin,
+            no credential, and no network hop.
             Evidence Gateway
             runs one OIDC bearer profile with one trusted issuer, one principal claim, and no trust
             in proxy identity headers. Caller to Evidence Gateway carries a bearer token, a declared
