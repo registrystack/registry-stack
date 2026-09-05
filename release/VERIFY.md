@@ -74,7 +74,7 @@ jq -e --arg tag "${tag}" '
   (if ($tag | test("^v0\\.(19|20)\\.")) then ["relay"]
    elif ($tag | test("^v0\\.(21|22|23)\\.")) then ["evidence", "mint", "relay"]
    elif ($tag | test("^v0\\.(24|25)\\.")) then ["discovery", "evidence", "mint", "relay"]
-   else ["discovery", "evidence", "mint", "breg", "relay"] end) as $image_names |
+   else ["breg", "discovery", "evidence", "mint", "relay"] end) as $image_names |
   .schema_version == "registry-stack.release-candidate.v2" and
   .repository == "registrystack/registry-stack" and
   .release.tag == $tag and
@@ -162,22 +162,35 @@ private-candidate recovery and evidence-regeneration procedure for a failed gate
 
 Registry Stack v0.22.0 publishes the checksum-covered Evidence and Relay client
 packages to npm and PyPI. Registry Stack v0.23.0 and later also publish the
-Discovery clients. With the release assets still in the current directory,
-compare every registry version with its release tarball or wheel:
+Discovery clients. Starting with v0.26.1, Registry Stack publishes only the
+unified `@registrystack/client` and `registry-stack-client` packages; releases
+through v0.26.0 keep their immutable product-specific packages, and those are
+not republished under the unified names. With the release assets still in the
+current directory, compare every registry version with its release tarball or
+wheel:
 
 ```sh
 version="${tag#v}"
-clients=(evidence relay)
-IFS=. read -r major minor _patch <<<"${version}"
-if (( major > 0 || minor >= 23 )); then
-  clients=(discovery "${clients[@]}")
+IFS=. read -r major minor patch <<<"${version}"
+if (( major > 0 || minor > 26 || (minor == 26 && patch >= 1) )); then
+  clients=(stack)
+else
+  clients=(evidence relay)
+  if (( major > 0 || minor >= 23 )); then
+    clients=(discovery "${clients[@]}")
+  fi
 fi
 for client in "${clients[@]}"; do
+  if [[ "${client}" == stack ]]; then
+    stem="registrystack-client"
+  else
+    stem="registrystack-${client}-client"
+  fi
   for tarball in \
-    "registrystack-${client}-client-darwin-arm64-${version}.tgz" \
-    "registrystack-${client}-client-linux-arm64-gnu-${version}.tgz" \
-    "registrystack-${client}-client-linux-x64-gnu-${version}.tgz" \
-    "registrystack-${client}-client-${version}.tgz"; do
+    "${stem}-darwin-arm64-${version}.tgz" \
+    "${stem}-linux-arm64-gnu-${version}.tgz" \
+    "${stem}-linux-x64-gnu-${version}.tgz" \
+    "${stem}-${version}.tgz"; do
     test "$(python3 release/scripts/client_registry.py npm-state \
       --tarball "${tarball}")" = present
   done
