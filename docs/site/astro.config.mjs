@@ -286,8 +286,11 @@ export default defineConfig({
       ],
       // Keep the first screen focused on adopter outcomes. Detailed product
       // and contract material remains available under collapsed reference
-      // sections. Every top level is a task an adopter can name; the product
-      // that serves the task is named inside it.
+      // sections. Every top level is a task an adopter can name, and every
+      // top level that one product serves names that product in its label,
+      // so a reader who was told a product name finds the group that holds
+      // it. Use the formal name docs/style-guide.md prescribes, never a
+      // short form and never a description of the pattern.
       sidebar: [
         {
           label: 'Start',
@@ -316,7 +319,7 @@ export default defineConfig({
           ],
         },
         {
-          label: 'Answer a bounded question',
+          label: 'Answer a bounded question with Evidence Gateway',
           items: [
             { label: 'Overview', slug: 'start/evidence-quickstart' },
             // The first hands-on tutorial stays in the open beside the
@@ -401,7 +404,7 @@ export default defineConfig({
           // follows the same shape as Evidence Gateway above: overview, first
           // tutorial, then the later phases collapsed behind the phase they
           // belong to.
-          label: 'Connect an existing registry',
+          label: 'Connect an existing registry with Registry Relay',
           items: [
             { label: 'Overview', slug: 'configure' },
             { label: 'How governed publication works', slug: 'explanation/governed-registry-publication' },
@@ -444,7 +447,7 @@ export default defineConfig({
           // groups a reader reaches only after a phase is finished start
           // collapsed, so the vocabulary of a later phase is not on screen
           // while the earlier one is being learned.
-          label: 'Build a registry',
+          label: 'Build a registry with Base Registry Engine',
           items: [
             { label: 'Overview', slug: 'start/breg-quickstart' },
             { label: 'Create and query your first registry', slug: 'tutorials/first-breg' },
@@ -504,7 +507,7 @@ export default defineConfig({
           // same assertion to a wallet. A relying party runs neither runtime,
           // so its path is a section of its own and wallet delivery stays with
           // the deployment that does the delivering.
-          label: 'Consume and verify assertions',
+          label: 'Consume and verify Evidence Gateway assertions',
           items: [
             { label: 'Request from an application', slug: 'tutorials/request-evidence-from-an-application' },
             { label: 'Verify and retain an assertion', slug: 'tutorials/verify-an-assertion-as-a-consumer' },
@@ -514,7 +517,7 @@ export default defineConfig({
         {
           // Registry Mint issues the access tokens a resource server verifies,
           // so it is a step in both adoption paths and belongs to neither.
-          label: 'Authenticate callers',
+          label: 'Authenticate callers with Registry Mint',
           collapsed: true,
           items: [
             { label: 'Configure Registry Mint', slug: 'configure/mint' },
@@ -527,7 +530,7 @@ export default defineConfig({
         {
           // One index, one section. The concept, the tutorial, and the build
           // page had been split across three unrelated parents.
-          label: 'Publish a Discovery index',
+          label: 'Publish a Registry Discovery index',
           collapsed: true,
           items: [
             { label: 'Registry Discovery is an index', slug: 'explanation/discovery-as-an-index' },
