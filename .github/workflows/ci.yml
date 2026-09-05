@@ -967,6 +967,10 @@ jobs:
           # The output stays inside the workspace, because the container step
           # below mounts the workspace and nothing else.
           out_dir="${GITHUB_WORKSPACE}/target/evidence-tutorial-client"
+          # maturin --zig resolves zig through the python3 on PATH, so the
+          # environment's interpreter, which carries the pinned ziglang, must
+          # come first, as in the release workflows.
+          export PATH="${RUNNER_TEMP}/maturin/bin:${PATH}"
           python3 release/scripts/assemble-registry-client-packages.py \
             --artifacts python \
             --output-dir "${out_dir}" \
