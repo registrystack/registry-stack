@@ -1,4 +1,12 @@
+# A selector profile: the exact input a caller may send with a request, and
+# nothing else. A field that is not declared here cannot reach the source.
+
+# The ceiling on every declared field together, so a caller cannot enlarge a
+# request by spreading it across fields.
 maximumAggregateBytes: 96
+
+# One field per accepted input. The bounds are part of the contract: a value
+# outside them is refused before the source is called.
 fields:
   record_reference:
     type: string

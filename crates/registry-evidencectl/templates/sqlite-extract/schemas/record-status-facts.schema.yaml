@@ -1,3 +1,6 @@
+# The shape extraction must produce before the derivation reads it. It is a
+# closed shape on purpose: a fact the question never declared cannot reach the
+# derivation by being added here.
 type: object
 additionalProperties: false
 required: [qualifying_record_count]
