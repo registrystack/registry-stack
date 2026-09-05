@@ -143,6 +143,10 @@ export default defineConfig({
     '/configure/breg-webhooks/': internalRedirect('/operate/breg-webhooks/'),
     '/reference/breg-history/': internalRedirect('/reference/breg-api/'),
     '/reference/breg-events/': internalRedirect('/reference/breg-api/'),
+    // One client package ships all four namespaces, so one reference page
+    // documents them; the two per-product pages it absorbed keep resolving.
+    '/reference/relay-client-api/': internalRedirect('/reference/client-api/'),
+    '/reference/breg-client-api/': internalRedirect('/reference/client-api/'),
     // Retired pages keep old links useful by sending readers to a supported
     // task or reference page.
     '/journeys/': internalRedirect('/'),
@@ -427,7 +431,7 @@ export default defineConfig({
               label: 'Call a Relay API',
               items: [
                 { label: 'Query a Relay with Python', slug: 'tutorials/query-relay-client' },
-                { label: 'Relay client APIs', slug: 'reference/relay-client-api' },
+                { label: 'Client API reference', slug: 'reference/client-api' },
               ],
             },
             { label: 'Run a Relay deployment', slug: 'operate/relay' },
@@ -494,7 +498,7 @@ export default defineConfig({
               label: 'Call a registry from an application',
               items: [
                 { label: 'Query a registry from Python and Node', slug: 'tutorials/query-breg-client' },
-                { label: 'Client API reference', slug: 'reference/breg-client-api' },
+                { label: 'Client API reference', slug: 'reference/client-api' },
               ],
             },
             { label: 'Configuration reference', slug: 'reference/breg-configuration' },

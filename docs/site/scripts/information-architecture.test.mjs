@@ -251,7 +251,7 @@ test('publishes one Relay reader journey without the retired V1 routes', () => {
   );
   // The caller's half of Relay is its own group: authoring and operating pages
   // address the institution publishing the API, not the application calling it.
-  assert.match(connect, /slug: 'reference\/relay-client-api'/);
+  assert.match(connect, /slug: 'reference\/client-api'/);
   // Relay's operational posture specification is a Relay page, so it is seated
   // here rather than a second time in the Reference specification register.
   assert.match(connect, /slug: 'spec\/rs-op-posture'/);
@@ -307,7 +307,7 @@ test('keeps the BReg guide and references in one adoption path', () => {
     'operate/breg-retention',
     'operate/breg-data',
     'tutorials/query-breg-client',
-    'reference/breg-client-api',
+    'reference/client-api',
     'reference/breg-configuration',
     'reference/breg-api',
   ]);
