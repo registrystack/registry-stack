@@ -321,7 +321,7 @@ Use a pre-acquired short-lived static bearer when an issuer requires those membe
 
 `from_profile` and `fromProfile` read an application-owned Evidence client profile, which carries
 the base URL, the pinned key set, and the credential configuration in one file. The profile is the
-owner-only JSON document `evidencectl client profile create --out` writes. The optional second
+owner-only JSON document `evidencectl client profile create --output` writes. The optional second
 argument is a private JWK held in memory, for an application that reads its key from a secret
 manager rather than from disk. It is never retained by the wrapper, and profile paths and
 file-backed secrets are redacted from every error.
