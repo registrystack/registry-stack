@@ -3,6 +3,7 @@
 
 use std::path::Path;
 
+use registry_breg::runtime_config::RuntimeConfigError;
 use registry_breg::startup::{prepare, StartupError};
 use registry_breg::{Diagnostic, DiagnosticSeverity};
 
@@ -35,12 +36,14 @@ pub(crate) fn run(runtime_config: &Path) -> Result<(), Diagnostic> {
 }
 
 fn startup_diagnostic(error: StartupError) -> Diagnostic {
+    // The runtime configuration carries its own closed-vocabulary cause; name
+    // it the way `bregctl verify` already names it instead of collapsing every
+    // configuration mistake into one generic refusal.
+    if let StartupError::RuntimeConfig(cause) = error {
+        return runtime_config_diagnostic(cause);
+    }
     let (code, path, message) = match error {
-        StartupError::RuntimeConfig => (
-            "startup.runtime_config.refused",
-            "runtimeConfig",
-            "the runtime configuration was refused",
-        ),
+        StartupError::RuntimeConfig(_) => unreachable!("handled above"),
         StartupError::PackageRefused => (
             "startup.package.refused",
             "package",
@@ -102,6 +105,18 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
     diagnostic(code, path, message)
 }
 
+/// Names a runtime configuration cause the same way `bregctl verify` already
+/// names it: the closed-vocabulary code and path `RuntimeConfigError` carries,
+/// prefixed for this command instead of `verify`'s.
+fn runtime_config_diagnostic(error: RuntimeConfigError) -> Diagnostic {
+    let metadata = error.metadata();
+    diagnostic(
+        &format!("startup.{}", metadata.code()),
+        metadata.path(),
+        &error.to_string(),
+    )
+}
+
 fn diagnostic(code: &str, path: &str, message: &str) -> Diagnostic {
     Diagnostic {
         severity: DiagnosticSeverity::Error,
@@ -118,11 +133,6 @@ mod tests {
     #[test]
     fn startup_value_disclosure_threat_is_enforced_by_a_closed_negative_class_mapping() {
         let cases = [
-            (
-                StartupError::RuntimeConfig,
-                "startup.runtime_config.refused",
-                "runtimeConfig",
-            ),
             (
                 StartupError::PackageRefused,
                 "startup.package.refused",
@@ -174,6 +184,157 @@ mod tests {
             assert_eq!(diagnostic.code, expected_code);
             assert_eq!(diagnostic.path, expected_path);
             assert!(!diagnostic.message.contains(&rendered_dependency_error));
+        }
+    }
+
+    #[test]
+    fn runtime_config_causes_are_named_the_way_verify_already_names_them() {
+        // Every closed-vocabulary configuration cause `RuntimeConfigError`
+        // carries is named by its own code and path, matching `bregctl verify`,
+        // instead of collapsing into one generic runtime-configuration refusal.
+        let cases = [
+            (
+                RuntimeConfigError::Unavailable,
+                "startup.runtime_config.unavailable",
+                "/",
+            ),
+            (
+                RuntimeConfigError::UnsafeFile,
+                "startup.runtime_config.unsafe_file",
+                "/",
+            ),
+            (
+                RuntimeConfigError::Bounds,
+                "startup.runtime_config.bounds",
+                "/",
+            ),
+            (
+                RuntimeConfigError::EnvExpansion,
+                "startup.runtime_config.env_expansion",
+                "/",
+            ),
+            (
+                RuntimeConfigError::Document,
+                "startup.runtime_config.document",
+                "/",
+            ),
+            (
+                RuntimeConfigError::InvalidApiVersion,
+                "startup.runtime_config.invalid_api_version",
+                "/apiVersion",
+            ),
+            (
+                RuntimeConfigError::InvalidKind,
+                "startup.runtime_config.invalid_kind",
+                "/kind",
+            ),
+            (
+                RuntimeConfigError::GovernedMember,
+                "startup.runtime_config.governed_member",
+                "/",
+            ),
+            (
+                RuntimeConfigError::InvalidBinding,
+                "startup.runtime_config.invalid_binding",
+                "/",
+            ),
+            (
+                RuntimeConfigError::InvalidListener,
+                "startup.runtime_config.invalid_listener",
+                "/listener",
+            ),
+            (
+                RuntimeConfigError::InvalidMetricsListener,
+                "startup.runtime_config.invalid_metrics_listener",
+                "/metricsListener",
+            ),
+            (
+                RuntimeConfigError::InvalidSecretProvider,
+                "startup.runtime_config.invalid_secret_provider",
+                "/secretProviders",
+            ),
+            (
+                RuntimeConfigError::SecretProviderRootUnavailable,
+                "startup.runtime_config.secret_provider_root_unavailable",
+                "/secretProviders/file/root",
+            ),
+            (
+                RuntimeConfigError::UnsafeSecretProviderRoot,
+                "startup.runtime_config.unsafe_secret_provider_root",
+                "/secretProviders/file/root",
+            ),
+            (
+                RuntimeConfigError::InvalidDatabase,
+                "startup.runtime_config.invalid_database",
+                "/database",
+            ),
+            (
+                RuntimeConfigError::InvalidPackage,
+                "startup.runtime_config.invalid_package",
+                "/package",
+            ),
+            (
+                RuntimeConfigError::PackageRootUnavailable,
+                "startup.runtime_config.package_root_unavailable",
+                "/package/root",
+            ),
+            (
+                RuntimeConfigError::UnsafePackageRoot,
+                "startup.runtime_config.unsafe_package_root",
+                "/package/root",
+            ),
+            (
+                RuntimeConfigError::TrustAnchorUnavailable,
+                "startup.runtime_config.trust_anchor_unavailable",
+                "/package/trustAnchorPath",
+            ),
+            (
+                RuntimeConfigError::UnsafeTrustAnchor,
+                "startup.runtime_config.unsafe_trust_anchor",
+                "/package/trustAnchorPath",
+            ),
+            (
+                RuntimeConfigError::InvalidOidc,
+                "startup.runtime_config.invalid_oidc",
+                "/authentication/oidc",
+            ),
+            (
+                RuntimeConfigError::InvalidOidcLeeway,
+                "startup.runtime_config.invalid_oidc_leeway",
+                "/authentication/oidc/leewayMilliseconds",
+            ),
+            (
+                RuntimeConfigError::InvalidAudit,
+                "startup.runtime_config.invalid_audit",
+                "/audit",
+            ),
+            (
+                RuntimeConfigError::InvalidCursor,
+                "startup.runtime_config.invalid_cursor",
+                "/cursor",
+            ),
+            (
+                RuntimeConfigError::InvalidEventDestination,
+                "startup.runtime_config.invalid_event_destination",
+                "/eventDestinations",
+            ),
+            (
+                RuntimeConfigError::InvalidBounds,
+                "startup.runtime_config.invalid_bounds",
+                "/operationalTimeouts",
+            ),
+            (
+                RuntimeConfigError::Secret,
+                "startup.runtime_config.secret",
+                "/",
+            ),
+        ];
+
+        for (cause, expected_code, expected_path) in cases {
+            let diagnostic = startup_diagnostic(StartupError::RuntimeConfig(cause));
+            assert_eq!(diagnostic.code, expected_code);
+            assert_eq!(diagnostic.path, expected_path);
+            assert_eq!(diagnostic.message, cause.to_string());
         }
     }
 
