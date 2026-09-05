@@ -67,6 +67,86 @@ Second, aligning with an external standard is not the same as conforming to it: 
 of OIDC, OAuth 2.0, SD-JWT VC, CCCEV, or the rest does not certify conformance to any of them.
 The [standards register](../../reference/standards/) records how each one is actually adopted.
 
+## Platform support
+
+This is the one place the documentation states which platforms carry an artifact; every install
+block links here instead of repeating a list that drifts.
+
+| Artifact | Linux amd64 | Linux arm64 | macOS Apple Silicon |
+| --- | --- | --- | --- |
+| `breg` and `bregctl` | Published | Published | Published |
+| `evidence` and `evidencectl` | Published | Published | Published |
+| `mint` and `evidence-oid4vci` | Published | Published | Published |
+| `relayctl` | Published | Published | Published |
+| `relay` | Published | None | None |
+| `discovery` and `registry-manifest` | Published | None | None |
+| Container images (`breg`, `evidence`, `relay`, `mint`, `discovery`) | Published | None | None |
+| Client packages (`@registrystack/client`, `registry-stack-client`) | Published | Published | Published |
+
+- No Windows, and no macOS on Intel: no binary, image, or client package targets either one, and
+  nothing is tested under WSL. Each installer names the platforms it accepts and refuses anything
+  else before it downloads.
+- No musl build: every binary links the GNU C library dynamically. On Alpine an installer reports
+  that its integrity checks passed and the installed binary then fails to start, because the check
+  covers the download rather than the platform it lands on. The Python client wheels are
+  `manylinux_2_17`; no `musllinux` wheel is published.
+- The supported C library floor is glibc 2.35 or newer, which is Ubuntu 22.04 LTS, Debian 12, and
+  newer. That floor applies from the next release. The v0.26.1 binaries do not meet it: they were
+  compiled in the pinned release builder image, which is Debian 13, so on Debian 12 or Ubuntu 22.04
+  `breg` stops at a missing `GLIBC_2.38` and `evidencectl` at a missing `GLIBC_2.39` before either
+  reaches its own code. Ubuntu 24.04 is the oldest distribution the v0.26.1 Linux binaries run on.
+- Container images are single-architecture: each published image is `linux/amd64`, and no
+  multi-architecture index is published, so an arm64 host runs one under emulation.
+- Installer scripts and the raw binaries are the only distribution channels. There is no Homebrew
+  formula, no `cargo binstall` target, no apt, apk, yum, or Nix package, and no winget or Scoop
+  package.
+
+{/* Evidence: crates/registry-breg/install.sh; crates/registry-evidencectl/install.sh;
+    crates/registry-relay-v2/install.sh; release/docker/Dockerfile.builder;
+    release/scripts/build-release-binaries.sh; release/scripts/build-release-image.sh;
+    crates/registry-stack-client-node/npm/linux-arm64-gnu/package.json. */}
+
+## Base Registry Engine limits
+
+Base Registry Engine serves one governed registry from a PostgreSQL database it owns, under a
+signed package an operator activates deliberately. The full operational posture is in
+[Evaluate Base Registry Engine](../../start/evaluate-breg/); what follows is what the product does
+not do.
+
+- PostgreSQL only: the store is a PostgreSQL database with the `btree_gist` extension installed,
+  plus PostGIS where the registry declares spatial fields. There is no SQLite, other SQL engine,
+  file, or HTTP source, and no adapter layer to add one.
+- Every production change is a signed package: a one-line access widening goes through `check`,
+  `test` against a schema-test database, `package`, external signing, and `apply`. No runtime
+  administration API edits access rules, record shapes, or webhook destinations, and nothing hot
+  reloads.
+- No backup, and no restore: no command takes or restores one. Recovery from an activation that
+  `migration reconcile` cannot resolve is your own PostgreSQL backup, and a destructive migration
+  must name a backup artifact that the tooling validates but never creates.
+- Erasure runs one way and stops early: `history erase` has no dry run and no undo, and refuses
+  more than 10,000 revisions in one transaction. `history rebaseline`, the only way to restore
+  snapshot coverage after an erasure, refuses a registry holding more than 1,000 live rows, so a
+  larger registry does not get that coverage back.
+- No request-rate limit: the runtime enforces operator-set timeouts and connection-pool bounds,
+  but no rate limit of its own. A registry that admits anonymous reads belongs behind an upstream
+  limiter.
+- No committed performance figure: the load-test harness asks whether a profile holds on your
+  hardware. Neither it nor this documentation states a supported throughput or latency.
+- The runtime configuration grammar is `registry.registrystack.org/breg-runtime/v1alpha1`, and
+  v0.26.0 is the product's first release. The pre-1.0 boundary is stated in
+  [API stability and versioning](../../reference/api-stability/).
+- Nothing deploys it for you: a release carries the two binaries and one container image. There is
+  no Helm chart, Compose file, operator, or hosted offering, and the quickstart's use of Docker is
+  a loopback development path rather than a deployment pattern.
+
+{/* Evidence: crates/registry-breg/src/postgres/roles.rs, verify_postgis;
+    crates/registry-breg/src/postgres/catalog.rs, verify_btree_gist;
+    crates/registry-breg/src/history_erasure.rs, MAX_ERASURE_REVISIONS;
+    crates/registry-breg/src/history_migration.rs, MAX_HISTORY_MIGRATION_COMMIT_MEMBERS;
+    crates/registry-breg/src/runtime_config.rs, RUNTIME_CONFIG_API_VERSION and OperationalTimeouts;
+    crates/registry-bregctl/src/lib.rs, ApplyArgs; products/breg/loadtest/README.md;
+    products/breg/README.md. */}
+
 ## Evidence Gateway limits
 
 Evidence Gateway releases one stateless assertion per request under a frozen Version 1 contract.
@@ -344,9 +424,9 @@ that narrowness rather than an unfinished feature. Its boundaries are covered in
 - Unix only, and it fails closed: Relay refuses to start on a non-Unix target, because its package
   and runtime trust checks depend on Unix ownership and sticky-directory semantics that have no
   equivalent there.
-- Linux amd64 binaries only: the published `relay` binary and its installer target Linux amd64.
-  The installer refuses any other platform before it downloads anything. There is no macOS,
-  Windows, or ARM asset.
+- One published platform: the `relay` binary and its installer target Linux amd64 alone, while
+  `relayctl` carries all three platforms. [Platform support](#platform-support) holds the matrix
+  for the whole stack.
 - The installer checks integrity, not authenticity: it verifies the downloaded binaries against
   `SHA256SUMS` and states plainly that it performs no authenticity check. Use the release
   verification procedure for that.
