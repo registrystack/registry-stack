@@ -26,7 +26,7 @@ deploy a service for you.
   outcome="A reviewed Evidence Gateway candidate, one target-host validation ceremony, and one independently verified synthetic assertion."
   time="About 45 minutes after the authoring project is reviewed"
   level="Production handoff with synthetic deployment data"
-  prerequisites={['A released Evidence Gateway toolset', 'A reviewed editable Evidence Gateway project', 'An operator with target-host and secret-manager access', 'A shell with curl and an editor']}
+  prerequisites={['A released Evidence Gateway toolset', 'A reviewed editable Evidence Gateway project', 'A provisioned Vault or OpenBao Transit key', 'An operator with target-host and secret-manager access', 'A shell with curl and an editor']}
 />
 
 ## Before you start
@@ -35,6 +35,14 @@ You need a released Evidence Gateway toolset on `PATH`, an editable project that
 operator who can provision owner-only secrets and a private listener on the target host.
 Use Registry Mint only when no suitable OpenID Connect (OIDC) issuer exists. An existing OIDC
 issuer and Mint are equivalent choices from Evidence Gateway's perspective.
+
+A production or evidence-grade target also needs a Vault or OpenBao Transit key before you build,
+not after. The target's `governance.yaml` names one governed public JWK, and for these profiles
+that JWK is the public half of a non-exportable Transit key, so the key has to exist before the
+target is complete. Provision it with
+[Configure Transit signing for Evidence Gateway and Registry Mint](../move-evidence-to-production-signing/).
+The build itself never contacts Transit; the workload-local proxy is what the target-host ceremony
+and the running service reach.
 
 Confirm the released binaries before changing the project:
 
@@ -116,8 +124,14 @@ bundle path, private listener, secret root, audit path, and optional private cer
 files. The build copies its bytes unchanged, so the target host remains the authority for path,
 ownership, permission, secret, and trust validation.
 Set `bundleDirectory` to `<new-candidate-directory>/bundle`, and keep the listener on a numeric
-loopback or private address. The runtime cannot override the governed service, authentication,
-authority, source, disclosure, or signing fields.
+loopback or private address. `listener.networkExposure` declares which addresses that means. It
+defaults to `private-address`, which accepts loopback, RFC 1918 private IPv4, or RFC 4193
+unique-local IPv6. A container listener that must bind the wildcard `0.0.0.0` inside an isolated
+network sets `networkExposure: container-private` instead, as
+[`runtime.docker.yaml`](https://github.com/registrystack/registry-stack/blob/v0.26.1/docker/compose/runtime.docker.yaml)
+in the Registry Stack repository does; that value permits the wildcard bind for an operator-confined
+container network and authorizes no public or direct-TLS serving. The runtime cannot override the
+governed service, authentication, authority, source, disclosure, or signing fields.
 
 `public-keys/` contains the exact active and published service JWKs named by `governance.yaml`.
 Production and evidence-grade targets bind the matching non-exportable provider key through the
