@@ -270,6 +270,7 @@ retention record to the journal, so the chain states what left it.
 | `history.erase.request_file.refused` or `history.rebaseline.request_file.refused` | The request file must be an absolute path to an owner-only regular file, not a symbolic link, holding the documented fields and nothing else. |
 | `request-retention erase` is refused | The request entity's retention mode is `retain`, or the version is pinned. Run the dry run for the exact version first. |
 | `audit verify` reports `audit.chain.broken` or `audit.head.mismatch` | The journal no longer links to its head. Export what is still reachable, keep the database as it is, and treat it as an integrity incident. |
+| `audit verify`, `audit export`, or `audit prune` reports `audit.envelope.invalid` | A reachable journal record holds an envelope no reader accepts, or names a link no record follows. Nothing is pruned. Keep the database as it is and treat it as an integrity incident, like a broken chain. |
 | `audit prune` reports `audit.boundary.future` | `--before` is later than the database transaction time. Choose a boundary in the past. |
 | `audit export` is refused with `audit.operation.refused` | The runtime configuration path or `--output` is relative, the destination already holds a file, or the database is unreachable. |
 | An operator command cannot reach PostgreSQL | Check the migration URL secret, the role names, and `SSL_CERT_FILE` for a private authority. |
