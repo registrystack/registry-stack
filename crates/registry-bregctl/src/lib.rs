@@ -4940,8 +4940,7 @@ credentials file. The operate documentation below walks through preparing them.
 - Configure a registry: <https://docs.registrystack.org/configure/breg/>
 - Operate a registry: <https://docs.registrystack.org/operate/breg/>
 - Every configuration key: <https://docs.registrystack.org/reference/breg-configuration/>
-- `bregctl` commands: run `bregctl --help`, or read
-  <https://docs.registrystack.org/configure/breg/#check-explain-and-generate>
+- `bregctl` commands: run `bregctl --help`.
 "#;
 
 const INIT_REGISTRY_PROJECT: &[u8] =
