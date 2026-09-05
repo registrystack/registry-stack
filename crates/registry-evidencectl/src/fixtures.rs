@@ -24,8 +24,12 @@ pub enum FixturesCommand {
 
 #[derive(Debug, Args)]
 pub struct RunArgs {
-    /// Deployment project directory containing runtime.yaml and bundle/.
-    #[arg(long)]
+    /// Evidence project directory; defaults to the current directory.
+    ///
+    /// This command accepts either shape: an editable project holding
+    /// questions/ and sources/, or a deployment project holding runtime.yaml
+    /// beside bundle/.
+    #[arg(long, default_value = ".")]
     pub project: PathBuf,
 
     /// Path to the evidence binary; defaults to `evidence` on PATH.

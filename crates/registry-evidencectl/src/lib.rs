@@ -269,4 +269,304 @@ mod tests {
         ])
         .is_ok());
     }
+
+    /// Every argument in the built command tree, with the command path that
+    /// owns it, so a rule can be asserted across the whole binary at once.
+    fn tree_arguments(command: &clap::Command, path: &str) -> Vec<(String, clap::Arg)> {
+        let mut arguments: Vec<(String, clap::Arg)> = command
+            .get_arguments()
+            .map(|argument| (path.to_owned(), argument.clone()))
+            .collect();
+        for subcommand in command.get_subcommands() {
+            let child = format!("{path} {}", subcommand.get_name());
+            arguments.extend(tree_arguments(subcommand, &child));
+        }
+        arguments
+    }
+
+    #[test]
+    fn project_names_one_project_directory_across_every_subcommand() {
+        let command = command();
+        let arguments = tree_arguments(&command, command.get_name());
+        let projects: Vec<_> = arguments
+            .iter()
+            .filter(|(_, argument)| argument.get_long() == Some("project"))
+            .collect();
+        assert!(
+            projects.len() >= 18,
+            "the whole tree must be walked, saw {:?}",
+            projects.iter().map(|(path, _)| path).collect::<Vec<_>>()
+        );
+
+        let documented: Vec<_> = projects
+            .iter()
+            .filter(|(_, argument)| !argument.is_hide_set())
+            .collect();
+        assert_eq!(
+            documented.len(),
+            8,
+            "every documented --project must be covered by this rule: {:?}",
+            documented.iter().map(|(path, _)| path).collect::<Vec<_>>()
+        );
+
+        for (path, argument) in &projects {
+            assert!(
+                !argument.is_required_set(),
+                "{path} --project must be optional so the current directory is always a valid answer"
+            );
+        }
+
+        for (path, argument) in documented {
+            let help = argument
+                .get_help()
+                .expect("every documented --project carries help")
+                .to_string();
+            assert!(
+                help.starts_with("Evidence project directory"),
+                "{path} --project help must open with the shared phrase, saw {help:?}"
+            );
+            let long_help = argument
+                .get_long_help()
+                .expect("every documented --project states the project shape it needs")
+                .to_string();
+            assert!(
+                long_help.contains("editable project") || long_help.contains("deployment project"),
+                "{path} --project must name the project shape it needs, saw {long_help:?}"
+            );
+            if *path == "evidencectl source suggest" {
+                assert!(
+                    help.contains("printed when this is absent"),
+                    "{path} --project stays absent to keep the draft print-only, saw {help:?}"
+                );
+            } else {
+                assert!(
+                    help.contains("defaults to the current directory"),
+                    "{path} --project must say the current directory is the default, saw {help:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_project_commands_a_newcomer_reaches_for_run_without_the_flag() {
+        for arguments in [
+            vec!["evidencectl", "doctor"],
+            vec!["evidencectl", "fixtures", "run"],
+            vec![
+                "evidencectl",
+                "build",
+                "--target",
+                "deployment/local",
+                "--output",
+                "candidate",
+            ],
+            vec!["evidencectl", "tooling", "editor"],
+        ] {
+            assert!(
+                Cli::try_parse_from(&arguments).is_ok(),
+                "{arguments:?} must work from inside the project directory"
+            );
+        }
+    }
+
+    #[test]
+    fn output_paths_are_spelled_one_way_in_help() {
+        let command = command();
+        for (path, argument) in tree_arguments(&command, command.get_name()) {
+            let Some(long) = argument.get_long() else {
+                continue;
+            };
+            assert!(
+                !matches!(long, "out" | "out-dir" | "public-out"),
+                "{path} still offers --{long} as a documented spelling"
+            );
+        }
+    }
+
+    #[test]
+    fn retired_output_spellings_keep_parsing() {
+        for arguments in [
+            vec!["evidencectl", "keygen", "secret", "--out", "audit-hmac-key"],
+            vec!["evidencectl", "keygen", "token", "--out", "source-token"],
+            vec!["evidencectl", "keygen", "signing", "--out-dir", "secrets"],
+            vec![
+                "evidencectl",
+                "keygen",
+                "signing",
+                "--out-dir",
+                "secrets",
+                "--public-out",
+                "signing.jwk.json",
+            ],
+            vec!["evidencectl", "keygen", "holder", "--out-dir", "keys"],
+            vec![
+                "evidencectl",
+                "keygen",
+                "client-assertion",
+                "--out-dir",
+                "secrets",
+                "--public-out",
+                "assertion.jwk.json",
+            ],
+            vec![
+                "evidencectl",
+                "jwks",
+                "--out",
+                "trusted-issuer-keys.json",
+                "signing-p256-public.jwk.json",
+            ],
+            vec![
+                "evidencectl",
+                "client",
+                "contracts",
+                "fetch",
+                "--profile",
+                "client-profile.json",
+                "--out",
+                "contracts.json",
+            ],
+            vec![
+                "evidencectl",
+                "client",
+                "profile",
+                "create",
+                "--base-url",
+                "https://evidence.example.test",
+                "--client-id",
+                "reporting",
+                "--private-key-file",
+                "client-private-jwk",
+                "--out",
+                "client-profile.json",
+            ],
+        ] {
+            assert!(
+                Cli::try_parse_from(&arguments).is_ok(),
+                "{arguments:?} must keep working as already published"
+            );
+        }
+    }
+
+    #[test]
+    fn current_output_spellings_parse() {
+        for arguments in [
+            vec![
+                "evidencectl",
+                "keygen",
+                "secret",
+                "--output",
+                "audit-hmac-key",
+            ],
+            vec!["evidencectl", "keygen", "token", "--output", "source-token"],
+            vec![
+                "evidencectl",
+                "keygen",
+                "signing",
+                "--output-dir",
+                "secrets",
+                "--public-output",
+                "signing.jwk.json",
+            ],
+            vec!["evidencectl", "keygen", "holder", "--output-dir", "keys"],
+            vec![
+                "evidencectl",
+                "keygen",
+                "client-assertion",
+                "--output-dir",
+                "secrets",
+                "--public-output",
+                "assertion.jwk.json",
+            ],
+            vec![
+                "evidencectl",
+                "jwks",
+                "--output",
+                "trusted-issuer-keys.json",
+                "signing-p256-public.jwk.json",
+            ],
+            vec![
+                "evidencectl",
+                "client",
+                "contracts",
+                "fetch",
+                "--profile",
+                "client-profile.json",
+                "--output",
+                "contracts.json",
+            ],
+            vec![
+                "evidencectl",
+                "client",
+                "profile",
+                "create",
+                "--base-url",
+                "https://evidence.example.test",
+                "--client-id",
+                "reporting",
+                "--private-key-file",
+                "client-private-jwk",
+                "--output",
+                "client-profile.json",
+            ],
+        ] {
+            assert!(
+                Cli::try_parse_from(&arguments).is_ok(),
+                "{arguments:?} must parse"
+            );
+        }
+    }
+
+    #[test]
+    fn request_verify_is_a_deprecated_alias_of_verify() {
+        let command = command();
+        let request = command
+            .find_subcommand("request")
+            .expect("request is published");
+        let aliased = request
+            .find_subcommand("verify")
+            .expect("request verify stays available");
+        let about = aliased
+            .get_about()
+            .expect("request verify carries help")
+            .to_string();
+        assert!(
+            about.to_lowercase().contains("deprecated"),
+            "request verify must announce itself as deprecated, saw {about:?}"
+        );
+        let long_about = aliased
+            .get_long_about()
+            .expect("request verify explains what replaces it")
+            .to_string();
+        assert!(
+            long_about.contains("evidencectl verify"),
+            "request verify must name the command that replaces it, saw {long_about:?}"
+        );
+
+        for arguments in [
+            vec![
+                "evidencectl",
+                "verify",
+                "response.jws",
+                "--context",
+                "context.json",
+                "--output",
+                "verified.json",
+            ],
+            vec![
+                "evidencectl",
+                "request",
+                "verify",
+                "response.jws",
+                "--context",
+                "context.json",
+                "--output",
+                "verified.json",
+            ],
+        ] {
+            assert!(
+                Cli::try_parse_from(&arguments).is_ok(),
+                "{arguments:?} must keep working"
+            );
+        }
+    }
 }

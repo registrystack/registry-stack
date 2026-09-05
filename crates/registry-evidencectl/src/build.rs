@@ -29,7 +29,10 @@ const SECRET_PREFIX: &str = "secret:file/";
 
 #[derive(Debug, Args)]
 pub struct BuildArgs {
-    /// Editable Evidence Gateway project; defaults to the current directory.
+    /// Evidence project directory; defaults to the current directory.
+    ///
+    /// This command needs an editable project: one holding questions/ and
+    /// sources/ beside evidence-project.yaml.
     #[arg(long, default_value = ".")]
     pub project: PathBuf,
 
