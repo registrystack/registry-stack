@@ -16,7 +16,7 @@ use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-use crate::safe_path::SafeEntry;
+use crate::safe_path::{SafeDir, SafeEntry};
 
 const SIGNING_INPUT_PATH: &str = "signing-input.json";
 const TEST_RECEIPT_PATH: &str = "schema-test-receipt.json";
@@ -299,9 +299,10 @@ fn ensure_reviewer_evidence(
     expected_test_receipt: &[u8],
 ) -> Result<(), PackageLifecycleError> {
     if build_directory.exists() {
-        // The held descriptor is what the published-package check below reads,
-        // so replacing a component of the build path afterwards cannot hide an
-        // already published package from it.
+        // The held descriptor is what the evidence reads and the published
+        // package check below use, so replacing a component of the build path
+        // afterwards can neither substitute the evidence compared here nor hide
+        // an already published package.
         let directory = super::validate_directory_for(
             build_directory,
             "package.output.invalid",
@@ -310,10 +311,14 @@ fn ensure_reviewer_evidence(
             "the package build path must be a directory and must not be a symbolic link",
         )
         .map_err(|_| PackageLifecycleError::Output)?;
-        let existing_signing_input =
-            read_bounded_regular(&build_directory.join(SIGNING_INPUT_PATH))?;
-        let existing_test_receipt = read_bounded_regular_with_bound(
-            &build_directory.join(TEST_RECEIPT_PATH),
+        let existing_signing_input = read_bounded_entry(
+            &directory,
+            OsStr::new(SIGNING_INPUT_PATH),
+            MAX_SIGNATURE_DOCUMENT_BYTES,
+        )?;
+        let existing_test_receipt = read_bounded_entry(
+            &directory,
+            OsStr::new(TEST_RECEIPT_PATH),
             MAX_TEST_RECEIPT_BYTES,
         )
         .map_err(|_| PackageLifecycleError::TestReceiptEvidence {
@@ -370,14 +375,26 @@ fn read_bounded_regular_with_bound(
         return Err(PackageLifecycleError::Output);
     }
     let entry = SafeEntry::resolve(path).map_err(|_| PackageLifecycleError::Output)?;
-    let stat = entry.stat().map_err(|_| PackageLifecycleError::Output)?;
+    read_bounded_entry(entry.parent(), entry.name(), bound)
+}
+
+/// Read a bounded regular file through a held directory descriptor, for callers
+/// that must read the tree they resolved rather than the pathname again.
+fn read_bounded_entry(
+    directory: &SafeDir,
+    name: &OsStr,
+    bound: u64,
+) -> Result<Vec<u8>, PackageLifecycleError> {
+    let stat = directory
+        .entry_stat(name)
+        .map_err(|_| PackageLifecycleError::Output)?;
     if stat.is_symlink() || !stat.is_file() || stat.len() == 0 || stat.len() > bound {
         return Err(PackageLifecycleError::Output);
     }
-    // The descriptor is opened through the resolved parent with `O_NOFOLLOW`,
+    // The descriptor is opened through the held directory with `O_NOFOLLOW`,
     // so the bytes read below are the entry just inspected.
-    let file = entry
-        .open_read()
+    let file = directory
+        .open_read(name)
         .map_err(|_| PackageLifecycleError::Output)?;
     let mut bytes = Vec::new();
     file.take(bound.saturating_add(1))
@@ -499,11 +516,38 @@ mod tests {
             std::fs::write(decoy.join(SIGNING_INPUT_PATH), b"signing input").unwrap();
             std::fs::write(decoy.join(TEST_RECEIPT_PATH), b"receipt").unwrap();
 
-            // Swap once the build directory and both evidence files are
-            // resolved, so only the held descriptor still names the real tree.
-            let guard = tree.arm_after(2);
+            // Swap once the build directory is resolved, so only the held
+            // descriptor still names the real tree.
+            let guard = tree.arm();
             let refused = ensure_reviewer_evidence(&build, b"signing input", b"receipt")
                 .expect_err("an already published package directory is refused");
+            drop(guard);
+
+            assert!(matches!(refused, PackageLifecycleError::Output));
+        }
+
+        #[test]
+        fn reviewer_evidence_after_an_ancestor_swap_compares_the_named_build_directory() {
+            let tree = race_tree();
+            let build = tree.named("build");
+            std::fs::create_dir_all(&build).unwrap();
+            std::fs::write(build.join(SIGNING_INPUT_PATH), b"other signing input").unwrap();
+            std::fs::write(build.join(TEST_RECEIPT_PATH), b"receipt").unwrap();
+            // The tree the operator never named holds evidence that matches
+            // this run, which is what a comparison made by pathname would
+            // accept instead of the mismatched evidence really on disk. It is
+            // moved into place as a real directory, so resolving the pathname
+            // again would meet no symbolic link to refuse.
+            let decoy = tree.outside("build");
+            std::fs::create_dir_all(&decoy).unwrap();
+            std::fs::write(decoy.join(SIGNING_INPUT_PATH), b"signing input").unwrap();
+            std::fs::write(decoy.join(TEST_RECEIPT_PATH), b"receipt").unwrap();
+
+            // Swap once the build directory is resolved and before its evidence
+            // is read, which is where a racing process would land.
+            let guard = tree.arm_directory_swap();
+            let refused = ensure_reviewer_evidence(&build, b"signing input", b"receipt")
+                .expect_err("evidence from a directory the operator never named is refused");
             drop(guard);
 
             assert!(matches!(refused, PackageLifecycleError::Output));
