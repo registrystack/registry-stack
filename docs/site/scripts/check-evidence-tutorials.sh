@@ -137,7 +137,7 @@ EXCLUDED_EVIDENCE_TUTORIALS=(
 	move-evidence-to-production-signing              # drift-checked by evidence-production-build-docs.test.mjs; needs a Transit signer
 	prove-an-evidence-project                        # how-to against the reader's own project; no fixed scenario this gate can replay
 	publish-and-consume-discovery-index               # Discovery journey; replayed by check-discovery-tutorial.sh with native Evidence and Relay handoffs
-	publish-governed-sqlite-registry                 # Relay V2 journey; replayed by the Relay product and real-process acceptance gates
+	publish-governed-sqlite-registry                 # Relay V2 journey; replayed by check-relay-tutorial.sh in the relay-v2-contracts job
 	query-relay-client                               # Relay client journey; depends on a released wheel and the Relay publishing prerequisite
 	request-a-holder-bound-credential                # draft: true, hidden from the sidebar; no verified wallet flow exists to replay
 	review-registry-changes                         # Base Registry Engine journey; verify page commands in reader mode, outside the Evidence runner

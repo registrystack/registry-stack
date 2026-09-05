@@ -23,6 +23,7 @@ from ci_changes import (
     REGISTRY_RECORD_CROSS_PRODUCT_INPUTS,
     BREG_PACKAGES,
     RELAY_CLIENT_PACKAGES,
+    RELAY_TUTORIAL_INPUTS,
     STACK_CLIENT_PACKAGES,
     SECURITY_WORKFLOW_GATES,
     SHARDS,
@@ -310,6 +311,12 @@ class CiChangesTest(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue(Path(path).is_file())
                 self.assertTrue(classify(self.workspace, (path,))["discovery_contracts"])
+
+    def test_every_relay_tutorial_input_replays_the_product_gate(self) -> None:
+        for path in RELAY_TUTORIAL_INPUTS:
+            with self.subTest(path=path):
+                self.assertTrue(Path(path).is_file())
+                self.assertTrue(classify(self.workspace, (path,))["relay_v2_contracts"])
 
     def test_relay_v2_paths_select_the_editor_and_reverse_dependents(self) -> None:
         outputs = classify(

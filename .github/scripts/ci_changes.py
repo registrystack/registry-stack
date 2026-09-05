@@ -139,6 +139,18 @@ DISCOVERY_TUTORIAL_INPUTS = (
     "docs/site/src/content/docs/tutorials/publish-and-consume-discovery-index.mdx",
 )
 
+# The Relay V2 tutorial teaches readers to hand-author its registry contract
+# across eleven fences rather than run a single product script, so its gate
+# follows the Evidence tutorial's fence-replay shape and reuses its shared
+# helper. This tuple keeps the CI trigger honest with what actually replays
+# the tutorial.
+RELAY_TUTORIAL_INPUTS = (
+    "docs/site/scripts/check-relay-tutorial.sh",
+    "docs/site/scripts/check-relay-tutorial.test.mjs",
+    "docs/site/scripts/evidence-tutorial-fence.sh",
+    "docs/site/src/content/docs/tutorials/publish-governed-sqlite-registry.mdx",
+)
+
 # Every input the Evidence tutorial gate replays or is built from. The tutorial
 # pages and helper scripts here must stay in step with the gate's own registry
 # and the helpers it invokes, which test_ci_changes.py enforces: a tutorial or
@@ -762,7 +774,8 @@ def classify(
         or any(matches(path, *DISCOVERY_PROVIDER_INPUTS) for path in paths)
         or any(path in DISCOVERY_TUTORIAL_INPUTS for path in paths),
         "relay_v2_contracts": registry_record_cross_product
-        or bool(affected & RELAY_V2_PACKAGES),
+        or bool(affected & RELAY_V2_PACKAGES)
+        or any(path in RELAY_TUTORIAL_INPUTS for path in paths),
         "relay_client_contracts": bool(affected & RELAY_CLIENT_PACKAGES),
         "breg_contracts": registry_record_cross_product
         or bool(affected & BREG_PACKAGES),
