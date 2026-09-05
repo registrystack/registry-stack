@@ -15,18 +15,16 @@ const registry = new breg.BaseRegistryClient({
 });
 ```
 
-A TypeScript consumer also needs the Node type definitions. The published
-declarations name `Buffer`, a Node.js global, so a project compiling against
-them without `@types/node` reports `TS2580` on every use of it:
+A TypeScript consumer also needs the Node type definitions, and must name
+them. The published declarations use `Buffer`, a Node.js global, and
+TypeScript 6 does not load installed `@types` packages on its own, so a
+project compiling against the declarations reports `TS2591` on every use of
+`Buffer` until it has both installed the package and listed it in
+`compilerOptions.types`:
 
 ```sh
 npm install --save-dev "@types/node"
 ```
-
-The package does not declare that dependency itself, because a JavaScript
-consumer does not need it. Installing `@types/node` is not sufficient on its
-own: if `tsconfig.json` sets `compilerOptions.types` to an explicit list,
-`Buffer` still reports `TS2591` unless that list includes `"node"`:
 
 ```json
 {
@@ -35,6 +33,9 @@ own: if `tsconfig.json` sets `compilerOptions.types` to an explicit list,
   }
 }
 ```
+
+The package does not declare that dependency itself, because a JavaScript
+consumer does not need it.
 
 Each product remains in its own namespace because its routing,
 authentication, errors, and verification rules are different. The package
