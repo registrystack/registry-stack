@@ -354,6 +354,93 @@ fn the_runtime_dependency_check_claims_the_audit_writer_before_startup() {
     assert!(!diagnostics.contains("0123456789abcdef"));
 }
 
+/// Run the full dependency preflight and additionally require the configured
+/// audit sink to resolve inside `root`, the path an operator declares persistent.
+fn check_audit_under(server: &Server, root: &Path) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_mint"))
+        .arg("check")
+        .arg("--config")
+        .arg(&server.config)
+        .arg("--require-runtime-dependencies")
+        .arg("--require-audit-under")
+        .arg(root)
+        .output()
+        .expect("the checker runs")
+}
+
+/// Stop the staged deployment so the dependency preflight can claim the writer.
+fn stopped_server() -> Server {
+    let mut server = server();
+    server.child.kill().expect("stop the serving process");
+    server.child.wait().expect("reap the serving process");
+    server
+}
+
+#[test]
+fn the_dependency_check_accepts_an_audit_sink_inside_the_required_root() {
+    // `audit.path` is configured relative to the configuration file, so passing
+    // against the configuration directory is what proves Mint compared the
+    // destination its own configuration contract resolved.
+    let server = stopped_server();
+
+    let output = check_audit_under(&server, &server.root);
+
+    assert!(
+        output.status.success(),
+        "check failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn the_dependency_check_refuses_an_audit_sink_outside_the_required_root() {
+    let ephemeral = tempfile::tempdir().expect("temp dir");
+    let server = stopped_server();
+
+    let output = check_audit_under(&server, ephemeral.path());
+
+    assert!(
+        !output.status.success(),
+        "an audit sink outside the declared root must fail closed"
+    );
+    let diagnostics = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(diagnostics
+        .contains("the configured audit destination resolves outside the declared audit root"));
+    assert!(!diagnostics.contains(&server.root.join("audit/mint.jsonl").display().to_string()));
+    assert!(!diagnostics.contains("0123456789abcdef"));
+}
+
+#[test]
+fn the_dependency_check_refuses_an_audit_directory_symlinked_out_of_the_required_root() {
+    // The decoy: durable storage really is mounted at the declared root, and
+    // the configured path really does sit inside it, but the chain lands on
+    // storage that disappears with the container.
+    let ephemeral = tempfile::tempdir().expect("temp dir");
+    let server = stopped_server();
+    fs::remove_dir_all(server.root.join("audit")).expect("remove the staged audit directory");
+    std::os::unix::fs::symlink(ephemeral.path(), server.root.join("audit"))
+        .expect("plant an escaping audit directory");
+
+    let output = check_audit_under(&server, &server.root);
+
+    assert!(
+        !output.status.success(),
+        "a symlink must not carry the audit chain out of the declared root"
+    );
+    let diagnostics = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(diagnostics
+        .contains("the configured audit destination resolves outside the declared audit root"));
+}
+
 #[test]
 fn the_runtime_dependency_check_rejects_an_empty_client_registry() {
     let mut server = server();
