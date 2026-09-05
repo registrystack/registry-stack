@@ -115,15 +115,19 @@ bregctl data export \
 ```
 
 The first run creates both files and refuses to start when either already exists on its own. A
-rerun validates the entire existing output against the checkpoint, length and digest included,
-before requesting the next server-validated cursor, so an output edited by hand is refused
-rather than extended. The report names the requested fields, the completed page count, the record
-count, the output length, and whether the export is complete. `--max-pages` bounds one run the
-way `--max-chunks` bounds an import, and `--max-pages 0` is refused. Each server response is
-bounded at 2 MiB.
+rerun streams the checkpointed prefix of the existing output, matches it against the checkpoint,
+length and digest included, and only then requests the next server-validated cursor, so an output
+edited by hand is refused rather than extended. A run stopped between the two writes leaves one
+page the checkpoint never recorded; the rerun discards that page and fetches it again. It refuses
+when the output is shorter than its checkpoint, when the checkpointed prefix no longer matches,
+when more than one page follows the checkpoint, or when anything follows a checkpoint that
+already reports the export complete. The report names the requested fields, the completed page
+count, the record count, the output length, and whether the export is complete. `--max-pages`
+bounds one run the way `--max-chunks` bounds an import, and `--max-pages 0` is refused. Each
+server response is bounded at 2 MiB.
 
-{/* Evidence: crates/registry-bregctl/src/data_lifecycle.rs, load_or_start_export()
-    and read_export_output_state();
+{/* Evidence: crates/registry-bregctl/src/data_lifecycle.rs, load_or_start_export(),
+    resume_existing_export(), and read_export_output_prefix();
     crates/registry-breg/src/data.rs, MAX_DATA_HTTP_RESPONSE_BYTES;
     crates/registry-bregctl/src/lib.rs, DataExportArgs. */}
 
@@ -136,6 +140,7 @@ bounded at 2 MiB.
 | The input is refused before any request | Check for an empty file, a symbolic link, more than 256 MiB, more than 1,000,000 lines, or a patch line with more than 128 operations. |
 | An import refuses its checkpoint | The sidecar is missing, or the package, entity, profile, or operation differs from the run that created it. Start a new checkpoint path for a new input. |
 | An export refuses to start | Exactly one of the output and checkpoint files exists, or the existing output no longer matches its checkpoint. Keep both files together and unedited, or start both afresh. |
+| `data export` is refused with `data.export.checkpoint.refused` | The output file and its checkpoint no longer describe one another: the output is shorter than the checkpoint, its checkpointed prefix changed, more than one page follows the checkpoint, or the checkpoint belongs to another export. Keep both files and resume from copies you trust. A rerun discards at most the single page an interrupted run left unrecorded. |
 | The report says the run is incomplete | `--max-chunks` or `--max-pages` bounded it. Run the same command again to continue. |
 
 ## Next
