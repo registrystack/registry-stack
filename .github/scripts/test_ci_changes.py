@@ -1428,6 +1428,38 @@ on:
         self.assertIn(fetch, docs_job)
         self.assertLess(docs_job.index(fetch), docs_job.index(test_scripts))
 
+    def test_every_referenced_changes_output_is_declared_and_emitted(self) -> None:
+        """Job conditions read outputs the changes job forwards.
+
+        A condition naming an output the ``changes`` job never declares reads
+        the empty string, so the job it guards never runs and nothing says so.
+        """
+
+        workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+        referenced = set(
+            re.findall(r"needs\.changes\.outputs\.([A-Za-z_][A-Za-z0-9_]*)", workflow)
+        )
+        self.assertTrue(referenced)
+
+        outputs_block = workflow.split("\n    outputs:\n", 1)[1].split(
+            "\n    steps:\n", 1
+        )[0]
+        declared = dict(
+            re.findall(
+                r"^      ([A-Za-z_][A-Za-z0-9_]*): "
+                r"\$\{\{ steps\.filter\.outputs\.([A-Za-z_][A-Za-z0-9_]*) \}\}$",
+                outputs_block,
+                re.MULTILINE,
+            )
+        )
+        emitted = set(classify(self.workspace, ()))
+
+        for name in sorted(referenced):
+            with self.subTest(output=name):
+                self.assertIn(name, declared)
+                self.assertEqual(name, declared[name])
+                self.assertIn(name, emitted)
+
     def test_other_workflow_changes_do_not_select_the_full_matrix(self) -> None:
         gate_outputs = {
             "docs",
