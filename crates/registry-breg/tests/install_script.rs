@@ -53,15 +53,99 @@ fn failed_atomic_pointer_switch_preserves_the_previous_toolset() {
     fixture.assert_active_toolset_is_traversable();
 }
 
+#[test]
+fn musl_system_refuses_before_installing() {
+    let fixture = InstallerFixture::linux();
+    let mut command = fixture.command();
+    command.env("FAKE_LIBC_MUSL", "1");
+    let output = command.output().unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("No musl build of the Base Registry Engine is published"),
+        "stderr: {stderr}"
+    );
+    assert!(stderr.contains("container images"), "stderr: {stderr}");
+    assert!(
+        !fixture.install_dir.exists(),
+        "nothing may reach the install directory"
+    );
+}
+
+#[test]
+fn glibc_below_the_floor_refuses_before_installing() {
+    let (major, minor) = glibc_floor();
+    let fixture = InstallerFixture::linux();
+    let mut command = fixture.command();
+    command.env("FAKE_GLIBC", format!("{major}.{}", minor - 1));
+    let output = command.output().unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&format!("This system has GNU libc {major}.{}", minor - 1)),
+        "stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains(&format!("need {major}.{minor} or newer")),
+        "stderr: {stderr}"
+    );
+    assert!(stderr.contains("Nothing was installed"), "stderr: {stderr}");
+    assert!(
+        !fixture.install_dir.exists(),
+        "nothing may reach the install directory"
+    );
+}
+
+#[test]
+fn glibc_at_the_floor_installs_both_commands() {
+    let (major, minor) = glibc_floor();
+    let fixture = InstallerFixture::linux();
+    let mut command = fixture.command();
+    command.env("FAKE_GLIBC", format!("{major}.{minor}"));
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    fixture.assert_release_toolset_active();
+}
+
+#[test]
+fn installer_carries_the_shared_glibc_floor() {
+    let (major, minor) = glibc_floor();
+    let source = fs::read_to_string(installer_path()).unwrap();
+    assert!(
+        source.contains(&format!("libc_floor=\"{major}.{minor}\"")),
+        "install.sh must carry the generated floor from release/glibc-floor.env"
+    );
+    assert!(
+        source.contains("BEGIN generated libc preflight"),
+        "install.sh must carry the generated preflight block"
+    );
+}
+
 struct InstallerFixture {
     root: PathBuf,
     release_dir: PathBuf,
     install_dir: PathBuf,
     fake_bin: PathBuf,
+    asset_suffix: String,
+    forced_uname: Option<(String, String)>,
 }
 
 impl InstallerFixture {
     fn new() -> Self {
+        Self::build(None)
+    }
+
+    /// A fixture that presents a Linux host whatever the workstation runs, so
+    /// the Linux-only libc preflight is exercised on macOS as well.
+    fn linux() -> Self {
+        Self::build(Some(("Linux".to_owned(), "x86_64".to_owned())))
+    }
+
+    fn build(forced_uname: Option<(String, String)>) -> Self {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -75,18 +159,82 @@ impl InstallerFixture {
         let fake_bin = root.join("fake-bin");
         fs::create_dir_all(&release_dir).unwrap();
         fs::create_dir_all(&fake_bin).unwrap();
+        // The platform and the libc preflight are read through these three
+        // commands. Faking all of them keeps the test identical on a macOS
+        // workstation and on a Linux runner, where the real ones differ.
+        write_executable(
+            &fake_bin.join("uname"),
+            r#"#!/usr/bin/env bash
+case "${1:-}" in
+  -s) printf '%s\n' "${FAKE_UNAME_S:-$(/usr/bin/uname -s)}" ;;
+  -m) printf '%s\n' "${FAKE_UNAME_M:-$(/usr/bin/uname -m)}" ;;
+  *) exec /usr/bin/uname "$@" ;;
+esac
+"#,
+        );
+        write_executable(
+            &fake_bin.join("getconf"),
+            r#"#!/usr/bin/env bash
+if [[ "${1:-}" == GNU_LIBC_VERSION && "${FAKE_LIBC_MUSL:-0}" -ne 1 ]]; then
+  printf 'glibc %s\n' "${FAKE_GLIBC:-2.41}"
+  exit 0
+fi
+exit 1
+"#,
+        );
+        write_executable(
+            &fake_bin.join("ldd"),
+            r#"#!/usr/bin/env bash
+if [[ "${FAKE_LIBC_MUSL:-0}" -eq 1 ]]; then
+  printf 'musl libc (x86_64)\n' >&2
+  printf 'Version 1.2.5\n' >&2
+  exit 1
+fi
+printf 'ldd (GNU libc) %s\n' "${FAKE_GLIBC:-2.41}"
+"#,
+        );
+        let asset_suffix = match &forced_uname {
+            Some(_) => "linux-amd64".to_owned(),
+            None => platform_suffix().to_owned(),
+        };
+        if forced_uname.is_some() {
+            // A forced Linux run reaches the installer's GNU pointer switch,
+            // which asks for mv -T. A macOS workstation spells that same
+            // guarantee mv -h, so translate it there and pass it through
+            // untouched on a Linux runner.
+            write_executable(
+                &fake_bin.join("mv"),
+                r#"#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$(/usr/bin/uname -s)" != Darwin ]]; then
+  exec /bin/mv "$@"
+fi
+arguments=()
+for argument in "$@"; do
+  case "$argument" in
+    -Tf | -fT) arguments+=(-f -h) ;;
+    -T) arguments+=(-h) ;;
+    *) arguments+=("$argument") ;;
+  esac
+done
+exec /bin/mv "${arguments[@]}"
+"#,
+            );
+        }
         let fixture = Self {
             root,
             release_dir,
             install_dir,
             fake_bin,
+            asset_suffix,
+            forced_uname,
         };
         fixture.write_release_assets();
         fixture
     }
 
     fn write_release_assets(&self) {
-        let suffix = platform_suffix();
+        let suffix = &self.asset_suffix;
         let mut sums = String::new();
         for binary in BINARIES {
             let asset = format!("{binary}-{TEST_VERSION}-{suffix}");
@@ -108,22 +256,32 @@ impl InstallerFixture {
         }
     }
 
-    fn run(&self, fail_final_pointer_switch: bool) -> Output {
+    fn command(&self) -> Command {
+        let path = format!(
+            "{}:{}",
+            self.fake_bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
         let mut command = Command::new("bash");
         command
             .arg(installer_path())
+            .env("PATH", path)
             .env("BREG_VERSION", TEST_VERSION)
             .env("BREG_ASSET_DIR", &self.release_dir)
             .env("BREG_INSTALL_DIR", &self.install_dir);
+        if let Some((system, machine)) = &self.forced_uname {
+            command
+                .env("FAKE_UNAME_S", system)
+                .env("FAKE_UNAME_M", machine);
+        }
+        command
+    }
+
+    fn run(&self, fail_final_pointer_switch: bool) -> Output {
+        let mut command = self.command();
         if fail_final_pointer_switch {
             self.install_failing_mv();
-            let path = format!(
-                "{}:{}",
-                self.fake_bin.display(),
-                std::env::var("PATH").unwrap_or_default()
-            );
             command
-                .env("PATH", path)
                 .env("REAL_MV", "/bin/mv")
                 .env("FAKE_MV_COUNT", self.root.join("mv-count"));
         }
@@ -131,9 +289,8 @@ impl InstallerFixture {
     }
 
     fn install_failing_mv(&self) {
-        let path = self.fake_bin.join("mv");
-        fs::write(
-            &path,
+        write_executable(
+            &self.fake_bin.join("mv"),
             r#"#!/usr/bin/env bash
 set -euo pipefail
 destination="${@: -1}"
@@ -150,9 +307,7 @@ if [[ "$destination" == */.breg-current ]]; then
 fi
 exec "$REAL_MV" "$@"
 "#,
-        )
-        .unwrap();
-        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        );
     }
 
     fn assert_release_toolset_active(&self) {
@@ -183,6 +338,11 @@ fn installer_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("install.sh")
 }
 
+fn write_executable(path: &Path, body: &str) {
+    fs::write(path, body).unwrap();
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
 fn platform_suffix() -> &'static str {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("linux", "x86_64") => "linux-amd64",
@@ -206,4 +366,17 @@ fn sha256(path: &Path) -> String {
         }
     }
     panic!("installer test needs shasum or sha256sum");
+}
+
+/// The single home of the floor, read rather than repeated, so a change to
+/// release/glibc-floor.env has to travel through the generator to reach here.
+fn glibc_floor() -> (u32, u32) {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../release/glibc-floor.env");
+    let text = fs::read_to_string(&path).unwrap();
+    let value = text
+        .lines()
+        .find_map(|line| line.strip_prefix("REGISTRY_GLIBC_FLOOR="))
+        .expect("release/glibc-floor.env declares REGISTRY_GLIBC_FLOOR");
+    let (major, minor) = value.trim().split_once('.').unwrap();
+    (major.parse().unwrap(), minor.parse().unwrap())
 }

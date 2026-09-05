@@ -106,6 +106,63 @@ Darwin/arm64 | Darwin/aarch64)
 	;;
 esac
 
+# BEGIN generated libc preflight
+# Generated from release/glibc-floor.env by
+# release/scripts/render-installer-libc-preflight.py. Do not edit by hand.
+#
+# The published Linux binaries are dynamically linked against GNU libc. On a
+# musl system, or on a glibc older than the floor below, they cannot start, and
+# the dynamic linker only says so at the first run, long after this installer
+# would have reported success. Refuse here instead, before anything downloads.
+if [ "$os_label" = "linux" ]; then
+	libc_floor="2.35"
+	# musl's ldd exits non-zero when asked for a version, and this installer runs
+	# under pipefail, so its report is captured once here instead of being read
+	# through a pipeline whose status would hide the match.
+	libc_report=""
+	if command -v ldd >/dev/null 2>&1; then
+		libc_report="$(ldd --version 2>&1 || true)"
+	fi
+	if ls /lib/ld-musl-*.so.1 >/dev/null 2>&1 ||
+		printf '%s' "$libc_report" | grep -qi musl; then
+		printf 'No musl build of the Base Registry Engine is published for this platform.\n' >&2
+		printf 'Every published Linux binary needs GNU libc %s or newer, so none of them can start here.\n' \
+			"$libc_floor" >&2
+		printf 'Install on a GNU libc distribution, or run the published container images.\n' >&2
+		printf 'If you need musl builds, ask for them at https://github.com/%s/issues so the demand is recorded.\n' \
+			"$repo" >&2
+		exit 1
+	fi
+	detected_libc=""
+	if command -v getconf >/dev/null 2>&1; then
+		detected_libc="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}' || true)"
+	fi
+	if [ -z "$detected_libc" ]; then
+		detected_libc="$(printf '%s\n' "$libc_report" | awk 'NR == 1 {print $NF}')"
+	fi
+	case "$detected_libc" in
+	[0-9]*.[0-9]*) ;;
+	*) detected_libc="" ;;
+	esac
+	if [ -z "$detected_libc" ]; then
+		printf 'Could not read the GNU libc version of this system, so the %s floor is unchecked.\n' \
+			"$libc_floor" >&2
+	elif ! awk -v have="$detected_libc" -v floor="$libc_floor" '
+		BEGIN {
+			split(have, h, ".")
+			split(floor, f, ".")
+			exit !(h[1] > f[1] || (h[1] == f[1] && h[2] >= f[2]))
+		}
+	'; then
+		printf 'This system has GNU libc %s. The published binaries of the Base Registry Engine need %s or newer.\n' \
+			"$detected_libc" "$libc_floor" >&2
+		printf 'Nothing was installed: the binaries would fail to start with a dynamic linker error.\n' >&2
+		printf 'Upgrade the distribution, or run the published container images.\n' >&2
+		exit 1
+	fi
+fi
+
+# END generated libc preflight
 base_url="https://github.com/${repo}/releases/download/${version}"
 verify_url="https://github.com/${repo}/blob/${version}/release/VERIFY.md"
 tmpdir="$(mktemp -d 2>/dev/null || mktemp -d -t breg)"

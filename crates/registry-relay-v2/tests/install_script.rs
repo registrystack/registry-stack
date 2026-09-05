@@ -208,6 +208,102 @@ fn partial_fresh_install_removes_the_incomplete_toolset() {
 }
 
 #[cfg(unix)]
+#[test]
+fn musl_system_refuses_before_download() {
+    let fixture = InstallerFixture::new();
+    let mut command = fixture.command();
+    command.env("FAKE_LIBC_MUSL", "1");
+    let output = command.output().unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("No musl build of Registry Relay is published"),
+        "stderr: {stderr}"
+    );
+    assert!(stderr.contains("container images"), "stderr: {stderr}");
+    assert!(
+        !fixture.fake_curl_log().exists(),
+        "must fail before download"
+    );
+    fixture.assert_nothing_installed();
+}
+
+#[cfg(unix)]
+#[test]
+fn glibc_below_the_floor_refuses_before_download() {
+    let (major, minor) = glibc_floor();
+    let fixture = InstallerFixture::new();
+    let mut command = fixture.command();
+    command.env("FAKE_GLIBC", format!("{major}.{}", minor - 1));
+    let output = command.output().unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&format!("This system has GNU libc {major}.{}", minor - 1)),
+        "stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains(&format!("need {major}.{minor} or newer")),
+        "stderr: {stderr}"
+    );
+    assert!(stderr.contains("Nothing was installed"), "stderr: {stderr}");
+    assert!(
+        !fixture.fake_curl_log().exists(),
+        "must fail before download"
+    );
+    fixture.assert_nothing_installed();
+}
+
+#[cfg(unix)]
+#[test]
+fn glibc_at_the_floor_installs_the_complete_toolset() {
+    let (major, minor) = glibc_floor();
+    let fixture = InstallerFixture::new();
+    let mut command = fixture.command();
+    command.env("FAKE_GLIBC", format!("{major}.{minor}"));
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    fixture.assert_toolset_installed();
+}
+
+#[cfg(unix)]
+#[test]
+fn unsupported_architecture_is_refused_before_the_libc_preflight() {
+    let fixture = InstallerFixture::new();
+    let mut command = fixture.command();
+    command
+        .env("FAKE_UNAME_M", "aarch64")
+        .env("FAKE_LIBC_MUSL", "1");
+    let output = command.output().unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("No prebuilt Relay asset"),
+        "stderr: {stderr}"
+    );
+    assert!(!stderr.contains("musl"), "stderr: {stderr}");
+}
+
+#[cfg(unix)]
+#[test]
+fn installer_carries_the_shared_glibc_floor() {
+    let (major, minor) = glibc_floor();
+    let source = fs::read_to_string(installer_path()).unwrap();
+    assert!(
+        source.contains(&format!("libc_floor=\"{major}.{minor}\"")),
+        "install.sh must carry the generated floor from release/glibc-floor.env"
+    );
+    assert!(
+        source.contains("BEGIN generated libc preflight"),
+        "install.sh must carry the generated preflight block"
+    );
+}
+
+#[cfg(unix)]
 struct InstallerFixture {
     _temp: TempDir,
     fake_bin: PathBuf,
@@ -251,6 +347,30 @@ case "${1:-}" in
   -m) printf '%s\n' "${FAKE_UNAME_M:-x86_64}" ;;
   *) exit 1 ;;
 esac
+"#,
+        );
+        // The libc preflight reads the running C library through these two
+        // commands. Faking both keeps the test identical on a macOS workstation
+        // and on a Linux runner, where the real ones answer differently.
+        write_executable(
+            &fake_bin.join("getconf"),
+            r#"#!/usr/bin/env bash
+if [[ "${1:-}" == GNU_LIBC_VERSION && "${FAKE_LIBC_MUSL:-0}" -ne 1 ]]; then
+  printf 'glibc %s\n' "${FAKE_GLIBC:-2.41}"
+  exit 0
+fi
+exit 1
+"#,
+        );
+        write_executable(
+            &fake_bin.join("ldd"),
+            r#"#!/usr/bin/env bash
+if [[ "${FAKE_LIBC_MUSL:-0}" -eq 1 ]]; then
+  printf 'musl libc (x86_64)\n' >&2
+  printf 'Version 1.2.5\n' >&2
+  exit 1
+fi
+printf 'ldd (GNU libc) %s\n' "${FAKE_GLIBC:-2.41}"
 "#,
         );
         let fixture = Self {
@@ -456,4 +576,17 @@ fn sha256(path: &Path) -> String {
         }
     }
     panic!("test needs shasum or sha256sum");
+}
+
+/// The single home of the floor, read rather than repeated, so a change to
+/// release/glibc-floor.env has to travel through the generator to reach here.
+fn glibc_floor() -> (u32, u32) {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../release/glibc-floor.env");
+    let text = fs::read_to_string(&path).unwrap();
+    let value = text
+        .lines()
+        .find_map(|line| line.strip_prefix("REGISTRY_GLIBC_FLOOR="))
+        .expect("release/glibc-floor.env declares REGISTRY_GLIBC_FLOOR");
+    let (major, minor) = value.trim().split_once('.').unwrap();
+    (major.parse().unwrap(), minor.parse().unwrap())
 }
