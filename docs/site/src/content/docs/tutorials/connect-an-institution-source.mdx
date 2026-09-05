@@ -158,6 +158,11 @@ For fixed query inputs, put reviewed values in `adapterParameters`, close them i
 inputs, read only a field declared by `selectorInputs`. The script cannot access credentials,
 caller identity, purpose, or signing keys.
 
+`people-parameters.schema.yaml` is generated as an empty-properties stub, and an empty object is
+not a bounded schema, so a project that keeps both the stub and `adapterParameters: {}` fails its
+first fixture run with `evidence: deployment artifact is invalid: artifact
+schemas/people-parameters.schema.yaml: schema objects must declare bounded properties`.
+
 ## Store the source credential
 
 Create owner-only files without placing either credential in a command:

@@ -89,6 +89,13 @@ Change these files together:
 Rerun the fixture command after each coherent change. A project is not ready for production while
 the starter's example identifiers or table contract remain.
 
+Leave the `fixture:` identifier in `fixtures/record-status.yaml` as generated while you replace the
+others: a fixture is approved only when that identifier begins `registry.evidence.reference.` and
+ends `/v1`, or the file declares `coequal_acceptance_definition: true`, so renaming it to your own
+namespace stops the run with `evidence: fixture is not an approved synthetic acceptance
+definition`. Fixtures are also the only way to exercise this project, because `evidencectl dev`
+refuses a SQLite source with `local serving does not bind SQLite extracts`.
+
 ## Publish the real extract
 
 Create the SQLite file on the publisher side with the authority's own export tooling. Evidence
