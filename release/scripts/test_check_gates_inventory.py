@@ -902,7 +902,7 @@ class GateInventoryTest(unittest.TestCase):
         )
         for snippet, replacement, gate in mutations:
             with self.subTest(gate=gate):
-                text = self.workflow.replace(snippet, replacement, 1)
+                text = self.workflow.replace(snippet, replacement)
                 self.assertIn(gate, self.module.missing_gates(text))
 
     def test_missing_debian13_image_contract_is_reported(self) -> None:
