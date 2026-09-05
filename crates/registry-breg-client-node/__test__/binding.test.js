@@ -17,6 +17,7 @@ const {
 
 const TRACE_ID = '4bf92f3577b34da6a3ce929d0e0e4736';
 const TRACEPARENT = `00-${TRACE_ID}-00f067aa0ba902b7-01`;
+const MISSING_RECORD_ID = '00000000-0000-4000-8000-000000000001';
 let server;
 let baseUrl;
 
@@ -51,6 +52,19 @@ before(async () => {
       entities: [],
       operations: [],
     }));
+    else if (request.url.endsWith(`/v1/records/companies/${MISSING_RECORD_ID}`)) {
+      response.statusCode = 404;
+      response.setHeader('content-type', 'application/problem+json');
+      response.setHeader('cache-control', 'no-store');
+      response.end(JSON.stringify({
+        type: 'urn:breg:problem:resource.not_found',
+        title: 'Not Found',
+        status: 404,
+        detail: 'The requested resource was not found.',
+        code: 'resource.not_found',
+        traceId: TRACE_ID,
+      }));
+    }
     else { response.statusCode = 404; response.end('{}'); }
   });
   await new Promise((resolve, reject) => {
@@ -139,6 +153,16 @@ test('nullable private-key JWT durations use provider defaults', () => {
       },
     },
   }), (error) => error instanceof BaseRegistryClientError && error.kind === 'configuration');
+});
+
+test('a missing record fails with its own not_found kind', async () => {
+  const client = new BaseRegistryClient({ baseUrl });
+  await assert.rejects(
+    client.getRecord('companies', MISSING_RECORD_ID),
+    (error) => error instanceof BaseRegistryClientError
+      && error.kind === 'not_found'
+      && error.status === 404,
+  );
 });
 
 test('metadata selection failures use the public error envelope', async () => {

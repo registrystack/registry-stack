@@ -120,7 +120,12 @@ fn client_error(error: BaseRegistryClientError) -> NapiError {
             code,
             trace_id,
         } => json!({
-            "kind": "problem",
+            // app-developer-22: a missing resource is its own kind, not_found,
+            // rather than the generic problem kind every other refusal shares.
+            "kind": match code {
+                BRegProblemCode::ResourceNotFound => "not_found",
+                _ => "problem",
+            },
             "status": status,
             "code": code.code(),
             "planRefusal": match code {
