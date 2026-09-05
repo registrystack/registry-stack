@@ -48,7 +48,11 @@ const LOCAL_PROCEDURE_SCHEMA_V1: &str = "registry.evidence.local-relying-procedu
 pub enum RequestCommand {
     /// Prepare the request, authorization header, and verification context.
     Prepare(PrepareArgs),
-    /// Verify one retained Evidence Gateway response offline.
+    /// Deprecated alias for `evidencectl verify`.
+    ///
+    /// `evidencectl verify` is the one verification command, and it takes the
+    /// same arguments. This spelling keeps working so a script that already
+    /// calls it is not broken by the rename.
     Verify(crate::verify::VerifyArgs),
 }
 

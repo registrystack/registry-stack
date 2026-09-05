@@ -83,7 +83,10 @@ pub struct SuggestArgs {
     #[arg(long)]
     pub base_url: Option<String>,
 
-    /// Deployment project to write the draft into; print-only if absent.
+    /// Evidence project directory; the draft is printed when this is absent.
+    ///
+    /// This command needs an editable project: one holding questions/ and
+    /// sources/ beside evidence-project.yaml.
     #[arg(long)]
     pub project: Option<std::path::PathBuf>,
 }

@@ -68,8 +68,12 @@ const GATED_ACQUISITION_CAPABILITIES: [&str; 2] = ["search-then-fetch-set", "sou
 
 #[derive(Debug, Args)]
 pub struct DoctorArgs {
-    /// Deployment project directory containing runtime.yaml and bundle/.
-    #[arg(long)]
+    /// Evidence project directory; defaults to the current directory.
+    ///
+    /// This command needs a deployment project: one holding runtime.yaml
+    /// beside bundle/. `evidencectl build` compiles an editable project into
+    /// one.
+    #[arg(long, default_value = ".")]
     pub project: PathBuf,
 
     /// Mechanically compare this Registry Mint configuration with Evidence

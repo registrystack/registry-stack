@@ -62,7 +62,10 @@ pub struct ServeArgs {
     )]
     config: Option<PathBuf>,
 
-    /// Explicit Evidence authoring project; the current directory is used when omitted.
+    /// Evidence project directory; defaults to the current directory.
+    ///
+    /// This command needs an editable project: one holding questions/ and
+    /// sources/ beside evidence-project.yaml.
     #[arg(long, conflicts_with_all = ["openapi", "config"])]
     project: Option<PathBuf>,
 
@@ -110,7 +113,10 @@ pub struct GenerateArgs {
     #[arg(long, requires = "openapi", conflicts_with = "config")]
     output: Option<PathBuf>,
 
-    /// Explicit Evidence authoring project; the current directory is used when omitted.
+    /// Evidence project directory; defaults to the current directory.
+    ///
+    /// This command needs an editable project: one holding questions/ and
+    /// sources/ beside evidence-project.yaml.
     #[arg(long, conflicts_with_all = ["openapi", "config"])]
     project: Option<PathBuf>,
 
@@ -145,7 +151,10 @@ pub struct CheckArgs {
     #[arg(long)]
     config: Option<PathBuf>,
 
-    /// Explicit Evidence authoring project; the current directory is used when omitted.
+    /// Evidence project directory; defaults to the current directory.
+    ///
+    /// This command needs an editable project: one holding questions/ and
+    /// sources/ beside evidence-project.yaml.
     #[arg(long, conflicts_with = "config")]
     project: Option<PathBuf>,
 }
