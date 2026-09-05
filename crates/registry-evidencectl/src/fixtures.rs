@@ -107,8 +107,7 @@ pub fn run(command: FixturesCommand) -> Result<ExitCode> {
 
 fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
     let runtime_path = args.project.join("runtime.yaml");
-    let evidence_bin = evidence_binary::resolve(args.evidence_bin.as_deref())?;
-    evidence_binary::ensure_matching_version(&evidence_bin)?;
+    let evidence_bin = evidence_binary::resolve_matching(args.evidence_bin.as_deref())?;
     let target = if runtime_path.is_file() {
         let bundle_directory = resolve_bundle_directory(&runtime_path, &args.project)?;
         let bundle_config_path = bundle_directory.join("evidence.yaml");
