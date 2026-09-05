@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import importlib.util
+import os
 import subprocess
 import tempfile
 import unittest
@@ -1502,6 +1503,54 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
         self.assertIn("workflow_dispatch:", trigger)
         self.assertNotIn("push:", trigger)
         self.assertNotIn("pull_request:", trigger)
+
+
+class NightlyRustCoverageWorkflowStructureTest(unittest.TestCase):
+    def test_plans_a_deterministic_shard_for_every_entry_in_the_shard_inventory(
+        self,
+    ) -> None:
+        _, document = workflow("nightly-rust-coverage.yml")
+        plan_script = step_run(
+            document,
+            "plan",
+            "Build coverage matrix from the CI shard inventory",
+        )
+
+        module_path = ROOT / ".github/scripts/ci_changes.py"
+        spec = importlib.util.spec_from_file_location("ci_changes", module_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_path = Path(temporary_directory) / "github_output"
+            output_path.write_text("", encoding="utf-8")
+            env = {**os.environ, "GITHUB_OUTPUT": str(output_path)}
+            result = subprocess.run(
+                ["bash", "-c", plan_script],
+                capture_output=True,
+                text=True,
+                cwd=ROOT,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            outputs = output_path.read_text(encoding="utf-8")
+
+        matrix_line = next(
+            line for line in outputs.splitlines() if line.startswith("matrix=")
+        )
+        matrix = json.loads(matrix_line[len("matrix=") :])["include"]
+
+        # Every shard the CI inventory can currently enumerate must plan, not
+        # just the ones with an explicit flag override.
+        self.assertEqual({entry["name"] for entry in matrix}, set(module.SHARDS))
+        flags = {entry["name"]: entry["flag"] for entry in matrix}
+        self.assertEqual(flags["platform"], "platform")
+        self.assertEqual(flags["manifest"], "manifest-unit")
+        self.assertEqual(flags["developer-tools"], "developer-tools")
+        for name in module.SHARDS.keys() - {"platform", "manifest", "developer-tools"}:
+            with self.subTest(shard=name):
+                self.assertEqual(flags[name], name)
 
 
 if __name__ == "__main__":
