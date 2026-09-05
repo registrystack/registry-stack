@@ -9,6 +9,7 @@ import YAML from 'yaml';
 import { assembleArchives, parseArgs } from './assemble-archives.mjs';
 import {
   createArchiveBundle,
+  localArchiveBundlePath,
   releaseRootOutputDirectory,
 } from './archive-bundle.mjs';
 
@@ -140,6 +141,69 @@ test('restores a locked release bundle without rebuilding', async (t) => {
   assert.equal(buildCalls, 0);
   assert.equal(result.restored, 1);
   assert.equal(await readFile(resolve(targetRoot, 'dist/v/1.2.3/index.html'), 'utf8'), '<h1>Frozen</h1>\n');
+});
+
+test('recovers from a stale local bundle cache instead of reporting a lock violation', async (t) => {
+  const { bundlePath, targetRoot } = await fixture(t);
+  const localBundlePath = localArchiveBundlePath(targetRoot, docset);
+  await mkdir(resolve(targetRoot, '.archive-bundles'), { recursive: true });
+  // A bundle left behind by an earlier `--bootstrap` run, built from a working
+  // tree that no longer matches the published lock entry.
+  await writeFile(localBundlePath, 'stale bundle bytes from an earlier bootstrap run');
+
+  const body = await readFile(bundlePath);
+  let fetches = 0;
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (message) => { warnings.push(message); };
+  t.after(() => { console.warn = originalWarn; });
+
+  const result = await assembleArchives({
+    docsRoot: targetRoot,
+    fetchImpl: async () => {
+      fetches += 1;
+      return new Response(body, { status: 200 });
+    },
+    restoreGeneratedData: async () => {},
+  });
+
+  assert.equal(fetches, 1);
+  assert.equal(result.restored, 1);
+  assert.equal(await readFile(resolve(targetRoot, 'dist/v/1.2.3/index.html'), 'utf8'), '<h1>Frozen</h1>\n');
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /stale local archive bundle cache/);
+  assert.match(warnings[0], new RegExp(localBundlePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(warnings[0], /does not match lock/);
+});
+
+test('does not treat a genuinely inconsistent local bundle as a stale cache', async (t) => {
+  const { bundlePath, targetRoot } = await fixture(t);
+  const localBundlePath = localArchiveBundlePath(targetRoot, docset);
+  await mkdir(resolve(targetRoot, '.archive-bundles'), { recursive: true });
+  await writeFile(localBundlePath, await readFile(bundlePath));
+
+  // Corrupt the lock's tree digest while keeping its bundle digest correct, so
+  // the local bundle passes the outer bundle digest check (this is not a stale
+  // cache) but fails the inner tree digest check (this bundle really is
+  // inconsistent with its lock entry).
+  const lockPath = resolve(targetRoot, 'src/data/archive-lock.yaml');
+  const lock = YAML.parse(await readFile(lockPath, 'utf8'));
+  lock.archives[docset.id].tree_sha256 = '0'.repeat(64);
+  await writeFile(lockPath, YAML.stringify(lock));
+
+  let fetches = 0;
+  await assert.rejects(
+    assembleArchives({
+      docsRoot: targetRoot,
+      fetchImpl: async () => {
+        fetches += 1;
+        return new Response(await readFile(bundlePath), { status: 200 });
+      },
+      restoreGeneratedData: async () => {},
+    }),
+    /tree digest .* does not match its lock/,
+  );
+  assert.equal(fetches, 0);
 });
 
 test('only bootstraps missing bundles when explicitly allowed', async (t) => {
