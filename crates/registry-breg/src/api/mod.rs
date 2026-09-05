@@ -1360,7 +1360,7 @@ async fn create_dispatch(
             &route,
             &surface.context,
             None,
-            invalid_request(),
+            missing_idempotency_key(),
             &correlation,
         )
         .await;
@@ -1479,7 +1479,7 @@ async fn patch_dispatch(
             &route,
             &surface.context,
             Some(record_id.as_str()),
-            invalid_request(),
+            missing_idempotency_key(),
             &correlation,
         )
         .await;
@@ -1641,7 +1641,7 @@ async fn batch_dispatch(
             &route,
             &surface.context,
             None,
-            invalid_request(),
+            missing_idempotency_key(),
             &correlation,
         )
         .await;
@@ -1761,7 +1761,7 @@ async fn tombstone_dispatch(
             &route,
             &surface.context,
             Some(record_id.as_str()),
-            invalid_request(),
+            missing_idempotency_key(),
             &correlation,
         )
         .await;
@@ -1892,7 +1892,7 @@ async fn request_action_dispatch(
             &route,
             &surface.context,
             Some(record_id.as_str()),
-            invalid_request(),
+            missing_idempotency_key(),
             &correlation,
         )
         .await;
@@ -5006,6 +5006,20 @@ fn invalid_request() -> Response {
         StatusCode::BAD_REQUEST,
         "request.invalid",
         "The request is invalid.",
+    )
+}
+
+/// A required mutation header was absent. Names the header so the fix is
+/// discoverable from the response instead of the generated OpenAPI: the
+/// header name is a fixed, known constant, not request content.
+fn missing_idempotency_key() -> Response {
+    crate::correlation::problem_response_with_field_path(
+        StatusCode::BAD_REQUEST,
+        "urn:breg:problem:request.invalid",
+        "Bad Request",
+        "The Idempotency-Key header is required.",
+        "request.invalid",
+        "Idempotency-Key",
     )
 }
 
