@@ -62,6 +62,9 @@ local Evidence keys. `evidencectl source suggest --project <dir>` drafts one sou
 from the retained contract, and `evidencectl dev` compiles complete authoring objects into the
 private local runtime layout shown here (`crates/registry-evidencectl/src/scaffold.rs`,
 `crates/registry-evidencectl/src/authoring.rs`).
+`evidencectl tooling` serves an editor rather than a deployment, so the authoring diagnostics the
+command line reports also appear while you type
+([editor support](../../reference/evidencectl/#editor-support)).
 
 ## Dependencies
 
@@ -262,6 +265,8 @@ upgrade continuity. */}
 
 ## Next
 
+- [Get your first Evidence Gateway assertion](../../tutorials/first-evidence-assertion/), the
+  20-minute local run of the layout described here
 - [Which product fits your problem](../when-to-use/)
 - [Configure Evidence Gateway](../../configure/evidence/)
 - [Evidence Gateway API reference](../../reference/apis/registry-evidence/)
