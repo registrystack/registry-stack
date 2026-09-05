@@ -200,7 +200,8 @@ Removed stopped local Evidence state
 
 This preserves your editable questions, derivations, keys, and the request artifacts under
 `.evidence/requests/`, which [Verify an assertion as a consumer](../verify-an-assertion-as-a-consumer/)
-reads.
+reads. It also leaves `.evidence/failed-start`, where a start that never reached readiness keeps its
+logs, so a failure you have not read yet survives the cleanup.
 
 Return to the registry terminal and press `Ctrl+C`.
 
