@@ -114,6 +114,41 @@ fn failed_runtime_check_leaves_no_output_or_private_staging() {
 }
 
 #[test]
+fn a_rejected_bundle_and_fixture_name_the_command_that_shows_the_diagnosis() {
+    let rejected_bundle = Fixture::new();
+    let project = fs::canonicalize(&rejected_bundle.project).expect("canonical project");
+
+    let output = rejected_bundle.build_failing("check");
+
+    assert_failed(&output, "a rejected bundle must fail the build");
+    let message = stderr(&output);
+    assert!(
+        message.contains(&format!(
+            "Run `evidencectl fixtures run --project {}` to read the diagnosis Evidence prints.",
+            project.display()
+        )),
+        "the refusal names the command that shows the diagnosis: {message}"
+    );
+    assert_value_free(&output);
+
+    let rejected_fixture = Fixture::new();
+    let project = fs::canonicalize(&rejected_fixture.project).expect("canonical project");
+
+    let output = rejected_fixture.build_failing("fixture:fixtures/answer.yaml");
+
+    assert_failed(&output, "a rejected fixture must fail the build");
+    let message = stderr(&output);
+    assert!(
+        message.contains(&format!(
+            "Run `evidencectl fixtures run --project {} --fixture fixtures/answer.yaml` to read the diagnosis Evidence prints.",
+            project.display()
+        )),
+        "the refusal names the rejected fixture with the command: {message}"
+    );
+    assert_value_free(&output);
+}
+
+#[test]
 fn a_mismatched_evidence_binary_is_refused_before_any_step() {
     let fixture = Fixture::new();
 

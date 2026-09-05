@@ -242,10 +242,16 @@ fn prepare_candidate(
         .context("sealing the copied deployment runtime")?;
 
     let secret_references = secret_references(&compiled.bundle)?;
-    let revision = run_bundle_check(evidence_bin, &compiled.bundle_path, interruption)?;
+    let revision = run_bundle_check(evidence_bin, &compiled.bundle_path, project, interruption)?;
     for fixture in &compiled.fixture_paths {
         interruption.check()?;
-        run_bundle_fixture(evidence_bin, &compiled.bundle_path, fixture, interruption)?;
+        run_bundle_fixture(
+            evidence_bin,
+            &compiled.bundle_path,
+            fixture,
+            project,
+            interruption,
+        )?;
     }
     Ok((revision, secret_references))
 }
@@ -253,6 +259,7 @@ fn prepare_candidate(
 fn run_bundle_check(
     evidence_bin: &Path,
     bundle: &Path,
+    project: &Path,
     interruption: &BuildInterruption,
 ) -> Result<String> {
     let mut command = Command::new(evidence_bin);
@@ -263,7 +270,10 @@ fn run_bundle_check(
         .env_remove("REGISTRY_EVIDENCE_RUNTIME");
     let output = run_evidence(command, interruption, true)?;
     if !output.status.success() {
-        return runtime_failure("Evidence rejected the generated deployment bundle");
+        return runtime_failure(
+            "Evidence rejected the generated deployment bundle",
+            &format!("evidencectl fixtures run --project {}", project.display()),
+        );
     }
     parse_bundle_revision(&String::from_utf8_lossy(&output.stdout))
 }
@@ -272,6 +282,7 @@ fn run_bundle_fixture(
     evidence_bin: &Path,
     bundle: &Path,
     fixture: &str,
+    project: &Path,
     interruption: &BuildInterruption,
 ) -> Result<()> {
     let mut command = Command::new(evidence_bin);
@@ -286,7 +297,13 @@ fn run_bundle_fixture(
     if output.status.success() {
         return Ok(());
     }
-    runtime_failure("Evidence rejected a deployment fixture")
+    runtime_failure(
+        "Evidence rejected a deployment fixture",
+        &format!(
+            "evidencectl fixtures run --project {} --fixture {fixture}",
+            project.display()
+        ),
+    )
 }
 
 struct EvidenceOutput {
@@ -356,11 +373,18 @@ fn terminate_validation_child(child: &mut std::process::Child) {
     let _ = child.wait();
 }
 
-fn runtime_failure<T>(message: &str) -> Result<T> {
-    // Evidence diagnostics are intentionally not relayed here. A validation
-    // process may have opened operator-authored configuration, and build
-    // failures must remain value-free even if that subprocess is replaced.
-    bail!("{message}")
+/// Refuse the build with a fixed sentence and the command that shows the
+/// reader what Evidence objected to.
+///
+/// The diagnostics `evidence bundle-check` and `evidence bundle-evaluate`
+/// write are not relayed here. A validation process may have opened
+/// operator-authored configuration, a build runs unattended and its error text
+/// lands in build logs, and no test in `registry-evidence` pins the stderr of
+/// those two seams as value-free. `evidencectl fixtures run` compiles the
+/// project again and relays them for an operator who asks for them at a
+/// terminal.
+fn runtime_failure<T>(message: &str, diagnosis_command: &str) -> Result<T> {
+    bail!("{message}. Run `{diagnosis_command}` to read the diagnosis Evidence prints.")
 }
 
 fn parse_bundle_revision(stdout: &str) -> Result<String> {
