@@ -5,7 +5,7 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-08"
+last_reviewed: "2026-09-06"
 doc_type: specification
 doc_id: RS-PR-EVIDENCE
 category: normative
@@ -953,6 +953,15 @@ The standards register lists `registry-evidence` under its SD-JWT VC entry, with
 evidence links; it does not yet carry an Evidence Gateway row under the CCCEV, OpenAPI, and JSON
 Schema entries this page also references, and that remaining gap is marked with an author comment in
 the source of this page.
+
+{/* Evidence: products/evidence/contracts/security-invariant-matrix.yaml carries every trust and
+    privacy invariant this document cites by identifier, each with its threat, its Rust enforcement
+    point, and the negative test it requires. security-test-traceability.yaml and
+    acceptance-test-traceability.yaml resolve the named requirements to exact executable tests. */}
+{/* Evidence: products/evidence/generated/registry-evidence.openapi.json is the generated route and
+    schema surface Sections 2 through 8 restate, and .github/workflows/ci.yml runs
+    products/evidence/scripts/check-contracts.sh, which regenerates it from the registry-evidence
+    crate and fails on any byte difference. */}
 
 - The frozen source contracts live in `products/evidence/contracts/`, indexed by
   `products/evidence/contracts/README.md`. Each requirement in Sections 2 through 11 names the file
