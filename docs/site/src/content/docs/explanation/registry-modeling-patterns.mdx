@@ -17,10 +17,12 @@ declare entities, fields, references, and profiles, and who wants to know how ot
 shaped identifiers, dated relationships, declarations, provenance, and document references before
 committing to a model.
 Each pattern describes a record structure and the choices you need to make before configuring it.
-The YAML examples use BReg's current configuration syntax, but are fragments, not installable
-modules or complete projects. Merge their list entries into your own configuration.
+The YAML examples use the current Base Registry Engine (BReg) configuration syntax, but are
+fragments, not installable modules or complete projects. Merge their list entries into your own configuration.
 References assume you have defined the target entities and created the referenced records.
-Each fragment names a `primaryDataset`; replace it with a dataset your project declares.
+Each fragment names a `primaryDataset`; replace it with your own value. The compiler checks that
+value against `manifestProjection.datasets[]` only when the project declares that block, so a
+project without one may use any non-empty string.
 
 The HTTP examples use those configured routes and field names. Each response is illustrative
 JSON with synthetic records, not a captured server response; it doubles as a sample record.
