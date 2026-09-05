@@ -118,6 +118,21 @@ class ReleaseImagePolicyTests(unittest.TestCase):
                 "protobuf-compiler",
                 "exact protobuf build package",
             ),
+            (
+                POLICY.RUST_BUILDER_PIP,
+                "python3-pip",
+                "exact pip build package",
+            ),
+            (
+                POLICY.RUST_BUILDER_ZIG_REQUIREMENTS,
+                "release/requirements/ziglang.txt",
+                "hash-pinned Zig requirements file",
+            ),
+            (
+                POLICY.RUST_BUILDER_HASHED_INSTALL,
+                "--no-deps",
+                "hash-checked Python install",
+            ),
         )
         for original, replacement, expected in mutations:
             with self.subTest(expected=expected):

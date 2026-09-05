@@ -20,13 +20,42 @@ if [[ "${zig_python}" != /* || ! -x "${zig_python}" ]]; then
   printf 'REGISTRY_ZIG_PYTHON must name an absolute executable\n' >&2
   exit 2
 fi
-case "${zig_target}" in
-  x86_64-linux-gnu.2.17|aarch64-linux-gnu.2.17) ;;
-  *)
-    printf 'REGISTRY_ZIG_TARGET must name an approved glibc 2.17 target\n' >&2
-    exit 2
-    ;;
-esac
+# The wrapper is reached through a symlink named zig-cc or zig-cxx, so the
+# invocation path is followed back to this file before the floor beside it is
+# read. The floor has one home and is never repeated here.
+self="${BASH_SOURCE[0]}"
+while [[ -L "${self}" ]]; do
+  link="$(readlink -- "${self}")"
+  case "${link}" in
+    /*) self="${link}" ;;
+    *) self="$(dirname -- "${self}")/${link}" ;;
+  esac
+done
+script_dir="$(cd -- "$(dirname -- "${self}")" && pwd)"
+floor_file="${script_dir}/../glibc-floor.env"
+if [[ ! -f "${floor_file}" ]]; then
+  printf 'the release glibc floor is missing: %s\n' "${floor_file}" >&2
+  exit 2
+fi
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=../glibc-floor.env
+. "${floor_file}"
+product_floor="${REGISTRY_GLIBC_FLOOR:?REGISTRY_GLIBC_FLOOR is required}"
+
+# The Node addons keep an older floor on purpose: they are loaded into a host
+# Node process, so they must start wherever that runtime already starts. The
+# product binaries own their own process and follow the release floor.
+node_addon_floor=2.17
+
+approved=()
+for floor in "${node_addon_floor}" "${product_floor}"; do
+  approved+=("x86_64-linux-gnu.${floor}" "aarch64-linux-gnu.${floor}")
+done
+if ! printf '%s\n' "${approved[@]}" | grep -qxF -- "${zig_target}"; then
+  printf 'REGISTRY_ZIG_TARGET must name an approved target, one of: %s\n' \
+    "${approved[*]}" >&2
+  exit 2
+fi
 
 # cc-rs adds the Rust target even when the selected compiler is a wrapper.
 # Remove only its target selector so Zig receives exactly the approved target
