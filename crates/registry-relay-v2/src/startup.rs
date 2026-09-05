@@ -13,7 +13,8 @@ use std::time::Duration;
 use axum::Router;
 use jsonwebtoken::Algorithm;
 use registry_platform_audit::{
-    AuditChainProfile, AuditSink, ChainState, DurableSegmentedJsonlSink,
+    require_audit_under, AuditChainProfile, AuditSink, ChainState, DurableSegmentedJsonlSink,
+    PersistentRootFault,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_httputil::FetchUrlPolicy;
@@ -65,6 +66,11 @@ pub enum StartupError {
     IssuerUnavailable,
     #[error("the required audit sink is not ready")]
     AuditUnavailable,
+    /// The configured audit sink was not proven to resolve inside the
+    /// operator-declared persistent root. The fault names the side that
+    /// failed and never the configured sink or the declared root.
+    #[error("the audit destination check failed: {0}")]
+    AuditRoot(PersistentRootFault),
     #[error("a required secret is unavailable")]
     SecretUnavailable,
     #[error("the cursor configuration is invalid")]
@@ -169,12 +175,29 @@ pub async fn prepare(runtime_path: &Path) -> Result<PreparedRelay, StartupError>
 /// Validate the complete deployment exactly as startup does without binding a
 /// listener. This is the native container preflight used before traffic is
 /// routed to a new Relay instance.
-pub async fn check(runtime_path: &Path) -> Result<(), StartupError> {
+pub async fn check(
+    runtime_path: &Path,
+    require_audit_root: Option<&Path>,
+) -> Result<(), StartupError> {
+    // The deployment owns storage persistence and declares the root it mounts;
+    // Relay owns where the sink resolves. Proving containment first keeps the
+    // two boundaries separate, and the readiness proof below still has to pass.
+    if let Some(root) = require_audit_root {
+        require_persistent_audit_sink(runtime_path, root)?;
+    }
     let prepared = prepare(runtime_path).await?;
     if !prepared.service.is_ready().await {
         return Err(StartupError::NotReady);
     }
     Ok(())
+}
+
+/// Prove the configured audit sink resolves inside `root`, resolving the
+/// runtime audit binding exactly as `prepare` resolves it.
+fn require_persistent_audit_sink(runtime_path: &Path, root: &Path) -> Result<(), StartupError> {
+    let (runtime_root, runtime) = load_runtime(runtime_path)?;
+    let paths = RuntimePaths::resolve(&runtime_root, &runtime)?;
+    require_audit_under(&paths.audit, root).map_err(StartupError::AuditRoot)
 }
 
 /// Prepare atomically, bind only after readiness, and serve until SIGINT or
@@ -1152,6 +1175,70 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
             maximum_age_seconds: 300,
         });
         assert_eq!(validate_runtime_contract(&runtime, &contract), Ok(()));
+    }
+
+    /// Write one loadable runtime whose audit sink is `sink`.
+    fn runtime_with_audit_sink(root: &Path, sink: &str) -> PathBuf {
+        let path = root.join("runtime.yaml");
+        fs::write(
+            &path,
+            format!(
+                "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {{bind: '127.0.0.1:0'}}\npackagePath: package\nsources: {{db: {{path: source.sqlite}}}}\nauthentication: {{issuer: null}}\naudit: {{sink: {sink}, integrityKeyRef: secret:env/KEY}}\nlimits: {{requestTimeoutMilliseconds: 1000, concurrentQueries: 1}}\n"
+            ),
+        )
+        .expect("write runtime");
+        path
+    }
+
+    #[test]
+    fn a_relative_audit_sink_is_proven_against_the_resolved_runtime_binding() {
+        let temporary = tempfile::tempdir().expect("temporary root");
+        let root = temporary
+            .path()
+            .canonicalize()
+            .expect("canonical temporary root");
+        let ephemeral = tempfile::tempdir().expect("temporary ephemeral root");
+        let path = runtime_with_audit_sink(&root, "var/audit.jsonl");
+
+        // The sink is configured relative to the runtime file, so proving it
+        // against the runtime directory is what shows Relay compared the
+        // destination its own binding resolution produced.
+        assert_eq!(Ok(()), require_persistent_audit_sink(&path, &root));
+        assert_eq!(
+            Err(StartupError::AuditRoot(PersistentRootFault::Outside)),
+            require_persistent_audit_sink(&path, ephemeral.path())
+        );
+        assert_eq!(
+            Err(StartupError::AuditRoot(PersistentRootFault::Root)),
+            require_persistent_audit_sink(&path, Path::new("var/lib/relay/audit"))
+        );
+    }
+
+    #[test]
+    fn an_absolute_audit_sink_outside_the_declared_root_is_refused() {
+        let temporary = tempfile::tempdir().expect("temporary root");
+        let root = temporary
+            .path()
+            .canonicalize()
+            .expect("canonical temporary root");
+        let ephemeral = tempfile::tempdir().expect("temporary ephemeral root");
+        // The runtime binding refuses an absolute path whose components are
+        // already symlinks, so the ephemeral location is named canonically.
+        let ephemeral_root = ephemeral
+            .path()
+            .canonicalize()
+            .expect("canonical ephemeral root");
+        let declared = root.join("audit");
+        fs::create_dir(&declared).expect("declared persistent root");
+        let path = runtime_with_audit_sink(
+            &root,
+            &ephemeral_root.join("events.jsonl").display().to_string(),
+        );
+
+        assert_eq!(
+            Err(StartupError::AuditRoot(PersistentRootFault::Outside)),
+            require_persistent_audit_sink(&path, &declared)
+        );
     }
 
     #[test]
