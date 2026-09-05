@@ -52,6 +52,49 @@ Debian snapshot inside the pinned builder container. The source commit
 therefore fixes both the builder image and the additional build packages
 instead of consulting Debian's mutable package indexes.
 
+## The C compiler, the linker, and the GNU libc floor
+
+The same container carries the Zig cross-compiler, installed from the Python
+index against the file hashes recorded in
+`release/requirements/ziglang-0.12.1.txt`. Every product binary is compiled and
+linked through it, targeting the GNU libc stubs of the floor in
+`release/glibc-floor.env`, so a binary imports only symbol versions that exist
+at the floor. Without it the builder's own much newer GNU libc decides the
+requirement by accident: the binaries start inside the container and refuse to
+start on a supported distribution.
+
+The floor is a build input like the packages above. One source commit fixes the
+builder image, the additional Debian packages, the C compiler and linker, and
+the oldest GNU libc a published binary can start on. A change to the floor file
+or to the pinned Zig file names a different builder image, because the local
+builder tag is the hash of the recipe and of the files it installs from.
+
+Before the payload is checksummed, `release/scripts/check-glibc-floor.sh` reads
+every staged binary and fails the build when one requires a newer GNU libc than
+the floor, or imports a strong symbol with no version at all. The three
+published installer scripts refuse the same two cases before they download
+anything, and carry the floor as a generated block written by
+`release/scripts/render-installer-libc-preflight.py`.
+
+### What the local rerun of this change observed
+
+Two complete payload builds of 0.26.1 ran on one Apple Silicon workstation
+through the emulated `linux/amd64` builder, each with its own Cargo home and
+its own target directory. All ten staged Linux amd64 binaries and all five
+container binaries matched byte for byte between the two runs. The Zig cache
+directory differs between runs because it sits inside the temporary wrapper
+directory the build removes on exit, so the equality also shows that path does
+not reach the output.
+
+A third build of the same payload ran natively on aarch64. Its binaries are
+aarch64 and are not comparable with the amd64 payload; what it shows is that
+the floor selection and the gate work on the second published architecture.
+Registry Manifest does not compile for aarch64, so that one slot was left out
+of the aarch64 run.
+
+The scheduled workflow above remains the proof of record. It builds
+`linux/amd64` only, so nothing observed here extends repeatability to arm64.
+
 ## OpenSSF Silver claim boundary
 
 The OpenSSF `build_repeatable` answer is supportable only while the latest

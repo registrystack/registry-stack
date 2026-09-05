@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -11,6 +12,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPILER = ROOT / "release/scripts/zig-glibc-compiler"
+
+
+def product_glibc_floor() -> str:
+    """The release floor the product binaries are built to, read from its home."""
+    text = (ROOT / "release/glibc-floor.env").read_text(encoding="utf-8")
+    match = re.search(r"^REGISTRY_GLIBC_FLOOR=([0-9]+\.[0-9]+)$", text, re.MULTILINE)
+    assert match, "release/glibc-floor.env declares REGISTRY_GLIBC_FLOOR"
+    return match.group(1)
 
 
 class ZigGlibcCompilerTest(unittest.TestCase):
@@ -97,6 +106,26 @@ class ZigGlibcCompilerTest(unittest.TestCase):
             ],
         )
 
+    def test_approves_the_product_release_floor_on_both_architectures(self) -> None:
+        """The product binaries are built to the floor release/glibc-floor.env holds."""
+        floor = product_glibc_floor()
+        for architecture in ("x86_64", "aarch64"):
+            with self.subTest(architecture=architecture):
+                target = f"{architecture}-linux-gnu.{floor}"
+                result = self.run_wrapper(
+                    self.cc,
+                    "source.c",
+                    env={**self.env, "REGISTRY_ZIG_TARGET": target},
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            [call[:5] for call in self.logged_calls()],
+            [
+                ["-m", "ziglang", "cc", "-target", f"x86_64-linux-gnu.{floor}"],
+                ["-m", "ziglang", "cc", "-target", f"aarch64-linux-gnu.{floor}"],
+            ],
+        )
+
     def test_rejects_unapproved_or_ambiguous_configuration(self) -> None:
         cases = (
             (COMPILER, (), self.env, "must be invoked"),
@@ -104,7 +133,7 @@ class ZigGlibcCompilerTest(unittest.TestCase):
                 self.cc,
                 (),
                 {**self.env, "REGISTRY_ZIG_TARGET": "aarch64-linux-gnu.2.28"},
-                "approved glibc 2.17 target",
+                "must name an approved target",
             ),
             (
                 self.cc,
