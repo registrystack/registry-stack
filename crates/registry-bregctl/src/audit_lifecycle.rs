@@ -7,22 +7,26 @@
 //! Engine so package, catalog, lock, role, and SQL boundaries stay in the
 //! product runtime. Refusals carry a closed code and no operator value.
 
+use std::ffi::OsString;
 use std::fs::File;
 use std::io::BufWriter;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use registry_breg::audit_tooling::{
     AuditExport, AuditOperatorService, AuditPrune, AuditPruneBoundary, AuditToolingError,
     AuditVerification,
 };
 use serde::Serialize;
-use tempfile::{Builder, NamedTempFile};
+
+use crate::safe_path::SafeEntry;
 
 /// Owner-only permissions for an export the operator has not yet placed.
-#[cfg(unix)]
 const EXPORT_FILE_MODE: u32 = 0o600;
+
+static EXPORT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AuditCliError {
@@ -75,16 +79,16 @@ pub(crate) fn export(
         return Err(AuditCliError::Operator);
     }
     let runtime = operator_runtime()?;
-    let mut temporary = create_export_file(output)?;
+    let mut staged = create_export_file(output)?;
     let export = {
-        let mut sink = BufWriter::new(temporary.as_file_mut());
+        let mut sink = BufWriter::new(&mut staged.file);
         let export = runtime.block_on(async {
             let service = service(runtime_config).await?;
             service.export(&mut sink).await.map_err(map_error)
         });
         export.and_then(|export| finish_export_file(sink).map(|()| export))?
     };
-    publish_export_file(temporary, output)?;
+    publish_export_file(staged)?;
     Ok(AuditExportOutcome { export })
 }
 
@@ -111,19 +115,46 @@ async fn service(runtime_config: &Path) -> Result<AuditOperatorService, AuditCli
         .map_err(map_error)
 }
 
-fn create_export_file(output: &Path) -> Result<NamedTempFile, AuditCliError> {
-    let parent = output.parent().ok_or(AuditCliError::Operator)?;
-    let temporary = Builder::new()
-        .prefix(".bregctl-audit-export-")
-        .suffix(".tmp")
-        .tempfile_in(parent)
-        .map_err(|_| AuditCliError::Operator)?;
-    #[cfg(unix)]
-    temporary
-        .as_file()
-        .set_permissions(std::fs::Permissions::from_mode(EXPORT_FILE_MODE))
-        .map_err(|_| AuditCliError::Operator)?;
-    Ok(temporary)
+/// An export staged as a sibling of the operator's destination, held through
+/// the destination's resolved parent descriptor so neither the staged write nor
+/// the publication can be redirected by a later path change.
+struct StagedExport {
+    destination: SafeEntry,
+    temporary: OsString,
+    file: File,
+}
+
+fn create_export_file(output: &Path) -> Result<StagedExport, AuditCliError> {
+    let destination = SafeEntry::resolve(output).map_err(|_| AuditCliError::Operator)?;
+    if destination.exists().map_err(|_| AuditCliError::Operator)? {
+        return Err(AuditCliError::Operator);
+    }
+    for _ in 0..64 {
+        let counter = EXPORT_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let temporary = OsString::from(format!(
+            ".bregctl-audit-export-{}-{counter}.tmp",
+            std::process::id()
+        ));
+        let file = match destination
+            .parent()
+            .create_new(&temporary, EXPORT_FILE_MODE)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => return Err(AuditCliError::Operator),
+        };
+        // The create mode is filtered by the process umask, so restate the
+        // owner-only permissions on the descriptor itself.
+        #[cfg(unix)]
+        file.set_permissions(std::fs::Permissions::from_mode(EXPORT_FILE_MODE))
+            .map_err(|_| AuditCliError::Operator)?;
+        return Ok(StagedExport {
+            destination,
+            temporary,
+            file,
+        });
+    }
+    Err(AuditCliError::Operator)
 }
 
 fn finish_export_file(sink: BufWriter<&mut File>) -> Result<(), AuditCliError> {
@@ -131,15 +162,21 @@ fn finish_export_file(sink: BufWriter<&mut File>) -> Result<(), AuditCliError> {
     file.sync_all().map_err(|_| AuditCliError::Operator)
 }
 
-fn publish_export_file(temporary: NamedTempFile, output: &Path) -> Result<(), AuditCliError> {
-    temporary
-        .persist_noclobber(output)
-        .map_err(|_| AuditCliError::Operator)?;
-    #[cfg(unix)]
-    File::open(output.parent().ok_or(AuditCliError::Operator)?)
-        .and_then(|parent| parent.sync_all())
-        .map_err(|_| AuditCliError::Operator)?;
-    Ok(())
+fn publish_export_file(staged: StagedExport) -> Result<(), AuditCliError> {
+    let StagedExport {
+        destination,
+        temporary,
+        file,
+    } = staged;
+    drop(file);
+    if destination.publish_from(&temporary).is_err() {
+        let _ = destination.parent().remove_file(&temporary);
+        return Err(AuditCliError::Operator);
+    }
+    destination
+        .parent()
+        .sync()
+        .map_err(|_| AuditCliError::Operator)
 }
 
 fn map_error(error: AuditToolingError) -> AuditCliError {
@@ -168,21 +205,28 @@ mod tests {
     #[test]
     fn export_is_hidden_until_an_owner_only_file_is_published() {
         let directory = tempfile::tempdir().unwrap();
-        let output = directory.path().join("audit.jsonl");
-        let mut temporary = create_export_file(&output).unwrap();
-        let temporary_path = temporary.path().to_owned();
+        // The platform temporary directory can itself sit behind a symbolic
+        // link, which the export path resolution refuses by design, so name the
+        // real directory the operator would name.
+        let root = directory.path().canonicalize().unwrap();
+        let output = root.join("audit.jsonl");
+        let mut staged = create_export_file(&output).unwrap();
         assert!(!output.exists());
 
         {
-            let mut sink = BufWriter::new(temporary.as_file_mut());
+            let mut sink = BufWriter::new(&mut staged.file);
             sink.write_all(b"verified\n").unwrap();
             finish_export_file(sink).unwrap();
         }
         assert!(!output.exists());
-        publish_export_file(temporary, &output).unwrap();
+        publish_export_file(staged).unwrap();
 
         assert_eq!(std::fs::read(&output).unwrap(), b"verified\n");
-        assert!(!temporary_path.exists());
+        assert!(!std::fs::read_dir(&root).unwrap().any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".bregctl-audit-export-")));
         #[cfg(unix)]
         assert_eq!(
             std::fs::metadata(&output).unwrap().permissions().mode() & 0o777,
@@ -242,5 +286,30 @@ mod tests {
             map_error(AuditToolingError::Unavailable),
             AuditCliError::Operator
         );
+    }
+
+    /// Deterministic ancestor-swap regression for the audit export output this
+    /// module owns.
+    #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+    mod ancestor_swap {
+        use super::*;
+        use crate::safe_path::race_fixture::race_tree;
+
+        #[test]
+        fn an_export_publication_after_an_ancestor_swap_publishes_only_in_the_named_tree() {
+            let tree = race_tree();
+
+            let guard = tree.arm();
+            let mut staged = create_export_file(&tree.named("audit.jsonl")).unwrap();
+            staged.file.write_all(b"exported\n").unwrap();
+            publish_export_file(staged).unwrap();
+            drop(guard);
+
+            assert_eq!(
+                std::fs::read(tree.moved("audit.jsonl")).unwrap(),
+                b"exported\n"
+            );
+            assert_eq!(tree.outside_entries(), vec!["target".to_owned()]);
+        }
     }
 }

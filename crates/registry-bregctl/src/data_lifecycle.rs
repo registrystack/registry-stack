@@ -5,11 +5,9 @@
 //! HTTP dispatch. Data shape, chunking, idempotency, and response validation
 //! remain in `registry_breg::data`.
 
-use std::fs;
+use std::ffi::OsString;
 use std::future::Future;
 use std::io::{self, Read, Write};
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -29,6 +27,8 @@ use registry_platform_httputil::{read_bounded, validate_response_headers};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{Client, Method, Url};
 use serde::{Deserialize, Serialize};
+
+use crate::safe_path::{SafeDir, SafeEntry, SafePathError};
 
 const MAX_TOKEN_BYTES: u64 = 64 * 1024;
 const MAX_CHECKPOINT_BYTES: u64 = 1024 * 1024;
@@ -687,13 +687,9 @@ fn data_endpoint(base: &ServiceBaseUrl, path_and_query: &str) -> Result<Url, ()>
 }
 
 fn read_bounded_regular(path: &Path, max_bytes: u64) -> Result<Vec<u8>, io::Error> {
-    super::ensure_no_symlink_components(path, "data.input.invalid", "data")
-        .map_err(|_| io::Error::other("unsafe path"))?;
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    options.custom_flags(file_no_follow_flags());
-    let file = options.open(path)?;
+    let file = SafeEntry::resolve(path)
+        .map_err(SafePathError::into_io)?
+        .open_read()?;
     let metadata = file.metadata()?;
     if !metadata.is_file() || metadata.len() == 0 || metadata.len() > max_bytes {
         return Err(io::Error::other("invalid file"));
@@ -721,13 +717,10 @@ fn reserve_export_paths(
 }
 
 fn read_export_output_state(path: &Path) -> Result<DataExportOutputState, DataLifecycleError> {
-    super::ensure_no_symlink_components(path, "data.output.invalid", "output")
+    let file = SafeEntry::resolve(path)
+        .map_err(|_| DataLifecycleError::Output)?
+        .open_read()
         .map_err(|_| DataLifecycleError::Output)?;
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    options.custom_flags(file_no_follow_flags());
-    let file = options.open(path).map_err(|_| DataLifecycleError::Output)?;
     if !file
         .metadata()
         .map_err(|_| DataLifecycleError::Output)?
@@ -739,12 +732,9 @@ fn read_export_output_state(path: &Path) -> Result<DataExportOutputState, DataLi
 }
 
 fn append_export_page(path: &Path, page: &[u8]) -> Result<(), DataLifecycleError> {
-    prepare_atomic_write_path(path, true)?;
-    let mut options = fs::OpenOptions::new();
-    options.append(true);
-    #[cfg(unix)]
-    options.custom_flags(file_no_follow_flags());
-    let mut file = options.open(path).map_err(|_| DataLifecycleError::Output)?;
+    let mut file = prepare_atomic_write_path(path, true)?
+        .open_append()
+        .map_err(|_| DataLifecycleError::Output)?;
     if !file
         .metadata()
         .map_err(|_| DataLifecycleError::Output)?
@@ -757,48 +747,42 @@ fn append_export_page(path: &Path, page: &[u8]) -> Result<(), DataLifecycleError
         .map_err(|_| DataLifecycleError::Output)
 }
 
-#[cfg(unix)]
-fn file_no_follow_flags() -> i32 {
-    (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NONBLOCK)
-        .bits() as i32
-}
-
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), DataLifecycleError> {
-    let parent = prepare_atomic_write_path(path, true)?;
-    let temporary = write_atomic_temporary(parent, bytes)?;
-    fs::rename(&temporary, path).map_err(|_| {
-        let _ = fs::remove_file(&temporary);
+    let destination = prepare_atomic_write_path(path, true)?;
+    let temporary = write_atomic_temporary(destination.parent(), bytes)?;
+    destination.replace_from(&temporary).map_err(|_| {
+        let _ = destination.parent().remove_file(&temporary);
         DataLifecycleError::Output
     })
 }
 
 fn write_atomic_create_new(path: &Path, bytes: &[u8]) -> Result<(), DataLifecycleError> {
-    let parent = prepare_atomic_write_path(path, false)?;
-    let temporary = write_atomic_temporary(parent, bytes)?;
-    match fs::hard_link(&temporary, path) {
-        Ok(()) => {
-            let _ = fs::remove_file(&temporary);
-            Ok(())
-        }
-        Err(_) => {
-            let _ = fs::remove_file(&temporary);
-            Err(DataLifecycleError::Output)
-        }
-    }
+    let destination = prepare_atomic_write_path(path, false)?;
+    let temporary = write_atomic_temporary(destination.parent(), bytes)?;
+    // A hard link never replaces an existing destination, so a losing writer
+    // keeps the winner's bytes.
+    let linked = destination
+        .parent()
+        .link(&temporary, destination.name())
+        .map_err(|_| DataLifecycleError::Output);
+    let _ = destination.parent().remove_file(&temporary);
+    linked
 }
 
+/// Resolve an output path to its held parent directory descriptor and refuse a
+/// destination that is not an absent or existing regular file. Every later
+/// staging, append, link, rename, and cleanup runs through the returned
+/// descriptor, so replacing an ancestor afterwards cannot redirect the write.
 fn prepare_atomic_write_path(
     path: &Path,
     allow_existing_regular_file: bool,
-) -> Result<&Path, DataLifecycleError> {
+) -> Result<SafeEntry, DataLifecycleError> {
     if path.as_os_str().is_empty() || super::has_parent_component(path) {
         return Err(DataLifecycleError::Output);
     }
-    let parent = path.parent().ok_or(DataLifecycleError::Output)?;
-    super::ensure_no_symlink_components(parent, "data.output.invalid", "output")
-        .map_err(|_| DataLifecycleError::Output)?;
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+    let destination = SafeEntry::resolve(path).map_err(|_| DataLifecycleError::Output)?;
+    match destination.stat() {
+        Ok(stat) if stat.is_symlink() || !stat.is_file() => {
             return Err(DataLifecycleError::Output);
         }
         Ok(_) if !allow_existing_regular_file => return Err(DataLifecycleError::Output),
@@ -806,18 +790,14 @@ fn prepare_atomic_write_path(
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(_) => return Err(DataLifecycleError::Output),
     }
-    Ok(parent)
+    Ok(destination)
 }
 
-fn write_atomic_temporary(parent: &Path, bytes: &[u8]) -> Result<PathBuf, DataLifecycleError> {
+fn write_atomic_temporary(parent: &SafeDir, bytes: &[u8]) -> Result<OsString, DataLifecycleError> {
     for _ in 0..MAX_ATOMIC_WRITE_TEMP_ATTEMPTS {
         let temporary =
-            atomic_write_temporary_path(parent, DATA_WRITE_COUNTER.fetch_add(1, Ordering::Relaxed));
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        options.mode(0o600);
-        let mut file = match options.open(&temporary) {
+            atomic_write_temporary_name(DATA_WRITE_COUNTER.fetch_add(1, Ordering::Relaxed));
+        let mut file = match parent.create_new(&temporary, 0o600) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(_) => return Err(DataLifecycleError::Output),
@@ -828,7 +808,7 @@ fn write_atomic_temporary(parent: &Path, bytes: &[u8]) -> Result<PathBuf, DataLi
             .is_err()
         {
             drop(file);
-            let _ = fs::remove_file(&temporary);
+            let _ = parent.remove_file(&temporary);
             return Err(DataLifecycleError::Output);
         }
         drop(file);
@@ -837,8 +817,8 @@ fn write_atomic_temporary(parent: &Path, bytes: &[u8]) -> Result<PathBuf, DataLi
     Err(DataLifecycleError::Output)
 }
 
-fn atomic_write_temporary_path(parent: &Path, sequence: u64) -> PathBuf {
-    parent.join(format!(
+fn atomic_write_temporary_name(sequence: u64) -> OsString {
+    OsString::from(format!(
         ".bregctl-data-{}-{sequence}.tmp",
         std::process::id()
     ))
@@ -846,6 +826,7 @@ fn atomic_write_temporary_path(parent: &Path, sequence: u64) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::io::{Read, Write};
     use std::net::{SocketAddr, TcpListener, TcpStream};
     use std::process::Command;
@@ -1104,7 +1085,7 @@ mod tests {
         fs::write(&canary, b"unchanged").unwrap();
 
         let collided_sequence = DATA_WRITE_COUNTER.load(Ordering::Relaxed);
-        let collided_temporary = atomic_write_temporary_path(&directory, collided_sequence);
+        let collided_temporary = directory.join(atomic_write_temporary_name(collided_sequence));
         std::os::unix::fs::symlink(&canary, &collided_temporary).unwrap();
 
         write_atomic(&destination, b"checkpoint").unwrap();
@@ -1144,6 +1125,92 @@ mod tests {
         assert_eq!(read_bounded_regular(&target, 5).unwrap(), b"token");
 
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// Deterministic ancestor-swap regressions for the surfaces this module
+    /// owns. They run wherever the descriptor-relative primitive exists.
+    #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+    mod ancestor_swap {
+        use super::*;
+        use crate::safe_path::race_fixture::race_tree;
+
+        #[test]
+        fn bounded_reads_after_an_ancestor_swap_read_only_the_named_file() {
+            let tree = race_tree();
+            let named = tree.named("input.ndjson");
+            fs::write(&named, b"genuine").unwrap();
+            fs::write(tree.outside("input.ndjson"), b"attacker").unwrap();
+
+            let guard = tree.arm();
+            let bytes = read_bounded_regular(&named, MAX_TOKEN_BYTES).unwrap();
+            drop(guard);
+
+            assert_eq!(bytes, b"genuine");
+            // The window is real: the same pathname now reaches the attacker
+            // tree.
+            assert_eq!(fs::read(&named).unwrap(), b"attacker");
+        }
+
+        #[test]
+        fn a_checkpoint_write_after_an_ancestor_swap_publishes_only_in_the_named_tree() {
+            let tree = race_tree();
+
+            let guard = tree.arm();
+            write_atomic(&tree.named("export.checkpoint.json"), b"checkpoint").unwrap();
+            drop(guard);
+
+            assert_eq!(
+                fs::read(tree.moved("export.checkpoint.json")).unwrap(),
+                b"checkpoint"
+            );
+            assert_eq!(tree.outside_entries(), vec!["target".to_owned()]);
+        }
+
+        #[test]
+        fn an_export_reservation_after_an_ancestor_swap_creates_nothing_outside_the_named_tree() {
+            let tree = race_tree();
+
+            let guard = tree.arm();
+            write_atomic_create_new(&tree.named("records.jsonl"), b"reserved").unwrap();
+            drop(guard);
+
+            assert_eq!(fs::read(tree.moved("records.jsonl")).unwrap(), b"reserved");
+            assert_eq!(tree.outside_entries(), vec!["target".to_owned()]);
+        }
+
+        #[test]
+        fn an_export_page_append_after_an_ancestor_swap_appends_only_to_the_named_file() {
+            let tree = race_tree();
+            let named = tree.named("records.jsonl");
+            fs::write(&named, b"first\n").unwrap();
+            fs::write(tree.outside("records.jsonl"), b"decoy\n").unwrap();
+
+            let guard = tree.arm();
+            append_export_page(&named, b"second\n").unwrap();
+            drop(guard);
+
+            assert_eq!(
+                fs::read(tree.moved("records.jsonl")).unwrap(),
+                b"first\nsecond\n"
+            );
+            assert_eq!(fs::read(tree.outside("records.jsonl")).unwrap(), b"decoy\n");
+        }
+
+        #[test]
+        fn an_export_state_read_after_an_ancestor_swap_reads_only_the_named_file() {
+            let tree = race_tree();
+            let named = tree.named("records.jsonl");
+            fs::write(&named, b"{\"id\":\"one\"}\n").unwrap();
+            // Bytes no export state can be built from, so reading the tree the
+            // operator never named would fail rather than pass quietly.
+            fs::write(tree.outside("records.jsonl"), b"not a record\n").unwrap();
+
+            let guard = tree.arm();
+            let state = read_export_output_state(&named).unwrap();
+            drop(guard);
+
+            assert!(format!("{state:?}").contains("record_count: 1"));
+        }
     }
 
     #[test]

@@ -6,8 +6,8 @@
 //! `breg`.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::OsString;
-use std::fs::{self, File};
+use std::ffi::{OsStr, OsString};
+use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
@@ -48,6 +48,7 @@ mod project_migration;
 mod reconcile_lifecycle;
 mod request_retention;
 mod reviewed_migrations;
+mod safe_path;
 mod test_lifecycle;
 mod webhook_lifecycle;
 
@@ -76,6 +77,7 @@ use request_retention::{
     RequestRetentionCliError, RequestRetentionDryRunOutcome, RequestRetentionEraseOutcome,
     RequestRetentionListOutcome,
 };
+use safe_path::{EntryStat, SafeDir, SafeEntry, SafePathError};
 use test_lifecycle::{TestLifecycleError, TestLifecycleRequest};
 use webhook_lifecycle::{
     WebhookLifecycleError, WebhookListOutcome, WebhookReplayOutcome, WebhookSampleOutcome,
@@ -4480,80 +4482,88 @@ fn load_module_files(
     project_path: &Path,
     project: &RegistryProject,
 ) -> Result<Vec<(String, Vec<u8>)>, Diagnostic> {
-    let modules_directory = project_path.join("modules");
-    match fs::symlink_metadata(&modules_directory) {
-        Ok(_) => validate_directory(&modules_directory, "source.modules.invalid")?,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(_) => {
-            return Err(diagnostic(
-                "source.modules.unreadable",
-                "modules",
-                "module sources cannot be read",
-            ));
-        }
-    }
     let locked: std::collections::BTreeSet<&str> = project
         .modules
         .iter()
         .map(|module| module.id.as_str())
         .collect();
-    let mut module_paths = Vec::new();
-    for entry in fs::read_dir(&modules_directory).map_err(|_| {
-        diagnostic(
-            "source.modules.unreadable",
-            "modules",
-            "module sources cannot be read",
-        )
-    })? {
-        let entry = entry.map_err(|_| {
-            diagnostic(
-                "source.modules.unreadable",
-                "modules",
-                "module sources cannot be read",
-            )
-        })?;
-        let file_type = entry.file_type().map_err(|_| {
-            diagnostic(
-                "source.modules.unreadable",
-                "modules",
-                "module sources cannot be read",
-            )
-        })?;
-        // Finder metadata is not an authored module. Ignore only this exact
-        // regular file; every other unexpected entry remains fail-closed.
-        if entry.file_name() == ".DS_Store" && file_type.is_file() {
-            continue;
-        }
-        if file_type.is_symlink() || !file_type.is_dir() {
-            return Err(diagnostic(
-                "source.modules.invalid",
-                "modules",
-                "module sources must be directories and must not be symbolic links",
-            ));
-        }
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else {
-            return Err(diagnostic(
-                "source.modules.invalid",
-                "modules",
-                "module source names must be valid UTF-8 identifiers",
-            ));
-        };
-        if !locked.contains(name) {
+    let modules = read_module_directory_names(project_path)?;
+    for id in &modules {
+        if !locked.contains(id.as_str()) {
             return Err(diagnostic(
                 "source.modules.unlocked",
                 "modules",
                 "every authored module directory must be declared by the project module lock",
             ));
         }
-        module_paths.push((name.to_owned(), entry.path().join("module.yaml")));
     }
-    module_paths.sort_by(|left, right| left.0.cmp(&right.0));
-    module_paths
+    read_module_yaml_files(project_path, modules)
+}
+
+/// List the authored module directories a project holds, refusing an entry that
+/// is not a directory or that traverses a symbolic link. An absent `modules`
+/// directory means the project authored none.
+fn read_module_directory_names(project_path: &Path) -> Result<Vec<String>, Diagnostic> {
+    let unreadable = || {
+        diagnostic(
+            "source.modules.unreadable",
+            "modules",
+            "module sources cannot be read",
+        )
+    };
+    let invalid = || {
+        diagnostic(
+            "source.modules.invalid",
+            "modules",
+            "module sources must be directories and must not be symbolic links",
+        )
+    };
+    let directory = match SafeDir::resolve(&project_path.join("modules")) {
+        Ok(directory) => directory,
+        Err(SafePathError::NotFound) => return Ok(Vec::new()),
+        Err(SafePathError::Unavailable) => return Err(unreadable()),
+        Err(error) => {
+            return Err(path_diagnostic(
+                error,
+                "source.modules.invalid",
+                "project",
+                "the project directory is not available",
+                "the project directory must be a directory and must not be a symbolic link",
+            ))
+        }
+    };
+    let mut names = Vec::new();
+    for entry in directory.read_entries().map_err(|_| unreadable())? {
+        // Finder metadata is not an authored module. Ignore only this exact
+        // regular file; every other unexpected entry remains fail-closed.
+        if entry.name == ".DS_Store" && entry.is_file {
+            continue;
+        }
+        if entry.is_symlink || !entry.is_dir {
+            return Err(invalid());
+        }
+        let Some(name) = entry.name.to_str() else {
+            return Err(diagnostic(
+                "source.modules.invalid",
+                "modules",
+                "module source names must be valid UTF-8 identifiers",
+            ));
+        };
+        names.push(name.to_owned());
+    }
+    names.sort();
+    Ok(names)
+}
+
+fn read_module_yaml_files(
+    project_path: &Path,
+    modules: Vec<String>,
+) -> Result<Vec<(String, Vec<u8>)>, Diagnostic> {
+    modules
         .into_iter()
-        .map(|(id, path)| {
+        .map(|id| {
             let bytes = read_bounded_source_file(
-                &path,
+                &project_path.join("modules").join(&id).join("module.yaml"),
                 "source.module.missing",
                 &format!("modules/{id}/module.yaml"),
                 AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
@@ -4564,73 +4574,7 @@ fn load_module_files(
 }
 
 fn discover_module_files(project_path: &Path) -> Result<Vec<(String, Vec<u8>)>, Diagnostic> {
-    let modules_directory = project_path.join("modules");
-    match fs::symlink_metadata(&modules_directory) {
-        Ok(_) => validate_directory(&modules_directory, "source.modules.invalid")?,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(_) => {
-            return Err(diagnostic(
-                "source.modules.unreadable",
-                "modules",
-                "module sources cannot be read",
-            ));
-        }
-    }
-    let mut module_paths = Vec::new();
-    for entry in fs::read_dir(&modules_directory).map_err(|_| {
-        diagnostic(
-            "source.modules.unreadable",
-            "modules",
-            "module sources cannot be read",
-        )
-    })? {
-        let entry = entry.map_err(|_| {
-            diagnostic(
-                "source.modules.unreadable",
-                "modules",
-                "module sources cannot be read",
-            )
-        })?;
-        let file_type = entry.file_type().map_err(|_| {
-            diagnostic(
-                "source.modules.unreadable",
-                "modules",
-                "module sources cannot be read",
-            )
-        })?;
-        if entry.file_name() == ".DS_Store" && file_type.is_file() {
-            continue;
-        }
-        if file_type.is_symlink() || !file_type.is_dir() {
-            return Err(diagnostic(
-                "source.modules.invalid",
-                "modules",
-                "module sources must be directories and must not be symbolic links",
-            ));
-        }
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else {
-            return Err(diagnostic(
-                "source.modules.invalid",
-                "modules",
-                "module source names must be valid UTF-8 identifiers",
-            ));
-        };
-        module_paths.push((name.to_owned(), entry.path().join("module.yaml")));
-    }
-    module_paths.sort_by(|left, right| left.0.cmp(&right.0));
-    module_paths
-        .into_iter()
-        .map(|(id, path)| {
-            let bytes = read_bounded_source_file(
-                &path,
-                "source.module.missing",
-                &format!("modules/{id}/module.yaml"),
-                AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
-            )?;
-            Ok((id, bytes))
-        })
-        .collect()
+    read_module_yaml_files(project_path, read_module_directory_names(project_path)?)
 }
 
 fn load_project_planner_asset_files(
@@ -5426,9 +5370,26 @@ fn write_project_registry(
     original: &[u8],
     updated: &[u8],
 ) -> Result<(), Diagnostic> {
-    let registry_path = project_path.join("registry.yaml");
-    let current = read_bounded_source_file(
-        &registry_path,
+    let write_failed = || {
+        diagnostic(
+            "module.lock.write_failed",
+            "registry.yaml",
+            "the project module locks could not be written",
+        )
+    };
+    // Resolve once, then reread, stage, and rename through that descriptor, so
+    // the file whose bytes are compared is the file that is replaced.
+    let destination = SafeEntry::resolve(&project_path.join("registry.yaml")).map_err(|error| {
+        path_diagnostic(
+            error,
+            "module.lock.write_failed",
+            "registry.yaml",
+            "the project directory is not available",
+            "the project directory must be a directory and must not be a symbolic link",
+        )
+    })?;
+    let current = read_bounded_source_entry(
+        &destination,
         "source.project.missing",
         "registry.yaml",
         AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
@@ -5440,75 +5401,50 @@ fn write_project_registry(
             "the project source changed before module locks could be written",
         ));
     }
-    let parent = registry_path.parent().ok_or_else(|| {
-        diagnostic(
-            "module.lock.write_failed",
-            "registry.yaml",
-            "the project module locks could not be written",
-        )
-    })?;
-    validate_directory_for(
-        parent,
-        "module.lock.write_failed",
-        "registry.yaml",
-        "the project directory is not available",
-        "the project directory must be a directory and must not be a symbolic link",
-    )?;
-    let temporary = parent.join(format!(
+    let parent = destination.parent();
+    let temporary = OsString::from(format!(
         ".bregctl-lock-{}-{}.tmp",
         std::process::id(),
         STAGING_COUNTER.fetch_add(1, Ordering::Relaxed)
     ));
     let write_result = (|| {
-        let mut file = File::options()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-            .map_err(|_| {
-                diagnostic(
-                    "module.lock.write_failed",
-                    "registry.yaml",
-                    "the project module locks could not be written",
-                )
-            })?;
-        file.write_all(updated).map_err(|_| {
-            diagnostic(
-                "module.lock.write_failed",
-                "registry.yaml",
-                "the project module locks could not be written",
-            )
-        })?;
-        file.sync_all().map_err(|_| {
-            diagnostic(
-                "module.lock.write_failed",
-                "registry.yaml",
-                "the project module locks could not be written",
-            )
-        })?;
-        fs::rename(&temporary, &registry_path).map_err(|_| {
-            diagnostic(
-                "module.lock.write_failed",
-                "registry.yaml",
-                "the project module locks could not be written",
-            )
-        })
+        let mut file = parent
+            .create_new(&temporary, 0o666)
+            .map_err(|_| write_failed())?;
+        file.write_all(updated).map_err(|_| write_failed())?;
+        file.sync_all().map_err(|_| write_failed())?;
+        destination
+            .replace_from(&temporary)
+            .map_err(|_| write_failed())
     })();
     if write_result.is_err() {
-        let _ = fs::remove_file(&temporary);
+        let _ = parent.remove_file(&temporary);
     }
     write_result
 }
 
+/// The name a migration transaction directory gives the rewritten bytes.
+const MIGRATION_STAGED_NAME: &str = "staged";
+/// The name a migration transaction directory gives the displaced original.
+const MIGRATION_ORIGINAL_NAME: &str = "original";
+
+/// One file a `project migrate --write` rewrites, held as descriptors so every
+/// stage, backup, promotion, rollback, and cleanup below acts on the entries
+/// this preflight resolved rather than on a path resolved again later.
 struct MigrationWriteTarget {
     relative_path: String,
-    path: PathBuf,
-    parent: PathBuf,
+    destination: SafeEntry,
+    transaction_name: OsString,
+    transaction: Option<SafeDir>,
     original: Vec<u8>,
     updated: Vec<u8>,
     metadata: fs::Metadata,
-    transaction_directory: PathBuf,
-    staged_path: PathBuf,
-    backup_path: PathBuf,
+}
+
+impl MigrationWriteTarget {
+    fn parent(&self) -> &SafeDir {
+        self.destination.parent()
+    }
 }
 
 #[derive(Clone, Copy, Default)]
@@ -5549,19 +5485,17 @@ fn write_migration_files_with_fault(
                 relative_path,
             ));
         }
-        let path = project_path.join(relative);
-        let parent = path.parent().map(Path::to_owned).ok_or_else(|| {
-            migration_write_diagnostic("project.migrate.write_failed", relative_path)
+        let destination = SafeEntry::resolve(&project_path.join(relative)).map_err(|error| {
+            path_diagnostic(
+                error,
+                "project.migrate.write_failed",
+                relative_path,
+                "the project directory is not available",
+                "the project directory must be a directory and must not be a symbolic link",
+            )
         })?;
-        validate_directory_for(
-            &parent,
-            "project.migrate.write_failed",
-            relative_path,
-            "the project directory is not available",
-            "the project directory must be a directory and must not be a symbolic link",
-        )?;
-        let current = read_bounded_source_file(
-            &path,
+        let current = read_bounded_source_entry(
+            &destination,
             "project.migrate.source_missing",
             relative_path,
             AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
@@ -5569,42 +5503,48 @@ fn write_migration_files_with_fault(
         if current != *original {
             return Err(migration_concurrent_change_diagnostic(relative_path));
         }
-        let metadata = fs::symlink_metadata(&path).map_err(|_| {
-            migration_write_diagnostic("project.migrate.write_failed", relative_path)
-        })?;
+        // Take the recorded identity from a descriptor opened through the
+        // resolved parent, so it names the file the renames below will move.
+        let metadata = destination
+            .open_read()
+            .and_then(|file| file.metadata())
+            .map_err(|_| {
+                migration_write_diagnostic("project.migrate.write_failed", relative_path)
+            })?;
         if !migration_target_permissions_are_safe(&metadata) {
             return Err(migration_write_diagnostic(
                 "project.migrate.permissions_invalid",
                 relative_path,
             ));
         }
-        let transaction_directory = parent.join(format!(
-            ".bregctl-migrate-{}-{}",
-            std::process::id(),
-            STAGING_COUNTER.fetch_add(1, Ordering::Relaxed)
-        ));
         targets.push(MigrationWriteTarget {
             relative_path: relative_path.clone(),
-            path,
-            parent,
+            destination,
+            transaction_name: OsString::from(format!(
+                ".bregctl-migrate-{}-{}",
+                std::process::id(),
+                STAGING_COUNTER.fetch_add(1, Ordering::Relaxed)
+            )),
+            transaction: None,
             original: original.clone(),
             updated: updated.clone(),
             metadata,
-            staged_path: transaction_directory.join("staged"),
-            backup_path: transaction_directory.join("original"),
-            transaction_directory,
         });
     }
 
     #[cfg(test)]
     if let MigrationWriteFault::ConcurrentChange(index) = _fault {
         if let Some(target) = targets.get(index) {
-            fs::write(&target.path, b"concurrent author edit\n").expect("fault injection writes");
+            fs::write(
+                project_path.join(&target.relative_path),
+                b"concurrent author edit\n",
+            )
+            .expect("fault injection writes");
         }
     }
 
     let stage_result = (|| {
-        for (index, target) in targets.iter().enumerate() {
+        for (index, target) in targets.iter_mut().enumerate() {
             #[cfg(not(test))]
             let _ = index;
             #[cfg(test)]
@@ -5614,39 +5554,29 @@ fn write_migration_files_with_fault(
                     &target.relative_path,
                 ));
             }
-            fs::create_dir(&target.transaction_directory).map_err(|_| {
+            let write_failed = || {
                 migration_write_diagnostic("project.migrate.write_failed", &target.relative_path)
-            })?;
-            let mut staged = File::options()
-                .write(true)
-                .create_new(true)
-                .open(&target.staged_path)
-                .map_err(|_| {
-                    migration_write_diagnostic(
-                        "project.migrate.write_failed",
-                        &target.relative_path,
-                    )
-                })?;
-            staged.write_all(&target.updated).map_err(|_| {
-                migration_write_diagnostic("project.migrate.write_failed", &target.relative_path)
-            })?;
-            fs::set_permissions(&target.staged_path, target.metadata.permissions()).map_err(
-                |_| {
-                    migration_write_diagnostic(
-                        "project.migrate.write_failed",
-                        &target.relative_path,
-                    )
-                },
-            )?;
-            staged.sync_all().map_err(|_| {
-                migration_write_diagnostic("project.migrate.write_failed", &target.relative_path)
-            })?;
-            sync_directory(&target.transaction_directory).map_err(|_| {
-                migration_write_diagnostic("project.migrate.write_failed", &target.relative_path)
-            })?;
-            sync_directory(&target.parent).map_err(|_| {
-                migration_write_diagnostic("project.migrate.write_failed", &target.relative_path)
-            })?;
+            };
+            let parent = target.destination.parent();
+            parent
+                .create_directory(&target.transaction_name, 0o700)
+                .map_err(|_| write_failed())?;
+            let transaction = parent
+                .open_directory(&target.transaction_name)
+                .map_err(|_| write_failed())?;
+            let mut staged = transaction
+                .create_new(OsStr::new(MIGRATION_STAGED_NAME), 0o600)
+                .map_err(|_| write_failed())?;
+            staged
+                .write_all(&target.updated)
+                .map_err(|_| write_failed())?;
+            staged
+                .set_permissions(target.metadata.permissions())
+                .map_err(|_| write_failed())?;
+            staged.sync_all().map_err(|_| write_failed())?;
+            transaction.sync().map_err(|_| write_failed())?;
+            parent.sync().map_err(|_| write_failed())?;
+            target.transaction = Some(transaction);
         }
         Ok(())
     })();
@@ -5659,18 +5589,20 @@ fn write_migration_files_with_fault(
     // closes the concurrent-edit window without letting one file advance while
     // another is stale.
     let revalidation = targets.iter().try_for_each(|target| {
-        let current = read_bounded_source_file(
-            &target.path,
+        let current = read_bounded_source_entry(
+            &target.destination,
             "project.migrate.source_missing",
             &target.relative_path,
             AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
         )
         .map_err(|_| migration_concurrent_change_diagnostic(&target.relative_path))?;
-        let metadata = fs::symlink_metadata(&target.path)
+        let stat = target
+            .destination
+            .stat()
             .map_err(|_| migration_concurrent_change_diagnostic(&target.relative_path))?;
         if current == target.original
-            && same_file_metadata(&target.metadata, &metadata)
-            && same_migration_permissions(&target.metadata, &metadata)
+            && stat.is_same_file_as(&target.metadata)
+            && same_migration_permissions(&target.metadata, stat)
         {
             Ok(())
         } else {
@@ -5686,7 +5618,7 @@ fn write_migration_files_with_fault(
 
     let mut backed_up = 0usize;
     for target in &targets {
-        if fs::rename(&target.path, &target.backup_path).is_err() {
+        if backup_migration_target(target).is_err() {
             let rollback = restore_migration_targets(&targets, backed_up, 0);
             return Err(rollback.unwrap_or_else(|| {
                 migration_write_diagnostic("project.migrate.write_failed", &target.relative_path)
@@ -5706,7 +5638,7 @@ fn write_migration_files_with_fault(
                 migration_write_diagnostic("project.migrate.write_failed", &target.relative_path)
             }));
         }
-        if fs::rename(&target.staged_path, &target.path).is_err() {
+        if promote_migration_target(target).is_err() {
             let rollback = restore_migration_targets(&targets, backed_up, promoted);
             return Err(rollback.unwrap_or_else(|| {
                 migration_write_diagnostic("project.migrate.write_failed", &target.relative_path)
@@ -5716,7 +5648,7 @@ fn write_migration_files_with_fault(
     }
 
     for target in &targets {
-        if sync_directory(&target.parent).is_err() {
+        if target.parent().sync().is_err() {
             let rollback = restore_migration_targets(&targets, backed_up, promoted);
             return Err(rollback.unwrap_or_else(|| {
                 migration_write_diagnostic("project.migrate.write_failed", &target.relative_path)
@@ -5725,17 +5657,44 @@ fn write_migration_files_with_fault(
     }
 
     for target in &targets {
-        fs::remove_file(&target.backup_path).map_err(|_| {
-            migration_write_diagnostic("project.migrate.write_failed", &target.relative_path)
-        })?;
-        fs::remove_dir(&target.transaction_directory).map_err(|_| {
-            migration_write_diagnostic("project.migrate.write_failed", &target.relative_path)
-        })?;
-        sync_directory(&target.parent).map_err(|_| {
-            migration_write_diagnostic("project.migrate.write_failed", &target.relative_path)
-        })?;
+        let write_failed =
+            || migration_write_diagnostic("project.migrate.write_failed", &target.relative_path);
+        let transaction = target.transaction.as_ref().ok_or_else(write_failed)?;
+        transaction
+            .remove_file(OsStr::new(MIGRATION_ORIGINAL_NAME))
+            .map_err(|_| write_failed())?;
+        target
+            .parent()
+            .remove_tree(&target.transaction_name)
+            .map_err(|_| write_failed())?;
+        target.parent().sync().map_err(|_| write_failed())?;
     }
     Ok(())
+}
+
+/// Move the operator's file into its transaction directory, so the promotion
+/// that follows can be undone from a backup this process still names.
+fn backup_migration_target(target: &MigrationWriteTarget) -> Result<(), ()> {
+    let transaction = target.transaction.as_ref().ok_or(())?;
+    target
+        .parent()
+        .rename_into(
+            target.destination.name(),
+            transaction,
+            OsStr::new(MIGRATION_ORIGINAL_NAME),
+        )
+        .map_err(|_| ())
+}
+
+fn promote_migration_target(target: &MigrationWriteTarget) -> Result<(), ()> {
+    let transaction = target.transaction.as_ref().ok_or(())?;
+    transaction
+        .rename_into(
+            OsStr::new(MIGRATION_STAGED_NAME),
+            target.parent(),
+            target.destination.name(),
+        )
+        .map_err(|_| ())
 }
 
 fn restore_migration_targets(
@@ -5745,23 +5704,46 @@ fn restore_migration_targets(
 ) -> Option<Diagnostic> {
     let mut failed = false;
     for target in targets.iter().take(promoted).rev() {
-        if fs::rename(&target.path, &target.staged_path).is_err() {
+        let Some(transaction) = target.transaction.as_ref() else {
+            failed = true;
+            continue;
+        };
+        if target
+            .parent()
+            .rename_into(
+                target.destination.name(),
+                transaction,
+                OsStr::new(MIGRATION_STAGED_NAME),
+            )
+            .is_err()
+        {
             // The promoted target contains only the already-fsynced migrated
             // bytes. Removing that exact file is safe when moving it back into
             // staging is unavailable, and lets the original backup be restored
             // on platforms whose rename cannot replace an existing file.
-            if fs::remove_file(&target.path).is_err() {
+            if target.destination.remove_file().is_err() {
                 failed = true;
             }
         }
     }
     for target in targets.iter().take(backed_up).rev() {
-        if fs::rename(&target.backup_path, &target.path).is_err() {
+        let Some(transaction) = target.transaction.as_ref() else {
+            failed = true;
+            continue;
+        };
+        if transaction
+            .rename_into(
+                OsStr::new(MIGRATION_ORIGINAL_NAME),
+                target.parent(),
+                target.destination.name(),
+            )
+            .is_err()
+        {
             failed = true;
         }
     }
     for target in targets {
-        if sync_directory(&target.parent).is_err() {
+        if target.parent().sync().is_err() {
             failed = true;
         }
     }
@@ -5779,9 +5761,9 @@ fn restore_migration_targets(
 
 fn cleanup_migration_transaction(targets: &[MigrationWriteTarget]) {
     for target in targets {
-        let _ = fs::remove_file(&target.staged_path);
-        let _ = fs::remove_file(&target.backup_path);
-        let _ = fs::remove_dir(&target.transaction_directory);
+        if target.transaction.is_some() {
+            let _ = target.parent().remove_tree(&target.transaction_name);
+        }
     }
 }
 
@@ -5805,26 +5787,18 @@ fn migration_target_permissions_are_safe(metadata: &fs::Metadata) -> bool {
     metadata.is_file() && !metadata.permissions().readonly()
 }
 
+/// Compare the permission bits recorded at preflight with those read back
+/// through the held parent descriptor.
 #[cfg(unix)]
-fn same_migration_permissions(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+fn same_migration_permissions(expected: &fs::Metadata, actual: EntryStat) -> bool {
     use std::os::unix::fs::PermissionsExt;
 
-    left.permissions().mode() == right.permissions().mode()
+    expected.permissions().mode() & 0o7777 == actual.permission_bits()
 }
 
 #[cfg(not(unix))]
-fn same_migration_permissions(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    left.permissions().readonly() == right.permissions().readonly()
-}
-
-#[cfg(unix)]
-fn sync_directory(path: &Path) -> io::Result<()> {
-    File::open(path)?.sync_all()
-}
-
-#[cfg(not(unix))]
-fn sync_directory(_path: &Path) -> io::Result<()> {
-    Ok(())
+fn same_migration_permissions(expected: &fs::Metadata, _actual: EntryStat) -> bool {
+    !expected.permissions().readonly()
 }
 
 impl ArtifactSelector {
@@ -6824,10 +6798,13 @@ fn validate_project_directory(project_path: &Path) -> Result<(), Diagnostic> {
             "the project path must not contain parent-directory components",
         ));
     }
-    validate_directory(project_path, "source.project.invalid")
+    validate_directory(project_path, "source.project.invalid").map(|_| ())
 }
 
-fn validate_directory(path: &Path, code: &str) -> Result<(), Diagnostic> {
+/// Resolve a directory to a held descriptor, refusing a symbolic link at every
+/// component. The descriptor is what callers must use afterwards, so replacing
+/// a component of `path` after this returns cannot redirect their work.
+fn validate_directory(path: &Path, code: &str) -> Result<SafeDir, Diagnostic> {
     validate_directory_for(
         path,
         code,
@@ -6843,13 +6820,41 @@ fn validate_directory_for(
     report_path: &str,
     unavailable_message: &str,
     invalid_message: &str,
-) -> Result<(), Diagnostic> {
-    let metadata = fs::symlink_metadata(path)
-        .map_err(|_| diagnostic(code, report_path, unavailable_message))?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(diagnostic(code, report_path, invalid_message));
+) -> Result<SafeDir, Diagnostic> {
+    SafeDir::resolve(path).map_err(|error| {
+        path_diagnostic(
+            error,
+            code,
+            report_path,
+            unavailable_message,
+            invalid_message,
+        )
+    })
+}
+
+/// Translate a path-resolution refusal into the caller's diagnostic vocabulary.
+/// A platform with no kernel-enforced symbolic-link-free resolution reports its
+/// own code, because the path itself was never the problem there.
+fn path_diagnostic(
+    error: SafePathError,
+    code: &str,
+    report_path: &str,
+    unavailable_message: &str,
+    invalid_message: &str,
+) -> Diagnostic {
+    match error {
+        SafePathError::Unsupported => diagnostic(
+            "path.no_symlink_unsupported",
+            report_path,
+            "this platform offers no kernel-enforced symbolic-link-free path resolution",
+        ),
+        SafePathError::NotFound | SafePathError::Unavailable => {
+            diagnostic(code, report_path, unavailable_message)
+        }
+        SafePathError::Path | SafePathError::Symlink => {
+            diagnostic(code, report_path, invalid_message)
+        }
     }
-    ensure_no_symlink_components(path, code, report_path)
 }
 
 /// Read a bounded regular file whose diagnostics address the project closure as
@@ -6870,29 +6875,54 @@ fn read_bounded_source_file(
     report_path: &str,
     bound: u64,
 ) -> Result<Vec<u8>, Diagnostic> {
-    let metadata = fs::symlink_metadata(path).map_err(|_| {
+    let entry = SafeEntry::resolve(path).map_err(|error| {
+        path_diagnostic(
+            error,
+            missing_code,
+            report_path,
+            "the required authoring source is not available",
+            "authoring sources must be regular files and must not be symbolic links",
+        )
+    })?;
+    read_bounded_source_entry(&entry, missing_code, report_path, bound)
+}
+
+/// Read a bounded regular file through an already-resolved entry, for callers
+/// that must reread the exact file they resolved rather than the path again.
+fn read_bounded_source_entry(
+    entry: &SafeEntry,
+    missing_code: &str,
+    report_path: &str,
+    bound: u64,
+) -> Result<Vec<u8>, Diagnostic> {
+    let invalid = || {
+        diagnostic(
+            "source.file.invalid",
+            report_path,
+            "authoring sources must be regular files and must not be symbolic links",
+        )
+    };
+    let missing = || {
         diagnostic(
             missing_code,
             report_path,
             "the required authoring source is not available",
         )
-    })?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(diagnostic(
-            "source.file.invalid",
-            report_path,
-            "authoring sources must be regular files and must not be symbolic links",
-        ));
+    };
+    let stat = entry.stat().map_err(|_| missing())?;
+    if stat.is_symlink() || !stat.is_file() {
+        return Err(invalid());
     }
-    ensure_no_symlink_components(path, "source.file.invalid", report_path)?;
-    if metadata.len() > bound {
+    if stat.len() > bound {
         return Err(diagnostic(
             "source.file.bounds",
             report_path,
             "an authoring source exceeds its fixed size bound",
         ));
     }
-    let file = File::open(path).map_err(|_| {
+    // The descriptor comes from the resolved parent with `O_NOFOLLOW`, so it is
+    // provably the entry just stat'ed and needs no re-verification by pathname.
+    let file = entry.open_read().map_err(|_| {
         diagnostic(
             "source.file.unreadable",
             report_path,
@@ -6906,23 +6936,8 @@ fn read_bounded_source_file(
             "an authoring source cannot be read",
         )
     })?;
-    let after = fs::symlink_metadata(path).map_err(|_| {
-        diagnostic(
-            "source.file.invalid",
-            report_path,
-            "authoring sources must be regular files and must not be symbolic links",
-        )
-    })?;
-    if after.file_type().is_symlink()
-        || !opened.is_file()
-        || !same_file_metadata(&metadata, &opened)
-        || !same_file_metadata(&opened, &after)
-    {
-        return Err(diagnostic(
-            "source.file.invalid",
-            report_path,
-            "authoring sources must be regular files and must not be symbolic links",
-        ));
+    if !opened.is_file() {
+        return Err(invalid());
     }
     if opened.len() > bound {
         return Err(diagnostic(
@@ -6956,20 +6971,6 @@ fn read_bounded_source_file(
         ));
     }
     Ok(bytes)
-}
-
-#[cfg(unix)]
-fn same_file_metadata(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-
-    left.dev() == right.dev() && left.ino() == right.ino()
-}
-
-#[cfg(not(unix))]
-fn same_file_metadata(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    left.len() == right.len()
-        && left.modified().ok() == right.modified().ok()
-        && left.created().ok() == right.created().ok()
 }
 
 fn write_source_files(output: &Path, files: &BTreeMap<String, Vec<u8>>) -> Result<(), Diagnostic> {
@@ -7014,191 +7015,138 @@ fn write_files_with_before_publish(
             "the output directory must be a new path without parent-directory components",
         ));
     }
-    // A bare relative destination names a child of the working directory, so its
-    // empty parent is that directory.
-    let parent = match output.parent() {
-        Some(parent) if !parent.as_os_str().is_empty() => parent,
-        _ => Path::new("."),
+    let write_failed = || {
+        diagnostic(
+            "output.write.failed",
+            "output",
+            "a generated artifact could not be written",
+        )
     };
-    validate_directory_for(
-        parent,
-        "output.parent.invalid",
-        "output.parent",
-        "the output parent directory is not available; create it, or give a destination inside a directory that exists",
-        "the output parent must be a directory and must not be a symbolic link",
-    )?;
-    ensure_no_symlink_components(output, "output.destination.invalid", "output")?;
+    // Resolving once yields the parent directory descriptor that every stage,
+    // write, cleanup, and publication below runs through, so replacing a
+    // component of `output` afterwards cannot redirect any of them.
+    let destination = SafeEntry::resolve(output).map_err(|error| {
+        path_diagnostic(
+            error,
+            "output.parent.invalid",
+            "output.parent",
+            "the output parent directory is not available; create it, or give a destination inside a directory that exists",
+            "the output parent must be a directory and must not be a symbolic link",
+        )
+    })?;
+    let parent = destination.parent();
+    if destination.exists().map_err(|_| {
+        diagnostic(
+            "output.destination.invalid",
+            "output",
+            "the output destination could not be inspected",
+        )
+    })? {
+        return Err(diagnostic(
+            "output.destination.invalid",
+            "output",
+            "the output directory must be a new path without parent-directory components",
+        ));
+    }
 
     let staged = create_staging_directory(parent)?;
     let result = (|| {
+        let root = parent.open_directory(&staged).map_err(|_| write_failed())?;
         for (relative_path, bytes) in files {
-            let path = safe_artifact_path(&staged, relative_path)?;
-            if let Some(directory) = path.parent() {
-                fs::create_dir_all(directory).map_err(|_| {
-                    diagnostic(
-                        "output.write.failed",
-                        "output",
-                        "a generated artifact could not be written",
-                    )
-                })?;
-            }
-            let mut file = File::options()
-                .write(true)
-                .create_new(true)
-                .open(&path)
-                .map_err(|_| {
-                    diagnostic(
-                        "output.write.failed",
-                        "output",
-                        "a generated artifact could not be written",
-                    )
-                })?;
-            file.write_all(bytes).map_err(|_| {
-                diagnostic(
-                    "output.write.failed",
-                    "output",
-                    "a generated artifact could not be written",
-                )
-            })?;
-            file.sync_all().map_err(|_| {
-                diagnostic(
-                    "output.write.failed",
-                    "output",
-                    "a generated artifact could not be written",
-                )
-            })?;
+            let (directory, name) = artifact_destination(&root, relative_path)?;
+            // The staged tree keeps the process umask that the previous
+            // pathname-based writer applied, so published output permissions
+            // are unchanged.
+            let mut file = directory
+                .create_new(&name, 0o666)
+                .map_err(|_| write_failed())?;
+            file.write_all(bytes).map_err(|_| write_failed())?;
+            file.sync_all().map_err(|_| write_failed())?;
         }
         before_publish(output)?;
-        publish_staged_directory(&staged, output)
+        destination.publish_from(&staged).map_err(|_| {
+            diagnostic(
+                "output.publish.failed",
+                "output",
+                "the generated artifact directory could not be published",
+            )
+        })
     })();
-    if result.is_err() && staged.exists() {
-        let _ = fs::remove_dir_all(&staged);
+    if result.is_err() {
+        let _ = parent.remove_tree(&staged);
     }
     result
 }
 
-#[cfg(any(target_os = "linux", target_vendor = "apple"))]
-fn publish_staged_directory(staged: &Path, output: &Path) -> Result<(), Diagnostic> {
-    use rustix::fs::{renameat_with, RenameFlags, CWD};
-
-    renameat_with(CWD, staged, CWD, output, RenameFlags::NOREPLACE).map_err(|_| {
+/// Create a uniquely named staging directory as a child of `parent` and return
+/// its name, which stays valid relative to that descriptor.
+fn create_staging_directory(parent: &SafeDir) -> Result<OsString, Diagnostic> {
+    let stage_failed = || {
         diagnostic(
-            "output.publish.failed",
+            "output.stage.failed",
             "output",
-            "the generated artifact directory could not be published",
+            "a staged output directory could not be created",
         )
-    })
-}
-
-#[cfg(target_os = "windows")]
-fn publish_staged_directory(staged: &Path, output: &Path) -> Result<(), Diagnostic> {
-    fs::rename(staged, output).map_err(|_| {
-        diagnostic(
-            "output.publish.failed",
-            "output",
-            "the generated artifact directory could not be published",
-        )
-    })
-}
-
-#[cfg(not(any(target_os = "linux", target_vendor = "apple", target_os = "windows")))]
-fn publish_staged_directory(_staged: &Path, _output: &Path) -> Result<(), Diagnostic> {
-    Err(diagnostic(
-        "output.publish.unsupported",
-        "output",
-        "atomic no-replace directory publication is unavailable on this platform",
-    ))
-}
-
-fn create_staging_directory(parent: &Path) -> Result<PathBuf, Diagnostic> {
+    };
     for _ in 0..64 {
         let counter = STAGING_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let staged = parent.join(format!(".bregctl-stage-{}-{counter}", std::process::id()));
-        match fs::create_dir(&staged) {
+        let staged = OsString::from(format!(".bregctl-stage-{}-{counter}", std::process::id()));
+        match parent.create_directory(&staged, 0o777) {
             Ok(()) => return Ok(staged),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(_) => {
-                return Err(diagnostic(
-                    "output.stage.failed",
-                    "output",
-                    "a staged output directory could not be created",
-                ));
-            }
+            Err(_) => return Err(stage_failed()),
         }
     }
-    Err(diagnostic(
-        "output.stage.failed",
-        "output",
-        "a staged output directory could not be created",
-    ))
+    Err(stage_failed())
 }
 
-fn safe_artifact_path(root: &Path, artifact_path: &str) -> Result<PathBuf, Diagnostic> {
-    let path = Path::new(artifact_path);
-    if path.is_absolute()
-        || path.components().any(|component| {
-            matches!(
-                component,
-                Component::ParentDir | Component::RootDir | Component::Prefix(_)
-            )
-        })
-    {
-        return Err(diagnostic(
+/// Walk a compiler-supplied artifact path from the staged root descriptor,
+/// creating each intermediate directory through the descriptor above it, and
+/// return the directory that holds the artifact together with its file name.
+fn artifact_destination(
+    root: &SafeDir,
+    artifact_path: &str,
+) -> Result<(SafeDir, OsString), Diagnostic> {
+    let unsafe_path = || {
+        diagnostic(
             "artifact.path.invalid",
             "artifacts",
             "the compiler returned an unsafe artifact path",
-        ));
+        )
+    };
+    let path = Path::new(artifact_path);
+    let mut names = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(name) => names.push(name),
+            _ => return Err(unsafe_path()),
+        }
     }
-    Ok(root.join(path))
+    let name = names.pop().ok_or_else(unsafe_path)?.to_owned();
+    let mut directory = root.try_clone().map_err(|_| {
+        diagnostic(
+            "output.write.failed",
+            "output",
+            "a generated artifact could not be written",
+        )
+    })?;
+    for part in names {
+        directory = directory
+            .open_or_create_directory(part, 0o777)
+            .map_err(|_| {
+                diagnostic(
+                    "output.write.failed",
+                    "output",
+                    "a generated artifact could not be written",
+                )
+            })?;
+    }
+    Ok((directory, name))
 }
 
 fn has_parent_component(path: &Path) -> bool {
     path.components()
         .any(|component| matches!(component, Component::ParentDir))
-}
-
-fn ensure_no_symlink_components(
-    path: &Path,
-    code: &str,
-    report_path: &str,
-) -> Result<(), Diagnostic> {
-    let mut checked = if path.is_absolute() {
-        PathBuf::from(std::path::MAIN_SEPARATOR_STR)
-    } else {
-        PathBuf::new()
-    };
-    for component in path.components() {
-        match component {
-            Component::Prefix(_) | Component::RootDir | Component::CurDir => continue,
-            Component::ParentDir => {
-                return Err(diagnostic(
-                    code,
-                    report_path,
-                    "paths must not contain parent-directory components",
-                ));
-            }
-            Component::Normal(part) => checked.push(part),
-        }
-        match fs::symlink_metadata(&checked) {
-            Ok(metadata) if metadata.file_type().is_symlink() => {
-                return Err(diagnostic(
-                    code,
-                    report_path,
-                    "paths must not traverse symbolic links",
-                ));
-            }
-            Ok(_) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(_) => {
-                return Err(diagnostic(
-                    code,
-                    report_path,
-                    "paths cannot be inspected safely",
-                ));
-            }
-        }
-    }
-    Ok(())
 }
 
 fn first_diagnostic(failure: CompileFailure) -> Diagnostic {
@@ -9318,5 +9266,133 @@ accessProfiles:
         let raw = std::str::from_utf8(INIT_RUNTIME_EXAMPLE).expect("the example is UTF-8");
         registry_breg::runtime_config::parse_runtime_config_with_env(raw, |_| None)
             .expect("the initialized runtime example parses");
+    }
+
+    /// Deterministic ancestor-swap regressions for the authoring, module lock,
+    /// migration, and generated-output surfaces this module owns. They run
+    /// wherever the descriptor-relative primitive exists.
+    #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+    mod ancestor_swap {
+        use super::*;
+        use crate::safe_path::race_fixture::race_tree;
+
+        #[test]
+        fn an_authoring_source_read_after_an_ancestor_swap_reads_only_the_named_file() {
+            let tree = race_tree();
+            let named = tree.named("registry.yaml");
+            fs::write(&named, b"genuine\n").unwrap();
+            fs::write(tree.outside("registry.yaml"), b"decoy\n").unwrap();
+
+            let guard = tree.arm();
+            let bytes = read_bounded_source_file(
+                &named,
+                "source.project.missing",
+                "registry.yaml",
+                AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
+            )
+            .unwrap();
+            drop(guard);
+
+            assert_eq!(bytes, b"genuine\n");
+            // The window is real: the same pathname now reaches the tree the
+            // operator never named.
+            assert_eq!(fs::read(&named).unwrap(), b"decoy\n");
+        }
+
+        #[test]
+        fn generated_output_publication_after_an_ancestor_swap_publishes_only_in_the_named_tree() {
+            let tree = race_tree();
+            let files = BTreeMap::from([
+                ("schema.sql".to_owned(), b"generated".to_vec()),
+                ("nested/plan.json".to_owned(), b"nested".to_vec()),
+            ]);
+
+            let guard = tree.arm();
+            write_source_files(&tree.named("out"), &files).unwrap();
+            drop(guard);
+
+            assert_eq!(
+                fs::read(tree.moved("out/schema.sql")).unwrap(),
+                b"generated"
+            );
+            assert_eq!(
+                fs::read(tree.moved("out/nested/plan.json")).unwrap(),
+                b"nested"
+            );
+            assert_eq!(tree.outside_entries(), vec!["target".to_owned()]);
+        }
+
+        #[test]
+        fn a_module_lock_write_after_an_ancestor_swap_rewrites_only_the_named_file() {
+            let tree = race_tree();
+            fs::write(tree.named("registry.yaml"), b"original\n").unwrap();
+            fs::write(tree.outside("registry.yaml"), b"decoy\n").unwrap();
+
+            let guard = tree.arm();
+            write_project_registry(&tree.named_directory(), b"original\n", b"locked\n").unwrap();
+            drop(guard);
+
+            assert_eq!(fs::read(tree.moved("registry.yaml")).unwrap(), b"locked\n");
+            assert_eq!(fs::read(tree.outside("registry.yaml")).unwrap(), b"decoy\n");
+        }
+
+        #[test]
+        fn a_migration_write_after_an_ancestor_swap_rewrites_only_the_named_file() {
+            let tree = race_tree();
+            fs::write(tree.named("registry.yaml"), b"original\n").unwrap();
+            fs::write(tree.outside("registry.yaml"), b"decoy\n").unwrap();
+            let files = BTreeMap::from([(
+                "registry.yaml".to_owned(),
+                (b"original\n".to_vec(), b"migrated\n".to_vec()),
+            )]);
+
+            let guard = tree.arm();
+            write_migration_files(&tree.named_directory(), &files).unwrap();
+            drop(guard);
+
+            assert_eq!(
+                fs::read(tree.moved("registry.yaml")).unwrap(),
+                b"migrated\n"
+            );
+            assert_eq!(fs::read(tree.outside("registry.yaml")).unwrap(), b"decoy\n");
+            assert_eq!(tree.outside_entries(), vec!["registry.yaml", "target"]);
+        }
+
+        #[test]
+        fn a_migration_write_refuses_once_an_ancestor_swap_precedes_a_later_resolution() {
+            let tree = race_tree();
+            fs::create_dir_all(tree.named("modules/core")).unwrap();
+            fs::write(tree.named("registry.yaml"), b"original\n").unwrap();
+            fs::write(tree.named("modules/core/module.yaml"), b"module\n").unwrap();
+            fs::write(tree.outside("registry.yaml"), b"decoy\n").unwrap();
+            let files = BTreeMap::from([
+                (
+                    "modules/core/module.yaml".to_owned(),
+                    (b"module\n".to_vec(), b"migrated module\n".to_vec()),
+                ),
+                (
+                    "registry.yaml".to_owned(),
+                    (b"original\n".to_vec(), b"migrated\n".to_vec()),
+                ),
+            ]);
+
+            let guard = tree.arm();
+            let refused = write_migration_files(&tree.named_directory(), &files)
+                .expect_err("a resolution that would traverse the swapped ancestor is refused");
+            drop(guard);
+
+            // Preflight resolves every target before staging any of them, so a
+            // swap landing between two resolutions leaves the project whole.
+            assert_eq!(refused.code, "project.migrate.write_failed");
+            assert_eq!(
+                fs::read(tree.moved("registry.yaml")).unwrap(),
+                b"original\n"
+            );
+            assert_eq!(
+                fs::read(tree.moved("modules/core/module.yaml")).unwrap(),
+                b"module\n"
+            );
+            assert_eq!(fs::read(tree.outside("registry.yaml")).unwrap(), b"decoy\n");
+        }
     }
 }
