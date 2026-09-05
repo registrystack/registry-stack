@@ -1353,6 +1353,31 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
         before_missing_match.audit + 1
     );
 
+    let before_missing_idempotency = durable_counts(&database, &table).await;
+    let missing_idempotency = send(
+        &app,
+        Method::PATCH,
+        &format!("/v1/records/widgets/{record_id}"),
+        Some(claims.clone()),
+        &[
+            ("content-type", "application/json-patch+json"),
+            ("if-match", &created.etag),
+        ],
+        br#"[{"op":"replace","path":"/data/label","value":"x"}]"#.to_vec(),
+    )
+    .await;
+    assert_eq!(missing_idempotency.status(), StatusCode::BAD_REQUEST);
+    let missing_idempotency_body = body_json(missing_idempotency).await;
+    assert_eq!(missing_idempotency_body["code"], "request.invalid");
+    // A missing required header names itself so the fix does not require
+    // reading the generated OpenAPI: the header name is fixed, known
+    // constant, never request content.
+    assert_eq!(missing_idempotency_body["fieldPath"], "Idempotency-Key");
+    assert_eq!(
+        durable_counts(&database, &table).await.audit,
+        before_missing_idempotency.audit + 1
+    );
+
     let before_bad_patch_body = durable_counts(&database, &table).await;
     let bad_patch_body = send(
         &app,
