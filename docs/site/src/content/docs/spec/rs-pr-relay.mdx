@@ -5,7 +5,7 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-11"
+last_reviewed: "2026-09-06"
 doc_type: specification
 doc_id: RS-PR-RELAY
 category: normative
@@ -235,7 +235,30 @@ Conformance to this specification does not imply conformance to any external sta
 
 ## Evidence
 
-This specification is `verified`: every requirement describes shipped behavior a reader can inspect, per RS-DOC REQ-DOC-014.
+This specification is `verified`: every requirement describes shipped behavior a reader can inspect, per RS-DOC REQ-DOC-014. The Relay V2 runtime and its tests carry the requirements; the pages below explain the same behavior for a reader who wants the narrative form.
+
+{/* Evidence: crates/registry-relay-http-contract/src/lib.rs fixes the route set the runtime may
+    serve in routes::ALL and the closed problem vocabulary the refusals draw on, including
+    UriTooLong, CursorInvalid, UnknownFilter, UnsupportedFormat, RateLimited, and AuditUnavailable
+    (Sections 3, 5, 6, 7, and 11). */}
+{/* Evidence: crates/registry-relay-v2/src/startup.rs verifies the sealed package before it opens an
+    issuer, an audit sink, a source, or a listener, and package.rs re-derives the compiled Registry
+    and every generated artifact and records the package revision as an integrity digest rather than
+    an authenticity proof (Section 2). contract.rs carries the two closed documents, RegistryContract
+    and RelayRuntime (REQ-PR-RELAY-104). */}
+{/* Evidence: crates/registry-relay-v2/src/server.rs assembles the fixed router with router() and
+    answers an unmatched path and an unmatched method through the one not_found() fallback, and
+    api.rs returns the Registry Core record context under domainData and refuses a field selection
+    the disclosure profile does not cover (Sections 3, 5, and 6). transform.rs applies a
+    CompiledTransform before the value leaves the process (REQ-PR-RELAY-119). */}
+{/* Evidence: crates/registry-relay-v2/src/cursor.rs binds a cursor to the request it continues with
+    CursorBindings and require_same_request(), and refuses one presented against another request
+    (Section 7). */}
+{/* Evidence: crates/registry-relay-v2/tests/access_profile_http.rs pins the concealment rule in
+    anonymous_explicit_protected_access_profile_conceals_known_and_unknown_routes, and
+    tests/acceptance_http.rs pins the fail-closed audit paths in
+    audit_attempt_failure_prevents_source_access and the indistinguishable refusals in
+    insufficient_scope_and_unknown_data_surfaces_are_indistinguishable (Sections 4 and 11). */}
 
 - The [governed SQLite publication tutorial](../../tutorials/publish-governed-sqlite-registry/) walks one contract from authoring to a served deployment, exercising the routes, envelope, and access profiles specified here.
 - The [Relay authoring guide](../../configure/relay/) is the key-by-key reference for the governed contract and the deployment binding that Sections 2, 4, and 5 constrain.
