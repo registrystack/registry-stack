@@ -407,4 +407,5 @@ platform:
   supported: Unix
   reason: >-
     Version 1 requires Unix owner, mode, no-follow, link-count, and file-identity guarantees
-    for secrets and audit storage.
+    for the runtime file, the bundle directory and its artifacts, named CA bundle files, the
+    secret root, source extracts, individual secrets, and audit storage.
