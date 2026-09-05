@@ -25,9 +25,8 @@ run and they must not be generated from an unrelated domain.
 Use them when your source, requirement, and derivation are ready for review. Local assurance lets a
 project load without them, but the run below is not a formality you can pass with an empty suite: a
 run that evaluated no case refuses with `no case was evaluated, so this run proves nothing: every
-fixture the project references must declare at least one case`, because a run that decided nothing
-proved nothing. Production and evidence-grade assurance require complete fixture coverage before the
-bundle loads.
+fixture the project references must declare at least one case`. Production and evidence-grade
+assurance require complete fixture coverage before the bundle loads.
 
 ## Add the governance each question hands off
 
@@ -95,9 +94,11 @@ From any directory, run:
 evidencectl fixtures run --project "<evidence-project>"
 ```
 
-Evidencectl compiles the editable project into a private staging bundle, runs `evidence check`
-against it, discovers the fixture files the compiled bundle captured, and drives each one through
-`evidence evaluate`. It does not start HTTP, resolve a source credential, call the source, or write
+Evidencectl asks the `evidence` binary for its version first and refuses one that is not its own,
+then compiles the editable project into a private staging bundle, runs `evidence check` against it,
+discovers the fixture files the compiled bundle captured, and drives each one through
+`evidence evaluate`; pass `--evidence-bin` when the matching binary is not the first `evidence` on
+`PATH`. The run does not start HTTP, resolve a source credential, call the source, or write
 the production audit log. The served HTTP path remains a separate integration check.
 
 A passing run reports the check and one line per fixture:
