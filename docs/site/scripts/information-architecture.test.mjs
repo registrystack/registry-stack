@@ -115,30 +115,70 @@ function assertOrdered(source, expectations, label) {
   }
 }
 
-// Top level is a list of tasks an adopter can name, not a list of products.
-// The product that serves a task is named inside the section, so a reader who
-// does not yet know which product they need can still pick a door.
+// Top level is a list of tasks an adopter can name, and each task that one
+// product serves names that product, so a reader who does not yet know which
+// product they need can still pick a door and a reader who arrived with a
+// product name finds the door that holds it.
 test('uses the adopter-first top-level flow in its published order', () => {
   assert.deepEqual(topLevelLabels(sidebarSource), [
     'Start',
-    'Answer a bounded question',
-    'Connect an existing registry',
-    'Build a registry',
-    'Consume and verify assertions',
-    'Authenticate callers',
-    'Publish a Discovery index',
+    'Answer a bounded question with Evidence Gateway',
+    'Connect an existing registry with Registry Relay',
+    'Build a registry with Base Registry Engine',
+    'Consume and verify Evidence Gateway assertions',
+    'Authenticate callers with Registry Mint',
+    'Publish a Registry Discovery index',
     'Operate and secure',
     'Understand the design',
     'Reference',
   ]);
 });
 
+// One product used to carry a different public name on every surface, and the
+// sidebar group that served it carried none of them: a reader told to "use
+// Registry Relay" scanned the navigation and found no such words. Every
+// top-level section that one product serves names that product, with the
+// formal name docs/style-guide.md prescribes.
+test('names the product each top-level task section serves', () => {
+  for (const [label, product] of [
+    ['Answer a bounded question with Evidence Gateway', 'Evidence Gateway'],
+    ['Connect an existing registry with Registry Relay', 'Registry Relay'],
+    ['Build a registry with Base Registry Engine', 'Base Registry Engine'],
+    ['Consume and verify Evidence Gateway assertions', 'Evidence Gateway'],
+    ['Authenticate callers with Registry Mint', 'Registry Mint'],
+    ['Publish a Registry Discovery index', 'Registry Discovery'],
+  ]) {
+    assert.ok(topLevelSection(sidebarSource, label), `could not isolate ${label}`);
+    assert.ok(label.includes(product), `${label} must name ${product}`);
+  }
+
+  // Short forms are what made one product look like several. `Relay`, `BReg`,
+  // `Mint`, and `Discovery` are ordinary inside a page that has already named
+  // the product; a top-level label is where a reader arrives, so it carries
+  // the full name or none at all.
+  for (const label of topLevelLabels(sidebarSource)) {
+    for (const [shortForm, formal] of [
+      ['Relay', 'Registry Relay'],
+      ['Mint', 'Registry Mint'],
+      ['Discovery', 'Registry Discovery'],
+      ['BReg', 'Base Registry Engine'],
+      ['Evidence', 'Evidence Gateway'],
+    ]) {
+      if (!label.includes(shortForm)) continue;
+      assert.ok(
+        label.includes(formal),
+        `top-level label "${label}" uses ${shortForm} where the formal name is ${formal}`,
+      );
+    }
+  }
+});
+
 test('publishes one overview route for every task-flow section that has one', () => {
   for (const [label, route] of [
     ['Start', "link: '/'"],
-    ['Answer a bounded question', "slug: 'start/evidence-quickstart'"],
-    ['Connect an existing registry', "slug: 'configure'"],
-    ['Build a registry', "slug: 'start/breg-quickstart'"],
+    ['Answer a bounded question with Evidence Gateway', "slug: 'start/evidence-quickstart'"],
+    ['Connect an existing registry with Registry Relay', "slug: 'configure'"],
+    ['Build a registry with Base Registry Engine', "slug: 'start/breg-quickstart'"],
     ['Operate and secure', "slug: 'operate/advanced'"],
     ['Reference', "slug: 'reference'"],
   ]) {
@@ -147,12 +187,12 @@ test('publishes one overview route for every task-flow section that has one', ()
     assert.match(section, new RegExp(route.replaceAll(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
 
-  // Consume and verify assertions ships without an overview because no page
+  // The relying-party section ships without an overview because no page
   // yet addresses a relying party who has not chosen a product. The section is
   // three tutorials that each stand alone, so it opens on the first of them
   // rather than on a page written for a different reader.
-  const consume = topLevelSection(sidebarSource, 'Consume and verify assertions');
-  assert.ok(consume, 'could not isolate Consume and verify assertions');
+  const consume = topLevelSection(sidebarSource, 'Consume and verify Evidence Gateway assertions');
+  assert.ok(consume, 'could not isolate the relying-party section');
   assert.doesNotMatch(consume, /label: 'Overview'/);
 });
 
@@ -162,7 +202,7 @@ test('publishes one overview route for every task-flow section that has one', ()
 // reader is on call for a running deployment, not choosing a product, so pages
 // that name a runtime sit beside the ones that do not.
 test('files adoption-time pages under their product', () => {
-  const relay = topLevelSection(sidebarSource, 'Connect an existing registry');
+  const relay = topLevelSection(sidebarSource, 'Connect an existing registry with Registry Relay');
   const operate = topLevelSection(sidebarSource, 'Operate and secure');
   assert.match(
     relay,
@@ -179,7 +219,7 @@ test('files adoption-time pages under their product', () => {
   // product rather than in the cross-product security group.
   const security = topLevelSection(sidebarSource, 'Operate and secure');
   assert.doesNotMatch(security, /slug: 'security\/evidence'/);
-  const evidence = topLevelSection(sidebarSource, 'Answer a bounded question');
+  const evidence = topLevelSection(sidebarSource, 'Answer a bounded question with Evidence Gateway');
   assert.match(evidence, /slug: 'security\/evidence'/);
 });
 
@@ -189,7 +229,7 @@ test('publishes one Relay reader journey without the retired V1 routes', () => {
     start,
     /slug: 'tutorials\//,
   );
-  const connect = topLevelSection(sidebarSource, 'Connect an existing registry');
+  const connect = topLevelSection(sidebarSource, 'Connect an existing registry with Registry Relay');
   assertOrdered(
     connect,
     [
@@ -244,8 +284,8 @@ test('gives Evidence Gateway a lane on both front doors without a retired Notary
 // group it belongs to. A reader who has finished one phase finds the next one
 // beside it, and a reader who has not is not shown its vocabulary yet.
 test('keeps the BReg guide and references in one adoption path', () => {
-  const breg = topLevelSection(sidebarSource, 'Build a registry');
-  assert.ok(breg, 'could not isolate Build a registry');
+  const breg = topLevelSection(sidebarSource, 'Build a registry with Base Registry Engine');
+  assert.ok(breg, 'could not isolate the Base Registry Engine section');
   const slugs = [...breg.matchAll(/slug: '([^']+)'/g)].map((match) => match[1]);
   assert.deepEqual(slugs, [
     'start/breg-quickstart',
@@ -285,7 +325,7 @@ test('keeps the BReg guide and references in one adoption path', () => {
       "label: 'Call a registry from an application'",
       "slug: 'reference/breg-configuration'",
     ],
-    'Build a registry',
+    'Build a registry with Base Registry Engine',
   );
 
   // The homepage names the doors into the path, not every room: the overview,
@@ -345,7 +385,7 @@ test('redirects the retired Server webhook, history, and event pages to their me
 });
 
 test('organizes Evidence Gateway tasks without publishing the obsolete Relay composition', () => {
-  const evidence = topLevelSection(sidebarSource, 'Answer a bounded question');
+  const evidence = topLevelSection(sidebarSource, 'Answer a bounded question with Evidence Gateway');
   assertOrdered(
     evidence,
     [
@@ -370,7 +410,7 @@ test('organizes Evidence Gateway tasks without publishing the obsolete Relay com
   // Token issuance and relying-party verification are separate audiences that
   // reach Evidence Gateway from outside it, so each is a section of its own
   // rather than a group buried in the provider's path.
-  assert.doesNotMatch(evidence, /label: 'Authenticate callers'/);
+  assert.doesNotMatch(evidence, /label: 'Authenticate callers with Registry Mint'/);
   assert.doesNotMatch(evidence, /label: 'Verify as a relying party'/);
   // explanation/integration-patterns held two seats, which left Starlight
   // unable to say which one is the active page and made prev/next ambiguous.
