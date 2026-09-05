@@ -1167,13 +1167,17 @@ directory and each artifact inside it, a named CA bundle file, the secret
 root, and a bound extract, must carry no write permission for anyone but its
 owner, and the secret root must additionally carry no group or other
 permission at all. `evidence check` and process startup both refuse a
-non-conforming input before the listener binds, with the message `an Evidence
-deployment input is not immutable: artifact <name>: <cause>` (for example
-`the runtime file is writable` for `runtime.yaml` itself, or `the secret root
-directory the runtime file names is reachable by group or other`). Startup
-collapses this to one fixed failure class; `evidence check` is what names the
-artifact and cause. Write `runtime.yaml`, make it non-writable (for example
-`chmod 400`), and run `evidence check` before `evidence serve`.
+non-conforming runtime file, bundle artifact, CA bundle file, or secret root
+before the listener binds, with the message `an Evidence deployment input is
+not immutable: artifact <name>: <cause>` (for example `the runtime file is
+writable` for `runtime.yaml` itself, or `the secret root directory the
+runtime file names is reachable by group or other`). A writable bound
+extract instead fails a distinct check, `an Evidence bundle artifact is
+invalid: the source extract the runtime file names is writable`. Startup
+collapses each to its own fixed failure class; `evidence check` is what names
+the artifact and cause either way. Write `runtime.yaml`, make it
+non-writable (for example `chmod 400`), and run `evidence check` before
+`evidence serve`.
 
 A bundle source may name one `tlsTrustProfile`. The corresponding bounded PEM
 file is loaded and validated at startup. Hostname verification and source-origin
