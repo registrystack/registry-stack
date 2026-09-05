@@ -1,0 +1,54 @@
+# Optional cold-start overlay adding an operator-owned Mint service beside the
+# Evidence adapter. Apply it after docker-compose.yaml, in overlay order:
+#
+#   docker compose -f docker-compose.yaml -f docker-compose.mint.yaml config
+#
+# Required environment, in addition to the base adapter's:
+#   MINT_CONFIG_DIR         Mint configuration, public keys, and client registry
+#   MINT_SECRET_ROOT        owner-only Mint secret directory
+#   MINT_TRANSIT_SOCKET_DIR directory containing transit-proxy.sock
+#   MINT_HEALTHCHECK_URL    Mint's configured private /ready URL
+#   MINT_IMAGE              reviewed Mint image by digest
+#
+# Mint publishes no host port. Its issuer and JWKS identities stay public
+# HTTPS identities that operator routing resolves inside this network.
+
+services:
+  mint:
+    image: ${MINT_IMAGE:?set MINT_IMAGE to a reviewed image digest}
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    environment:
+      # The preflight readiness probe runs `mint healthcheck` inside this
+      # container. Name the listener the Mint configuration binds.
+      MINT_HEALTHCHECK_URL: ${MINT_HEALTHCHECK_URL:?set MINT_HEALTHCHECK_URL to Mint's private /ready URL}
+    volumes:
+      - ${MINT_CONFIG_DIR:?set MINT_CONFIG_DIR to the Mint configuration directory}:/etc/registry-mint:ro
+      - ${MINT_SECRET_ROOT:?set MINT_SECRET_ROOT to the Mint secret root}:/run/secrets/registry-mint:ro
+      # Mint receives only the workload-local proxy socket, never its Transit
+      # token or private signing key.
+      - ${MINT_TRANSIT_SOCKET_DIR:?set MINT_TRANSIT_SOCKET_DIR to the Transit socket directory}:/run/registry-mint:ro
+      # The append-only audit chain must outlive the container.
+      - mint-audit:/var/lib/registry-mint
+      # Docker otherwise provides an implicit writable /dev/shm tmpfs. Keep it
+      # read-only so the audit root is the only regular-file write lane.
+      - type: tmpfs
+        target: /dev/shm
+        read_only: true
+    networks: [evidence-net]
+
+  evidence:
+    # The preflight reads this edge: it checks Mint, starts only Mint with
+    # --no-deps, and probes Mint's readiness before checking Evidence. The
+    # condition stays service_started because neither official image declares
+    # a Docker HEALTHCHECK; readiness is the preflight's `mint healthcheck`
+    # probe, not a Compose condition.
+    depends_on:
+      mint:
+        condition: service_started
+
+volumes:
+  mint-audit:
