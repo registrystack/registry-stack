@@ -15,6 +15,17 @@ const registry = new breg.BaseRegistryClient({
 });
 ```
 
+A TypeScript consumer also needs the Node type definitions. The published
+declarations name `Buffer`, a Node.js global, so a project compiling against
+them without `@types/node` reports `TS2580` on every use of it:
+
+```sh
+npm install --save-dev "@types/node"
+```
+
+The package does not declare that dependency itself, because a JavaScript
+consumer does not need it.
+
 Each product remains in its own namespace because its routing,
 authentication, errors, and verification rules are different. The package
 uses one platform-specific native dependency containing all four bindings.
