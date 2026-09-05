@@ -462,11 +462,28 @@ def validate_current(manifest_dir: Path) -> int:
     return validate(current_paths[0])
 
 
+def published_release_tags(metadata: Any) -> set[str]:
+    """The canonical tags of every public, non-prerelease release."""
+
+    tags: set[str] = set()
+    if not isinstance(metadata, list):
+        return tags
+    for release in metadata:
+        if not isinstance(release, dict):
+            continue
+        if release.get("draft") is not False or release.get("prerelease") is not False:
+            continue
+        tag = release.get("tag_name")
+        if isinstance(tag, str) and SEMVER_TAG.fullmatch(tag) is not None:
+            tags.add(tag)
+    return tags
+
+
 def published_release_selector_errors(
     docsets_data: Any,
     published_releases_path: Path,
 ) -> list[str]:
-    """Check the docs released selector against the published release list.
+    """Check the docs released selector and docsets for publication overclaims.
 
     The release manifest's own ``stack.status`` is set by hand while preparing
     the next release, so it says what a human remembered, not what is
@@ -474,6 +491,12 @@ def published_release_selector_errors(
     exists, so neither can stand in for the published release either. The one
     signal that only moves when a release is actually public is the release
     list this resolver reads.
+
+    Only overclaims fail: a selector naming a release nobody can fetch, and a
+    docset advertising released availability ahead of the newest published
+    release. A selector behind that release is the ordinary transition, since
+    ``release.yml`` dispatches the documentation deployment against the tree
+    it published from and hands that deployment the release to serve.
     """
 
     try:
@@ -486,13 +509,14 @@ def published_release_selector_errors(
 
     published_tag = resolved["tag_name"]
     published_version = release_version_tuple(published_tag[1:])
+    published_tags = published_release_tags(metadata)
     errors: list[str] = []
     selector = docsets_data.get("released") if isinstance(docsets_data, dict) else None
-    if selector != published_tag:
+    if selector not in published_tags:
         errors.append(
-            "docsets.yaml released selector must be "
-            f"{published_tag!r}, the newest published release carrying a docs "
-            f"archive, not {selector!r}"
+            f"docsets.yaml released selector {selector!r} names no published "
+            f"release; the newest published release carrying a docs archive "
+            f"is {published_tag}"
         )
 
     docsets = docsets_data.get("docsets", []) if isinstance(docsets_data, dict) else []
@@ -503,18 +527,6 @@ def published_release_selector_errors(
             continue
         docset_id = str(docset.get("id", ""))
         if SEMVER_TAG.fullmatch(docset_id) is None:
-            continue
-        if docset_id == published_tag:
-            if docset.get("status") != "archived":
-                errors.append(
-                    f"docset {published_tag} must be 'archived' because its "
-                    "release is published"
-                )
-            if docset.get("availability") != "released":
-                errors.append(
-                    f"docset {published_tag} availability must be 'released' "
-                    "because its release is published"
-                )
             continue
         version = release_version_tuple(docset_id[1:])
         if (

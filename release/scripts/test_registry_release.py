@@ -1883,18 +1883,55 @@ class RegistryReleaseTest(TestCase):
             result.stdout,
         )
 
-    def test_validate_docsets_rejects_selector_behind_published_release(self) -> None:
+    def test_validate_docsets_accepts_selector_behind_published_release(self) -> None:
+        """A prepared tree keeps its selector while its release goes public.
+
+        release.yml dispatches the docs deployment against the tree it
+        published from, so the committed selector still names the previous
+        release for that run. The deployment receives the release it must
+        serve as an input.
+        """
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_dir, docsets = write_docset_fixture(root)
+            write_prepared_next_release(root, manifest_dir, docsets)
+            data = yaml.safe_load(docsets.read_text(encoding="utf-8"))
+            data["released"] = "v0.8.0"
+            data["docsets"][0]["availability"] = "released"
+            docsets.write_text(
+                yaml.safe_dump(data, sort_keys=False),
+                encoding="utf-8",
+            )
+            published = write_published_releases(root, "v0.8.0", "v0.9.0")
+
+            result = run_tool(
+                "validate-docsets",
+                "--manifest-dir",
+                str(manifest_dir),
+                "--docsets",
+                str(docsets),
+                "--published-releases",
+                str(published),
+            )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_validate_docsets_rejects_unpublished_selector(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             manifest_dir, docsets = write_docset_fixture(root)
             data = yaml.safe_load(docsets.read_text(encoding="utf-8"))
-            data["released"] = "v0.7.0"
-            data["docsets"][0]["availability"] = "candidate"
+            data["released"] = "v0.8.0"
+            data["docsets"][0]["availability"] = "released"
             docsets.write_text(
                 yaml.safe_dump(data, sort_keys=False),
                 encoding="utf-8",
             )
             published = write_published_releases(root, "v0.7.0", "v0.8.0")
+            metadata = json.loads(published.read_text(encoding="utf-8"))
+            metadata[1]["prerelease"] = True
+            published.write_text(json.dumps(metadata), encoding="utf-8")
 
             result = run_tool(
                 "validate-docsets",
@@ -1908,13 +1945,8 @@ class RegistryReleaseTest(TestCase):
 
         self.assertNotEqual(0, result.returncode)
         self.assertIn(
-            "docsets.yaml released selector must be 'v0.8.0', the newest "
-            "published release carrying a docs archive, not 'v0.7.0'",
-            result.stderr,
-        )
-        self.assertIn(
-            "docset v0.8.0 availability must be 'released' because its "
-            "release is published",
+            "docsets.yaml released selector 'v0.8.0' names no published "
+            "release",
             result.stderr,
         )
 
@@ -1971,8 +2003,8 @@ class RegistryReleaseTest(TestCase):
 
         self.assertNotEqual(0, result.returncode)
         self.assertIn(
-            "docsets.yaml released selector must be 'v0.8.0', the newest "
-            "published release carrying a docs archive, not 'v0.9.0'",
+            "docsets.yaml released selector 'v0.9.0' names no published "
+            "release",
             result.stderr,
         )
         self.assertIn(

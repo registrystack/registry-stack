@@ -101,12 +101,14 @@ jobs:
         run: |
           set -euo pipefail
           # docsets.yaml names the release the version banner, the archive
-          # indexable flag, and the canonical selector point a reader at.
-          # Release preparation never moves it and the manifest status that
-          # the offline gate reads is written by hand, so check the selector
-          # against the release list this job already fetched. A prepared
-          # release note or manifest precedes its tag and cannot stand in for
-          # a published release.
+          # indexable flag, and the canonical selector point a reader at. The
+          # manifest status the offline gate reads is written by hand, so
+          # check those claims against the release list this job already
+          # fetched. Only overclaims fail: a selector naming a release nobody
+          # can fetch, and a docset advertising released availability ahead of
+          # the newest published release. Release preparation never moves the
+          # selector, so it still names the previous release while this job
+          # deploys the release it received above.
           release/scripts/registry-release validate-docsets \
             --published-releases "${PUBLISHED_RELEASES}"
 
