@@ -346,11 +346,13 @@ fn write_new_authoring_file(path: &Path, contents: &[u8]) -> Result<()> {
 /// Run `evidence --runtime <project>/runtime.yaml check` and classify the
 /// result. `evidence_bin` resolves the same way as the other `evidencectl`
 /// subcommands that shell out to the runtime binary: an explicit path, else
-/// `EVIDENCE_BIN`, else the first `evidence` found on `PATH`.
+/// `EVIDENCE_BIN`, else the first `evidence` found on `PATH`, and the
+/// resolved binary identifies itself as this build's runtime before any
+/// classification is made.
 #[allow(dead_code)]
 pub fn verify(project: &Path, evidence_bin: Option<&Path>) -> Result<CheckClassification> {
-    let evidence_bin =
-        crate::evidence_binary::resolve(evidence_bin).context("resolving the evidence binary")?;
+    let evidence_bin = crate::evidence_binary::resolve_matching(evidence_bin)
+        .context("resolving the evidence binary")?;
     let runtime_path = project.join("runtime.yaml");
 
     let output = Command::new(&evidence_bin)

@@ -114,6 +114,61 @@ fn failed_runtime_check_leaves_no_output_or_private_staging() {
 }
 
 #[test]
+fn a_mismatched_evidence_binary_is_refused_before_any_step() {
+    let fixture = Fixture::new();
+
+    let output = fixture
+        .command(&fixture.project, &fixture.target, &fixture.output)
+        .env("FAKE_EVIDENCE_VERSION", "0.0.0-other")
+        .output()
+        .expect("evidencectl build starts");
+
+    assert_failed(&output, "a mismatched evidence binary must fail the build");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("0.0.0-other"),
+        "the refusal names the reported version: {stderr}"
+    );
+    assert!(
+        stderr.contains(registry_platform_buildinfo::DISPLAY_VERSION),
+        "the refusal names this build: {stderr}"
+    );
+    assert!(!fixture.output.exists());
+    assert!(
+        fixture.invocations().is_empty(),
+        "a mismatched binary was handed work"
+    );
+    fixture.assert_no_staging_residue();
+}
+
+#[test]
+fn an_evidence_binary_that_does_not_identify_itself_is_refused_before_any_step() {
+    let fixture = Fixture::new();
+
+    let output = fixture
+        .command(&fixture.project, &fixture.target, &fixture.output)
+        .env("FAKE_EVIDENCE_VERSION", "")
+        .output()
+        .expect("evidencectl build starts");
+
+    assert_failed(
+        &output,
+        "an unidentified evidence binary must fail the build",
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("did not report an Evidence runtime version"),
+        "the refusal names what was missing: {stderr}"
+    );
+    assert!(!fixture.output.exists());
+    assert!(
+        fixture.invocations().is_empty(),
+        "an unidentified binary was handed work"
+    );
+    fixture.assert_no_staging_residue();
+}
+
+#[test]
 fn successful_build_copies_runtime_exactly_and_excludes_local_and_validation_secrets() {
     let fixture = Fixture::new();
     let local = fixture.project.join(".evidence/dev");
@@ -575,7 +630,12 @@ impl Fixture {
             .arg(output)
             .env("EVIDENCE_BIN", &self.evidence)
             .env("FAKE_EVIDENCE_LOG", &self.log)
-            .env_remove("FAKE_EVIDENCE_FAIL");
+            .env(
+                "FAKE_EVIDENCE_VERSION",
+                registry_platform_buildinfo::DISPLAY_VERSION,
+            )
+            .env_remove("FAKE_EVIDENCE_FAIL")
+            .env_remove("FAKE_EVIDENCE_EMPTY_DESCRIPTION");
         command
     }
 
@@ -939,8 +999,15 @@ outboundTls: {systemRoots: true, trustProfiles: {}}
 const FAKE_EVIDENCE: &str = r#"#!/bin/sh
 set -eu
 
+if [ "${1:-}" = '--version' ]; then
+  printf 'evidence %s\n' "$FAKE_EVIDENCE_VERSION"
+  exit 0
+fi
+
 if [ "${1:-}" = 'render-discovery-description' ]; then
-  printf '{}\n'
+  if [ "${FAKE_EVIDENCE_EMPTY_DESCRIPTION:-}" != '1' ]; then
+    printf '{}\n'
+  fi
   exit 0
 fi
 

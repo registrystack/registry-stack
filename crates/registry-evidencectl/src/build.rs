@@ -139,7 +139,7 @@ fn run_inner(args: BuildArgs, interruption: &BuildInterruption) -> Result<ExitCo
     let governance: TargetGovernance = serde_norway::from_slice(&governance_bytes)
         .context("deployment governance is not the closed Version 1 target shape")?;
     let governed_bundle = governance.into_bundle()?;
-    let evidence_bin = crate::evidence_binary::resolve(None)?;
+    let evidence_bin = crate::evidence_binary::resolve_matching(None)?;
 
     interruption.check()?;
     let staging = tempfile::Builder::new()

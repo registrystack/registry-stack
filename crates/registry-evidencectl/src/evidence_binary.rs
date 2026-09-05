@@ -34,6 +34,19 @@ pub(crate) fn resolve(explicit: Option<&Path>) -> Result<PathBuf> {
     })
 }
 
+/// Resolve the Evidence runtime binary and refuse one that is not this
+/// build's, in the one order every delegating command needs.
+///
+/// Resolution and the version handshake belong together: a command that
+/// resolves without asking would hand work to whatever `evidence` happened to
+/// be reachable, and the answer it printed would read exactly like one from
+/// the matching runtime.
+pub(crate) fn resolve_matching(explicit: Option<&Path>) -> Result<PathBuf> {
+    let evidence_bin = resolve(explicit)?;
+    ensure_matching_version(&evidence_bin)?;
+    Ok(evidence_bin)
+}
+
 /// Refuse an `evidence` binary that is not the one this build delegates to.
 ///
 /// Adopter tooling makes no semantic decision of its own: it asks `evidence`

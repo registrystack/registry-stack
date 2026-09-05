@@ -873,12 +873,26 @@ fn equivalent_command_omits_optional_flags_when_absent() {
     assert!(!command.contains("--project"));
 }
 
+/// A stub `evidence` that identifies itself as this build's runtime, the
+/// handshake [`emit::verify`] performs before it delegates anything, and runs
+/// `script` for every other invocation.
 #[cfg(unix)]
 fn write_stub_evidence(dir: &Path, script: &str) -> PathBuf {
+    write_stub_reporting(dir, registry_platform_buildinfo::DISPLAY_VERSION, script)
+}
+
+/// The same stub, reporting `version` when asked to identify itself, so a
+/// test can present a runtime this build does not delegate to.
+#[cfg(unix)]
+fn write_stub_reporting(dir: &Path, version: &str, script: &str) -> PathBuf {
     use std::os::unix::fs::PermissionsExt as _;
 
+    let body = script.strip_prefix("#!/bin/sh\n").unwrap_or(script);
+    let contents = format!(
+        "#!/bin/sh\nif [ \"$1\" = '--version' ]; then printf 'evidence {version}\\n'; exit 0; fi\n{body}"
+    );
     let path = dir.join("evidence");
-    std::fs::write(&path, script).expect("write stub evidence script");
+    std::fs::write(&path, contents).expect("write stub evidence script");
     let mut permissions = std::fs::metadata(&path).expect("stat stub").permissions();
     permissions.set_mode(0o755);
     std::fs::set_permissions(&path, permissions).expect("chmod stub");
@@ -920,6 +934,48 @@ fn is_executable_busy(error: &anyhow::Error) -> bool {
         .chain()
         .filter_map(|cause| cause.downcast_ref::<std::io::Error>())
         .any(|io| io.kind() == std::io::ErrorKind::ExecutableFileBusy)
+}
+
+#[cfg(unix)]
+#[test]
+fn verify_refuses_a_runtime_that_reports_another_version() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let project = temp.path().join("project");
+    std::fs::create_dir_all(&project).expect("mkdir project");
+    let checked = temp.path().join("checked");
+    let stub = write_stub_reporting(
+        temp.path(),
+        "0.0.0-other",
+        &format!(
+            "#!/bin/sh\nprintf 'checked\\n' > {}\nexit 0\n",
+            checked.display()
+        ),
+    );
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let error = loop {
+        match emit::verify(&project, Some(&stub)) {
+            Ok(classification) => panic!("a foreign runtime was trusted: {classification:?}"),
+            Err(error) if is_executable_busy(&error) && std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(error) => break error,
+        }
+    };
+
+    let rendered = format!("{error:#}");
+    assert!(
+        rendered.contains("0.0.0-other"),
+        "the refusal names the reported version: {rendered}"
+    );
+    assert!(
+        rendered.contains(registry_platform_buildinfo::DISPLAY_VERSION),
+        "the refusal names this build: {rendered}"
+    );
+    assert!(
+        !checked.exists(),
+        "a foreign runtime was asked to check the draft"
+    );
 }
 
 /// The race [`verify_stub`] exists for, made deterministic: hold the stub open
