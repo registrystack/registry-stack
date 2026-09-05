@@ -131,12 +131,14 @@ rules, with an optional field spelled as `anyOf` of the type and `null`.
 
 ## Collections and paging
 
-A collection read returns the matching envelopes as `items`, a `pageInfo` object, and the same
-`meta` as a single record:
+A collection read returns the matching records as `items`, a `pageInfo` object, and the same
+`meta` as a single record. Only a single-record response wraps the record in `data`; a collection
+member carries `recordIdentifier`, `revisionIdentifier`, and `domainData` directly, so the field
+path is `items[0].domainData`, not `items[0].data.domainData`:
 
 ```json
 {
-  "items": [{"data": {"recordIdentifier": "…", "revisionIdentifier": "1", "domainData": {}}}],
+  "items": [{"recordIdentifier": "…", "revisionIdentifier": "1", "domainData": {}}],
   "pageInfo": {"nextCursor": "eyJ…"},
   "meta": {"registryIdentifier": "asset-registry", "datasetIdentifier": "asset-sites", "entityTypeIdentifier": "asset-site"}
 }
@@ -149,7 +151,9 @@ runtime `cursor.secretRef`, binds the whole original query, and expires after
 any of those checks returns `400 query.cursor_invalid`. With `$count`, the response carries the
 matching total beside the page.
 
-{/* Evidence: crates/registry-breg/src/query.rs, ParsedReadQueryMode;
+{/* Evidence: crates/registry-record/src/lib.rs, RegistryRecordCollectionResponse and RegistryRecord;
+    crates/registry-record/tests/contract.rs, product_extensions_are_preserved_at_every_open_level();
+    crates/registry-breg/src/query.rs, ParsedReadQueryMode;
     crates/registry-breg/src/api/mod.rs, cursor_invalid();
     crates/registry-breg/src/runtime_config.rs, CursorConfig. */}
 

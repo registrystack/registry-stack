@@ -267,7 +267,21 @@ writableFields: [code, label, group, status]
 filterableFields: [code, status]
 ```
 
-Repeat the request with `code` in place of `label` and it returns the record you created.
+Repeat the request on `code`, which is filterable, and match the code you created, `DEMO-002`.
+The filter compares the field to a literal, so the value changes with the field:
+
+```sh
+curl --silent --show-error --fail-with-body \
+  --header @tutorial-work/authorization.header --get \
+  --data-urlencode 'accessProfile=operator' \
+  --data-urlencode "\$filter=code eq 'DEMO-002'" \
+  "$registry_url/v1/records/records" | python3 -m json.tool
+```
+
+The request succeeds and `items` holds the one record you created, with `recordIdentifier`,
+`revisionIdentifier`, and `domainData` in each item.
+Filtering on `code eq 'North Quay Engineering'` would also succeed, with an empty `items`: no
+record carries that code, and a filter that matches nothing is a successful read, not a refusal.
 
 What happened: a grant carries three separate permission lists, and `label` is readable and writable
 but not filterable, so `$select` may name it and `$filter` may not.
