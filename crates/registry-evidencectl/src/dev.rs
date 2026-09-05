@@ -8,6 +8,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, Metadata, OpenOptions},
     io::{Read as _, Write as _},
+    net::TcpListener,
     os::unix::{
         fs::{
             symlink, DirBuilderExt as _, FileTypeExt as _, MetadataExt as _, OpenOptionsExt as _,
@@ -48,6 +49,7 @@ const LOCAL_ACCESS_TOKEN_AUDIENCE: &str = "registry-evidence-local";
 const LOCAL_CALLER_EVIDENCE_AUDIENCE: &str = "urn:registrystack:evidence:local:caller";
 const LOCAL_REQUESTER_TAG: &str = "local-caller";
 const MINT_AUDIT_KEY_FILENAME: &str = "mint-audit-hmac-key";
+const FAILED_START_LOGS: &str = "failed-start";
 const PRIVATE_DIR_MODE: u32 = 0o700;
 const PRIVATE_FILE_MODE: u32 = 0o600;
 const MAX_STATE_BYTES: u64 = 4 * 1024 * 1024;
@@ -834,6 +836,7 @@ fn start_detached(
         Err(error) => return Err(error).context("failed to inspect local development state"),
     }
 
+    probe_local_ports(ports)?;
     create_private_directory(&dev_root)?;
     let result = prepare_and_start(
         &project,
@@ -844,14 +847,71 @@ fn start_detached(
         ports,
     );
     if let Err(error) = result {
+        let kept = preserve_failed_start_logs(&dev_root);
         if let Err(cleanup) = cleanup_new_dev_root(&dev_root) {
             return Err(error.context(format!(
                 "failed to roll back the incomplete local session: {cleanup:#}"
             )));
         }
-        return Err(error);
+        // The rollback is the remedy for the project, not for the reader, so
+        // the failure carries the path of the logs it just moved out of the
+        // way. Rebuilding the message keeps that sentence last: added as
+        // context it would print before the failure it explains.
+        return Err(match kept {
+            Ok(Some(kept)) => anyhow!("{error:#}; startup logs kept at {}", kept.display()),
+            Ok(None) => error,
+            Err(problem) => anyhow!("{error:#}; the startup logs could not be kept: {problem:#}"),
+        });
     }
     result
+}
+
+/// Refuse a start whose loopback ports are already taken.
+///
+/// The services bind these ports themselves, several seconds later and inside
+/// a detached supervisor, where the failure reaches the operator as a
+/// readiness timeout that names neither the port nor a way out. Binding first
+/// is the same question asked where the answer can still be acted on.
+fn probe_local_ports(ports: LocalServicePorts) -> Result<()> {
+    for (port, service, flag) in [
+        (ports.evidence, "Evidence Gateway", "--evidence-port"),
+        (ports.mint, "Registry Mint", "--mint-port"),
+    ] {
+        if let Err(error) = TcpListener::bind(("127.0.0.1", port)) {
+            bail!(
+                "local port {port} is already in use, so the local {service} cannot listen on it ({error}); free 127.0.0.1:{port}, or start this session with {flag} <port>"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Move an incomplete session's logs out of the way of its rollback.
+///
+/// The rollback removes the whole session tree so the next start is fresh,
+/// and the logs are the one part of it a reader still needs. They are kept
+/// beside the session rather than inside it, so the fresh-start invariant is
+/// untouched, and they replace the previous failed start's copy so the record
+/// is always of the attempt just made.
+fn preserve_failed_start_logs(dev_root: &Path) -> Result<Option<PathBuf>> {
+    let logs = dev_root.join("logs");
+    match fs::symlink_metadata(&logs) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Ok(metadata) => validate_private_directory_metadata(&logs, &metadata)?,
+        Err(error) => return Err(error.into()),
+    }
+    let generated_root = dev_root
+        .parent()
+        .ok_or_else(|| anyhow!("local development state has no parent directory"))?;
+    let kept = generated_root.join(FAILED_START_LOGS);
+    match fs::symlink_metadata(&kept) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Ok(_) => remove_private_tree(&kept)?,
+        Err(error) => return Err(error.into()),
+    }
+    fs::rename(&logs, &kept)
+        .with_context(|| format!("failed to keep the startup logs at {}", kept.display()))?;
+    Ok(Some(kept))
 }
 
 fn remove_completed_dev_root(project: &Path, dev_root: &Path) -> Result<()> {
@@ -999,7 +1059,8 @@ fn prepare_and_start(
         }
     };
 
-    if let Err(error) = wait_for_supervisor_ready(dev_root, &mut supervisor, ready_timeout_seconds)
+    if let Err(error) =
+        wait_for_supervisor_ready(dev_root, &mut supervisor, ready_timeout_seconds, ports)
     {
         abort_start(&mut supervisor)?;
         publish_supervisor_failure(dev_root, FailureKind::Supervisor)?;
@@ -1462,7 +1523,12 @@ fn signal_child_with(child: &Child, signal: rustix::process::Signal) -> Result<(
     Ok(())
 }
 
-fn wait_for_supervisor_ready(dev_root: &Path, child: &mut Child, seconds: u64) -> Result<()> {
+fn wait_for_supervisor_ready(
+    dev_root: &Path,
+    child: &mut Child,
+    seconds: u64,
+    ports: LocalServicePorts,
+) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(seconds + 5);
     loop {
         let state = read_state(&dev_root.join("state.json"))?;
@@ -1475,8 +1541,8 @@ fn wait_for_supervisor_ready(dev_root: &Path, child: &mut Child, seconds: u64) -
                     .and_then(|bytes| String::from_utf8(bytes).ok())
                     .unwrap_or_default();
                 bail!(
-                    "local services failed during startup ({:?}){}{}",
-                    state.failure,
+                    "{}{}{}",
+                    startup_failure_summary(state.failure, ports),
                     if diagnostic.is_empty() { "" } else { ": " },
                     diagnostic.trim()
                 );
@@ -1488,6 +1554,42 @@ fn wait_for_supervisor_ready(dev_root: &Path, child: &mut Child, seconds: u64) -
             bail!("local supervisor exited before readiness");
         }
         thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Say which part of the startup failed, in the terms the operator started it
+/// with. The recorded [`FailureKind`] is a program value: printing it puts the
+/// reader in this file rather than in the session that just failed.
+fn startup_failure_summary(failure: Option<FailureKind>, ports: LocalServicePorts) -> String {
+    let evidence = ports.evidence;
+    let mint = ports.mint;
+    match failure {
+        Some(FailureKind::MintStart) => {
+            format!("the local Registry Mint service could not be started on 127.0.0.1:{mint}")
+        }
+        Some(FailureKind::MintReadiness) => {
+            format!("the local Registry Mint service did not become ready on 127.0.0.1:{mint}")
+        }
+        Some(FailureKind::EvidenceStart) => {
+            format!(
+                "the local Evidence Gateway service could not be started on 127.0.0.1:{evidence}"
+            )
+        }
+        Some(FailureKind::EvidenceReadiness) => {
+            format!(
+                "the local Evidence Gateway service did not become ready on 127.0.0.1:{evidence}"
+            )
+        }
+        Some(FailureKind::ChildExited) => {
+            "a local service exited before the session was ready".to_owned()
+        }
+        Some(FailureKind::Supervisor) => {
+            "the local supervisor failed before the services were ready".to_owned()
+        }
+        Some(FailureKind::SupervisorSignal) => {
+            "the local supervisor was signalled before the session was ready".to_owned()
+        }
+        None => "the local services failed during startup".to_owned(),
     }
 }
 
@@ -2416,5 +2518,58 @@ requirements:
         send_control_request(&long_socket, b"reload-mint\n", b"reload-requested\n")
             .expect("long control path");
         server.join().expect("server");
+    }
+
+    #[test]
+    fn every_startup_failure_reads_as_a_sentence_about_this_session() {
+        let ports = LocalServicePorts::new(18080, 18081).expect("distinct ports");
+        let recorded = [
+            Some(FailureKind::MintStart),
+            Some(FailureKind::MintReadiness),
+            Some(FailureKind::EvidenceStart),
+            Some(FailureKind::EvidenceReadiness),
+            Some(FailureKind::ChildExited),
+            Some(FailureKind::Supervisor),
+            Some(FailureKind::SupervisorSignal),
+            None,
+        ];
+        let summaries = recorded.map(|failure| startup_failure_summary(failure, ports));
+
+        for summary in &summaries {
+            assert!(!summary.contains("Some("), "{summary}");
+            assert!(!summary.contains("Kind"), "{summary}");
+            assert!(summary.starts_with(char::is_lowercase), "{summary}");
+        }
+        // The port is the fact the operator can act on, so a failure that
+        // belongs to one service names that service's own port.
+        assert!(summaries[0].contains("127.0.0.1:18081"), "{}", summaries[0]);
+        assert!(summaries[1].contains("127.0.0.1:18081"), "{}", summaries[1]);
+        assert!(summaries[2].contains("127.0.0.1:18080"), "{}", summaries[2]);
+        assert!(summaries[3].contains("127.0.0.1:18080"), "{}", summaries[3]);
+    }
+
+    #[test]
+    fn a_held_port_is_refused_by_name_and_a_released_one_passes_the_probe() {
+        let held = TcpListener::bind("127.0.0.1:0").expect("hold a local port");
+        let port = held.local_addr().expect("held address").port();
+        let free = TcpListener::bind("127.0.0.1:0").expect("reserve a free port");
+        let free_port = free.local_addr().expect("free address").port();
+        drop(free);
+
+        let error = probe_local_ports(LocalServicePorts::new(port, free_port).expect("ports"))
+            .expect_err("a held Evidence port is refused")
+            .to_string();
+        assert!(error.contains(&port.to_string()), "{error}");
+        assert!(error.contains("already in use"), "{error}");
+        assert!(error.contains("--evidence-port"), "{error}");
+
+        let error = probe_local_ports(LocalServicePorts::new(free_port, port).expect("ports"))
+            .expect_err("a held Mint port is refused")
+            .to_string();
+        assert!(error.contains("--mint-port"), "{error}");
+
+        drop(held);
+        probe_local_ports(LocalServicePorts::new(port, free_port).expect("ports"))
+            .expect("a released port passes the probe");
     }
 }
