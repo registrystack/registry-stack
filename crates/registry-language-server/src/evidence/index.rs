@@ -64,7 +64,7 @@ use crate::{
     evidence::{
         diagnostics::{read_access_policy, read_project_marker, read_question, QuestionReading},
         layout::{document_role, is_source_artifact, DocumentRole},
-        openapi::Description,
+        openapi::{Description, DescriptionFailure, DescriptionReading},
     },
     refs::{
         bounded_message, bounded_value, EvidenceKind, IndexedChoices, IndexedDiagnostic,
@@ -111,16 +111,22 @@ pub(crate) fn build_index(
     // The one project file the loader leaves on disk, read once for the whole build. Every operation
     // it publishes is defined here, whether or not a question names it, so that `Find references` on
     // an operation answers from the description an author is looking at.
+    //
+    // A root with no description at all is only a refusal when a question needs one. The authoring
+    // form has two ways to write a question: one names a source document and reads it over whatever
+    // transport that document declares, and one names an operation of this description directly. The
+    // second is the only one that needs the file, so a project written entirely the first way, which
+    // is what `evidencectl new --transport sqlite-extract` writes, is a project the compiler builds
+    // without a description and the editor must index without a sentence about a file the author
+    // never wrote.
     let mut description = match Description::read(root) {
-        Ok(description) => description,
-        Err(failure) => {
-            return empty_index(vec![IndexedDiagnostic {
-                path: failure.path().to_path_buf(),
-                range: DOCUMENT_START,
-                severity: DiagnosticSeverity::ERROR,
-                code: Some("evidence/openapi-prerequisite".to_owned()),
-                message: bounded_message(failure.message()),
-            }]);
+        DescriptionReading::Read(description) => description,
+        DescriptionReading::Refused(failure) => return empty_index(vec![prerequisite(&failure)]),
+        DescriptionReading::Absent(failure) => {
+            if a_question_answers_an_operation(&readings) {
+                return empty_index(vec![prerequisite(&failure)]);
+            }
+            None
         }
     };
     if let Some(description) = &description {
@@ -1060,6 +1066,34 @@ fn sources_accepted_questions_read<'a>(
         })
         .map(|source| source.value.clone())
         .collect()
+}
+
+/// Whether any question the form accepts answers an operation of the project's own description.
+///
+/// This is what makes the description a prerequisite. `compile_question_plan` in
+/// `crates/registry-evidencectl/src/authoring.rs` hands a question naming a source straight to
+/// `compile_referenced_question` and reads no description for it, and reaches `unique_operation`
+/// only for a question that names an operation instead. A question the form refuses is outside
+/// this for the same reason it is outside the set of sources anything reads: `read_inputs` stops
+/// at its finding before any question is compiled at all.
+fn a_question_answers_an_operation(readings: &BTreeMap<&Path, QuestionReading>) -> bool {
+    readings.values().any(|reading| {
+        reading
+            .validated
+            .as_ref()
+            .is_some_and(|question| question.source.source_ref.is_none())
+    })
+}
+
+/// The one sentence a description the compiler stops at reaches the author as.
+fn prerequisite(failure: &DescriptionFailure) -> IndexedDiagnostic {
+    IndexedDiagnostic {
+        path: failure.path().to_path_buf(),
+        range: DOCUMENT_START,
+        severity: DiagnosticSeverity::ERROR,
+        code: Some("evidence/openapi-prerequisite".to_owned()),
+        message: bounded_message(failure.message()),
+    }
 }
 
 /// The role of the document a reference of this kind points at, for the kinds a document names by
