@@ -1,8 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 608" role="img"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 792" role="img"
      font-family="'Public Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
      text-rendering="geometricPrecision">
   <title>Registry architecture flow</title>
-  <desc>Registry Platform provides shared primitives to both runtime services. Registry Manifest produces portable metadata contracts describing what a registry exposes. Registry Relay independently compiles a reviewed registry contract and serves protected read-only operations over one local read-only SQLite source; it does not read a Registry Manifest document. Evidence Gateway independently answers one bounded question about one subject from its own configured authoritative sources, reached over a fixed HTTP JSON request or one reviewed SQL statement against a read-only SQLite extract, and returns a signed assertion carrying the answer and not the record. Registry Mint is a supporting service that issues the short-lived access tokens Evidence Gateway verifies, for deployments with no identity provider. The external Solmara Lab adopter demo provides synthetic registry data.</desc>
+  <desc>Registry Platform provides shared primitives to every runtime product. Registry Manifest produces portable metadata contracts describing what a registry exposes. Base Registry Engine compiles a declared registry project into a PostgreSQL-backed writable registry with a REST API, revision history, and an audit journal. Registry Relay independently compiles a reviewed registry contract and serves protected read-only operations over one local read-only SQLite source; it does not read a Registry Manifest document. Evidence Gateway independently answers one bounded question about one subject from its own configured authoritative sources, reached over a fixed HTTP JSON request or one reviewed SQL statement against a read-only SQLite extract, and returns a signed assertion carrying the answer and not the record. A Base Registry Engine route or a Relay-protected API can be one of those fixed HTTP sources, and Evidence Gateway inherits neither one's authorization. Registry Discovery serves one immutable index built offline from approved provider descriptions and leaves endpoint trust to the relying application. Registry Mint is a supporting service that issues the short-lived access tokens a resource server such as Evidence Gateway or Base Registry Engine verifies, for deployments with no identity provider. The external Solmara Lab adopter demo provides synthetic registry data.</desc>
 
   <text x="16" y="22" fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">SHARED PRIMITIVES</text>
   <rect x="16" y="30" width="32" height="2" fill="#000091"/>
@@ -12,7 +12,7 @@
         font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">registry-platform</text>
   <g fill="#3a3a3a" font-size="12.5">
     <text x="16" y="112">Shared auth, OIDC, audit, HTTP security, crypto, SD-JWT, and test crates.</text>
-    <text x="16" y="130">Composed by both runtime services.</text>
+    <text x="16" y="130">Composed by every runtime product.</text>
   </g>
 
   <line x1="0" y1="156" x2="720" y2="156" stroke="#e5e5e5" stroke-width="1"/>
@@ -20,7 +20,7 @@
   <g fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">
     <text x="16" y="178">CONTRACTS</text>
     <text x="240" y="178">RUNTIME</text>
-    <text x="520" y="178">EXTERNAL DEMO</text>
+    <text x="520" y="178">INDEX</text>
   </g>
   <g fill="#000091">
     <rect x="16" y="186" width="32" height="2"/>
@@ -39,50 +39,82 @@
     <text x="16" y="340">OGC Records, and SKOS.</text>
   </g>
 
-  <text x="240" y="220" fill="#161616" font-size="14" font-weight="700">Registry Relay</text>
+  <text x="240" y="220" fill="#161616" font-size="14" font-weight="700">Base Registry Engine</text>
   <text x="240" y="238" fill="#6a6a6a" font-size="11.5"
-        font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">registry-relay</text>
+        font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">registry-breg</text>
   <g fill="#3a3a3a" font-size="12.5">
-    <text x="240" y="268">Compiles a reviewed registry</text>
-    <text x="240" y="286">contract. Serves read-only</text>
-    <text x="240" y="304">operations over one local</text>
-    <text x="240" y="322">read-only SQLite source.</text>
+    <text x="240" y="268">Compiles a declared registry</text>
+    <text x="240" y="286">project into a PostgreSQL</text>
+    <text x="240" y="304">schema, a REST API, revision</text>
+    <text x="240" y="322">history, and an audit journal.</text>
   </g>
 
-  <text x="240" y="392" fill="#161616" font-size="14" font-weight="700">Evidence Gateway</text>
-  <text x="240" y="410" fill="#6a6a6a" font-size="11.5"
-        font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">registry-evidence</text>
+  <text x="520" y="220" fill="#161616" font-size="14" font-weight="700">Registry Discovery</text>
+  <text x="520" y="238" fill="#6a6a6a" font-size="11.5"
+        font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">registry-discovery</text>
   <g fill="#3a3a3a" font-size="12.5">
-    <text x="240" y="440">Answers one bounded question</text>
-    <text x="240" y="458">about one subject. Returns a</text>
-    <text x="240" y="476">signed assertion carrying the</text>
-    <text x="240" y="494">answer, not the record.</text>
+    <text x="520" y="268">Serves one immutable</text>
+    <text x="520" y="286">index built offline from</text>
+    <text x="520" y="304">approved provider</text>
+    <text x="520" y="322">descriptions. Endpoint</text>
+    <text x="520" y="340">trust stays with the caller.</text>
+  </g>
+
+  <text x="240" y="392" fill="#161616" font-size="14" font-weight="700">Registry Relay</text>
+  <text x="240" y="410" fill="#6a6a6a" font-size="11.5"
+        font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">registry-relay</text>
+  <g fill="#3a3a3a" font-size="12.5">
+    <text x="240" y="440">Compiles a reviewed registry</text>
+    <text x="240" y="458">contract. Serves read-only</text>
+    <text x="240" y="476">operations over one local</text>
+    <text x="240" y="494">read-only SQLite source.</text>
   </g>
 
   <g stroke="#000091" stroke-width="1" fill="none">
-    <line x1="476" y1="268" x2="512" y2="268"/>
-    <polyline points="506,264 512,268 506,272"/>
+    <line x1="476" y1="440" x2="512" y2="440"/>
+    <polyline points="506,436 512,440 506,444"/>
   </g>
 
-  <text x="520" y="220" fill="#161616" font-size="14" font-weight="700">Solmara Lab</text>
-  <text x="520" y="238" fill="#6a6a6a" font-size="11.5"
+  <text x="520" y="374" fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">EXTERNAL DEMO</text>
+  <rect x="520" y="382" width="32" height="2" fill="#000091"/>
+
+  <text x="520" y="416" fill="#161616" font-size="14" font-weight="700">Solmara Lab</text>
+  <text x="520" y="434" fill="#6a6a6a" font-size="11.5"
         font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">solmara-lab</text>
   <g fill="#3a3a3a" font-size="12.5">
-    <text x="520" y="268">External adopter demo</text>
-    <text x="520" y="286">with generated synthetic</text>
-    <text x="520" y="304">registry data and demo</text>
-    <text x="520" y="322">configuration.</text>
+    <text x="520" y="464">External adopter demo</text>
+    <text x="520" y="482">with generated synthetic</text>
+    <text x="520" y="500">registry data and demo</text>
+    <text x="520" y="518">configuration.</text>
   </g>
 
-  <line x1="0" y1="520" x2="720" y2="520" stroke="#e5e5e5" stroke-width="1"/>
-  <text x="16" y="542" fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">SUPPORTING SERVICE</text>
-  <rect x="16" y="550" width="32" height="2" fill="#000091"/>
+  <text x="240" y="564" fill="#161616" font-size="14" font-weight="700">Evidence Gateway</text>
+  <text x="240" y="582" fill="#6a6a6a" font-size="11.5"
+        font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">registry-evidence</text>
+  <g fill="#3a3a3a" font-size="12.5">
+    <text x="240" y="612">Answers one bounded question</text>
+    <text x="240" y="630">about one subject. Returns a</text>
+    <text x="240" y="648">signed assertion carrying the</text>
+    <text x="240" y="666">answer, not the record.</text>
+  </g>
 
-  <text x="16" y="574" fill="#161616" font-size="14" font-weight="700">Registry Mint</text>
-  <text x="144" y="574" fill="#6a6a6a" font-size="11.5"
+  <g stroke="#000091" stroke-width="1" fill="none" stroke-dasharray="4 3">
+    <path d="M228 300 H208 V616 H228"/>
+    <polyline points="222,612 228,616 222,620"/>
+  </g>
+  <text x="16" y="612" fill="#6a6a6a" font-size="11.5">A compiled route</text>
+  <text x="16" y="630" fill="#6a6a6a" font-size="11.5">can be one fixed</text>
+  <text x="16" y="648" fill="#6a6a6a" font-size="11.5">Evidence source.</text>
+
+  <line x1="0" y1="704" x2="720" y2="704" stroke="#e5e5e5" stroke-width="1"/>
+  <text x="16" y="726" fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">SUPPORTING SERVICE</text>
+  <rect x="16" y="734" width="32" height="2" fill="#000091"/>
+
+  <text x="16" y="758" fill="#161616" font-size="14" font-weight="700">Registry Mint</text>
+  <text x="144" y="758" fill="#6a6a6a" font-size="11.5"
         font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">registry-mint</text>
   <g fill="#3a3a3a" font-size="12.5">
-    <text x="260" y="574">Issues the short-lived access tokens Evidence Gateway verifies,</text>
-    <text x="260" y="592">for deployments with no identity provider.</text>
+    <text x="260" y="758">Issues the short-lived access tokens Evidence Gateway and</text>
+    <text x="260" y="776">Base Registry Engine verify, for deployments with no identity provider.</text>
   </g>
 </svg>
