@@ -1081,14 +1081,40 @@ fn doctor_renders_every_call_each_declared_acquisition_will_make() {
 
 /// Assemble the smallest filesystem fixture that names every kind of artifact
 /// doctor checks, then generate the private material through the public CLI.
+/// The signer a local deployment declares, resolved from the same secret root
+/// the bundle's other references use.
+const LOCAL_SIGNER: &str =
+    "signer:\n  kind: local-jwk\n  privateKeyRef: secret:file/signing-p256-private-jwk\n";
+
+/// The signer a production deployment declares, over a socket that belongs to
+/// the target host and exists nowhere in this workspace.
+const TRANSIT_SIGNER: &str = "signer:\n  kind: transit\n  unixSocketPath: /run/registry-evidence/transit-proxy.sock\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 1\n  timeoutMilliseconds: 2000\n";
+
+fn runtime_document(signer: &str) -> String {
+    format!("bundleDirectory: bundle\nsecretProviders:\n  file:\n    root: secrets\n{signer}auditStorage:\n  path: audit/evidence.jsonl\n")
+}
+
+fn rewrite_runtime(project: &Path, signer: &str) {
+    let path = project.join("runtime.yaml");
+    let mode = mode_of(&path);
+    set_mode(&path, 0o600);
+    fs::write(&path, runtime_document(signer)).expect("runtime fixture");
+    set_mode(&path, mode);
+}
+
+fn use_transit_signer(project: &Path) {
+    rewrite_runtime(project, TRANSIT_SIGNER);
+}
+
+fn remove_signer(project: &Path) {
+    rewrite_runtime(project, "");
+}
+
 fn provision(project: &Path) {
     fs::create_dir_all(project.join("bundle")).expect("bundle directory");
     fs::create_dir_all(project.join("audit")).expect("audit directory");
-    fs::write(
-        project.join("runtime.yaml"),
-        "bundleDirectory: bundle\nsecretProviders:\n  file:\n    root: secrets\nauditStorage:\n  path: audit/evidence.jsonl\n",
-    )
-    .expect("runtime fixture");
+    fs::write(project.join("runtime.yaml"), runtime_document(LOCAL_SIGNER))
+        .expect("runtime fixture");
     fs::write(
         project.join("bundle/evidence.yaml"),
         r#"authentication:
@@ -1304,4 +1330,141 @@ fn set_tree_mode(path: &Path, directory_mode: u32, file_mode: u32) {
     } else {
         set_mode(path, file_mode);
     }
+}
+
+/// `doctor` is the command a newcomer reaches for first, and the project they
+/// have just authored is not the shape it inspects. The refusal names the
+/// shape it needs and both commands that move forward from an editable one.
+#[test]
+fn doctor_names_the_next_commands_when_the_project_is_still_editable() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = workspace.path().join("over18");
+    let created = evidencectl(&[
+        "new",
+        project.to_str().expect("project path"),
+        "--transport",
+        "sqlite-extract",
+        "--profile",
+        "local",
+    ]);
+    assert!(created.status.success(), "{}", stderr_of(&created));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .arg("doctor")
+        .current_dir(&project)
+        .output()
+        .expect("running evidencectl doctor");
+
+    assert!(
+        !output.status.success(),
+        "doctor inspects a deployment project only"
+    );
+    let message = stderr_of(&output);
+    assert!(
+        message.contains("editable project"),
+        "the refusal must name the shape it was handed: {message}"
+    );
+    assert!(
+        message.contains("evidencectl build"),
+        "the refusal must name the command that produces a candidate: {message}"
+    );
+    assert!(
+        message.contains("evidencectl fixtures run"),
+        "the refusal must name the command that checks an editable project: {message}"
+    );
+}
+
+#[test]
+fn doctor_names_the_build_command_for_a_directory_that_is_neither_shape() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .arg("doctor")
+        .current_dir(workspace.path())
+        .output()
+        .expect("running evidencectl doctor");
+
+    assert!(!output.status.success());
+    let message = stderr_of(&output);
+    assert!(
+        message.contains("deployment project"),
+        "the refusal must name the shape it needs: {message}"
+    );
+    assert!(
+        message.contains("evidencectl build"),
+        "the refusal must name the command that produces one: {message}"
+    );
+}
+
+/// An all-green report that never mentions the signer reads as a ready target
+/// host. The signer this deployment declares belongs in the report.
+#[test]
+fn doctor_reports_the_local_signer_it_inspected() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = workspace.path().join("project");
+    provision(&project);
+    provision_bearer_token(&project);
+    freeze(&project);
+
+    let output = doctor(&project, &[]);
+
+    assert!(output.status.success(), "{}", stdout_of(&output));
+    let report = stdout_of(&output);
+    assert!(
+        report.contains("PASS: signer"),
+        "the signer belongs among the checks: {report}"
+    );
+    assert!(
+        report.contains("local-jwk"),
+        "the report must name the signer kind it inspected: {report}"
+    );
+}
+
+/// A Transit signer resolves against a provider on the target host, which this
+/// walk contacts as it contacts nothing else. Saying so is what keeps the
+/// all-green report from reading as a ready host.
+#[test]
+fn doctor_states_that_a_transit_signer_is_settled_on_the_target_host() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = workspace.path().join("project");
+    provision(&project);
+    provision_bearer_token(&project);
+    use_transit_signer(&project);
+    freeze(&project);
+
+    let output = doctor(&project, &[]);
+
+    assert!(output.status.success(), "{}", stdout_of(&output));
+    let report = stdout_of(&output);
+    assert!(
+        report.contains("transit"),
+        "the report must name the signer kind it inspected: {report}"
+    );
+    assert!(
+        report.contains("/run/registry-evidence/transit-proxy.sock"),
+        "the report must name the provider it did not reach: {report}"
+    );
+    assert!(
+        report.contains("evidence check"),
+        "the report must name what settles the signer on the target host: {report}"
+    );
+}
+
+#[test]
+fn doctor_reports_a_runtime_file_that_declares_no_signer() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = workspace.path().join("project");
+    provision(&project);
+    provision_bearer_token(&project);
+    remove_signer(&project);
+    freeze(&project);
+
+    let output = doctor(&project, &[]);
+
+    assert!(!output.status.success());
+    let report = stdout_of(&output);
+    assert!(
+        report.contains("FAIL: signer"),
+        "a runtime file without a signer cannot start: {report}"
+    );
 }
