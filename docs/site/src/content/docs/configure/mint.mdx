@@ -237,7 +237,7 @@ response could exceed the shared client's 16 KiB read ceiling.
 Registry Relay validates the resulting token through its standard OAuth JWT verifier. It has no
 Registry Mint-specific authentication branch. The Relay client library's private-key-JWT token
 provider can acquire, retain, and refresh this token; see the
-[Registry Relay client API](../../reference/relay-client-api/).
+[Registry Relay client API](../../reference/client-api/#registry-relay).
 
 Keep `private-key-jwt` as the default when the client can sign assertions. For one managed QGIS
 installation or another standard OAuth client that cannot, generate a secret and explicitly
