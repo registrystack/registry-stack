@@ -65,7 +65,7 @@ jobs:
                   "packages": " ".join(packages),
                   "all_features": str(name in {"platform", "relay-v2"}).lower(),
                   "features": "",
-                  "flag": flags[name],
+                  "flag": flags.get(name, name),
               }
               for name, packages in SHARDS.items()
           ]
