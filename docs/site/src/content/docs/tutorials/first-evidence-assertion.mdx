@@ -23,7 +23,7 @@ person's name or date of birth.
   outcome="One governed adult-status answer verified as signed JWS and SD-JWT VC, without the source record."
   time="About 20 minutes"
   level="Local development with synthetic data"
-  prerequisites={['Python 3', 'A shell with curl', 'An editor', 'Linux or macOS']}
+  prerequisites={['Python 3', 'A shell with curl', 'An editor']}
 />
 
 ## Understand the flow
@@ -57,7 +57,8 @@ evidencectl --version
 ```
 
 The installer provides `evidencectl` and the local Evidence Gateway and Registry Mint runtimes used later
-in the tutorial.
+in the tutorial. The platforms those binaries cover, and the C library floor they need, are in
+[platform support](../../explanation/known-limitations/#platform-support).
 
 The command pipes a script from GitHub straight into `bash`, so replace `| bash` with `| less` first if you
 would rather read it before it runs. On a tutorial machine that is your own call, but before these binaries
@@ -368,7 +369,8 @@ Mint ready at http://127.0.0.1:8081
 ```
 
 This command starts Evidence Gateway and Mint only. The source mock remains the process you started in
-the first terminal.
+the first terminal. If either port is already taken, use
+[If local ports are already in use](#if-local-ports-are-already-in-use) before continuing.
 
 ## Request an assertion
 
@@ -569,6 +571,27 @@ The requester value changes on each fresh project. The view identifies the quest
 requester pseudonym, authorization decision, and disclosed concept. It does not repeat the source
 record or access token.
 
+## If local ports are already in use
+
+Choose two different unused ports when you start the local services:
+
+```sh
+evidencectl dev --detach --evidence-port 8180 --mint-port 8181
+```
+
+Evidence Gateway uses the selected ports consistently in its runtime, Mint authorization, readiness
+checks, and generated request artifacts. Send the assertion request to the selected Evidence Gateway port,
+such as `http://127.0.0.1:8180/v1/evidence`.
+
+The source mock separately uses `127.0.0.1:4010`, the origin retained in `source.openapi.yaml`. If that
+port is unavailable, change the OpenAPI server URL before creating the project and pass the same origin
+with `source mock serve --http-addr`.
+
+The development profile binds both services to loopback in the environment where the command
+runs. If that environment is a Docker container, run the tutorial's `curl` commands in the same
+container. Use the operator deployment configuration when the service must listen beyond
+loopback.
+
 ## Clean up
 
 Remove the stopped local generation, including the sealed bundle that Evidence Gateway used:
@@ -590,27 +613,6 @@ Return to the first terminal and press `Ctrl+C` to stop the source mock.
 
 Keep the tutorial directory to continue with the governed-value tutorial. If you do not plan to
 continue, you can remove the complete directory with ordinary file commands.
-
-## If local ports are already in use
-
-Choose two different unused ports when you start the local services:
-
-```sh
-evidencectl dev --detach --evidence-port 8180 --mint-port 8181
-```
-
-Evidence Gateway uses the selected ports consistently in its runtime, Mint authorization, readiness
-checks, and generated request artifacts. Send the assertion request to the selected Evidence Gateway port,
-such as `http://127.0.0.1:8180/v1/evidence`.
-
-The source mock separately uses `127.0.0.1:4010`, the origin retained in `source.openapi.yaml`. If that
-port is unavailable, change the OpenAPI server URL before creating the project and pass the same origin
-with `source mock serve --http-addr`.
-
-The development profile binds both services to loopback in the environment where the command
-runs. If that environment is a Docker container, run the tutorial's `curl` commands in the same
-container. Use the operator deployment configuration when the service must listen beyond
-loopback.
 
 ## Next
 
