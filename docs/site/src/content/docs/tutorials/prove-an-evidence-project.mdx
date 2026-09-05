@@ -121,10 +121,13 @@ run to explain itself:
 evidencectl fixtures run --project "<evidence-project>" --explain
 ```
 
-Each fixture's trace is relayed with its step: one line per case, then one line per stage that case
-reached, with the status it reached it at. The last line of a failed case is the one to read first.
-An unresolved lookup lists the response members the extraction script actually saw, and an
-output-gate rejection lists each declared concept and its required form.
+Each fixture prints one JSON trace after its result line. The trace holds one entry per case, with
+the case `id`, its `expectedResult` and `observedResult`, the `reasonCode` the run settled on, and
+one `stages` entry for every stage that case reached: `prepare`, `acquire`, `extract`, `derive`,
+`validate`, and `sign`. Every stage carries its own `status` and a short `note`, such as the keys a
+response was projected to or the concepts the output gate accepted. A failed case adds `failure` and
+`findingCodes`, and its `stages` list stops at the stage that ended the case, so read that last entry
+first.
 
 To explain one fixture on its own, or one case inside it, name them. The paths are the ones the
 compiled bundle captured, which are the project's own `fixtures/` paths:
