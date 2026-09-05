@@ -161,7 +161,11 @@ caller identity, purpose, or signing keys.
 `people-parameters.schema.yaml` is generated as an empty-properties stub, and an empty object is
 not a bounded schema, so a project that keeps both the stub and `adapterParameters: {}` fails its
 first fixture run with `evidence: deployment artifact is invalid: artifact
-schemas/people-parameters.schema.yaml: schema objects must declare bounded properties`.
+schemas/people-parameters.schema.yaml: schema objects must declare bounded properties`. Fill the
+stub with the one reviewed parameter this source takes, require it, and give it a value in
+`adapterParameters`. The Evidence authoring form reference states that rule and the others a first
+build meets under
+[Rules that block a build](../../products/registry-evidence/authoring-form/#rules-that-block-a-build).
 
 ## Store the source credential
 
