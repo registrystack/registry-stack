@@ -19,6 +19,8 @@ use std::{
 const REVISION: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const LOCAL_URI: &str = "urn:registrystack:evidence:local:forbidden";
 const SECRET_CANARY: &str = "production-build-secret-canary";
+const CHECK_DIAGNOSTIC: &str =
+    "evidence bundle-check diagnostic: derivations/answer.rhai failed static compilation";
 
 #[test]
 fn build_is_create_only_and_never_changes_an_existing_output() {
@@ -129,6 +131,10 @@ fn a_rejected_bundle_and_fixture_name_the_command_that_shows_the_diagnosis() {
         )),
         "the refusal names the command that shows the diagnosis: {message}"
     );
+    assert!(
+        message.contains(CHECK_DIAGNOSTIC),
+        "the refusal includes what Evidence printed: {message}"
+    );
     assert_value_free(&output);
 
     let rejected_fixture = Fixture::new();
@@ -145,7 +151,33 @@ fn a_rejected_bundle_and_fixture_name_the_command_that_shows_the_diagnosis() {
         )),
         "the refusal names the rejected fixture with the command: {message}"
     );
+    assert!(
+        !message.contains("Evidence reported:"),
+        "a rejected fixture's own diagnosis is not relayed here: {message}"
+    );
     assert_value_free(&output);
+}
+
+#[test]
+fn a_long_bundle_check_diagnostic_is_bounded_and_says_so() {
+    let fixture = Fixture::new();
+
+    let output = fixture.build_failing("check-overflow");
+
+    assert_failed(&output, "a long rejected bundle must still fail the build");
+    let message = stderr(&output);
+    assert!(
+        message.contains("diagnostic trimmed to the last 40 lines"),
+        "a long diagnostic says it was trimmed: {message}"
+    );
+    assert!(
+        message.contains("evidence bundle-check diagnostic line 200"),
+        "the most recent line survives the trim: {message}"
+    );
+    assert!(
+        !message.contains("evidence bundle-check diagnostic line 1\n"),
+        "an earlier line does not survive the trim: {message}"
+    );
 }
 
 #[test]
@@ -1121,7 +1153,15 @@ done
 
 failure=${FAKE_EVIDENCE_FAIL:-}
 if [ "$failure" = 'check' ] && [ -z "$fixture" ]; then
-  printf '%s\n' 'production-build-secret-canary synthetic-selector-canary source-value-canary' >&2
+  printf '%s\n' 'evidence bundle-check diagnostic: derivations/answer.rhai failed static compilation' >&2
+  exit 1
+fi
+if [ "$failure" = 'check-overflow' ] && [ -z "$fixture" ]; then
+  i=1
+  while [ "$i" -le 200 ]; do
+    printf 'evidence bundle-check diagnostic line %s\n' "$i" >&2
+    i=$((i + 1))
+  done
   exit 1
 fi
 if [ "$failure" = "fixture:$fixture" ]; then
