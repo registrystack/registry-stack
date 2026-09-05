@@ -41,6 +41,10 @@ fn write_project(root: &Path, fixture_paths: &[&str]) -> PathBuf {
 }
 
 /// Write a stub `evidence` binary that:
+/// - answers the version handshake with this build's own version, or with
+///   `$STUB_VERSION` when that is set, and prints nothing at all when
+///   `$STUB_VERSION` is empty; the handshake is deliberately absent from
+///   `$ARGV_LOG`, which records the steps of the run itself;
 /// - appends its argv (one argument per line, `===` between invocations) to
 ///   the file named by `$ARGV_LOG`;
 /// - exits 1 with a fixed diagnostic on stderr when its step name equals
@@ -50,8 +54,17 @@ fn write_project(root: &Path, fixture_paths: &[&str]) -> PathBuf {
 ///   when `$CASES` is set and the step is an evaluation.
 fn write_stub_evidence(dir: &Path) -> PathBuf {
     let path = dir.join("evidence");
-    let script = r#"#!/bin/sh
+    let script = format!(
+        r#"#!/bin/sh
 set -eu
+
+if [ "${{1:-}}" = "--version" ]; then
+  reported="${{STUB_VERSION-{version}}}"
+  if [ -n "$reported" ]; then
+    printf 'evidence %s\n' "$reported"
+  fi
+  exit 0
+fi
 
 for arg in "$@"; do
   printf '%s\n' "$arg" >> "$ARGV_LOG"
@@ -81,23 +94,25 @@ if [ -n "$fixture" ]; then
   step="evaluate:$fixture"
 fi
 
-if [ "$step" = "${FAIL_STEP:-}" ]; then
+if [ "$step" = "${{FAIL_STEP:-}}" ]; then
   printf 'stub failure for %s\n' "$step" >&2
   exit 1
 fi
 
 if [ "$explain_json" = "true" ]; then
-  printf '{"passed":true,"evaluatedCases":%s,"cases":[]}\n' "${CASES:-0}"
+  printf '{{"passed":true,"evaluatedCases":%s,"cases":[]}}\n' "${{CASES:-0}}"
   exit 0
 fi
 
 printf 'stub ok for %s\n' "$step"
-if [ -n "$fixture" ] && [ -n "${CASES:-}" ]; then
+if [ -n "$fixture" ] && [ -n "${{CASES:-}}" ]; then
   printf 'Evidence fixture passed (%s evaluated cases)\n' "$CASES"
 fi
 exit 0
-"#;
-    fs::write(&path, script).expect("write stub evidence script");
+"#,
+        version = registry_platform_buildinfo::DISPLAY_VERSION
+    );
+    fs::write(&path, &script).expect("write stub evidence script");
     let mut permissions = fs::metadata(&path).expect("stat stub").permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(&path, permissions).expect("chmod stub");
@@ -127,6 +142,7 @@ fn happy_path_runs_check_then_each_fixture_and_reports_pass() {
         .arg("--evidence-bin")
         .arg(&stub)
         .env("ARGV_LOG", &argv_log)
+        .env("CASES", "5")
         .env_remove("FAIL_STEP")
         .output()
         .expect("run evidencectl");
@@ -502,7 +518,6 @@ fn an_unrecognized_summary_line_is_counted_as_nothing() {
         .output()
         .expect("run evidencectl");
 
-    assert!(output.status.success(), "{}", stderr_of(&output));
     let stdout = stdout_of(&output);
     assert!(
         stdout.contains("2 passed, 0 failed (0 cases evaluated)"),
@@ -511,6 +526,132 @@ fn an_unrecognized_summary_line_is_counted_as_nothing() {
     assert!(
         !stdout.contains("cases)\n") || !stdout.contains("PASS: fixtures/a.yaml ("),
         "an uncounted fixture must not claim a count: {stdout}"
+    );
+    // Counting nothing is honest; reporting it as success is not.
+    assert!(
+        !output.status.success(),
+        "a run that counted no case reported success: {stdout}"
+    );
+}
+
+/// A run whose steps all pass but whose fixtures evaluated nothing is the one
+/// green result that means nothing at all: a reader takes it for proof the
+/// deployment answers its questions, and no question was ever asked.
+#[test]
+fn a_run_that_evaluated_no_case_fails_instead_of_reporting_success() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = write_project(dir.path(), &["fixtures/a.yaml", "fixtures/b.yaml"]);
+    let stub = write_stub_evidence(dir.path());
+    let argv_log = dir.path().join("argv.log");
+
+    let output = evidencectl()
+        .args(["fixtures", "run", "--project"])
+        .arg(&project)
+        .arg("--evidence-bin")
+        .arg(&stub)
+        .arg("--json")
+        .env("ARGV_LOG", &argv_log)
+        .env("CASES", "0")
+        .env_remove("FAIL_STEP")
+        .output()
+        .expect("run evidencectl");
+
+    assert!(!output.status.success(), "{}", stdout_of(&output));
+    let report: serde_json::Value =
+        serde_json::from_str(stdout_of(&output).trim()).expect("parse JSON report");
+    assert_eq!(report["passed"], serde_json::Value::Bool(false));
+    assert_eq!(report["evaluated_cases"], serde_json::json!(0));
+
+    // The verdict comes from the empty count, not from a failing step: every
+    // step this run took passed, which is exactly what makes it misleading.
+    assert_eq!(report["check"]["passed"], serde_json::Value::Bool(true));
+    let fixtures = report["fixtures"].as_array().expect("fixtures array");
+    assert!(
+        fixtures
+            .iter()
+            .all(|fixture| fixture["passed"] == serde_json::Value::Bool(true)),
+        "{report}"
+    );
+
+    let stderr = stderr_of(&output);
+    assert!(stderr.contains("no case was evaluated"), "{stderr}");
+    assert!(
+        stderr.contains("declare"),
+        "the failure must name what to do about it: {stderr}"
+    );
+}
+
+/// A binary that answers nothing recognizable to `--version` is not the
+/// runtime this driver delegates every semantic decision to, and finding that
+/// out after a green run is finding it out too late.
+#[test]
+fn a_foreign_evidence_binary_is_refused_before_any_step() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = write_project(dir.path(), &["fixtures/a.yaml"]);
+    let stub = write_stub_evidence(dir.path());
+    let argv_log = dir.path().join("argv.log");
+
+    let output = evidencectl()
+        .args(["fixtures", "run", "--project"])
+        .arg(&project)
+        .arg("--evidence-bin")
+        .arg(&stub)
+        .env("ARGV_LOG", &argv_log)
+        .env("STUB_VERSION", "")
+        .output()
+        .expect("run evidencectl");
+
+    assert!(!output.status.success());
+    let stderr = stderr_of(&output);
+    assert!(
+        stderr.contains("did not report an Evidence runtime version"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(stub.to_str().expect("stub path is utf8")),
+        "the refusal must name the binary it refused: {stderr}"
+    );
+    assert!(
+        !argv_log.exists(),
+        "a refused binary must never be asked to run a step"
+    );
+}
+
+/// A mismatched pair is the same problem one step later: `evidencectl` reads
+/// the runtime's own output, so a run against another build reports whatever
+/// that build happened to print.
+#[test]
+fn a_mismatched_evidence_binary_is_refused_naming_both_versions() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = write_project(dir.path(), &["fixtures/a.yaml"]);
+    let stub = write_stub_evidence(dir.path());
+    let argv_log = dir.path().join("argv.log");
+    let reported = "0.0.1-another-build";
+
+    let output = evidencectl()
+        .args(["fixtures", "run", "--project"])
+        .arg(&project)
+        .arg("--evidence-bin")
+        .arg(&stub)
+        .env("ARGV_LOG", &argv_log)
+        .env("STUB_VERSION", reported)
+        .output()
+        .expect("run evidencectl");
+
+    assert!(!output.status.success());
+    let stderr = stderr_of(&output);
+    assert!(stderr.contains(reported), "{stderr}");
+    assert!(
+        stderr.contains(registry_platform_buildinfo::DISPLAY_VERSION),
+        "the refusal must name this evidencectl's own version too: {stderr}"
+    );
+    assert!(
+        stderr.contains("--evidence-bin"),
+        "the refusal must name the remedy: {stderr}"
+    );
+    assert!(
+        !argv_log.exists(),
+        "a refused binary must never be asked to run a step"
     );
 }
 
@@ -601,6 +742,7 @@ fn an_unexplained_run_relays_no_trace() {
         .arg(&stub)
         .arg("--json")
         .env("ARGV_LOG", &argv_log)
+        .env("CASES", "4")
         .env_remove("FAIL_STEP")
         .output()
         .expect("run evidencectl");
@@ -640,6 +782,7 @@ fn an_explained_json_run_carries_each_trace_in_its_report() {
         .arg("--json")
         .arg("--explain")
         .env("ARGV_LOG", &argv_log)
+        .env("CASES", "6")
         .env_remove("FAIL_STEP")
         .output()
         .expect("run evidencectl");
@@ -733,6 +876,7 @@ fn fixtures_are_discovered_at_a_relative_bundle_directory_named_in_runtime_yaml(
         .arg("--evidence-bin")
         .arg(&stub)
         .env("ARGV_LOG", &argv_log)
+        .env("CASES", "2")
         .env_remove("FAIL_STEP")
         .output()
         .expect("run evidencectl");
@@ -771,6 +915,7 @@ fn fixtures_are_discovered_at_an_absolute_bundle_directory_named_in_runtime_yaml
         .arg("--evidence-bin")
         .arg(&stub)
         .env("ARGV_LOG", &argv_log)
+        .env("CASES", "2")
         .env_remove("FAIL_STEP")
         .output()
         .expect("run evidencectl");
@@ -824,6 +969,7 @@ fn evidence_bin_env_var_is_used_when_the_flag_is_omitted() {
         .arg(&project)
         .env("EVIDENCE_BIN", &stub)
         .env("ARGV_LOG", &argv_log)
+        .env("CASES", "1")
         .output()
         .expect("run evidencectl");
 
