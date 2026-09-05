@@ -1,10 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Containment proof for an operator-declared persistent audit root.
 
-use std::{
-    env,
-    path::{Component, Path, PathBuf},
-};
+use std::path::{Component, Path, PathBuf};
 
 use thiserror::Error;
 
@@ -31,9 +28,11 @@ pub enum PersistentRootFault {
 ///
 /// The caller supplies the destination its own configuration contract already
 /// resolved, and the operator supplies the root that storage is declared
-/// persistent under. Symlinks are followed before the comparison so a link
-/// planted inside the root cannot redirect the audit chain onto ephemeral
-/// storage. Any resolution error fails closed.
+/// persistent under. A destination that is not absolute is refused rather than
+/// resolved here, because only the caller knows what it resolves against.
+/// Symlinks are followed before the comparison so a link planted inside the
+/// root cannot redirect the audit chain onto ephemeral storage. Any resolution
+/// error fails closed.
 pub fn require_audit_under(destination: &Path, root: &Path) -> Result<(), PersistentRootFault> {
     let root = canonical_root(root)?;
     let destination = canonical_destination(destination)?;
@@ -62,19 +61,15 @@ fn canonical_root(root: &Path) -> Result<PathBuf, PersistentRootFault> {
 /// the deepest existing ancestor is canonicalized and the remaining components
 /// are appended. Those components are rejected unless they can only descend.
 fn canonical_destination(destination: &Path) -> Result<PathBuf, PersistentRootFault> {
-    if destination.as_os_str().is_empty() {
+    // Resolving a relative destination would mean guessing a base directory
+    // that belongs to the caller's configuration contract. An empty path is
+    // not absolute either, so the same rule refuses it.
+    if !destination.is_absolute() {
         return Err(PersistentRootFault::Destination);
     }
-    let absolute = if destination.is_absolute() {
-        destination.to_path_buf()
-    } else {
-        env::current_dir()
-            .map_err(|_| PersistentRootFault::Destination)?
-            .join(destination)
-    };
 
     let mut descending = PathBuf::new();
-    for component in absolute.components() {
+    for component in destination.components() {
         match component {
             // `Components` already drops interior `.`; `..` would let the tail
             // climb back out of the root after canonicalization.
@@ -213,17 +208,12 @@ mod tests {
     }
 
     #[test]
-    fn a_relative_destination_resolves_against_the_working_directory() {
-        let package_root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let elsewhere = tempdir().expect("temporary root");
+    fn a_relative_destination_is_refused() {
+        let root = tempdir().expect("temporary root");
 
         assert_eq!(
-            Ok(()),
-            require_audit_under(Path::new("src/persistent_root.rs"), package_root)
-        );
-        assert_eq!(
-            Err(PersistentRootFault::Outside),
-            require_audit_under(Path::new("src/persistent_root.rs"), elsewhere.path())
+            Err(PersistentRootFault::Destination),
+            require_audit_under(Path::new("audit.jsonl"), root.path())
         );
     }
 
