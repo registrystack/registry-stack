@@ -6,9 +6,10 @@ import test from 'node:test';
 
 import YAML from 'yaml';
 
-import { assembleArchives, parseArgs } from './assemble-archives.mjs';
+import { assembleArchives, downloadBundle, parseArgs } from './assemble-archives.mjs';
 import {
   createArchiveBundle,
+  localArchiveBundlePath,
   releaseRootOutputDirectory,
 } from './archive-bundle.mjs';
 
@@ -140,6 +141,69 @@ test('restores a locked release bundle without rebuilding', async (t) => {
   assert.equal(buildCalls, 0);
   assert.equal(result.restored, 1);
   assert.equal(await readFile(resolve(targetRoot, 'dist/v/1.2.3/index.html'), 'utf8'), '<h1>Frozen</h1>\n');
+});
+
+test('recovers from a stale local bundle cache instead of reporting a lock violation', async (t) => {
+  const { bundlePath, targetRoot } = await fixture(t);
+  const localBundlePath = localArchiveBundlePath(targetRoot, docset);
+  await mkdir(resolve(targetRoot, '.archive-bundles'), { recursive: true });
+  // A bundle left behind by an earlier `--bootstrap` run, built from a working
+  // tree that no longer matches the published lock entry.
+  await writeFile(localBundlePath, 'stale bundle bytes from an earlier bootstrap run');
+
+  const body = await readFile(bundlePath);
+  let fetches = 0;
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (message) => { warnings.push(message); };
+  t.after(() => { console.warn = originalWarn; });
+
+  const result = await assembleArchives({
+    docsRoot: targetRoot,
+    fetchImpl: async () => {
+      fetches += 1;
+      return new Response(body, { status: 200 });
+    },
+    restoreGeneratedData: async () => {},
+  });
+
+  assert.equal(fetches, 1);
+  assert.equal(result.restored, 1);
+  assert.equal(await readFile(resolve(targetRoot, 'dist/v/1.2.3/index.html'), 'utf8'), '<h1>Frozen</h1>\n');
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /stale local archive bundle cache/);
+  assert.match(warnings[0], new RegExp(localBundlePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(warnings[0], /does not match lock/);
+});
+
+test('does not treat a genuinely inconsistent local bundle as a stale cache', async (t) => {
+  const { bundlePath, targetRoot } = await fixture(t);
+  const localBundlePath = localArchiveBundlePath(targetRoot, docset);
+  await mkdir(resolve(targetRoot, '.archive-bundles'), { recursive: true });
+  await writeFile(localBundlePath, await readFile(bundlePath));
+
+  // Corrupt the lock's tree digest while keeping its bundle digest correct, so
+  // the local bundle passes the outer bundle digest check (this is not a stale
+  // cache) but fails the inner tree digest check (this bundle really is
+  // inconsistent with its lock entry).
+  const lockPath = resolve(targetRoot, 'src/data/archive-lock.yaml');
+  const lock = YAML.parse(await readFile(lockPath, 'utf8'));
+  lock.archives[docset.id].tree_sha256 = '0'.repeat(64);
+  await writeFile(lockPath, YAML.stringify(lock));
+
+  let fetches = 0;
+  await assert.rejects(
+    assembleArchives({
+      docsRoot: targetRoot,
+      fetchImpl: async () => {
+        fetches += 1;
+        return new Response(await readFile(bundlePath), { status: 200 });
+      },
+      restoreGeneratedData: async () => {},
+    }),
+    /tree digest .* does not match its lock/,
+  );
+  assert.equal(fetches, 0);
 });
 
 test('only bootstraps missing bundles when explicitly allowed', async (t) => {
@@ -289,4 +353,83 @@ test('skips the exact release bundle supplied by authenticated promotion', async
     parseArgs(['--exclude-docset', docset.id]),
     { bootstrap: false, excludeDocsetId: docset.id },
   );
+});
+
+test('retries a transient bundle download failure with backoff before succeeding', async (t) => {
+  const { bundlePath, targetRoot } = await fixture(t);
+  const output = resolve(targetRoot, 'downloaded.tar.gz');
+  let calls = 0;
+  const waits = [];
+  const restored = await downloadBundle('https://example.test/bundle.tar.gz', output, {
+    fetchImpl: async () => {
+      calls += 1;
+      // A transient upstream failure (a momentary CDN/proxy error), not a
+      // missing bundle or a real content problem.
+      if (calls < 3) return new Response(null, { status: 503 });
+      return new Response(await readFile(bundlePath), { status: 200 });
+    },
+    wait: async (delayMs) => { waits.push(delayMs); },
+  });
+
+  assert.equal(restored, true);
+  assert.equal(calls, 3);
+  assert.deepEqual(waits, [200, 400]);
+  assert.deepEqual(await readFile(output), await readFile(bundlePath));
+});
+
+test('does not retry a non-transient bundle download failure', async (t) => {
+  const { targetRoot } = await fixture(t);
+  const output = resolve(targetRoot, 'downloaded.tar.gz');
+  let calls = 0;
+  await assert.rejects(
+    downloadBundle('https://example.test/bundle.tar.gz', output, {
+      fetchImpl: async () => {
+        calls += 1;
+        return new Response(null, { status: 400 });
+      },
+      wait: async () => {
+        throw new Error('must not wait before retrying a permanent failure');
+      },
+    }),
+    /returned HTTP 400/,
+  );
+  assert.equal(calls, 1);
+});
+
+test('stops retrying a persistent transient bundle download failure after its bounded attempts, status intact', async (t) => {
+  const { targetRoot } = await fixture(t);
+  const output = resolve(targetRoot, 'downloaded.tar.gz');
+  let calls = 0;
+  const waits = [];
+  await assert.rejects(
+    downloadBundle('https://example.test/bundle.tar.gz', output, {
+      fetchImpl: async () => {
+        calls += 1;
+        return new Response(null, { status: 503 });
+      },
+      wait: async (delayMs) => { waits.push(delayMs); },
+    }),
+    /returned HTTP 503/,
+  );
+  assert.equal(calls, 3);
+  assert.deepEqual(waits, [200, 400]);
+});
+
+test('classifies a dropped connection as a transient bundle download failure', async (t) => {
+  const { targetRoot } = await fixture(t);
+  const output = resolve(targetRoot, 'downloaded.tar.gz');
+  let calls = 0;
+  const result = await downloadBundle('https://example.test/bundle.tar.gz', output, {
+    fetchImpl: async () => {
+      calls += 1;
+      if (calls < 2) {
+        throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } });
+      }
+      return new Response(null, { status: 404 });
+    },
+    wait: async () => {},
+  });
+
+  assert.equal(result, false);
+  assert.equal(calls, 2);
 });

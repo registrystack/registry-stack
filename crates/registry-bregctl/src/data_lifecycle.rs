@@ -5,11 +5,10 @@
 //! HTTP dispatch. Data shape, chunking, idempotency, and response validation
 //! remain in `registry_breg::data`.
 
-use std::fs;
+use std::ffi::OsString;
+use std::fs::File;
 use std::future::Future;
 use std::io::{self, Read, Write};
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -30,12 +29,20 @@ use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{Client, Method, Url};
 use serde::{Deserialize, Serialize};
 
+use crate::safe_path::{SafeDir, SafeEntry, SafePathError};
+
 const MAX_TOKEN_BYTES: u64 = 64 * 1024;
 const MAX_CHECKPOINT_BYTES: u64 = 1024 * 1024;
 const DATA_HTTP_USER_AGENT: &str = "bregctl-data";
 const DATA_STATE_API_VERSION: &str = "registry.registrystack.org/bregctl-data/v1";
 const IMPORT_STATE_KIND: &str = "BRegctlDataImportState";
 const MAX_ATOMIC_WRITE_TEMP_ATTEMPTS: usize = 16;
+/// The longest output tail a resuming export discards. The export appends one
+/// bounded page and then publishes the checkpoint that records it, so a run
+/// stopped between the two leaves at most one page the checkpoint never
+/// recorded, and a page never exceeds the bounded HTTP response it is built
+/// from. Anything longer did not come from that window.
+const MAX_UNCOMMITTED_EXPORT_TAIL_BYTES: u64 = MAX_DATA_HTTP_RESPONSE_BYTES as u64;
 
 static DATA_WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -493,20 +500,7 @@ fn load_or_start_export(
             reserve_export_paths(output_path, checkpoint_path, &checkpoint_bytes)?;
             Ok((checkpoint, DataExportOutputState::empty(), resume_state))
         }
-        (true, true) => {
-            let output_state = read_export_output_state(output_path)?;
-            let checkpoint_bytes = read_bounded_regular(checkpoint_path, MAX_CHECKPOINT_BYTES)
-                .map_err(|_| DataLifecycleError::Checkpoint)?;
-            let (checkpoint, resume_state) = DataExportCheckpoint::resume_from_json(
-                &checkpoint_bytes,
-                plan,
-                &inspected.package_revision,
-                &inspected.schema_fingerprint,
-                &output_state,
-            )
-            .map_err(DataLifecycleError::Data)?;
-            Ok((checkpoint, output_state, resume_state))
-        }
+        (true, true) => resume_existing_export(plan, inspected, output_path, checkpoint_path),
         (false, true) | (true, false) => Err(DataLifecycleError::Checkpoint),
     }
 }
@@ -687,13 +681,9 @@ fn data_endpoint(base: &ServiceBaseUrl, path_and_query: &str) -> Result<Url, ()>
 }
 
 fn read_bounded_regular(path: &Path, max_bytes: u64) -> Result<Vec<u8>, io::Error> {
-    super::ensure_no_symlink_components(path, "data.input.invalid", "data")
-        .map_err(|_| io::Error::other("unsafe path"))?;
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    options.custom_flags(file_no_follow_flags());
-    let file = options.open(path)?;
+    let file = SafeEntry::resolve(path)
+        .map_err(SafePathError::into_io)?
+        .open_read()?;
     let metadata = file.metadata()?;
     if !metadata.is_file() || metadata.len() == 0 || metadata.len() > max_bytes {
         return Err(io::Error::other("invalid file"));
@@ -720,31 +710,100 @@ fn reserve_export_paths(
     write_atomic_create_new(checkpoint, checkpoint_bytes)
 }
 
-fn read_export_output_state(path: &Path) -> Result<DataExportOutputState, DataLifecycleError> {
-    super::ensure_no_symlink_components(path, "data.output.invalid", "output")
+/// Restore an export from its output file and the checkpoint that records the
+/// committed prefix of that file.
+///
+/// The export appends one page and then publishes the checkpoint recording it,
+/// so a killed process or a refused checkpoint publication leaves an output
+/// file one page longer than the checkpoint accounts for. Recovery streams
+/// exactly the checkpointed prefix, requires the checkpoint to describe those
+/// bytes, and only then discards the tail past them through the descriptor the
+/// prefix was read from. An output shorter than the checkpoint, a prefix the
+/// checkpoint does not describe, a checkpoint bound to another export, a tail
+/// longer than one page, and any tail following a checkpoint that already
+/// reports the export complete are refused, and refusal leaves both files as
+/// they are.
+fn resume_existing_export(
+    plan: &DataExportPlan,
+    inspected: &InspectedDataPackage,
+    output_path: &Path,
+    checkpoint_path: &Path,
+) -> Result<
+    (
+        DataExportCheckpoint,
+        DataExportOutputState,
+        registry_breg::data::DataExportResumeState,
+    ),
+    DataLifecycleError,
+> {
+    let checkpoint_bytes = read_bounded_regular(checkpoint_path, MAX_CHECKPOINT_BYTES)
+        .map_err(|_| DataLifecycleError::Checkpoint)?;
+    let committed_length = checkpointed_output_length(&checkpoint_bytes)?;
+    let output = SafeEntry::resolve(output_path).map_err(|_| DataLifecycleError::Output)?;
+    // One descriptor serves the prefix read and the tail discard, so the file
+    // whose prefix matched the checkpoint is the file that gets shortened.
+    let file = output
+        .open_read_write()
         .map_err(|_| DataLifecycleError::Output)?;
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    options.custom_flags(file_no_follow_flags());
-    let file = options.open(path).map_err(|_| DataLifecycleError::Output)?;
-    if !file
-        .metadata()
-        .map_err(|_| DataLifecycleError::Output)?
-        .is_file()
-    {
+    let metadata = file.metadata().map_err(|_| DataLifecycleError::Output)?;
+    if !metadata.is_file() {
         return Err(DataLifecycleError::Output);
     }
-    DataExportOutputState::from_reader(file).map_err(DataLifecycleError::Data)
+    let tail_length = metadata
+        .len()
+        .checked_sub(committed_length)
+        .ok_or(DataLifecycleError::Data(DataError::CheckpointMismatch))?;
+    if tail_length > MAX_UNCOMMITTED_EXPORT_TAIL_BYTES {
+        return Err(DataLifecycleError::Data(DataError::CheckpointMismatch));
+    }
+    let output_state = read_export_output_prefix(&file, committed_length)?;
+    let (checkpoint, resume_state) = DataExportCheckpoint::resume_from_json(
+        &checkpoint_bytes,
+        plan,
+        &inspected.package_revision,
+        &inspected.schema_fingerprint,
+        &output_state,
+    )
+    .map_err(DataLifecycleError::Data)?;
+    if tail_length > 0 {
+        // A checkpoint reporting the export complete is published after the
+        // last page, so no interrupted append can follow it.
+        if checkpoint.is_complete() {
+            return Err(DataLifecycleError::Data(DataError::CheckpointMismatch));
+        }
+        file.set_len(committed_length)
+            .and_then(|()| file.sync_all())
+            .map_err(|_| DataLifecycleError::Output)?;
+    }
+    Ok((checkpoint, output_state, resume_state))
+}
+
+/// The output length the checkpoint records, read before the checkpoint is
+/// validated so recovery knows how much of the output file it covers. The value
+/// only bounds the prefix that is streamed; the checkpoint is still matched
+/// against the bytes that prefix hashes to.
+fn checkpointed_output_length(checkpoint_bytes: &[u8]) -> Result<u64, DataLifecycleError> {
+    parse_json_strict(checkpoint_bytes)
+        .map_err(|_| DataLifecycleError::Checkpoint)?
+        .get("outputLength")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or(DataLifecycleError::Checkpoint)
+}
+
+/// Stream exactly the checkpointed prefix of an open output file into the
+/// incremental state the checkpoint is matched against. A prefix that ends
+/// inside a record is refused, since it is not canonical JSON Lines.
+fn read_export_output_prefix(
+    file: &File,
+    length: u64,
+) -> Result<DataExportOutputState, DataLifecycleError> {
+    DataExportOutputState::from_reader(file.take(length)).map_err(DataLifecycleError::Data)
 }
 
 fn append_export_page(path: &Path, page: &[u8]) -> Result<(), DataLifecycleError> {
-    prepare_atomic_write_path(path, true)?;
-    let mut options = fs::OpenOptions::new();
-    options.append(true);
-    #[cfg(unix)]
-    options.custom_flags(file_no_follow_flags());
-    let mut file = options.open(path).map_err(|_| DataLifecycleError::Output)?;
+    let mut file = prepare_atomic_write_path(path, true)?
+        .open_append()
+        .map_err(|_| DataLifecycleError::Output)?;
     if !file
         .metadata()
         .map_err(|_| DataLifecycleError::Output)?
@@ -757,48 +816,42 @@ fn append_export_page(path: &Path, page: &[u8]) -> Result<(), DataLifecycleError
         .map_err(|_| DataLifecycleError::Output)
 }
 
-#[cfg(unix)]
-fn file_no_follow_flags() -> i32 {
-    (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NONBLOCK)
-        .bits() as i32
-}
-
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), DataLifecycleError> {
-    let parent = prepare_atomic_write_path(path, true)?;
-    let temporary = write_atomic_temporary(parent, bytes)?;
-    fs::rename(&temporary, path).map_err(|_| {
-        let _ = fs::remove_file(&temporary);
+    let destination = prepare_atomic_write_path(path, true)?;
+    let temporary = write_atomic_temporary(destination.parent(), bytes)?;
+    destination.replace_from(&temporary).map_err(|_| {
+        let _ = destination.parent().remove_file(&temporary);
         DataLifecycleError::Output
     })
 }
 
 fn write_atomic_create_new(path: &Path, bytes: &[u8]) -> Result<(), DataLifecycleError> {
-    let parent = prepare_atomic_write_path(path, false)?;
-    let temporary = write_atomic_temporary(parent, bytes)?;
-    match fs::hard_link(&temporary, path) {
-        Ok(()) => {
-            let _ = fs::remove_file(&temporary);
-            Ok(())
-        }
-        Err(_) => {
-            let _ = fs::remove_file(&temporary);
-            Err(DataLifecycleError::Output)
-        }
-    }
+    let destination = prepare_atomic_write_path(path, false)?;
+    let temporary = write_atomic_temporary(destination.parent(), bytes)?;
+    // A hard link never replaces an existing destination, so a losing writer
+    // keeps the winner's bytes.
+    let linked = destination
+        .parent()
+        .link(&temporary, destination.name())
+        .map_err(|_| DataLifecycleError::Output);
+    let _ = destination.parent().remove_file(&temporary);
+    linked
 }
 
+/// Resolve an output path to its held parent directory descriptor and refuse a
+/// destination that is not an absent or existing regular file. Every later
+/// staging, append, link, rename, and cleanup runs through the returned
+/// descriptor, so replacing an ancestor afterwards cannot redirect the write.
 fn prepare_atomic_write_path(
     path: &Path,
     allow_existing_regular_file: bool,
-) -> Result<&Path, DataLifecycleError> {
+) -> Result<SafeEntry, DataLifecycleError> {
     if path.as_os_str().is_empty() || super::has_parent_component(path) {
         return Err(DataLifecycleError::Output);
     }
-    let parent = path.parent().ok_or(DataLifecycleError::Output)?;
-    super::ensure_no_symlink_components(parent, "data.output.invalid", "output")
-        .map_err(|_| DataLifecycleError::Output)?;
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+    let destination = SafeEntry::resolve(path).map_err(|_| DataLifecycleError::Output)?;
+    match destination.stat() {
+        Ok(stat) if stat.is_symlink() || !stat.is_file() => {
             return Err(DataLifecycleError::Output);
         }
         Ok(_) if !allow_existing_regular_file => return Err(DataLifecycleError::Output),
@@ -806,18 +859,14 @@ fn prepare_atomic_write_path(
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(_) => return Err(DataLifecycleError::Output),
     }
-    Ok(parent)
+    Ok(destination)
 }
 
-fn write_atomic_temporary(parent: &Path, bytes: &[u8]) -> Result<PathBuf, DataLifecycleError> {
+fn write_atomic_temporary(parent: &SafeDir, bytes: &[u8]) -> Result<OsString, DataLifecycleError> {
     for _ in 0..MAX_ATOMIC_WRITE_TEMP_ATTEMPTS {
         let temporary =
-            atomic_write_temporary_path(parent, DATA_WRITE_COUNTER.fetch_add(1, Ordering::Relaxed));
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        options.mode(0o600);
-        let mut file = match options.open(&temporary) {
+            atomic_write_temporary_name(DATA_WRITE_COUNTER.fetch_add(1, Ordering::Relaxed));
+        let mut file = match parent.create_new(&temporary, 0o600) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(_) => return Err(DataLifecycleError::Output),
@@ -828,7 +877,7 @@ fn write_atomic_temporary(parent: &Path, bytes: &[u8]) -> Result<PathBuf, DataLi
             .is_err()
         {
             drop(file);
-            let _ = fs::remove_file(&temporary);
+            let _ = parent.remove_file(&temporary);
             return Err(DataLifecycleError::Output);
         }
         drop(file);
@@ -837,8 +886,8 @@ fn write_atomic_temporary(parent: &Path, bytes: &[u8]) -> Result<PathBuf, DataLi
     Err(DataLifecycleError::Output)
 }
 
-fn atomic_write_temporary_path(parent: &Path, sequence: u64) -> PathBuf {
-    parent.join(format!(
+fn atomic_write_temporary_name(sequence: u64) -> OsString {
+    OsString::from(format!(
         ".bregctl-data-{}-{sequence}.tmp",
         std::process::id()
     ))
@@ -846,6 +895,7 @@ fn atomic_write_temporary_path(parent: &Path, sequence: u64) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::io::{Read, Write};
     use std::net::{SocketAddr, TcpListener, TcpStream};
     use std::process::Command;
@@ -1104,7 +1154,7 @@ mod tests {
         fs::write(&canary, b"unchanged").unwrap();
 
         let collided_sequence = DATA_WRITE_COUNTER.load(Ordering::Relaxed);
-        let collided_temporary = atomic_write_temporary_path(&directory, collided_sequence);
+        let collided_temporary = directory.join(atomic_write_temporary_name(collided_sequence));
         std::os::unix::fs::symlink(&canary, &collided_temporary).unwrap();
 
         write_atomic(&destination, b"checkpoint").unwrap();
@@ -1144,6 +1194,120 @@ mod tests {
         assert_eq!(read_bounded_regular(&target, 5).unwrap(), b"token");
 
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// Deterministic ancestor-swap regressions for the surfaces this module
+    /// owns. They run wherever the descriptor-relative primitive exists.
+    #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+    mod ancestor_swap {
+        use super::*;
+        use crate::safe_path::race_fixture::race_tree;
+
+        #[test]
+        fn bounded_reads_after_an_ancestor_swap_read_only_the_named_file() {
+            let tree = race_tree();
+            let named = tree.named("input.ndjson");
+            fs::write(&named, b"genuine").unwrap();
+            fs::write(tree.outside("input.ndjson"), b"attacker").unwrap();
+
+            let guard = tree.arm();
+            let bytes = read_bounded_regular(&named, MAX_TOKEN_BYTES).unwrap();
+            drop(guard);
+
+            assert_eq!(bytes, b"genuine");
+            // The window is real: the same pathname now reaches the attacker
+            // tree.
+            assert_eq!(fs::read(&named).unwrap(), b"attacker");
+        }
+
+        #[test]
+        fn a_checkpoint_write_after_an_ancestor_swap_publishes_only_in_the_named_tree() {
+            let tree = race_tree();
+
+            let guard = tree.arm();
+            write_atomic(&tree.named("export.checkpoint.json"), b"checkpoint").unwrap();
+            drop(guard);
+
+            assert_eq!(
+                fs::read(tree.moved("export.checkpoint.json")).unwrap(),
+                b"checkpoint"
+            );
+            assert_eq!(tree.outside_entries(), vec!["target".to_owned()]);
+        }
+
+        #[test]
+        fn an_export_reservation_after_an_ancestor_swap_creates_nothing_outside_the_named_tree() {
+            let tree = race_tree();
+
+            let guard = tree.arm();
+            write_atomic_create_new(&tree.named("records.jsonl"), b"reserved").unwrap();
+            drop(guard);
+
+            assert_eq!(fs::read(tree.moved("records.jsonl")).unwrap(), b"reserved");
+            assert_eq!(tree.outside_entries(), vec!["target".to_owned()]);
+        }
+
+        #[test]
+        fn an_export_page_append_after_an_ancestor_swap_appends_only_to_the_named_file() {
+            let tree = race_tree();
+            let named = tree.named("records.jsonl");
+            fs::write(&named, b"first\n").unwrap();
+            fs::write(tree.outside("records.jsonl"), b"decoy\n").unwrap();
+
+            let guard = tree.arm();
+            append_export_page(&named, b"second\n").unwrap();
+            drop(guard);
+
+            assert_eq!(
+                fs::read(tree.moved("records.jsonl")).unwrap(),
+                b"first\nsecond\n"
+            );
+            assert_eq!(fs::read(tree.outside("records.jsonl")).unwrap(), b"decoy\n");
+        }
+
+        #[test]
+        fn an_export_state_read_after_an_ancestor_swap_reads_only_the_named_file() {
+            let tree = race_tree();
+            let named = tree.named("records.jsonl");
+            let record = b"{\"id\":\"one\"}\n";
+            fs::write(&named, record).unwrap();
+            // Bytes no export state can be built from, so reading the tree the
+            // operator never named would fail rather than pass quietly.
+            fs::write(tree.outside("records.jsonl"), b"not a record\n").unwrap();
+
+            let guard = tree.arm();
+            let file = SafeEntry::resolve(&named)
+                .unwrap()
+                .open_read_write()
+                .unwrap();
+            drop(guard);
+            let state = read_export_output_prefix(&file, record.len() as u64).unwrap();
+
+            assert!(format!("{state:?}").contains("record_count: 1"));
+        }
+
+        #[test]
+        fn an_export_tail_discard_after_an_ancestor_swap_shortens_only_the_named_file() {
+            let tree = race_tree();
+            let named = tree.named("records.jsonl");
+            let record = b"{\"id\":\"one\"}\n";
+            let mut appended = record.to_vec();
+            appended.extend_from_slice(b"{\"id\":\"two\"}\n");
+            fs::write(&named, &appended).unwrap();
+            fs::write(tree.outside("records.jsonl"), &appended).unwrap();
+
+            let guard = tree.arm();
+            let file = SafeEntry::resolve(&named)
+                .unwrap()
+                .open_read_write()
+                .unwrap();
+            drop(guard);
+            file.set_len(record.len() as u64).unwrap();
+            file.sync_all().unwrap();
+
+            assert_eq!(fs::read(tree.moved("records.jsonl")).unwrap(), record);
+            assert_eq!(fs::read(tree.outside("records.jsonl")).unwrap(), appended);
+        }
     }
 
     #[test]
@@ -1232,6 +1396,377 @@ mod tests {
         ));
 
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// Drive one export page through the executor and append it to the output
+    /// file, leaving the matching checkpoint publication to the caller. That
+    /// gap is the interruption window these regressions exercise.
+    fn append_one_export_page(
+        plan: &DataExportPlan,
+        checkpoint: &mut DataExportCheckpoint,
+        output_path: &Path,
+        output_state: &DataExportOutputState,
+        resume_state: &registry_breg::data::DataExportResumeState,
+        code: &str,
+        next_cursor: Option<&str>,
+    ) -> (
+        DataExportOutputState,
+        registry_breg::data::DataExportResumeState,
+    ) {
+        let progress = test_runtime()
+            .block_on(execute_export_page(
+                plan,
+                checkpoint,
+                PACKAGE,
+                SCHEMA,
+                output_state,
+                resume_state,
+                |_| {
+                    let response = export_response(code, next_cursor);
+                    async move { Ok::<_, ()>(response) }
+                },
+            ))
+            .unwrap()
+            .unwrap();
+        let (page, next_output, next_resume) = progress.into_parts();
+        append_export_page(output_path, &page).unwrap();
+        (next_output, next_resume)
+    }
+
+    /// One export with a single committed page: the output holds that page, the
+    /// checkpoint records it, and the in-memory checkpoint is positioned to
+    /// request the next one.
+    struct CommittedExport {
+        directory: PathBuf,
+        output_path: PathBuf,
+        checkpoint_path: PathBuf,
+        checkpoint: DataExportCheckpoint,
+        output_state: DataExportOutputState,
+        resume_state: registry_breg::data::DataExportResumeState,
+        committed_output: Vec<u8>,
+        committed_checkpoint: Vec<u8>,
+    }
+
+    fn committed_export(
+        plan: &DataExportPlan,
+        inspected: &InspectedDataPackage,
+        label: &str,
+    ) -> CommittedExport {
+        let directory = test_directory(label);
+        let output_path = directory.join("records.jsonl");
+        let checkpoint_path = directory.join("export.checkpoint.json");
+        let (mut checkpoint, output_state, resume_state) =
+            load_or_start_export(plan, inspected, &output_path, &checkpoint_path).unwrap();
+        let (output_state, resume_state) = append_one_export_page(
+            plan,
+            &mut checkpoint,
+            &output_path,
+            &output_state,
+            &resume_state,
+            "AA",
+            Some("SERVER-CURSOR"),
+        );
+        write_atomic(&checkpoint_path, &checkpoint.canonical_json().unwrap()).unwrap();
+        CommittedExport {
+            committed_output: fs::read(&output_path).unwrap(),
+            committed_checkpoint: fs::read(&checkpoint_path).unwrap(),
+            directory,
+            output_path,
+            checkpoint_path,
+            checkpoint,
+            output_state,
+            resume_state,
+        }
+    }
+
+    #[test]
+    fn export_resumes_after_a_page_append_without_its_checkpoint() {
+        let (plan, inspected) = export_plan_and_inspected();
+        let mut committed = committed_export(&plan, &inspected, "export-interrupted-append");
+
+        // The process stops after the second page is appended and before the
+        // checkpoint that records it is published.
+        append_one_export_page(
+            &plan,
+            &mut committed.checkpoint,
+            &committed.output_path,
+            &committed.output_state,
+            &committed.resume_state,
+            "BB",
+            Some("SECOND-CURSOR"),
+        );
+        assert!(fs::read(&committed.output_path).unwrap().len() > committed.committed_output.len());
+
+        let (mut recovered, recovered_output, recovered_resume) = load_or_start_export(
+            &plan,
+            &inspected,
+            &committed.output_path,
+            &committed.checkpoint_path,
+        )
+        .unwrap();
+
+        assert_eq!(
+            fs::read(&committed.output_path).unwrap(),
+            committed.committed_output
+        );
+        assert_eq!(
+            fs::read(&committed.checkpoint_path).unwrap(),
+            committed.committed_checkpoint
+        );
+        assert_eq!(recovered.completed_page_count(), 1);
+        assert_eq!(recovered.record_count(), 1);
+
+        // The resumed run continues from the committed cursor rather than
+        // starting the export again.
+        let progress = test_runtime()
+            .block_on(execute_export_page(
+                &plan,
+                &mut recovered,
+                PACKAGE,
+                SCHEMA,
+                &recovered_output,
+                &recovered_resume,
+                |request| async move {
+                    assert!(request
+                        .path_and_query()
+                        .contains("$skiptoken=SERVER-CURSOR"));
+                    Ok::<_, ()>(export_response("BB", None))
+                },
+            ))
+            .unwrap()
+            .unwrap();
+        let (page, _, _) = progress.into_parts();
+        append_export_page(&committed.output_path, &page).unwrap();
+        write_atomic(
+            &committed.checkpoint_path,
+            &recovered.canonical_json().unwrap(),
+        )
+        .unwrap();
+
+        let output = fs::read(&committed.output_path).unwrap();
+        assert_eq!(output.iter().filter(|byte| **byte == b'\n').count(), 2);
+        DataExportOutputState::from_bytes(&output).expect("the resumed output remains canonical");
+        assert_eq!(recovered.record_count(), 2);
+        assert!(recovered.is_complete());
+
+        fs::remove_dir_all(committed.directory).unwrap();
+    }
+
+    #[test]
+    fn export_resumes_after_a_refused_checkpoint_publication() {
+        let (plan, inspected) = export_plan_and_inspected();
+        let mut committed = committed_export(&plan, &inspected, "export-refused-checkpoint");
+
+        append_one_export_page(
+            &plan,
+            &mut committed.checkpoint,
+            &committed.output_path,
+            &committed.output_state,
+            &committed.resume_state,
+            "BB",
+            Some("SECOND-CURSOR"),
+        );
+
+        // Stand in for any checkpoint publication failure: the destination is
+        // no longer a regular file, so the staged bytes are never renamed over
+        // it and the committed checkpoint survives untouched.
+        let held = committed.directory.join("export.checkpoint.json.held");
+        fs::rename(&committed.checkpoint_path, &held).unwrap();
+        fs::create_dir(&committed.checkpoint_path).unwrap();
+        assert!(matches!(
+            write_atomic(
+                &committed.checkpoint_path,
+                &committed.checkpoint.canonical_json().unwrap()
+            ),
+            Err(DataLifecycleError::Output)
+        ));
+        fs::remove_dir(&committed.checkpoint_path).unwrap();
+        fs::rename(&held, &committed.checkpoint_path).unwrap();
+        assert_eq!(
+            fs::read(&committed.checkpoint_path).unwrap(),
+            committed.committed_checkpoint
+        );
+
+        let (recovered, _, _) = load_or_start_export(
+            &plan,
+            &inspected,
+            &committed.output_path,
+            &committed.checkpoint_path,
+        )
+        .unwrap();
+
+        assert_eq!(
+            fs::read(&committed.output_path).unwrap(),
+            committed.committed_output
+        );
+        assert_eq!(recovered.completed_page_count(), 1);
+        assert_eq!(recovered.record_count(), 1);
+        assert!(!recovered.is_complete());
+
+        fs::remove_dir_all(committed.directory).unwrap();
+    }
+
+    #[test]
+    fn export_refuses_an_output_shorter_than_its_checkpoint() {
+        let (plan, inspected) = export_plan_and_inspected();
+        let committed = committed_export(&plan, &inspected, "export-short-output");
+
+        let shortened = committed.committed_output[..committed.committed_output.len() - 1].to_vec();
+        fs::write(&committed.output_path, &shortened).unwrap();
+
+        assert!(matches!(
+            load_or_start_export(
+                &plan,
+                &inspected,
+                &committed.output_path,
+                &committed.checkpoint_path
+            ),
+            Err(DataLifecycleError::Data(DataError::CheckpointMismatch))
+        ));
+        assert_eq!(fs::read(&committed.output_path).unwrap(), shortened);
+        assert_eq!(
+            fs::read(&committed.checkpoint_path).unwrap(),
+            committed.committed_checkpoint
+        );
+
+        fs::remove_dir_all(committed.directory).unwrap();
+    }
+
+    #[test]
+    fn export_refuses_an_altered_committed_prefix() {
+        let (plan, inspected) = export_plan_and_inspected();
+        let committed = committed_export(&plan, &inspected, "export-altered-prefix");
+
+        // Same length, same canonical shape, different committed bytes.
+        let altered = String::from_utf8(committed.committed_output.clone())
+            .unwrap()
+            .replace("\"AA\"", "\"AB\"");
+        assert_ne!(altered.as_bytes(), committed.committed_output.as_slice());
+        assert_eq!(altered.len(), committed.committed_output.len());
+        fs::write(&committed.output_path, altered.as_bytes()).unwrap();
+
+        assert!(matches!(
+            load_or_start_export(
+                &plan,
+                &inspected,
+                &committed.output_path,
+                &committed.checkpoint_path
+            ),
+            Err(DataLifecycleError::Data(DataError::CheckpointMismatch))
+        ));
+        assert_eq!(
+            fs::read(&committed.output_path).unwrap(),
+            altered.as_bytes()
+        );
+
+        fs::remove_dir_all(committed.directory).unwrap();
+    }
+
+    #[test]
+    fn export_refuses_a_substituted_checkpoint() {
+        let (plan, inspected) = export_plan_and_inspected();
+        let committed = committed_export(&plan, &inspected, "export-substituted-checkpoint");
+
+        for (field, replacement) in [
+            ("packageRevision", json!("other-package-revision")),
+            (
+                "outputPrefixDigest",
+                json!("0000000000000000000000000000000000000000000000000000000000000000"),
+            ),
+            ("outputLength", json!(1)),
+        ] {
+            let mut substituted = parse_json_strict(&committed.committed_checkpoint).unwrap();
+            substituted[field] = replacement;
+            fs::write(
+                &committed.checkpoint_path,
+                canonicalize_json(&substituted).unwrap(),
+            )
+            .unwrap();
+
+            assert!(matches!(
+                load_or_start_export(
+                    &plan,
+                    &inspected,
+                    &committed.output_path,
+                    &committed.checkpoint_path
+                ),
+                Err(DataLifecycleError::Data(DataError::CheckpointMismatch))
+            ));
+            assert_eq!(
+                fs::read(&committed.output_path).unwrap(),
+                committed.committed_output
+            );
+        }
+
+        fs::remove_dir_all(committed.directory).unwrap();
+    }
+
+    #[test]
+    fn export_refuses_more_than_one_unrecorded_page() {
+        let (plan, inspected) = export_plan_and_inspected();
+        let committed = committed_export(&plan, &inspected, "export-oversized-tail");
+
+        let mut oversized = committed.committed_output.clone();
+        oversized.resize(
+            committed.committed_output.len() + MAX_DATA_HTTP_RESPONSE_BYTES + 1,
+            b'x',
+        );
+        fs::write(&committed.output_path, &oversized).unwrap();
+
+        assert!(matches!(
+            load_or_start_export(
+                &plan,
+                &inspected,
+                &committed.output_path,
+                &committed.checkpoint_path
+            ),
+            Err(DataLifecycleError::Data(DataError::CheckpointMismatch))
+        ));
+        assert_eq!(fs::read(&committed.output_path).unwrap(), oversized);
+
+        fs::remove_dir_all(committed.directory).unwrap();
+    }
+
+    #[test]
+    fn export_refuses_anything_appended_after_a_complete_checkpoint() {
+        let (plan, inspected) = export_plan_and_inspected();
+        let mut committed = committed_export(&plan, &inspected, "export-complete-tail");
+
+        append_one_export_page(
+            &plan,
+            &mut committed.checkpoint,
+            &committed.output_path,
+            &committed.output_state,
+            &committed.resume_state,
+            "BB",
+            None,
+        );
+        write_atomic(
+            &committed.checkpoint_path,
+            &committed.checkpoint.canonical_json().unwrap(),
+        )
+        .unwrap();
+        assert!(committed.checkpoint.is_complete());
+        let complete_output = fs::read(&committed.output_path).unwrap();
+
+        // The checkpoint that reports the export complete is published after
+        // the last page, so no interrupted append can follow it.
+        append_export_page(&committed.output_path, b"{\"code\":\"CC\"}\n").unwrap();
+        assert!(matches!(
+            load_or_start_export(
+                &plan,
+                &inspected,
+                &committed.output_path,
+                &committed.checkpoint_path
+            ),
+            Err(DataLifecycleError::Data(DataError::CheckpointMismatch))
+        ));
+        assert_eq!(
+            fs::read(&committed.output_path).unwrap().len(),
+            complete_output.len() + 14
+        );
+
+        fs::remove_dir_all(committed.directory).unwrap();
     }
 
     #[cfg(unix)]

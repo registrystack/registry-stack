@@ -543,7 +543,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.relay_v2_contracts == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -566,6 +566,9 @@ jobs:
 
       - name: Relay V2 coequal HTTP journeys
         run: products/relay-v2/scripts/test-http.sh
+
+      - name: Relay V2 tutorial reader gate
+        run: docs/site/scripts/check-relay-tutorial.sh
 
   relay-client-contracts:
     name: Relay client contract and source neutrality

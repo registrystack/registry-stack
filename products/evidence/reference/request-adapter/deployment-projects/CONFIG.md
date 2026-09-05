@@ -861,11 +861,13 @@ Startup opens one connection for each `concurrencyLimit` permit, reads the
 metadata, and runs the statement against the real extract. A statement whose
 result columns disagree with `columns`, a parameter no binding supplies, and a
 binding the statement never names all fail before the listener binds.
-`evidence bundle-check` runs a weaker check without the extract: it settles that
-the artifact holds exactly one statement, that the statement parses, and that
-the authorizer accepts it. It cannot settle columns, parameters, metadata, or
-age, because only the extract can. That check never reports a false failure,
-only an incomplete pass.
+`evidencectl build` and `evidencectl fixtures run` reach this same statement
+check earlier, without a mounted extract, through `evidence bundle-check`: an
+internal Evidencectl seam hidden from `evidence --help`, not a command an
+adopter runs directly. It settles that the artifact holds exactly one
+statement, that the statement parses, and that the authorizer accepts it. It
+cannot settle columns, parameters, metadata, or age, because only the extract
+can. That check never reports a false failure, only an incomplete pass.
 
 ### Statement request
 
@@ -1143,10 +1145,11 @@ sourceExtracts:
 | `listener.maximumConcurrentRequests` | yes | 1 through 4,096. |
 | `listener.requestTimeoutMilliseconds` | yes | 1 through 30,000 milliseconds for admission, concurrency queueing, and request-body collection. Once protected evaluation starts, this timer does not cancel it; source and OIDC boundaries have their own bounds, and the runtime preserves fail-closed audit and release ordering. |
 | `listener.shutdownGraceMilliseconds` | yes | 1 through 120,000 milliseconds. |
+| `metricsListener` | no | Optional operator-only telemetry listener serving `GET /metrics`, a binding separate from the evidence listener above and absent from the public evidence contract. Absence is the default and serves no metrics endpoint. `bindHost` accepts only loopback, RFC 1918 private IPv4, or RFC 4193 unique-local IPv6, and `bindHost`/`port` together must not repeat the evidence listener's exact binding. |
 | `secretProviders.file.root` | yes | Absolute root for logical `secret:file/...` references. Only regular, non-symlink, single-link files owned by the service identity with exact mode `0400` or `0600` are accepted. |
 | `signer` | yes | Closed runtime signer union. `production` and `evidence-grade` require a pinned Transit signer over a workload-local Unix socket. `local` requires `kind: local-jwk` with `privateKeyRef: secret:file/evidence-signing`. Startup validates provider controls and exact public-key agreement, then signs and verifies a challenge. |
 | `auditStorage.path` | yes | Absolute keyed-JSONL audit path on operator-owned durable storage. |
-| `auditStorage.maximumFileBytes` | yes | 1,048,576 through 1,099,511,627,776 bytes. Reaching the closed bound fails audit writes and therefore fails closed. |
+| `auditStorage.maximumFileBytes` | yes | 1,048,576 through 1,099,511,627,776 bytes. Reaching the bound seals the active segment under an ascending sequence number and opens a fresh empty segment at the configured path for subsequent writes; sealed segments are never deleted. A write or sync failure, not rotation itself, is what fails closed. |
 | `outboundTls.systemRoots` | yes | Literal `true`. |
 | `outboundTls.trustProfiles` | yes | Closed map of at most 64 logical profile ids. It may be empty when no source names a private trust profile. |
 | `outboundTls.trustProfiles.<id>.caBundleFile` | for each profile | Absolute path to one bounded PEM CA file. Profile names must exactly match bundle `tlsTrustProfile` references. |
@@ -1158,6 +1161,23 @@ sourceExtracts:
 absolute paths. The runtime rejects symlinks, insecure ownership/modes, missing
 required logical bindings, mutable files, and files outside the configured
 roots according to the operator contract.
+
+Every deployment input this contract loads, `runtime.yaml` itself, the bundle
+directory and each artifact inside it, a named CA bundle file, the secret
+root, and a bound extract, must carry no write permission for anyone but its
+owner, and the secret root must additionally carry no group or other
+permission at all. `evidence check` and process startup both refuse a
+non-conforming runtime file, bundle artifact, CA bundle file, or secret root
+before the listener binds, with the message `an Evidence deployment input is
+not immutable: artifact <name>: <cause>` (for example `the runtime file is
+writable` for `runtime.yaml` itself, or `the secret root directory the
+runtime file names is reachable by group or other`). A writable bound
+extract instead fails a distinct check, `an Evidence bundle artifact is
+invalid: the source extract the runtime file names is writable`. Startup
+collapses each to its own fixed failure class; `evidence check` is what names
+the artifact and cause either way. Write `runtime.yaml`, make it
+non-writable (for example `chmod 400`), and run `evidence check` before
+`evidence serve`.
 
 A bundle source may name one `tlsTrustProfile`. The corresponding bounded PEM
 file is loaded and validated at startup. Hostname verification and source-origin

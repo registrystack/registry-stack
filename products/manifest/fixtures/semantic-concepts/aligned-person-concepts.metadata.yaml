@@ -1,0 +1,76 @@
+# Non-normative example. It shows what Registry Manifest generates from an
+# ordered `fields[].concepts` list: no concept, one concept, and one field that
+# carries a PublicSchema term and an EU SEMIC term at the same time.
+#
+# Vocabulary references checked on 2026-09-06:
+#
+# - PublicSchema, https://publicschema.org/manifest.json reports version 0.3.0
+#   with maturity `draft` and base URI https://publicschema.org/. Terms are
+#   rooted directly at that base URI, so `https://publicschema.org/date_of_birth`
+#   is the canonical form. The vocabulary publishes no stable release tag, so
+#   treat every PublicSchema IRI here as pinned to that draft snapshot rather
+#   than to a released contract.
+# - EU SEMIC Core Person Vocabulary 2.00, published 2022-04-01. Its Person class
+#   is http://www.w3.org/ns/person#Person and its birth-date property is
+#   http://data.europa.eu/m8g/birthDate.
+#
+# Listing both concepts on `birth_date` records two independent vocabulary
+# references. It asserts no equivalence between them: Registry Manifest renders
+# no skos:exactMatch, skos:closeMatch, or any other mapping predicate, and it
+# resolves neither IRI. PublicSchema does publish its own skos:exactMatch to the
+# SEMIC term; that claim belongs to PublicSchema, not to this manifest.
+schema_version: registry-manifest/v1
+catalog:
+  id: example-aligned-person-concepts
+  base_url: https://person-register.example.gov
+  title:
+    en: Aligned Person Concepts Example
+  description:
+    en: Non-normative example of ordered multi-vocabulary field concept references.
+  publisher:
+    name: Example Person Register Authority
+    iri: https://person-register.example.gov/authority
+    authority_type: eli:PublicAuthority
+  standards:
+    dcat: "3.0"
+    shacl: "1.1"
+    json_schema: "2020-12"
+  application_profiles: []
+vocabularies:
+  eli: http://data.europa.eu/eli/ontology#
+datasets:
+  - id: person-register
+    title:
+      en: Person Register
+    status: active
+    access_rights: restricted
+    entities:
+      - name: person
+        title:
+          en: Person
+        concept_uri: https://publicschema.org/Person
+        identifiers:
+          - name: person_id
+            kind: local
+        fields:
+          # No concept. The generated property identifier falls back to the
+          # deterministic manifest URI for this field.
+          - name: person_id
+            type: string
+            required: true
+            constraints:
+              min_length: 1
+              max_length: 64
+          # One concept. It is the generated property identifier.
+          - name: given_name
+            type: string
+            concepts:
+              - https://publicschema.org/given_name
+          # Two concepts. The first entry is the generated property identifier;
+          # the second is published alongside it as an additional reference.
+          - name: birth_date
+            type: date
+            concepts:
+              - https://publicschema.org/date_of_birth
+              - http://data.europa.eu/m8g/birthDate
+codelists: []

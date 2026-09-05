@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Production schema-test orchestration for unsigned package candidates.
 
+use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use registry_breg::fixtures::{
@@ -17,6 +18,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
+use crate::safe_path::{SafeDir, SafeEntry};
 use crate::CapturedPackageCandidate;
 
 const CREDENTIALS_API_VERSION: &str = "registry.registrystack.org/breg-schema-test-credentials/v1";
@@ -44,10 +46,12 @@ pub(crate) struct TestLifecycleOutcome {
     pub receipt_bytes: usize,
 }
 
+/// The receipt destination, held as its resolved parent descriptor plus the
+/// final component name. The preflight and the publication act through the same
+/// descriptor, so no component of the operator's path is resolved twice.
 #[derive(Debug)]
 pub(crate) struct OutputTarget {
-    path: PathBuf,
-    parent: PathBuf,
+    destination: SafeEntry,
 }
 
 #[derive(Debug)]
@@ -99,58 +103,45 @@ pub(crate) fn preflight_output(path: &Path) -> Result<OutputTarget, TestLifecycl
         || path.as_os_str().is_empty()
         || super::has_parent_component(path)
         || path.file_name().is_none()
-        || path.exists()
     {
         return Err(TestLifecycleError::OutputPreflight);
     }
-    let parent = path.parent().ok_or(TestLifecycleError::OutputPreflight)?;
-    super::validate_directory_for(
-        parent,
-        "test.output.parent_invalid",
-        "output.parent",
-        "the schema-test receipt output parent is not available",
-        "the schema-test receipt output parent was refused",
-    )
-    .map_err(|_| TestLifecycleError::OutputPreflight)?;
-    super::ensure_no_symlink_components(path, "test.output.path_invalid", "output")
-        .map_err(|_| TestLifecycleError::OutputPreflight)?;
+    // Resolving once yields the parent directory descriptor that the receipt
+    // publication reuses, so replacing a component of `path` after this
+    // preflight cannot redirect the write.
+    let destination = SafeEntry::resolve(path).map_err(|_| TestLifecycleError::OutputPreflight)?;
+    if destination
+        .exists()
+        .map_err(|_| TestLifecycleError::OutputPreflight)?
+    {
+        return Err(TestLifecycleError::OutputPreflight);
+    }
 
-    let file = File::options()
-        .write(true)
-        .create_new(true)
-        .open(path)
+    // Prove the destination can be created and removed before a long schema
+    // test runs, rather than discovering an unwritable output afterwards.
+    let file = destination
+        .create_new(0o666)
         .map_err(|_| TestLifecycleError::OutputPreflight)?;
     let opened = match file.metadata() {
         Ok(metadata) => metadata,
         Err(_) => {
             drop(file);
-            let _ = fs::remove_file(path);
+            let _ = destination.remove_file();
             return Err(TestLifecycleError::OutputPreflight);
         }
     };
-    let result = (|| {
-        file.sync_all()
-            .map_err(|_| TestLifecycleError::OutputPreflight)?;
-        let after = fs::symlink_metadata(path).map_err(|_| TestLifecycleError::OutputPreflight)?;
-        if after.file_type().is_symlink()
-            || !after.is_file()
-            || !super::same_file_metadata(&opened, &after)
-        {
-            return Err(TestLifecycleError::OutputPreflight);
-        }
-        Ok(())
-    })();
+    let synced = file.sync_all();
     drop(file);
-    if result.is_err() {
-        cleanup_exact_file(path, &opened);
+    if synced.is_err() {
+        cleanup_exact_file(&destination, &opened);
         return Err(TestLifecycleError::OutputPreflight);
     }
-    remove_exact_file(path, &opened).map_err(|_| TestLifecycleError::OutputPreflight)?;
-    sync_parent(parent).map_err(|_| TestLifecycleError::OutputPreflight)?;
-    Ok(OutputTarget {
-        path: path.to_path_buf(),
-        parent: parent.to_path_buf(),
-    })
+    remove_exact_file(&destination, &opened).map_err(|_| TestLifecycleError::OutputPreflight)?;
+    destination
+        .parent()
+        .sync()
+        .map_err(|_| TestLifecycleError::OutputPreflight)?;
+    Ok(OutputTarget { destination })
 }
 
 pub(crate) fn run(
@@ -406,31 +397,27 @@ fn read_credentials(path: &Path) -> Result<Vec<u8>, TestLifecycleError> {
             "the credentials path must be absolute and must not contain parent traversal",
         ));
     }
-    super::ensure_no_symlink_components(path, "test.credentials.path_invalid", "credentials")
-        .map_err(|_| {
-            credentials_refusal(
-                "credentials",
-                "the credentials path must not resolve through a symbolic link",
-            )
-        })?;
-    let metadata = fs::symlink_metadata(path).map_err(|_| unavailable())?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
+    let entry = SafeEntry::resolve(path).map_err(|_| {
+        credentials_refusal(
+            "credentials",
+            "the credentials path must not resolve through a symbolic link",
+        )
+    })?;
+    let stat = entry.stat().map_err(|_| unavailable())?;
+    if stat.is_symlink() || !stat.is_file() {
         return Err(credentials_refusal(
             "credentials",
             "the credentials file must be a regular file and must not be a symbolic link",
         ));
     }
-    if metadata.len() == 0 || metadata.len() > MAX_CREDENTIAL_DOCUMENT_BYTES {
+    if stat.len() == 0 || stat.len() > MAX_CREDENTIAL_DOCUMENT_BYTES {
         return Err(bounds());
     }
-    let file = File::open(path).map_err(|_| unreadable())?;
+    // The descriptor is opened through the resolved parent with `O_NOFOLLOW`,
+    // so it is the entry just inspected.
+    let file = entry.open_read().map_err(|_| unreadable())?;
     let opened = file.metadata().map_err(|_| unreadable())?;
-    let after = fs::symlink_metadata(path).map_err(|_| unavailable())?;
-    if after.file_type().is_symlink()
-        || !opened.is_file()
-        || !super::same_file_metadata(&metadata, &opened)
-        || !super::same_file_metadata(&opened, &after)
-    {
+    if !opened.is_file() {
         return Err(changed());
     }
     if opened.len() > MAX_CREDENTIAL_DOCUMENT_BYTES {
@@ -466,7 +453,8 @@ fn execution_error(error: FixtureError) -> TestLifecycleError {
 }
 
 fn publish_receipt(target: &OutputTarget, bytes: &[u8]) -> Result<(), TestLifecycleError> {
-    let (temporary, mut file) = create_temporary_file(&target.parent)?;
+    let parent = target.destination.parent();
+    let (temporary, mut file) = create_temporary_file(parent)?;
     let result = (|| {
         file.write_all(bytes)
             .map_err(|_| TestLifecycleError::OutputCommit)?;
@@ -476,12 +464,17 @@ fn publish_receipt(target: &OutputTarget, bytes: &[u8]) -> Result<(), TestLifecy
             .metadata()
             .map_err(|_| TestLifecycleError::OutputCommit)?;
         drop(file);
-        publish_temporary_file(&temporary, &target.path)?;
-        sync_parent(&target.parent).map_err(|_| TestLifecycleError::OutputCommit)?;
-        if fs::symlink_metadata(&target.path)
-            .map(|after| {
-                after.file_type().is_symlink() || !super::same_file_metadata(&metadata, &after)
-            })
+        target
+            .destination
+            .publish_from(&temporary)
+            .map_err(|_| TestLifecycleError::OutputCommit)?;
+        parent
+            .sync()
+            .map_err(|_| TestLifecycleError::OutputCommit)?;
+        if target
+            .destination
+            .stat()
+            .map(|after| after.is_symlink() || !after.is_same_file_as(&metadata))
             .unwrap_or(true)
         {
             return Err(TestLifecycleError::OutputCommit);
@@ -489,23 +482,19 @@ fn publish_receipt(target: &OutputTarget, bytes: &[u8]) -> Result<(), TestLifecy
         Ok(())
     })();
     if result.is_err() {
-        cleanup_temporary_file(&temporary);
+        cleanup_temporary_file(parent, &temporary);
     }
     result
 }
 
-fn create_temporary_file(parent: &Path) -> Result<(PathBuf, File), TestLifecycleError> {
+fn create_temporary_file(parent: &SafeDir) -> Result<(OsString, File), TestLifecycleError> {
     for _ in 0..64 {
         let counter = TEST_OUTPUT_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let temporary = parent.join(format!(
+        let temporary = OsString::from(format!(
             ".bregctl-test-receipt-{}-{counter}.tmp",
             std::process::id()
         ));
-        match File::options()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-        {
+        match parent.create_new(&temporary, 0o666) {
             Ok(file) => return Ok((temporary, file)),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(_) => return Err(TestLifecycleError::OutputCommit),
@@ -514,50 +503,27 @@ fn create_temporary_file(parent: &Path) -> Result<(PathBuf, File), TestLifecycle
     Err(TestLifecycleError::OutputCommit)
 }
 
-#[cfg(any(target_os = "linux", target_vendor = "apple"))]
-fn publish_temporary_file(temporary: &Path, output: &Path) -> Result<(), TestLifecycleError> {
-    use rustix::fs::{renameat_with, RenameFlags, CWD};
-
-    renameat_with(CWD, temporary, CWD, output, RenameFlags::NOREPLACE)
-        .map_err(|_| TestLifecycleError::OutputCommit)
-}
-
-#[cfg(target_os = "windows")]
-fn publish_temporary_file(temporary: &Path, output: &Path) -> Result<(), TestLifecycleError> {
-    fs::rename(temporary, output).map_err(|_| TestLifecycleError::OutputCommit)
-}
-
-#[cfg(not(any(target_os = "linux", target_vendor = "apple", target_os = "windows")))]
-fn publish_temporary_file(_temporary: &Path, _output: &Path) -> Result<(), TestLifecycleError> {
-    Err(TestLifecycleError::OutputCommit)
-}
-
-fn cleanup_temporary_file(path: &Path) {
-    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+fn cleanup_temporary_file(parent: &SafeDir, name: &OsStr) {
+    let Some(text) = name.to_str() else {
         return;
     };
-    if name.starts_with(".bregctl-test-receipt-") && name.ends_with(".tmp") {
-        let _ = fs::remove_file(path);
+    if text.starts_with(".bregctl-test-receipt-") && text.ends_with(".tmp") {
+        let _ = parent.remove_file(name);
     }
 }
 
-fn remove_exact_file(path: &Path, expected: &fs::Metadata) -> std::io::Result<()> {
-    let actual = fs::symlink_metadata(path)?;
-    if actual.file_type().is_symlink()
-        || !actual.is_file()
-        || !super::same_file_metadata(expected, &actual)
-    {
+/// Remove an entry only when it is still the exact file this process created,
+/// so a name swapped underneath the held parent descriptor is left alone.
+fn remove_exact_file(destination: &SafeEntry, expected: &fs::Metadata) -> std::io::Result<()> {
+    let actual = destination.stat()?;
+    if actual.is_symlink() || !actual.is_file() || !actual.is_same_file_as(expected) {
         return Err(std::io::Error::other("output identity changed"));
     }
-    fs::remove_file(path)
+    destination.remove_file()
 }
 
-fn cleanup_exact_file(path: &Path, expected: &fs::Metadata) {
-    let _ = remove_exact_file(path, expected);
-}
-
-fn sync_parent(parent: &Path) -> std::io::Result<()> {
-    File::open(parent)?.sync_all()
+fn cleanup_exact_file(destination: &SafeEntry, expected: &fs::Metadata) {
+    let _ = remove_exact_file(destination, expected);
 }
 
 pub(crate) fn receipt_artifact_path() -> &'static str {
@@ -602,6 +568,8 @@ fn is_file_secret_reference(value: &str) -> bool {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    use std::path::PathBuf;
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -716,6 +684,44 @@ journeys:
                 assert!(message.contains("boolean rebase"));
             }
             other => panic!("unexpected diagnostic: {other:?}"),
+        }
+    }
+
+    /// Deterministic ancestor-swap regressions for the receipt and credentials
+    /// surfaces this module owns.
+    #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+    mod ancestor_swap {
+        use super::*;
+        use crate::safe_path::race_fixture::race_tree;
+
+        #[test]
+        fn a_receipt_publication_after_an_ancestor_swap_publishes_only_in_the_named_tree() {
+            let tree = race_tree();
+
+            let guard = tree.arm();
+            let target = preflight_output(&tree.named("receipt.json")).unwrap();
+            publish_receipt(&target, b"receipt").unwrap();
+            drop(guard);
+
+            assert_eq!(fs::read(tree.moved("receipt.json")).unwrap(), b"receipt");
+            assert_eq!(tree.outside_entries(), vec!["target".to_owned()]);
+        }
+
+        #[test]
+        fn a_credentials_read_after_an_ancestor_swap_reads_only_the_named_file() {
+            let tree = race_tree();
+            let named = tree.named("credentials.yaml");
+            fs::write(&named, b"genuine").unwrap();
+            fs::write(tree.outside("credentials.yaml"), b"decoy").unwrap();
+
+            let guard = tree.arm();
+            let bytes = read_credentials(&named).unwrap();
+            drop(guard);
+
+            assert_eq!(bytes, b"genuine");
+            // The window is real: the same pathname now reaches the tree the
+            // operator never named.
+            assert_eq!(fs::read(&named).unwrap(), b"decoy");
         }
     }
 }

@@ -3103,7 +3103,12 @@ fn render_discovery_description(evidence_bin: &Path, config_path: &Path) -> Resu
     if output.status.success() {
         return Ok(output.stdout);
     }
-    bail!("Evidence rejected provider publication compilation")
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let diagnostic = stderr.trim();
+    if diagnostic.is_empty() {
+        bail!("Evidence rejected provider publication compilation");
+    }
+    bail!("Evidence rejected provider publication compilation: {diagnostic}")
 }
 
 fn yaml_bytes(value: &Value) -> Result<Vec<u8>> {
@@ -5514,5 +5519,51 @@ factSchema: schemas/family-facts.schema.yaml
     fn assert_mode(path: &Path, expected: u32) {
         let actual = fs::metadata(path).unwrap().permissions().mode() & 0o7777;
         assert_eq!(actual, expected, "mode of {}", path.display());
+    }
+
+    fn write_stub_evidence(path: &Path, script: &str) {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o700)
+            .open(path)
+            .expect("stub");
+        file.write_all(script.as_bytes()).expect("write stub");
+    }
+
+    #[test]
+    fn render_discovery_description_surfaces_the_evidence_compiler_stderr() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let evidence = root.path().join("evidence-stub");
+        write_stub_evidence(
+            &evidence,
+            "#!/bin/sh\necho 'catalog binding is missing a required field' >&2\nexit 1\n",
+        );
+        let config_path = root.path().join("evidence.yaml");
+        fs::write(&config_path, "questions: []\n").expect("config");
+
+        let error = render_discovery_description(&evidence, &config_path)
+            .expect_err("a rejected compilation must fail");
+        let diagnostic = format!("{error:#}");
+        assert!(
+            diagnostic.contains("catalog binding is missing a required field"),
+            "{diagnostic}"
+        );
+    }
+
+    #[test]
+    fn render_discovery_description_keeps_the_bare_message_when_evidence_writes_nothing() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let evidence = root.path().join("evidence-stub");
+        write_stub_evidence(&evidence, "#!/bin/sh\nexit 1\n");
+        let config_path = root.path().join("evidence.yaml");
+        fs::write(&config_path, "questions: []\n").expect("config");
+
+        let error = render_discovery_description(&evidence, &config_path)
+            .expect_err("a rejected compilation must fail");
+        assert_eq!(
+            format!("{error:#}"),
+            "Evidence rejected provider publication compilation"
+        );
     }
 }

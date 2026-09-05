@@ -26,7 +26,19 @@ the commands stay the same.
 Every command reads `--help`. Paths given to `--runtime-config`, `--credentials`, `--output`, and
 `--package` must be absolute.
 
-{/* Evidence: crates/registry-bregctl/src/lib.rs, TestArgs, PackageArgs, ApplyArgs, and DoctorArgs;
+No path an operator command reads or writes may traverse a symbolic link. `bregctl` resolves each
+component against the directory descriptor that holds it, then opens, creates, renames, and
+publishes through those held descriptors, so a directory replaced by a symbolic link after the
+path is validated redirects the pathname without redirecting the command. Name the real
+directory: on macOS, `/tmp` and `/var` are reached through symbolic links, so pass `/private/tmp`
+and `/private/var`.
+
+The refusal is fail-closed. The Linux and macOS builds resolve every operator path this way. A
+build for a platform that offers no equivalent kernel-enforced resolution refuses each such path
+with `path.no_symlink_unsupported` rather than falling back to resolution by pathname.
+
+{/* Evidence: crates/registry-bregctl/src/lib.rs, TestArgs, PackageArgs, ApplyArgs, DoctorArgs, and path_diagnostic();
+    crates/registry-bregctl/src/safe_path.rs, SafeDir and SafeEntry;
     products/breg/scripts/test-adopter-workflow.sh. */}
 
 ## Obtain the runtime
@@ -867,9 +879,13 @@ bregctl data export \
 one bounded chunk at a time and records progress in the checkpoint file beside a sidecar the
 command owns, so a rerun with the same checkpoint resumes after the last committed chunk and never
 re-sends a committed one. An export appends one bounded page at a time, then records the output
-length, digest, record count, and server cursor in its checkpoint. A rerun validates the entire
-existing output against that checkpoint before requesting the next server-validated cursor. Do not
-edit either file. `--max-chunks` and `--max-pages` bound one operator run.
+length, digest, record count, and server cursor in its checkpoint. A rerun streams the checkpointed
+prefix of the existing output, matches it against that checkpoint, and only then requests the next
+server-validated cursor. A run stopped between the two writes leaves one page the checkpoint never
+recorded; the rerun discards that page and fetches it again. It refuses when the output is shorter
+than its checkpoint, when the checkpointed prefix no longer matches, when more than one page follows
+the checkpoint, or when anything follows a checkpoint that already reports the export complete. Do
+not edit either file. `--max-chunks` and `--max-pages` bound one operator run.
 
 {/* Evidence: crates/registry-breg/src/data.rs;
     crates/registry-bregctl/src/data_lifecycle.rs;
@@ -894,9 +910,12 @@ edit either file. `--max-chunks` and `--max-pages` bound one operator run.
 | `history rebaseline` reports `history.rebaseline.live_rows.unverified` | A live row and its journal head disagree, and the refusal names no record. Read the revisions of the records you suspect, or compare live rows with their journal heads under the migration role. |
 | `request-retention erase` is refused | The request entity's retention mode is `retain`, or the version is pinned. |
 | `audit verify` reports `audit.chain.broken` or `audit.head.mismatch` | The journal no longer links to its head. Export what is still reachable, keep the database as it is, and treat it as an integrity incident. |
+| `audit verify`, `audit export`, or `audit prune` reports `audit.envelope.invalid` | A reachable journal record holds an envelope no reader accepts, or names a link no record follows. Nothing is pruned. Keep the database as it is and treat it as an integrity incident, like a broken chain. |
 | `audit prune` reports `audit.boundary.future` | `--before` is later than the database transaction time. Choose a boundary in the past. |
 | `audit export` is refused with `audit.operation.refused` | The runtime configuration path or `--output` is relative, the destination already holds a file, or the database is unreachable. |
+| `data export` is refused with `data.export.checkpoint.refused` | The output file and its checkpoint no longer describe one another: the output is shorter than the checkpoint, its checkpointed prefix changed, more than one page follows the checkpoint, or the checkpoint belongs to another export. Keep both files and resume from copies you trust. A rerun discards at most the single page an interrupted run left unrecorded. |
 | An operator command cannot reach PostgreSQL | Check the migration URL secret, the role names, and `SSL_CERT_FILE` for a private authority. |
+| A command refuses a path that exists | Some component of the path is a symbolic link. Name the real directory; on macOS pass `/private/tmp` rather than `/tmp`. |
 
 ## Next
 

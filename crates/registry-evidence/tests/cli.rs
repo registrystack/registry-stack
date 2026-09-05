@@ -240,6 +240,77 @@ fn dependency_check_proves_the_real_runtime_boundaries() {
 }
 
 #[test]
+fn dependency_check_accepts_an_audit_sink_inside_the_required_root() {
+    let key_server = JwksServer::start();
+    let deployment = Deployment::stage("all-definitions");
+    deployment.stage_acceptance_secrets();
+    deployment.point_authentication_to(key_server.origin());
+
+    assert_success(
+        &deployment.check_with_audit_under(deployment.root.path()),
+        "Evidence deployment ",
+        " passed check (4 requirements)\n",
+    );
+}
+
+#[test]
+fn dependency_check_refuses_an_audit_sink_outside_the_required_root() {
+    let key_server = JwksServer::start();
+    let ephemeral = tempfile::tempdir().expect("temporary ephemeral root");
+    let deployment = Deployment::stage("all-definitions");
+    deployment.stage_acceptance_secrets();
+    deployment.point_authentication_to(key_server.origin());
+
+    let output = deployment.check_with_audit_under(ephemeral.path());
+
+    assert!(!output.status.success(), "containment must fail closed");
+    let stderr = String::from_utf8(output.stderr).expect("diagnostic is UTF-8");
+    assert_eq!(
+        stderr,
+        "evidence: audit destination check failed: the configured audit destination resolves outside the declared audit root\n"
+    );
+    assert!(!stderr.contains(&deployment.path("audit.jsonl").display().to_string()));
+}
+
+#[test]
+fn dependency_check_refuses_an_audit_sink_symlinked_out_of_the_required_root() {
+    let key_server = JwksServer::start();
+    let ephemeral = tempfile::tempdir().expect("temporary ephemeral root");
+    let deployment = Deployment::stage("all-definitions");
+    deployment.stage_acceptance_secrets();
+    deployment.point_authentication_to(key_server.origin());
+    let escape = ephemeral.path().join("audit.jsonl");
+    fs::write(&escape, "").expect("stage ephemeral audit chain");
+    std::os::unix::fs::symlink(&escape, deployment.path("audit.jsonl"))
+        .expect("stage escaping audit sink");
+
+    let output = deployment.check_with_audit_under(deployment.root.path());
+
+    assert!(
+        !output.status.success(),
+        "a symlink must not escape the root"
+    );
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("diagnostic is UTF-8"),
+        "evidence: audit destination check failed: the configured audit destination resolves outside the declared audit root\n"
+    );
+}
+
+#[test]
+fn dependency_check_refuses_a_required_audit_root_that_is_not_an_absolute_directory() {
+    let deployment = Deployment::stage("all-definitions");
+    deployment.stage_acceptance_secrets();
+
+    let output = deployment.check_with_audit_under(Path::new("var/lib/registry-evidence"));
+
+    assert!(!output.status.success(), "a relative root must fail closed");
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("diagnostic is UTF-8"),
+        "evidence: audit destination check failed: the declared audit root is not an existing absolute directory\n"
+    );
+}
+
+#[test]
 fn dependency_check_fails_closed_when_the_jwks_endpoint_is_unavailable() {
     let unavailable = TcpListener::bind("127.0.0.1:0").expect("ephemeral port binds");
     let origin = format!(
@@ -2784,6 +2855,23 @@ outboundTls:
         let output = invoke(
             &self.path("runtime.yaml"),
             &["check", "--require-runtime-dependencies"],
+        );
+        self.unseal();
+        output
+    }
+
+    /// Run the dependency proof and additionally require the configured audit
+    /// sink to resolve inside `root`, the path an operator declares persistent.
+    fn check_with_audit_under(&self, root: &Path) -> Output {
+        self.seal();
+        let output = invoke(
+            &self.path("runtime.yaml"),
+            &[
+                "check",
+                "--require-runtime-dependencies",
+                "--require-audit-under",
+                &root.display().to_string(),
+            ],
         );
         self.unseal();
         output

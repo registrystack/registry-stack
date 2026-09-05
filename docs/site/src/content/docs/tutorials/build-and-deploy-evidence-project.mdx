@@ -163,7 +163,10 @@ Transfer the exact candidate. The operator provisions the audit HMAC key, subjec
 and source credentials beneath the runtime secret root. The workload-local Transit proxy holds the
 provider token and auto-auth state; Evidence Gateway receives only access to the configured Unix
 socket. Its non-exportable signing key remains in Transit.
-Make the candidate runtime and bundle non-writable to the Evidence Gateway service identity.
+Make the candidate runtime and bundle non-writable to the Evidence Gateway service identity, for
+example `chmod -R a-w bundle && chmod 444 runtime.yaml`. `evidencectl fixtures run` below runs
+`evidence check` first, which refuses a writable runtime file, bundle artifact, or CA bundle file,
+a secret root reachable by group or other, or a writable extract, before it evaluates any fixture.
 
 Start the workload-local Transit proxy. Run the grouped offline ceremony once after the candidate,
 runtime bindings, trust files, secrets, and proxy socket are in place:

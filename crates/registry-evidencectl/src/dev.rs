@@ -1063,11 +1063,11 @@ fn publish_thumbprint_named_public_jwk(staged: &Path) -> Result<PathBuf> {
 
 fn stop_dev(project: &Path) -> Result<ExitCode> {
     let project = canonical_project(project)?;
-    let generated_root = existing_private_generated_root(&project)?;
+    let generated_root = or_inactive_session(existing_private_generated_root(&project))?;
     let _lifecycle = lock_lifecycle(&generated_root)?;
     let dev_root = generated_root.join("dev");
-    validate_private_directory(&dev_root)?;
-    let state = read_state(&dev_root.join("state.json"))?;
+    or_inactive_session(validate_private_directory(&dev_root))?;
+    let state = or_inactive_session(read_state(&dev_root.join("state.json")))?;
     if state.project != project || !matches!(state.status, DevStatus::Starting | DevStatus::Ready) {
         bail!("local development state is not an active session");
     }
@@ -1091,6 +1091,22 @@ fn stop_dev(project: &Path) -> Result<ExitCode> {
     }
     println!("Local Evidence stopped");
     Ok(ExitCode::SUCCESS)
+}
+
+/// Report the same refusal as a recorded but inactive session when the
+/// generated root, dev directory, or dev state file is simply missing,
+/// instead of letting the raw filesystem error reach the caller.
+fn or_inactive_session<T>(result: Result<T>) -> Result<T> {
+    match result {
+        Err(error)
+            if error
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            bail!("local development state is not an active session")
+        }
+        other => other,
+    }
 }
 
 fn supervisor_executable() -> Result<PathBuf> {
@@ -2416,5 +2432,41 @@ requirements:
         send_control_request(&long_socket, b"reload-mint\n", b"reload-requested\n")
             .expect("long control path");
         server.join().expect("server");
+    }
+
+    #[test]
+    fn stop_dev_reports_a_friendly_refusal_when_no_generated_root_exists() {
+        let project = tempfile::tempdir().expect("tempdir");
+        let error =
+            stop_dev(project.path()).expect_err("stop must refuse a project with no dev session");
+        let diagnostic = format!("{error:#}");
+        assert_eq!(
+            diagnostic,
+            "local development state is not an active session"
+        );
+    }
+
+    #[test]
+    fn stop_dev_reports_a_friendly_refusal_when_dev_state_is_missing() {
+        let project = tempfile::tempdir().expect("tempdir");
+        let generated_root = project.path().join(".evidence");
+        fs::create_dir(&generated_root).expect("create generated root");
+        fs::set_permissions(
+            &generated_root,
+            fs::Permissions::from_mode(PRIVATE_DIR_MODE),
+        )
+        .expect("mode generated root");
+        let dev_root = generated_root.join("dev");
+        fs::create_dir(&dev_root).expect("create dev root");
+        fs::set_permissions(&dev_root, fs::Permissions::from_mode(PRIVATE_DIR_MODE))
+            .expect("mode dev root");
+
+        let error =
+            stop_dev(project.path()).expect_err("stop must refuse a project with no dev state");
+        let diagnostic = format!("{error:#}");
+        assert_eq!(
+            diagnostic,
+            "local development state is not an active session"
+        );
     }
 }

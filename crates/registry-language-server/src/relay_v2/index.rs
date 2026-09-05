@@ -939,16 +939,23 @@ fn range_for_location(root: &YamlValue, location: &str) -> Option<Range> {
         if !name.is_empty() {
             match current {
                 YamlValue::Mapping(entries) => {
-                    let entry = entries.iter().find(|entry| entry.key.value == name)?;
+                    // A segment that doesn't resolve degrades to the last
+                    // ancestor range that did, rather than discarding the
+                    // whole walk and falling back to the document origin.
+                    let Some(entry) = entries.iter().find(|entry| entry.key.value == name) else {
+                        return range;
+                    };
                     range = Some(entry.key.range);
                     current = &entry.value;
                 }
                 YamlValue::Sequence(values) => {
-                    let value = values.iter().find(|value| {
+                    let Some(value) = values.iter().find(|value| {
                         value
                             .get_scalar("id")
                             .is_some_and(|identifier| identifier.value == name)
-                    })?;
+                    }) else {
+                        return range;
+                    };
                     range = value.get_scalar("id").map(|identifier| identifier.range);
                     current = value;
                 }
@@ -956,8 +963,13 @@ fn range_for_location(root: &YamlValue, location: &str) -> Option<Range> {
             }
         }
         if let Some(index) = index {
-            let values = current.as_sequence()?;
-            current = values.get(index)?;
+            let Some(values) = current.as_sequence() else {
+                return range;
+            };
+            let Some(next) = values.get(index) else {
+                return range;
+            };
+            current = next;
             range = first_scalar(current).map(|scalar| scalar.range).or(range);
         }
     }
@@ -1086,6 +1098,43 @@ mod tests {
                 .start,
             Position::new(3, 6)
         );
+    }
+
+    #[test]
+    fn location_parser_falls_back_to_the_deepest_resolved_ancestor() {
+        let parsed = crate::yaml::parse_yaml(
+            "resources:\n  - id: people\n    properties:\n      name: {type: string}\n",
+        )
+        .unwrap();
+        // "missing" does not exist under properties, but "resources[0].properties"
+        // does; the range of that resolved ancestor must survive rather than
+        // the whole walk collapsing to None (and the caller's zero_range()).
+        assert_eq!(
+            range_for_location(&parsed.value, "resources[0].properties.missing")
+                .unwrap()
+                .start,
+            Position::new(2, 4)
+        );
+    }
+
+    #[test]
+    fn location_parser_falls_back_when_a_sequence_index_is_out_of_range() {
+        let parsed = crate::yaml::parse_yaml(
+            "resources:\n  - id: people\n    properties:\n      name: {type: string}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            range_for_location(&parsed.value, "resources[9].name")
+                .unwrap()
+                .start,
+            Position::new(0, 0)
+        );
+    }
+
+    #[test]
+    fn location_parser_returns_none_when_the_first_segment_does_not_resolve() {
+        let parsed = crate::yaml::parse_yaml("resources:\n  - id: people\n").unwrap();
+        assert!(range_for_location(&parsed.value, "missing.field").is_none());
     }
 
     #[test]

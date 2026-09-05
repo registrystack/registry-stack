@@ -69,7 +69,8 @@ use registry_evidence::{
     },
 };
 use registry_platform_audit::{
-    AuditChainHasher, AuditChainProfile, AuditHashSecret, OptionalHashHex,
+    require_audit_under, AuditChainHasher, AuditChainProfile, AuditHashSecret, OptionalHashHex,
+    PersistentRootFault,
 };
 use registry_platform_crypto::{canonicalize_json, parse_json_strict, LocalJwkSigner, PrivateJwk};
 use serde_json::{Map as JsonMap, Value};
@@ -116,6 +117,12 @@ enum CommandError {
     /// permission bit, a chain that no longer verifies, and a second writer
     /// holding the sink lock have nothing in common but the moment they fail.
     Audit(&'static str, AuditInitializationFault),
+    /// The configured audit destination was not proven persistent.
+    ///
+    /// The fault names the side that failed and nothing else. Neither the
+    /// configured destination nor the declared root appears, which keeps the
+    /// diagnostic to the same value-free shape as the rest of `check`.
+    AuditRoot(PersistentRootFault),
     Service(String),
 }
 
@@ -131,6 +138,7 @@ impl fmt::Display for CommandError {
                 sources.join(", ")
             ),
             Self::Audit(message, fault) => write!(formatter, "{message}: {fault}"),
+            Self::AuditRoot(fault) => write!(formatter, "audit destination check failed: {fault}"),
             Self::Service(reason) => write!(formatter, "service failed: {reason}"),
         }
     }
@@ -164,6 +172,7 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
     match cli.command {
         Command::Check {
             require_runtime_dependencies,
+            require_audit_under: audit_root,
         } => {
             let deployment = DeploymentInputs::load(&cli.runtime).map_err(deployment_load_error)?;
             let runtime = deployment.runtime;
@@ -192,6 +201,14 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
                 .await
                 .map_err(runtime_initialization_error)?;
             if require_runtime_dependencies {
+                // The deployment owns storage persistence and declares the root
+                // it mounts; Evidence owns where the sink resolves. Proving
+                // containment before the chain opens keeps the two boundaries
+                // separate and never relaxes the writability proof below.
+                if let Some(root) = audit_root.as_deref() {
+                    require_audit_under(Path::new(&runtime.config.audit_storage.path), root)
+                        .map_err(CommandError::AuditRoot)?;
+                }
                 let serving = EvidenceRuntime::initialize(&cli.runtime)
                     .await
                     .map_err(runtime_initialization_error)?;

@@ -51,6 +51,19 @@ const CHAIN_FETCH_BATCH: usize = 1000;
 /// Recover chain order from the links. The walk starts at the head hash and
 /// steps to the row whose `record_hash` is the current envelope's `prev_hash`,
 /// which a genesis record leaves null so the recursion stops there.
+///
+/// The link is read from the stored bytes without decoding or parsing them, so
+/// no stored byte can fail the statement before the walk classifies the record
+/// it came from. `encode(..., 'escape')` accepts every byte, leaves printable
+/// ASCII alone, and only ever inserts backslashes and octal digits, so it
+/// neither hides nor invents a match for a link written in hex; the pattern
+/// admits exactly the 64 hex digits a 32-byte hash is written as. Bytes that
+/// name no link stop the recursion and reach the walk as the record they are,
+/// which is where an unreadable envelope is reported.
+///
+/// The order this recovers proves nothing on its own. The walk re-derives the
+/// chain from the parsed envelopes and counts what the head reaches, so a link
+/// taken from bytes no envelope reader accepts fails there rather than passing.
 const CHAIN_CTE: &str = "WITH RECURSIVE chain AS (
          SELECT record.envelope_id,
                 record.record_hash,
@@ -70,7 +83,8 @@ const CHAIN_CTE: &str = "WITH RECURSIVE chain AS (
            FROM chain AS step
            JOIN registry_internal.registry_audit AS previous
              ON previous.record_hash = decode(
-                    convert_from(step.envelope, 'UTF8')::jsonb ->> 'prev_hash', 'hex')
+                    substring(encode(step.envelope, 'escape')
+                              from '\"prev_hash\":\"([0-9a-fA-F]{64})\"'), 'hex')
      ) CYCLE record_hash SET cycle_detected USING chain_path";
 
 /// Number every chain position from the oldest reachable record, then name the

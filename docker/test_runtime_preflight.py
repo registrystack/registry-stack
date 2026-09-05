@@ -7,6 +7,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import subprocess
 import sys
 import unittest
@@ -16,6 +17,55 @@ from pathlib import Path
 
 SCRIPT = Path(__file__).with_name("runtime-preflight.py")
 DIGEST = "a" * 64
+COMPOSE_DIRECTORY = SCRIPT.parent / "compose"
+COLD_FIXTURE_FILES = (
+    COMPOSE_DIRECTORY / "docker-compose.yaml",
+    COMPOSE_DIRECTORY / "docker-compose.mint.yaml",
+)
+# Compose interpolates these without touching the host paths they name, so the
+# rendered fixture stays identical wherever the suite runs.
+COLD_FIXTURE_ENVIRONMENT = {
+    "EVIDENCE_CANDIDATE_DIR": "/srv/registry-stack/evidence/candidate",
+    "EVIDENCE_RUNTIME_FILE": "/srv/registry-stack/evidence/runtime.docker.yaml",
+    "EVIDENCE_SECRET_ROOT": "/srv/registry-stack/evidence/secrets",
+    "EVIDENCE_TRANSIT_SOCKET_DIR": "/srv/registry-stack/evidence/transit",
+    "EVIDENCE_IMAGE": f"ghcr.io/registrystack/evidence@sha256:{DIGEST}",
+    "MINT_CONFIG_DIR": "/srv/registry-stack/mint/config",
+    "MINT_SECRET_ROOT": "/srv/registry-stack/mint/secrets",
+    "MINT_TRANSIT_SOCKET_DIR": "/srv/registry-stack/mint/transit",
+    "MINT_HEALTHCHECK_URL": "http://127.0.0.1:8081/ready",
+    "MINT_IMAGE": f"ghcr.io/registrystack/mint@sha256:{DIGEST}",
+}
+
+
+def compose_is_available() -> bool:
+    try:
+        result = subprocess.run(
+            ["docker", "compose", "version"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0
+
+
+def render_cold_fixture() -> dict[str, object]:
+    command = ["docker", "compose"]
+    for compose_file in COLD_FIXTURE_FILES:
+        command.extend(["--file", str(compose_file)])
+    command.extend(["config", "--format", "json"])
+    result = subprocess.run(
+        command,
+        check=True,
+        capture_output=True,
+        text=True,
+        env={**os.environ, **COLD_FIXTURE_ENVIRONMENT},
+        timeout=120,
+    )
+    return json.loads(result.stdout)
 
 
 def load_module():
@@ -73,6 +123,20 @@ def deployment(services: dict[str, dict[str, object]]) -> dict[str, object]:
     }
 
 
+def completed(returncode: int = 0) -> subprocess.CompletedProcess[str]:
+    return subprocess.CompletedProcess(
+        args=[], returncode=returncode, stdout="sensitive", stderr="sensitive"
+    )
+
+
+def cold_deployment() -> dict[str, object]:
+    document = deployment({"evidence": service("evidence"), "mint": service("mint")})
+    document["services"]["evidence"]["depends_on"] = {  # type: ignore[index]
+        "mint": {"condition": "service_started"}
+    }
+    return document
+
+
 class RuntimePreflightTest(unittest.TestCase):
     def setUp(self) -> None:
         self.module = load_module()
@@ -116,6 +180,26 @@ class RuntimePreflightTest(unittest.TestCase):
             result = self.module.main(self.argv if argv is None else argv)
         return result, stdout.getvalue(), stderr.getvalue(), run
 
+    def run_orchestration(
+        self,
+        document: dict[str, object],
+        effects: list[object],
+        argv: list[str],
+    ) -> tuple[int, str, str, unittest.mock.Mock]:
+        render = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=json.dumps(document), stderr=""
+        )
+        run = unittest.mock.Mock(side_effect=[render, *effects])
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            unittest.mock.patch.object(self.module.subprocess, "run", run),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            result = self.module.main(argv)
+        return result, stdout.getvalue(), stderr.getvalue(), run
+
     def test_all_products_use_native_checks_after_complete_static_preflight(
         self,
     ) -> None:
@@ -147,7 +231,7 @@ class RuntimePreflightTest(unittest.TestCase):
         )
         self.assertIn("--require-runtime-dependencies", calls[1])
         self.assertIn("--require-runtime-dependencies", calls[2])
-        self.assertEqual("check", calls[3][-3])
+        self.assertEqual("check", calls[3][-5])
         self.assertEqual("evidence", calls[1][calls[1].index("--no-deps") + 1])
         self.assertEqual("mint", calls[2][calls[2].index("--no-deps") + 1])
         self.assertEqual("relay", calls[3][calls[3].index("--no-deps") + 1])
@@ -157,8 +241,68 @@ class RuntimePreflightTest(unittest.TestCase):
             self.assertEqual(self.module.subprocess.DEVNULL, call.kwargs["stdout"])
             self.assertEqual(self.module.subprocess.DEVNULL, call.kwargs["stderr"])
             self.assertNotIn("capture_output", call.kwargs)
-            self.assertIsNone(call.kwargs["timeout"])
+            self.assertEqual(
+                self.module.DEFAULT_NATIVE_CHECK_TIMEOUT_SECONDS,
+                call.kwargs["timeout"],
+            )
             self.assertEqual(document, json.loads(call.kwargs["input"]))
+
+    def test_every_native_check_asserts_the_validated_audit_prefix(self) -> None:
+        # The adapter proves the mount is durable container storage and the
+        # product proves its own configured sink resolves inside it. The root
+        # handed to the product is the exact mount target already validated, so
+        # neither side has to read the other's configuration.
+        document = deployment(
+            {
+                "evidence": service("evidence"),
+                "mint": service("mint"),
+                "relay": service("relay"),
+            }
+        )
+        result, _, stderr, run = self.run_main(document)
+        self.assertEqual(0, result, stderr)
+        calls = [call.args[0] for call in run.call_args_list]
+        for index, product in enumerate(("evidence", "mint", "relay"), start=1):
+            with self.subTest(product=product):
+                prefix = self.module.AUDIT_PREFIXES[product]
+                self.assertEqual(
+                    ["--require-audit-under", prefix], calls[index][-2:]
+                )
+                persistent = [
+                    volume
+                    for volume in document["services"][product]["volumes"]
+                    if volume["type"] in ("volume", "bind")
+                    and not volume["read_only"]
+                ]
+                self.assertEqual([prefix], [volume["target"] for volume in persistent])
+
+    def test_a_decoy_persistent_volume_cannot_rescue_an_ephemeral_sink(self) -> None:
+        # The whole deployment posture is correct: a durable named volume is
+        # mounted writable at the conventional audit prefix. Only the product
+        # can see that its configured sink resolves somewhere ephemeral instead,
+        # and it refuses the containment assertion the adapter passed in.
+        document = deployment({"relay": service("relay")})
+        argv = [
+            "--compose-file",
+            "compose.yaml",
+            "--env-file",
+            "operator.env",
+            "--service",
+            "relay=relay",
+        ]
+        result, stdout, stderr, run = self.run_main(
+            document, native_returncode=1, argv=argv
+        )
+
+        self.assertEqual(1, result)
+        self.assertEqual("", stdout)
+        self.assertIn("native runtime check", stderr)
+        self.assertNotIn("sensitive", stderr)
+        calls = [call.args[0] for call in run.call_args_list]
+        self.assertEqual(
+            ["--require-audit-under", self.module.AUDIT_PREFIXES["relay"]],
+            calls[1][-2:],
+        )
 
     def test_every_static_posture_failure_precedes_native_execution(self) -> None:
         mutations = {
@@ -544,7 +688,7 @@ class RuntimePreflightTest(unittest.TestCase):
         self.assertNotIn("sensitive", stderr)
         self.assertIn("native runtime check", stderr)
 
-    def test_native_check_timeout_is_optional_and_operator_bounded(self) -> None:
+    def test_native_check_deadline_is_bounded_and_operator_configurable(self) -> None:
         document = deployment(
             {
                 "evidence": service("evidence"),
@@ -552,21 +696,75 @@ class RuntimePreflightTest(unittest.TestCase):
                 "relay": service("relay"),
             }
         )
-        result, _, stderr, run = self.run_main(
-            document,
-            argv=[
-                *self.argv,
-                "--native-check-timeout-seconds",
-                "3600",
-            ],
-        )
-        self.assertEqual(0, result, stderr)
-        for call in run.call_args_list[1:]:
-            self.assertEqual(3600, call.kwargs["timeout"])
-        for raw in ("0", "-1", "1.5", "not-a-number"):
+        minimum = self.module.MINIMUM_NATIVE_CHECK_TIMEOUT_SECONDS
+        maximum = self.module.MAXIMUM_NATIVE_CHECK_TIMEOUT_SECONDS
+        default = self.module.DEFAULT_NATIVE_CHECK_TIMEOUT_SECONDS
+        self.assertLessEqual(minimum, default)
+        self.assertLessEqual(default, maximum)
+        for selected in (minimum, default, maximum):
+            with self.subTest(selected=selected):
+                result, _, stderr, run = self.run_main(
+                    document,
+                    argv=[
+                        *self.argv,
+                        "--native-check-timeout-seconds",
+                        str(selected),
+                    ],
+                )
+                self.assertEqual(0, result, stderr)
+                for call in run.call_args_list[1:]:
+                    self.assertEqual(selected, call.kwargs["timeout"])
+        for raw in (
+            str(minimum - 1),
+            str(maximum + 1),
+            "0",
+            "-1",
+            "1.5",
+            "not-a-number",
+        ):
             with self.subTest(raw=raw):
-                with self.assertRaises(self.module.argparse.ArgumentTypeError):
-                    self.module.positive_integer(raw)
+                rejected = io.StringIO()
+                with (
+                    contextlib.redirect_stderr(rejected),
+                    self.assertRaises(SystemExit),
+                ):
+                    self.module.parse_args(
+                        [
+                            "--compose-file",
+                            "compose.yaml",
+                            "--service",
+                            "evidence=evidence",
+                            "--native-check-timeout-seconds",
+                            raw,
+                        ]
+                    )
+
+    def test_an_expired_native_check_deadline_fails_without_output(self) -> None:
+        document = deployment({"evidence": service("evidence")})
+        render = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=json.dumps(document), stderr=""
+        )
+        expired = subprocess.TimeoutExpired(
+            cmd=["docker", "compose"],
+            timeout=30,
+            output="sensitive",
+            stderr="sensitive",
+        )
+        run = unittest.mock.Mock(side_effect=[render, expired])
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            unittest.mock.patch.object(self.module.subprocess, "run", run),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            result = self.module.main(
+                ["--compose-file", "compose.yaml", "--service", "evidence=evidence"]
+            )
+        self.assertEqual(1, result)
+        self.assertEqual("", stdout.getvalue())
+        self.assertNotIn("sensitive", stderr.getvalue())
+        self.assertIn("native runtime check deadline", stderr.getvalue())
 
     def test_cold_mint_dependency_is_checked_started_probed_then_consumed(self) -> None:
         document = deployment(
@@ -675,6 +873,7 @@ class RuntimePreflightTest(unittest.TestCase):
         self.assertEqual(1, result)
         self.assertEqual("", stdout.getvalue())
         self.assertIn("did not become ready", stderr.getvalue())
+        self.assertIn("docker compose stop mint", stderr.getvalue())
         self.assertEqual(4, run.call_count)
         self.assertFalse(
             any(
@@ -682,6 +881,136 @@ class RuntimePreflightTest(unittest.TestCase):
                 for call in run.call_args_list
             )
         )
+
+    def test_dependency_order_is_deterministic_across_selection_order(self) -> None:
+        document = deployment(
+            {
+                "evidence": service("evidence"),
+                "mint": service("mint"),
+                "relay": service("relay"),
+            }
+        )
+        document["services"]["evidence"]["depends_on"] = ["mint"]  # type: ignore[index]
+        selections = [
+            self.module.ServiceSelection("evidence", "evidence"),
+            self.module.ServiceSelection("mint", "mint"),
+            self.module.ServiceSelection("relay", "relay"),
+        ]
+        for selected in (selections, list(reversed(selections))):
+            with self.subTest(selected=[item.service for item in selected]):
+                ordered, dependencies = self.module.native_check_plan(
+                    list(selected), document
+                )
+                names = [item.service for item in ordered]
+                self.assertCountEqual(
+                    [item.service for item in selected], names, names
+                )
+                self.assertLess(names.index("mint"), names.index("evidence"))
+                self.assertEqual({"mint"}, dependencies)
+                repeated, _ = self.module.native_check_plan(list(selected), document)
+                self.assertEqual(names, [item.service for item in repeated])
+
+    def test_an_unselected_dependency_is_never_started(self) -> None:
+        document = cold_deployment()
+        result, stdout, stderr, run = self.run_orchestration(
+            document,
+            [completed()],
+            ["--compose-file", "compose.yaml", "--service", "evidence=evidence"],
+        )
+        self.assertEqual(0, result, stderr)
+        self.assertEqual("runtime preflight passed for 1 service(s)\n", stdout)
+        self.assertEqual(2, run.call_count)
+        native = run.call_args_list[1].args[0]
+        self.assertEqual("evidence", native[native.index("--no-deps") + 1])
+        self.assertNotIn("up", native)
+        self.assertNotIn("mint", native)
+
+    def test_an_unavailable_mint_fails_before_the_dependent_check(self) -> None:
+        document = cold_deployment()
+        result, stdout, stderr, run = self.run_orchestration(
+            document,
+            [completed(), completed(returncode=1)],
+            [
+                "--compose-file",
+                "compose.yaml",
+                "--service",
+                "evidence=evidence",
+                "--service",
+                "mint=mint",
+            ],
+        )
+        self.assertEqual(1, result)
+        self.assertEqual("", stdout)
+        self.assertNotIn("sensitive", stderr)
+        self.assertIn("could not be started", stderr)
+        self.assertEqual(3, run.call_count)
+        self.assertEqual(
+            ["up", "--detach", "--no-deps", "mint"],
+            run.call_args_list[2].args[0][-4:],
+        )
+
+    def test_started_dependencies_are_reported_for_operator_recovery(self) -> None:
+        document = cold_deployment()
+        argv = [
+            "--compose-file",
+            "compose.yaml",
+            "--service",
+            "evidence=evidence",
+            "--service",
+            "mint=mint",
+        ]
+        result, stdout, stderr, _ = self.run_orchestration(
+            document,
+            [completed(), completed(), completed(), completed()],
+            argv,
+        )
+        self.assertEqual(0, result, stderr)
+        self.assertIn("docker compose stop mint", stdout)
+        self.assertIn("remain running", stdout)
+
+        result, stdout, stderr, _ = self.run_orchestration(
+            document,
+            [completed(), completed(), completed(), completed(returncode=1)],
+            argv,
+        )
+        self.assertEqual(1, result)
+        self.assertEqual("", stdout)
+        self.assertIn("native runtime check", stderr)
+        self.assertIn("docker compose stop mint", stderr)
+
+        result, stdout, stderr, _ = self.run_orchestration(
+            document,
+            [completed(), completed(returncode=1)],
+            argv,
+        )
+        self.assertEqual(1, result)
+        self.assertNotIn("docker compose stop", stderr)
+
+    def test_the_cold_fixture_passes_without_publishing_a_host_port(self) -> None:
+        if not compose_is_available():
+            self.skipTest("docker compose renders the shipped cold fixture")
+        document = render_cold_fixture()
+        for name in ("evidence", "mint"):
+            self.assertIsNone(document["services"][name].get("ports"))  # type: ignore[index]
+        argv: list[str] = []
+        for compose_file in COLD_FIXTURE_FILES:
+            argv.extend(["--compose-file", str(compose_file)])
+        argv.extend(["--service", "evidence=evidence", "--service", "mint=mint"])
+        result, stdout, stderr, run = self.run_orchestration(
+            document,
+            [completed(), completed(), completed(), completed()],
+            argv,
+        )
+        self.assertEqual(0, result, stderr)
+        self.assertNotIn("sensitive", stdout)
+        calls = [call.args[0] for call in run.call_args_list]
+        self.assertEqual("mint", calls[1][calls[1].index("--no-deps") + 1])
+        self.assertEqual(["up", "--detach", "--no-deps", "mint"], calls[2][-4:])
+        self.assertEqual(
+            ["exec", "--no-TTY", "mint", "/usr/local/bin/mint", "healthcheck"],
+            calls[3][-5:],
+        )
+        self.assertEqual("evidence", calls[4][calls[4].index("--no-deps") + 1])
 
     def test_probe_success_after_the_shared_deadline_is_rejected(self) -> None:
         complete = subprocess.CompletedProcess(

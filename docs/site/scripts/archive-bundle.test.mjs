@@ -14,6 +14,7 @@ import { resolve } from 'node:path';
 import test from 'node:test';
 
 import {
+  ARCHIVE_BUNDLE_DIGEST_MISMATCH,
   ARCHIVE_BUNDLE_SCHEMA,
   LEGACY_ARCHIVE_BUNDLE_SCHEMA,
   SINGLE_TREE_ARCHIVE_BUNDLE_SCHEMA,
@@ -95,7 +96,11 @@ test('rejects a bundle that does not match the immutable digest', async (t) => {
       expectedRootTreeSha256: result.root_tree_sha256,
       expectedVersionTreeSha256: result.version_tree_sha256,
     }),
-    /does not match lock/,
+    (error) => {
+      assert.match(error.message, /does not match lock/);
+      assert.equal(error.code, ARCHIVE_BUNDLE_DIGEST_MISMATCH);
+      return true;
+    },
   );
 });
 

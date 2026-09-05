@@ -246,7 +246,7 @@ Evidence Gateway keeps its own source model, and it is a different one: one fixe
 reached over either of two coequal transports, with bounded reviewed Rhai around it.
 An HTTP JSON source states a fixed origin and resolves a compiled credential for it, except
 under the `none` authentication kind, which only a `local` assurance bundle may declare and
-only at a numeric-loopback origin.
+only at a canonical numeric-loopback HTTP origin with an explicit non-zero port.
 A statement source states no origin and resolves no credential at all: it runs one reviewed SQL
 statement against a read-only SQLite extract file the runtime mounts beside the process.
 The two products do not share that machinery, and Evidence does not inherit Relay's authorization
@@ -260,7 +260,9 @@ the values a reviewed requirement declares.
     products/evidence/CONCEPT.md; Evidence holds no database credential for the statement
     transport, and there is no connection string, secret reference, or authentication kind,
     `transport_absences` in products/evidence/contracts/sqlite-extract-source-contract.yaml
-    (frozen). */}
+    (frozen); the `none` authentication kind requires a canonical numeric-loopback HTTP origin
+    with an explicit non-zero port, validate_local_unauthenticated_source_origin,
+    crates/registry-evidence/src/config.rs. */}
 
 ## Evidence Gateway with a fixed authoritative source
 

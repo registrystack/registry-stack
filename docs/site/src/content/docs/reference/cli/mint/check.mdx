@@ -18,7 +18,7 @@ Load the configuration, keys, audit chain, and client registry, then exit.
 
 ## Contract status
 
-This page is generated from the public Clap command tree for Registry Stack source version `0.26.1` and catalog SHA-256 `079c4b00e55a12d92f3f115032bdc5b87195d9a4f623beafda35a7787a4b1998`. Hidden implementation commands are omitted.
+This page is generated from the public Clap command tree for Registry Stack source version `0.26.1` and catalog SHA-256 `261a85ad1819b025d174b6b8d2edc3d0af2d3744b395f70b3943d150c1a87ed0`. Hidden implementation commands are omitted.
 
 ## Usage
 
@@ -26,13 +26,20 @@ This page is generated from the public Clap command tree for Registry Stack sour
 mint check [OPTIONS] --config <CONFIG>
 ```
 
+## Constraints
+
+| Condition | Requirement |
+| --- | --- |
+| `--require-audit-under <ABSOLUTE_DIRECTORY>` is present | `--require-runtime-dependencies` is required. |
+
 ## Options
 
 | Option | Always required | Default | Values | Environment | Description |
 | --- | --- | --- | --- | --- | --- |
 | `--config <CONFIG>` | No | n/a | n/a | `MINT_CONFIG` | Mint deployment configuration file |
 | `--require-runtime-dependencies` | No | n/a | n/a | n/a | Claim the audit writer and prove every serving dependency is ready. Use before startup, not against a Mint process that is already serving |
-| `-h, --help` | No | n/a | n/a | n/a | Print help |
+| `--require-audit-under <ABSOLUTE_DIRECTORY>` | No | n/a | n/a | n/a | Also prove the configured audit sink resolves inside this absolute directory, which the deployment declares persistent. The declared root is a storage boundary, not a second audit setting. Mint resolves `audit.path` against the configuration file exactly as startup resolves it and refuses when the result is not at or below the root, which is what stops a container from mounting durable storage at the conventional prefix while writing the chain somewhere ephemeral. |
+| `-h, --help` | No | n/a | n/a | n/a | Print help (see a summary with '-h') |
 
 ## Generation contract
 

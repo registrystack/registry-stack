@@ -8,7 +8,7 @@ source_repos:
   - registry-relay
   - registry-evidence
   - registry-mint
-last_reviewed: "2026-08-11"
+last_reviewed: "2026-09-06"
 doc_type: specification
 doc_id: RS-SEC-G
 category: normative
@@ -227,6 +227,14 @@ This specification is `verified`: every requirement describes shipped behavior a
 - The enforcing code is inspectable in the workspace: OIDC verification in `crates/registry-platform-oidc`, the Evidence Gateway authenticator in `crates/registry-evidence/src/auth.rs`, and the Relay authenticator in `crates/registry-relay-v2/src/auth.rs` (REQ-SEC-G-004); the Relay startup refusal that pairs a protected access profile with a configured issuer in `crates/registry-relay-v2/src/startup.rs` (REQ-SEC-G-002); registered client authentication and provisioning in `crates/registry-mint/src/assertion.rs`, `crates/registry-mint/src/clients.rs`, and `crates/registry-mint/src/client_secret.rs` (REQ-SEC-G-016); authority matching before source work in `crates/registry-evidence` and Relay's access-profile preflight in `crates/registry-relay-v2/src/api.rs` (REQ-SEC-G-005); the unauthenticated-surface allow-lists in Relay's router assembly (`crates/registry-relay-v2/src/server.rs`) and the Evidence Gateway router (`crates/registry-evidence/src/server.rs`), together with the `access.public_nonpublic_forbidden` and `disclosure.public_nonpublic_forbidden` compiler refusals in `crates/registry-relay-v2/src/compiler.rs` (REQ-SEC-G-006); the audit envelope in `crates/registry-platform-audit` and the services' fail-closed audit paths (REQ-SEC-G-008, REQ-SEC-G-009); Registry Mint's bounded assertion cache in `crates/registry-mint/src/replay.rs` (REQ-SEC-G-017); and the secret-material rejection lists in `crates/registry-manifest-core` (REQ-SEC-G-013).
 - No maintained crate holds a replay table, a replay reservation, or a persistent single-use record: `crates/registry-relay-v2` and `crates/registry-relayctl` declare no database dependency beyond the read-only `crates/registry-platform-sqlite` boundary, and Registry Mint's only single-use state is the in-process cache REQ-SEC-G-017 bounds (REQ-SEC-G-018).
 - The frozen Evidence Gateway Version 1 security invariant matrix (`products/evidence/contracts/security-invariant-matrix.yaml`) records the Evidence Gateway-specific form of the audit-ordering, fail-closed, transport-identity, and nonce invariants that Sections 3, 6, and 7 state at stack level.
+
+{/* Evidence: crates/registry-platform-oidc verifies bearer tokens for both services, and the
+    authenticators that call it are crates/registry-evidence/src/auth.rs and
+    crates/registry-relay-v2/src/auth.rs (REQ-SEC-G-004). crates/registry-relay-v2/src/startup.rs
+    refuses to serve a protected access profile with no configured issuer (REQ-SEC-G-002),
+    crates/registry-platform-audit carries the audit envelope both services append to
+    (REQ-SEC-G-008, REQ-SEC-G-009), and crates/registry-mint/src/replay.rs bounds the only single-use
+    state Registry Mint keeps (REQ-SEC-G-017, REQ-SEC-G-018). */}
 
 ## Next
 

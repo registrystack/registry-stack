@@ -35,6 +35,20 @@ pub enum Command {
         /// and access-token JWKS reachability in the target runtime context.
         #[arg(long)]
         require_runtime_dependencies: bool,
+        /// Also prove the configured audit sink resolves inside this absolute
+        /// directory, which the deployment declares persistent.
+        ///
+        /// The declared root is a storage boundary, not a second audit setting.
+        /// Evidence resolves its own configured destination exactly as startup
+        /// resolves it and refuses when the result is not at or below the root,
+        /// which is what stops a container from mounting durable storage at the
+        /// conventional prefix while writing the chain somewhere ephemeral.
+        #[arg(
+            long,
+            value_name = "ABSOLUTE_DIRECTORY",
+            requires = "require_runtime_dependencies"
+        )]
+        require_audit_under: Option<PathBuf>,
     },
     /// Evaluate one bundle-owned fixture without source or credential access.
     Evaluate {
@@ -183,6 +197,40 @@ pub fn command() -> clap::Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn requiring_an_audit_root_also_requires_the_runtime_dependency_proof() {
+        let parsed = Cli::try_parse_from([
+            "evidence",
+            "check",
+            "--require-runtime-dependencies",
+            "--require-audit-under",
+            "/var/lib/registry-evidence",
+        ])
+        .expect("the audit root pairs with the dependency proof");
+        let Command::Check {
+            require_runtime_dependencies,
+            require_audit_under,
+        } = parsed.command
+        else {
+            panic!("check parsed as another command");
+        };
+        assert!(require_runtime_dependencies);
+        assert_eq!(
+            Some(PathBuf::from("/var/lib/registry-evidence")),
+            require_audit_under
+        );
+
+        // Containment is a claim about the sink the dependency proof opens, so
+        // it cannot be requested on its own.
+        assert!(Cli::try_parse_from([
+            "evidence",
+            "check",
+            "--require-audit-under",
+            "/var/lib/registry-evidence",
+        ])
+        .is_err());
+    }
 
     #[test]
     fn public_reference_excludes_internal_evidencectl_seams() {

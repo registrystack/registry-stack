@@ -99,12 +99,23 @@ writability, signer readiness, source credentials, and JWKS reachability:
 
 ```sh
 docker run --rm -v "$PWD/deploy/evidence:/etc/registry-evidence:ro" \
-  registry-evidence check --require-runtime-dependencies
+  -v evidence-audit:/var/lib/registry-evidence \
+  registry-evidence check --require-runtime-dependencies \
+  --require-audit-under /var/lib/registry-evidence
 ```
+
+`--require-audit-under ABSOLUTE_DIRECTORY` adds one further proof: the
+configured audit sink has to resolve at or below the directory the deployment
+declares persistent. Evidence resolves its own configured destination exactly
+as startup does and canonicalizes both sides, so a sink configured outside the
+declared root, and a symlink inside the root that leads out of it, both fail
+closed. The option proves containment only; the writability and chain proofs
+still have to pass.
 
 Relay provides the equivalent `relay check --runtime
 /etc/relay/runtime.yaml`; Mint provides `mint check
---require-runtime-dependencies`. For a Compose deployment containing any
+--require-runtime-dependencies`. Both accept the same
+`--require-audit-under`. For a Compose deployment containing any
 combination of the three official products, use
 `docker/runtime-preflight.py` to verify the common container posture first and
 then run each product's native check in its actual mounts and network. The
@@ -122,22 +133,38 @@ volume hide an ephemeral configured sink. With `/dev/shm` read-only, the fixed
 nonroot identity, and the read-only root filesystem, the audit root is the only
 usable regular-file write lane. It may be a Docker-managed local named volume
 with no driver options or an explicit bind outside known ephemeral host paths.
-The native check then proves that the configured audit sink can open and lock
-through that lane, rather than through an unused durable mount beside ephemeral
-storage.
+The preflight then hands that validated root to each
+native check as `--require-audit-under`, which splits the proof along the
+ownership boundary: the adapter owns storage persistence and never reads
+product configuration, while the product owns configuration resolution and
+never infers which mounts are durable. Neither a durable mount sitting unused
+beside an ephemeral configured sink nor a symlink leading out of the mount
+satisfies both halves.
 
-Native checks have no wrapper deadline by default because validating a retained
-audit chain can legitimately take longer than a fixed deployment timeout. Use
-`--native-check-timeout-seconds SECONDS` when the operator requires a positive
-deadline. Selected Compose dependencies are honored. A cold Evidence check can
-check, start with `--no-deps`, and readiness-probe a declared Mint dependency
-before checking Evidence. Only Mint may be started as a preflight dependency;
-Relay's existing healthcheck is liveness-only and is not accepted as readiness.
+Every native check runs under a bounded deadline. It defaults to 1800 seconds
+because validating a retained audit chain can legitimately take longer than a
+short deployment timeout, and `--native-check-timeout-seconds SECONDS` selects
+any deadline from 30 to 21600 seconds. An expired deadline names the service
+that exceeded it and fails the preflight.
+
+Selected Compose dependencies are honored. A cold Evidence check can check,
+start with `--no-deps`, and readiness-probe a declared Mint dependency before
+checking Evidence. The dependency lane is an explicit allowlist: only a
+selected service whose product is Mint may be started, because Relay's existing
+healthcheck is liveness-only and is not accepted as readiness, and a
+`depends_on` edge to a service the operator did not select starts nothing. The
+plan orders every dependency before its dependent, rejects a cycle in the
+selected services before running anything, and is otherwise the given selection
+order. `docker/compose/docker-compose.mint.yaml` is the cold Mint and Evidence
+fixture for that lane; it publishes no host port.
+
 Services started for dependency checking remain under the operator's Compose
-lifecycle. `--dependency-timeout-seconds` bounds both Mint startup and readiness
-polling under one shared deadline. Mint's `MINT_HEALTHCHECK_URL` selects a
-numeric private `/ready` listener when loopback is not the configured bind.
-Native checks consume the exact rendered Compose JSON already
+lifecycle. The preflight names them, and the command that stops them, on
+success and on failure, so a partially completed run is recoverable with the
+same Compose files. `--dependency-timeout-seconds` bounds both Mint startup and
+readiness polling under one shared deadline. Mint's `MINT_HEALTHCHECK_URL`
+selects a numeric private `/ready` listener when loopback is not the configured
+bind. Native checks consume the exact rendered Compose JSON already
 validated by the static pass, rather than re-reading mutable Compose or
 environment files.
 

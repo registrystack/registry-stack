@@ -28,6 +28,21 @@ pub enum Command {
         /// Use before startup, not against a Mint process that is already serving.
         #[arg(long)]
         require_runtime_dependencies: bool,
+        /// Also prove the configured audit sink resolves inside this absolute
+        /// directory, which the deployment declares persistent.
+        ///
+        /// The declared root is a storage boundary, not a second audit setting.
+        /// Mint resolves `audit.path` against the configuration file exactly as
+        /// startup resolves it and refuses when the result is not at or below
+        /// the root, which is what stops a container from mounting durable
+        /// storage at the conventional prefix while writing the chain somewhere
+        /// ephemeral.
+        #[arg(
+            long,
+            value_name = "ABSOLUTE_DIRECTORY",
+            requires = "require_runtime_dependencies"
+        )]
+        require_audit_under: Option<PathBuf>,
     },
     /// Serve the token endpoint until terminated.
     Serve {
@@ -197,6 +212,44 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn requiring_an_audit_root_also_requires_the_runtime_dependency_proof() {
+        let parsed = Cli::try_parse_from([
+            "mint",
+            "check",
+            "--config",
+            "mint.yaml",
+            "--require-runtime-dependencies",
+            "--require-audit-under",
+            "/var/lib/registry-mint",
+        ])
+        .expect("the audit root pairs with the dependency proof");
+        let Command::Check {
+            require_audit_under,
+            ..
+        } = parsed.command
+        else {
+            panic!("check parsed as another command");
+        };
+        assert_eq!(
+            Some(PathBuf::from("/var/lib/registry-mint")),
+            require_audit_under
+        );
+
+        // Containment is a claim about the sink the dependency proof claims, so
+        // it cannot be requested on its own.
+        let error = Cli::try_parse_from([
+            "mint",
+            "check",
+            "--config",
+            "mint.yaml",
+            "--require-audit-under",
+            "/var/lib/registry-mint",
+        ])
+        .expect_err("containment alone proves nothing about writability");
+        assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
     }
 
     #[test]
