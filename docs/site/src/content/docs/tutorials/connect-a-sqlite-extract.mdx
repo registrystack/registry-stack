@@ -51,6 +51,7 @@ reads.
 
 ```text
 registry-status/
+  README.md
   selectors/record-reference-v1.yaml
   sources/record-status.yaml
   queries/record-status.sql
@@ -61,6 +62,9 @@ registry-status/
   derivations/record-status.rhai
   fixtures/record-status.yaml
 ```
+
+`README.md` names each of these files and the command that comes next, and `evidencectl new` prints
+its path with the rest of the project.
 
 Start with `sources/record-status.yaml`. Its `extractProfile` is the logical name an operator will
 bind to a file. Its request names one fixed statement, its authorized selector input, the SQL
