@@ -2,6 +2,7 @@
 //! Deterministic package signing-input and publication orchestration.
 
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::io::Read;
 use std::path::Path;
 
@@ -298,7 +299,10 @@ fn ensure_reviewer_evidence(
     expected_test_receipt: &[u8],
 ) -> Result<(), PackageLifecycleError> {
     if build_directory.exists() {
-        super::validate_directory_for(
+        // The held descriptor is what the published-package check below reads,
+        // so replacing a component of the build path afterwards cannot hide an
+        // already published package from it.
+        let directory = super::validate_directory_for(
             build_directory,
             "package.output.invalid",
             "output",
@@ -325,7 +329,9 @@ fn ensure_reviewer_evidence(
             });
         }
         if existing_signing_input != expected_signing_input
-            || build_directory.join(PACKAGE_DIRECTORY).exists()
+            || directory
+                .entry_exists(OsStr::new(PACKAGE_DIRECTORY))
+                .map_err(|_| PackageLifecycleError::Output)?
         {
             return Err(PackageLifecycleError::Output);
         }
@@ -477,6 +483,31 @@ mod tests {
     mod ancestor_swap {
         use super::*;
         use crate::safe_path::race_fixture::race_tree;
+
+        #[test]
+        fn a_reviewer_evidence_check_after_an_ancestor_swap_still_sees_the_named_package() {
+            let tree = race_tree();
+            let build = tree.named("build");
+            std::fs::create_dir_all(build.join(PACKAGE_DIRECTORY)).unwrap();
+            std::fs::write(build.join(SIGNING_INPUT_PATH), b"signing input").unwrap();
+            std::fs::write(build.join(TEST_RECEIPT_PATH), b"receipt").unwrap();
+            // The tree the operator never named holds the same evidence without
+            // a published package directory, which is what a check made by
+            // pathname would read instead.
+            let decoy = tree.outside("build");
+            std::fs::create_dir_all(&decoy).unwrap();
+            std::fs::write(decoy.join(SIGNING_INPUT_PATH), b"signing input").unwrap();
+            std::fs::write(decoy.join(TEST_RECEIPT_PATH), b"receipt").unwrap();
+
+            // Swap once the build directory and both evidence files are
+            // resolved, so only the held descriptor still names the real tree.
+            let guard = tree.arm_after(2);
+            let refused = ensure_reviewer_evidence(&build, b"signing input", b"receipt")
+                .expect_err("an already published package directory is refused");
+            drop(guard);
+
+            assert!(matches!(refused, PackageLifecycleError::Output));
+        }
 
         #[test]
         fn a_receipt_read_after_an_ancestor_swap_reads_only_the_named_file() {
