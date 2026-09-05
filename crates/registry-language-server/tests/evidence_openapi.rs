@@ -24,8 +24,8 @@ use registry_evidence_authoring::{
 };
 use registry_language_server::{EvidenceKind, IndexedDiagnostic, ProjectIndex, SymbolKind};
 use support::{
-    adult_status_project, operation_question_project, replacing, without, EvidenceProject,
-    OPENAPI_PATH, OPERATION_OPENAPI, OPERATION_QUESTION, QUESTION_PATH,
+    adult_status_project, file, operation_question_project, replacing, without, EvidenceProject,
+    DERIVATION, OPENAPI_PATH, OPERATION_OPENAPI, OPERATION_QUESTION, QUESTION_PATH, SOURCE_PATH,
 };
 
 /// The worked compact-form project the compiler accepts is a project the editor reports nothing
@@ -701,6 +701,112 @@ fn a_description_too_large_to_index_positions_in_still_resolves_at_the_start_of_
             .map(|location| (location.path, location.range.start.line))
             .collect::<Vec<_>>(),
         vec![(project.path(OPENAPI_PATH), 0)]
+    );
+}
+
+/// A project whose questions all name sources is a project the compiler builds with no description
+/// at all, and the editor indexes it with nothing to say about the file the author never wrote.
+///
+/// This is the shape `evidencectl new --transport sqlite-extract` writes, and the shape a project
+/// reading a fixed HTTP source writes: `read_inputs` in
+/// `crates/registry-evidencectl/src/authoring.rs` treats a description that is not there as a
+/// description of nothing, and `compile_question_plan` in the same file hands every question that
+/// names a source to `compile_referenced_question` without reading one.
+#[test]
+fn a_project_whose_questions_all_name_sources_needs_no_description() {
+    let project = EvidenceProject::new(&without(&adult_status_project(), OPENAPI_PATH));
+    let index = project.index();
+
+    assert!(index.diagnostics().is_empty(), "{:?}", index.diagnostics());
+    assert_eq!(
+        index
+            .definitions_at(
+                &project.path(QUESTION_PATH),
+                project.cursor(QUESTION_PATH, "source-ref")
+            )
+            .into_iter()
+            .map(|location| location.path)
+            .collect::<Vec<_>>(),
+        vec![project.path(SOURCE_PATH)],
+        "the edges a referenced-form question draws are drawn without a description"
+    );
+}
+
+/// One question written in the compact form is what makes the description a prerequisite, whatever
+/// the rest of the project is written as.
+#[test]
+fn one_question_naming_an_operation_makes_the_description_a_prerequisite() {
+    let compact = OPERATION_QUESTION
+        .replace("id: adult-status", "id: record-count")
+        .replace(
+            "derivations/adult-status.rhai",
+            "derivations/record-count.rhai",
+        );
+    let mut files = replacing(
+        &without(&adult_status_project(), OPENAPI_PATH),
+        "questions/record-count.yaml",
+        &compact,
+    );
+    files.push(file("derivations/record-count.rhai", DERIVATION));
+    let project = EvidenceProject::new(&files);
+
+    let reported = project.index().diagnostics().to_vec();
+    assert_eq!(reported.len(), 1, "{reported:?}");
+    assert_eq!(reported[0].path, project.path(OPENAPI_PATH));
+    assert_eq!(
+        reported[0].code.as_deref(),
+        Some("evidence/openapi-prerequisite")
+    );
+    assert_eq!(
+        reported[0].message,
+        "The required source.openapi.yaml is missing"
+    );
+}
+
+/// A question the form refuses is not a question that needs a description.
+///
+/// `read_inputs` stops at `first_finding(validate_question(&question))?` before any question is
+/// compiled, so the sentence the author gets from the build is the one about the question. Adding a
+/// second sentence about a missing file would send them to a file that is not the problem.
+#[test]
+fn a_question_the_form_refuses_does_not_make_the_description_a_prerequisite() {
+    let project = EvidenceProject::new(&replacing(
+        &without(&operation_question_project(), OPENAPI_PATH),
+        QUESTION_PATH,
+        &OPERATION_QUESTION.replace("<|concept|>is_adult", "<|concept|>IsAdult"),
+    ));
+
+    let reported = project.index().diagnostics().to_vec();
+    assert_eq!(reported.len(), 1, "{reported:?}");
+    assert_eq!(reported[0].path, project.path(QUESTION_PATH));
+    assert_eq!(
+        reported[0].code.as_deref(),
+        Some("evidence/answer-concept-identifier")
+    );
+}
+
+/// A description that is there and is not a regular project file is a refusal for every project.
+///
+/// Absence is the only reading the questions get to weigh. The compiler inspects the name with
+/// `symlink_metadata` and reads whatever that found, so a link at that name fails its build whether
+/// or not a question names an operation, and the editor says so at the same place.
+#[test]
+fn a_linked_description_is_refused_whatever_the_questions_name() {
+    let project = EvidenceProject::new(&without(&adult_status_project(), OPENAPI_PATH));
+    let elsewhere = project.path("elsewhere.openapi.yaml");
+    std::fs::write(&elsewhere, "openapi: 3.1.0\n").expect("the target writes");
+    std::os::unix::fs::symlink(&elsewhere, project.path(OPENAPI_PATH)).expect("the link writes");
+
+    let reported = project.index().diagnostics().to_vec();
+    assert_eq!(reported.len(), 1, "{reported:?}");
+    assert_eq!(reported[0].path, project.path(OPENAPI_PATH));
+    assert_eq!(
+        reported[0].code.as_deref(),
+        Some("evidence/openapi-prerequisite")
+    );
+    assert_eq!(
+        reported[0].message,
+        "The retained OpenAPI description is not a regular project file"
     );
 }
 
