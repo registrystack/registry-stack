@@ -76,7 +76,7 @@ published installer scripts refuse the same two cases before they download
 anything, and carry the floor as a generated block written by
 `release/scripts/render-installer-libc-preflight.py`.
 
-### What the local rerun of this change observed
+### Local observation on Apple Silicon
 
 Two complete payload builds of 0.26.1 ran on one Apple Silicon workstation
 through the emulated `linux/amd64` builder, each with its own Cargo home and

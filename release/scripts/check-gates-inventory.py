@@ -73,6 +73,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "run: python3 release/scripts/check-debian13-images.py",
     ),
     (
+        "GNU libc floor gate tests",
+        "run: python3 -m unittest release/scripts/test_glibc_floor.py",
+    ),
+    (
         "Advisory exposure policy tests",
         "run: python3 -m unittest release/scripts/test_check_advisory_baselines.py",
     ),
