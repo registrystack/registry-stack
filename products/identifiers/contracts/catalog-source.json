@@ -31,6 +31,16 @@
       "exporterPath": "crates/registry-evidence/examples/problem-catalog.rs",
       "cargoPackage": "registry-evidence",
       "cargoExample": "problem-catalog"
+    },
+    {
+      "owner": "breg",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "uriPrefix": "https://id.registrystack.org/problems/registry-breg/",
+      "sourcePath": "crates/registry-breg/src/problem.rs",
+      "exporterPath": "crates/registry-breg/examples/problem-catalog.rs",
+      "cargoPackage": "registry-breg",
+      "cargoExample": "problem-catalog"
     }
   ],
   "referenceExclusions": [
