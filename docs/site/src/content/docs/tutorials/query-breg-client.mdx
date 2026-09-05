@@ -331,7 +331,7 @@ refused an input before sending anything, `metadata_selection` when a binding co
 selected, and `protocol` when a response violated the contract. Every kind carries a message
 (`str(error)` in Python, `error.message` in Node); a kind that comes from a response also carries
 the trace identifier to quote when you ask the registry operator about it. The
-[Base Registry Engine client API reference](../../reference/breg-client-api/#error-contract) names
+[Registry Stack client API reference](../../reference/client-api/#breg-error-contract) names
 every kind the bindings raise and the members each one sets.
 
 {/* Evidence: crates/registry-breg-client-py/src/lib.rs, sdk_error(); crates/registry-breg-client-node/src/lib.rs,
@@ -366,7 +366,7 @@ inspect a refused write through one error type.
 
 ## Next
 
-- [Base Registry Engine client API reference](../../reference/breg-client-api/) for every method, outcome shape, and error kind.
+- [Registry Stack client API reference](../../reference/client-api/#base-registry-engine) for every method, outcome shape, and error kind.
 - [Control access per profile](../../configure/breg-access/) for the access profiles and capability bindings a project exposes.
 - [Base Registry Engine API reference](../../reference/breg-api/) for the HTTP contract the client speaks.
 - [Error and status code reference](../../reference/errors/) for the problem codes the registry returns.
