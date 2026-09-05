@@ -546,6 +546,19 @@ class CiChangesTest(unittest.TestCase):
                 self.assertTrue(
                     classify(self.workspace, (path,))["evidence_tutorial"]
                 )
+        # The assembled package bundles every product's Python binding, so
+        # each of them feeds what the replay imports, not only the Evidence
+        # binding.
+        for path in (
+            "crates/registry-breg-client-py/src/lib.rs",
+            "crates/registry-discovery-client-py/src/lib.rs",
+            "crates/registry-evidence-client-py/src/lib.rs",
+            "crates/registry-relay-client-py/src/lib.rs",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(
+                    classify(self.workspace, (path,))["evidence_tutorial"]
+                )
         self.assertFalse(
             classify(
                 self.workspace,

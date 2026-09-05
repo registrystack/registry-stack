@@ -320,6 +320,15 @@ EVIDENCE_TUTORIAL_PACKAGES = (
     EVIDENCE_PACKAGES - EVIDENCE_TUTORIAL_EXEMPT_PACKAGES
 ) | frozenset(SHARDS["mint"])
 
+# The application tutorial imports the assembled `registry-stack-client`
+# wheel, which the gate builds from every product's Python binding, so a
+# change to any of them changes what the replay imports, whichever product it
+# belongs to. The pure-Python facade the wheel also carries owns no Cargo
+# package, so a change under it already selects the complete matrix.
+ASSEMBLED_PYTHON_CLIENT_PACKAGES = frozenset(
+    package for package in NATIVE_BINDING_PACKAGES if package.endswith("-client-py")
+)
+
 # The gate builds and runs exactly these: the registry, the tool that applies
 # its package, and Registry Mint, because the launcher the tutorial starts
 # issues the operator token the reader's first authenticated call carries. The
@@ -768,7 +777,9 @@ def classify(
     evidence_tutorial = (
         complete
         or any(path in EVIDENCE_TUTORIAL_INPUTS for path in paths)
-        or bool(affected & EVIDENCE_TUTORIAL_PACKAGES)
+        or bool(
+            affected & (EVIDENCE_TUTORIAL_PACKAGES | ASSEMBLED_PYTHON_CLIENT_PACKAGES)
+        )
     )
 
     breg_tutorial = (
