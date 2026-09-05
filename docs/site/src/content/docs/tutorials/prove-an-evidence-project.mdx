@@ -74,8 +74,12 @@ Cover behavior your reviewers need to approve:
 - one ordinary positive result;
 - one legitimate negative value, or an unresolved case when false would be misleading;
 - each important boundary in the derivation;
-- the `no_match` and `ambiguous` outcomes;
-- missing or mistyped required facts;
+- missing required facts, which the extractor generated from OpenAPI fails as
+  `source.unavailable` rather than as a `no_match` or `ambiguous` outcome; get a real `no_match` or
+  `ambiguous` by hand-editing the extractor, as
+  [Finish extraction and facts](../connect-an-institution-source/#finish-extraction-and-facts)
+  covers;
+- mistyped required facts;
 - malformed and unavailable source responses;
 - output outside the governed codelist or schema;
 - privacy expectations proving source fields and selector values stay out of evidence and
@@ -95,11 +99,11 @@ evidencectl fixtures run --project "<evidence-project>"
 ```
 
 Evidencectl asks the `evidence` binary for its version first and refuses one that is not its own,
-then compiles the editable project into a private staging bundle, runs `evidence check` against it,
-discovers the fixture files the compiled bundle captured, and drives each one through
-`evidence evaluate`; pass `--evidence-bin` when the matching binary is not the first `evidence` on
-`PATH`. The run does not start HTTP, resolve a source credential, call the source, or write
-the production audit log. The served HTTP path remains a separate integration check.
+then compiles the editable project into a private staging bundle, runs `evidence bundle-check`
+against it, discovers the fixture files the compiled bundle captured, and drives each one through
+`evidence bundle-evaluate`; pass `--evidence-bin` when the matching binary is not the first
+`evidence` on `PATH`. The run does not start HTTP, resolve a source credential, call the source, or
+write the production audit log. The served HTTP path remains a separate integration check.
 
 A passing run reports the check and one line per fixture:
 
