@@ -56,6 +56,7 @@ jobs:
       client_bindings: ${{ steps.filter.outputs.client_bindings }}
       release_linux_node_clients: ${{ steps.filter.outputs.release_linux_node_clients }}
       evidence_tutorial: ${{ steps.filter.outputs.evidence_tutorial }}
+      breg_tutorial: ${{ steps.filter.outputs.breg_tutorial }}
       identifiers: ${{ steps.filter.outputs.identifiers }}
     steps:
       - name: Checkout
