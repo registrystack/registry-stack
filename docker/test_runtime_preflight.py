@@ -231,7 +231,7 @@ class RuntimePreflightTest(unittest.TestCase):
         )
         self.assertIn("--require-runtime-dependencies", calls[1])
         self.assertIn("--require-runtime-dependencies", calls[2])
-        self.assertEqual("check", calls[3][-3])
+        self.assertEqual("check", calls[3][-5])
         self.assertEqual("evidence", calls[1][calls[1].index("--no-deps") + 1])
         self.assertEqual("mint", calls[2][calls[2].index("--no-deps") + 1])
         self.assertEqual("relay", calls[3][calls[3].index("--no-deps") + 1])
@@ -246,6 +246,63 @@ class RuntimePreflightTest(unittest.TestCase):
                 call.kwargs["timeout"],
             )
             self.assertEqual(document, json.loads(call.kwargs["input"]))
+
+    def test_every_native_check_asserts_the_validated_audit_prefix(self) -> None:
+        # The adapter proves the mount is durable container storage and the
+        # product proves its own configured sink resolves inside it. The root
+        # handed to the product is the exact mount target already validated, so
+        # neither side has to read the other's configuration.
+        document = deployment(
+            {
+                "evidence": service("evidence"),
+                "mint": service("mint"),
+                "relay": service("relay"),
+            }
+        )
+        result, _, stderr, run = self.run_main(document)
+        self.assertEqual(0, result, stderr)
+        calls = [call.args[0] for call in run.call_args_list]
+        for index, product in enumerate(("evidence", "mint", "relay"), start=1):
+            with self.subTest(product=product):
+                prefix = self.module.AUDIT_PREFIXES[product]
+                self.assertEqual(
+                    ["--require-audit-under", prefix], calls[index][-2:]
+                )
+                persistent = [
+                    volume
+                    for volume in document["services"][product]["volumes"]
+                    if volume["type"] in ("volume", "bind")
+                    and not volume["read_only"]
+                ]
+                self.assertEqual([prefix], [volume["target"] for volume in persistent])
+
+    def test_a_decoy_persistent_volume_cannot_rescue_an_ephemeral_sink(self) -> None:
+        # The whole deployment posture is correct: a durable named volume is
+        # mounted writable at the conventional audit prefix. Only the product
+        # can see that its configured sink resolves somewhere ephemeral instead,
+        # and it refuses the containment assertion the adapter passed in.
+        document = deployment({"relay": service("relay")})
+        argv = [
+            "--compose-file",
+            "compose.yaml",
+            "--env-file",
+            "operator.env",
+            "--service",
+            "relay=relay",
+        ]
+        result, stdout, stderr, run = self.run_main(
+            document, native_returncode=1, argv=argv
+        )
+
+        self.assertEqual(1, result)
+        self.assertEqual("", stdout)
+        self.assertIn("native runtime check", stderr)
+        self.assertNotIn("sensitive", stderr)
+        calls = [call.args[0] for call in run.call_args_list]
+        self.assertEqual(
+            ["--require-audit-under", self.module.AUDIT_PREFIXES["relay"]],
+            calls[1][-2:],
+        )
 
     def test_every_static_posture_failure_precedes_native_execution(self) -> None:
         mutations = {

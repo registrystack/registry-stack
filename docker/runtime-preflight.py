@@ -65,20 +65,35 @@ KNOWN_EPHEMERAL_BIND_ROOTS = tuple(
         "/private/var/folders",
     )
 )
+# Each native check is handed the audit prefix this adapter already proved is a
+# writable persistent mount. Storage persistence is the adapter's boundary and
+# configuration resolution is the product's, so the product decides whether its
+# own configured sink resolves inside the asserted root. The adapter never reads
+# product configuration to answer that question.
 NATIVE_CHECKS = {
     "evidence": [
         "--runtime",
         "/etc/registry-evidence/runtime.yaml",
         "check",
         "--require-runtime-dependencies",
+        "--require-audit-under",
+        AUDIT_PREFIXES["evidence"],
     ],
     "mint": [
         "check",
         "--config",
         "/etc/registry-mint/config.yaml",
         "--require-runtime-dependencies",
+        "--require-audit-under",
+        AUDIT_PREFIXES["mint"],
     ],
-    "relay": ["check", "--runtime", "/etc/relay/runtime.yaml"],
+    "relay": [
+        "check",
+        "--runtime",
+        "/etc/relay/runtime.yaml",
+        "--require-audit-under",
+        AUDIT_PREFIXES["relay"],
+    ],
 }
 DEPENDENCY_HEALTHCHECKS = {"mint": ["/usr/local/bin/mint", "healthcheck"]}
 
