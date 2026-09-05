@@ -24,7 +24,12 @@ use serde_json::{json, Map, Value};
 use crate::authoring;
 
 const MAX_TARGET_BYTES: u64 = 1024 * 1024;
-const MAX_EVIDENCE_STDOUT_BYTES: u64 = 1024 * 1024;
+const MAX_EVIDENCE_CAPTURE_BYTES: u64 = 1024 * 1024;
+/// How much of a failed `evidence bundle-check` diagnostic is kept for the
+/// build failure message: the two bounds are applied together, whichever is
+/// hit first.
+const MAX_DIAGNOSTIC_EXCERPT_LINES: usize = 40;
+const MAX_DIAGNOSTIC_EXCERPT_BYTES: usize = 8 * 1024;
 const SECRET_PREFIX: &str = "secret:file/";
 
 #[derive(Debug, Args)]
@@ -268,11 +273,12 @@ fn run_bundle_check(
         .arg("--bundle")
         .arg(bundle)
         .env_remove("REGISTRY_EVIDENCE_RUNTIME");
-    let output = run_evidence(command, interruption, true)?;
+    let output = run_evidence(command, interruption, true, true)?;
     if !output.status.success() {
         return runtime_failure(
             "Evidence rejected the generated deployment bundle",
             &format!("evidencectl fixtures run --project {}", project.display()),
+            bounded_diagnostic(&output.stderr).as_deref(),
         );
     }
     parse_bundle_revision(&String::from_utf8_lossy(&output.stdout))
@@ -293,7 +299,7 @@ fn run_bundle_fixture(
         .arg("--fixture")
         .arg(fixture)
         .env_remove("REGISTRY_EVIDENCE_RUNTIME");
-    let output = run_evidence(command, interruption, false)?;
+    let output = run_evidence(command, interruption, false, false)?;
     if output.status.success() {
         return Ok(());
     }
@@ -303,29 +309,41 @@ fn run_bundle_fixture(
             "evidencectl fixtures run --project {} --fixture {fixture}",
             project.display()
         ),
+        None,
     )
 }
 
 struct EvidenceOutput {
     status: ExitStatus,
     stdout: Vec<u8>,
+    stderr: Vec<u8>,
 }
 
 fn run_evidence(
     mut command: Command,
     interruption: &BuildInterruption,
     capture_stdout: bool,
+    capture_stderr: bool,
 ) -> Result<EvidenceOutput> {
     interruption.check()?;
     let mut stdout = capture_stdout
         .then(tempfile::tempfile)
         .transpose()
-        .context("creating private Evidence output capture")?;
-    command.stdin(Stdio::null()).stderr(Stdio::null());
+        .context("creating a private Evidence standard-output capture")?;
+    let mut stderr = capture_stderr
+        .then(tempfile::tempfile)
+        .transpose()
+        .context("creating a private Evidence standard-error capture")?;
+    command.stdin(Stdio::null());
     if let Some(file) = &stdout {
         command.stdout(Stdio::from(file.try_clone()?));
     } else {
         command.stdout(Stdio::null());
+    }
+    if let Some(file) = &stderr {
+        command.stderr(Stdio::from(file.try_clone()?));
+    } else {
+        command.stderr(Stdio::null());
     }
     let mut child = command
         .spawn()
@@ -335,10 +353,7 @@ fn run_evidence(
             terminate_validation_child(&mut child);
             return Err(anyhow!("deployment build interrupted"));
         }
-        if stdout.as_ref().is_some_and(|file| {
-            file.metadata()
-                .is_ok_and(|metadata| metadata.len() > MAX_EVIDENCE_STDOUT_BYTES)
-        }) {
+        if capture_over_limit(&stdout) || capture_over_limit(&stderr) {
             terminate_validation_child(&mut child);
             bail!("Evidence deployment validation output exceeded its byte limit");
         }
@@ -353,19 +368,31 @@ fn run_evidence(
     };
     interruption.check()?;
 
+    Ok(EvidenceOutput {
+        status,
+        stdout: drain_capture(&mut stdout)?,
+        stderr: drain_capture(&mut stderr)?,
+    })
+}
+
+fn capture_over_limit(file: &Option<File>) -> bool {
+    file.as_ref().is_some_and(|file| {
+        file.metadata()
+            .is_ok_and(|metadata| metadata.len() > MAX_EVIDENCE_CAPTURE_BYTES)
+    })
+}
+
+fn drain_capture(file: &mut Option<File>) -> Result<Vec<u8>> {
     let mut captured = Vec::new();
-    if let Some(file) = stdout.as_mut() {
+    if let Some(file) = file.as_mut() {
         file.rewind()?;
-        file.take(MAX_EVIDENCE_STDOUT_BYTES + 1)
+        file.take(MAX_EVIDENCE_CAPTURE_BYTES + 1)
             .read_to_end(&mut captured)?;
-        if captured.len() as u64 > MAX_EVIDENCE_STDOUT_BYTES {
+        if captured.len() as u64 > MAX_EVIDENCE_CAPTURE_BYTES {
             bail!("Evidence deployment validation output exceeded its byte limit");
         }
     }
-    Ok(EvidenceOutput {
-        status,
-        stdout: captured,
-    })
+    Ok(captured)
 }
 
 fn terminate_validation_child(child: &mut std::process::Child) {
@@ -373,18 +400,55 @@ fn terminate_validation_child(child: &mut std::process::Child) {
     let _ = child.wait();
 }
 
-/// Refuse the build with a fixed sentence and the command that shows the
-/// reader what Evidence objected to.
+/// Refuse the build with a fixed sentence, the command that shows the reader
+/// what Evidence objected to, and, when the caller has one, a bounded excerpt
+/// of what Evidence printed.
 ///
-/// The diagnostics `evidence bundle-check` and `evidence bundle-evaluate`
-/// write are not relayed here. A validation process may have opened
-/// operator-authored configuration, a build runs unattended and its error text
-/// lands in build logs, and no test in `registry-evidence` pins the stderr of
-/// those two seams as value-free. `evidencectl fixtures run` compiles the
-/// project again and relays them for an operator who asks for them at a
-/// terminal.
-fn runtime_failure<T>(message: &str, diagnosis_command: &str) -> Result<T> {
-    bail!("{message}. Run `{diagnosis_command}` to read the diagnosis Evidence prints.")
+/// `evidence bundle-check` only loads and statically compiles the generated
+/// bundle: it never resolves a secret, runs a source query, or reads a
+/// subject selector, so its stderr is safe to fold into an unattended build's
+/// own error text. `evidence bundle-evaluate` runs a fixture through the
+/// compiled bundle, so its stderr is not relayed here; `evidencectl fixtures
+/// run` compiles the project again and relays it for an operator who asks for
+/// it at a terminal.
+fn runtime_failure<T>(message: &str, diagnosis_command: &str, excerpt: Option<&str>) -> Result<T> {
+    match excerpt {
+        Some(excerpt) => bail!(
+            "{message}. Run `{diagnosis_command}` to read the diagnosis Evidence prints.\n\nEvidence reported:\n{excerpt}"
+        ),
+        None => bail!("{message}. Run `{diagnosis_command}` to read the diagnosis Evidence prints."),
+    }
+}
+
+/// Keep only the most recent lines of a captured diagnostic, bounded first to
+/// `MAX_DIAGNOSTIC_EXCERPT_LINES` lines and then to
+/// `MAX_DIAGNOSTIC_EXCERPT_BYTES` bytes, and say so when earlier content was
+/// cut. Returns `None` for empty input, so a caller with nothing to show
+/// omits the excerpt entirely.
+fn bounded_diagnostic(raw: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(raw);
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let all_lines: Vec<&str> = text.lines().collect();
+    let mut trimmed = all_lines.len() > MAX_DIAGNOSTIC_EXCERPT_LINES;
+    let start = all_lines.len().saturating_sub(MAX_DIAGNOSTIC_EXCERPT_LINES);
+    let mut excerpt = all_lines[start..].join("\n");
+    if excerpt.len() > MAX_DIAGNOSTIC_EXCERPT_BYTES {
+        trimmed = true;
+        let cut = excerpt.len() - MAX_DIAGNOSTIC_EXCERPT_BYTES;
+        let cut = (cut..=excerpt.len())
+            .find(|&index| excerpt.is_char_boundary(index))
+            .unwrap_or(excerpt.len());
+        excerpt = excerpt[cut..].to_owned();
+    }
+    if trimmed {
+        excerpt = format!(
+            "(diagnostic trimmed to the last {MAX_DIAGNOSTIC_EXCERPT_LINES} lines / {MAX_DIAGNOSTIC_EXCERPT_BYTES} bytes)\n{excerpt}"
+        );
+    }
+    Some(excerpt)
 }
 
 fn parse_bundle_revision(stdout: &str) -> Result<String> {
@@ -709,5 +773,55 @@ requirements: []
                 .to_string();
             assert!(!error.contains(marker));
         }
+    }
+
+    #[test]
+    fn bounded_diagnostic_omits_empty_input() {
+        assert!(bounded_diagnostic(b"").is_none());
+        assert!(bounded_diagnostic(b"   \n  \n").is_none());
+    }
+
+    #[test]
+    fn bounded_diagnostic_passes_short_input_through_unchanged() {
+        let raw = b"first line\nsecond line\n";
+        assert_eq!(
+            bounded_diagnostic(raw).expect("diagnostic present"),
+            "first line\nsecond line"
+        );
+    }
+
+    #[test]
+    fn bounded_diagnostic_keeps_only_the_most_recent_lines() {
+        let last_line_number = MAX_DIAGNOSTIC_EXCERPT_LINES + 10;
+        let raw = (1..=last_line_number)
+            .map(|number| format!("line {number}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let excerpt = bounded_diagnostic(raw.as_bytes()).expect("diagnostic present");
+        assert!(
+            excerpt.starts_with("(diagnostic trimmed to the last"),
+            "excerpt says it was trimmed: {excerpt}"
+        );
+        assert!(excerpt.contains(&format!("line {last_line_number}")));
+        assert!(!excerpt.contains("line 1\n") && !excerpt.ends_with("line 1"));
+        assert_eq!(
+            excerpt.lines().skip(1).count(),
+            MAX_DIAGNOSTIC_EXCERPT_LINES
+        );
+    }
+
+    #[test]
+    fn bounded_diagnostic_bounds_total_bytes_even_within_the_line_limit() {
+        let raw = "a".repeat(MAX_DIAGNOSTIC_EXCERPT_BYTES * 2);
+        let excerpt = bounded_diagnostic(raw.as_bytes()).expect("diagnostic present");
+        assert!(
+            excerpt.starts_with("(diagnostic trimmed to the last"),
+            "excerpt says it was trimmed: {excerpt}"
+        );
+        let kept = excerpt
+            .rsplit('\n')
+            .next()
+            .expect("content survives the trim note");
+        assert!(kept.len() <= MAX_DIAGNOSTIC_EXCERPT_BYTES);
     }
 }
