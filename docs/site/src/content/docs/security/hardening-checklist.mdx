@@ -116,9 +116,24 @@ Relay package. It assumes you have already configured your services per
 
 ## Freeze the Evidence Gateway deployment project
 
-- Mount the governed `bundle/` directory, `runtime.yaml`, and every captured artifact read-only
-  and non-writable to the service process. Evidence Gateway reports a non-immutable-input error and
-  refuses to start rather than serving from an input it could write to.
+- Mount the governed `bundle/` directory and every artifact inside it, `runtime.yaml`, and each
+  named CA bundle file read-only and non-writable to the service process, and keep the secret root
+  at mode `0700` or tighter. Evidence Gateway reports a non-immutable-input error and refuses to
+  start rather than serving from an input it could write to, and applies the same refusal to the
+  secret root when it is reachable by group or other even if it is not itself writable. Keep every
+  bound source extract non-writable too: Evidence Gateway refuses a writable extract as an invalid
+  artifact, a distinct refusal from the non-immutable-input error the other classes share.
+
+{/* Evidence: BundleError::NotImmutable(ArtifactFault) carries `an Evidence deployment input is
+     not immutable: {0}`, crates/registry-evidence/src/bundle.rs:68-69; validate_read_only refuses
+     a writable runtime file, crates/registry-evidence/src/bundle.rs:396-397; a writable named CA
+     bundle file, crates/registry-evidence/src/bundle.rs:421-422; and a writable bundle directory
+     or artifact, crates/registry-evidence/src/bundle.rs:601-605, :669-680;
+     validate_secret_root refuses a secret root reachable by group or other,
+     crates/registry-evidence/src/bundle.rs:2573-2594; map_extract_capture_error refuses a
+     writable bound source extract as BundleError::InvalidArtifact rather than NotImmutable,
+     crates/registry-evidence/src/bundle.rs:852-864, :80-81, :863-864. */}
+
 - Freeze the project before validating or serving it, then validate the frozen bytes:
 
   ```sh
@@ -389,7 +404,8 @@ serve, and a startup that fails rather than degrades.
 | Relay refuses to start on a contract it served before | The contract now has protected access with no configured issuer, a lookup with no quotas, or a list with no cursor key | Add the missing runtime block; none of the three is waivable |
 | Relay refuses to start and names the source | The snapshot sits on writable storage, is a symlink, or has a `-wal` or `-journal` sidecar beside it | Place the file on a read-only filesystem or make it non-writable, resolve the symlink, and remove the sidecar by checkpointing the database before you stage it |
 | Relay returns `503 audit.unavailable` and then fails readiness | The audit sink is unwritable, or the file it was bound to was replaced | Restore writable durable storage at `audit.sink` and restart; the failed requests returned no data |
-| Evidence Gateway refuses to start on a non-immutable input | The bundle directory, `runtime.yaml`, or a captured artifact is writable by the service process | Re-freeze the project (`chmod -R a-w bundle && chmod 444 runtime.yaml`) and restart |
+| Evidence Gateway refuses to start on a non-immutable input | The bundle directory, `runtime.yaml`, a captured artifact, or a named CA bundle file is writable by the service process, or the secret root is reachable by group or other | Re-freeze the project (`chmod -R a-w bundle && chmod 444 runtime.yaml`), tighten the secret root to `0700`, and restart |
+| Evidence Gateway refuses to start on an invalid bound source extract | The source extract the runtime file names is writable; a distinct refusal from the non-immutable-input row above | Make the extract file non-writable and restart |
 | A second Evidence Gateway process fails at startup with a sink-locked error | Two processes point at the same `auditStorage.path` | Run one writer per audit path; use active/passive with restart-on-failure rather than a second replica |
 | A second Registry Mint process fails to start, or `mint verify-audit` rejects its chain | Another writer holds `audit.path`, or retained records were changed, reordered, or written with another key | Run one writer per path and restore the matching retained chain and HMAC key; do not delete audit records to make startup pass |
 | Registry Mint returns `500 server_error` and then fails readiness | The process could not durably append a token decision and poisoned its audit writer | Stop traffic, preserve and verify the chain, restore writable durable storage, and restart Mint; the failed request did not receive a token |
