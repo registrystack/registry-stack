@@ -118,6 +118,7 @@ EVIDENCE_TUTORIALS=(
 	verify-an-assertion-as-a-consumer
 	control-who-can-request-evidence
 	issue-fhir-evidence-as-vcs
+	connect-a-sqlite-extract
 )
 
 # Every other page under DOCS_ROOT, and the reason it is not replayed here.
@@ -126,7 +127,6 @@ EVIDENCE_TUTORIALS=(
 EXCLUDED_EVIDENCE_TUTORIALS=(
 	build-and-deploy-evidence-project                # drift-checked by evidence-production-build-docs.test.mjs; needs a production build environment
 	connect-an-institution-source                    # how-to against the reader's own OpenAPI source; no fixed scenario this gate can replay
-	connect-a-sqlite-extract                         # starter is covered by evidencectl scaffold and fixture tests; production half needs an operator-mounted extract
 	first-run-with-solmara-lab                       # historical; the Solmara Lab stack is replayed by check-tutorial.sh, not here
 	first-breg                            # Base Registry Engine journey; product CI runs quickstart/run.sh --smoke, reader execution checks the documented steps
 	extend-a-registry-with-a-module                  # Base Registry Engine journey; offline bregctl steps on the quickstart project, verified in reader mode outside the Evidence runner
@@ -423,6 +423,15 @@ load_spec() {
 			"pinned binding recorded in subject-bindings.json"
 			"unverifiable response, nothing read (policy)"
 		)
+		;;
+	connect-a-sqlite-extract)
+		SPEC_STEPS=(
+			"run:Create and prove the starter"
+		)
+		# The scaffold and the fixture run hold themselves up: a starter that
+		# failed to scaffold ends the journey at the next command, and the
+		# fixture run exits non-zero on any case it cannot prove.
+		SPEC_ASSERTS=()
 		;;
 	issue-fhir-evidence-as-vcs)
 		SPEC_STEPS=(
