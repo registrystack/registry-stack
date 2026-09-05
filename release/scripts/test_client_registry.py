@@ -429,15 +429,16 @@ class ClientReadmeInstallTest(unittest.TestCase):
     def test_install_lines_name_only_the_unified_packages(self) -> None:
         # Registry Stack publishes no product-specific client package after
         # v0.26.0, so an install line naming one sends a reader to a version
-        # that will never exist.
+        # that will never exist. Install lines for third-party packages, such
+        # as the Node type definitions, are outside this rule.
         for readme in self.readmes():
             text = readme.read_text(encoding="utf-8")
             for number, line in enumerate(text.splitlines(), start=1):
                 stripped = line.strip()
                 where = f"{readme.name}:{number}"
-                if stripped.startswith("npm install "):
+                if stripped.startswith("npm install ") and "@registrystack/" in stripped:
                     self.assertIn("@registrystack/client@", stripped, where)
-                if stripped.startswith("python -m pip install "):
+                if stripped.startswith("python -m pip install ") and "registry-" in stripped:
                     self.assertIn("registry-stack-client==", stripped, where)
 
     def test_every_binding_readme_points_at_its_unified_namespace(self) -> None:
