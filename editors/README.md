@@ -77,8 +77,9 @@ mappings. Run it again after changing the authoring project's shape.
 
 ## Relay V2 projects
 
-A Relay V2 project is rooted by a regular `registry.yaml`; `runtime.yaml` and
-the exact governed files named by the contract join the same bounded index.
+A Relay V2 project is rooted by a regular `registry.yaml` that declares a
+governed contract; `runtime.yaml` and the exact governed files named by the
+contract join the same bounded index.
 Configure version-matched schemas and refresh them after upgrading Relay V2:
 
 ```console

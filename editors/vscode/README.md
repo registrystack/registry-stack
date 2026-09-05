@@ -8,15 +8,16 @@ For the stable beta path, run
 generated YAML schema settings. Install this integration for optional semantic navigation.
 
 This extension activates when a workspace contains a Registry Stack project marker at its root or
-below it. A Relay V2 root contains `registry.yaml`, and an Evidence authoring project root
-contains `evidence-project.yaml`, or the pre-marker pair of a `source.openapi.yaml` and a
-`questions` directory. A workspace folder that is itself a project starts its language server
-immediately. For a project nested below a workspace folder, opening its first YAML document starts
-one language server for the containing workspace folder; the server then discovers the project by
-walking upward from that document. This avoids recursively scanning the workspace from the
-extension. It adds cross-file definitions, references, workspace/document symbols, and Registry
-Stack reference diagnostics. Red Hat YAML remains responsible for YAML syntax, schema validation,
-completion, formatting, and ordinary hover information.
+below it. A Relay V2 root contains a `registry.yaml` that declares a governed contract, which is how
+a Base Registry Engine project of the same file name is left to its own tooling. An Evidence
+authoring project root contains `evidence-project.yaml`, or the pre-marker pair of a
+`source.openapi.yaml` and a `questions` directory. A workspace folder that is itself a project
+starts its language server immediately. For a project nested below a workspace folder, opening its
+first YAML document starts one language server for the containing workspace folder; the server then
+discovers the project by walking upward from that document. This avoids recursively scanning the
+workspace from the extension. It adds cross-file definitions, references, workspace/document
+symbols, and Registry Stack reference diagnostics. Red Hat YAML remains responsible for YAML
+syntax, schema validation, completion, formatting, and ordinary hover information.
 
 Multi-root workspaces are supported. The extension starts at most one isolated language-server
 process for each eligible local workspace folder and responds when workspace folders are added or
