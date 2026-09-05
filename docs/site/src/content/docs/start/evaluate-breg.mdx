@@ -121,10 +121,10 @@ products, not dependencies.
 
 ## Deployment options today
 
-Base Registry Engine ships first in Registry Stack v0.26.0, published 2026-09-04. The Python and
-Node client packages arrive one patch release later, in v0.26.1, so an application that will call
-the registry through a client library needs a v0.26.1 or later deployment, not this one. Registry
-Stack v0.26.0 carries three artifacts for the product:
+Base Registry Engine ships first in Registry Stack v0.26.0, published 2026-09-04, and the Python
+and Node client packages follow in v0.26.1, published the same day, so an application that will
+call the registry through a client library needs a v0.26.1 or later deployment. A release carries
+three runtime artifacts for the product:
 
 - `breg` and `bregctl` binaries for Linux amd64, Linux arm64, and macOS on Apple Silicon, with a
   `SHA256SUMS` file.
@@ -139,7 +139,7 @@ Stack v0.26.0 carries three artifacts for the product:
   mount read-only under `/etc/breg`. There is no shell and no healthcheck subcommand; probe
   `GET /health` or `GET /healthz` for liveness and `GET /ready` for readiness.
 
-{/* Evidence: release/manifests/registry-stack-beta-37.yaml; release/notes/v0.26.0.md;
+{/* Evidence: release/manifests/registry-stack-beta-38.yaml; release/notes/v0.26.0.md; release/notes/v0.26.1.md;
     crates/registry-breg/install.sh; release/docker/Dockerfile.breg; crates/registry-breg/src/api/mod.rs. */}
 
 The release ships no Helm chart, Compose file, or hosted offering; scheduling, TLS termination,
