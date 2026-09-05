@@ -6,19 +6,27 @@ client, via [napi-rs](https://napi.rs). Every Evidence semantic decision
 own; this crate is a thin `#[napi]` surface plus a JSON conversion layer, and
 re-implements none of it.
 
-Starting with Registry Stack v0.22.0, install the exact client version that
-matches the Evidence deployment:
+This crate publishes through the unified `@registrystack/client` package.
+Install the exact client version that matches the Evidence deployment, and use
+its `evidence` namespace:
 
 ```sh
-npm install "@registrystack/evidence-client@<version>"
+npm install "@registrystack/client@<version>"
+```
+
+```js
+const { evidence: { EvidenceClient } } = require('@registrystack/client');
 ```
 
 The root package selects one exact native package for Linux amd64 with glibc,
 Linux arm64 with glibc, or macOS arm64. Linux addons target glibc 2.17; the
-installed Node.js runtime may impose a newer system requirement. Earlier
-versions remain available as platform tarballs attached to their GitHub
-Releases. The Linux packages do not support musl-based distributions such as
-Alpine.
+installed Node.js runtime may impose a newer system requirement. The Linux
+packages do not support musl-based distributions such as Alpine.
+
+Registry Stack v0.22.0 through v0.26.0 published this binding on its own, as
+`@registrystack/evidence-client`. Those versions stay published and unchanged,
+and no later version joins them: from v0.26.1 the maintained Node.js client is
+`@registrystack/client`.
 
 ## JS surface
 

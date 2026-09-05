@@ -5,15 +5,23 @@ It performs exact service search, Evidence Type resolution, and ambiguity-safe
 selection. A returned selection is inert public metadata. Apply local trust
 policy before calling its Evidence or Relay endpoint.
 
-Starting with Registry Stack v0.23.0, install the exact client version that
-matches the Discovery deployment:
+This crate publishes through the unified `registry-stack-client`
+distribution, which imports as `registry_client`. Install the exact client
+version that matches the Discovery deployment, and use its `discovery`
+namespace:
 
 ```sh
-python -m pip install "registry-discovery-client==<version>"
+python -m pip install "registry-stack-client==<version>"
 ```
 
-Published v0.23.0 and later distributions carry manylinux wheels requiring
-glibc 2.17 or newer for Linux amd64 and Linux arm64, plus a macOS arm64 wheel.
+The distribution carries manylinux wheels requiring glibc 2.17 or newer for
+Linux amd64 and Linux arm64, plus a macOS arm64 wheel.
+
+Registry Stack v0.23.0 through v0.26.0 published this binding on its own, as
+the `registry-discovery-client` distribution imported as
+`registry_discovery_client`. Those versions stay published and unchanged, and
+no later version joins them: from v0.26.1 the maintained Python client is
+`registry-stack-client`.
 
 The public methods accept only ordinary built-in JSON values: `None`, `bool`,
 signed 64-bit `int`, finite `float`, `str`, `list`, and `dict` with string keys.
@@ -24,14 +32,14 @@ values raise `DiscoveryClientError(kind="query")`. Error messages never echo
 caller values.
 
 ```python
-from registry_discovery_client import (
+from registry_client.discovery import (
     DiscoveryClient,
     accept_selection,
     select_evidence_alternative,
     select_evidence_service,
     validate_selection_structure,
 )
-from registry_evidence_client import EvidenceClient
+from registry_client.evidence import EvidenceClient
 
 # These values come from application-owned configuration or deployment
 # ceremony. They are never copied from the Discovery response being checked.
@@ -173,7 +181,7 @@ service, and build a fresh selection. `renew_unchanged_selection` accepts only
 fetch-provenance and global catalog-revision changes:
 
 ```python
-from registry_discovery_client import renew_unchanged_selection
+from registry_client.discovery import renew_unchanged_selection
 
 previous_resolution = persisted["evidenceResolution"]
 fresh_resolved = client.resolve_evidence_types({
@@ -216,6 +224,6 @@ alternative automatically.
 Relay follows the same boundary with `search_relay_services` and
 `select_relay_service`. The selection retains both the semantic class and
 operation family. Apply exact local Relay pins with `accept_selection`, pass
-only `accepted.endpoint_url` to `registry_relay_client.RelayClient`, then use
+only `accepted.endpoint_url` to `registry_client.relay.RelayClient`, then use
 native Relay metadata to choose the concrete resource and operation. Discovery
 never invents route arguments.
