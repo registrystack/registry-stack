@@ -167,6 +167,13 @@ EVIDENCE_TUTORIAL_INPUTS = frozenset(
         "products/evidence/fixtures/interoperability/inji-oid4vci/receipt.json",
         "products/evidence/scripts/compat/inji-oid4vci-upstream.sh",
         "products/evidence/scripts/compat/inji-oid4vci.sh",
+        # The application tutorial imports the maintained client package, and
+        # the job assembles that package from this commit with these scripts
+        # and this pinned build tool. A change to any of them changes what the
+        # replay imports.
+        "release/requirements/maturin-1.9.6.txt",
+        "release/scripts/assemble-registry-client-packages.py",
+        "release/scripts/assemble-registry-client-wheel.py",
     }
 )
 
