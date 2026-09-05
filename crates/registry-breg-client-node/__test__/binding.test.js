@@ -57,7 +57,7 @@ before(async () => {
       response.setHeader('content-type', 'application/problem+json');
       response.setHeader('cache-control', 'no-store');
       response.end(JSON.stringify({
-        type: 'urn:breg:problem:resource.not_found',
+        type: 'https://id.registrystack.org/problems/registry-breg/resource/not_found',
         title: 'Not Found',
         status: 404,
         detail: 'The requested resource was not found.',

@@ -479,7 +479,6 @@ fn valid_action_condition(value: &str) -> bool {
 fn invalid_action_request(error: ParseActionError) -> Response {
     crate::correlation::problem_response_with_field_path(
         StatusCode::BAD_REQUEST,
-        "urn:breg:problem:request.invalid",
         "Bad Request",
         "The request is invalid.",
         "request.invalid",
