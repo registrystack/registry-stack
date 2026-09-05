@@ -20,7 +20,8 @@ the next one: what does running it actually cost.
 
 Evidence Gateway is one crate, `registry-evidence`, and one binary, `evidence`. There is no separate control plane or worker process: one
 Evidence Gateway process serves one operator-controlled trust domain. Production and evidence-grade
-signing also requires an operator-managed workload-local Transit proxy
+signing also requires an operator-managed workload-local
+[Transit proxy](../../reference/glossary/#transit-proxy)
 ([Evidence Gateway product overview](../../products/registry-evidence/)).
 
 At startup the process reads two inputs, both mounted read-only: a closed
@@ -62,6 +63,9 @@ local Evidence keys. `evidencectl source suggest --project <dir>` drafts one sou
 from the retained contract, and `evidencectl dev` compiles complete authoring objects into the
 private local runtime layout shown here (`crates/registry-evidencectl/src/scaffold.rs`,
 `crates/registry-evidencectl/src/authoring.rs`).
+`evidencectl tooling` serves an editor rather than a deployment, so the authoring diagnostics the
+command line reports also appear while you type
+([editor support](../../reference/evidencectl/#editor-support)).
 
 ## Dependencies
 
@@ -103,6 +107,8 @@ Build the toolset from source with
 or, for a tagged release that publishes it, install reproducible bare
 binaries through the pinned installer script
 ([Evidence Gateway product overview](../../products/registry-evidence/)).
+The platforms those binaries and images cover, and the C library floor they
+need, are in [platform support](../../explanation/known-limitations/#platform-support).
 
 Starting with `v0.21.0`, Registry Stack publishes official
 `ghcr.io/registrystack/evidence:v0.21.0` and
@@ -260,6 +266,8 @@ upgrade continuity. */}
 
 ## Next
 
+- [Get your first Evidence Gateway assertion](../../tutorials/first-evidence-assertion/), the
+  20-minute local run of the layout described here
 - [Which product fits your problem](../when-to-use/)
 - [Configure Evidence Gateway](../../configure/evidence/)
 - [Evidence Gateway API reference](../../reference/apis/registry-evidence/)

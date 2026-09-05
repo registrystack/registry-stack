@@ -1019,7 +1019,7 @@ pub(crate) fn openapi_action_operation(
             traceparent_schema(),
             "Optional W3C trace context. Responses carry Registry trace context for the request.",
         ),
-        access_profile_parameter(),
+        access_profile_parameter(route.default_access_profile.is_none()),
     ];
     if route.kind == ActionRouteKind::Invoke {
         parameters.push(header_parameter(
@@ -2057,7 +2057,9 @@ fn operation_parameters(
         traceparent_schema(),
         "Optional W3C trace context. Responses carry Registry trace context for the request.",
     ));
-    parameters.push(access_profile_parameter());
+    parameters.push(access_profile_parameter(
+        route.default_access_profile.is_none(),
+    ));
     match route.operation {
         Operation::Get => {
             parameters.push(query_parameter(
@@ -2266,13 +2268,13 @@ fn query_parameter(
     })
 }
 
-fn access_profile_parameter() -> Value {
+fn access_profile_parameter(required: bool) -> Value {
     query_parameter(
         "accessProfile",
-        false,
+        required,
         false,
         json!({"type": "string", "maxLength": crate::query::MAX_IDENTIFIER_BYTES}),
-        "Select one compiled access profile. Omit to use the route default.",
+        "Select one compiled access profile. Required when the route has no default; otherwise omission uses its default.",
     )
 }
 
@@ -3697,23 +3699,10 @@ fn problem_schema() -> Value {
             "fieldPath": {"type": "string", "maxLength": 256},
             "code": {
                 "type": "string",
-                "enum": [
-                    "authentication.refused",
-                    "idempotency.conflict",
-                    "lookup.unresolved",
-                    "mutation.conflict",
-                    "precondition.failed",
-                    "precondition.required",
-                    "query.cursor_invalid",
-                    "query.invalid",
-                    "request.invalid",
-                    "request.plan_refused",
-                    "request.timeout",
-                    "resource.not_found",
-                    "service.unavailable",
-                    "source.unavailable",
-                    "unsupported.media_type"
-                ]
+                "enum": crate::problem::ProblemCode::DOCUMENTED
+                    .iter()
+                    .map(|code| code.code())
+                    .collect::<Vec<_>>()
             }
         }
     })
@@ -3721,7 +3710,7 @@ fn problem_schema() -> Value {
 
 fn problem_example(status: &str, code: &str, detail: &str) -> Value {
     json!({
-        "type": format!("urn:breg:problem:{code}"),
+        "type": crate::problem::type_uri(code),
         "title": match status {
             "400" => "Bad Request",
             "401" => "Unauthorized",
@@ -4118,9 +4107,9 @@ mod spatial_tests {
                 ]
             }],
             "accessProfiles":[
-                {"id":"map","default":true,"principalClaim":"principal","grants":[{"entity":"site","operations":["get","list"],"readableFields":["code","label","location"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.5,"maximumLatitudeSpanDegrees":0.25}}}]},
-                {"id":"plain","principalClaim":"principal","grants":[{"entity":"site","operations":["get","list"],"readableFields":["code"]}]},
-                {"id":"geometry-only","principalClaim":"principal","grants":[{"entity":"site","operations":["get","list"],"readableFields":["location"]}]}
+                {"id":"map","default":true,"principalClaim":"principal","grants":[{"entity":"site","operations":["get","list"],"readableFields":["code","label","location"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.5,"maximumLatitudeSpanDegrees":0.25}}, "rowBoundaries": []}]},
+                {"id":"plain","principalClaim":"principal","grants":[{"entity":"site","operations":["get","list"],"readableFields":["code"], "rowBoundaries": []}]},
+                {"id":"geometry-only","principalClaim":"principal","grants":[{"entity":"site","operations":["get","list"],"readableFields":["location"], "rowBoundaries": []}]}
             ]
         }"#).expect("spatial artifact fixture parses");
         compile_project(&project, &[], CompileProfile::Authoring)

@@ -75,6 +75,7 @@ accessProfiles:
     requiredScopes: [registry.read]
     grants:
       - entity: record
+        rowBoundaries: []
         operations: [get, list]
         readableFields: [label]
 "#,
@@ -97,7 +98,8 @@ entities:
         maxLength: 50
         classification: internal
     accessProfiles:
-      - id: reader
+      - rowBoundaries: []
+        id: reader
         principalClaim: sub
         operations: [get, list]
         readableFields: [label]
@@ -1569,6 +1571,144 @@ modules:
 }
 
 #[test]
+fn init_prints_the_next_command_and_what_the_example_leaves_open() {
+    let project = TestProject::asset_fixture();
+    let destination = project.path().join("initialized");
+    let destination_argument = path(&destination).to_owned();
+
+    let output = bregctl(&["init", &destination_argument]);
+
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).expect("init stdout is UTF-8");
+    let readme = destination.join("README.md");
+    let registry = destination.join("registry.yaml");
+    assert!(
+        stdout.contains(&format!(
+            "next: read {}, then run 'bregctl check {destination_argument}'",
+            readme.display()
+        )),
+        "init names the next command: {stdout}"
+    );
+    assert!(
+        stdout.contains("next: leave the finding above as it is;"),
+        "init says the reported finding belongs to the example: {stdout}"
+    );
+    assert!(
+        stdout.contains(&format!(
+            "next: replace canonicalBaseIri in {} before you build a production package;",
+            registry.display()
+        )),
+        "init says the example base IRI is not shippable: {stdout}"
+    );
+
+    let json_destination = project.path().join("initialized-json");
+    let reported = bregctl(&["--format", "json", "init", path(&json_destination)]);
+    assert!(reported.status.success(), "{reported:?}");
+    let report = json_stdout(&reported);
+    let steps = report["nextSteps"]
+        .as_array()
+        .expect("nextSteps is an array")
+        .iter()
+        .map(|step| step.as_str().expect("step is a string").to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(steps.len(), 3, "{report}");
+
+    let checked = bregctl(&["--format", "json", "check", &destination_argument]);
+    assert!(checked.status.success(), "{checked:?}");
+    assert!(
+        json_stdout(&checked).get("nextSteps").is_none(),
+        "only init carries next steps"
+    );
+}
+
+#[test]
+fn the_scaffold_links_only_documentation_pages_that_ship() {
+    let project = TestProject::asset_fixture();
+    let destination = project.path().join("initialized");
+
+    let output = bregctl(&["init", path(&destination)]);
+    assert!(output.status.success(), "{output:?}");
+
+    let documentation =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/site/src/content/docs");
+    let mut checked = 0usize;
+    for relative in [
+        "README.md",
+        "modules/record-notes/module.yaml",
+        "registry.yaml",
+        "runtime.example.yaml",
+        "tests/journeys.yaml",
+    ] {
+        let content = fs::read_to_string(destination.join(relative))
+            .unwrap_or_else(|error| panic!("{relative} reads: {error}"));
+        for link in documentation_links(&content) {
+            checked += 1;
+            let (route, anchor) = match link.split_once('#') {
+                Some((route, anchor)) => (route, Some(anchor)),
+                None => (link.as_str(), None),
+            };
+            let route = route.trim_matches('/');
+            let page = [
+                documentation.join(format!("{route}.mdx")),
+                documentation.join(format!("{route}.md")),
+                documentation.join(route).join("index.mdx"),
+            ]
+            .into_iter()
+            .find(|candidate| candidate.is_file())
+            .unwrap_or_else(|| panic!("{relative} links {link}, which has no page"));
+            let source = fs::read_to_string(&page).expect("documentation page reads");
+            let frontmatter = source
+                .split("---")
+                .nth(1)
+                .expect("documentation page has frontmatter");
+            assert!(
+                !frontmatter.contains("draft: true"),
+                "{relative} links {link}, whose page is not published"
+            );
+            if let Some(anchor) = anchor {
+                assert!(
+                    source
+                        .lines()
+                        .filter(|line| line.starts_with('#'))
+                        .any(|line| heading_slug(line) == anchor),
+                    "{relative} links {link}, whose page has no such heading"
+                );
+            }
+        }
+    }
+    assert!(checked > 0, "the scaffold links the documentation");
+}
+
+/// Collects every published documentation URL a scaffold file carries.
+fn documentation_links(content: &str) -> Vec<String> {
+    const PREFIX: &str = "https://docs.registrystack.org/";
+    let mut links = Vec::new();
+    let mut rest = content;
+    while let Some(start) = rest.find(PREFIX) {
+        rest = &rest[start + PREFIX.len()..];
+        let end = rest
+            .find(|character: char| character.is_whitespace() || ">)\"'".contains(character))
+            .unwrap_or(rest.len());
+        links.push(rest[..end].to_owned());
+        rest = &rest[end..];
+    }
+    links
+}
+
+/// Renders a Markdown heading the way the documentation site anchors it.
+fn heading_slug(heading: &str) -> String {
+    let mut slug = String::new();
+    for character in heading.trim_start_matches('#').trim().chars() {
+        if character.is_ascii_alphanumeric() {
+            slug.push(character.to_ascii_lowercase());
+        } else if !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    slug.trim_matches('-').to_owned()
+}
+
+#[test]
 fn init_writes_a_bare_relative_destination_into_the_working_directory() {
     let project = TestProject::asset_fixture();
     let output = Command::new(env!("CARGO_BIN_EXE_bregctl"))
@@ -2117,6 +2257,59 @@ fn explain_routes_includes_served_immediate_action_routes() {
 }
 
 #[test]
+fn explain_access_includes_action_only_grants_and_target_reach() {
+    let project = TestProject::from_registry_source(action_fixture());
+    let output = bregctl(&[
+        "--format",
+        "json",
+        "explain",
+        "access",
+        project.path().to_str().expect("path is UTF-8"),
+    ]);
+    assert!(output.status.success(), "{output:?}");
+    let report = json_stdout(&output);
+    let explanation = &report["explanation"];
+    assert!(explanation["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|entity| entity["profiles"].as_array().unwrap().is_empty()));
+    let action = &explanation["actions"]["actions"][0];
+    assert_eq!(action["id"], "register-household-contact");
+    let registrar = action["grants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|grant| grant["profileId"] == "contact-registrar")
+        .unwrap();
+    assert_eq!(
+        registrar["requiredScopes"],
+        json!(["registry:contact:register"])
+    );
+    assert_eq!(
+        registrar["requiredPurposes"],
+        json!(["contact-registration"])
+    );
+    assert_eq!(
+        explanation["actions"]["routes"].as_array().unwrap().len(),
+        2
+    );
+    assert!(explanation["claimContract"]["purposeRequired"]
+        .as_bool()
+        .unwrap());
+    let targets = explanation["rowReach"].as_array().unwrap();
+    assert_eq!(targets.len(), 6);
+    assert!(targets
+        .iter()
+        .all(|target| target["surface"] == "action_target" && target["rows"] == "all"));
+    assert!(report["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|finding| finding["code"] == "access.target.unrestricted_rows"));
+}
+
+#[test]
 fn explain_actions_reports_compiled_effects_conditions_results_and_grants() {
     let project = TestProject::from_registry_source(action_fixture());
 
@@ -2277,6 +2470,7 @@ accessProfiles:
     principalClaim: principal
     grants:
       - entity: typed-record
+        rowBoundaries: []
         operations: [list]
         readableFields: [label, score, enabled, observed-on, observed-at]
         filterableFields: [label, score, enabled, observed-on, observed-at]
@@ -2346,6 +2540,7 @@ accessProfiles:
     principalClaim: principal
     grants:
       - entity: service-site
+        rowBoundaries: []
         operations: [get, list]
         readableFields: [location]
         spatialQueries:
@@ -2353,7 +2548,7 @@ accessProfiles:
   - id: geometry-reader
     principalClaim: principal
     grants:
-      - {entity: service-site, operations: [get, list], readableFields: [location]}
+      - {entity: service-site, operations: [get, list], readableFields: [location], rowBoundaries: []}
 "#,
     );
     let output = bregctl(&[
@@ -2432,7 +2627,8 @@ entities:
             maxLength: 16
             classification: internal
     accessProfiles:
-      - id: reader
+      - rowBoundaries: []
+        id: reader
         principalClaim: principal
         operations: [list]
         readableFields: [code, summary]
@@ -4760,7 +4956,8 @@ entities:
         maxLength: 16
         classification: internal
     accessProfiles:
-      - id: reader
+      - rowBoundaries: []
+        id: reader
         principalClaim: principal
         operations: [get, list]
         readableFields: [code]
@@ -4781,7 +4978,8 @@ entities:
         maxLength: 16
         classification: internal
     accessProfiles:
-      - id: reader
+      - rowBoundaries: []
+        id: reader
         principalClaim: principal
         operations: [get, list]
         readableFields: [code]
@@ -4789,12 +4987,12 @@ entities:
 }
 
 fn package_module_bytes() -> Vec<u8> {
-    br#"{"id":"core","version":"1","entities":[{"id":"record","primaryDataset":"verify-registry","route":"records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":16,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}]}]}"#
+    br#"{"id":"core","version":"1","entities":[{"id":"record","primaryDataset":"verify-registry","route":"records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":16,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"], "rowBoundaries": []}]}]}"#
         .to_vec()
 }
 
 fn data_package_fixture() -> (TestProject, PathBuf) {
-    let module_bytes = br#"{"id":"core","version":"1","entities":[{"id":"record","primaryDataset":"data-registry","route":"records","mutationMode":"create_only","batch":{"maximumItems":2,"maximumBytes":400},"fields":[{"id":"code","type":"string","minLength":2,"maxLength":16,"required":true,"classification":"internal"}],"accessProfiles":[{"id":"operator","principalClaim":"principal","operations":["create","batch","list"],"readableFields":["code"],"writableFields":["code"],"allowDataExport":true}]}]}"#.to_vec();
+    let module_bytes = br#"{"id":"core","version":"1","entities":[{"id":"record","primaryDataset":"data-registry","route":"records","mutationMode":"create_only","batch":{"maximumItems":2,"maximumBytes":400},"fields":[{"id":"code","type":"string","minLength":2,"maxLength":16,"required":true,"classification":"internal"}],"accessProfiles":[{"id":"operator","principalClaim":"principal","operations":["create","batch","list"],"readableFields":["code"],"writableFields":["code"],"allowDataExport":true, "rowBoundaries": []}]}]}"#.to_vec();
     let module = parse_module_json(&module_bytes).expect("data module parses");
     let module_digest = module_digest(&module);
     let project = TestProject::from_registry_source(

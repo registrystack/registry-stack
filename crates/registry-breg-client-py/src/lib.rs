@@ -116,6 +116,12 @@ fn sdk_error(py: Python<'_>, error: RustClientError) -> PyErr {
             RustClientError::InvalidRequest { .. } => "invalid_request",
             RustClientError::Token(_) => "token",
             RustClientError::Transport { .. } => "transport",
+            // app-developer-22: a missing resource is its own kind, not_found,
+            // rather than the generic problem kind every other refusal shares.
+            RustClientError::Problem {
+                code: BRegProblemCode::ResourceNotFound,
+                ..
+            } => "not_found",
             RustClientError::Problem { .. } => "problem",
             RustClientError::Protocol { .. } => "protocol",
             _ => "client",

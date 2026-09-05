@@ -89,8 +89,8 @@ fn multi_dataset_project() -> registry_breg::contract::RegistryProject {
             ]}
           ],
           "accessProfiles":[{"id":"reader","default":true,"principalClaim":"sub","requiredScopes":["registry.read"],"grants":[
-            {"entity":"person","operations":["get","list"],"readableFields":["name"]},
-            {"entity":"residence","operations":["get","list"],"readableFields":["place","resident"]}
+            {"entity":"person","operations":["get","list"],"readableFields":["name"], "rowBoundaries": []},
+            {"entity":"residence","operations":["get","list"],"readableFields":["place","resident"], "rowBoundaries": []}
           ]}]
         }"#,
     )
@@ -219,8 +219,8 @@ fn manifest_projection_excludes_every_protected_resource_from_public_bytes() {
             ]}
           ],
           "accessProfiles":[
-            {"id":"public-reader","anonymous":true,"grants":[{"entity":"public-record","operations":["get"],"readableFields":["label","protected-link"]}]},
-            {"id":"protected-reader","principalClaim":"sub","requiredScopes":["protected.read"],"grants":[{"entity":"protected-record","operations":["get"],"readableFields":["protected-title"]}]}
+            {"id":"public-reader","anonymous":true,"grants":[{"entity":"public-record","operations":["get"],"readableFields":["label","protected-link"], "rowBoundaries": []}]},
+            {"id":"protected-reader","principalClaim":"sub","requiredScopes":["protected.read"],"grants":[{"entity":"protected-record","operations":["get"],"readableFields":["protected-title"], "rowBoundaries": []}]}
           ]
         }"#,
     )
@@ -579,17 +579,17 @@ fn change_request_correction_project(
           }}{extra_entity}],
           "accessProfiles":[{{
             "id":"placement-reader","principalClaim":"principal","grants":[{{
-              "entity":"placement","operations":["get","list"],"readableFields":["site","label"],
-              "requestPresence":[{{"requestType":"placement-correction-request"}}]
+              "rowBoundaries": [], "entity":"placement","operations":["get","list"],"readableFields":["site","label"],
+              "requestPresence":[{{"rowBoundaries": [], "requestType":"placement-correction-request"}}]
             }}]
           }},{{
             "id":"request-reviewer","default":true,"principalClaim":"principal","requiredScopes":{reviewer_scopes},"grants":[{{
-              "entity":"placement-correction-request","operations":["get","list","submit_request","approve_request","reject_request","request_revision"],"readableFields":["placement","proposed-site","reason"],
+              "rowBoundaries": [], "entity":"placement-correction-request","operations":["get","list","submit_request","approve_request","reject_request","request_revision"],"readableFields":["placement","proposed-site","reason"],
               "reviewStages":[{{"stage":"review","targets":[{{"entity":"placement","readableFields":["site","label"],"rowBoundaries":{review_boundaries}}}]}}]
             }}]
           }},{{
             "id":"request-applier","principalClaim":"principal","grants":[{{
-              "entity":"placement-correction-request","operations":["get","apply_request"],"readableFields":["placement"],
+              "rowBoundaries": [], "entity":"placement-correction-request","operations":["get","apply_request"],"readableFields":["placement"],
               "applyTargets":[{{"entity":"placement","rowBoundaries":{apply_boundaries}}}]
             }}]
           }}]
@@ -625,7 +625,7 @@ fn anonymous_request_presence_processes_only_public_existence_and_linkage() {
     reader.insert("anonymous".to_owned(), json!(true));
     project["accessProfiles"].as_array_mut().unwrap().push(json!({
         "id":"request-public", "anonymous":true,
-        "grants":[{"entity":"placement-correction-request","operations":["get","list"],"readableFields":["placement"]}]
+        "grants":[{"entity":"placement-correction-request","operations":["get","list"],"readableFields":["placement"], "rowBoundaries": []}]
     }));
     let registry = compile_json(&serde_json::to_vec(&project).unwrap())
         .expect("public existence and linkage may be disclosed without private intake detail");
@@ -718,17 +718,20 @@ fn change_request_correction_compiles_to_immutable_plan_and_scoped_grants() {
           "accessProfiles":[{
             "id":"placement-reader","principalClaim":"principal","grants":[{
               "entity":"placement","operations":["get","list"],"readableFields":["site","label"],
-              "requestPresence":[{"requestType":"placement-correction-request"}]
+              "requestPresence":[{"requestType":"placement-correction-request", "rowBoundaries": []}],
+              "rowBoundaries": []
             }]
           },{
             "id":"request-reviewer","default":true,"principalClaim":"principal","grants":[{
               "entity":"placement-correction-request","operations":["get","list","submit_request","approve_request","reject_request","request_revision"],"readableFields":["placement","proposed-site","reason"],
-              "reviewStages":[{"stage":"review","targets":[{"entity":"placement","readableFields":["site","label"],"rowBoundaries":[]}]}]
+              "reviewStages":[{"stage":"review","targets":[{"entity":"placement","readableFields":["site","label"],"rowBoundaries":[]}]}],
+              "rowBoundaries": []
             }]
           },{
             "id":"request-applier","principalClaim":"principal","grants":[{
               "entity":"placement-correction-request","operations":["get","apply_request"],"readableFields":["placement"],
-              "applyTargets":[{"entity":"placement","rowBoundaries":[]}]
+              "applyTargets":[{"entity":"placement","rowBoundaries":[]}],
+              "rowBoundaries": []
             }]
           }]
         }"#,
@@ -897,26 +900,31 @@ fn change_request_openapi_exposes_finite_action_contract_and_request_metadata() 
           "accessProfiles":[{
             "id":"placement-reader","principalClaim":"principal","grants":[{
               "entity":"placement","operations":["get","list"],"readableFields":["site","label"],
-              "requestPresence":[{"requestType":"placement-correction-request"}]
+              "requestPresence":[{"requestType":"placement-correction-request", "rowBoundaries": []}],
+              "rowBoundaries": []
             }]
           },{
             "id":"submitter","default":true,"principalClaim":"principal","grants":[{
-              "entity":"placement-correction-request","operations":["create","patch","submit_request","revise_request","cancel_request"],"readableFields":["placement","proposed-site","reason"],"writableFields":["placement","proposed-site","reason"]
+              "entity":"placement-correction-request","operations":["create","patch","submit_request","revise_request","cancel_request"],"readableFields":["placement","proposed-site","reason"],"writableFields":["placement","proposed-site","reason"],
+              "rowBoundaries": []
             }]
           },{
             "id":"reviewer","default":true,"principalClaim":"principal","grants":[{
               "entity":"placement-correction-request","operations":["get","list","approve_request","reject_request","request_revision"],"readableFields":["placement","proposed-site","reason"],
-              "reviewStages":[{"stage":"review","targets":[{"entity":"placement","readableFields":["site","label"],"rowBoundaries":[]}]}]
+              "reviewStages":[{"stage":"review","targets":[{"entity":"placement","readableFields":["site","label"],"rowBoundaries":[]}]}],
+              "rowBoundaries": []
             }]
           },{
             "id":"supervisor","principalClaim":"principal","grants":[{
               "entity":"placement-correction-request","operations":["approve_request","reject_request","request_revision"],"readableFields":["placement","proposed-site","reason"],
-              "reviewStages":[{"stage":"final-approval","targets":[{"entity":"placement","readableFields":["site","label"],"rowBoundaries":[]}]}]
+              "reviewStages":[{"stage":"final-approval","targets":[{"entity":"placement","readableFields":["site","label"],"rowBoundaries":[]}]}],
+              "rowBoundaries": []
             }]
           },{
             "id":"applier","default":true,"principalClaim":"principal","grants":[{
               "entity":"placement-correction-request","operations":["apply_request"],"readableFields":["placement"],
-              "applyTargets":[{"entity":"placement","rowBoundaries":[]}]
+              "applyTargets":[{"entity":"placement","rowBoundaries":[]}],
+              "rowBoundaries": []
             }]
           }]
         }"#,
@@ -1392,11 +1400,12 @@ fn change_request_multi_record_create_and_patch_orders_reserved_references() {
             "id":"reviewer","default":true,"principalClaim":"principal","grants":[{
               "entity":"registration-request","operations":["get","list","submit_request","approve_request","reject_request","request_revision","apply_request"],"readableFields":["household","name"],
               "reviewStages":[{"stage":"review","targets":[
-                {"entity":"person","readableFields":["display-name"]},
-                {"entity":"membership","readableFields":["person","household"]},
-                {"entity":"household","readableFields":["contact-person"]}
+                {"entity":"person","readableFields":["display-name"], "rowBoundaries": []},
+                {"entity":"membership","readableFields":["person","household"], "rowBoundaries": []},
+                {"entity":"household","readableFields":["contact-person"], "rowBoundaries": []}
               ]}],
-              "applyTargets":[{"entity":"person"},{"entity":"membership"},{"entity":"household"}]
+              "applyTargets":[{"entity":"person", "rowBoundaries": []},{"entity":"membership", "rowBoundaries": []},{"entity":"household", "rowBoundaries": []}],
+              "rowBoundaries": []
             }]
           }]
         }"#,
@@ -1463,10 +1472,10 @@ fn change_request_compile_refuses_direct_write_bypass_and_incomplete_grants() {
                   "review":{{"stages":[{{"id":"review","approvals":1}}]}}}}
               }}],
               "accessProfiles":[{{
-                "id":"target-writer","principalClaim":"principal","grants":[{{"entity":"placement","operations":{grant_ops},"readableFields":["site"],"writableFields":["site"]}}]
+                "id":"target-writer","principalClaim":"principal","grants":[{{"rowBoundaries": [], "entity":"placement","operations":{grant_ops},"readableFields":["site"],"writableFields":["site"]}}]
               }},{{
-                "id":"reviewer","default":true,"principalClaim":"principal","grants":[{{"entity":"correction-request","operations":["get","submit_request","approve_request","reject_request","request_revision","apply_request"],"readableFields":["placement","site"],
-                  "reviewStages":[{{"stage":"review","targets":[{{"entity":"placement","readableFields":{review_fields}}}]}}],
+                "id":"reviewer","default":true,"principalClaim":"principal","grants":[{{"rowBoundaries": [], "entity":"correction-request","operations":["get","submit_request","approve_request","reject_request","request_revision","apply_request"],"readableFields":["placement","site"],
+                  "reviewStages":[{{"stage":"review","targets":[{{"rowBoundaries": [], "entity":"placement","readableFields":{review_fields}}}]}}],
                   "applyTargets":{apply_targets}
                 }}]
               }}]
@@ -1478,7 +1487,7 @@ fn change_request_compile_refuses_direct_write_bypass_and_incomplete_grants() {
         source(
             r#"["get","patch"]"#,
             r#"["site"]"#,
-            r#"[{"entity":"placement"}]"#,
+            r#"[{"entity":"placement","rowBoundaries":[]}]"#,
         )
         .as_bytes(),
     )
@@ -1488,9 +1497,15 @@ fn change_request_compile_refuses_direct_write_bypass_and_incomplete_grants() {
         .iter()
         .any(|diagnostic| diagnostic.code == "change_control.direct_write_grant"));
 
-    let blind =
-        compile_json(source(r#"["get"]"#, r#"[]"#, r#"[{"entity":"placement"}]"#).as_bytes())
-            .expect_err("review grants must cover changed fields");
+    let blind = compile_json(
+        source(
+            r#"["get"]"#,
+            r#"[]"#,
+            r#"[{"entity":"placement","rowBoundaries":[]}]"#,
+        )
+        .as_bytes(),
+    )
+    .expect_err("review grants must cover changed fields");
     assert!(blind
         .diagnostics()
         .iter()
@@ -1522,9 +1537,9 @@ fn change_request_compile_refuses_ambiguous_references_cycles_overlaps_and_null_
               }}],
               "accessProfiles":[{{
                 "id":"operator","default":true,"principalClaim":"principal","grants":[{{
-                  "entity":"request","operations":["get","submit_request","approve_request","apply_request"],"readableFields":["target","value","optional-value"],
-                  "reviewStages":[{{"stage":"review","targets":[{{"entity":"record","readableFields":["label","parent"]}}]}}],
-                  "applyTargets":[{{"entity":"record"}}]
+                  "rowBoundaries": [], "entity":"request","operations":["get","submit_request","approve_request","apply_request"],"readableFields":["target","value","optional-value"],
+                  "reviewStages":[{{"stage":"review","targets":[{{"rowBoundaries": [], "entity":"record","readableFields":["label","parent"]}}]}}],
+                  "applyTargets":[{{"rowBoundaries": [], "entity":"record"}}]
                 }}]
               }}]
             }}"#
@@ -1677,8 +1692,9 @@ fn change_request_compile_refuses_uncontrolled_targets_tombstone_requests_and_pl
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"principal","grants":[{
               "entity":"request","operations":["get","submit_request","approve_request","apply_request"],"readableFields":["target","label"],
-              "reviewStages":[{"stage":"review","targets":[{"entity":"target","readableFields":["label"]}]}],
-              "applyTargets":[{"entity":"target"}]
+              "reviewStages":[{"stage":"review","targets":[{"entity":"target","readableFields":["label"], "rowBoundaries": []}]}],
+              "applyTargets":[{"entity":"target", "rowBoundaries": []}],
+              "rowBoundaries": []
             }]
           }]
         }"#,
@@ -1709,8 +1725,9 @@ fn change_request_compile_refuses_uncontrolled_targets_tombstone_requests_and_pl
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"principal","grants":[{
               "entity":"request","operations":["get","tombstone","submit_request","approve_request","apply_request"],"readableFields":["target","label"],
-              "reviewStages":[{"stage":"review","targets":[{"entity":"target","readableFields":["label"]}]}],
-              "applyTargets":[{"entity":"target"}]
+              "reviewStages":[{"stage":"review","targets":[{"entity":"target","readableFields":["label"], "rowBoundaries": []}]}],
+              "applyTargets":[{"entity":"target", "rowBoundaries": []}],
+              "rowBoundaries": []
             }]
           }]
         }"#,
@@ -1756,9 +1773,9 @@ fn change_request_compile_refuses_uncontrolled_targets_tombstone_requests_and_pl
             "fields":[{}],
             "changeRequest":{{"effects":[{}],"review":{{"stages":[{{"id":"review","approvals":1}}]}}}}
           }}],
-          "accessProfiles":[{{"id":"operator","default":true,"principalClaim":"principal","grants":[{{"entity":"request","operations":["get","submit_request","approve_request","apply_request"],"readableFields":["target"],
-            "reviewStages":[{{"stage":"review","targets":[{{"entity":"target","readableFields":[{}]}}]}}],
-            "applyTargets":[{{"entity":"target"}}]}}]}}]
+          "accessProfiles":[{{"id":"operator","default":true,"principalClaim":"principal","grants":[{{"rowBoundaries": [], "entity":"request","operations":["get","submit_request","approve_request","apply_request"],"readableFields":["target"],
+            "reviewStages":[{{"stage":"review","targets":[{{"rowBoundaries": [], "entity":"target","readableFields":[{}]}}]}}],
+            "applyTargets":[{{"rowBoundaries": [], "entity":"target"}}]}}]}}]
         }}"#,
         target_fields.join(","),
         request_fields.join(","),
@@ -1782,7 +1799,7 @@ fn change_request_compile_refuses_invalid_lifecycle_surface_bounds_and_controls(
           "registry":{"id":"misplaced-lifecycle","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create_only",
             "fields":[{"id":"label","type":"string","maxLength":32,"classification":"internal"}]}],
-          "accessProfiles":[{"id":"operator","principalClaim":"principal","grants":[{"entity":"record","operations":["get","submit_request"],"readableFields":["label"]}]}]
+          "accessProfiles":[{"id":"operator","principalClaim":"principal","grants":[{"entity":"record","operations":["get","submit_request"],"readableFields":["label"], "rowBoundaries": []}]}]
         }"#,
     )
     .expect_err("request lifecycle operations are available only on request entities");
@@ -1798,7 +1815,7 @@ fn change_request_compile_refuses_invalid_lifecycle_surface_bounds_and_controls(
           "registry":{"id":"unsupported-control","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable","changeControl":{"requiredFor":["tombstone"]},
             "fields":[{"id":"label","type":"string","maxLength":32,"classification":"internal"}]}],
-          "accessProfiles":[{"id":"reader","principalClaim":"principal","grants":[{"entity":"record","operations":["get"],"readableFields":["label"]}]}]
+          "accessProfiles":[{"id":"reader","principalClaim":"principal","grants":[{"entity":"record","operations":["get"],"readableFields":["label"], "rowBoundaries": []}]}]
         }"#,
     )
     .expect_err("change control is bounded to create and patch operations");
@@ -1825,8 +1842,8 @@ fn change_request_compile_refuses_invalid_lifecycle_surface_bounds_and_controls(
               "review":{"stages":[{"id":"review","approvals":1}]}}
           }],
           "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","grants":[{"entity":"request","operations":["get","submit_request","approve_request","apply_request"],"readableFields":["target","label"],
-            "reviewStages":[{"stage":"review","targets":[{"entity":"target","readableFields":["label"]}]}],
-            "applyTargets":[{"entity":"target"}]}]}]
+            "reviewStages":[{"stage":"review","targets":[{"entity":"target","readableFields":["label"], "rowBoundaries": []}]}],
+            "applyTargets":[{"entity":"target", "rowBoundaries": []}], "rowBoundaries": []}]}]
         }"#,
     )
     .expect_err("request entities cannot also be target-controlled entities");
@@ -1862,12 +1879,14 @@ fn change_request_compile_refuses_invalid_lifecycle_surface_bounds_and_controls(
           }],
           "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","grants":[{
             "entity":"inner-request","operations":["get","submit_request","approve_request","apply_request"],"readableFields":["target","label"],
-            "reviewStages":[{"stage":"review","targets":[{"entity":"target","readableFields":["label"]}]}],
-            "applyTargets":[{"entity":"target"}]
+            "reviewStages":[{"stage":"review","targets":[{"entity":"target","readableFields":["label"], "rowBoundaries": []}]}],
+            "applyTargets":[{"entity":"target", "rowBoundaries": []}],
+            "rowBoundaries": []
           },{
             "entity":"outer-request","operations":["get","submit_request","approve_request","apply_request"],"readableFields":["inner","label"],
-            "reviewStages":[{"stage":"review","targets":[{"entity":"inner-request","readableFields":["label"]}]}],
-            "applyTargets":[{"entity":"inner-request"}]
+            "reviewStages":[{"stage":"review","targets":[{"entity":"inner-request","readableFields":["label"], "rowBoundaries": []}]}],
+            "applyTargets":[{"entity":"inner-request", "rowBoundaries": []}],
+            "rowBoundaries": []
           }]}]
         }"#,
     )
@@ -1896,9 +1915,9 @@ fn change_request_compile_refuses_invalid_lifecycle_surface_bounds_and_controls(
             "changeRequest":{{"effects":[{{"target":{{"fromField":"target"}},"operation":"patch","set":{{"label":{{"fromField":"label"}}}}}}],
               "review":{{"stages":[{stages}]}}}}
           }}],
-          "accessProfiles":[{{"id":"operator","default":true,"principalClaim":"principal","grants":[{{"entity":"request","operations":["get","submit_request","approve_request","apply_request"],"readableFields":["target","label"],
-            "reviewStages":[{{"stage":"stage-0","targets":[{{"entity":"target","readableFields":["label"]}}]}}],
-            "applyTargets":[{{"entity":"target"}}]}}]}}]
+          "accessProfiles":[{{"id":"operator","default":true,"principalClaim":"principal","grants":[{{"rowBoundaries": [], "entity":"request","operations":["get","submit_request","approve_request","apply_request"],"readableFields":["target","label"],
+            "reviewStages":[{{"stage":"stage-0","targets":[{{"rowBoundaries": [], "entity":"target","readableFields":["label"]}}]}}],
+            "applyTargets":[{{"rowBoundaries": [], "entity":"target"}}]}}]}}]
         }}"#
     );
     let too_many_stages =
@@ -1961,7 +1980,8 @@ fn derived_fields_selectors_and_read_paths_compile_to_route_specific_inventories
             "filterableFields":["date-of-birth"],
             "sortableFields":["date-of-birth"],
             "allowCount":true
-          }]
+          }],
+          "rowBoundaries": []
         }]
       }]
     }"#;
@@ -2190,7 +2210,7 @@ fn anonymous_access_cannot_process_selector_path_or_derived_private_fields() {
                 "derived":[{{"id":"flags","sql":"sql/flags.sql","key":"id","fields":[{{"id":"risk-flag","type":"boolean","classification":"public"}}]}}],
                 "selectorProfiles":[{{"id":"by-private-code","fields":["private-code"]}}]
               }}],
-              "accessProfiles":[{{"id":"anon","anonymous":true,"grants":[{{"entity":"household","operations":["lookup"],{extra}}}]}}]
+              "accessProfiles":[{{"id":"anon","anonymous":true,"grants":[{{"rowBoundaries": [], "entity":"household","operations":["lookup"],{extra}}}]}}]
             }}"#
         )
     };
@@ -2267,7 +2287,7 @@ fn batch_route_requires_explicit_bounds_and_compiles_bounded_openapi() {
               }}],
               "accessProfiles":[{{
                 "id":"writer","principalClaim":"principal","grants":[{{
-                  "entity":"record","operations":{operations},
+                  "rowBoundaries": [], "entity":"record","operations":{operations},
                   "readableFields":["label"],"writableFields":["label"]
                 }}]
               }}]
@@ -2557,7 +2577,8 @@ fn production_allows_missing_manifest_projection_and_emits_no_manifest_artifacts
                 "grants":[{
                   "entity":"record",
                   "operations":["get"],
-                  "readableFields":["code"]
+                  "readableFields":["code"],
+                  "rowBoundaries": []
                 }]
               }]
             }"#,
@@ -2580,7 +2601,10 @@ fn production_allows_missing_manifest_projection_and_emits_no_manifest_artifacts
             .iter()
             .map(|d| d.code.as_str())
             .collect::<Vec<_>>(),
-        vec!["access.profile.no_required_scope"]
+        vec![
+            "access.profile.no_required_scope",
+            "access.profile.unrestricted_rows"
+        ]
     );
 }
 
@@ -2609,7 +2633,8 @@ fn project_access_profiles_use_the_entity_access_vocabulary() {
               "operations":["get","list"],
               "readableFields":["case-code","status"],
               "filterableFields":["status"],
-              "allowCount":true
+              "allowCount":true,
+              "rowBoundaries": []
             }]
           }]
         }"#,
@@ -2642,7 +2667,7 @@ fn project_access_profiles_use_the_entity_access_vocabulary() {
         entry.entity_id == "case-file"
             && entry.operation == Operation::List
             && entry.profile_ids == ["operator".to_owned()].into_iter().collect()
-            && entry.default_profile_id == "operator"
+            && entry.default_profile_id.as_deref() == Some("operator")
     }));
 }
 
@@ -2660,7 +2685,8 @@ fn root_project_entity_access_profiles_are_compile_time_errors() {
               "id":"entity-local-reader",
               "principalClaim":"sub",
               "operations":["get"],
-              "readableFields":["case-code"]
+              "readableFields":["case-code"],
+              "rowBoundaries": []
             }]
           }]
         }"#,
@@ -2703,7 +2729,8 @@ fn module_entity_access_profiles_remain_supported_for_module_composition() {
               "id":"module-reader",
               "principalClaim":"sub",
               "operations":["get"],
-              "readableFields":["case-code"]
+              "readableFields":["case-code"],
+              "rowBoundaries": []
             }]
           }],
           "extendEntities":[{
@@ -2712,7 +2739,8 @@ fn module_entity_access_profiles_remain_supported_for_module_composition() {
               "id":"extension-reader",
               "principalClaim":"sub",
               "operations":["get"],
-              "readableFields":["case-code"]
+              "readableFields":["case-code"],
+              "rowBoundaries": []
             }]
           }]
         }"#,
@@ -2751,7 +2779,8 @@ fn anonymous_project_access_profiles_expand_without_authenticated_claims() {
               "entity":"public-record",
               "operations":["get","list"],
               "readableFields":["code","name"],
-              "filterableFields":["code"]
+              "filterableFields":["code"],
+              "rowBoundaries": []
             }]
           }]
         }"#,
@@ -2792,7 +2821,7 @@ fn anonymous_project_access_profiles_cannot_require_authenticated_claims() {
                 "id":"public-reader",
                 "anonymous":true,
                 {extra}
-                "grants":[{{"entity":"public-record","operations":["get"],"readableFields":["code"]}}]
+                "grants":[{{"rowBoundaries": [], "entity":"public-record","operations":["get"],"readableFields":["code"]}}]
               }}]
             }}"#
         )
@@ -2840,7 +2869,7 @@ fn project_access_profiles_reject_the_legacy_purpose_vocabulary() {
             "id":"operator",
             "principalClaim":"sub",
             "purposes":["case-management"],
-            "grants":[{"entity":"case-file","operations":["get"],"readableFields":["case-code"]}]
+            "grants":[{"entity":"case-file","operations":["get"],"readableFields":["case-code"], "rowBoundaries": []}]
           }]
         }"#,
     )
@@ -2866,7 +2895,7 @@ fn project_access_grants_reject_the_legacy_action_vocabulary() {
             "id":"operator",
             "principalClaim":"sub",
             "requiredPurposes":["case-management"],
-            "grants":[{"entity":"case-file","actions":["get"],"readableFields":["case-code"]}]
+            "grants":[{"entity":"case-file","actions":["get"],"readableFields":["case-code"], "rowBoundaries": []}]
           }]
         }"#,
     )
@@ -2899,7 +2928,7 @@ fn entity_access_grants_reject_action_target_and_result_fields() {
                 "id":"operator",
                 "principalClaim":"sub",
                 "grants":[{{
-                  "entity":"case-file",
+                  "rowBoundaries": [], "entity":"case-file",
                   "operations":["get"],
                   "readableFields":["case-code"]{extra}
                 }}]
@@ -2938,7 +2967,8 @@ fn project_access_grants_reject_mixed_entity_and_action_targets() {
               "entity":"case-file",
               "action":"create-case-file",
               "operations":["invoke"],
-              "targets":[{"entity":"case-file","rowBoundaries":[]}]
+              "targets":[{"entity":"case-file","rowBoundaries":[]}],
+              "rowBoundaries": []
             }]
           }]
         }"#,
@@ -3163,9 +3193,9 @@ fn manifest_projection_filters_by_selected_profile_and_classification_ceiling() 
           ],
           "accessProfiles":[{
             "id":"operator","principalClaim":"principal","grants":[
-              {"entity":"visible-target","operations":["get"],"readableFields":["label"]},
-              {"entity":"hidden-target","operations":["get"],"readableFields":["label"]},
-              {"entity":"link","operations":["get"],"readableFields":["name","operator-note","visible-ref","hidden-ref"]}
+              {"entity":"visible-target","operations":["get"],"readableFields":["label"], "rowBoundaries": []},
+              {"entity":"hidden-target","operations":["get"],"readableFields":["label"], "rowBoundaries": []},
+              {"entity":"link","operations":["get"],"readableFields":["name","operator-note","visible-ref","hidden-ref"], "rowBoundaries": []}
             ]
           }]
         }"#,
@@ -3236,8 +3266,8 @@ fn manifest_projection_metadata_cannot_describe_hidden_entities_or_fields() {
              "fields":[{"id":"name","type":"string","maxLength":64,"classification":"restricted"}]}
           ],
           "accessProfiles":[
-            {"id":"reader","principalClaim":"principal","grants":[{"entity":"record","operations":["get"],"readableFields":["name","profile"]}]},
-            {"id":"other-reader","principalClaim":"principal","grants":[{"entity":"secret-record","operations":["get"],"readableFields":["name"]}]}
+            {"id":"reader","principalClaim":"principal","grants":[{"entity":"record","operations":["get"],"readableFields":["name","profile"], "rowBoundaries": []}]},
+            {"id":"other-reader","principalClaim":"principal","grants":[{"entity":"secret-record","operations":["get"],"readableFields":["name"], "rowBoundaries": []}]}
           ]
         }"#,
     )
@@ -3298,7 +3328,8 @@ fn independent_additive_modules_are_order_independent() {
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"registry_principal","grants":[{
               "entity":"object","operations":["create","get","list","patch"],
-              "readableFields":["code"],"writableFields":["code"]
+              "readableFields":["code"],"writableFields":["code"],
+              "rowBoundaries": []
             }]
           }]
         }"#,
@@ -3350,7 +3381,8 @@ fn project_access_profile_required_scopes_compile_into_each_grant() {
             "id":"operator","principalClaim":"registry_principal",
             "requiredScopes":["registry:record:operate"],
             "grants":[{
-              "entity":"record","operations":["get"],"readableFields":["code"]
+              "entity":"record","operations":["get"],"readableFields":["code"],
+              "rowBoundaries": []
             }]
           }]
         }"#,
@@ -3577,7 +3609,8 @@ fn generic_decimal_crs84_point_and_structured_fields_compile_to_deterministic_dd
             "id":"operator","default":true,"principalClaim":"principal","grants":[{
               "entity":"reading","operations":["create","get","list","patch"],
               "readableFields":["amount","location","payload"],
-              "writableFields":["amount","location","payload"]
+              "writableFields":["amount","location","payload"],
+              "rowBoundaries": []
             }]
           }]
         }"#,
@@ -3800,7 +3833,7 @@ fn generic_scalar_option_and_schema_negatives_fail_before_ddl_generation() {
                 "id":"reading","primaryDataset":"test-dataset","route":"readings","mutationMode":"mutable",
                 "fields":[{field}]
               }}],
-              "accessProfiles":[{{"id":"operator","default":true,"principalClaim":"principal","grants":[{{"entity":"reading","operations":["get"],"readableFields":["{}"]}}]}}]
+              "accessProfiles":[{{"id":"operator","default":true,"principalClaim":"principal","grants":[{{"rowBoundaries": [], "entity":"reading","operations":["get"],"readableFields":["{}"]}}]}}]
             }}"#,
             if field.contains("\"amount\"") {
                 "amount"
@@ -3887,7 +3920,8 @@ fn geojson_and_bbox_compile_only_for_direct_current_lists() {
           "accessProfiles":[{
             "id":"map-reader","default":true,"principalClaim":"principal","grants":[{
               "entity":"site","operations":["get","list"],"readableFields":["code","location","valid-from","valid-to","scope"],
-              "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.25,"maximumLatitudeSpanDegrees":1.5}}
+              "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.25,"maximumLatitudeSpanDegrees":1.5}},
+              "rowBoundaries": []
             }]
           }]
         }"#,
@@ -3947,7 +3981,8 @@ fn geojson_and_bbox_compile_only_for_direct_current_lists() {
           }],
           "accessProfiles":[{
             "id":"reader","default":true,"principalClaim":"principal","grants":[{
-              "entity":"entry","operations":["list"],"readableFields":["code"]
+              "entity":"entry","operations":["list"],"readableFields":["code"],
+              "rowBoundaries": []
             }]
           }]
         }"#,
@@ -4038,7 +4073,7 @@ fn bbox_authoring_requires_declared_readable_primary_point_and_bounded_spans() {
               }}],
               "accessProfiles":[{{
                 "id":"map-reader","default":true,"principalClaim":"principal","grants":[{{
-                  "entity":"site",{grant}
+                  "rowBoundaries": [], "entity":"site",{grant}
                 }}]
               }}]
             }}"#
@@ -4070,7 +4105,8 @@ fn bbox_authoring_is_strict_and_does_not_make_points_scalar_query_fields() {
           "accessProfiles":[{
             "id":"map-reader","default":true,"principalClaim":"principal","grants":[{
               "entity":"site","operations":["list"],"readableFields":["location"],
-              "spatialQueries":{"bbox":{"geometryField":"location","maximumLongitudeSpanDegrees":2,"maximumLatitudeSpanDegrees":2}}
+              "spatialQueries":{"bbox":{"geometryField":"location","maximumLongitudeSpanDegrees":2,"maximumLatitudeSpanDegrees":2}},
+              "rowBoundaries": []
             }]
           }]
         }"#,
@@ -4101,7 +4137,7 @@ fn bbox_authoring_is_strict_and_does_not_make_points_scalar_query_fields() {
               }}],
               "accessProfiles":[{{
                 "id":"reader","default":true,"principalClaim":"principal","grants":[{{
-                  "entity":"site","operations":["list"],"readableFields":["location"],{member}
+                  "rowBoundaries": [], "entity":"site","operations":["list"],"readableFields":["location"],{member}
                 }}]
               }}]
             }}"#
@@ -4136,7 +4172,8 @@ fn anonymous_bbox_queries_cannot_process_hidden_geometry() {
           "accessProfiles":[{
             "id":"public-map","default":true,"anonymous":true,"grants":[{
               "entity":"site","operations":["list"],"readableFields":["code","location"],
-              "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":2,"maximumLatitudeSpanDegrees":2}}
+              "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":2,"maximumLatitudeSpanDegrees":2}},
+              "rowBoundaries": []
             }]
           }]
         }"#,
@@ -4174,7 +4211,8 @@ fn modules_can_add_geojson_once_but_conflicting_geometry_is_refused() {
           "accessProfiles":[{
             "id":"map-reader","default":true,"principalClaim":"principal","grants":[{
               "entity":"site","operations":["list"],"readableFields":["code","location"],
-              "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":2,"maximumLatitudeSpanDegrees":2}}
+              "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":2,"maximumLatitudeSpanDegrees":2}},
+              "rowBoundaries": []
             }]
           }]
         }"#,
@@ -4790,7 +4828,8 @@ fn anonymous_profiles_cannot_inherit_partial_unique_processing_over_non_public_f
       }],
       "accessProfiles":[{
         "id":"public-reader","anonymous":true,"default":true,"grants":[{
-          "entity":"entry","operations":["get"],"readableFields":["code"]
+          "entity":"entry","operations":["get"],"readableFields":["code"],
+          "rowBoundaries": []
         }]
       }]
     }"#;
@@ -4836,7 +4875,8 @@ fn anonymous_public_surface_rejects_every_non_public_constraint_field() {
       }],
       "accessProfiles":[{
         "id":"public-reader","anonymous":true,"default":true,"grants":[{
-          "entity":"record","operations":["get"],"readableFields":["label"]
+          "entity":"record","operations":["get"],"readableFields":["label"],
+          "rowBoundaries": []
         }]
       }],
       "vocabularies":[{"id":"status","values":["active","inactive"]}]
@@ -4922,7 +4962,8 @@ fn compiled_partial_unique_constraint_keeps_closed_predicates_in_the_model() {
       }],
       "accessProfiles":[{
         "id":"public-reader","anonymous":true,"default":true,"grants":[{
-          "entity":"entry","operations":["get"],"readableFields":["code","status"],"filterableFields":["status"]
+          "entity":"entry","operations":["get"],"readableFields":["code","status"],"filterableFields":["status"],
+          "rowBoundaries": []
         }]
       }],
       "vocabularies":[{"id":"status","values":["active","closed"]}]
@@ -5173,7 +5214,8 @@ fn generated_openapi_separates_security_and_mutation_input_from_read_schema() {
             "grants":[{
               "entity":"business-record",
               "operations":["get","list"],
-              "readableFields":["code","business-note"]
+              "readableFields":["code","business-note"],
+              "rowBoundaries": []
             }]
           },{
             "id":"business",
@@ -5183,7 +5225,8 @@ fn generated_openapi_separates_security_and_mutation_input_from_read_schema() {
               "entity":"business-record",
               "operations":["create","get"],
               "readableFields":["code","business-note"],
-              "writableFields":["code","draft-note"]
+              "writableFields":["code","draft-note"],
+              "rowBoundaries": []
             }]
           }]
         }"#,
@@ -5407,7 +5450,8 @@ fn compiler_produces_both_revision_routes_when_explicitly_configured() {
           }],
           "accessProfiles":[{
             "id":"auditor","default":true,"principalClaim":"principal","grants":[{
-              "entity":"entry","operations":["revisions"],"revisionAccess":true,"readableFields":["code"]
+              "entity":"entry","operations":["revisions"],"revisionAccess":true,"readableFields":["code"],
+              "rowBoundaries": []
             }]
           }]
         }"#,
@@ -5512,7 +5556,7 @@ fn compiler_omits_revision_routes_when_not_configured_or_revision_access_is_fals
               }}],
               "accessProfiles":[{{
                 "id":"reader","default":true,"anonymous":{anonymous},{principal_claim}"grants":[{{
-                  "entity":"entry","operations":{operations},"revisionAccess":{revision_access},"readableFields":["code"]
+                  "rowBoundaries": [], "entity":"entry","operations":{operations},"revisionAccess":{revision_access},"readableFields":["code"]
                 }}]
               }}]
             }}"#
@@ -5607,7 +5651,8 @@ fn anonymous_public_profile_cannot_filter_a_non_public_field() {
           "accessProfiles":[{
             "id":"public-reader","anonymous":true,"default":true,"grants":[{
               "entity":"entry","operations":["list"],"readableFields":["label"],
-              "filterableFields":["hidden-filter-canary"]
+              "filterableFields":["hidden-filter-canary"],
+              "rowBoundaries": []
             }]
           }]
         }"#,
@@ -5658,7 +5703,7 @@ fn additive_module_conflicts_fail_instead_of_using_input_precedence() {
           "entities":[{"id":"object","primaryDataset":"test-dataset","route":"objects","mutationMode":"mutable","fields":[
             {"id":"code","type":"string","maxLength":8,"classification":"internal"}
           ]}],
-          "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","grants":[{"entity":"object","operations":["get"],"readableFields":["code"]}]}]
+          "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","grants":[{"entity":"object","operations":["get"],"readableFields":["code"], "rowBoundaries": []}]}]
         }"#,
     )
     .expect("project parses");
@@ -5695,8 +5740,8 @@ fn operation_ids_preserve_distinct_valid_entity_ids_without_collisions() {
             ]}
           ],
           "accessProfiles":[{"id":"reader","principalClaim":"principal","grants":[
-            {"entity":"case-file","operations":["get"],"readableFields":["code"]},
-            {"entity":"case_file","operations":["get"],"readableFields":["code"]}
+            {"entity":"case-file","operations":["get"],"readableFields":["code"], "rowBoundaries": []},
+            {"entity":"case_file","operations":["get"],"readableFields":["code"], "rowBoundaries": []}
           ]}]
         }"#,
     )
@@ -6097,7 +6142,8 @@ fn temporal_validity_compiles_without_non_overlap_constraint() {
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"principal","grants":[{
               "entity":"membership","operations":["list"],
-              "readableFields":["person","role","valid-from","valid-to"]
+              "readableFields":["person","role","valid-from","valid-to"],
+              "rowBoundaries": []
             }]
           }]
         }"#,
@@ -6148,7 +6194,8 @@ fn deprecated_temporal_scope_fields_must_match_explicit_non_overlap() {
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"principal","grants":[{
               "entity":"membership","operations":["list"],
-              "readableFields":["person","household","valid-from","valid-to"]
+              "readableFields":["person","household","valid-from","valid-to"],
+              "rowBoundaries": []
             }]
           }]
         }"#,
@@ -6178,7 +6225,8 @@ fn anonymous_temporal_processing_floor_survives_without_exclusion() {
           }],
           "accessProfiles":[{
             "id":"public-reader","anonymous":true,"default":true,"grants":[{
-              "entity":"membership","operations":["list"],"readableFields":["label"]
+              "entity":"membership","operations":["list"],"readableFields":["label"],
+              "rowBoundaries": []
             }]
           }]
         }"#,
@@ -6217,7 +6265,8 @@ fn snapshot_operation_is_authenticated_stored_field_history_contract() {
           "filterableFields":["administrative-area","member-count"],
           "sortableFields":["member-count"],
           "allowCount":true,
-          "provenanceFields":["kind","reasonCode","sourceReferences"]
+          "provenanceFields":["kind","reasonCode","sourceReferences"],
+          "rowBoundaries": []
         }]
       }]
     }"#;
@@ -6428,7 +6477,8 @@ fn snapshot_operation_rejects_anonymous_and_unauthorized_provenance() {
           }],
           "accessProfiles":[{
             "id":"public-reader","anonymous":true,"default":true,"grants":[{
-              "entity":"record","operations":["snapshot"],"readableFields":["code"]
+              "entity":"record","operations":["snapshot"],"readableFields":["code"],
+              "rowBoundaries": []
             }]
           }]
         }"#,
@@ -6451,7 +6501,8 @@ fn snapshot_operation_rejects_anonymous_and_unauthorized_provenance() {
           "accessProfiles":[{
             "id":"reader","default":true,"principalClaim":"principal","grants":[{
               "entity":"record","operations":["snapshot"],"readableFields":["code"],
-              "provenanceFields":["kind"]
+              "provenanceFields":["kind"],
+              "rowBoundaries": []
             }]
           }]
         }"#,
@@ -6482,7 +6533,8 @@ fn snapshot_valid_at_openapi_schema_matches_temporal_value_type() {
           "accessProfiles":[{
             "id":"historian","default":true,"principalClaim":"principal","grants":[{
               "entity":"record","operations":["snapshot"],"allowCount":true,
-              "readableFields":["code","valid-from","valid-to"]
+              "readableFields":["code","valid-from","valid-to"],
+              "rowBoundaries": []
             }]
           }]
         }"#,
@@ -6677,7 +6729,7 @@ fn query_inventory_rejects_unsupported_filter_and_sort_field_types() {
               }}],
               "accessProfiles":[{{
                 "id":"operator","default":true,"principalClaim":"principal","grants":[{{
-                  "entity":"entry","operations":["list"],"readableFields":["payload"],{member}
+                  "rowBoundaries": [], "entity":"entry","operations":["list"],"readableFields":["payload"],{member}
                 }}]
               }}]
             }}"#
@@ -6729,7 +6781,8 @@ fn reordered_stored_field_authoring_changes_revision_but_not_query_inventory() {
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"principal","grants":[{
               "entity":"entry","operations":["list"],
-              "readableFields":["code","count"],"filterableFields":["count","code"],"sortableFields":["count","code"]
+              "readableFields":["code","count"],"filterableFields":["count","code"],"sortableFields":["count","code"],
+              "rowBoundaries": []
             }]
           }]
         }"#,
@@ -6749,7 +6802,8 @@ fn reordered_stored_field_authoring_changes_revision_but_not_query_inventory() {
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"principal","grants":[{
               "entity":"entry","operations":["list"],
-              "readableFields":["count","code"],"filterableFields":["code","count"],"sortableFields":["code","count"]
+              "readableFields":["count","code"],"filterableFields":["code","count"],"sortableFields":["code","count"],
+              "rowBoundaries": []
             }]
           }]
         }"#,
@@ -6783,8 +6837,8 @@ fn duplicate_routes_fail_before_artifact_generation() {
             ]}
           ],
           "accessProfiles":[{"id":"reader","principalClaim":"principal","grants":[
-            {"entity":"first-record","operations":["get"],"readableFields":["code"]},
-            {"entity":"second-record","operations":["get"],"readableFields":["code"]}
+            {"entity":"first-record","operations":["get"],"readableFields":["code"], "rowBoundaries": []},
+            {"entity":"second-record","operations":["get"],"readableFields":["code"], "rowBoundaries": []}
           ]}]
         }"#,
     )
@@ -6816,7 +6870,8 @@ fn anonymous_profiles_cannot_grant_mutation_operations() {
           }],
           "accessProfiles":[{
             "id":"anonymous-writer","anonymous":true,"default":true,"grants":[{
-              "entity":"public-entry","operations":["create","patch"],"readableFields":["label"],"writableFields":["label"]
+              "entity":"public-entry","operations":["create","patch"],"readableFields":["label"],"writableFields":["label"],
+              "rowBoundaries": []
             }]
           }]
         }"#,
@@ -6847,7 +6902,7 @@ fn production_refuses_a_digest_present_lock_without_module_source() {
           "entities":[{"id":"object","primaryDataset":"test-dataset","route":"objects","mutationMode":"create_only","fields":[
             {"id":"code","type":"string","maxLength":8,"classification":"internal"}
           ]}],
-          "accessProfiles":[{"id":"reader","principalClaim":"principal","grants":[{"entity":"object","operations":["get"],"readableFields":["code"]}]}]
+          "accessProfiles":[{"id":"reader","principalClaim":"principal","grants":[{"entity":"object","operations":["get"],"readableFields":["code"], "rowBoundaries": []}]}]
         }"#,
     )
     .expect("project parses");
@@ -6879,10 +6934,10 @@ fn verified_module_digest_changes_compiled_closure_artifact_and_revision() {
       "id":"core","version":"1","entities":[
         {"id":"alpha-record","primaryDataset":"neutral","route":"alpha-records","mutationMode":"create_only","fields":[
           {"id":"code","type":"string","maxLength":8,"classification":"internal"}
-        ],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get"],"readableFields":["code"]}]},
+        ],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get"],"readableFields":["code"], "rowBoundaries": []}]},
         {"id":"beta-record","primaryDataset":"neutral","route":"beta-records","mutationMode":"create_only","fields":[
           {"id":"code","type":"string","maxLength":8,"classification":"internal"}
-        ],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get"],"readableFields":["code"]}]}
+        ],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get"],"readableFields":["code"], "rowBoundaries": []}]}
       ]
     }"#;
     let first_module = parse_module_json(module_source).expect("module parses");
@@ -6939,7 +6994,7 @@ fn selector_project(fields: &str) -> Vec<u8> {
           }}],
           "accessProfiles":[{{
             "id":"operator","default":true,"principalClaim":"sub","grants":[{{
-              "entity":"record","operations":["get"],"readableFields":["code","area"]
+              "rowBoundaries": [], "entity":"record","operations":["get"],"readableFields":["code","area"]
             }}]
           }}]
         }}"#
@@ -7010,7 +7065,8 @@ fn entity_classification_defaults_while_field_classification_stays_explicit() {
           }],
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"sub","grants":[{
-              "entity":"record","operations":["get"],"readableFields":["code"]
+              "entity":"record","operations":["get"],"readableFields":["code"],
+              "rowBoundaries": []
             }]
           }]
         }"#,

@@ -413,5 +413,53 @@ class CheckedInClientManifestTest(unittest.TestCase):
                 self.assertNotIn("optionalDependencies", lock["packages"][""])
 
 
+class ClientReadmeInstallTest(unittest.TestCase):
+    """Every client crate README installs a package the release still ships."""
+
+    def readmes(self) -> list[Path]:
+        repo = Path(__file__).resolve().parents[2]
+        found = sorted(
+            path
+            for pattern in ("*-client-node", "*-client-py")
+            for path in (repo / "crates").glob(f"{pattern}/README.md")
+        )
+        self.assertEqual(10, len(found), found)
+        return found
+
+    def test_install_lines_name_only_the_unified_packages(self) -> None:
+        # Registry Stack publishes no product-specific client package after
+        # v0.26.0, so an install line naming one sends a reader to a version
+        # that will never exist. Install lines for third-party packages, such
+        # as the Node type definitions, are outside this rule.
+        for readme in self.readmes():
+            text = readme.read_text(encoding="utf-8")
+            for number, line in enumerate(text.splitlines(), start=1):
+                stripped = line.strip()
+                where = f"{readme.name}:{number}"
+                if stripped.startswith("npm install ") and "@registrystack/" in stripped:
+                    self.assertIn("@registrystack/client@", stripped, where)
+                if stripped.startswith("python -m pip install ") and "registry-" in stripped:
+                    self.assertIn("registry-stack-client==", stripped, where)
+
+    def test_every_binding_readme_points_at_its_unified_namespace(self) -> None:
+        expected = {
+            "registry-breg-client-node": "@registrystack/client",
+            "registry-discovery-client-node": "@registrystack/client",
+            "registry-evidence-client-node": "@registrystack/client",
+            "registry-relay-client-node": "@registrystack/client",
+            "registry-breg-client-py": "registry-stack-client",
+            "registry-discovery-client-py": "registry-stack-client",
+            "registry-evidence-client-py": "registry-stack-client",
+            "registry-relay-client-py": "registry-stack-client",
+        }
+        for readme in self.readmes():
+            crate = readme.parent.name
+            if crate not in expected:
+                continue
+            with self.subTest(crate=crate):
+                text = readme.read_text(encoding="utf-8")
+                self.assertIn(expected[crate], text)
+
+
 if __name__ == "__main__":
     unittest.main()

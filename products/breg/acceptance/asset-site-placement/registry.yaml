@@ -151,6 +151,7 @@ accessProfiles:
       - asset-management
     grants:
       - entity: asset-item
+        rowBoundaries: []
         operations:
           - create
           - get
@@ -166,6 +167,7 @@ accessProfiles:
           - label
           - asset-class
       - entity: asset-site
+        rowBoundaries: []
         operations:
           - create
           - get
@@ -178,6 +180,7 @@ accessProfiles:
           - site-code
           - label
       - entity: asset-placement
+        rowBoundaries: []
         operations:
           - create
           - get
@@ -194,6 +197,7 @@ accessProfiles:
           - valid-from
           - valid-to
       - entity: inspection-event
+        rowBoundaries: []
         operations:
           - create
           - get
@@ -212,6 +216,7 @@ accessProfiles:
       - site-planning
     grants:
       - entity: asset-item
+        rowBoundaries: []
         operations:
           - get
           - list
@@ -221,6 +226,7 @@ accessProfiles:
         filterableFields:
           - asset-code
       - entity: asset-site
+        rowBoundaries: []
         operations:
           - get
           - list
@@ -230,6 +236,7 @@ accessProfiles:
         filterableFields:
           - site-code
       - entity: asset-placement
+        rowBoundaries: []
         operations:
           - create
           - get

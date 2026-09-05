@@ -425,6 +425,23 @@ async fn real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable
     .await;
     assert_eq!(wrong_media.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
 
+    // A missing required header names itself so the fix does not require
+    // reading the generated OpenAPI: the header name is fixed, known
+    // constant, never request content.
+    let missing_idempotency = send(
+        &app,
+        Method::POST,
+        "/v1/records/widgets:batch",
+        Some(authorized_claims.clone()),
+        &[("content-type", "application/json")],
+        br#"{"items":[]}"#.to_vec(),
+    )
+    .await;
+    assert_eq!(missing_idempotency.status(), StatusCode::BAD_REQUEST);
+    let missing_idempotency_body = body_json(missing_idempotency).await;
+    assert_eq!(missing_idempotency_body["code"], "request.invalid");
+    assert_eq!(missing_idempotency_body["fieldPath"], "Idempotency-Key");
+
     let before_hidden_unique = effect_counts(&database, table).await;
     let hidden_unique = send_json(
         &app,

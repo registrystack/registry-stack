@@ -1,0 +1,14 @@
+{
+  "entity": "record",
+  "accessProfile": "supervisor",
+  "operation": "list",
+  "claims": {
+    "principalClaim": "registry_principal",
+    "principal": "synthetic-clerk",
+    "scopes": [
+      "record:read"
+    ],
+    "purpose": "record-administration",
+    "directClaims": {}
+  }
+}

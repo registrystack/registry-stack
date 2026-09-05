@@ -4,6 +4,12 @@
 // `__test__/drift.test.js`, against the real module.
 export * from './index'
 
+import {
+  EvidenceClient as NativeEvidenceClient,
+  PreparedEvidenceRequest,
+  PreparedEvidenceRequestBatch,
+} from './index'
+
 /** The signed response encoding closed before one request is sent. */
 export type EvidenceResponseFormat = 'signed-jws' | 'sd-jwt-vc'
 
@@ -24,17 +30,22 @@ export type ProgressiveSubjectContinuity =
 
 export interface ProgressiveVerifiedResult {
   readonly evidence: unknown
-  readonly traceId?: string
+  /** The exchange's trace identifier, `null` when the response carried none. */
+  readonly traceId: string | null
   readonly values: Readonly<Record<string, unknown>>
   readonly value: unknown
   readonly subjectContinuity: ProgressiveSubjectContinuity
 }
 
+/** A signed-JWS result. The credential member of the native result is `null`. */
 export interface ProgressiveVerifiedAssertion extends ProgressiveVerifiedResult {
   readonly assertion: Buffer
+  readonly credential: null
 }
 
+/** An SD-JWT VC result. The assertion member of the native result is `null`. */
 export interface ProgressiveVerifiedAudienceScopedCredential extends ProgressiveVerifiedResult {
+  readonly assertion: null
   readonly credential: string
 }
 
@@ -53,20 +64,78 @@ export type AudienceScopedRequest = {
   bindingReceipt?: SubjectBindingReceipt
 }
 
-/** Progressive methods merged into the native `EvidenceClient` declaration. */
-export interface EvidenceClient {
-  refreshMetadata(): Promise<void>
-  request(request: AudienceScopedRequest): Promise<ProgressiveResult>
+/**
+ * The pinned verification key set, as a JWKS document. It is a trust input:
+ * the client never fetches one to verify a response it already holds.
+ */
+export interface TrustedJwks {
+  keys: ReadonlyArray<Readonly<Record<string, unknown>>>
+  readonly [field: string]: unknown
 }
 
-/** Progressive factories merged into the native `EvidenceClient` value. */
-export namespace EvidenceClient {
+/**
+ * A private-key-JWT client-credentials exchange the client performs for
+ * itself. `clientKey` holds the private half; it stays in this process and
+ * reaches nothing but the token endpoint.
+ */
+export interface PrivateKeyJwtConfig {
+  tokenEndpoint: string
+  clientId: string
+  clientKey: Readonly<Record<string, unknown>>
+  audience?: string
+  assertionLifetimeSeconds?: number
+  refreshMarginSeconds?: number
+  requestTimeoutMs?: number
+  connectTimeoutMs?: number
+  userAgent?: string
+  /** Additional trust roots for the token endpoint, as a PEM bundle. */
+  trustedRootCertificates?: string
+}
+
+/**
+ * Exactly one credential source. A configuration naming both is refused, so a
+ * merge of two authentication settings cannot silently pick one.
+ */
+export type EvidenceTokenConfig =
+  | { static: string }
+  | { privateKeyJwt: PrivateKeyJwtConfig }
+
+/** The configuration `new EvidenceClient(...)` reads. */
+export interface EvidenceClientConfig {
+  baseUrl: string
+  trustedJwks: TrustedJwks
+  revokedKeyIds: ReadonlyArray<string>
+  token: EvidenceTokenConfig
+  requestTimeoutMs?: number
+  connectTimeoutMs?: number
+  userAgent?: string
+  /** Additional trust roots for the deployment, as a PEM bundle. */
+  trustedRootCertificates?: string
+  maxResponseBytes?: number
+  maxMetadataBytes?: number
+}
+
+/**
+ * The client `client.js` exports, which subclasses the generated one so every
+ * mapped failure normalizes to an `EvidenceClientError`. Declaring it as a
+ * subclass, rather than as an interface of the same name, is what keeps the
+ * generated construct signature reachable: a same-named interface would
+ * shadow the re-exported class and leave `new EvidenceClient(...)` untyped.
+ *
+ * The members below only narrow generated declarations that cross as
+ * JSON-shaped `any`; every other member is inherited unchanged.
+ */
+export declare class EvidenceClient extends NativeEvidenceClient {
+  constructor(config: EvidenceClientConfig)
+  prepare(spec: EvidenceRequestSpec): PreparedEvidenceRequest
+  prepareBatch(spec: EvidenceRequestBatchSpec): PreparedEvidenceRequestBatch
+  request(request: AudienceScopedRequest): Promise<ProgressiveResult>
   /**
    * Read an application-owned profile. `privateKeyJwk` is optional and is
    * intended for an in-memory secret-manager result; it is never retained by
    * the JavaScript wrapper.
    */
-  function fromProfile(path: string, privateKeyJwk?: Readonly<Record<string, unknown>>): EvidenceClient
+  static fromProfile(path: string, privateKeyJwk?: Readonly<Record<string, unknown>>): EvidenceClient
 }
 
 /**

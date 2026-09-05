@@ -38,7 +38,8 @@ a binding cannot be observed.
 ## Obtain the runtime
 
 The installer installs the `relay` and `relayctl` binaries together and
-accepts one platform, Linux amd64:
+accepts the platforms in
+[platform support](../explanation/known-limitations/#platform-support):
 
 ```sh
 curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/relay-install.sh | bash
@@ -63,7 +64,8 @@ The container image is `ghcr.io/registrystack/relay:v0.21.0`, built on
 distroless nonroot. It exposes port 8080, runs `relay serve --runtime
 /etc/relay/runtime.yaml` by default, and probes itself with `relay healthcheck`.
 
-`relayctl` also ships as a plain release binary for three platforms,
+`relayctl` also ships as a plain release binary for each platform in
+[platform support](../explanation/known-limitations/#platform-support):
 `relayctl-<tag>-linux-amd64`, `relayctl-<tag>-linux-arm64`, and
 `relayctl-<tag>-macos-arm64`. Take the asset directly when the combined
 installer does not support the target platform, or build it from source.

@@ -1360,7 +1360,7 @@ async fn create_dispatch(
             &route,
             &surface.context,
             None,
-            invalid_request(),
+            missing_idempotency_key(),
             &correlation,
         )
         .await;
@@ -1479,7 +1479,7 @@ async fn patch_dispatch(
             &route,
             &surface.context,
             Some(record_id.as_str()),
-            invalid_request(),
+            missing_idempotency_key(),
             &correlation,
         )
         .await;
@@ -1641,7 +1641,7 @@ async fn batch_dispatch(
             &route,
             &surface.context,
             None,
-            invalid_request(),
+            missing_idempotency_key(),
             &correlation,
         )
         .await;
@@ -1761,7 +1761,7 @@ async fn tombstone_dispatch(
             &route,
             &surface.context,
             Some(record_id.as_str()),
-            invalid_request(),
+            missing_idempotency_key(),
             &correlation,
         )
         .await;
@@ -1892,7 +1892,7 @@ async fn request_action_dispatch(
             &route,
             &surface.context,
             Some(record_id.as_str()),
-            invalid_request(),
+            missing_idempotency_key(),
             &correlation,
         )
         .await;
@@ -2267,7 +2267,7 @@ async fn audited_mutation_concealment(
             .iter()
             .any(|candidate| candidate == profile)
             .then_some(profile.as_str()),
-        None => Some(route.default_access_profile.as_str()),
+        None => route.default_access_profile.as_deref(),
     };
     match mutations
         .record_refusal(crate::audit::HttpRefusalAudit {
@@ -2441,7 +2441,7 @@ fn authorize_direct_route_base<'a>(
     let selected_profile = options
         .access_profile()
         .map(String::as_str)
-        .unwrap_or(&access.default_profile_id);
+        .or(access.default_profile_id.as_deref())?;
     if !access.profile_ids.contains(selected_profile)
         || !route
             .access_profiles
@@ -2524,7 +2524,7 @@ fn authorize_read_path_route<'a>(
     let selected_profile = options
         .access_profile()
         .map(String::as_str)
-        .unwrap_or(&access.default_profile_id);
+        .or(access.default_profile_id.as_deref())?;
     if !access.profile_ids.contains(selected_profile)
         || !route
             .access_profiles
@@ -5009,6 +5009,21 @@ fn invalid_request() -> Response {
     )
 }
 
+/// A required mutation header was absent. The problem keeps the registered
+/// `request.invalid` detail, which typed clients match exactly, and names the
+/// header in `fieldPath` so the fix is discoverable from the response instead
+/// of the generated OpenAPI: the header name is a fixed, known constant, not
+/// request content.
+fn missing_idempotency_key() -> Response {
+    crate::correlation::problem_response_with_field_path(
+        StatusCode::BAD_REQUEST,
+        "Bad Request",
+        "The request is invalid.",
+        "request.invalid",
+        "Idempotency-Key",
+    )
+}
+
 fn unsupported_media_type() -> Response {
     fixed_problem(
         StatusCode::UNSUPPORTED_MEDIA_TYPE,
@@ -5087,7 +5102,6 @@ const fn planner_failure_problem(
 fn fixed_problem(status: StatusCode, code: &'static str, detail: &'static str) -> Response {
     crate::correlation::problem_response(
         status,
-        format!("urn:breg:problem:{code}"),
         status.canonical_reason().unwrap_or("Request failed"),
         detail,
         code,

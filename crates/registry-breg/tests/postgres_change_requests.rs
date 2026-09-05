@@ -2108,6 +2108,471 @@ async fn real_postgres_http_change_request_apply_cancels_when_startup_timeout_dr
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires actual local issuers and PostgreSQL; run test-issuer-portability.py --with-postgres"]
+async fn mint_to_keycloak_continues_persisted_review_with_stable_principal() {
+    let database = TestDatabase::create(8).await;
+    let mut project = two_stage_project();
+    for profile in &mut project.access_profiles {
+        if !profile.required_purposes.is_empty() {
+            profile.required_purposes = BTreeSet::from(["registry-administration".to_owned()]);
+            profile.required_scopes = BTreeSet::from(["registry.read".to_owned()]);
+        }
+    }
+    let registry = Arc::new(
+        compile_project(&project, &[], CompileProfile::Authoring).expect("portable review policy"),
+    );
+    let identity = install_registry(&database, &registry, "two-stage-change-request", true).await;
+    let app = change_request_router(
+        &database,
+        registry.clone(),
+        identity.clone(),
+        "two-stage-change-request",
+        None,
+    );
+    let (request, digest) = submit_two_stage_correction(&app).await;
+    let root =
+        std::env::var_os("BREG_ISSUER_JOURNEY_DIR").expect("actual issuer material directory");
+    let root = std::path::Path::new(&root);
+    let manifest: Value =
+        serde_json::from_slice(&std::fs::read(root.join("journey.json")).expect("issuer manifest"))
+            .expect("manifest JSON");
+    let authenticator = |issuer: &Value| {
+        let jwks = serde_json::from_slice(
+            &std::fs::read(root.join(issuer["jwks_file"].as_str().expect("JWKS filename")))
+                .expect("public JWKS"),
+        )
+        .expect("JWKS JSON");
+        let config = registry_platform_oidc::TokenVerifierConfig::access_token_profile(
+            issuer["issuer"].as_str().expect("issuer"),
+            vec!["urn:breg:issuer-portability".to_owned()],
+            vec![serde_json::from_value(issuer["algorithm"].clone()).expect("algorithm")],
+            vec![issuer["token_type"]
+                .as_str()
+                .expect("token type")
+                .to_owned()],
+        )
+        .with_max_token_lifetime(Some(Duration::from_secs(300)));
+        Arc::new(
+            registry_breg::auth::RegistryAuthenticator::new(
+                &registry,
+                config,
+                Arc::new(registry_platform_oidc::JwksFetcher::new_static(
+                    jwks,
+                    registry_platform_oidc::JwksFetcherConfig::defaults(),
+                )),
+                registry_breg::auth::AuthorityClaimConfig::new(
+                    "registry_principal",
+                    Some("purpose".to_owned()),
+                ),
+            )
+            .expect("explicit issuer authority contract"),
+        )
+    };
+    let mint = authenticator(&manifest["mint"]);
+    let keycloak = authenticator(&manifest["keycloak"]);
+    let mint_token =
+        Zeroizing::new(std::fs::read_to_string(root.join("mint.token")).expect("Mint token"));
+    let service_token = Zeroizing::new(
+        std::fs::read_to_string(root.join("service.token")).expect("Keycloak service token"),
+    );
+    let human_token = Zeroizing::new(
+        std::fs::read_to_string(root.join("human.token")).expect("Keycloak human token"),
+    );
+    drop(app);
+    let mint_app = registry_breg::api::authenticated_router(
+        change_request_service(
+            &database,
+            registry.clone(),
+            identity.clone(),
+            "two-stage-change-request",
+            None,
+        ),
+        mint,
+    );
+    let first = bearer_request(
+        &mint_app,
+        Method::GET,
+        &format!(
+            "/v1/records/correction-requests/{}?accessProfile=reviewer",
+            request.id
+        ),
+        &mint_token,
+        &[],
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(first.status, StatusCode::OK);
+    let first_approve = action(&first.body, "approve_request", Some("review"));
+    let first_result = bearer_action(
+        &mint_app,
+        &first_approve,
+        "issuer-first-approval",
+        &mint_token,
+        &digest,
+    )
+    .await;
+    assert_eq!(first_result.status, StatusCode::OK);
+    let first_page = bearer_request(
+        &mint_app,
+        Method::GET,
+        "/v1/records/sites?accessProfile=steward&$top=1",
+        &mint_token,
+        &[],
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(first_page.status, StatusCode::OK);
+    let cursor = first_page.body["pageInfo"]["nextCursor"]
+        .as_str()
+        .expect("two sites produce a continuation")
+        .to_owned();
+    drop(mint_app);
+    let keycloak_app = registry_breg::api::authenticated_router(
+        change_request_service(
+            &database,
+            registry,
+            identity,
+            "two-stage-change-request",
+            None,
+        ),
+        keycloak,
+    );
+    let continuation = format!("/v1/records/sites?accessProfile=steward&$skiptoken={cursor}");
+    let next_page = bearer_request(
+        &keycloak_app,
+        Method::GET,
+        &continuation,
+        &service_token,
+        &[],
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(
+        next_page.status,
+        StatusCode::OK,
+        "stable authority continues the old issuer's cursor"
+    );
+    assert_ne!(
+        next_page.body["items"][0]["id"]
+            .as_str()
+            .expect("next page record"),
+        first_page.body["items"][0]["id"]
+            .as_str()
+            .expect("first page record")
+    );
+    assert_eq!(
+        bearer_request(
+            &keycloak_app,
+            Method::GET,
+            &continuation,
+            &human_token,
+            &[],
+            Vec::new()
+        )
+        .await
+        .status,
+        StatusCode::BAD_REQUEST,
+        "another principal cannot reuse the cursor after cutover"
+    );
+    let uri = format!(
+        "/v1/records/correction-requests/{}?accessProfile=final-reviewer",
+        request.id
+    );
+    assert_eq!(
+        bearer_request(
+            &keycloak_app,
+            Method::GET,
+            &uri,
+            &mint_token,
+            &[],
+            Vec::new()
+        )
+        .await
+        .status,
+        StatusCode::UNAUTHORIZED
+    );
+    let final_review = bearer_request(
+        &keycloak_app,
+        Method::GET,
+        &uri,
+        &human_token,
+        &[],
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(final_review.status, StatusCode::OK);
+    assert_eq!(final_review.body["request"]["proposalVersion"], 1);
+    let final_approve = action(&final_review.body, "approve_request", Some("final"));
+    let excluded = bearer_request(
+        &keycloak_app,
+        Method::GET,
+        &uri,
+        &service_token,
+        &[],
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(excluded.status, StatusCode::OK);
+    assert!(
+        excluded.body["request"]["actions"]
+            .as_array()
+            .is_none_or(|actions| actions
+                .iter()
+                .all(|action| action["operation"] != "approve_request")),
+        "the same stable principal remains excluded after issuer replacement"
+    );
+    assert_eq!(
+        bearer_action(
+            &keycloak_app,
+            &final_approve,
+            "issuer-same-principal",
+            &service_token,
+            &digest
+        )
+        .await
+        .status,
+        StatusCode::PRECONDITION_FAILED,
+        "the new issuer cannot make the same institutional actor an independent reviewer"
+    );
+    let approved = bearer_action(
+        &keycloak_app,
+        &final_approve,
+        "issuer-independent-principal",
+        &human_token,
+        &digest,
+    )
+    .await;
+    assert_eq!(approved.status, StatusCode::OK);
+    assert_eq!(approved.body["request"]["bregState"], "approved");
+    assert_eq!(approved.body["request"]["effectDigest"], digest);
+    // A committed first-stage receipt remains owned by the same principal after issuer replacement.
+    let replay = bearer_action(
+        &keycloak_app,
+        &first_approve,
+        "issuer-first-approval",
+        &service_token,
+        &digest,
+    )
+    .await;
+    assert_eq!(replay.status, StatusCode::OK);
+    assert_eq!(replay.body, first_result.body);
+    database.cleanup().await;
+}
+
+async fn submit_two_stage_correction(app: &axum::Router) -> (CreatedRecord, String) {
+    let steward = claims("steward", "two-stage-steward", None);
+    let submitter = claims("submitter", SUBMITTER, None);
+
+    let old_site = create_record(
+        app,
+        "/v1/records/sites?accessProfile=steward",
+        steward.clone(),
+        "two-create-old-site",
+        json!({"tenant": TENANT, "name": "two-old"}),
+    )
+    .await;
+    let new_site = create_record(
+        app,
+        "/v1/records/sites?accessProfile=steward",
+        steward.clone(),
+        "two-create-new-site",
+        json!({"tenant": TENANT, "name": "two-new"}),
+    )
+    .await;
+    let placement = create_record(
+        app,
+        "/v1/records/placements?accessProfile=steward",
+        steward,
+        "two-create-placement",
+        json!({"tenant": TENANT, "site": old_site.id}),
+    )
+    .await;
+    let request = create_record(
+        app,
+        "/v1/records/correction-requests?accessProfile=submitter",
+        submitter.clone(),
+        "two-create-correction-request",
+        json!({
+            "tenant": TENANT,
+            "placement": placement.id,
+            "proposedSite": new_site.id,
+            "reason": "two-stage correction"
+        }),
+    )
+    .await;
+    let submitted = run_action(
+        app,
+        &request.id,
+        "correction-requests",
+        "submitter",
+        submitter.clone(),
+        "two-submit-correction-request",
+        "submit_request",
+        None,
+        |_| json!({}),
+    )
+    .await;
+    let digest = submitted["request"]["effectDigest"]
+        .as_str()
+        .expect("submission freezes digest")
+        .to_owned();
+
+    (request, digest)
+}
+
+async fn bearer_request(
+    app: &axum::Router,
+    method: Method,
+    uri: &str,
+    token: &str,
+    headers: &[(&str, &str)],
+    body: Vec<u8>,
+) -> ResponseParts {
+    let authorization = Zeroizing::new(format!("Bearer {token}"));
+    let mut headers = headers.to_vec();
+    headers.push(("authorization", authorization.as_str()));
+    response_parts(send(app, method, uri, None, &headers, body).await).await
+}
+
+async fn bearer_action(
+    app: &axum::Router,
+    action: &RequestAction,
+    key: &str,
+    token: &str,
+    digest: &str,
+) -> ResponseParts {
+    bearer_request(
+        app,
+        Method::POST,
+        &action.href,
+        token,
+        &[
+            ("content-type", "application/json"),
+            ("idempotency-key", key),
+            ("if-match", &action.if_match),
+        ],
+        serde_json::to_vec(&json!({"proposalVersion": 1, "effectDigest": digest}))
+            .expect("action JSON"),
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_prior_stage_reviewer_cannot_approve_independent_final_stage() {
+    let database = TestDatabase::create(8).await;
+    let registry = Arc::new(two_stage_registry());
+    let identity = install_registry(&database, &registry, "two-stage-change-request", true).await;
+    let app = change_request_router(
+        &database,
+        registry.clone(),
+        identity.clone(),
+        "two-stage-change-request",
+        None,
+    );
+    let (request, digest) = submit_two_stage_correction(&app).await;
+    let reviewer = claims("reviewer", REVIEWER, Some("review"));
+    let final_reviewer = claims("final-reviewer", "final-reviewer-principal", Some("final"));
+
+    let first_review = get_record(
+        &app,
+        &format!(
+            "/v1/records/correction-requests/{}?accessProfile=reviewer",
+            request.id
+        ),
+        reviewer.clone(),
+    )
+    .await;
+    let first_approve = action(&first_review.body, "approve_request", Some("review"));
+    action_response(
+        &app,
+        &first_approve.href,
+        "two-first-approval",
+        &first_approve.if_match,
+        reviewer.clone(),
+        json!({"proposalVersion": 1, "effectDigest": digest}),
+    )
+    .await;
+
+    // Reconstruct the service so stage independence is established by the
+    // committed workflow, not a previous request's in-memory actor context.
+    drop(app);
+    let app = change_request_router(
+        &database,
+        registry,
+        identity,
+        "two-stage-change-request",
+        None,
+    );
+    let final_review = get_record(
+        &app,
+        &format!(
+            "/v1/records/correction-requests/{}?accessProfile=final-reviewer",
+            request.id
+        ),
+        final_reviewer.clone(),
+    )
+    .await;
+    let approve = action(&final_review.body, "approve_request", Some("final"));
+    let reused_principal = claims("final-reviewer", REVIEWER, Some("final"));
+    let excluded = get_record(
+        &app,
+        &format!(
+            "/v1/records/correction-requests/{}?accessProfile=final-reviewer",
+            request.id
+        ),
+        reused_principal.clone(),
+    )
+    .await;
+    assert!(
+        excluded.body["request"]["actions"]
+            .as_array()
+            .is_none_or(|actions| actions
+                .iter()
+                .all(|action| action["operation"] != "approve_request")),
+        "persisted prior-stage actor has no final approval capability"
+    );
+    let denied = send_action(
+        &app,
+        &approve,
+        "independent-final-same-principal",
+        reused_principal,
+        json!({"proposalVersion": 1, "effectDigest": approve.effect_digest}),
+    )
+    .await;
+    assert_eq!(
+        denied.status,
+        StatusCode::PRECONDITION_FAILED,
+        "an excluded actor cannot borrow another reviewer's lifecycle capability"
+    );
+    let unchanged = get_record(
+        &app,
+        &format!(
+            "/v1/records/correction-requests/{}?accessProfile=final-reviewer",
+            request.id
+        ),
+        final_reviewer.clone(),
+    )
+    .await;
+    let approve_after_denial = action(&unchanged.body, "approve_request", Some("final"));
+    assert_eq!(
+        approve_after_denial.if_match, approve.if_match,
+        "refused review does not advance the persisted workflow"
+    );
+    let approved = action_response(
+        &app,
+        &approve_after_denial.href,
+        "independent-final-other-principal",
+        &approve_after_denial.if_match,
+        final_reviewer,
+        json!({"proposalVersion": 1, "effectDigest": approve_after_denial.effect_digest}),
+    )
+    .await;
+    assert_eq!(approved["request"]["bregState"], "approved");
+    assert_eq!(approved["request"]["proposalVersion"], 1);
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn real_postgres_http_change_request_two_stage_stale_rebase_and_cancel_are_bound() {
     let database = TestDatabase::create(8).await;
     let registry = Arc::new(two_stage_registry());
@@ -2360,6 +2825,34 @@ async fn real_postgres_http_change_request_cancel_belongs_to_the_request_owner()
 
     let owner_draft = get_record(&app, &uri, owner.clone()).await;
     let draft_cancel = action(&owner_draft.body, "cancel_request", None);
+
+    // A missing required header names itself so the fix does not require
+    // reading the generated OpenAPI: the header name is fixed, known
+    // constant, never request content.
+    let missing_idempotency = response_parts(
+        send(
+            &app,
+            Method::POST,
+            &draft_cancel.href,
+            Some(owner.clone()),
+            &[
+                ("content-type", "application/json"),
+                ("if-match", &draft_cancel.if_match),
+            ],
+            serde_json::to_vec(&json!({})).expect("action body serializes"),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(missing_idempotency.status, StatusCode::BAD_REQUEST);
+    assert_eq!(missing_idempotency.body["code"], "request.invalid");
+    assert_eq!(missing_idempotency.body["fieldPath"], "Idempotency-Key");
+    let still_draft_before_cancel = get_record(&app, &uri, owner.clone()).await;
+    assert_eq!(
+        action(&still_draft_before_cancel.body, "cancel_request", None).if_match,
+        draft_cancel.if_match,
+        "a header refusal leaves the record and workflow revisions where they were"
+    );
 
     let other_draft = get_record(&app, &uri, other.clone()).await;
     assert_eq!(
@@ -2646,6 +3139,18 @@ fn change_request_router(
     package_id: &str,
     fault: Option<MutationFaultPoint>,
 ) -> axum::Router {
+    router(change_request_service(
+        database, registry, identity, package_id, fault,
+    ))
+}
+
+fn change_request_service(
+    database: &TestDatabase,
+    registry: Arc<registry_breg::CompiledRegistry>,
+    identity: registry_breg::postgres::ExpectedRegistryIdentity,
+    package_id: &str,
+    fault: Option<MutationFaultPoint>,
+) -> Arc<HttpService> {
     let pool = database.runtime_config.build_pool().expect("pool builds");
     let lock_key = RegistryLockKey::derive(package_id).expect("lock key derives");
     let audit = AuditProfile::production_from_secret_bytes(vec![0x9a; 32].into())
@@ -2684,7 +3189,7 @@ fn change_request_router(
         None => mutations,
     };
     let mutations = Arc::new(mutations);
-    router(Arc::new(
+    Arc::new(
         HttpService::new(
             registry,
             ReadRuntimeIdentity {
@@ -2697,7 +3202,7 @@ fn change_request_router(
         )
         .with_postgres_revisions(revisions)
         .with_postgres_mutations(mutations),
-    ))
+    )
 }
 
 #[derive(Clone)]
@@ -3889,8 +4394,9 @@ fn long_logical_id_registry() -> registry_breg::CompiledRegistry {
               "entity":"placement-correction-request",
               "operations":["get","list","submit_request","approve_request","apply_request"],
               "readableFields":["tenant","placement","proposed-site","reason"],
-              "reviewStages":[{"stage":"review","targets":[{"entity":"asset-placement","readableFields":["site"]}]}],
-              "applyTargets":[{"entity":"asset-placement"}]
+              "reviewStages":[{"stage":"review","targets":[{"entity":"asset-placement","readableFields":["site"], "rowBoundaries": []}]}],
+              "applyTargets":[{"entity":"asset-placement", "rowBoundaries": []}],
+              "rowBoundaries": []
             }]
           }]
         }"#,
@@ -4016,7 +4522,12 @@ fn registration_registry() -> registry_breg::CompiledRegistry {
 }
 
 fn two_stage_registry() -> registry_breg::CompiledRegistry {
-    let project = parse_project_json(
+    compile_project(&two_stage_project(), &[], CompileProfile::Authoring)
+        .expect("two-stage change-request fixture compiles")
+}
+
+fn two_stage_project() -> registry_breg::contract::RegistryProject {
+    parse_project_json(
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
@@ -4053,7 +4564,7 @@ fn two_stage_registry() -> registry_breg::CompiledRegistry {
                 }],
                 "review":{"stages":[
                   {"id":"review","approvals":1,"excludeSubmitter":true},
-                  {"id":"final","approvals":1,"excludeSubmitter":true}
+                  {"id":"final","approvals":1,"excludeSubmitter":true,"excludePreviousReviewers":true}
                 ]}
               }
             }
@@ -4128,9 +4639,7 @@ fn two_stage_registry() -> registry_breg::CompiledRegistry {
           ]
         }"#,
     )
-    .expect("two-stage change-request fixture parses");
-    compile_project(&project, &[], CompileProfile::Authoring)
-        .expect("two-stage change-request fixture compiles")
+    .expect("two-stage change-request fixture parses")
 }
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {

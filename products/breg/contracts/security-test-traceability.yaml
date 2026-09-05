@@ -32,3 +32,6 @@ traceability:
   - {id: BREG-SEC-29, state: enforced, negativeId: BREG-NEG-29, negativeTest: {path: crates/registry-breg/tests/compiler_rhai_planner.rs, name: rhai_planner_resource_limits_and_deadline_leave_runtime_healthy}}
   - {id: BREG-SEC-30, state: enforced, negativeId: BREG-NEG-30, negativeTest: {path: crates/registry-breg/tests/compiler_rhai_planner.rs, name: rhai_planner_errors_and_queue_reasons_are_value_free}}
   - {id: BREG-SEC-31, state: enforced, negativeId: BREG-NEG-31, negativeTest: {path: crates/registry-breg/tests/postgres_rhai_planner.rs, name: rhai_planner_automatic_transition_requires_same_profile_and_is_atomic}}
+  - {id: BREG-SEC-32, state: enforced, negativeId: BREG-NEG-32, negativeTest: {path: crates/registry-breg/tests/explicit_row_authority.rs, name: every_row_bearing_grant_requires_an_explicit_declaration}}
+  - {id: BREG-SEC-33, state: enforced, negativeId: BREG-NEG-33, negativeTest: {path: crates/registry-breg/tests/http_auth.rs, name: ambiguous_route_without_default_requires_explicit_selection_without_guessing_authority}}
+  - {id: BREG-SEC-34, state: enforced, negativeId: BREG-NEG-34, negativeTest: {path: crates/registry-breg/src/request_workflow.rs, name: prior_stage_actor_is_excluded_only_when_the_stage_requires_independence}}

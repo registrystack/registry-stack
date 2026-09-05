@@ -1,0 +1,29 @@
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: issuer-portability
+  version: 0.1.0
+  defaultLanguage: en
+  canonicalBaseIri: https://registry.example.test
+entities:
+  - id: record
+    primaryDataset: records
+    route: records
+    mutationMode: mutable
+    tombstone: false
+    classification: internal
+    fields:
+      - {id: label, type: string, required: true, maxLength: 100, classification: internal}
+      - {id: district, type: string, required: true, maxLength: 100, classification: internal}
+accessProfiles:
+  - id: clerk
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: [registry.read]
+    requiredPurposes: [registry-administration]
+    grants:
+      - entity: record
+        operations: [get]
+        readableFields: [label]
+        rowBoundaries:
+          - {field: district, claim: districts, operator: in}

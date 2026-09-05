@@ -71,6 +71,7 @@ accessProfiles:
     anonymous: true
     grants:
       - entity: public-record
+        rowBoundaries: []
         operations: [list]
         readableFields: [label]
 "#;
@@ -479,7 +480,10 @@ async fn request_operational_log_has_only_closed_value_free_fields() {
 
 fn startup_errors() -> [StartupError; 12] {
     [
-        StartupError::RuntimeConfig,
+        // The wrapped cause never changes the rendered operational message: it
+        // only lets `bregctl doctor` name it. Any `RuntimeConfigError` variant
+        // exercises the same static text, so one representative is enough here.
+        StartupError::RuntimeConfig(RuntimeConfigError::Document),
         StartupError::PackageRefused,
         StartupError::DatabaseConnection,
         StartupError::DatabaseUnready,
@@ -551,7 +555,7 @@ fn expected_operational_event(
 
 fn expected_startup_error(error: StartupError) -> &'static str {
     match error {
-        StartupError::RuntimeConfig => "the Registry runtime configuration was refused",
+        StartupError::RuntimeConfig(_) => "the Registry runtime configuration was refused",
         StartupError::PackageRefused => "the Registry package was refused",
         StartupError::DatabaseConnection => "the Registry database connection was refused",
         StartupError::DatabaseUnready => "the Registry database is not ready for this package",

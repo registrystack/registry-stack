@@ -1,6 +1,6 @@
 ---
 title: Query Registry Relay with Python
-description: Install the thin Python client, read a synthetic business record, handle an optional continuation, revalidate a document, and handle a Relay refusal.
+description: Install the maintained Python client, read a synthetic business record, handle an optional continuation, revalidate a document, and handle a Relay refusal.
 status: current
 owner: registry-docs
 source_repos:
@@ -17,9 +17,10 @@ standards_referenced:
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 The Registry Relay Python client gives a consumer or verifier one synchronous method for each
-fixed Relay V2 operation. In this tutorial you will install a released wheel, read one synthetic
-business record, advance discovery only when Relay returns a continuation, revalidate OpenAPI
-with a strong entity tag, and inspect a governed refusal.
+fixed Relay V2 operation. It is the `relay` namespace of the maintained `registry-stack-client`
+package. In this tutorial you will install that package, read one synthetic business record,
+advance discovery only when Relay returns a continuation, revalidate OpenAPI with a strong entity
+tag, and inspect a governed refusal.
 
 <QuickstartMeta
   outcome="A Python program that reads the synthetic registered-business Relay and handles an optional continuation, caching, and errors explicitly."
@@ -37,14 +38,13 @@ anonymous, contains synthetic records only, and listens at `http://127.0.0.1:808
 That second shell also needs the `relay` binary on its path. The install below reads the exact
 release version from it rather than asking you to type one.
 
-Prebuilt Relay client packages start with Registry Stack v0.20.0. The running Relay must therefore
-be v0.20.0 or later. Install the client from that exact Relay release, using the wheel that matches
-this machine.
+The maintained client package ships from Registry Stack v0.26.1. The running Relay must therefore
+be v0.26.1 or later. Install the client at that exact Relay version.
 
 ## Install the client and read a record
 
-Work in a directory of its own, so the wheel and the virtual environment stay out of the registry
-project you built in the prerequisite:
+Work in a directory of its own, so the virtual environment stays out of the registry project you
+built in the prerequisite:
 
 ```sh
 mkdir relay-python-query
@@ -53,32 +53,26 @@ python3 -m venv .venv
 . .venv/bin/activate
 ```
 
-Now read the release version from the running Relay, select the wheel for this machine, and
-install it. The release workflow attaches Python wheels to the matching GitHub Release, so the
-download comes from that release rather than from PyPI:
+Now read the release version from the running Relay and install the client at that version:
 
 ```sh
-VERSION="$(relay --version | awk '{print $2}' | sed 's/^v//')"
-case "$VERSION" in
-  *-dev*) echo "This relay was built from source ($VERSION), not installed from a release" >&2; exit 1 ;;
+version="$(relay --version | awk '{print $2}' | sed 's/^v//')"
+case "$version" in
+  *-dev*) echo "This relay was built from source ($version), not installed from a release" >&2; exit 1 ;;
 esac
-case "$(uname -s)-$(uname -m)" in
-  Linux-x86_64) WHEEL_PLATFORM="linux_x86_64" ;;
-  Linux-aarch64|Linux-arm64) WHEEL_PLATFORM="linux_aarch64" ;;
-  Darwin-arm64) WHEEL_PLATFORM="macosx_11_0_arm64" ;;
-  *) echo "No prebuilt Relay client wheel for this platform" >&2; exit 1 ;;
-esac
-WHEEL="registry_relay_client-${VERSION}-cp310-abi3-${WHEEL_PLATFORM}.whl"
-curl -fLO "https://github.com/registrystack/registry-stack/releases/download/v${VERSION}/${WHEEL}"
-python -m pip install "./${WHEEL}"
+python -m pip install "registry-stack-client==${version}"
 ```
 
-The wheel uses the Python 3.10 stable ABI, so supported newer Python versions import the same
-file. The three platform names in that `case` are the whole set: the release provides no Windows
-or Intel macOS wheel.
+The package selects the native build for Linux amd64, Linux arm64, or macOS arm64; the release
+provides no other platform. The wheel uses the Python 3.10 stable ABI, so later Python versions
+import the same file. The distribution installs as `registry-stack-client` and imports as
+`registry_client`.
 
-The first `case` stops a build that came from source rather than from a release. Such a build
-reports a `-dev` version, which names no published release and so has no wheel to download.
+The `case` stops a build that came from source rather than from a release. Such a build reports a
+`-dev` version, which names no published release and so has no package to install.
+
+{/* Evidence: crates/registry-stack-client-py/README.md,
+    release/scripts/assemble-registry-client-packages.py */}
 
 Create `query_relay.py`. It constructs a client against the running deployment and reads one
 record:
@@ -86,7 +80,7 @@ record:
 ```python
 import json
 
-from registry_relay_client import RelayClient
+from registry_client.relay import RelayClient
 
 
 client = RelayClient(base_url="http://127.0.0.1:8080")
@@ -117,8 +111,8 @@ row.
 
 Pass `fields=["legalName"]` to `read_record` to narrow that response further. Narrowing is the only
 direction available: a caller cannot use fields to widen the contract's disclosure profile. Read
-the [Relay client API reference](../../reference/relay-client-api/) before adding authentication or
-private certificate roots.
+the [Registry Stack client API reference](../../reference/client-api/#registry-relay) before
+adding authentication or private certificate roots.
 
 ## Handle an optional continuation exactly
 
@@ -199,7 +193,7 @@ A record identifier the register does not hold is a refusal, not an empty result
 request for a missing synthetic record and run the file:
 
 ```python
-from registry_relay_client import RelayClientError
+from registry_client.relay import RelayClientError
 
 
 try:
@@ -262,8 +256,8 @@ registry project remains available for later Relay exercises.
 
 ## Next
 
-- [Read the Relay client API reference](../../reference/relay-client-api/) for every Rust, Python,
-  and Node operation and outcome shape.
+- [Read the Registry Stack client API reference](../../reference/client-api/#registry-relay) for
+  every Rust, Python, and Node operation and outcome shape.
 - [Author a Registry Relay project](../../configure/relay/) to add list, lookup, search, artifact,
   and SDMX operations to a deployment.
 - [Review errors and status codes](../../reference/errors/) before mapping failures into an

@@ -1177,17 +1177,28 @@ fn stage_reference_secrets(secret_root: &Path) {
 /// pinning a line number that ordinary fixture edits would move. The acceptance
 /// bundle is named per case because a failure class can be reachable only from
 /// the bundle that declares the configuration it is about.
+///
+/// `needs_runtime` marks a case whose break only exists in `runtime.yaml` or
+/// whose bundle is refused only once a runtime document is in scope. `check`
+/// carries every case; `bundle-check` has no runtime document at all, so it
+/// runs only the bundle-only subset.
 struct FailureCase {
     label: &'static str,
     bundle: &'static str,
     break_deployment: fn(&Deployment),
     prefix: &'static str,
     suffix: &'static str,
+    needs_runtime: bool,
 }
 
-#[test]
-fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() {
-    let cases = [
+/// The shared failure-class table `check` and `bundle-check` both iterate.
+///
+/// `main.rs` routes `Command::Check` and `Command::BundleCheck` through the
+/// same `deployment_load_error` and `kernel_compile_error`, so a bundle-only
+/// case produces the identical fixed prefix and suffix under either command;
+/// only the third pass (source plan compilation) differs between them.
+fn failure_cases() -> Vec<FailureCase> {
+    vec![
         FailureCase {
             label: "malformed bundle YAML",
             bundle: "all-definitions",
@@ -1196,6 +1207,7 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
             },
             prefix: "evidence: deployment configuration is invalid: artifact evidence.yaml: document is not well-formed YAML (line ",
             suffix: ")\n",
+            needs_runtime: false,
         },
         FailureCase {
             label: "unknown bundle field",
@@ -1209,6 +1221,7 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
             },
             prefix: "evidence: deployment configuration is invalid: artifact evidence.yaml: unknown field at authentication (line ",
             suffix: ")\n",
+            needs_runtime: false,
         },
         FailureCase {
             label: "wrong bundle field type",
@@ -1222,6 +1235,7 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
             },
             prefix: "evidence: deployment configuration is invalid: artifact evidence.yaml: field has the wrong type at version (line ",
             suffix: ")\n",
+            needs_runtime: false,
         },
         FailureCase {
             label: "unaccepted bundle field variant",
@@ -1235,6 +1249,7 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
             },
             prefix: "evidence: deployment configuration is invalid: artifact evidence.yaml: field value is not one of the accepted variants at authentication.kind (line ",
             suffix: ")\n",
+            needs_runtime: false,
         },
         FailureCase {
             label: "configuration cross-reference",
@@ -1248,6 +1263,7 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
             },
             prefix: "evidence: deployment configuration is invalid: artifact evidence.yaml: requirement acquisition references an unknown source\n",
             suffix: "",
+            needs_runtime: false,
         },
         FailureCase {
             label: "artifact closure references a missing file",
@@ -1257,6 +1273,7 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
             },
             prefix: "evidence: deployment artifact closure is invalid: artifact derivations/adult-status.rhai: the configuration references an artifact the bundle does not contain\n",
             suffix: "",
+            needs_runtime: false,
         },
         FailureCase {
             label: "artifact closure carries an unreferenced file",
@@ -1266,6 +1283,7 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
             },
             prefix: "evidence: deployment artifact closure is invalid: artifact schemas/orphan.schema.yaml: the bundle contains an artifact the configuration does not reference\n",
             suffix: "",
+            needs_runtime: false,
         },
         FailureCase {
             label: "unsafe artifact name is never echoed",
@@ -1278,6 +1296,7 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
             },
             prefix: "evidence: deployment artifact closure is invalid: the bundle contains an artifact the configuration does not reference\n",
             suffix: "",
+            needs_runtime: false,
         },
         FailureCase {
             label: "script",
@@ -1290,6 +1309,7 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
             },
             prefix: "evidence: deployment script is invalid: artifact derivations/adult-status.rhai: script does not compile\n",
             suffix: "",
+            needs_runtime: false,
         },
         // The bundle loader compiles a script on a permissive engine that only
         // proves an entrypoint. The kernel is the pass that applies the
@@ -1306,6 +1326,7 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
             },
             prefix: "evidence: bundle compilation failed: artifact derivations/adult-status.rhai: script does not compile\n",
             suffix: "",
+            needs_runtime: false,
         },
         FailureCase {
             label: "fact schema",
@@ -1318,6 +1339,7 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
             },
             prefix: "evidence: deployment artifact is invalid: artifact schemas/adult-status-facts.schema.yaml: fact schema must close the root object\n",
             suffix: "",
+            needs_runtime: false,
         },
         FailureCase {
             label: "codelist",
@@ -1330,6 +1352,7 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
             },
             prefix: "evidence: deployment artifact is invalid: artifact codelists/residence-region-map.yaml: codelist YAML is invalid\n",
             suffix: "",
+            needs_runtime: false,
         },
         FailureCase {
             label: "fixture",
@@ -1342,6 +1365,7 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
             },
             prefix: "evidence: deployment artifact is invalid: artifact fixtures/adult-status-cases.yaml: fixture cases are missing\n",
             suffix: "",
+            needs_runtime: false,
         },
         FailureCase {
             label: "unknown runtime field",
@@ -1351,6 +1375,7 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
             },
             prefix: "evidence: deployment configuration is invalid: artifact runtime.yaml: unknown field (line ",
             suffix: ")\n",
+            needs_runtime: true,
         },
         FailureCase {
             label: "wrong runtime field type",
@@ -1364,6 +1389,7 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
             },
             prefix: "evidence: deployment configuration is invalid: artifact runtime.yaml: field has the wrong type at listener.port (line ",
             suffix: ")\n",
+            needs_runtime: true,
         },
         FailureCase {
             label: "runtime operator path",
@@ -1377,6 +1403,7 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
             },
             prefix: "evidence: deployment configuration is invalid: artifact runtime.yaml: absolute operator path is invalid\n",
             suffix: "",
+            needs_runtime: true,
         },
         // Nothing is broken here: an operator runtime file that says nothing
         // about acquisition capabilities enables nothing beyond the frozen
@@ -1388,10 +1415,14 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
             break_deployment: |_| {},
             prefix: "evidence: deployment artifact is invalid: the runtime configuration does not enable an acquisition capability the bundle requires\n",
             suffix: "",
+            needs_runtime: true,
         },
-    ];
+    ]
+}
 
-    for case in cases {
+#[test]
+fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() {
+    for case in failure_cases() {
         let deployment = Deployment::stage(case.bundle);
         (case.break_deployment)(&deployment);
         let output = deployment.check();
@@ -1415,6 +1446,104 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
             case.label
         );
     }
+}
+
+/// The bundle-only half of the same pin, from the seam Evidencectl uses.
+///
+/// `bundle-check` shares `Bundle::load` and `OfflineKernel::compile` with
+/// `check`, by way of the same `deployment_load_error` and
+/// `kernel_compile_error`, so every case here that does not touch
+/// `runtime.yaml` must produce the identical value-free diagnostic under
+/// either command. The four cases that break or depend on `runtime.yaml`
+/// (unknown runtime field, wrong runtime field type, runtime operator path,
+/// gated acquisition kind the operator did not enable) are skipped: a bundle
+/// alone has no runtime document for them to break, and Evidencectl's build
+/// never has one to check either.
+#[test]
+fn bundle_check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() {
+    for case in failure_cases()
+        .into_iter()
+        .filter(|case| !case.needs_runtime)
+    {
+        let deployment = Deployment::stage(case.bundle);
+        (case.break_deployment)(&deployment);
+        let output = deployment.bundle_check();
+
+        assert!(
+            !output.status.success(),
+            "{}: bundle-check accepted a broken bundle",
+            case.label
+        );
+        let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
+        let stderr = std::str::from_utf8(&output.stderr).expect("stderr is UTF-8");
+        assert!(
+            stdout.is_empty(),
+            "{}: bundle-check wrote output",
+            case.label
+        );
+        assert!(
+            stderr.starts_with(case.prefix) && stderr.ends_with(case.suffix),
+            "{}: unexpected diagnostic {stderr:?}",
+            case.label
+        );
+        assert!(
+            !stdout.contains(CANARY) && !stderr.contains(CANARY),
+            "{}: diagnostic disclosed a document value",
+            case.label
+        );
+    }
+}
+
+/// The source-plan pass is the one place `bundle-check` and `check` differ:
+/// `compile_bundle_source_plans` checks a statement offline, with no extract
+/// mounted, where `compile_source_plans` may open a bound one. None of the
+/// acceptance fixtures declare a `sqlite-extract` source, so this reaches that
+/// pass through the reference project that does, staging only its `bundle/`
+/// directory since `bundle-check` needs nothing else.
+#[test]
+fn bundle_check_names_a_safe_artifact_and_a_value_free_cause_for_a_broken_statement() {
+    let root = tempfile::tempdir().expect("temporary bundle");
+    let project = Path::new(env!("CARGO_MANIFEST_DIR")).join(
+        "../../products/evidence/reference/request-adapter/deployment-projects/sqlite-extract-evidence",
+    );
+    let bundle = root.path().join("bundle");
+    copy_tree(&project.join("bundle"), &bundle);
+    let bundle_configuration = bundle.join("evidence.yaml");
+    let bundle_document = fs::read_to_string(&bundle_configuration).expect("read bundle document");
+    fs::write(
+        &bundle_configuration,
+        bundle_document.replacen(
+            "assuranceProfile: evidence-grade",
+            "assuranceProfile: local",
+            1,
+        ),
+    )
+    .expect("select local assurance");
+    // A first statement with no table reference (so the offline check's
+    // deliberate no-op pass on an unresolved name never reaches it) followed by
+    // a second statement, which SQLite refuses before either statement runs.
+    // The canary sits in the statement that is never reached, so a diagnostic
+    // that echoed the artifact's SQL instead of naming its cause would surface it.
+    fs::write(
+        bundle.join("queries/professional-licence-lookup.sql"),
+        format!("SELECT 1;\nSELECT '{CANARY}';\n"),
+    )
+    .expect("write broken statement");
+
+    set_tree_mode(&bundle, 0o555, 0o444);
+    let output = invoke_bundle_check(&bundle);
+    set_tree_mode(&bundle, 0o755, 0o644);
+
+    assert!(
+        !output.status.success(),
+        "a broken statement passed bundle-check"
+    );
+    assert!(output.stdout.is_empty(), "bundle-check wrote output");
+    assert_eq!(
+        std::str::from_utf8(&output.stderr).expect("diagnostic is UTF-8"),
+        "evidence: source plan compilation failed: artifact queries/professional-licence-lookup.sql: the artifact holds more than one statement\n"
+    );
+    assert!(!String::from_utf8_lossy(&output.stderr).contains(CANARY));
 }
 
 /// The operator half of the acquisition gate, from the other side.
@@ -2789,6 +2918,16 @@ outboundTls:
         output
     }
 
+    /// Run `bundle-check` against the sealed bundle directory alone, the same
+    /// seam Evidencectl uses to validate a compiled project before it has a
+    /// runtime document.
+    fn bundle_check(&self) -> Output {
+        self.seal();
+        let output = invoke_bundle_check(&self.path("bundle"));
+        self.unseal();
+        output
+    }
+
     /// Evaluate the staged bundle's own fixture, with any extra arguments.
     fn evaluate(&self, arguments: &[&str]) -> Output {
         let mut invocation = vec!["evaluate", "--fixture", "fixtures/cases.yaml"];
@@ -2856,6 +2995,19 @@ fn invoke(runtime: &Path, arguments: &[&str]) -> Output {
         .arg("--runtime")
         .arg(runtime)
         .args(arguments)
+        .env_remove("REGISTRY_EVIDENCE_RUNTIME")
+        .output()
+        .expect("evidence binary starts")
+}
+
+/// Run `bundle-check` against a bundle directory, with no runtime document at
+/// all: the global `--runtime` argument has a default value this subcommand
+/// never reads.
+fn invoke_bundle_check(bundle: &Path) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_evidence"))
+        .arg("bundle-check")
+        .arg("--bundle")
+        .arg(bundle)
         .env_remove("REGISTRY_EVIDENCE_RUNTIME")
         .output()
         .expect("evidence binary starts")

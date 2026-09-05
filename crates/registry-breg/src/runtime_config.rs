@@ -1098,7 +1098,7 @@ impl OidcVerifierConfig {
         if allowed_unique.len() != raw.allowed_clients.len() {
             return Err(RuntimeConfigError::InvalidOidc);
         }
-        let max_token_lifetime = seconds_bounded(raw.max_token_lifetime_seconds, 1, 3600)?;
+        let max_token_lifetime = seconds_bounded(raw.max_token_lifetime_seconds, 1, 7200)?;
         let leeway = oidc_leeway(raw.leeway_milliseconds)?;
         Ok(Self {
             issuer: raw.issuer,
@@ -1534,7 +1534,9 @@ pub struct AuthorityClaimsConfig {
 
 impl AuthorityClaimsConfig {
     fn from_raw(raw: RawAuthorityClaimsConfig) -> Result<Self> {
-        validate_authority_claim_name(&raw.principal)?;
+        if raw.principal != "sub" {
+            validate_authority_claim_name(&raw.principal)?;
+        }
         if let Some(purpose) = &raw.purpose {
             validate_authority_claim_name(purpose)?;
         }
@@ -2126,7 +2128,7 @@ fn install_schema_constraints(schema: &mut Value) {
         (
             "/$defs/RawOidcVerifierConfig/properties/maxTokenLifetimeSeconds",
             1,
-            3_600,
+            7_200,
         ),
         (
             "/$defs/RawOidcVerifierConfig/properties/leewayMilliseconds",
@@ -2513,8 +2515,11 @@ fn install_schema_property_names(schema: &mut Value, pointer: &str, pattern: &st
 
 #[cfg(feature = "schema")]
 fn install_schema_authority_claim_exclusions(schema: &mut Value) {
-    let registered = serde_json::json!({
-        "enum": [
+    for (pointer, allow_subject) in [
+        ("/$defs/RawAuthorityClaimsConfig/properties/principal", true),
+        ("/$defs/RawAuthorityClaimsConfig/properties/purpose", false),
+    ] {
+        let registered = [
             "iss",
             "aud",
             "exp",
@@ -2524,15 +2529,13 @@ fn install_schema_authority_claim_exclusions(schema: &mut Value) {
             "client_id",
             "azp",
             "jti",
-            "cnf"
+            "cnf",
         ]
-    });
-    for pointer in [
-        "/$defs/RawAuthorityClaimsConfig/properties/principal",
-        "/$defs/RawAuthorityClaimsConfig/properties/purpose",
-    ] {
+        .into_iter()
+        .filter(|name| !allow_subject || *name != "sub")
+        .collect::<Vec<_>>();
         if let Some(member) = schema.pointer_mut(pointer).and_then(Value::as_object_mut) {
-            member.insert("not".to_owned(), registered.clone());
+            member.insert("not".to_owned(), serde_json::json!({"enum": registered}));
         }
     }
 }

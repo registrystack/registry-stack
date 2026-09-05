@@ -714,7 +714,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         Variant::StatusRestricted => "restricted",
     };
     format!(
-        r#"{{"id":"core","version":"1","entities":[{{"id":"asset","primaryDataset":"history-migration-registry","route":"assets","mutationMode":"create_only","fields":[{{"id":"code","type":"string","required":true,"maxLength":8,"classification":"internal"}},{{"id":"status","type":"string","required":true,"maxLength":16,"classification":"{status_classification}"}}],"accessProfiles":[{{"id":"reader","principalClaim":"principal","operations":["create","get","list","revisions"],"revisionAccess":true,"readableFields":["code"],"writableFields":["code","status"]}}]}}]}}"#
+        r#"{{"id":"core","version":"1","entities":[{{"id":"asset","primaryDataset":"history-migration-registry","route":"assets","mutationMode":"create_only","fields":[{{"id":"code","type":"string","required":true,"maxLength":8,"classification":"internal"}},{{"id":"status","type":"string","required":true,"maxLength":16,"classification":"{status_classification}"}}],"accessProfiles":[{{"rowBoundaries": [], "id":"reader","principalClaim":"principal","operations":["create","get","list","revisions"],"revisionAccess":true,"readableFields":["code"],"writableFields":["code","status"]}}]}}]}}"#
     )
     .into_bytes()
 }

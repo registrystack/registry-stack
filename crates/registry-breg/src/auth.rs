@@ -17,7 +17,10 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::api::{VerifiedClaimValue, VerifiedRequestClaims};
-use crate::contract::{BoundaryOperator, FieldTypeSource, LookupValueOrigin};
+#[cfg(feature = "tooling")]
+pub(crate) use crate::authority::compiled_authority_field_type;
+use crate::authority::{authority_inventory, AuthorityInventoryError, DirectClaimExpectation};
+use crate::contract::FieldTypeSource;
 use crate::model::CompiledRegistry;
 
 const MAX_CLAIM_NAME_BYTES: usize = 128;
@@ -64,25 +67,6 @@ impl fmt::Debug for AuthorityClaimConfig {
     }
 }
 
-/// One compiled direct-claim expectation derived from row boundaries and
-/// lookup selector claim mappings. Values remain direct verified scalars; set
-/// shape is only available for row-boundary `in` operators.
-#[derive(Clone, Eq, PartialEq)]
-struct DirectClaimExpectation {
-    field_type: FieldTypeSource,
-    multi_value: bool,
-}
-
-impl fmt::Debug for DirectClaimExpectation {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("DirectClaimExpectation")
-            .field("field_type", &self.field_type)
-            .field("multi_value", &self.multi_value)
-            .finish()
-    }
-}
-
 /// A closed construction failure. Each variant names the check that refused
 /// the deployment, and deliberately carries no configured URL, claim name, or
 /// claim value that an operator could accidentally copy into a log.
@@ -98,6 +82,8 @@ pub enum AuthenticationConfigError {
     PrincipalClaimMismatch,
     #[error("a compiled row boundary selects a field the compiled entity does not declare")]
     BoundaryFieldNotCompiled,
+    #[error("a compiled authority target entity does not exist")]
+    TargetEntityNotCompiled,
     #[error("a compiled verified-claim lookup names a selector profile the compiled entity does not declare")]
     LookupSelectorNotCompiled,
     #[error("a compiled verified-claim lookup leaves a selector field without a claim mapping")]
@@ -165,15 +151,21 @@ impl RegistryAuthenticator {
             .verify(token)
             .await
             .map_err(|_| AuthenticationError::VerificationRefused)?;
-        if !matches!(
-            verified.claims.aud.as_ref(),
-            Some(Audience::One(audience)) if audience == &self.audience
-        ) {
+        if !accepted_audience(verified.claims.aud.as_ref(), &self.audience) {
             return Err(AuthenticationError::InvalidClaims);
         }
 
         let claims = &verified.claims.extra;
-        let principal = required_direct_string(claims.get(&self.principal_claim))?;
+        let subject = verified
+            .claims
+            .sub
+            .as_ref()
+            .map(|value| Value::String(value.clone()));
+        let principal = required_direct_string(if self.principal_claim == "sub" {
+            subject.as_ref()
+        } else {
+            claims.get(&self.principal_claim)
+        })?;
         let purpose = self
             .purpose_claim
             .as_deref()
@@ -192,7 +184,12 @@ impl RegistryAuthenticator {
             .direct_claims
             .iter()
             .filter_map(|(name, expectation)| {
-                claims.get(name).map(|value| {
+                let value = if name == "sub" {
+                    subject.as_ref()
+                } else {
+                    claims.get(name)
+                };
+                value.map(|value| {
                     mapped_claim(value, expectation).map(|value| (name.clone(), value))
                 })
             })
@@ -297,126 +294,92 @@ fn validate_claim_mapping(
     verifier: &TokenVerifierConfig,
     claims: &AuthorityClaimConfig,
 ) -> Result<BTreeMap<String, DirectClaimExpectation>, AuthenticationConfigError> {
-    let mut configured_names = BTreeSet::new();
-    if !valid_authority_claim_name(&claims.principal_claim)
-        || !configured_names.insert(claims.principal_claim.as_str())
+    if !(valid_authority_claim_name(&claims.principal_claim) || claims.principal_claim == "sub")
         || claims.principal_claim == verifier.scope_claim
     {
         return Err(AuthenticationConfigError::InvalidClaimMapping);
     }
     if let Some(purpose) = &claims.purpose_claim {
         if !valid_authority_claim_name(purpose)
-            || !configured_names.insert(purpose)
+            || purpose == &claims.principal_claim
             || purpose == &verifier.scope_claim
         {
             return Err(AuthenticationConfigError::InvalidClaimMapping);
         }
     }
-
-    let mut expected_direct_claims = BTreeMap::new();
-    let mut purpose_required = false;
-    for entity in registry.entities().values() {
-        for profile in entity.access_profiles.values() {
-            if profile.anonymous {
-                if profile.principal_claim.is_some()
-                    || !profile.required_scopes.is_empty()
-                    || !profile.required_purposes.is_empty()
-                    || !profile.row_boundaries.is_empty()
-                {
-                    return Err(AuthenticationConfigError::AnonymousProfileCarriesAuthority);
-                }
-                continue;
-            }
-            if profile.principal_claim.as_deref() != Some(claims.principal_claim.as_str()) {
-                return Err(AuthenticationConfigError::PrincipalClaimMismatch);
-            }
-            purpose_required |= !profile.required_purposes.is_empty();
-            for boundary in &profile.row_boundaries {
-                let field_type = compiled_authority_field_type(entity, &boundary.field)
-                    .ok_or(AuthenticationConfigError::BoundaryFieldNotCompiled)?;
-                let expectation = DirectClaimExpectation {
-                    field_type,
-                    multi_value: boundary.operator == BoundaryOperator::In,
-                };
-                insert_direct_claim_expectation(
-                    &mut expected_direct_claims,
-                    &boundary.claim,
-                    expectation,
-                )?;
-            }
-            for lookup in profile
-                .lookups
-                .iter()
-                .filter(|lookup| lookup.value_origin == LookupValueOrigin::VerifiedClaim)
-            {
-                let selector = entity
-                    .selector_profiles
-                    .get(&lookup.selector)
-                    .ok_or(AuthenticationConfigError::LookupSelectorNotCompiled)?;
-                for field_id in &selector.fields {
-                    let claim = lookup
-                        .claim_mapping
-                        .get(field_id)
-                        .ok_or(AuthenticationConfigError::LookupClaimMappingIncomplete)?;
-                    let field_type = entity
-                        .fields
-                        .get(field_id)
-                        .ok_or(AuthenticationConfigError::LookupFieldNotCompiled)?
-                        .field_type
-                        .clone();
-                    insert_direct_claim_expectation(
-                        &mut expected_direct_claims,
-                        claim,
-                        DirectClaimExpectation {
-                            field_type,
-                            multi_value: false,
-                        },
-                    )?;
-                }
-            }
+    let inventory = authority_inventory(registry).map_err(|error| match error {
+        AuthorityInventoryError::AnonymousProfileCarriesAuthority => {
+            AuthenticationConfigError::AnonymousProfileCarriesAuthority
         }
+        AuthorityInventoryError::PrincipalClaimMissing => {
+            AuthenticationConfigError::PrincipalClaimMismatch
+        }
+        AuthorityInventoryError::TargetEntityNotCompiled => {
+            AuthenticationConfigError::TargetEntityNotCompiled
+        }
+        AuthorityInventoryError::BoundaryFieldNotCompiled => {
+            AuthenticationConfigError::BoundaryFieldNotCompiled
+        }
+        AuthorityInventoryError::LookupSelectorNotCompiled => {
+            AuthenticationConfigError::LookupSelectorNotCompiled
+        }
+        AuthorityInventoryError::LookupClaimMappingIncomplete => {
+            AuthenticationConfigError::LookupClaimMappingIncomplete
+        }
+        AuthorityInventoryError::LookupFieldNotCompiled => {
+            AuthenticationConfigError::LookupFieldNotCompiled
+        }
+        AuthorityInventoryError::ConflictingClaimExpectation => {
+            AuthenticationConfigError::ConflictingClaimExpectation
+        }
+    })?;
+    if inventory
+        .principal_claims
+        .iter()
+        .any(|name| name != &claims.principal_claim)
+    {
+        return Err(AuthenticationConfigError::PrincipalClaimMismatch);
     }
-    for name in expected_direct_claims.keys() {
-        if !valid_authority_claim_name(name)
+    for (name, expectation) in &inventory.direct_claims {
+        if name == &claims.principal_claim {
+            // Ownership reuses the explicitly selected principal, never a fallback.
+            // The field still applies its ordinary scalar type validation.
+            if expectation.multi_value
+                || matches!(
+                    expectation.field_type,
+                    FieldTypeSource::Boolean
+                        | FieldTypeSource::Int64
+                        | FieldTypeSource::Crs84Point { .. }
+                        | FieldTypeSource::Structured { .. }
+                )
+            {
+                return Err(AuthenticationConfigError::ConflictingClaimExpectation);
+            }
+        } else if !valid_authority_claim_name(name)
             || name == &verifier.scope_claim
-            || !configured_names.insert(name.as_str())
+            || claims.purpose_claim.as_ref() == Some(name)
         {
             return Err(AuthenticationConfigError::InvalidClaimMapping);
         }
     }
-    if purpose_required != claims.purpose_claim.is_some() {
+    if inventory.purpose_required != claims.purpose_claim.is_some() {
         return Err(AuthenticationConfigError::PurposeClaimMismatch);
     }
-    Ok(expected_direct_claims)
+    Ok(inventory.direct_claims)
 }
 
-pub(crate) fn compiled_authority_field_type(
-    entity: &crate::model::CompiledEntity,
-    field_id: &str,
-) -> Option<crate::contract::FieldTypeSource> {
-    if field_id == entity.canonical_id.id {
-        Some(entity.canonical_id.field_type.clone())
-    } else {
-        entity
-            .fields
-            .get(field_id)
-            .map(|field| field.field_type.clone())
-    }
-}
-
-fn insert_direct_claim_expectation(
-    claims: &mut BTreeMap<String, DirectClaimExpectation>,
-    name: &str,
-    expectation: DirectClaimExpectation,
-) -> Result<(), AuthenticationConfigError> {
-    if !valid_authority_claim_name(name) {
-        return Err(AuthenticationConfigError::InvalidClaimMapping);
-    }
-    match claims.insert(name.to_owned(), expectation.clone()) {
-        Some(prior) if prior != expectation => {
-            Err(AuthenticationConfigError::ConflictingClaimExpectation)
+fn accepted_audience(audience: Option<&Audience>, expected: &str) -> bool {
+    const MAX_AUDIENCES: usize = 16;
+    match audience {
+        Some(Audience::One(value)) => valid_config_value(value) && value == expected,
+        Some(Audience::Many(values)) => {
+            !values.is_empty()
+                && values.len() <= MAX_AUDIENCES
+                && values.iter().all(|value| valid_config_value(value))
+                && values.iter().collect::<BTreeSet<_>>().len() == values.len()
+                && values.iter().any(|value| value == expected)
         }
-        _ => Ok(()),
+        None => false,
     }
 }
 
@@ -537,7 +500,6 @@ fn mapped_scalar_claim(
 fn authentication_refused() -> Response {
     crate::correlation::problem_response(
         StatusCode::UNAUTHORIZED,
-        "urn:breg:problem:authentication.refused",
         "Unauthorized",
         "The bearer credential is missing or refused.",
         "authentication.refused",

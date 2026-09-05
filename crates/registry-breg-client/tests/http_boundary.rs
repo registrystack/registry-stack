@@ -267,7 +267,10 @@ fn meta() -> Value {
 
 fn registered_problem(code: BRegProblemCode) -> Response<Body> {
     let body = serde_json::to_vec(&json!({
-        "type": format!("urn:breg:problem:{}", code.code()),
+        "type": format!(
+            "https://id.registrystack.org/problems/registry-breg/{}",
+            code.code().replace('.', "/")
+        ),
         "title": match code.status() {
             400 => "Bad Request", 401 => "Unauthorized", 404 => "Not Found",
             415 => "Unsupported Media Type", 503 => "Service Unavailable", _ => "Gateway Timeout",
@@ -297,7 +300,7 @@ fn malformed_problem() -> Response<Body> {
     let mut response = response(
         StatusCode::NOT_FOUND,
         "application/problem+json",
-        br#"{"type":"urn:breg:problem:resource.not_found","title":"Not Found","status":404,"detail":"The requested resource was not found.","code":"resource.not_found","traceId":"4bf92f3577b34da6a3ce929d0e0e4736","extra":true}"#,
+        br#"{"type":"https://id.registrystack.org/problems/registry-breg/resource/not_found","title":"Not Found","status":404,"detail":"The requested resource was not found.","code":"resource.not_found","traceId":"4bf92f3577b34da6a3ce929d0e0e4736","extra":true}"#,
         Some(TRACEPARENT),
     );
     response
@@ -646,6 +649,9 @@ async fn trace_and_problem_contracts_are_exact_and_concealment_has_no_fallback()
         error.problem_code(),
         Some(BRegProblemCode::ResourceNotFound)
     );
+    // app-developer-22: a missing record is its own error kind, not a generic
+    // `"problem"` a caller must also check `status == 404` to recognize.
+    assert_eq!(error.kind(), "not_found");
     assert_eq!(captured.lock().expect("captured requests").len(), 1);
     let rendered = format!("{error:?} {error}");
     assert!(!rendered.contains(RECORD_ID));

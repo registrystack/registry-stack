@@ -1,0 +1,18 @@
+{
+  "entity": "record",
+  "accessProfile": "clerk-reader",
+  "operation": "list",
+  "claims": {
+    "principalClaim": "registry_principal",
+    "principal": "synthetic-clerk",
+    "scopes": [
+      "record:read"
+    ],
+    "purpose": "record-administration",
+    "directClaims": {
+      "assigned_districts": [
+        "north"
+      ]
+    }
+  }
+}

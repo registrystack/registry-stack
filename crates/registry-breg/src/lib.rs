@@ -5,6 +5,7 @@
 pub mod access;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 pub mod access_preview;
+pub mod authority;
 
 #[cfg(feature = "runtime")]
 pub mod api;
@@ -71,6 +72,7 @@ pub mod package;
 pub mod physical_names;
 #[cfg(feature = "runtime")]
 pub mod postgres;
+pub mod problem;
 pub mod query;
 #[cfg(feature = "runtime")]
 pub(crate) mod query_binding;

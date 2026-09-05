@@ -1,6 +1,6 @@
 ---
 title: Evidencectl workflow reference
-description: Operational boundaries for Evidence Gateway authoring, production build, deployment inspection, fixtures, and local development.
+description: Operational boundaries for Evidence Gateway authoring, production build, deployment inspection, fixtures, local development, and editor integration.
 status: current
 owner: registry-docs
 source_repos:
@@ -111,6 +111,73 @@ registrations remain in a separately governed Registry Mint registry. Files unde
 Use `keygen`, `source suggest`, `request`, `verify`, and `audit` for their documented authoring or
 local inspection roles. Do not use a local request, local audit record, or disposable key as a
 production candidate input.
+
+## Editor support
+
+`evidencectl tooling` groups the two commands that serve an editor rather than a deployment.
+
+| Command | Inputs | Result | Does not do |
+| --- | --- | --- | --- |
+| `evidencectl tooling editor --project <project>` | Editable project directory, defaulting to the current directory | Writes the project-local schema mappings VS Code and Zed read, and reports all six managed files | Install an extension, change editor settings outside the project, or replace a file it did not write |
+| `evidencectl tooling language-server` | No arguments; speaks the Language Server Protocol over standard input and output | Reports Evidence Gateway authoring diagnostics for every document it indexes in the project, not only the open one | Open a socket, contact a source, read source values, or observe SQLite |
+
+`tooling editor` writes six files into the project:
+
+```text
+.evidence-editor/manifest.json
+.evidence-editor/schemas/project-marker.schema.json
+.evidence-editor/schemas/question.schema.json
+.vscode/extensions.json
+.vscode/settings.json
+.zed/settings.json
+```
+
+Commit all six with the rest of the project. They are generated, nonsecret configuration matched to
+the schemas the checks apply, and the `.gitignore` that `evidencectl new` writes excludes `secrets/`
+and `.evidence/` only. A later run refreshes exactly what an earlier run recorded writing. A managed
+file someone has edited by hand stops the command, which names that file and changes nothing.
+
+The mappings cover `evidence-project.yaml` and `questions/*.yaml`, the two document kinds a Rust type
+stands behind. Sources, selectors, derivations, answer schemas, and fixtures carry no static schema;
+the language server checks those.
+
+A diagnostic in your editor carries the sentence `evidencectl` reports for the same input, because
+both read one shared set of authoring checks. Fixing what the editor reports satisfies the command
+line for that rule. The editor bounds a message at 1024 characters.
+
+{/* Evidence: crates/registry-evidencectl/src/tooling.rs, ToolingCommand;
+    crates/registry-evidencectl/src/tooling_editor.rs, EDITOR_SCHEMA_CATALOG and MANAGED_FILES;
+    crates/registry-evidencectl/src/scaffold.rs;
+    crates/registry-evidence-authoring/src/validate.rs, validate_question();
+    crates/registry-evidencectl/src/authoring.rs, first_finding();
+    crates/registry-language-server/src/evidence/diagnostics.rs, bounded_message(). */}
+
+### Base Registry Engine projects
+
+The language server serves Evidence Gateway and Registry Relay projects. A Base Registry Engine
+(BReg) project is neither, and it names its own project document `registry.yaml`. The editor tooling in this
+page reports nothing about one, and starts no language server over one.
+
+BReg publishes its authoring JSON Schemas as
+[`registry-project.schema.json`](https://github.com/registrystack/registry-stack/blob/main/products/breg/generated/authoring/registry-project.schema.json)
+and
+[`registry-module.schema.json`](https://github.com/registrystack/registry-stack/blob/main/products/breg/generated/authoring/registry-module.schema.json).
+No command writes a mapping for them, so copy both into the BReg project and map them yourself in
+`.vscode/settings.json`:
+
+```json
+{
+  "yaml.schemas": {
+    "./schemas/registry-project.schema.json": "registry.yaml",
+    "./schemas/registry-module.schema.json": "modules/*/module.yaml"
+  }
+}
+```
+
+{/* Evidence: products/breg/generated/authoring/registry-project.schema.json;
+    products/breg/generated/authoring/registry-module.schema.json;
+    products/breg/acceptance/business/registry.yaml;
+    crates/registry-language-server/src/relay_v2/index.rs, declares_root(). */}
 
 ## Related reference
 

@@ -1020,12 +1020,14 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                 "entity":"asset-site",
                 "operations":["create"],
                 "readableFields":["tenant","name"],
-                "writableFields":["tenant","name"]
+                "writableFields":["tenant","name"],
+                "rowBoundaries": []
               },{
                 "entity":"asset-placement",
                 "operations":["create"],
                 "readableFields":["tenant","site"],
-                "writableFields":["tenant","site"]
+                "writableFields":["tenant","site"],
+                "rowBoundaries": []
               }]
             },
             {
@@ -1034,7 +1036,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                 "entity":"asset-placement",
                 "operations":["get","list"],
                 "readableFields":["tenant","site"],
-                "requestPresence":[{"requestType":"placement-correction-request","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}]
+                "requestPresence":[{"requestType":"placement-correction-request","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}],
+                "rowBoundaries": []
               }]
             },
             {
@@ -1042,7 +1045,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               "grants":[{
                 "entity":"asset-placement",
                 "operations":["get","list"],
-                "readableFields":["tenant","site"]
+                "readableFields":["tenant","site"],
+                "rowBoundaries": []
               }]
             },
             {
@@ -1051,7 +1055,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                 "entity":"placement-correction-request",
                 "operations":["create","get","list","patch","submit_request","revise_request"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
-                "writableFields":["tenant","placement","proposed-site","reason"]
+                "writableFields":["tenant","placement","proposed-site","reason"],
+                "rowBoundaries": []
               }]
             },
             {

@@ -1,0 +1,279 @@
+---
+title: Control access per profile
+description: Declare the access profiles a token can select, grant each one the operations, fields, and rows it may touch, state what an entity requires of every profile, and preview admission with synthetic claims before a database exists.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-04"
+doc_type: how-to
+locale: en
+standards_referenced: []
+---
+
+You are authoring a registry project that `bregctl check` compiles, and you want to decide who may read and write what.
+This page covers access profiles and their grants, the three field lists that bound a response, a filter, and a write, the row boundaries that tie rows to a caller's claims, the requirements an entity imposes on every profile that touches it, and the offline preview that tells you whether a set of synthetic claims would be admitted.
+At the end, every profile grants what its callers need and nothing more, and you can show a reviewer why.
+
+## One profile per request
+
+An access profile is the unit of authorization.
+The application selects one profile per request, and that profile decides everything the request may do: which operations, fields, rows, lookups, and paths it may touch.
+Profiles are never merged, and naming a profile in a request grants nothing the profile does not already allow.
+
+Before the server looks at any record, it admits the request against the selected profile: the token's principal claim must be present, every scope in `requiredScopes` must be present, the token's purpose must match one of `requiredPurposes`, and every row boundary must find its claim.
+`explain access` states the same rules at the top of its report:
+
+```text
+all required scopes must be present
+one allowed purpose must match; empty means unrestricted
+all claim-bound row predicates must hold; empty means no row restriction
+one profile per request; selecting its name never grants authority and profiles are not merged
+```
+
+Treat profiles as tasks, such as reading assigned records or editing records you own.
+The identity provider issues permissions and assignments; Base Registry Engine enforces the selected task's limits.
+The application selects the profile for the task, while its users work with actions such as "edit address".
+A caller holding several permissions still uses one profile at a time.
+If reading and editing need different row restrictions, declare separate task profiles with the appropriate operations.
+The server does not search for a more permissive profile when a request fails.
+Defaults apply only to the operations and paths a profile actually grants.
+You can leave an overlapping route without a default when choosing a task should be explicit.
+
+What a token must carry to satisfy them, and where it comes from, belongs to [Deploy a registry](../../operate/breg/).
+
+{/* Evidence: crates/registry-breg/src/api/mod.rs, authorize_profile_claims(); crates/registry-bregctl/src/lib.rs, explain(). */}
+
+## Declare a profile
+
+```yaml
+accessProfiles:
+  - id: site-planner
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: [registry:sites:plan]
+    requiredPurposes: [site-planning]
+    grants:
+      - entity: asset-site
+        operations: [get, list]
+        readableFields: [site-code, label, zone]
+        filterableFields: [site-code, zone]
+        sortableFields: [site-code]
+        allowCount: true
+        rowBoundaries:
+          - field: zone
+            claim: planning_zones
+            operator: in
+      - entity: household
+        rowBoundaries: []
+        operations: [get, lookup]
+        readableFields: [household-code]
+        lookups:
+          - selector: by-household-code
+            valueOrigin: request
+        readPaths:
+          - path: people
+            readableFields: [person-code, legal-name]
+  - id: public-directory
+    anonymous: true
+    grants:
+      - entity: asset-site
+        rowBoundaries: []
+        operations: [get, list]
+        readableFields: [site-code, label]
+```
+
+Profile members:
+
+| Member | Effect |
+|---|---|
+| `principalClaim` | The explicitly selected token claim that identifies the caller in audit and workflow decisions. Required unless the profile is `anonymous`; it must match the runtime principal mapping. |
+| `requiredScopes`, `requiredPurposes` | Every listed scope, and one of the listed purposes, must be present in the token. Empty lists impose no restriction for that dimension. |
+| `default: true` | The profile selected when a request names none. At most one default may expose a route. If several profiles expose a route and none is default, the request must name its profile. A sole profile is selected automatically. |
+| `anonymous: true` | No token needed. Anonymous profiles cannot carry row boundaries, lookups from claims, or write operations. |
+
+A profile with no required scope raises `access.profile.no_required_scope`, because any authenticated principal satisfying its purpose and row claims could then select it.
+
+## Grant operations, fields, and rows
+
+Each entry under `grants` names one entity, or one action, and what the profile may do with it.
+
+Three field lists bound every entity grant.
+`readableFields` decide what a response may carry, `writableFields` what a create or patch may set, and `filterableFields` which fields `$filter` may name; `sortableFields` and `allowCount` do the same for `$orderby` and `$count`.
+A write never reveals a field the profile cannot read.
+Field ids in grants are the authored ids, `asset-code`, not the API names, `assetCode`, and a grant that names a field the entity does not have fails `check`.
+A profile that grants `create` or `patch` without any writable field raises `access.profile.no_writable_fields`, because every write naming a field would then be refused.
+
+Every entity grant declares `rowBoundaries` explicitly, as do action targets, review targets, apply targets, and request-presence grants.
+Write `rowBoundaries: []` when the grant intentionally has no row restriction; omitting the member is an error.
+An empty list grants all rows within the other permissions, so use it only where that breadth is intended.
+
+A row boundary compares a declared field with a verified token claim: `equals` against one claim value, or `in` against a claim carrying a list, which the token issuer must then issue as a JSON array.
+On reads, rows outside the boundary do not exist for the caller: a get returns 404, and a list omits them.
+Writes check both the existing record, where one exists, and the proposed record against the same boundaries.
+Bind the boundary to whatever field carries your registry's tenancy, an owning office, a jurisdiction code, a programme.
+Decide deliberately which profiles may write that field, because a profile that can patch it moves records in and out of another caller's rows; `check` reports that as `access.profile.writable_row_boundary`.
+A profile that can list an entity with no row boundary raises `access.profile.unrestricted_collection`, because caller-supplied filters are never authorization; accept it only for a registry-wide role.
+
+Use the principal claim for an ownership boundary when the field stores that same identity, for example
+`{field: owner, claim: registry_principal, operator: equals}`.
+District or team assignments belong in separate claims, such as `assigned_districts`.
+All boundaries must hold, so combining owner and district restricts the caller to their own records within assigned districts.
+The same claim must have a consistent type and cardinality throughout the project.
+Principal reuse passes the exact identity string through the field's normal validation; it does not convert the identity or infer assignments.
+
+The remaining grant members:
+
+| Member | Effect |
+|---|---|
+| `lookups` | The selector profiles this grant may use, and whether the values come from the `request` or from a `verified_claim` with a `claimMapping`. |
+| `readPaths` | The read paths this grant may follow and the target fields it may read. |
+| `spatialQueries.bbox` | Allows bounding-box queries and caps their longitude and latitude span in degrees. |
+| `revisionAccess` | With the `revisions` operation, lets the profile read a record's revision history. `check` reports `access.profile.revision_history`, because history can disclose values removed from the current record. |
+| `allowDataExport` | Enables bulk export through the profile. `check` reports `access.profile.data_export`, because disabling it later cannot recall downloaded data. |
+| `requestPresence` | Lets a reader of a target entity see that a change request of the named `requestType` is pending against a record. |
+| `reviewStages`, `applyTargets` | Which review stages a reviewer may decide, and which target entities an applier may write. |
+| `action`, `targets`, `results` | An action grant instead of an entity grant. |
+
+The last three rows belong to [Declare change requests and actions](../breg-change-control/).
+
+The operations a grant may list:
+
+| Operation | Grants |
+|---|---|
+| `create`, `get`, `list`, `patch`, `tombstone`, `batch` | Direct reads and writes. `tombstone` needs `tombstone: true` on the entity. |
+| `lookup` | Selector lookups declared under `lookups`. |
+| `revisions`, `snapshot` | Reading revision history and snapshot or effective-time reads. |
+| `submit_request`, `revise_request`, `cancel_request` | Submitter actions on a change-request entity. |
+| `approve_request`, `reject_request`, `request_revision` | Reviewer actions, limited by `reviewStages`. |
+| `apply_request` | Applying an approved request, limited by `applyTargets`. |
+| `invoke` | Invoking an immediate action. |
+
+{/* Evidence: products/breg/acceptance/asset-site-placement-change-requests/registry.yaml; products/breg/acceptance/business-establishments/registry.yaml; crates/registry-breg/src/auth.rs; crates/registry-breg/src/contract.rs, AccessProfileSource and AccessGrantSource; crates/registry-breg/src/access.rs. */}
+
+## Access requirements
+
+An entity can state what any profile touching it must satisfy, and the compiler checks every profile against it:
+
+```yaml
+  - id: facility
+    accessRequirements:
+      requiredScopes: [facility:read]
+      allowedPurposes: [facility-registry]
+      rowBoundaries:
+        - field: administrative-boundary
+          claim: administrative_boundaries
+          operator: in
+```
+
+A profile that grants the entity without the scope, with another purpose, or without the exact field, claim, and operator binding fails the check.
+Requirements never grant access; they only refuse a profile that would widen it.
+Use requirements for limits that apply to every role, including actions and workflow target grants.
+An exact district binding also applies to a supervisor; it is unsuitable as a universal requirement if that supervisor should have registry-wide access.
+Requirements grant no exemption based on a profile's name.
+
+{/* Evidence: crates/registry-breg/src/contract.rs, AccessRequirementsSource; products/breg/acceptance/facility/registry.yaml. */}
+
+## Read the compiled access
+
+```sh
+bregctl explain access ./my-registry
+```
+
+The plain-text report lists entity profiles with each grant's row restrictions; `--format json` adds action grants, nested workflow permissions, and the row reach of every target.
+For the `record-reader` profile of the project `init` wrote, the block reads:
+
+```text
+entity: record (internal)
+  profile: record-reader
+    principal claim: registry_principal
+    operations: ["get","list"]
+    required scopes (all): ["registry:generic:read"]
+    allowed purposes (any): ["registry-reporting"]
+    readable fields: ["code","group","label","status"]
+    writable fields: none
+    filterable fields: ["code"]
+    sortable fields: none
+    row restrictions (all): [{"claim":"registry_record_status","field":"status","operator":"equals"}]
+    lookups: none
+    related records: none
+    anonymous: false
+    allowCount: false
+    revisionAccess: false
+    allowDataExport: false
+```
+
+The other profiles and the findings are omitted.
+Read the complete report as a reviewer: inspect direct operations, action targets, and workflow targets separately.
+A direct entity grant does not describe all authority held through actions or change requests.
+
+## Preview synthetic claims
+
+The compiled report shows what a profile allows; the preview shows whether a given caller would get in.
+Save a scenario file beside the project.
+This one matches the `record-reader` profile `init` wrote, so you can run it unchanged:
+
+```json
+{
+  "entity": "record",
+  "accessProfile": "record-reader",
+  "operation": "list",
+  "claims": {
+    "principalClaim": "registry_principal",
+    "principal": "synthetic-reader",
+    "scopes": ["registry:generic:read"],
+    "purpose": "registry-reporting",
+    "directClaims": {"registry_record_status": "active"}
+  }
+}
+```
+
+```sh
+bregctl explain access ./my-registry --scenario ./access-scenario.json
+```
+
+The preview runs the same admission function as the HTTP layer and reports the verdict and the rule that produced it:
+
+```text
+synthetic profile admission: allowed (profile_requirements_satisfied)
+No credentials verified, records checked, or authority issued. Claim values are not printed.
+```
+
+Remove `registry:generic:read` from `scopes` and the first line becomes `synthetic profile admission: refused (required_scope_missing)`.
+The other reasons are `principal_missing_or_mismatched`, `purpose_missing_or_not_allowed`, `row_claim_missing_or_wrong_cardinality`, `operation_not_granted`, and `entity_or_profile_not_found`.
+Both admitted and refused previews exit successfully, because a refusal is the answer you asked for; `bregctl --format json explain access ./my-registry --scenario ./access-scenario.json` reports the same verdict as `explanation.admitted` and `explanation.reason`.
+A scenario may add `readPath` with `operation: list` to preview a read path.
+The file is limited to 64 KiB, must be strict JSON without duplicate keys, and refuses unknown members.
+
+:::caution[An admitted preview is not an authorised request]
+Use invented claims only, never a real token or personal data. The preview verifies no token, reads no record, and prints no claim value. Row boundaries, query bounds, request bodies, and audit availability are only exercised by journeys against a database.
+:::
+
+{/* Evidence: crates/registry-breg/src/access_preview.rs, AccessScenario and preview_access(); crates/registry-bregctl/src/lib.rs, ExplainArgs and explain(); products/breg/examples/access-review/registry.yaml. */}
+
+## Start from a working example
+
+In a repository checkout, `products/breg/examples/access-review/README.md` provides an offline district-reader check and a task-profile project covering
+assigned records, owned records, a registry-wide supervisor, history, an action, and reviewed corrections.
+Follow its README to compare profile admission with the limits that need a running database.
+
+{/* Evidence: products/breg/examples/access-review/README.md;
+    products/breg/examples/access-review/task-profiles/registry.yaml. */}
+
+## Troubleshooting
+
+| Symptom | Cause and next move |
+|---|---|
+| A request is refused when `accessProfile` is omitted. | Several profiles expose that operation or path and none is the default. Have the application select the intended profile; it must still satisfy that profile's permissions. |
+| `check` refuses a grant because the entity has no such field. | Field ids in grants are the authored kebab-case ids, not the camelCase API names. Use `asset-code`, not `assetCode`. |
+| The preview refuses with `required_scope_missing`, `purpose_missing_or_not_allowed`, or `principal_missing_or_mismatched`. | The scenario's claims do not satisfy the profile. Compare `scopes`, `purpose`, and `principalClaim` with the profile's `requiredScopes`, `requiredPurposes`, and `principalClaim`. |
+| The preview refuses with `row_claim_missing_or_wrong_cardinality`. | A row boundary found no claim, or an `in` boundary found a single value where it needs a list. Add the claim under `directClaims` with the cardinality the operator expects. |
+| The preview refuses with `operation_not_granted` or `entity_or_profile_not_found`. | The scenario names an operation the grant does not list, or an entity or profile the project does not declare. Check the ids against `explain access`. |
+| `check` reports `access.profile.unrestricted_collection`. | A profile lists an entity with no row boundary. Add a claim-bound boundary, or accept a registry-wide role knowingly and record why. |
+
+## Next
+
+- [Declare change requests and actions](../breg-change-control/): the grants that submit, review, apply, and invoke.
+- [Test with journeys](../breg-journeys/): prove a row boundary with a refusal step, which no offline check can.
+- [Deploy a registry](../../operate/breg/): what a token must carry and where it comes from.
+- [Base Registry Engine configuration reference](../../reference/breg-configuration/): every profile and grant key.

@@ -1027,7 +1027,7 @@ impl TokenVerifier {
         } else {
             self.match_client(&data.claims).ok().flatten()
         };
-        let scopes = self.scopes(&data.claims);
+        let scopes = self.scopes(&data.claims)?;
         Ok(VerifiedToken {
             claims: data.claims,
             matched_client,
@@ -1064,7 +1064,7 @@ impl TokenVerifier {
         self.enforce_present_azp(&data.claims)?;
         self.enforce_multi_audience_azp(&data.claims, &audiences)?;
         let matched_client = self.match_client(&data.claims).ok().flatten();
-        let scopes = self.scopes(&data.claims);
+        let scopes = self.scopes(&data.claims)?;
         Ok(VerifiedToken {
             claims: data.claims,
             matched_client,
@@ -1233,10 +1233,10 @@ impl TokenVerifier {
         }
     }
 
-    fn scopes(&self, claims: &Claims) -> Vec<String> {
-        let raw = self.raw_scopes(claims);
+    fn scopes(&self, claims: &Claims) -> Result<Vec<String>, OidcError> {
+        let raw = self.raw_scopes(claims)?;
         let require_mapping = reserved_scope_claim_requires_mapping(&self.config.scope_claim);
-        if let Some(scope_map) = &self.config.scope_map {
+        Ok(if let Some(scope_map) = &self.config.scope_map {
             raw.into_iter()
                 .flat_map(|scope| {
                     if let Some(mapped) = scope_map.get(&scope) {
@@ -1252,14 +1252,14 @@ impl TokenVerifier {
             Vec::new()
         } else {
             raw
-        }
+        })
     }
 
-    fn raw_scopes(&self, claims: &Claims) -> Vec<String> {
+    fn raw_scopes(&self, claims: &Claims) -> Result<Vec<String>, OidcError> {
         if let Some(value) = claims.extra.get(&self.config.scope_claim) {
             return scope_values(value, self.config.scope_separator);
         }
-        match self.config.scope_claim.as_str() {
+        Ok(match self.config.scope_claim.as_str() {
             "sub" => claims.sub.iter().cloned().collect(),
             "client_id" => claims.client_id.iter().cloned().collect(),
             "azp" => claims.azp.iter().cloned().collect(),
@@ -1276,7 +1276,7 @@ impl TokenVerifier {
                 _ => Vec::new(),
             },
             _ => Vec::new(),
-        }
+        })
     }
 }
 
@@ -1284,20 +1284,23 @@ fn reserved_scope_claim_requires_mapping(scope_claim: &str) -> bool {
     matches!(scope_claim, "sub" | "client_id" | "azp" | "aud")
 }
 
-fn scope_values(value: &Value, separator: char) -> Vec<String> {
+fn scope_values(value: &Value, separator: char) -> Result<Vec<String>, OidcError> {
     match value {
-        Value::String(s) => s
+        Value::String(s) => Ok(s
             .split(separator)
             .filter(|part| !part.is_empty())
             .map(ToOwned::to_owned)
-            .collect(),
+            .collect()),
         Value::Array(values) => values
             .iter()
-            .filter_map(Value::as_str)
-            .map(ToOwned::to_owned)
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(ToOwned::to_owned)
+                    .ok_or(OidcError::InvalidToken)
+            })
             .collect(),
-        Value::Object(_) => Vec::new(),
-        _ => Vec::new(),
+        _ => Err(OidcError::InvalidToken),
     }
 }
 
@@ -1942,7 +1945,7 @@ mod tests {
             extra: Map::new(),
         };
         assert_eq!(
-            verifier.scopes(&claims),
+            verifier.scopes(&claims).expect("valid permission claim"),
             vec!["social_protection_registry:rows".to_string()]
         );
     }
@@ -1990,7 +1993,7 @@ mod tests {
             extra: Map::new(),
         };
         assert_eq!(
-            verifier.scopes(&claims),
+            verifier.scopes(&claims).expect("valid permission claim"),
             vec!["social_protection_registry:rows".to_string()]
         );
     }
@@ -2085,7 +2088,10 @@ mod tests {
             );
 
             assert!(
-                verifier.scopes(&claims).is_empty(),
+                verifier
+                    .scopes(&claims)
+                    .expect("valid permission claim")
+                    .is_empty(),
                 "{scope_claim} should require an explicit scope_map entry"
             );
         }
@@ -2128,7 +2134,10 @@ mod tests {
             extra: Map::new(),
         };
 
-        assert!(verifier.scopes(&claims).is_empty());
+        assert!(verifier
+            .scopes(&claims)
+            .expect("valid permission claim")
+            .is_empty());
     }
 
     #[test]
@@ -2176,11 +2185,14 @@ mod tests {
             extra,
         };
 
-        assert_eq!(verifier.scopes(&claims), vec!["registry:read".to_string()]);
+        assert_eq!(
+            verifier.scopes(&claims).expect("valid permission claim"),
+            vec!["registry:read".to_string()]
+        );
     }
 
     #[test]
-    fn object_scope_claim_keys_do_not_grant_scopes() {
+    fn object_scope_claim_is_refused() {
         let fetcher = Arc::new(JwksFetcher::new(
             "http://127.0.0.1/jwks".to_string(),
             JwksFetcherConfig::defaults(),
@@ -2227,7 +2239,10 @@ mod tests {
             extra,
         };
 
-        assert!(verifier.scopes(&claims).is_empty());
+        assert!(matches!(
+            verifier.scopes(&claims),
+            Err(OidcError::InvalidToken)
+        ));
     }
 
     #[tokio::test]
@@ -2355,6 +2370,87 @@ mod tests {
             verifier.verify(&token).await,
             Err(OidcError::UnknownKid)
         ));
+    }
+
+    #[tokio::test]
+    async fn selected_permission_claim_rejects_malformed_values_without_fallback() {
+        let secret = b"synthetic-permission-claim-test-secret";
+        let fetcher = Arc::new(JwksFetcher::new_static(
+            serde_json::from_value(jwks_with_oct_key("kid", secret)).expect("static JWKS"),
+            jwks_test_config(),
+        ));
+        let verifier = TokenVerifier::new(
+            TokenVerifierConfig::access_token_profile(
+                "https://issuer.example",
+                vec!["registry-api".to_string()],
+                vec![Algorithm::HS256],
+                vec!["at+jwt".to_string()],
+            )
+            .with_scope_claim("permissions"),
+            fetcher,
+        );
+        for permissions in [
+            json!(["record:read", 7]),
+            json!([null, "record:read"]),
+            json!({"record:read": true}),
+            json!(true),
+            json!(42),
+            json!(null),
+        ] {
+            let mut claims = test_claims(
+                Some("https://issuer.example"),
+                Some("registry-api"),
+                Some("actor"),
+            );
+            claims.extra.insert("permissions".to_string(), permissions);
+            claims
+                .extra
+                .insert("scope".to_string(), json!("record:read"));
+            // Preserve the selected claim's explicit null; the generic test
+            // signer omits nulls to represent absent registered claims.
+            let mut header = Header::new(Algorithm::HS256);
+            header.kid = Some("kid".to_string());
+            header.typ = Some("at+jwt".to_string());
+            let token = encode(&header, &claims, &EncodingKey::from_secret(secret))
+                .expect("sign synthetic malformed claims");
+            let result = verifier.verify(&token).await;
+            assert!(matches!(result, Err(OidcError::InvalidToken)), "{result:?}");
+        }
+        for (permissions, expected) in [
+            (
+                Some(json!("record:read record:write")),
+                vec!["record:read", "record:write"],
+            ),
+            (
+                Some(json!(["record:read", "record:write"])),
+                vec!["record:read", "record:write"],
+            ),
+            (None, vec![]),
+        ] {
+            let mut claims = test_claims(
+                Some("https://issuer.example"),
+                Some("registry-api"),
+                Some("actor"),
+            );
+            if let Some(permissions) = permissions {
+                claims.extra.insert("permissions".to_string(), permissions);
+            }
+            claims
+                .extra
+                .insert("scope".to_string(), json!("unselected:scope"));
+            claims
+                .extra
+                .insert("roles".to_string(), json!(["unselected:role"]));
+            let token = signed_hs256_token("kid", claims, secret, Some("at+jwt"));
+            assert_eq!(
+                verifier
+                    .verify(&token)
+                    .await
+                    .expect("valid selected claim")
+                    .scopes,
+                expected
+            );
+        }
     }
 
     #[tokio::test]

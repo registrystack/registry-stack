@@ -349,7 +349,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         r#",{"id":"legacy","type":"string","maxLength":16,"classification":"internal"}"#
     };
     format!(
-        r#"{{"id":"core","version":"1","entities":[{{"id":"site","primaryDataset":"spatial-migration-registry","route":"sites","mutationMode":"mutable","classification":"internal","fields":[{{"id":"code","type":"string","maxLength":16,"required":true,"classification":"internal"}},{{"id":"location","type":"crs84-point","precision":6,"required":true,"classification":"internal"}}{legacy}],"geojson":{{"geometryField":"location"}},"accessProfiles":[{{"id":"reader","principalClaim":"principal","operations":["get","list","create","patch"],"readableFields":["code","location"],"writableFields":["code","location"]{spatial_queries}}}]}}]}}"#
+        r#"{{"id":"core","version":"1","entities":[{{"id":"site","primaryDataset":"spatial-migration-registry","route":"sites","mutationMode":"mutable","classification":"internal","fields":[{{"id":"code","type":"string","maxLength":16,"required":true,"classification":"internal"}},{{"id":"location","type":"crs84-point","precision":6,"required":true,"classification":"internal"}}{legacy}],"geojson":{{"geometryField":"location"}},"accessProfiles":[{{"rowBoundaries": [], "id":"reader","principalClaim":"principal","operations":["get","list","create","patch"],"readableFields":["code","location"],"writableFields":["code","location"]{spatial_queries}}}]}}]}}"#
     )
     .into_bytes()
 }

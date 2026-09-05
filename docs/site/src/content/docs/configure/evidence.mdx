@@ -190,8 +190,8 @@ configured secret root. `evidencectl keygen` writes private material as owner-on
 prints its contents (`crates/registry-evidencectl/src/keygen.rs`):
 
 ```sh
-evidencectl keygen secret --out "<secrets-dir>/audit-hmac-key"
-evidencectl keygen secret --out "<secrets-dir>/subject-binding-hmac-key"
+evidencectl keygen secret --output "<secrets-dir>/audit-hmac-key"
+evidencectl keygen secret --output "<secrets-dir>/subject-binding-hmac-key"
 ```
 
 ### Local P-256 signing JWKs
@@ -203,7 +203,7 @@ For local assurance, Evidence Gateway signs with a P-256 private JSON Web Key (J
 Generate a disposable local pair with:
 
 ```sh
-evidencectl keygen signing --out-dir "<owner-only-local-directory>"
+evidencectl keygen signing --output-dir "<owner-only-local-directory>"
 ```
 
 Do not use this command to provision a production signer.
@@ -238,7 +238,7 @@ reaches the token endpoint. SMART on FHIR Backend Services sources authenticate 
 Generate the pair with:
 
 ```sh
-evidencectl keygen client-assertion --out-dir "<secrets-dir>"
+evidencectl keygen client-assertion --output-dir "<secrets-dir>"
 ```
 
 The default writes `client-assertion-p384-private-jwk` and `client-assertion-p384-public.jwk.json`.
@@ -252,7 +252,7 @@ A deployment reaching two authorization servers needs a key for each, and both l
 secret root, so name them:
 
 ```sh
-evidencectl keygen client-assertion --out-dir "<secrets-dir>" --private-name records-authority-key
+evidencectl keygen client-assertion --output-dir "<secrets-dir>" --private-name records-authority-key
 ```
 
 `--private-name` names the private file itself, so the name you pass is the one

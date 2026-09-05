@@ -1,0 +1,360 @@
+---
+title: Send registry events to a webhook
+description: Run the business demo with a local receiver, read an event declaration, cause a signed CloudEvents delivery, and inspect an automatic retry, a dead letter, and its replay.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-04"
+doc_type: tutorial
+persona:
+  - data publisher
+locale: en
+standards_referenced: []
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+If you finished [Create and query your first registry](../first-breg/), you are a data publisher with the
+checkout, the installed binaries, and a `tutorial-work` directory, and you want to know what leaves a
+registry when a record changes.
+In this tutorial you run the business demo, whose launcher starts a local receiver that verifies signatures,
+read the event the project declares, cause one delivery yourself, and inspect an automatic retry,
+a dead letter, and its replay in the receiver's report.
+You write no receiver and edit no project.
+
+<QuickstartMeta
+  outcome="One signed CloudEvents delivery you caused, plus a receiver report showing an automatic retry, a dead letter, and its replay."
+  time="About 15 minutes"
+  level="Local evaluation only"
+  prerequisites={['The checkout, binaries, and tutorial-work directory from Create and query your first registry', 'Running Docker', 'Python 3', 'curl 7.76 or later', 'Two terminals']}
+/>
+
+{/* Evidence: products/breg/demo/run.sh;
+    products/breg/demo/support/demo.py, WEBHOOK_MODULE_SOURCE and WebhookReceiver;
+    crates/registry-bregctl/src/lib.rs, WebhookCommand;
+    crates/registry-breg/src/outbox.rs; crates/registry-breg/src/webhook.rs. */}
+
+## Start the demo with a receiver
+
+:::caution[This is a separate disposable database]
+The demo replaces `products/breg/demo/.run/` on each launch, and stopping it removes its database container.
+Use synthetic records only, and keep anything you want to keep in `tutorial-work/`.
+:::
+
+In the first terminal, at the root of the `breg-tutorial` checkout and with the quickstart from the first
+tutorial stopped, run:
+
+```sh
+products/breg/demo/run.sh --installed --webhook
+```
+
+Wait for these two lines; other setup output is omitted:
+
+```text
+Webhook delivery, retry, dead-letter inspection, and replay passed.
+Base Registry Engine business demo is ready.
+```
+
+Leave this terminal running.
+The launcher seeded eight establishments, seven of them operating, and each of those emitted the configured event.
+Its receiver refused some attempts on purpose, so the report you read later already contains a retry,
+a dead letter, and a replay.
+
+## Read the event declaration
+
+In the second terminal, save the demo's run directory and open the module that declares the event:
+
+```sh
+webhook_run="$PWD/products/breg/demo/.run"
+cat "$webhook_run/project/modules/business-establishment-summary/module.yaml"
+```
+
+An event is a declaration on an entity that says which committed changes leave the registry and what they carry.
+Find the `events` list under the `establishment` extension:
+
+```yaml
+events:
+  - id: operating-created-v1
+    trigger: created
+    projection: [establishment-code, operating-status]
+    when:
+      kind: fields
+      afterEquals:
+        operating-status: operating
+    webhook:
+      destinationId: business-event-receiver
+```
+
+Three parts do the work.
+`trigger` names the change that may emit the event, here a create.
+`projection` is the complete list of values that may leave: two fields, not the site name or opening date.
+`when` narrows the trigger to changes whose values match, here a new establishment whose `operating-status` is `operating`.
+`webhook.destinationId` names a destination by id only; where the request goes is not the project's business.
+
+## Find the destination
+
+An event destination is the deployment's binding for that id: the receiver's address, network profile,
+signing key reference, and delivery ceilings.
+It lives in the runtime configuration, not in the project:
+
+```sh
+grep -A11 '^eventDestinations:' "$webhook_run/runtime.yaml"
+```
+
+```yaml
+eventDestinations:
+  business-event-receiver:
+    origin: http://127.0.0.1:<port>
+    path: /events
+    networkProfile: loopbackDevelopmentHttp
+    dnsFamily: dualStackStrict
+    allowedPrivateCidrs: []
+    hmacSha256KeyRef: secret:file/webhook-key
+    classificationCeiling: restricted
+    deliveryCeilings:
+      attemptTimeoutMilliseconds: 1000
+      maximumAttempts: 3
+```
+
+The key reference points at a file the launcher generated; the key itself never appears in configuration.
+Do not edit these running deployment files: a change needs a checked package and a restart.
+
+Now see how the compiled project pairs the declaration with its retry profile:
+
+```sh
+bregctl explain events "$webhook_run/project"
+```
+
+After `explain succeeded` and the project's findings, the report has one delivery,
+`events.establishment.operating-created-v1.webhook`.
+A delivery is one event bound to one destination, and the report shows what the project declares for it:
+`deliveryMode` is `after_commit`, `maximumAttempts` is `5` with `retryDelaysMs` of `1000, 2000, 4000, 8000`,
+`attemptTimeoutMs` is `5000`, `deadLetter` is `required`, and `operatorReplay` is `true`.
+The destination's `deliveryCeilings` lower those numbers to three attempts and a one-second timeout for this demo.
+A ceiling may tighten what the project declares, never widen it.
+
+{/* Evidence: crates/registry-breg/src/outbox.rs; crates/registry-breg/src/webhook.rs;
+    crates/registry-bregctl/src/lib.rs, ExplainSubject. */}
+
+## Preview the delivery
+
+Render the request the registry would send, without sending it:
+
+```sh
+bregctl webhook sample "$webhook_run/project" --event operating-created-v1
+```
+
+```text
+webhook sample succeeded
+event: operating-created-v1
+POST <configured-webhook-request-target> HTTP/1.1
+Accept: application/json
+Content-Type: application/json
+Idempotency-Key: sha256:0000000000000000000000000000000000000000000000000000000000000000
+X-Registry-Delivery-Attempt: 1
+X-Registry-Delivery-Time: 2026-01-01T00:00:00Z
+X-Registry-Event-Generation: 1
+X-Registry-Signature: v1=<computed-at-delivery>
+ce-dataschema: urn:breg:event-schema:business-establishments:establishment:operating-created-v1:sha256:<digest>
+ce-id: 00000000-0000-4000-8000-000000000001
+ce-source: urn:registrystack:registry:business-establishments:instance:<configured-instance>
+ce-specversion: 1.0
+ce-time: 2026-01-01T00:00:00Z
+ce-type: operating-created-v1
+
+{"entity":"establishment","packageRevision":"sha256:0000000000000000000000000000000000000000000000000000000000000000","recordId":"00000000-0000-4000-8000-000000000002","revision":1,"trigger":"created","values":{"establishment-code":"x","operating-status":"operating"}}
+```
+
+A CloudEvents delivery is one HTTP POST in CloudEvents 1.0 binary mode: the `ce-` headers carry the event's
+identity, source, type, and time, and the JSON body carries the entity, record identifier, revision, trigger,
+and the projected `values` under their authored names.
+Three registry headers sit beside them: `Idempotency-Key` so a receiver can drop a duplicate,
+`X-Registry-Event-Generation` with `X-Registry-Delivery-Attempt` so it can tell a retry from a replay,
+and `X-Registry-Signature`, an HMAC-SHA-256 signature the running worker computes with the destination's key.
+The sample's identifiers and signature are placeholders; everything else is exact.
+
+## Cause a delivery
+
+Obtain a fresh token from this demo's Mint client and keep it in an owner-only header file:
+
+```sh
+webhook_url=$(cat "$webhook_run/breg-origin")
+umask 077
+mint token \
+  --url "$(cat "$webhook_run/mint-origin")/token" \
+  --client-id business-demo \
+  --key "$webhook_run/keys/operator/signing-p256-private-jwk" \
+  > "$webhook_run/secrets/operator-token" &&
+sed 's/^/Authorization: Bearer /' "$webhook_run/secrets/operator-token" \
+  > tutorial-work/webhook-authorization.header
+```
+
+Success prints nothing; the token lasts five minutes, and the same command renews it.
+Create an operating establishment:
+
+```sh
+curl --silent --show-error --fail-with-body \
+  --header @tutorial-work/webhook-authorization.header \
+  --header 'Content-Type: application/json' \
+  --header 'Idempotency-Key: tutorial-establishment-9' \
+  --data '{"data":{"establishmentCode":"ESTABLISHMENT-TUTORIAL-009","siteName":"North Quay Annex","establishmentKind":"warehouse","operatingStatus":"operating"}}' \
+  --output tutorial-work/establishment.json --write-out 'HTTP %{http_code}\n' \
+  "$webhook_url/v1/records/establishments?accessProfile=business-operator"
+```
+
+```text
+HTTP 201
+```
+
+Count the events the receiver has accepted:
+
+```sh
+python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["events"]))' \
+  "$webhook_run/webhook-receiver-state.json"
+```
+
+The count reaches `8`: the seven seeded deliveries plus yours.
+The registry evaluated the event inside your create and handed the delivery to a worker that sends it
+after the commit, so if you still see `7`, count again in a moment.
+Repeat the create with its original idempotency key and the count stays `8`: a retried request is not a second change.
+Create another establishment with `operatingStatus` set to `suspended` and a new key, and the count still
+stays `8`: the `when` condition did not match.
+
+## Read the delivery history
+
+Open the receiver's report:
+
+```sh
+python3 -m json.tool "$webhook_run/webhook-receiver-state.json"
+```
+
+`verificationFailures` is `0`: every request carried a valid signature and well-formed headers.
+Each event is keyed by its `ce-id` and lists its `attempts`, each with a `generation`, an `attempt` number,
+and whether the receiver `accepted` it.
+Most events show one accepted attempt.
+One shows a refused attempt `1` followed by an accepted attempt `2` in the same generation: a retry is the
+worker sending the same delivery again after a refused or failed attempt, with the delays you saw in
+`explain events`, the same event id, and the same idempotency key.
+Then find the dead letter and its replay:
+
+```json
+"attempts": [
+  {
+    "accepted": false,
+    "attempt": 1,
+    "generation": 1
+  },
+  {
+    "accepted": false,
+    "attempt": 2,
+    "generation": 1
+  },
+  {
+    "accepted": false,
+    "attempt": 3,
+    "generation": 1
+  },
+  {
+    "accepted": true,
+    "attempt": 1,
+    "generation": 2
+  }
+],
+"idempotencyKeys": {
+  "1": "sha256:<key-for-generation-1>",
+  "2": "sha256:<key-for-generation-2>"
+}
+```
+
+Three refused attempts is the destination's ceiling, so the delivery became a dead letter:
+the worker stopped, kept the payload, and left the delivery for an operator.
+The launcher then replayed it.
+A replay is an operator-requested new generation of the same event: the same `ce-id`,
+`X-Registry-Event-Generation` raised to `2`, a fresh idempotency key, and an audit entry.
+The report records no establishment values, only delivery metadata.
+
+Read the dead-letter list the launcher saved before that replay:
+
+```sh
+python3 -m json.tool "$webhook_run/webhook-list.json"
+```
+
+```json
+{
+  "ok": true,
+  "command": "webhook list",
+  "deliveries": [
+    {
+      "eventId": "<event-id>",
+      "deliveryId": "events.establishment.operating-created-v1.webhook",
+      "generation": 1,
+      "state": "dead_lettered",
+      "attempt": 3,
+      "payloadAvailable": true,
+      "payloadExpiresAt": "<timestamp>",
+      "replayEligible": true
+    }
+  ]
+}
+```
+
+`replayEligible` is true because the delivery is in its terminal dead-letter state and its payload is still retained.
+The demo keeps payloads for one day; after `payloadExpiresAt`, a replay is no longer possible.
+Now list the current queue.
+The command connects to PostgreSQL directly, so give it the demo's certificate authority file:
+
+```sh
+SSL_CERT_FILE="$webhook_run/tls/ca.pem" bregctl --format json webhook list \
+  --runtime-config "$webhook_run/runtime.yaml"
+```
+
+```json
+{
+  "ok": true,
+  "command": "webhook list",
+  "deliveries": []
+}
+```
+
+The list is empty: the registry erases a payload as soon as its delivery succeeds, and this command shows
+pending, dead-lettered, and expired work, not a history.
+The receiver's report is where you look for what happened, and the public record API exposes no route to the queue at all.
+
+{/* Evidence: crates/registry-breg/src/webhook.rs; crates/registry-breg/src/outbox.rs;
+    products/breg/demo/support/demo.py, WebhookReceiver;
+    crates/registry-bregctl/src/lib.rs, WebhookCommand. */}
+
+## Stop the demo
+
+:::caution[Stopping deletes the demo database]
+Pressing `Ctrl+C` in the first terminal stops Base Registry Engine, Mint, and the receiver, and removes the PostgreSQL
+container with every establishment in it.
+:::
+
+Stop the demo now.
+The reports remain under `.run/` until the next launch, beside disposable keys and tokens.
+`tutorial-work/webhook-authorization.header` holds a token: the checkout's `.gitignore` keeps it out of
+commits, so keep it out of support messages too.
+
+## What you built
+
+You caused one signed CloudEvents delivery from a record you created, read the declaration that selected it
+and the destination that received it, and traced a retry, a dead letter, and its replay through the
+receiver's report and the registry's queue listing.
+Declaring events in your own project, and binding receivers with real keys and ceilings, come next.
+
+## Troubleshooting
+
+| Symptom | Next move |
+| --- | --- |
+| A request returns `401` | The token expired. Rerun the `mint token` command in [Cause a delivery](#cause-a-delivery) while the first terminal is still running. |
+| The count stays at `7` | Delivery runs after the commit, on the worker's schedule. Count again after a few seconds, then check `.run/logs/` under the demo directory. |
+| `webhook list` reports `webhook.operation.refused` | The command could not verify the database's TLS certificate. Prefix it with `SSL_CERT_FILE="$webhook_run/tls/ca.pem"` as shown. |
+| The launcher stops before the ready lines | Read its last lines for the cause, then rerun it; a rerun replaces the previous disposable run. |
+
+## Next
+
+- [Author a registry project](../../configure/breg/) to declare events on your own entities.
+- [Bind webhook receivers](../../operate/breg-webhooks/) for destinations, keys, retry limits, and replaying a dead letter yourself.
+- [Base Registry Engine API reference](../../reference/breg-api/) for the delivery contract a receiver validates, verifies, and deduplicates.

@@ -15,15 +15,16 @@ standards_referenced: []
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Evidence Gateway reads an authorized source record, answers a preconfigured question, and signs only the
-governed answer. In this tutorial, you will ask "Is this person an adult?" without returning the
+Evidence Gateway reads an authorized source record, answers a
+[preconfigured question](../../reference/glossary/#bounded-question), and signs only the governed
+answer. In this tutorial, you will ask "Is this person an adult?" without returning the
 person's name or date of birth.
 
 <QuickstartMeta
   outcome="One governed adult-status answer verified as signed JWS and SD-JWT VC, without the source record."
   time="About 20 minutes"
   level="Local development with synthetic data"
-  prerequisites={['Python 3', 'A shell with curl', 'An editor', 'Linux or macOS']}
+  prerequisites={['Python 3', 'A shell with curl', 'An editor']}
 />
 
 ## Understand the flow
@@ -57,7 +58,8 @@ evidencectl --version
 ```
 
 The installer provides `evidencectl` and the local Evidence Gateway and Registry Mint runtimes used later
-in the tutorial.
+in the tutorial. The platforms those binaries cover, and the C library floor they need, are in
+[platform support](../../explanation/known-limitations/#platform-support).
 
 The command pipes a script from GitHub straight into `bash`, so replace `| bash` with `| less` first if you
 would rather read it before it runs. On a tutorial machine that is your own call, but before these binaries
@@ -368,7 +370,10 @@ Mint ready at http://127.0.0.1:8081
 ```
 
 This command starts Evidence Gateway and Mint only. The source mock remains the process you started in
-the first terminal.
+the first terminal. If either port is already taken, the start refuses before it starts a new
+generation and names the port and the flag that moves the session: `free 127.0.0.1:8080, or start
+this session with --evidence-port <port>`. Use
+[If local ports are already in use](#if-local-ports-are-already-in-use) before continuing.
 
 ## Request an assertion
 
@@ -569,28 +574,6 @@ The requester value changes on each fresh project. The view identifies the quest
 requester pseudonym, authorization decision, and disclosed concept. It does not repeat the source
 record or access token.
 
-## Clean up
-
-Remove the stopped local generation, including the sealed bundle that Evidence Gateway used:
-
-```sh
-evidencectl dev clean
-```
-
-```text
-Removed stopped local Evidence state
-```
-
-This preserves your editable questions, derivations, keys, and request artifacts. It removes
-`.evidence/dev`, whose runtime files are deliberately read-only while a generation exists. Run
-`dev stop` and then `dev clean` instead of changing those permissions by hand. The command refuses
-to remove a running or unrecognized generation.
-
-Return to the first terminal and press `Ctrl+C` to stop the source mock.
-
-Keep the tutorial directory to continue with the governed-value tutorial. If you do not plan to
-continue, you can remove the complete directory with ordinary file commands.
-
 ## If local ports are already in use
 
 Choose two different unused ports when you start the local services:
@@ -612,8 +595,33 @@ runs. If that environment is a Docker container, run the tutorial's `curl` comma
 container. Use the operator deployment configuration when the service must listen beyond
 loopback.
 
+## Clean up
+
+Remove the stopped local generation, including the sealed bundle that Evidence Gateway used:
+
+```sh
+evidencectl dev clean
+```
+
+```text
+Removed stopped local Evidence state
+```
+
+This preserves your editable questions, derivations, keys, and request artifacts. It removes
+`.evidence/dev`, whose runtime files are deliberately read-only while a generation exists. Run
+`dev stop` and then `dev clean` instead of changing those permissions by hand. The command refuses
+to remove a running or unrecognized generation. A start that never reached readiness keeps its logs
+at `.evidence/failed-start` and prints that path with the failure; the cleanup leaves that directory
+alone, so the record of the failed start outlives the generation that produced it.
+
+Return to the first terminal and press `Ctrl+C` to stop the source mock.
+
+Keep the tutorial directory to continue with the governed-value tutorial. If you do not plan to
+continue, you can remove the complete directory with ordinary file commands.
+
 ## Next
 
+- [Evidence authoring form reference](../../products/registry-evidence/authoring-form/)
 - [Explore SD-JWT VC locally](../request-evidence-as-sd-jwt-vc/)
 - [Return a governed value](../return-a-governed-value/)
 - [Bind two people to one relationship assertion](../assert-a-role-bound-relationship/)

@@ -63,6 +63,7 @@ accessProfiles:
     anonymous: true
     grants:
       - entity: case
+        rowBoundaries: []
         operations: [get, list]
         readableFields: [label]
         filterableFields: [label]
@@ -82,6 +83,7 @@ accessProfiles:
         rowBoundaries:
           - {field: jurisdiction, claim: jurisdictions, operator: in}
       - entity: protected-note
+        rowBoundaries: []
         operations: [create, get, list]
         readableFields: [text]
         writableFields: [text]
@@ -137,6 +139,7 @@ accessProfiles:
     requiredPurposes: [case-management]
     grants:
       - entity: household
+        rowBoundaries: []
         operations: [get, lookup, list]
         readableFields: [household-code, administrative-area, local-household-number]
         filterableFields: [household-code, administrative-area, local-household-number]
@@ -151,6 +154,7 @@ accessProfiles:
             sortableFields: [person-code]
             allowCount: true
       - entity: person
+        rowBoundaries: []
         operations: [get, list]
         readableFields: [sensitive-note]
         filterableFields: [sensitive-note]
@@ -202,6 +206,7 @@ accessProfiles:
     requiredPurposes: [case-management]
     grants:
       - entity: benefit-record
+        rowBoundaries: []
         operations: [get, list]
         readableFields: [label, eligibility-score]
 "#;
@@ -250,6 +255,7 @@ accessProfiles:
     anonymous: true
     grants:
       - entity: public-record
+        rowBoundaries: []
         operations: [get, list]
         readableFields: [label]
         filterableFields: [label]
@@ -260,11 +266,13 @@ accessProfiles:
     requiredPurposes: [case-management]
     grants:
       - entity: public-record
+        rowBoundaries: []
         operations: [get, list]
         readableFields: [label, restricted-canary-field]
         filterableFields: [label]
         sortableFields: [label]
       - entity: protected-ledger
+        rowBoundaries: []
         operations: [get, list]
         readableFields: [classified-status, valid-from, valid-to]
         filterableFields: [classified-status]
@@ -298,6 +306,7 @@ accessProfiles:
     anonymous: true
     grants:
       - entity: logical-record
+        rowBoundaries: []
         operations: [get, list]
         readableFields: [household-code, household-kind-code]
 vocabularies:
@@ -402,26 +411,32 @@ accessProfiles:
     anonymous: true
     grants:
       - entity: permit
+        rowBoundaries: []
         operations: [get, list]
         readableFields: [import-source, source-record-id, permit-number, display-token, valid-from, valid-to]
       - entity: inspection
+        rowBoundaries: []
         operations: [get, list]
         readableFields: [import-source, source-record-id, inspection-code, valid-from, valid-to]
         filterableFields: [inspection-code]
         sortableFields: [inspection-code]
       - entity: finding
+        rowBoundaries: []
         operations: [get]
         readableFields: [inspection]
       - entity: certificate
+        rowBoundaries: []
         operations: [get, list]
         readableFields: [import-source, certificate-code]
   - id: redacted-reader
     anonymous: true
     grants:
       - entity: inspection
+        rowBoundaries: []
         operations: [get]
         readableFields: [import-source, valid-from]
       - entity: finding
+        rowBoundaries: []
         operations: [get]
         readableFields: [inspection]
 "#;
@@ -451,6 +466,7 @@ accessProfiles:
     anonymous: true
     grants:
       - entity: site
+        rowBoundaries: []
         operations: [get, list]
         readableFields: [code, location]
         filterableFields: [code]
@@ -462,6 +478,7 @@ accessProfiles:
     anonymous: true
     grants:
       - entity: site
+        rowBoundaries: []
         operations: [get, list]
         readableFields: [code]
 "#;
@@ -551,6 +568,7 @@ accessProfiles:
     requiredScopes: [registry.read]
     grants:
       - entity: assignment
+        rowBoundaries: []
         operations: [get, list]
         readableFields: [label, starts, ends]
   - id: revision-only
@@ -558,6 +576,7 @@ accessProfiles:
     requiredScopes: [registry.read]
     grants:
       - entity: assignment
+        rowBoundaries: []
         operations: [revisions]
         revisionAccess: true
         readableFields: [label]
@@ -3746,7 +3765,7 @@ async fn workspace_metadata_lookup_claim_origin_exposes_no_private_claim_mapping
 
 #[tokio::test]
 async fn workspace_references_require_independent_same_profile_target_operations() {
-    let source = LOOKUP_PATH_PROJECT.replace("      - entity: person\n        operations: [get, list]", "      - entity: membership\n        operations: [get]\n        readableFields: [person]\n      - entity: person\n        operations: [get, list]");
+    let source = LOOKUP_PATH_PROJECT.replace("      - entity: person\n        rowBoundaries: []\n        operations: [get, list]", "      - entity: membership\n        rowBoundaries: []\n        operations: [get]\n        readableFields: [person]\n      - entity: person\n        rowBoundaries: []\n        operations: [get, list]");
     let harness = Harness::from_project(&source, true);
     let document = body_json(
         harness
@@ -3769,7 +3788,7 @@ async fn workspace_references_require_independent_same_profile_target_operations
         assert_eq!(operation["labelFields"], json!(["sensitive-note"]));
         assert_ne!(operation["operationId"], "records.household.path.people");
     }
-    let path_only = source.replace("      - entity: person\n        operations: [get, list]\n        readableFields: [sensitive-note]\n        filterableFields: [sensitive-note]\n        sortableFields: [sensitive-note]\n", "");
+    let path_only = source.replace("      - entity: person\n        rowBoundaries: []\n        operations: [get, list]\n        readableFields: [sensitive-note]\n        filterableFields: [sensitive-note]\n        sortableFields: [sensitive-note]\n", "");
     let harness = Harness::from_project(&path_only, true);
     let document = body_json(
         harness
@@ -3791,7 +3810,7 @@ async fn workspace_references_require_independent_same_profile_target_operations
         .any(|operation| operation["readPath"]["id"] == "people"));
     // The no-profile request can have different compiled defaults per route.
     // Even a visible direct operation in another profile cannot label this reference.
-    let other_profile = format!("{path_only}      - entity: person\n        operations: [get, list]\n        readableFields: [sensitive-note]\n");
+    let other_profile = format!("{path_only}      - entity: person\n        rowBoundaries: []\n        operations: [get, list]\n        readableFields: [sensitive-note]\n");
     let harness = Harness::from_project(&other_profile, true);
     let document = body_json(
         harness
@@ -3853,4 +3872,92 @@ async fn workspace_temporal_capabilities_and_no_store_cover_success_and_refusal(
         assert_eq!(response.headers()["cache-control"], "no-store", "{uri}");
         assert!(response.headers().contains_key("traceparent"));
     }
+}
+
+/// Every public refusal names a problem type on the shared Registry Stack
+/// identifier host, so an adopter can resolve the type it was handed. A dot in
+/// the code separates path segments under the product prefix.
+#[tokio::test]
+async fn public_refusals_name_a_resolvable_problem_type() {
+    let not_ready = Harness::new(false);
+    assert_problem_type(
+        not_ready.send(Method::GET, "/ready", None).await,
+        "runtime.not_ready",
+    )
+    .await;
+
+    let harness = Harness::new(true);
+    assert_problem_type(
+        harness.send(Method::GET, "/missing", None).await,
+        "resource.not_found",
+    )
+    .await;
+    assert_problem_type(
+        harness
+            .send(
+                Method::GET,
+                "/v1/records/cases?$filter=label%20approximately%20'a'",
+                None,
+            )
+            .await,
+        "query.invalid",
+    )
+    .await;
+
+    let unavailable = Harness::new(true);
+    unavailable
+        .records
+        .refusal_fails
+        .store(true, Ordering::SeqCst);
+    assert_problem_type(
+        unavailable
+            .send(
+                Method::GET,
+                "/v1/records/cases?$filter=label%20eq",
+                Some(caseworker_claims("case-management")),
+            )
+            .await,
+        "source.unavailable",
+    )
+    .await;
+
+    let lookup = Harness::from_project(LOOKUP_PATH_PROJECT, true);
+    let operator_claims = Some(caseworker_claims("case-management"));
+    assert_problem_type(
+        lookup
+            .send_json(
+                Method::POST,
+                "/v1/records/households:lookup?accessProfile=operator",
+                operator_claims.clone(),
+                json!({"selector": "by-local-reference"}),
+            )
+            .await,
+        "request.invalid",
+    )
+    .await;
+    assert_problem_type(
+        lookup
+            .send_json(
+                Method::POST,
+                "/v1/records/households:lookup?accessProfile=operator",
+                operator_claims,
+                json!({"selector": "missing-canary", "values": {"householdCode": "7"}}),
+            )
+            .await,
+        "lookup.unresolved",
+    )
+    .await;
+}
+
+async fn assert_problem_type(response: axum::response::Response, code: &str) {
+    let body = body_json(response).await;
+    assert_eq!(body["code"], code);
+    assert_eq!(
+        body["type"],
+        format!(
+            "https://id.registrystack.org/problems/registry-breg/{}",
+            code.replace('.', "/")
+        ),
+        "{code}"
+    );
 }

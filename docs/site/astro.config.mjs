@@ -138,11 +138,15 @@ export default defineConfig({
     '/explanation/trust-posture-and-security-guarantees/': internalRedirect('/security/'),
     '/reference/security-self-assessment/': internalRedirect('/security/self-assessment/'),
     '/reference/openssf-evidence/': internalRedirect('/security/openssf-evidence/'),
-    // Webhook configuration, history reads, and the event reference are
-    // sections of the operate and API reference pages.
-    '/configure/breg-webhooks/': internalRedirect('/operate/breg/'),
+    // Webhook binding is an operator task with its own page; history reads
+    // and the event reference are sections of the API reference page.
+    '/configure/breg-webhooks/': internalRedirect('/operate/breg-webhooks/'),
     '/reference/breg-history/': internalRedirect('/reference/breg-api/'),
     '/reference/breg-events/': internalRedirect('/reference/breg-api/'),
+    // One client package ships all four namespaces, so one reference page
+    // documents them; the two per-product pages it absorbed keep resolving.
+    '/reference/relay-client-api/': internalRedirect('/reference/client-api/'),
+    '/reference/breg-client-api/': internalRedirect('/reference/client-api/'),
     // Retired pages keep old links useful by sending readers to a supported
     // task or reference page.
     '/journeys/': internalRedirect('/'),
@@ -286,8 +290,11 @@ export default defineConfig({
       ],
       // Keep the first screen focused on adopter outcomes. Detailed product
       // and contract material remains available under collapsed reference
-      // sections. Every top level is a task an adopter can name; the product
-      // that serves the task is named inside it.
+      // sections. Every top level is a task an adopter can name, and every
+      // top level that one product serves names that product in its label,
+      // so a reader who was told a product name finds the group that holds
+      // it. Use the formal name docs/style-guide.md prescribes, never a
+      // short form and never a description of the pattern.
       sidebar: [
         {
           label: 'Start',
@@ -303,6 +310,11 @@ export default defineConfig({
             // anything runs, so its case has to be made before the first
             // command rather than after it.
             { label: 'Evaluate Evidence Gateway', slug: 'start/evaluate-evidence' },
+            // Base Registry Engine is in the same position: it asks for
+            // PostgreSQL, a token issuer, and a package signing policy before
+            // it serves anything, so its case is also made here, before the
+            // first command.
+            { label: 'Evaluate Base Registry Engine', slug: 'start/evaluate-breg' },
             // A reader on their first page meets the vocabulary before they
             // meet a command, so the glossary sits here rather than in
             // Reference, where it was reachable only after the terms had
@@ -311,7 +323,7 @@ export default defineConfig({
           ],
         },
         {
-          label: 'Answer a bounded question',
+          label: 'Answer a bounded question with Evidence Gateway',
           items: [
             { label: 'Overview', slug: 'start/evidence-quickstart' },
             // The first hands-on tutorial stays in the open beside the
@@ -396,7 +408,7 @@ export default defineConfig({
           // follows the same shape as Evidence Gateway above: overview, first
           // tutorial, then the later phases collapsed behind the phase they
           // belong to.
-          label: 'Connect an existing registry',
+          label: 'Connect an existing registry with Registry Relay',
           items: [
             { label: 'Overview', slug: 'configure' },
             { label: 'How governed publication works', slug: 'explanation/governed-registry-publication' },
@@ -419,7 +431,7 @@ export default defineConfig({
               label: 'Call a Relay API',
               items: [
                 { label: 'Query a Relay with Python', slug: 'tutorials/query-relay-client' },
-                { label: 'Relay client APIs', slug: 'reference/relay-client-api' },
+                { label: 'Client API reference', slug: 'reference/client-api' },
               ],
             },
             { label: 'Run a Relay deployment', slug: 'operate/relay' },
@@ -428,18 +440,69 @@ export default defineConfig({
           ],
         },
         {
-          label: 'Build a registry',
+          // The section reads in the order a new adopter meets the product:
+          // an overview, one tutorial that runs the registry the launcher
+          // ships, the model behind it, then the phases. 'Learn locally'
+          // stays with the launcher; 'Model your registry' is the authoring
+          // work; 'Prepare and deploy' turns a project into a signed package
+          // an operator serves; 'Operate a running registry' is what happens
+          // after activation; 'Call a registry from an application' is the
+          // path for a developer who never writes a project. The three
+          // groups a reader reaches only after a phase is finished start
+          // collapsed, so the vocabulary of a later phase is not on screen
+          // while the earlier one is being learned.
+          label: 'Build a registry with Base Registry Engine',
           items: [
-            { label: 'Base Registry Engine overview', slug: 'explanation/configuration-defined-registry' },
+            { label: 'Overview', slug: 'start/breg-quickstart' },
             { label: 'Create and query your first registry', slug: 'tutorials/first-breg' },
-            { label: 'Review changes before updating a registry', slug: 'tutorials/review-registry-changes' },
-            { label: 'Map a registry in QGIS', slug: 'tutorials/query-a-spatial-registry-from-qgis' },
-            { label: 'Configure your registry', slug: 'configure/breg' },
-            { label: 'Deploy and operate a registry', slug: 'operate/breg' },
-            { label: 'Modeling patterns', slug: 'explanation/registry-modeling-patterns' },
+            { label: 'How a configured registry works', slug: 'explanation/configuration-defined-registry' },
+            {
+              label: 'Learn locally',
+              collapsed: true,
+              items: [
+                { label: 'Extend a registry with a module', slug: 'tutorials/extend-a-registry-with-a-module' },
+                { label: 'Review changes before updating a registry', slug: 'tutorials/review-registry-changes' },
+                { label: 'Send registry events to a webhook', slug: 'tutorials/send-registry-events-to-a-webhook' },
+                { label: 'Map a registry in QGIS', slug: 'tutorials/query-a-spatial-registry-from-qgis' },
+              ],
+            },
+            {
+              label: 'Model your registry',
+              items: [
+                { label: 'Author a registry project', slug: 'configure/breg' },
+                { label: 'Control access per profile', slug: 'configure/breg-access' },
+                { label: 'Declare change requests and actions', slug: 'configure/breg-change-control' },
+                { label: 'Test with journeys', slug: 'configure/breg-journeys' },
+                { label: 'Modeling patterns', slug: 'explanation/registry-modeling-patterns' },
+              ],
+            },
+            {
+              label: 'Prepare and deploy',
+              collapsed: true,
+              items: [
+                { label: 'Build a production candidate', slug: 'tutorials/build-a-breg-production-candidate' },
+                { label: 'Deploy a registry', slug: 'operate/breg' },
+                { label: 'Bind webhook receivers', slug: 'operate/breg-webhooks' },
+              ],
+            },
+            {
+              label: 'Operate a running registry',
+              collapsed: true,
+              items: [
+                { label: 'Change an active registry', slug: 'operate/breg-changes' },
+                { label: 'Retain, erase, and audit', slug: 'operate/breg-retention' },
+                { label: 'Move data in bulk', slug: 'operate/breg-data' },
+              ],
+            },
+            {
+              label: 'Call a registry from an application',
+              items: [
+                { label: 'Query a registry from Python and Node', slug: 'tutorials/query-breg-client' },
+                { label: 'Client API reference', slug: 'reference/client-api' },
+              ],
+            },
             { label: 'Configuration reference', slug: 'reference/breg-configuration' },
             { label: 'API reference', slug: 'reference/breg-api' },
-            { label: 'BReg client APIs', slug: 'reference/breg-client-api' },
           ],
         },
         {
@@ -448,7 +511,7 @@ export default defineConfig({
           // same assertion to a wallet. A relying party runs neither runtime,
           // so its path is a section of its own and wallet delivery stays with
           // the deployment that does the delivering.
-          label: 'Consume and verify assertions',
+          label: 'Consume and verify Evidence Gateway assertions',
           items: [
             { label: 'Request from an application', slug: 'tutorials/request-evidence-from-an-application' },
             { label: 'Verify and retain an assertion', slug: 'tutorials/verify-an-assertion-as-a-consumer' },
@@ -458,7 +521,7 @@ export default defineConfig({
         {
           // Registry Mint issues the access tokens a resource server verifies,
           // so it is a step in both adoption paths and belongs to neither.
-          label: 'Authenticate callers',
+          label: 'Authenticate callers with Registry Mint',
           collapsed: true,
           items: [
             { label: 'Configure Registry Mint', slug: 'configure/mint' },
@@ -471,7 +534,7 @@ export default defineConfig({
         {
           // One index, one section. The concept, the tutorial, and the build
           // page had been split across three unrelated parents.
-          label: 'Publish a Discovery index',
+          label: 'Publish a Registry Discovery index',
           collapsed: true,
           items: [
             { label: 'Registry Discovery is an index', slug: 'explanation/discovery-as-an-index' },

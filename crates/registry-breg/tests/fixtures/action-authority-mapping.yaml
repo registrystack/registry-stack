@@ -1,0 +1,44 @@
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry: {id: action-admission, version: "1", defaultLanguage: en, canonicalBaseIri: https://action-admission.example.test}
+entities:
+  - id: case
+    primaryDataset: test-dataset
+    route: cases
+    mutationMode: mutable
+    classification: restricted
+    fields:
+      - {id: label, type: string, maxLength: 40, required: true, classification: restricted}
+      - {id: region, type: string, maxLength: 20, required: true, classification: internal}
+actions:
+  - id: rename-case
+    inputs:
+      - {id: case-ref, apiName: caseId, type: reference, target: case, required: true, classification: restricted}
+      - {id: case-label, apiName: newLabel, type: string, maxLength: 40, required: true, classification: restricted}
+    effects:
+      - id: renamed
+        target: {fromField: case-ref}
+        operation: patch
+        set: {label: {fromField: case-label}}
+accessProfiles:
+  - id: registrar
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: [case.rename]
+    requiredPurposes: [case-management]
+    grants:
+      - action: rename-case
+        operations: [invoke]
+        targets:
+          - entity: case
+            rowBoundaries: [{field: region, claim: regions, operator: in}]
+        results: [renamed]
+  - id: supervisor
+    principalClaim: registry_principal
+    requiredScopes: [case.supervise]
+    requiredPurposes: [case-management]
+    grants:
+      - action: rename-case
+        operations: [invoke]
+        targets: [{entity: case, rowBoundaries: []}]
+        results: []

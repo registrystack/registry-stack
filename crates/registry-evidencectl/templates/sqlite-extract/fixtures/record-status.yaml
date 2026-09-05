@@ -1,5 +1,14 @@
+# The fixture set `evidencectl fixtures run` replays offline. It is the proof
+# that the source, statement, schemas, extraction, and derivation still agree
+# with each other, so it is edited with them rather than after them.
 fixture: registry.evidence.reference.sqlite-record-status-starter/v1
+
+# Every value below is invented. `synthetic_only` says so, and the run refuses
+# to reach a real source.
 synthetic_only: true
+
+# What every case starts from: the observation time, the caller input, and the
+# extract the statement runs against. A case overrides only what it is about.
 common:
   observed_at: "2026-08-02T00:00:00Z"
   selectors:
@@ -33,10 +42,17 @@ common:
       ('ROW-0005', 'REC-0004', 1, 'SOURCE-UNRELATED-CANARY'),
       ('ROW-0006', 'REC-0004', 1, 'SOURCE-UNRELATED-CANARY'),
       ('ROW-0007', 'REC-0004', 1, 'SOURCE-UNRELATED-CANARY');
+  # The request the source is expected to make. A change that would send more
+  # than this, or send it somewhere else, fails here rather than in a
+  # deployment.
   expectedRequestParts:
     parameters: {}
   expectedTransport:
     statement: queries/record-status.sql
+
+# One case per behaviour the question has to keep. Each names the input it
+# varies and the outcome it expects, so a case that starts passing for a new
+# reason is as visible as one that starts failing.
 cases:
   - id: positive
     selectors:
@@ -62,6 +78,8 @@ cases:
       facts: {qualifying_record_count: 0}
       value: false
 
+  # No match and ambiguity are reported to a caller identically, so neither
+  # answers whether a reference exists.
   - id: no-match
     selectors:
       subject:
@@ -84,6 +102,8 @@ cases:
       derivationRuns: false
       signed: false
 
+  # The bounds hold: a result past `maximumRows` and an extract past its age
+  # limit both fail the request instead of returning a partial or stale answer.
   - id: result-past-row-bound
     selectors:
       subject:
@@ -131,6 +151,9 @@ cases:
       signed: false
       sourceRequestCount: 1
 
+  # The refusals: a mutated statement, a hostile reference that stays a bound
+  # value, a derivation returning something the disclosure list forbids, and a
+  # bundle that would let two disclosures be recombined.
   - id: statement-refused
     statementMutation: attach-external-database
     expected: {bundle: rejected}
@@ -155,6 +178,9 @@ cases:
   - id: anti-reconstruction
     bundleMutation: duplicate-disclosure-family
     expected: {bundle: rejected}
+# What must never appear in a signed assertion or in diagnostics. The canary
+# strings are unrelated source values, present so that a leak of the whole row
+# fails a case instead of passing quietly.
 privacyExpectation:
   evidenceContains: [urn:example:concept:record-condition-satisfied:v1]
   evidenceExcludes:

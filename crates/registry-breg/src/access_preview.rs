@@ -117,8 +117,31 @@ fn synthetic_claims(
             Ok(VerifiedRequestClaims::anonymous())
         }
         (Some(name), Some(principal)) => {
+            let mut supplied = claims.direct_claims;
+            let principal_value = Value::String(principal.clone());
+            if supplied
+                .get(&name)
+                .is_some_and(|value| value != &principal_value)
+            {
+                return Err(invalid);
+            }
+            // A principal used as an own-record boundary is one claim in a real
+            // token. Reuse the synthetic principal too; never let directClaims
+            // substitute a different identity for the same claim name.
+            if target.is_some_and(|(_, profile)| {
+                profile
+                    .row_boundaries
+                    .iter()
+                    .any(|boundary| boundary.claim == name)
+                    || profile
+                        .lookups
+                        .iter()
+                        .any(|lookup| lookup.claim_mapping.values().any(|claim| claim == &name))
+            }) {
+                supplied.insert(name.clone(), principal_value);
+            }
             let mut direct = BTreeMap::new();
-            for (name, value) in claims.direct_claims {
+            for (name, value) in supplied {
                 if let Some((entity, profile)) = target {
                     let binding = profile
                         .row_boundaries

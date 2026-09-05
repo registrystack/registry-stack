@@ -1,0 +1,212 @@
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: access-review
+  canonicalBaseIri: https://registry.example.com
+  version: 0.1.0
+  defaultLanguage: en
+package:
+  environment: local
+  instanceId: access-review-example
+  sequence: 1
+  sourceRevision: access-review-example-1
+manifestProjection:
+  accessProfile: clerk-reader
+  classificationCeiling: internal
+  catalog:
+    baseUrl: https://registry.example.com
+    title: Access review example
+    publisher: {id: access-review-authority, name: Example institution}
+  publicService: {id: access-review-service, title: Access review example}
+  datasets:
+    - {id: access-review, title: Access review records, owner: Example institution, status: active}
+  dataServices:
+    - id: access-review-data-service
+      title: Access review example
+      endpointUrl: https://registry.example.com
+      servesDatasets: [access-review]
+  distributions: []
+entities:
+  - id: record
+    primaryDataset: access-review
+    route: records
+    mutationMode: mutable
+    classification: internal
+    fields:
+      - {id: code, type: string, required: true, maxLength: 32, classification: internal}
+      - {id: label, type: string, required: true, maxLength: 100, classification: internal}
+      - {id: district, type: string, required: true, maxLength: 32, classification: internal}
+      - {id: owner, type: string, required: true, maxLength: 100, classification: internal}
+  - id: reviewed-record
+    primaryDataset: access-review
+    route: reviewed-records
+    mutationMode: mutable
+    classification: internal
+    changeControl:
+      requiredFor: [patch]
+    fields:
+      - {id: code, type: string, required: true, maxLength: 32, classification: internal}
+      - {id: label, type: string, required: true, maxLength: 100, classification: internal}
+      - {id: district, type: string, required: true, maxLength: 32, classification: internal}
+  - id: label-correction
+    primaryDataset: access-review
+    route: label-corrections
+    mutationMode: mutable
+    classification: internal
+    fields:
+      - {id: record, type: reference, target: reviewed-record, required: true, classification: internal}
+      - {id: label, type: string, required: true, maxLength: 100, classification: internal}
+      - {id: district, type: string, required: true, maxLength: 32, classification: internal}
+    changeRequest:
+      effects:
+        - target: {fromField: record}
+          operation: patch
+          set:
+            label: {fromField: label}
+      review:
+        stages:
+          - {id: review, approvals: 1, excludeSubmitter: true}
+          - {id: final-approval, approvals: 1, excludeSubmitter: true, excludePreviousReviewers: true}
+      application: {mode: manual}
+      retention: {mode: operator_erase}
+actions:
+  - id: register-record
+    inputs:
+      - {id: code, type: string, required: true, maxLength: 32, classification: internal}
+      - {id: label, type: string, required: true, maxLength: 100, classification: internal}
+      - {id: district, type: string, required: true, maxLength: 32, classification: internal}
+      - {id: owner, type: string, required: true, maxLength: 100, classification: internal}
+    effects:
+      - id: created-record
+        target: {entity: record}
+        operation: create
+        set:
+          code: {fromField: code}
+          label: {fromField: label}
+          district: {fromField: district}
+          owner: {fromField: owner}
+accessProfiles:
+  - id: clerk-reader
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: [record:read]
+    requiredPurposes: [record-administration]
+    grants:
+      - entity: record
+        operations: [get, list]
+        readableFields: [code, label, district, owner]
+        filterableFields: [code, district]
+        rowBoundaries:
+          - {field: district, claim: assigned_districts, operator: in}
+  - id: clerk-editor
+    principalClaim: registry_principal
+    requiredScopes: [record:edit-own]
+    requiredPurposes: [record-administration]
+    grants:
+      - entity: record
+        operations: [get, patch]
+        readableFields: [code, label, district, owner]
+        writableFields: [label]
+        rowBoundaries:
+          - {field: district, claim: assigned_districts, operator: in}
+          - {field: owner, claim: registry_principal, operator: equals}
+  - id: supervisor
+    principalClaim: registry_principal
+    requiredScopes: [record:supervise]
+    requiredPurposes: [record-administration]
+    grants:
+      - entity: record
+        operations: [get, list, patch]
+        readableFields: [code, label, district, owner]
+        writableFields: [label]
+        rowBoundaries: []
+      - entity: reviewed-record
+        operations: [create, get, list]
+        readableFields: [code, label, district]
+        writableFields: [code, label, district]
+        rowBoundaries: []
+  - id: auditor
+    principalClaim: registry_principal
+    requiredScopes: [record:audit]
+    requiredPurposes: [record-audit]
+    grants:
+      - entity: record
+        operations: [get, revisions]
+        readableFields: [code, label, district]
+        revisionAccess: true
+        rowBoundaries:
+          - {field: district, claim: assigned_districts, operator: in}
+  - id: registrar
+    principalClaim: registry_principal
+    requiredScopes: [record:register]
+    requiredPurposes: [record-administration]
+    grants:
+      - action: register-record
+        operations: [invoke]
+        targets:
+          - entity: record
+            rowBoundaries:
+              - {field: district, claim: assigned_districts, operator: in}
+              - {field: owner, claim: registry_principal, operator: equals}
+        results: [created-record]
+  - id: correction-submitter
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: [correction:submit]
+    requiredPurposes: [record-administration]
+    grants:
+      - entity: label-correction
+        operations: [create, get, patch, submit_request, revise_request, cancel_request]
+        readableFields: [record, label, district]
+        writableFields: [record, label, district]
+        requestVisibility: owner
+        rowBoundaries:
+          - {field: district, claim: assigned_districts, operator: in}
+  - id: correction-reviewer
+    principalClaim: registry_principal
+    requiredScopes: [correction:review]
+    requiredPurposes: [record-administration]
+    grants:
+      - entity: label-correction
+        operations: [get, approve_request, reject_request, request_revision]
+        readableFields: [record, label, district]
+        rowBoundaries:
+          - {field: district, claim: assigned_districts, operator: in}
+        reviewStages:
+          - stage: review
+            targets:
+              - entity: reviewed-record
+                readableFields: [label, district]
+                rowBoundaries:
+                  - {field: district, claim: assigned_districts, operator: in}
+  - id: correction-final-approver
+    principalClaim: registry_principal
+    requiredScopes: [correction:final-approve]
+    requiredPurposes: [record-administration]
+    grants:
+      - entity: label-correction
+        operations: [get, approve_request, reject_request, request_revision]
+        readableFields: [record, label, district]
+        rowBoundaries:
+          - {field: district, claim: assigned_districts, operator: in}
+        reviewStages:
+          - stage: final-approval
+            targets:
+              - entity: reviewed-record
+                readableFields: [label, district]
+                rowBoundaries:
+                  - {field: district, claim: assigned_districts, operator: in}
+  - id: correction-applier
+    principalClaim: registry_principal
+    requiredScopes: [correction:apply]
+    requiredPurposes: [record-administration]
+    grants:
+      - entity: label-correction
+        operations: [get, apply_request]
+        readableFields: [record, label, district]
+        rowBoundaries:
+          - {field: district, claim: assigned_districts, operator: in}
+        applyTargets:
+          - entity: reviewed-record
+            rowBoundaries:
+              - {field: district, claim: assigned_districts, operator: in}

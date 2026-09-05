@@ -1257,6 +1257,7 @@ mod tests {
             id: "review".to_owned(),
             approvals: 1,
             exclude_submitter: true,
+            exclude_previous_reviewers: false,
         }]
     }
 

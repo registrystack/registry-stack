@@ -1006,13 +1006,14 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
 
     let create_body =
         br#"{"data":{"jurisdiction":"zone-a","label":"http-created","quantity":3}}"#.to_vec();
-    for (label, headers, body, expected, code) in [
+    for (label, headers, body, expected, code, field_path) in [
         (
             "missing idempotency",
             vec![("content-type", "application/json")],
             create_body.clone(),
             StatusCode::BAD_REQUEST,
             "request.invalid",
+            Some("Idempotency-Key"),
         ),
         (
             "wrong media",
@@ -1023,6 +1024,7 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
             create_body.clone(),
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
             "unsupported.media_type",
+            None,
         ),
         (
             "caller id",
@@ -1033,6 +1035,7 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
             br#"{"id":"00000000-0000-0000-0000-000000000001","data":{"jurisdiction":"zone-a","label":"bad","quantity":1}}"#.to_vec(),
             StatusCode::BAD_REQUEST,
             "request.invalid",
+            None,
         ),
     ] {
         let before = durable_counts(&database, &table).await;
@@ -1046,7 +1049,21 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
         )
         .await;
         assert_eq!(response.status(), expected, "{label}");
-        assert_eq!(body_json(response).await["code"], code, "{label}");
+        let body = body_json(response).await;
+        assert_eq!(body["code"], code, "{label}");
+        match field_path {
+            // A missing required header names itself in `fieldPath` so the fix
+            // does not require reading the generated OpenAPI: the header name
+            // is a fixed, known constant, never request content. The detail
+            // stays the registered one, because typed clients match it exactly.
+            Some(expected_field_path) => {
+                assert_eq!(body["fieldPath"], expected_field_path, "{label}");
+                assert_eq!(body["detail"], "The request is invalid.", "{label}");
+            }
+            None => {
+                assert!(body.get("fieldPath").is_none(), "{label}");
+            }
+        }
         assert_eq!(
             durable_counts(&database, &table).await.current,
             before.current
@@ -1334,6 +1351,31 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
         before_missing_match.audit + 1
     );
 
+    let before_missing_idempotency = durable_counts(&database, &table).await;
+    let missing_idempotency = send(
+        &app,
+        Method::PATCH,
+        &format!("/v1/records/widgets/{record_id}"),
+        Some(claims.clone()),
+        &[
+            ("content-type", "application/json-patch+json"),
+            ("if-match", &created.etag),
+        ],
+        br#"[{"op":"replace","path":"/data/label","value":"x"}]"#.to_vec(),
+    )
+    .await;
+    assert_eq!(missing_idempotency.status(), StatusCode::BAD_REQUEST);
+    let missing_idempotency_body = body_json(missing_idempotency).await;
+    assert_eq!(missing_idempotency_body["code"], "request.invalid");
+    // A missing required header names itself so the fix does not require
+    // reading the generated OpenAPI: the header name is fixed, known
+    // constant, never request content.
+    assert_eq!(missing_idempotency_body["fieldPath"], "Idempotency-Key");
+    assert_eq!(
+        durable_counts(&database, &table).await.audit,
+        before_missing_idempotency.audit + 1
+    );
+
     let before_bad_patch_body = durable_counts(&database, &table).await;
     let bad_patch_body = send(
         &app,
@@ -1451,13 +1493,14 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
     assert_eq!(current.body["data"]["revisionIdentifier"], "2");
     assert_eq!(current.etag, patched.etag);
 
-    for (label, headers, body, expected, code) in [
+    for (label, headers, body, expected, code, field_path) in [
         (
             "missing idempotency",
             vec![("if-match", current.etag.as_str())],
             Vec::new(),
             StatusCode::BAD_REQUEST,
             "request.invalid",
+            Some("Idempotency-Key"),
         ),
         (
             "missing if-match",
@@ -1465,6 +1508,7 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
             Vec::new(),
             StatusCode::PRECONDITION_REQUIRED,
             "precondition.required",
+            None,
         ),
         (
             "weak if-match",
@@ -1475,6 +1519,7 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
             Vec::new(),
             StatusCode::PRECONDITION_FAILED,
             "precondition.failed",
+            None,
         ),
         (
             "content type is forbidden",
@@ -1486,6 +1531,7 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
             Vec::new(),
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
             "unsupported.media_type",
+            None,
         ),
         (
             "body is forbidden",
@@ -1496,6 +1542,7 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
             br#"{}"#.to_vec(),
             StatusCode::BAD_REQUEST,
             "request.invalid",
+            None,
         ),
     ] {
         let response = send(
@@ -1509,7 +1556,16 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
         .await;
         assert_eq!(response.status(), expected, "{label}");
         assert!(response.headers().get("etag").is_none(), "{label}");
-        assert_eq!(body_json(response).await["code"], code, "{label}");
+        let body = body_json(response).await;
+        assert_eq!(body["code"], code, "{label}");
+        match field_path {
+            Some(expected_field_path) => {
+                assert_eq!(body["fieldPath"], expected_field_path, "{label}");
+            }
+            None => {
+                assert!(body.get("fieldPath").is_none(), "{label}");
+            }
+        }
     }
 
     let duplicate_delete_key = request_with_duplicate_header(
@@ -2275,7 +2331,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             "id":"anonymous-reader","anonymous":true,
             "grants":[{
               "entity":"widget","operations":["get","list"],
-              "readableFields":["label"]
+              "readableFields":["label"],
+              "rowBoundaries": []
             }]
           },{
             "id":"label-editor","principalClaim":"registry_principal",
@@ -2525,7 +2582,7 @@ async fn assert_unique_violation_conflict_is_value_free(
     assert_eq!(
         problem,
         json!({
-            "type": "urn:breg:problem:mutation.conflict",
+            "type": "https://id.registrystack.org/problems/registry-breg/mutation/conflict",
             "title": "Conflict",
             "status": 409,
             "detail": "The mutation conflicts with current state.",

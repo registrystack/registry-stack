@@ -1035,7 +1035,10 @@ fn problem_response(code: BRegProblemCode) -> MockResponse {
     MockResponse::json(
         StatusCode::from_u16(code.status()).expect("registered status"),
         json!({
-            "type": format!("urn:breg:problem:{}", code.code()),
+            "type": format!(
+                "https://id.registrystack.org/problems/registry-breg/{}",
+                code.code().replace('.', "/")
+            ),
             "title": problem_title(code.status()),
             "status": code.status(),
             "detail": problem_detail(code),
@@ -1121,7 +1124,7 @@ async fn redirects_and_failures_are_never_followed_or_retried() {
     let redirect = MockResponse::json(
         StatusCode::FOUND,
         json!({
-            "type": "urn:breg:problem:redirect",
+            "type": "https://example.test/problems/redirect",
             "title": "Redirect",
             "status": 302,
             "detail": "Do not follow this response.",

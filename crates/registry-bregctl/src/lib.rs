@@ -824,6 +824,13 @@ struct SuccessReport {
     artifacts: Vec<ArtifactReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     explanation: Option<Value>,
+    /// What the reader does next, in the order a reader does it.
+    ///
+    /// A command that leaves the reader holding something unfinished says so
+    /// here, so the sentence travels with the report instead of living only in
+    /// a tutorial the reader may not be following.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    next_steps: Vec<String>,
 }
 
 #[derive(Debug, Eq, PartialEq, Serialize)]
@@ -984,6 +991,7 @@ enum SuggestedAction {
 struct DoctorSuccessReport {
     ok: bool,
     command: &'static str,
+    checked: &'static [&'static str],
 }
 
 #[derive(Serialize)]
@@ -3613,7 +3621,34 @@ fn init(destination: &Path) -> Result<SuccessReport, FailureReport> {
             .map(|(path, bytes)| artifact_report(path, init_media_type(path), bytes))
             .collect(),
         explanation: None,
+        next_steps: init_next_steps(destination),
     })
+}
+
+/// What a reader does after `init`, named against the directory just written.
+///
+/// The example project reports a finding and carries a reserved base IRI, both
+/// on purpose. A reader who is told neither reads the finding as a mistake and
+/// carries the reserved identity into a real package, so `init` says which of
+/// the two it left standing for teaching and which one has to go before a
+/// production package.
+fn init_next_steps(destination: &Path) -> Vec<String> {
+    let readme = destination.join("README.md");
+    vec![
+        format!(
+            "read {}, then run 'bregctl check {}'",
+            readme.display(),
+            destination.display()
+        ),
+        format!(
+            "leave the finding above as it is; the example operator profile lists a whole collection on purpose, and {} says where to narrow it",
+            readme.display()
+        ),
+        format!(
+            "replace canonicalBaseIri in {} before you build a production package; the example value is a reserved .invalid name that never resolves",
+            destination.join("registry.yaml").display()
+        ),
+    ]
 }
 
 fn check(project_path: &Path, profile: ProfileArg) -> Result<SuccessReport, FailureReport> {
@@ -3626,6 +3661,7 @@ fn check(project_path: &Path, profile: ProfileArg) -> Result<SuccessReport, Fail
         findings: compiler_findings(&compiled),
         artifacts: Vec::new(),
         explanation: None,
+        next_steps: Vec::new(),
     })
 }
 
@@ -3917,6 +3953,7 @@ fn project_lock(project_path: &Path, check_only: bool) -> Result<SuccessReport, 
             "changed": changed,
             "modules": reports,
         })),
+        next_steps: Vec::new(),
     })
 }
 
@@ -3958,6 +3995,7 @@ fn generate(
         findings: compiler_findings(&compiled),
         artifacts,
         explanation: None,
+        next_steps: Vec::new(),
     })
 }
 
@@ -4265,6 +4303,7 @@ fn explain(
         findings: compiler_findings(&compiled),
         artifacts: Vec::new(),
         explanation: Some(explanation),
+        next_steps: Vec::new(),
     })
 }
 
@@ -4901,7 +4940,7 @@ credentials file. The operate documentation below walks through preparing them.
 - Configure a registry: <https://docs.registrystack.org/configure/breg/>
 - Operate a registry: <https://docs.registrystack.org/operate/breg/>
 - Every configuration key: <https://docs.registrystack.org/reference/breg-configuration/>
-- `bregctl` commands: <https://docs.registrystack.org/reference/cli/bregctl/>
+- `bregctl` commands: run `bregctl --help`.
 "#;
 
 const INIT_REGISTRY_PROJECT: &[u8] =
@@ -5024,11 +5063,13 @@ accessProfiles:
     requiredPurposes: [registry-operations]
     grants:
       - entity: record-group
+        rowBoundaries: []
         operations: [create, get, list]
         readableFields: [code, label]
         writableFields: [code, label]
         filterableFields: [code]
       - entity: record
+        rowBoundaries: []
         operations: [create, get, list, patch]
         readableFields: [code, label, group, status]
         writableFields: [code, label, group, status]
@@ -7305,11 +7346,15 @@ fn write_success(
                 if explanation.get("scopeMatching").is_some()
                     || explanation.get("mode").and_then(Value::as_str) == Some("offline_synthetic")
                 {
-                    return write_access_explanation(explanation, stdout);
+                    write_access_explanation(explanation, stdout)?;
+                } else {
+                    let rendered =
+                        serde_json::to_string_pretty(explanation).map_err(io::Error::other)?;
+                    writeln!(stdout, "{rendered}")?;
                 }
-                let rendered =
-                    serde_json::to_string_pretty(explanation).map_err(io::Error::other)?;
-                writeln!(stdout, "{rendered}")?;
+            }
+            for step in &report.next_steps {
+                writeln!(stdout, "next: {step}")?;
             }
             Ok(())
         })
@@ -7528,13 +7573,19 @@ fn write_doctor_success(
     let report = DoctorSuccessReport {
         ok: true,
         command: "doctor",
+        checked: &doctor::CHECKED_DEPENDENCIES,
     };
     let result = if format == OutputFormat::Json {
         serde_json::to_writer_pretty(&mut *stdout, &report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
-        writeln!(stdout, "doctor succeeded")
+        writeln!(stdout, "doctor succeeded").and_then(|()| {
+            for dependency in report.checked {
+                writeln!(stdout, "checked {dependency}: pass")?;
+            }
+            Ok(())
+        })
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -9147,10 +9198,21 @@ mod tests {
     #[test]
     fn doctor_success_output_is_stable_in_human_and_machine_formats() {
         for (format, expected) in [
-            (OutputFormat::Human, "doctor succeeded\n"),
+            (
+                OutputFormat::Human,
+                "doctor succeeded\n\
+                 checked runtimeConfig: pass\n\
+                 checked package: pass\n\
+                 checked database: pass\n\
+                 checked audit: pass\n\
+                 checked cursor: pass\n\
+                 checked authentication.oidc: pass\n\
+                 checked eventDestinations: pass\n\
+                 checked authentication: pass\n",
+            ),
             (
                 OutputFormat::Json,
-                "{\n  \"ok\": true,\n  \"command\": \"doctor\"\n}\n",
+                "{\n  \"ok\": true,\n  \"command\": \"doctor\",\n  \"checked\": [\n    \"runtimeConfig\",\n    \"package\",\n    \"database\",\n    \"audit\",\n    \"cursor\",\n    \"authentication.oidc\",\n    \"eventDestinations\",\n    \"authentication\"\n  ]\n}\n",
             ),
         ] {
             let mut stdout = Vec::new();
@@ -9207,6 +9269,7 @@ accessProfiles:
     requiredPurposes: [operations]
     grants:
       - entity: record
+        rowBoundaries: []
         operations: [create, get, list, patch]
         readableFields: [code]
         writableFields: [code]

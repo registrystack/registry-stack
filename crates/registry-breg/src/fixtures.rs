@@ -3772,7 +3772,7 @@ fn assert_response(
                 .and_then(Value::as_str)
                 .ok_or(FixtureError::ResponseShapeRefused)?;
             TraceId::parse(trace_id).map_err(|_| FixtureError::ResponseShapeRefused)?;
-            let expected_type = format!("urn:breg:problem:{code}");
+            let expected_type = crate::problem::type_uri(code);
             if object.get("type").and_then(Value::as_str) != Some(expected_type.as_str())
                 || object.get("title").and_then(Value::as_str) != Some(title)
                 || object.get("status").and_then(Value::as_u64)
@@ -6248,7 +6248,7 @@ journeys:
 
         let refusal = &suite.journeys[0].steps[5];
         let extra_refusal = json!({
-            "type": "urn:breg:problem:resource.not_found",
+            "type": "https://id.registrystack.org/problems/registry-breg/resource/not_found",
             "title": "Not Found",
             "status": 404,
             "detail": "The requested resource was not found.",
@@ -6261,7 +6261,7 @@ journeys:
             Err(FixtureError::ResponseShapeRefused)
         );
         let changed_detail = json!({
-            "type": "urn:breg:problem:resource.not_found",
+            "type": "https://id.registrystack.org/problems/registry-breg/resource/not_found",
             "title": "Not Found",
             "status": 404,
             "detail": "protected canary",
@@ -6273,7 +6273,7 @@ journeys:
             Err(FixtureError::ExpectationMismatch)
         );
         let correlated_refusal = json!({
-            "type": "urn:breg:problem:resource.not_found",
+            "type": "https://id.registrystack.org/problems/registry-breg/resource/not_found",
             "title": "Not Found",
             "status": 404,
             "detail": "The requested resource was not found.",
@@ -6569,12 +6569,13 @@ journeys:
             request_stage: None,
             maximum_records: Some(1),
             access_profiles: vec!["submitter".to_owned()],
-            default_access_profile: "submitter".to_owned(),
+            default_access_profile: Some("submitter".to_owned()),
         };
         let profile: AccessProfileSource = serde_json::from_value(json!({
             "id": "submitter",
             "principalClaim": "principal",
-            "operations": ["submit_request"]
+            "operations": ["submit_request"],
+            "rowBoundaries": []
         }))
         .expect("test profile parses");
         let step = ValidatedStep {
@@ -6728,12 +6729,13 @@ journeys:
             request_stage: None,
             maximum_records: Some(1),
             access_profiles: vec!["submitter".to_owned()],
-            default_access_profile: "submitter".to_owned(),
+            default_access_profile: Some("submitter".to_owned()),
         };
         let profile: AccessProfileSource = serde_json::from_value(json!({
             "id": "submitter",
             "principalClaim": "principal",
-            "operations": ["submit_request"]
+            "operations": ["submit_request"],
+            "rowBoundaries": []
         }))
         .expect("test profile parses");
         ValidatedStep {
@@ -6763,7 +6765,7 @@ journeys:
 
     fn plan_refused_document(detail: &str) -> Value {
         json!({
-            "type": "urn:breg:problem:request.plan_refused",
+            "type": "https://id.registrystack.org/problems/registry-breg/request/plan_refused",
             "title": "Bad Request",
             "status": 400,
             "detail": detail,
@@ -6850,7 +6852,7 @@ journeys:
             5 => (
                 404,
                 json!({
-                    "type":"urn:breg:problem:resource.not_found",
+                    "type":"https://id.registrystack.org/problems/registry-breg/resource/not_found",
                     "title":"Not Found",
                     "status":404,
                     "detail":"The requested resource was not found.",

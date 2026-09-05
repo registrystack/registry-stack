@@ -41,7 +41,7 @@ use crate::webhook::{WebhookDeliveryService, WebhookWorker};
 #[derive(Debug, Error, Clone, Copy, Eq, PartialEq)]
 pub enum StartupError {
     #[error("the Registry runtime configuration was refused")]
-    RuntimeConfig,
+    RuntimeConfig(RuntimeConfigError),
     #[error("the Registry package was refused")]
     PackageRefused,
     #[error("the Registry database connection was refused")]
@@ -245,7 +245,7 @@ impl OperationalEvent {
 impl StartupError {
     const fn operational_message(self) -> &'static str {
         match self {
-            Self::RuntimeConfig => "the Registry runtime configuration was refused",
+            Self::RuntimeConfig(_) => "the Registry runtime configuration was refused",
             Self::PackageRefused => "the Registry package was refused",
             Self::DatabaseConnection => "the Registry database connection was refused",
             Self::DatabaseUnready => "the Registry database is not ready for this package",
@@ -643,7 +643,9 @@ async fn finish_prepared_server(
         .any(|operation| operation.gis_collection_id().is_some())
         && config.listener().public_origin().is_none()
     {
-        return Err(StartupError::RuntimeConfig);
+        return Err(StartupError::RuntimeConfig(
+            RuntimeConfigError::InvalidListener,
+        ));
     }
     #[cfg(all(feature = "postgres-test", feature = "tooling"))]
     let fixture_pool = pool.clone();
@@ -781,7 +783,7 @@ fn map_runtime_config_error(error: RuntimeConfigError) -> StartupError {
         RuntimeConfigError::InvalidAudit => StartupError::Audit,
         RuntimeConfigError::InvalidCursor => StartupError::Cursor,
         RuntimeConfigError::InvalidOidc => StartupError::Oidc,
-        _ => StartupError::RuntimeConfig,
+        other => StartupError::RuntimeConfig(other),
     }
 }
 
@@ -854,7 +856,6 @@ async fn request_timeout(
 fn timeout_problem() -> Response {
     let mut response = crate::correlation::problem_response(
         StatusCode::GATEWAY_TIMEOUT,
-        "urn:breg:problem:request.timeout",
         "Gateway Timeout",
         "The request timed out.",
         "request.timeout",

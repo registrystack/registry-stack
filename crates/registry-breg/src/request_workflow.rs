@@ -194,6 +194,15 @@ impl RequestWorkflow {
         if pending_stage.exclude_submitter && context.actor == submitted_by {
             return Err(WorkflowError::SubmitterExcluded);
         }
+        if pending_stage.exclude_previous_reviewers
+            && self.decisions.iter().any(|existing| {
+                existing.version == version
+                    && existing.stage_id != stage_id.0
+                    && existing.actor == context.actor
+            })
+        {
+            return Err(WorkflowError::PreviousReviewerExcluded);
+        }
         if self.decisions.iter().any(|existing| {
             existing.version == version
                 && existing.stage_id == stage_id.0
@@ -436,6 +445,17 @@ impl RequestWorkflow {
             else {
                 return Err(WorkflowError::InvalidRestoredState);
             };
+            if proposal.stages[stage_index].exclude_previous_reviewers
+                && self.decisions.iter().any(|prior| {
+                    prior.version == decision.version
+                        && prior.actor == decision.actor
+                        && proposal.stages[..stage_index]
+                            .iter()
+                            .any(|stage| stage.id == prior.stage_id)
+                })
+            {
+                return Err(WorkflowError::PreviousReviewerExcluded);
+            }
             for prior_stage in &proposal.stages[..stage_index] {
                 if !self.stage_is_satisfied(proposal, &prior_stage.id) {
                     return Err(WorkflowError::StageOutOfOrder);
@@ -2372,6 +2392,8 @@ pub enum WorkflowError {
     StageOutOfOrder,
     #[error("submitter cannot approve this stage")]
     SubmitterExcluded,
+    #[error("a reviewer from an earlier stage cannot decide this stage")]
+    PreviousReviewerExcluded,
     #[error("only the request owner can take this transition")]
     NotOwner,
     #[error("actor already decided this stage for this proposal")]
@@ -2611,11 +2633,13 @@ mod tests {
                 id: "review".to_owned(),
                 approvals: 2,
                 exclude_submitter: true,
+                exclude_previous_reviewers: false,
             },
             CompiledChangeRequestStage {
                 id: "quality".to_owned(),
                 approvals: 1,
                 exclude_submitter: false,
+                exclude_previous_reviewers: false,
             },
         ]
     }
@@ -2625,6 +2649,7 @@ mod tests {
             id: "review".to_owned(),
             approvals: 1,
             exclude_submitter: true,
+            exclude_previous_reviewers: false,
         }]
     }
 
@@ -2912,7 +2937,7 @@ mod tests {
     }
 
     #[test]
-    fn sequential_stages_require_distinct_actors_and_exclude_submitter() {
+    fn each_stage_requires_distinct_approvals_and_optional_submitter_exclusion() {
         let submitted = workflow()
             .submit(
                 context("submitter", 1),
@@ -2997,6 +3022,105 @@ mod tests {
             .expect("quality approval")
             .into_workflow();
         assert_eq!(approved.state(), RequestState::Approved);
+    }
+
+    #[test]
+    fn stages_without_cross_stage_exclusion_preserve_frozen_serialization() {
+        let legacy = json!({"id":"review", "approvals":1, "excludeSubmitter":true});
+        let mut stage: CompiledChangeRequestStage =
+            serde_json::from_value(legacy.clone()).expect("stored stage predates the new rule");
+        assert!(!stage.exclude_previous_reviewers);
+        assert_eq!(
+            serde_json::to_value(&stage).expect("canonical stage"),
+            legacy
+        );
+        stage.exclude_previous_reviewers = true;
+        assert_eq!(
+            serde_json::to_value(&stage).expect("independent stage")["excludePreviousReviewers"],
+            json!(true)
+        );
+    }
+
+    #[test]
+    fn prior_stage_actor_is_excluded_only_when_the_stage_requires_independence() {
+        for independent in [false, true] {
+            let mut review_stages = stages();
+            review_stages[0].approvals = 1;
+            review_stages[1].exclude_previous_reviewers = independent;
+            let submitted = workflow()
+                .submit(
+                    context("submitter", 1),
+                    proposal(vec![patch_effect("site-b", 3)], review_stages),
+                )
+                .expect("submit")
+                .into_workflow();
+            let digest = submitted
+                .current_proposal()
+                .unwrap()
+                .effect_digest()
+                .clone();
+            let reviewed = submitted
+                .decide(
+                    context("reviewer", 2),
+                    "review",
+                    ProposalVersion::first(),
+                    &digest,
+                    ReviewDecisionKind::Approve,
+                )
+                .expect("first stage")
+                .into_workflow();
+            // The constraint belongs to the frozen proposal and survives storage.
+            let restored = serde_json::from_value::<RequestWorkflow>(
+                serde_json::to_value(&reviewed).expect("serialize"),
+            )
+            .expect("deserialize")
+            .validate_restored()
+            .expect("restore");
+            let repeated = restored.clone().decide(
+                context("reviewer", 3),
+                "quality",
+                ProposalVersion::first(),
+                &digest,
+                ReviewDecisionKind::Approve,
+            );
+            if independent {
+                assert_eq!(
+                    repeated.expect_err("the same actor holds both grants"),
+                    WorkflowError::PreviousReviewerExcluded
+                );
+            } else {
+                assert_eq!(
+                    repeated
+                        .expect("explicitly shared reviewers")
+                        .into_workflow()
+                        .state(),
+                    RequestState::Approved
+                );
+            }
+            let approved = restored
+                .decide(
+                    context("second-reviewer", 4),
+                    "quality",
+                    ProposalVersion::first(),
+                    &digest,
+                    ReviewDecisionKind::Approve,
+                )
+                .expect("independent reviewer")
+                .into_workflow();
+            assert_eq!(approved.state(), RequestState::Approved);
+            let mut altered = approved;
+            altered.decisions.last_mut().expect("final approval").actor =
+                context("reviewer", 4).actor;
+            let validation = altered.validate_restored();
+            if independent {
+                assert_eq!(
+                    validation.expect_err("stored decisions preserve independence"),
+                    WorkflowError::PreviousReviewerExcluded
+                );
+            } else {
+                validation.expect("shared reviewers remain valid after storage");
+            }
+        }
     }
 
     #[test]

@@ -547,7 +547,7 @@ fn project_bytes(environment: &str, module_digest: &str) -> Vec<u8> {
 
 fn module_bytes(classification: &str) -> Vec<u8> {
     format!(
-        r#"{{"id":"core","version":"1","entities":[{{"id":"record","primaryDataset":"neutral-registry","route":"records","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":16,"classification":"{classification}"}}],"accessProfiles":[{{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]}}]}}"#
+        r#"{{"id":"core","version":"1","entities":[{{"id":"record","primaryDataset":"neutral-registry","route":"records","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":16,"classification":"{classification}"}}],"accessProfiles":[{{"rowBoundaries": [], "id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]}}]}}"#
     )
     .into_bytes()
 }

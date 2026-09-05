@@ -197,12 +197,27 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "release/scripts/build-linux-node-client \\",
     ),
     (
+        # The Evidence tutorial job installs maturin from the same pinned
+        # requirements file, so this gate names the step that owns the Linux
+        # Node client copy and stays blind to the other one.
         "Release Linux Node client pinned tools",
-        '--requirement "${GITHUB_WORKSPACE}/release/requirements/maturin-1.9.6.txt"',
+        "      - name: Install pinned Linux client build tools\n"
+        "        shell: bash\n"
+        "        run: |\n"
+        "          set -euo pipefail\n"
+        "          rustup toolchain install 1.95.0 --profile minimal\n"
+        '          python3 -m venv "${RUNNER_TEMP}/maturin"\n'
+        '          "${RUNNER_TEMP}/maturin/bin/pip" install --quiet \\\n'
+        "            --require-hashes --only-binary=:all: \\\n"
+        '            --requirement "${GITHUB_WORKSPACE}/release/requirements/maturin-1.9.6.txt"',
     ),
     (
         "Release Linux Node client CI aggregate",
         "      - release-linux-node-clients",
+    ),
+    (
+        "Unified Node client ESM entry point smoke",
+        '(cd "${smoke}" && node smoke-registry-client-package.mjs)',
     ),
     (
         "Release helper tests",
@@ -227,6 +242,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     (
         "Unified Python wheel assembly tests",
         "run: python3 -m unittest release/scripts/test_assemble_registry_client_wheel.py",
+    ),
+    (
+        "Local client package assembly tests",
+        "run: python3 -m unittest release/scripts/test_assemble_registry_client_packages.py",
     ),
     (
         "Release storage preflight tests",
@@ -305,6 +324,18 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ("Docs dependency install", "run: npm ci"),
     ("Docs tests", "run: npm test"),
     ("Production-shaped docs build check", "run: npm run check:production"),
+    (
+        "Base Registry Engine tutorial replay",
+        "bash docs/site/scripts/check-breg-tutorial.sh",
+    ),
+    (
+        "Base Registry Engine tutorial command drift",
+        "run: npm run check:tutorial:breg:dry-run",
+    ),
+    (
+        "Base Registry Engine tutorial path filter",
+        '"docs/site/scripts/check-breg-tutorial.sh",',
+    ),
 )
 
 RELEASE_SECURITY_POLICY_PATHS = (
@@ -557,6 +588,16 @@ REQUIRED_RELEASE_SECURITY_GATES = (
             "python3 release/scripts/verify_latest_published_release.py",
             "name: Recheck latest published docs release immediately before deployment",
             "name: Deploy to GitHub Pages",
+        ),
+    ),
+    (
+        "Released docset selector gated on the published release",
+        ".github/workflows/docs-pages.yml",
+        (
+            "name: Resolve latest published docs release",
+            "name: Gate the released docset selector on the published release",
+            "release/scripts/registry-release validate-docsets \\",
+            '--published-releases "${PUBLISHED_RELEASES}"',
         ),
     ),
     (

@@ -56,6 +56,7 @@ jobs:
       client_bindings: ${{ steps.filter.outputs.client_bindings }}
       release_linux_node_clients: ${{ steps.filter.outputs.release_linux_node_clients }}
       evidence_tutorial: ${{ steps.filter.outputs.evidence_tutorial }}
+      breg_tutorial: ${{ steps.filter.outputs.breg_tutorial }}
       identifiers: ${{ steps.filter.outputs.identifiers }}
     steps:
       - name: Checkout
@@ -763,6 +764,9 @@ jobs:
       - name: Test unified Python wheel assembly
         run: python3 -m unittest release/scripts/test_assemble_registry_client_wheel.py
 
+      - name: Test local client package assembly
+        run: python3 -m unittest release/scripts/test_assemble_registry_client_packages.py
+
       - name: Test release storage preflight
         run: python3 -m unittest release/scripts/test_check_release_storage.py
 
@@ -947,13 +951,40 @@ jobs:
           [[ -n "$test_binary" ]]
           cp "$test_binary" \
             target/evidence-tutorial-source/ci/inji-oid4vci-interop-test
-          # The application tutorial imports the Python client. It is built for
-          # the stable ABI, so the container step below imports this same file
-          # rather than building inside a read-only mount.
-          CARGO_TARGET_DIR="target/evidence-tutorial-source" \
-            cargo build --locked --profile ci \
-            -p registry-evidence-client-py --lib \
-            --features registry-evidence-client-py/extension-module
+
+      - name: Assemble the client package the application tutorial imports
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The tutorial installs the maintained client package, so the replay
+          # imports that same package, assembled from this commit. maturin gets
+          # the pinned environment the release workflows build the published
+          # wheel with, so a packaging regression fails here too.
+          python3 -m venv "${RUNNER_TEMP}/maturin"
+          "${RUNNER_TEMP}/maturin/bin/pip" install --quiet \
+            --require-hashes --only-binary=:all: \
+            --requirement "${GITHUB_WORKSPACE}/release/requirements/maturin-1.9.6.txt"
+          # The output stays inside the workspace, because the container step
+          # below mounts the workspace and nothing else.
+          out_dir="${GITHUB_WORKSPACE}/target/evidence-tutorial-client"
+          # maturin --zig resolves zig through the python3 on PATH, so the
+          # environment's interpreter, which carries the pinned ziglang, must
+          # come first, as in the release workflows.
+          export PATH="${RUNNER_TEMP}/maturin/bin:${PATH}"
+          python3 release/scripts/assemble-registry-client-packages.py \
+            --artifacts python \
+            --output-dir "${out_dir}" \
+            --work-dir "${RUNNER_TEMP}/client-assembly" \
+            --maturin "${RUNNER_TEMP}/maturin/bin/maturin"
+          wheel="$(find "${out_dir}" -maxdepth 1 -name 'registry_stack_client-*.whl')"
+          if [[ "$(printf '%s\n' "${wheel}" | wc -l)" -ne 1 || ! -f "${wheel}" ]]; then
+            echo "expected exactly one assembled client wheel in ${out_dir}" >&2
+            find "${out_dir}" -maxdepth 1 -name '*.whl' >&2
+            exit 1
+          fi
+          # The gate reads it inside the container, at the mounted path.
+          printf 'TUTORIAL_CLIENT_WHEEL=/work/%s\n' \
+            "${wheel#"${GITHUB_WORKSPACE}/"}" >>"${GITHUB_ENV}"
 
       - name: Test the exact local Evidence lifecycle
         shell: bash
@@ -981,9 +1012,73 @@ jobs:
             --env EVIDENCE_OID4VCI_BIN=/work/target/evidence-tutorial-source/ci/evidence-oid4vci \
             --env EVIDENCE_OID4VCI_INTEROP_TEST_BIN=/work/target/evidence-tutorial-source/ci/inji-oid4vci-interop-test \
             --env MINT_BIN=/work/target/evidence-tutorial-source/ci/mint \
-            --env EVIDENCE_CLIENT_PY_LIB=/work/target/evidence-tutorial-source/ci/libregistry_evidence_client.so \
+            --env "REGISTRY_CLIENT_PY_WHEEL=${TUTORIAL_CLIENT_WHEEL}" \
             rust:1.95-trixie@sha256:f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3 \
             bash /work/docs/site/scripts/check-evidence-tutorials.sh
+
+  breg-tutorial:
+    name: Base Registry Engine tutorial from source
+    needs: changes
+    if: needs.changes.outputs.breg_tutorial == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22.12.0
+          cache: npm
+          cache-dependency-path: docs/site/package-lock.json
+
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.11.16"
+
+      - name: Test the tutorial gate helpers
+        working-directory: docs/site
+        run: npm run test:tutorial:breg
+
+      - name: Check tutorial command drift
+        working-directory: docs/site
+        run: npm run check:tutorial:breg:dry-run
+
+      - name: Build the Base Registry Engine toolset under test
+        shell: bash
+        run: |
+          set -euo pipefail
+          CARGO_TARGET_DIR="target/breg-tutorial-source" \
+            cargo build --locked --profile ci \
+            -p registry-breg --features registry-breg/runtime \
+            -p registry-bregctl -p registry-mint --bins
+
+      - name: Execute the Base Registry Engine tutorial from a reader directory
+        shell: bash
+        env:
+          BREG_BIN: ${{ github.workspace }}/target/breg-tutorial-source/ci/breg
+          BREGCTL_BIN: ${{ github.workspace }}/target/breg-tutorial-source/ci/bregctl
+          MINT_BIN: ${{ github.workspace }}/target/breg-tutorial-source/ci/mint
+        run: |
+          set -euo pipefail
+          # This replay does not run in a clean read-only container the way the
+          # Evidence one does: the quickstart launcher the tutorial starts runs
+          # PostgreSQL in a disposable container of its own and owns a run
+          # directory inside the checkout it was started from. The gate stages
+          # a writable copy of that checkout for the reader instead.
+          bash docs/site/scripts/check-breg-tutorial.sh
 
   evidence-anchors:
     # The documentation anchors cite source across the whole workspace, so this check
@@ -1317,8 +1412,10 @@ jobs:
           ln -s "${client_dir}" \
             "${smoke}/node_modules/@registrystack/client"
           cp "${GITHUB_WORKSPACE}/release/scripts/smoke-registry-client-package.js" \
+            "${GITHUB_WORKSPACE}/release/scripts/smoke-registry-client-package.mjs" \
             "${smoke}/"
           (cd "${smoke}" && node smoke-registry-client-package.js)
+          (cd "${smoke}" && node smoke-registry-client-package.mjs)
 
   ci-result:
     name: CI result
@@ -1335,6 +1432,7 @@ jobs:
       - release-tool
       - release-source-proof
       - evidence-tutorials
+      - breg-tutorial
       - evidence-anchors
       - docs
       - editor-extensions

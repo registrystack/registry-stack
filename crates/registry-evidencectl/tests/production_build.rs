@@ -19,6 +19,8 @@ use std::{
 const REVISION: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const LOCAL_URI: &str = "urn:registrystack:evidence:local:forbidden";
 const SECRET_CANARY: &str = "production-build-secret-canary";
+const CHECK_DIAGNOSTIC: &str =
+    "evidence bundle-check diagnostic: derivations/answer.rhai failed static compilation";
 
 #[test]
 fn build_is_create_only_and_never_changes_an_existing_output() {
@@ -114,6 +116,126 @@ fn failed_runtime_check_leaves_no_output_or_private_staging() {
 }
 
 #[test]
+fn a_rejected_bundle_and_fixture_name_the_command_that_shows_the_diagnosis() {
+    let rejected_bundle = Fixture::new();
+    let project = fs::canonicalize(&rejected_bundle.project).expect("canonical project");
+
+    let output = rejected_bundle.build_failing("check");
+
+    assert_failed(&output, "a rejected bundle must fail the build");
+    let message = stderr(&output);
+    assert!(
+        message.contains(&format!(
+            "Run `evidencectl fixtures run --project {}` to read the diagnosis Evidence prints.",
+            project.display()
+        )),
+        "the refusal names the command that shows the diagnosis: {message}"
+    );
+    assert!(
+        message.contains(CHECK_DIAGNOSTIC),
+        "the refusal includes what Evidence printed: {message}"
+    );
+    assert_value_free(&output);
+
+    let rejected_fixture = Fixture::new();
+    let project = fs::canonicalize(&rejected_fixture.project).expect("canonical project");
+
+    let output = rejected_fixture.build_failing("fixture:fixtures/answer.yaml");
+
+    assert_failed(&output, "a rejected fixture must fail the build");
+    let message = stderr(&output);
+    assert!(
+        message.contains(&format!(
+            "Run `evidencectl fixtures run --project {} --fixture fixtures/answer.yaml` to read the diagnosis Evidence prints.",
+            project.display()
+        )),
+        "the refusal names the rejected fixture with the command: {message}"
+    );
+    assert!(
+        !message.contains("Evidence reported:"),
+        "a rejected fixture's own diagnosis is not relayed here: {message}"
+    );
+    assert_value_free(&output);
+}
+
+#[test]
+fn a_long_bundle_check_diagnostic_is_bounded_and_says_so() {
+    let fixture = Fixture::new();
+
+    let output = fixture.build_failing("check-overflow");
+
+    assert_failed(&output, "a long rejected bundle must still fail the build");
+    let message = stderr(&output);
+    assert!(
+        message.contains("diagnostic trimmed to the last 40 lines"),
+        "a long diagnostic says it was trimmed: {message}"
+    );
+    assert!(
+        message.contains("evidence bundle-check diagnostic line 200"),
+        "the most recent line survives the trim: {message}"
+    );
+    assert!(
+        !message.contains("evidence bundle-check diagnostic line 1\n"),
+        "an earlier line does not survive the trim: {message}"
+    );
+}
+
+#[test]
+fn a_mismatched_evidence_binary_is_refused_before_any_step() {
+    let fixture = Fixture::new();
+
+    let output = fixture
+        .command(&fixture.project, &fixture.target, &fixture.output)
+        .env("FAKE_EVIDENCE_VERSION", "0.0.0-other")
+        .output()
+        .expect("evidencectl build starts");
+
+    assert_failed(&output, "a mismatched evidence binary must fail the build");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("0.0.0-other"),
+        "the refusal names the reported version: {stderr}"
+    );
+    assert!(
+        stderr.contains(registry_platform_buildinfo::DISPLAY_VERSION),
+        "the refusal names this build: {stderr}"
+    );
+    assert!(!fixture.output.exists());
+    assert!(
+        fixture.invocations().is_empty(),
+        "a mismatched binary was handed work"
+    );
+    fixture.assert_no_staging_residue();
+}
+
+#[test]
+fn an_evidence_binary_that_does_not_identify_itself_is_refused_before_any_step() {
+    let fixture = Fixture::new();
+
+    let output = fixture
+        .command(&fixture.project, &fixture.target, &fixture.output)
+        .env("FAKE_EVIDENCE_VERSION", "")
+        .output()
+        .expect("evidencectl build starts");
+
+    assert_failed(
+        &output,
+        "an unidentified evidence binary must fail the build",
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("did not report an Evidence runtime version"),
+        "the refusal names what was missing: {stderr}"
+    );
+    assert!(!fixture.output.exists());
+    assert!(
+        fixture.invocations().is_empty(),
+        "an unidentified binary was handed work"
+    );
+    fixture.assert_no_staging_residue();
+}
+
+#[test]
 fn successful_build_copies_runtime_exactly_and_excludes_local_and_validation_secrets() {
     let fixture = Fixture::new();
     let local = fixture.project.join(".evidence/dev");
@@ -157,6 +279,45 @@ fn successful_build_copies_runtime_exactly_and_excludes_local_and_validation_sec
         );
         assert!(!path.to_string_lossy().contains("validation"));
     }
+    fixture.assert_no_staging_residue();
+}
+
+#[test]
+fn an_empty_publication_description_leaves_no_candidate() {
+    let fixture = Fixture::new();
+    fixture.declare_publication();
+
+    let output = fixture
+        .command(&fixture.project, &fixture.target, &fixture.output)
+        .env("FAKE_EVIDENCE_EMPTY_DESCRIPTION", "1")
+        .output()
+        .expect("evidencectl build starts");
+
+    assert_failed(
+        &output,
+        "an empty publication description must fail the build",
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("publication"),
+        "the refusal names the publication the bundle declares: {stderr}"
+    );
+    assert!(!fixture.output.exists());
+    fixture.assert_no_staging_residue();
+}
+
+#[test]
+fn a_bundle_without_publication_carries_no_catalog_description() {
+    let fixture = Fixture::new();
+
+    let output = fixture
+        .command(&fixture.project, &fixture.target, &fixture.output)
+        .env("FAKE_EVIDENCE_EMPTY_DESCRIPTION", "1")
+        .output()
+        .expect("evidencectl build starts");
+
+    assert_success(&output, "build of a bundle that declares no publication");
+    assert!(!fixture.output.join("bundle/catalog.jsonld").exists());
     fixture.assert_no_staging_residue();
 }
 
@@ -575,7 +736,12 @@ impl Fixture {
             .arg(output)
             .env("EVIDENCE_BIN", &self.evidence)
             .env("FAKE_EVIDENCE_LOG", &self.log)
-            .env_remove("FAKE_EVIDENCE_FAIL");
+            .env(
+                "FAKE_EVIDENCE_VERSION",
+                registry_platform_buildinfo::DISPLAY_VERSION,
+            )
+            .env_remove("FAKE_EVIDENCE_FAIL")
+            .env_remove("FAKE_EVIDENCE_EMPTY_DESCRIPTION");
         command
     }
 
@@ -635,6 +801,15 @@ impl Fixture {
             "sourceExtracts:\n  registry-snapshot:\n    path: /var/lib/evidence/registry.sqlite\n",
         );
         fs::write(&self.runtime, runtime).expect("runtime extract binding");
+    }
+
+    /// Declare a provider publication in the deployment target, the shape
+    /// that makes `evidence render-discovery-description` produce a catalog
+    /// description rather than nothing.
+    fn declare_publication(&self) {
+        let mut governance = fs::read_to_string(&self.governance).expect("target governance");
+        governance.push_str(PUBLICATION);
+        fs::write(&self.governance, governance).expect("target governance with publication");
     }
 
     fn remove_governance(&self) {
@@ -912,6 +1087,14 @@ authorityProfiles:
         subjects: [{role: subject, selectorProfile: subject-reference-v1, valueOrigin: request}]
 "#;
 
+const PUBLICATION: &str = r#"publication:
+  serviceId: urn:example:services:evidence
+  title: Governed Evidence service
+  description: Governed minimum-disclosure Evidence service
+  endpointUrl: https://evidence.invalid
+  jurisdictions: [urn:example:jurisdictions:governed]
+"#;
+
 const TARGET_RUNTIME: &str = r#"version: 1
 bundleDirectory: /srv/evidence/candidate/bundle
 listener:
@@ -939,8 +1122,15 @@ outboundTls: {systemRoots: true, trustProfiles: {}}
 const FAKE_EVIDENCE: &str = r#"#!/bin/sh
 set -eu
 
+if [ "${1:-}" = '--version' ]; then
+  printf 'evidence %s\n' "$FAKE_EVIDENCE_VERSION"
+  exit 0
+fi
+
 if [ "${1:-}" = 'render-discovery-description' ]; then
-  printf '{}\n'
+  if [ "${FAKE_EVIDENCE_EMPTY_DESCRIPTION:-}" != '1' ]; then
+    printf '{}\n'
+  fi
   exit 0
 fi
 
@@ -963,7 +1153,15 @@ done
 
 failure=${FAKE_EVIDENCE_FAIL:-}
 if [ "$failure" = 'check' ] && [ -z "$fixture" ]; then
-  printf '%s\n' 'production-build-secret-canary synthetic-selector-canary source-value-canary' >&2
+  printf '%s\n' 'evidence bundle-check diagnostic: derivations/answer.rhai failed static compilation' >&2
+  exit 1
+fi
+if [ "$failure" = 'check-overflow' ] && [ -z "$fixture" ]; then
+  i=1
+  while [ "$i" -le 200 ]; do
+    printf 'evidence bundle-check diagnostic line %s\n' "$i" >&2
+    i=$((i + 1))
+  done
   exit 1
 fi
 if [ "$failure" = "fixture:$fixture" ]; then

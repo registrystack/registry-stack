@@ -56,9 +56,10 @@
 #                                              apply a documented before/after
 #                                              fence pair to an existing file
 #                   wait-http:URL              block until that URL answers
-#                   python-client              install the Python client from
-#                                              this checkout, standing in for
-#                                              the documented clone and build
+#                   python-client              put the client package assembled
+#                                              from this checkout on the import
+#                                              path, standing in for the
+#                                              documented install
 #                   fhir-mock                  start the sanitized local FHIR
 #                                              mock this gate carries
 #                   track-pid:PATH             adopt a PID a fence wrote, so
@@ -84,8 +85,8 @@
 #   EVIDENCE_BIN / EVIDENCECTL_BIN /      run these exact binaries instead of
 #   EVIDENCE_OID4VCI_BIN / MINT_BIN       building from source
 #   EVIDENCE_OID4VCI_INTEROP_TEST_BIN     run this prebuilt sanitized flow test
-#   EVIDENCE_CLIENT_PY_LIB                import this prebuilt Python client
-#                                         module instead of building one
+#   REGISTRY_CLIENT_PY_WHEEL              import the client package out of this
+#                                         assembled wheel
 #   EVIDENCE_TUTORIAL_CARGO_PROFILE       ci (default) or release
 #   EVIDENCE_TUTORIAL_DOCS_ROOT           tutorial directory override (tests)
 
@@ -117,6 +118,7 @@ EVIDENCE_TUTORIALS=(
 	verify-an-assertion-as-a-consumer
 	control-who-can-request-evidence
 	issue-fhir-evidence-as-vcs
+	connect-a-sqlite-extract
 )
 
 # Every other page under DOCS_ROOT, and the reason it is not replayed here.
@@ -125,9 +127,12 @@ EVIDENCE_TUTORIALS=(
 EXCLUDED_EVIDENCE_TUTORIALS=(
 	build-and-deploy-evidence-project                # drift-checked by evidence-production-build-docs.test.mjs; needs a production build environment
 	connect-an-institution-source                    # how-to against the reader's own OpenAPI source; no fixed scenario this gate can replay
-	connect-a-sqlite-extract                         # starter is covered by evidencectl scaffold and fixture tests; production half needs an operator-mounted extract
 	first-run-with-solmara-lab                       # historical; the Solmara Lab stack is replayed by check-tutorial.sh, not here
 	first-breg                            # Base Registry Engine journey; product CI runs quickstart/run.sh --smoke, reader execution checks the documented steps
+	extend-a-registry-with-a-module                  # Base Registry Engine journey; offline bregctl steps on the quickstart project, verified in reader mode outside the Evidence runner
+	send-registry-events-to-a-webhook                # Base Registry Engine journey; needs the demo launcher's webhook receiver, verified in reader mode outside the Evidence runner
+	build-a-breg-production-candidate                # Base Registry Engine journey; needs a PostgreSQL container and a local signing key, verified in reader mode outside the Evidence runner
+	query-breg-client                                # BReg client journey; depends on the released unified packages, like query-relay-client
 	query-a-spatial-registry-from-qgis               # Base Registry Engine spatial journey; product CI runs the spatial smoke, while QGIS needs a desktop reader run
 	integrate-evidence-candidate-with-docker-compose # drift-checked by evidence-production-build-docs.test.mjs; needs Docker Compose
 	issue-a-birth-certificate-vc-from-opencrvs       # needs the public OpenCRVS Farajaland demo; live and opt-in, not replayed in CI
@@ -391,8 +396,8 @@ load_spec() {
 			"wait-http:http://127.0.0.1:4010/people/person-123"
 			"run:Give the application its own identity"
 			"run:Pin the keys your application trusts"
-			# Stands in for the two fences under "Build the Python client", the
-			# documented clone and build of the released client.
+			# Stands in for the fence under "Install the Python client", the
+			# documented install of the released client package.
 			"python-client"
 			"run:Start the local services|2"
 			"run-fails:Start the local services|3"
@@ -418,6 +423,15 @@ load_spec() {
 			"pinned binding recorded in subject-bindings.json"
 			"unverifiable response, nothing read (policy)"
 		)
+		;;
+	connect-a-sqlite-extract)
+		SPEC_STEPS=(
+			"run:Create and prove the starter"
+		)
+		# The scaffold and the fixture run hold themselves up: a starter that
+		# failed to scaffold ends the journey at the next command, and the
+		# fixture run exits non-zero on any case it cannot prove.
+		SPEC_ASSERTS=()
 		;;
 	issue-fhir-evidence-as-vcs)
 		SPEC_STEPS=(
@@ -565,49 +579,37 @@ prepare_toolset() {
 	ln -s "$MINT_BIN" "$SHIM_DIR/mint"
 }
 
-# The Python client extension module, built once for whichever tutorials import
-# it.
+# The unified client package, unpacked once for whichever tutorials import it.
 #
-# The documented build clones the repository at the installed runtime's release
-# tag, which is the right instruction for a reader and the wrong one for this
-# gate: it needs the network, and it would prove a released client rather than
-# the one in this checkout. Building the same crate from here instead is what
-# makes a client regression fail this gate on the commit that introduces it.
-# The two documented fences it stands in for are reported as unexecuted, so
-# their release tag and build flags stay a reviewer's call rather than this
-# gate's.
-# The module is built for the stable ABI, so one built outside this script
-# imports under any CPython the replay userland carries, exactly as
-# EVIDENCE_CLIENT_PY_LIB's siblings let CI mount prebuilt binaries.
-PYTHON_CLIENT_LIB="${EVIDENCE_CLIENT_PY_LIB:-}"
+# The documented install resolves the package from an index at the running
+# runtime's version, which is the right instruction for a reader and the wrong
+# one for this gate: it needs the network, and it would prove a released client
+# rather than the one in this checkout. Importing a package assembled from this
+# checkout instead is what makes a client regression fail this gate on the
+# commit that introduces it. The documented install fence it stands in for is
+# reported as unexecuted, so its version selector stays a reviewer's call
+# rather than this gate's.
+# The bindings inside are built for the stable ABI, so a wheel assembled
+# outside this script imports under any CPython the replay userland carries,
+# exactly as EVIDENCE_BIN's siblings let CI mount prebuilt binaries. Assembling
+# one needs a build toolchain the replay userland does not carry, so this gate
+# never assembles: the caller names a wheel, or the gate stops here.
+REGISTRY_CLIENT_PY_WHEEL="${REGISTRY_CLIENT_PY_WHEEL:-}"
 
 prepare_python_client() {
-	if [[ -n "$PYTHON_CLIENT_LIB" ]]; then
-		if [[ "$PYTHON_CLIENT_LIB" != /* ]]; then
-			printf 'Python client module path must be absolute: %s\n' \
-				"$PYTHON_CLIENT_LIB" >&2
-			exit 1
-		fi
-	else
-		local profile_dir built
-		profile_dir="$(resolve_profile_dir)"
-		(cd "$REPO_ROOT" && CARGO_TARGET_DIR="$TARGET_DIR" \
-			cargo build --locked --profile "$BUILD_PROFILE" \
-			-p registry-evidence-client-py --lib \
-			--features registry-evidence-client-py/extension-module)
-		case "$(uname -s)" in
-		Darwin) built="libregistry_evidence_client.dylib" ;;
-		Linux) built="libregistry_evidence_client.so" ;;
-		*)
-			printf 'the Python Evidence client tutorial covers macOS and Linux, not %s\n' \
-				"$(uname -s)" >&2
-			exit 1
-			;;
-		esac
-		PYTHON_CLIENT_LIB="$TARGET_DIR/$profile_dir/$built"
+	if [[ -z "$REGISTRY_CLIENT_PY_WHEEL" ]]; then
+		printf 'REGISTRY_CLIENT_PY_WHEEL is unset: name a client wheel assembled with %s\n' \
+			'release/scripts/assemble-registry-client-packages.py' >&2
+		exit 1
 	fi
-	if [[ ! -f "$PYTHON_CLIENT_LIB" ]]; then
-		printf 'Python client module not built: %s\n' "$PYTHON_CLIENT_LIB" >&2
+	if [[ "$REGISTRY_CLIENT_PY_WHEEL" != /* ]]; then
+		printf 'client wheel path must be absolute: %s\n' "$REGISTRY_CLIENT_PY_WHEEL" >&2
+		exit 1
+	fi
+	if [[ ! -f "$REGISTRY_CLIENT_PY_WHEEL" ]]; then
+		printf 'client wheel not found: %s; assemble one with %s\n' \
+			"$REGISTRY_CLIENT_PY_WHEEL" \
+			'release/scripts/assemble-registry-client-packages.py' >&2
 		exit 1
 	fi
 }
@@ -713,13 +715,18 @@ emit_run_fails_step() {
 	printf 'fi\n'
 }
 
-# Install the Python client the way the tutorial's clone-and-build fences do,
-# from this checkout. The destination path and module name are the reader's.
+# Put the client package assembled from this checkout where the tutorial's
+# install fence puts the released one: on the import path of the shell the
+# reader's commands run in. The replay userland carries unzip and no installer,
+# so the wheel is unpacked rather than installed, which is enough because the
+# package declares no dependencies of its own.
 emit_python_client_step() {
 	local slug="$1"
-	printf '\nprintf "==> %s install the Python client from this checkout\\n"\n' "$slug"
-	printf 'mkdir -p python-module\n'
-	printf 'cp %q python-module/registry_evidence_client.so\n' "$PYTHON_CLIENT_LIB"
+	printf '\nprintf "==> %s unpack the client package assembled from this checkout\\n"\n' "$slug"
+	printf 'mkdir -p client-package\n'
+	printf 'unzip -q -o %q -d client-package\n' "$REGISTRY_CLIENT_PY_WHEEL"
+	# shellcheck disable=SC2016  # PYTHONPATH expands in the emitted script
+	printf 'PYTHONPATH="$PWD/client-package${PYTHONPATH:+:$PYTHONPATH}"\nexport PYTHONPATH\n'
 }
 
 # Emit a documented before/after fence pair applied to a file the reader edits.

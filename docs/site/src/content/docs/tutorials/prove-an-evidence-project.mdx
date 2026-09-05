@@ -14,27 +14,72 @@ locale: en
 standards_referenced: []
 ---
 
-Start with a reviewed editable project. If you need to create one,
-[connect an institution source from OpenAPI](../connect-an-institution-source/) before adding
-fixtures. Fixtures are executable claims about your own Evidence Gateway project. They are not sample data
-for a first run and they must not be generated from an unrelated domain.
+Start with an editable project: the directory `evidencectl new` created, holding `questions/`,
+`derivations/`, `fixtures/`, and its source objects. It has no `runtime.yaml` and no `bundle/`;
+those belong to the candidate `evidencectl build` produces later. If you need to create a project,
+[connect an institution source from OpenAPI](../connect-an-institution-source/) or
+[get your first assertion](../first-evidence-assertion/) before adding fixtures. Fixtures are
+executable claims about your own Evidence Gateway project. They are not sample data for a first
+run and they must not be generated from an unrelated domain.
 
-Use them when your source, requirement, and derivation are ready for review. Local assurance may
-omit them while you iterate. Production and evidence-grade assurance require complete fixture
-coverage before the bundle loads.
+Use them when your source, requirement, and derivation are ready for review. Local assurance lets a
+project load without them, but the run below is not a formality you can pass with an empty suite: a
+run that evaluated no case refuses with `no case was evaluated, so this run proves nothing: every
+fixture the project references must declare at least one case`. Production and evidence-grade
+assurance require complete fixture coverage before the bundle loads.
+
+## Add the governance each question hands off
+
+The fixture runner compiles the editable project the way a production build compiles it, so the
+governance a candidate needs is required before the first fixture run, not at build time. Give
+every question a `governance` block and every answer a stable concept identifier:
+
+```yaml
+answers:
+  - concept: is_adult
+    id: urn:example:concept:adult-status:v1
+    type: boolean
+governance:
+  requirement: urn:example:requirement:adult-status:v1
+  kind: criterion
+  referenceFrameworks: [urn:example:framework:adult-status:v1]
+  evidenceType: urn:example:evidence-type:adult-status:v1
+  validitySeconds: 300
+  observationTimezone: UTC
+  fixtures: fixtures/adult-status.yaml
+  disclosureFamilies: [urn:example:disclosure-family:adult-status]
+```
+
+Three rules decide whether the run starts at all:
+
+- A question with no `governance` block stops the run with `evidencectl: compiling editable project
+  for fixture evaluation: every production question requires governance`.
+- An answer with no `id` stops it with `every production answer requires one stable concept id`.
+- `governance.fixtures` must be exactly `fixtures/<name>.yaml`, a path inside the project. No
+  requirement, framework, Evidence Type, disclosure family, or concept identifier may be one of the
+  disposable `urn:registrystack:evidence:local:` URIs that a local generation issues.
+
+The project a local tutorial leaves behind satisfies none of this, so adding governance is the
+first change to make here. The Evidence authoring form reference states these three beside the
+other refusals a project meets on the way to a candidate, under
+[Rules that block a build](../../products/registry-evidence/authoring-form/#rules-that-block-a-build).
 
 ## Write cases for your requirement
 
-Place the fixture file under `bundle/fixtures/` and reference it from the requirement in
-`bundle/evidence.yaml`. Keep every value synthetic and sanitized.
+Place the fixture file under `fixtures/` in the editable project and name it from the question's
+`governance.fixtures`. Keep every value synthetic and sanitized.
 
 Cover behavior your reviewers need to approve:
 
 - one ordinary positive result;
 - one legitimate negative value, or an unresolved case when false would be misleading;
 - each important boundary in the derivation;
-- the `no_match` and `ambiguous` outcomes;
-- missing or mistyped required facts;
+- missing required facts, which the extractor generated from OpenAPI fails as
+  `source.unavailable` rather than as a `no_match` or `ambiguous` outcome; get a real `no_match` or
+  `ambiguous` by hand-editing the extractor, as
+  [Finish extraction and facts](../connect-an-institution-source/#finish-extraction-and-facts)
+  covers;
+- mistyped required facts;
 - malformed and unavailable source responses;
 - output outside the governed codelist or schema;
 - privacy expectations proving source fields and selector values stay out of evidence and
@@ -53,10 +98,20 @@ From any directory, run:
 evidencectl fixtures run --project "<evidence-project>"
 ```
 
-Evidencectl first runs `evidence check`, discovers the fixture files referenced by the captured
-bundle, and drives each one through `evidence evaluate`. It does not start HTTP, resolve a source
-credential, call the source, or write the production audit log. The served HTTP path remains a
-separate integration check.
+Evidencectl asks the `evidence` binary for its version first and refuses one that is not its own,
+then compiles the editable project into a private staging bundle, runs `evidence bundle-check`
+against it, discovers the fixture files the compiled bundle captured, and drives each one through
+`evidence bundle-evaluate`; pass `--evidence-bin` when the matching binary is not the first
+`evidence` on `PATH`. The run does not start HTTP, resolve a source credential, call the source, or
+write the production audit log. The served HTTP path remains a separate integration check.
+
+A passing run reports the check and one line per fixture:
+
+```text
+PASS: check
+PASS: fixtures/adult-status.yaml (8 cases)
+2 passed, 0 failed (8 cases evaluated)
+```
 
 Use JSON output in CI:
 
@@ -76,17 +131,20 @@ run to explain itself:
 evidencectl fixtures run --project "<evidence-project>" --explain
 ```
 
-Each fixture's trace is relayed with its step: one line per case, then one line per stage that case
-reached, with the status it reached it at. The last line of a failed case is the one to read first.
-An unresolved lookup lists the response members the extraction script actually saw, and an
-output-gate rejection lists each declared concept and its required form.
+Each fixture prints one JSON trace after its result line. The trace holds one entry per case, with
+the case `id`, its `expectedResult` and `observedResult`, the `reasonCode` the run settled on, and
+one `stages` entry for every stage that case reached: `prepare`, `acquire`, `extract`, `derive`,
+`validate`, and `sign`. Every stage carries its own `status` and a short `note`, such as the keys a
+response was projected to or the concepts the output gate accepted. A failed case adds `failure` and
+`findingCodes`, and its `stages` list stops at the stage that ended the case, so read that last entry
+first.
 
-To explain one fixture on its own, or to keep the trace as a document, run `evidence evaluate`
-directly:
+To explain one fixture on its own, or one case inside it, name them. The paths are the ones the
+compiled bundle captured, which are the project's own `fixtures/` paths:
 
 ```sh
-evidence --runtime "<evidence-project>/runtime.yaml" \
-  evaluate --fixture "bundle/fixtures/<cases>.yaml" --explain --explain-format json
+evidencectl fixtures run --project "<evidence-project>" \
+  --fixture "fixtures/<cases>.yaml" --case "<case-id>" --explain
 ```
 
 The trace reports shapes: member names, counts, and identifiers. It never prints a response, fact,
@@ -97,15 +155,18 @@ public problem and the audit chain instead.
 
 ## Check the deployable inputs
 
-Run `evidence check` against the runtime file you plan to deploy:
+An editable project has no runtime document to check. Once `evidencectl build` has produced a
+candidate, that candidate is what carries `runtime.yaml` beside `bundle/`, and `evidence check`
+runs against it:
 
 ```sh
-evidence check --runtime "<evidence-project>/runtime.yaml"
+evidence check --runtime "<candidate>/runtime.yaml"
 ```
 
 This validates the complete captured bundle, scripts, schemas, codelists, key references, and
-runtime bindings. Source credentials are checked by readiness when the service starts, not by the
-offline fixture runner.
+runtime bindings, and it initializes the configured signer, so a production or evidence-grade
+candidate needs its Transit proxy already running. Source credentials are checked by readiness when
+the service starts, not by the offline fixture runner.
 
 During local authoring, keep the project writable so changes are convenient. Freeze inputs only
 for the deployable revision: make the runtime and bundle non-writable to the service identity, or

@@ -745,14 +745,21 @@ jobs:
                 -maxdepth 1 -name '*.node' -print -quit)"
               test "$(find node_modules/@registrystack/client-${{ matrix.napi_platform }} \
                 -maxdepth 1 -name '*.node' | wc -l)" -eq 4
-              cp "${GITHUB_WORKSPACE}/release/scripts/smoke-registry-client-package.js" .
+              cp "${GITHUB_WORKSPACE}/release/scripts/smoke-registry-client-package.js" \
+                "${GITHUB_WORKSPACE}/release/scripts/smoke-registry-client-package.mjs" .
               node smoke-registry-client-package.js
+              node smoke-registry-client-package.mjs
               if [[ "${RUNNER_OS}" == Linux ]]; then
                 docker run --rm --network none \
                   --volume "${smoke}:${smoke}:ro" \
                   --workdir "${smoke}" \
                   "${NODE_GLIBC_BASELINE_IMAGE}" \
                 node smoke-registry-client-package.js
+                docker run --rm --network none \
+                  --volume "${smoke}:${smoke}:ro" \
+                  --workdir "${smoke}" \
+                  "${NODE_GLIBC_BASELINE_IMAGE}" \
+                node smoke-registry-client-package.mjs
               fi
             )
             if [[ "${{ matrix.asset }}" == linux-amd64-glibc ]]; then
