@@ -407,6 +407,15 @@ mod descriptor {
             self.parent.open_append(&self.name)
         }
 
+        /// Open this entry for reading and writing, so one descriptor can both
+        /// validate a file and shorten it. A caller that reads a prefix and
+        /// then truncates through the same descriptor shortens the file it
+        /// validated, even when the entry is replaced in between.
+        pub(crate) fn open_read_write(&self) -> io::Result<File> {
+            self.parent
+                .open_leaf(&self.name, OFlags::RDWR, Mode::empty())
+        }
+
         pub(crate) fn create_new(&self, mode: u32) -> io::Result<File> {
             self.parent.create_new(&self.name, mode)
         }
@@ -692,6 +701,10 @@ mod descriptor {
             match self.0 {}
         }
 
+        pub(crate) fn open_read_write(&self) -> io::Result<File> {
+            match self.0 {}
+        }
+
         pub(crate) fn create_new(&self, _mode: u32) -> io::Result<File> {
             match self.0 {}
         }
@@ -961,6 +974,31 @@ mod tests {
             b"published"
         );
         assert_eq!(tree.outside_entries(), vec!["target".to_owned()]);
+    }
+
+    #[test]
+    fn a_truncation_after_an_ancestor_is_replaced_only_shortens_the_named_file() {
+        let tree = race_tree();
+        let named = tree.named("target");
+        fs::write(&named, b"genuine tail").expect("the named file is written");
+        fs::write(tree.outside("target"), b"attacker tail").expect("the outside file is written");
+        let _guard = tree.arm();
+
+        let entry = SafeEntry::resolve(&named).expect("the path resolves before the swap");
+        let file = entry
+            .open_read_write()
+            .expect("the held descriptor opens the named file");
+        file.set_len(7).expect("the named file is shortened");
+        file.sync_all().expect("the shortened file is flushed");
+
+        assert_eq!(
+            fs::read(tree.moved("target")).expect("the named file survives"),
+            b"genuine"
+        );
+        assert_eq!(
+            fs::read(tree.outside("target")).expect("the outside file survives"),
+            b"attacker tail"
+        );
     }
 
     #[test]
