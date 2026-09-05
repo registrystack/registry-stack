@@ -26,8 +26,9 @@ You need:
 - An auto-auth method appropriate for the deployment platform.
 - A reviewed deployment target based on the ready-to-copy templates under
   `products/evidence/reference/deployment-targets/`.
-- An approved tool that can convert a P-256 public key from PEM to JWK and calculate its RFC 7638
-  SHA-256 thumbprint.
+- Python 3.11 or later, run through [`uv`](https://docs.astral.sh/uv/), to convert each service's
+  public key from PEM to JWK and compute its RFC 7638 SHA-256 thumbprint. [Publish the exact public
+  projections](#publish-the-exact-public-projections) gives the exact command for each service.
 
 The commands use a Transit mount named `transit`. Change the mount consistently when your provider
 uses another name.
@@ -103,8 +104,51 @@ the filename:
 }
 ```
 
-The object must contain exactly those six members and no private member. Put each service's public
-JWK in its complete environment target:
+The object must contain exactly those six members and no private member. Run this conversion from
+each service's saved review metadata; it reads the pinned version's PEM, derives `x` and `y`,
+computes the RFC 7638 thumbprint, and writes the finished JWK to the named directory as
+`<thumbprint>.jwk.json`:
+
+```sh
+pem_to_jwk() {
+  metadata_path=$1
+  version=$2
+  out_dir=$3
+  uv run --with cryptography python3 - "$metadata_path" "$version" "$out_dir" <<'PY'
+import base64, hashlib, json, sys
+
+from cryptography.hazmat.primitives.serialization import load_pem_public_key
+
+metadata_path, version, out_dir = sys.argv[1:4]
+
+with open(metadata_path) as f:
+    metadata = json.load(f)
+pem = metadata["data"]["keys"][version]["public_key"].encode()
+numbers = load_pem_public_key(pem).public_numbers()
+
+
+def b64url(n):
+    return base64.urlsafe_b64encode(n.to_bytes(32, "big")).rstrip(b"=").decode()
+
+
+x, y = b64url(numbers.x), b64url(numbers.y)
+canonical = json.dumps({"crv": "P-256", "kty": "EC", "x": x, "y": y}, separators=(",", ":"), sort_keys=True)
+kid = base64.urlsafe_b64encode(hashlib.sha256(canonical.encode()).digest()).rstrip(b"=").decode()
+jwk = {"kty": "EC", "crv": "P-256", "x": x, "y": y, "alg": "ES256", "kid": kid}
+
+with open(f"{out_dir}/{kid}.jwk.json", "w") as f:
+    json.dump(jwk, f, indent=2)
+    f.write("\n")
+print(kid)
+PY
+}
+
+pem_to_jwk "<operator-review-path>/evidence-key.json" "<nonzero-version>" "environments/<environment>/evidence/public-keys"
+pem_to_jwk "<operator-review-path>/mint-key.json" "<nonzero-version>" "environments/<environment>/mint/public-keys"
+```
+
+Each command prints the thumbprint it used as the filename. The result lands in the same
+environment target either command would need to publish to:
 
 ```text
 environments/<environment>/
