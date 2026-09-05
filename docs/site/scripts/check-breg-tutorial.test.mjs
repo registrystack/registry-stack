@@ -401,3 +401,33 @@ test('the staged reader checkout carries what the launcher resolves', async () =
     await rm(root, { recursive: true, force: true });
   }
 });
+
+// The registry refuses to initialize a project under a path that traverses a
+// symbolic link, and a temporary directory is one wherever the system temp
+// directory is itself a link, so the journey has to run from a resolved path.
+test('the work root the journey runs from traverses no symbolic link', async () => {
+  const source = await readFile(gate, 'utf8');
+  const assignment = source.match(/^WORK_ROOT=.*$/mu)?.[0];
+  assert.ok(assignment, 'the gate must assign a work root');
+  const root = await mkdtemp(join(tmpdir(), 'breg-work-root-'));
+  try {
+    const physical = join(root, 'physical');
+    const linked = join(root, 'linked');
+    await mkdir(physical);
+    const { code, output } = await runShell(
+      [
+        'set -euo pipefail',
+        `ln -s '${physical}' '${linked}'`,
+        `export TMPDIR='${linked}'`,
+        assignment,
+        'printf "%s\\n" "$WORK_ROOT"',
+      ].join('\n'),
+    );
+    assert.equal(code, 0, output);
+    const resolved = await runShell(`cd '${output.trim()}' && pwd -P`);
+    assert.equal(resolved.code, 0, resolved.output);
+    assert.equal(output.trim(), resolved.output.trim());
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

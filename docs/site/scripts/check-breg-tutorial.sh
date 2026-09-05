@@ -247,7 +247,11 @@ while (($# > 0)); do
 	esac
 done
 
-WORK_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/breg-tutorial.XXXXXX")"
+# The registry refuses to initialize a project under a path that traverses a
+# symbolic link, and the system temporary directory is one wherever /tmp or
+# TMPDIR is itself a link. Resolving the work root once puts the whole reader
+# journey on the physical path the registry accepts.
+WORK_ROOT="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/breg-tutorial.XXXXXX")" && pwd -P)"
 cleanup() {
 	local exit_code=$?
 	set +e
