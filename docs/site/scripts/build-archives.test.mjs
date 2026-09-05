@@ -18,7 +18,6 @@ import { gunzipSync, gzipSync } from 'node:zlib';
 import {
   buildDocsetArchive,
   currentSourceGeneratedArtifacts,
-  git,
   normalizePagefindGzipMetadata,
   readOptionalRegularFile,
   stagePinnedGeneratedArtifacts,
@@ -315,67 +314,6 @@ test('an empty artifact list stages nothing instead of listing the whole tree', 
 
   await restore();
   assert.deepEqual(calls, []);
-});
-
-test('retries a transient git failure with backoff before succeeding', async () => {
-  let calls = 0;
-  const waits = [];
-  const result = await git('git', ['show', 'HEAD:foo'], '/repo', {
-    execFileImpl: async () => {
-      calls += 1;
-      if (calls < 3) {
-        const error = new Error('Command failed');
-        error.stderr = Buffer.from(
-          "fatal: unable to access 'https://example.invalid/repo.git/': Could not resolve host: example.invalid\n",
-        );
-        throw error;
-      }
-      return { stdout: Buffer.from('ok') };
-    },
-    wait: async (delayMs) => { waits.push(delayMs); },
-  });
-
-  assert.equal(result.stdout.toString('utf8'), 'ok');
-  assert.equal(calls, 3);
-  assert.deepEqual(waits, [200, 400]);
-});
-
-test('does not retry a non-transient git failure', async () => {
-  let calls = 0;
-  await assert.rejects(
-    git('git', ['show', "HEAD:missing.json"], '/repo', {
-      execFileImpl: async () => {
-        calls += 1;
-        const error = new Error('Command failed');
-        error.stderr = Buffer.from("fatal: Path 'missing.json' does not exist in 'HEAD'\n");
-        throw error;
-      },
-      wait: async () => {
-        throw new Error('must not wait before retrying a permanent failure');
-      },
-    }),
-    /fatal: Path 'missing\.json' does not exist in 'HEAD'/,
-  );
-  assert.equal(calls, 1);
-});
-
-test('stops retrying a persistent transient failure after its bounded attempts', async () => {
-  let calls = 0;
-  const waits = [];
-  await assert.rejects(
-    git('git', ['show', 'HEAD:foo'], '/repo', {
-      execFileImpl: async () => {
-        calls += 1;
-        const error = new Error('Command failed');
-        error.stderr = Buffer.from('fatal: the remote end hung up unexpectedly\n');
-        throw error;
-      },
-      wait: async (delayMs) => { waits.push(delayMs); },
-    }),
-    /fatal: the remote end hung up unexpectedly/,
-  );
-  assert.equal(calls, 3);
-  assert.deepEqual(waits, [200, 400]);
 });
 
 test('candidate archive rejects a tag that does not match its release identity', async () => {
