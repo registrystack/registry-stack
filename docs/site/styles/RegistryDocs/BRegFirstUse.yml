@@ -1,0 +1,9 @@
+extends: conditional
+message: "Introduce the short form before using it: write 'Base Registry Engine (BReg)' earlier on this page."
+level: error
+scope: text
+ignorecase: false
+# Vale exempts every 'BReg' on a page once the expansion has appeared in an
+# earlier block, so this fires only where the short form comes first.
+first: '\b(BReg)\b'
+second: 'Base\s+Registry\s+Engine\s+\((BReg)\)'

@@ -1,0 +1,372 @@
+---
+title: Query a registry from Python and Node
+description: Install the unified Registry Stack client, read and create records in the quickstart registry from Python and Node, page with a continuation, and handle a refused write.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-04"
+doc_type: tutorial
+persona:
+  - consumer or verifier
+locale: en
+standards_referenced:
+  - openapi
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+This tutorial needs a registry on Registry Stack v0.26.1 or later and a client package at exactly
+that registry's version. The unified client packages start at v0.26.1: against a v0.26.0 registry
+there is no Base Registry Engine client package to install. The unified Registry Stack client gives
+an application one method for each Base Registry Engine operation, in Python and in Node. In this
+tutorial you install the published package, read the quickstart's example record, create a record
+with an idempotency key, page through the collection with a continuation, and inspect a refused
+write. Every step shows both languages; follow the one your application uses, or run both against
+the same registry.
+
+<QuickstartMeta
+  outcome="A Python program and a Node program that read, page, and write the quickstart registry through the unified client and handle a refusal explicitly."
+  time="About 20 minutes after the prerequisite"
+  level="Python or Node application developer"
+  prerequisites={['Python 3.10 or later, or Node 22.12 or later', 'The quickstart registry from Create and query your first registry, still running', 'The breg and mint binaries on your path']}
+/>
+
+## Before you start
+
+Complete [Create and query your first registry](../first-breg/) through **Read the first record**
+and leave the launcher running. In a second shell at the root of that checkout, save the run
+directory; the programs in this tutorial read the registry address and the token from it:
+
+```sh
+registry_run="$PWD/products/breg/quickstart/.run"
+```
+
+The operator token lasts five minutes, and the install takes longer than that. Renew it now, and
+again whenever a call fails with status `401`:
+
+```sh
+mint token \
+  --url "$(cat "$registry_run/mint-origin")/token" \
+  --client-id generic-quickstart \
+  --key "$registry_run/keys/operator/signing-p256-private-jwk" \
+  > "$registry_run/secrets/operator-token"
+```
+
+Success prints nothing. The file keeps its owner-only mode; the programs read it and never print it.
+
+## Install the client
+
+Work in a directory of its own and read the version from the `breg` binary rather than typing it:
+
+```sh
+mkdir breg-client-query
+cd breg-client-query
+version="$(breg --version | awk '{print $2}')"
+```
+
+Python, in a virtual environment:
+
+```sh
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install "registry-stack-client==${version}"
+```
+
+Node, in a package of its own:
+
+```sh
+npm init -y
+npm install "@registrystack/client@${version}"
+```
+
+Each package selects the native build for Linux amd64, Linux arm64, or macOS arm64; the release
+provides no other platform. The Python wheel uses the Python 3.10 stable ABI, so later Python
+versions import the same file.
+
+{/* Evidence: crates/registry-stack-client-py/README.md, crates/registry-stack-client-node/README.md,
+    release/scripts/assemble-registry-client-wheel.py */}
+
+## Construct a client and probe the registry
+
+The client takes the registry's base URL and an authorization mode. `static` sends the bearer you
+give it, unchanged, on every call. Create `query_breg.py`:
+
+```python
+import os
+from pathlib import Path
+
+from registry_client import breg
+
+run = Path(os.environ["REGISTRY_RUN"])
+client = breg.BaseRegistryClient(
+    base_url=(run / "breg-origin").read_text().strip(),
+    authorization={"static": (run / "secrets" / "operator-token").read_text().strip()},
+)
+
+print(client.health()["value"]["status"])
+print(client.ready()["value"]["status"])
+```
+
+Or create `query-breg.js`. Node methods return promises, so the calls live in an `async` function:
+
+```js
+const fs = require('node:fs');
+const path = require('node:path');
+
+const { breg } = require('@registrystack/client');
+
+const run = process.env.REGISTRY_RUN;
+const read = (name) => fs.readFileSync(path.join(run, name), 'utf8').trim();
+
+async function main() {
+  const client = new breg.BaseRegistryClient({
+    baseUrl: read('breg-origin'),
+    authorization: { static: read('secrets/operator-token') },
+  });
+
+  console.log((await client.health()).value.status);
+  console.log((await client.ready()).value.status);
+}
+
+main();
+```
+
+Run the program you wrote:
+
+```sh
+REGISTRY_RUN="$registry_run" python query_breg.py
+REGISTRY_RUN="$registry_run" node query-breg.js
+```
+
+Either prints:
+
+```text
+alive
+ready
+```
+
+Every method returns an outcome rather than a bare value: a Python dict, or a Node object, with
+`kind`, `value`, and the trace identifier of the exchange (`trace_id` in Python, `traceId` in
+Node). The following steps append to the Python file, and to the body of `main` in the Node file,
+before its closing brace. Each run repeats the earlier lines and adds the new ones.
+
+## Read the example record
+
+The quickstart seeded one record with code `QS-001`. Records are addressed by the identifier the
+registry assigned, so list with a filter on `code` first, then read the record. Both calls name the
+`operator` access profile, which the quickstart project defines with `code` and `status` as its
+filterable fields:
+
+```python
+found = client.list_records("records", access_profile="operator", filter="code eq 'QS-001'")
+record_identifier = found["value"]["items"][0]["recordIdentifier"]
+
+record = client.get_record("records", record_identifier, access_profile="operator")
+print(record["kind"])
+print(record["value"]["data"]["domainData"]["label"])
+print(record["etag"] is not None)
+```
+
+```js
+  const found = await client.listRecords('records', {
+    accessProfile: 'operator',
+    filter: "code eq 'QS-001'",
+  });
+  const recordIdentifier = found.value.items[0].recordIdentifier;
+
+  const record = await client.getRecord('records', recordIdentifier, { accessProfile: 'operator' });
+  console.log(record.kind);
+  console.log(record.value.data.domainData.label);
+  console.log(record.etag !== undefined);
+```
+
+The run adds three lines (`true` in Node):
+
+```text
+complete
+Quickstart example record
+True
+```
+
+`value` is the record document as the registry returned it, with the project's fields under
+`domainData`. `etag` is the strong entity tag a later patch must present. A field the registry did
+not return is `None` in Python; in Node the key is absent.
+
+## Create a record with an idempotency key
+
+Writes need a capability binding. The client reads the registry contract for the profile and
+selects the create operation by its identifier, so the program never types a route. The third
+argument is the idempotency key: 1 to 256 visible ASCII characters without a comma or semicolon.
+The registry replays a write it has already applied under the same key, so running the program
+again, in either language, prints the same record instead of creating a second one:
+
+```python
+contract = client.registry_contract(access_profile="operator")
+binding = contract.select_create("records.record.create", "operator")
+
+created = client.create_record(
+    binding,
+    {"code": "QS-002", "label": "Created from the unified client"},
+    "query-breg-qs-002",
+)
+print(created["kind"])
+print(created["value"]["data"]["domainData"]["code"])
+print(created["location"] is not None)
+```
+
+```js
+  const contract = await client.registryContract('operator');
+  const binding = contract.selectCreate('records.record.create', 'operator');
+
+  const created = await client.createRecord(
+    binding,
+    { code: 'QS-002', label: 'Created from the unified client' },
+    'query-breg-qs-002',
+  );
+  console.log(created.kind);
+  console.log(created.value.data.domainData.code);
+  console.log(created.location !== undefined);
+```
+
+The run adds:
+
+```text
+complete
+QS-002
+True
+```
+
+`location` is the URL of the created record. The binding is opaque: the program can select it and
+pass it to a write, and nothing else.
+
+## Page through the collection
+
+`top` asks for one record per page and `select` projects only the `code` field. A page with more
+records behind it carries a continuation. Pass it unchanged to the continuation method and stop
+when the last page has none (`None` in Python, absent in Node):
+
+```python
+page = client.list_records("records", access_profile="operator", top=1, select=["code"])
+
+while True:
+    for item in page["value"]["items"]:
+        print(item["domainData"]["code"])
+
+    continuation = page["continuation"]
+    if continuation is None:
+        break
+
+    page = client.continue_list(continuation)
+```
+
+```js
+  let page = await client.listRecords('records', { accessProfile: 'operator', top: 1, select: ['code'] });
+
+  while (true) {
+    for (const item of page.value.items) {
+      console.log(item.domainData.code);
+    }
+
+    if (page.continuation === undefined) {
+      break;
+    }
+
+    page = await client.continueList(page.continuation);
+  }
+```
+
+The run adds one line per record, across two pages:
+
+```text
+QS-001
+QS-002
+```
+
+## Handle a refused write
+
+The quickstart project declares `code` unique, so a second record with code `QS-002` under a new
+idempotency key is refused. The registry answers with a problem document, and the client raises
+one error type whose `kind` names the failure class. For a refusal the kind is `problem`, and the
+error carries the HTTP status and the problem code:
+
+```python
+try:
+    client.create_record(
+        binding,
+        {"code": "QS-002", "label": "A second record with the same code"},
+        "query-breg-qs-002-again",
+    )
+except breg.BaseRegistryClientError as error:
+    print(error.kind)
+    print(error.status)
+    print(error.code)
+```
+
+```js
+  try {
+    await client.createRecord(
+      binding,
+      { code: 'QS-002', label: 'A second record with the same code' },
+      'query-breg-qs-002-again',
+    );
+  } catch (error) {
+    console.log(error.kind);
+    console.log(error.status);
+    console.log(error.code);
+  }
+```
+
+The run adds:
+
+```text
+problem
+409
+mutation.conflict
+```
+
+Other kinds arrive the same way. The ones you are most likely to meet are `transport` when the
+connection or the exchange failed below HTTP, `configuration` and `invalid_request` when the client
+refused an input before sending anything, `metadata_selection` when a binding could not be
+selected, and `protocol` when a response violated the contract. Every kind carries a message
+(`str(error)` in Python, `error.message` in Node); a kind that comes from a response also carries
+the trace identifier to quote when you ask the registry operator about it. The
+[Registry Stack client API reference](../../reference/client-api/#breg-error-contract) names
+every kind the bindings raise and the members each one sets.
+
+{/* Evidence: crates/registry-breg-client-py/src/lib.rs, sdk_error(); crates/registry-breg-client-node/src/lib.rs,
+    client_error() and selection_error(); crates/registry-breg-client-node/client.d.ts,
+    crates/registry-breg-client-node/client.js, crates/registry-breg-client/src/client.rs */}
+
+## Clean up
+
+Deactivate the virtual environment and delete `breg-client-query` when you no longer need it. Stop
+the launcher with Ctrl+C in its terminal: that removes the quickstart database container and the
+record you created with it. The run directory stays until the next launch replaces it.
+
+## What you built
+
+A Python program and a Node program that construct a client from a base URL and a static bearer,
+probe the registry, read a record by identifier, create a record through a selected capability
+binding with an idempotency key, page through a projected collection with a continuation, and
+inspect a refused write through one error type.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `pip` or `npm` finds no matching version | The quickstart is older than v0.26.1, or `version` does not match `breg --version` | Run a v0.26.1 or later quickstart and reinstall at its exact version |
+| `KeyError: 'REGISTRY_RUN'`, or a `TypeError` naming the `path` argument | `REGISTRY_RUN` is not set | Prefix the command with `REGISTRY_RUN="$registry_run"` |
+| `problem` with status `401` and code `authentication.refused` | The token is older than five minutes | Renew it with the `mint token` command in [Before you start](#before-you-start) and rerun |
+| `transport` with a `connect` transport kind | The launcher is not running | Start it again and renew the token |
+| `problem` with status `400` and code `query.invalid` | A filter names a field the profile does not allow | Filter on `code` or `status` only |
+| `metadata_selection` with code `not_found` or `profile_mismatch` | The operation identifier or the profile does not match the project | Use `records.record.create` with the `operator` profile |
+| `configuration` while constructing the client | The base URL is not HTTPS or loopback HTTP, or carries credentials, a query, or a fragment | Read the URL from `breg-origin` as shown |
+| `problem` with status `404` and code `resource.not_found` | The identifier names no record, or the request carried no bearer | Read the identifier from a list result and check the token file is not empty |
+
+## Next
+
+- [Registry Stack client API reference](../../reference/client-api/#base-registry-engine) for every method, outcome shape, and error kind.
+- [Control access per profile](../../configure/breg-access/) for the access profiles and capability bindings a project exposes.
+- [Base Registry Engine API reference](../../reference/breg-api/) for the HTTP contract the client speaks.
+- [Error and status code reference](../../reference/errors/) for the problem codes the registry returns.

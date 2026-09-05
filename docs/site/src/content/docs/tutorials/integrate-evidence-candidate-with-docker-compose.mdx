@@ -121,12 +121,15 @@ Evidence deployment <bundle-revision> / <runtime-revision> passed check (<count>
 Both revisions are your own candidate's, and the count is the number of requirements in your
 bundle, so the line will not match anyone else's.
 
-`--require-runtime-dependencies` is what turns this into a check of the container rather than of
-the files. Without it, the command compiles the bundle, compiles the source plans, refuses a
-mounted extract already older than its source allows, and validates the mounted secret material.
-With it, the command also opens the configured audit path, signs a self-test
-message through the Transit proxy and verifies it against the governed public JWK, and resolves
-every configured source credential. It appends no audit event in either form, so a check that fails
+Both forms of the command compile the bundle, compile the source plans, refuse a mounted extract
+already older than its source allows, validate the mounted secret material, and initialize the
+configured signer, which signs a self-test message through the Transit proxy and verifies it
+against the governed public JWK. That is why the proxy starts first: without a reachable socket
+either form stops at `evidence: runtime signing initialization failed`.
+
+`--require-runtime-dependencies` adds the dependencies a served request would need. It opens the
+configured audit path, fetches the access-token issuer key set fail-closed, and resolves every
+configured source credential. It appends no audit event in either form, so a check that fails
 leaves the chain exactly as it found it.
 
 Changing only the container runtime does not change the governed bundle, so it does not require the

@@ -20,6 +20,13 @@ Complete [Return a governed value](../return-a-governed-value/) before starting 
 You will reuse that project to observe two boundaries: Evidence Gateway denies a purpose the provider did
 not authorize, and the verifier rejects a response changed after signing.
 
+The commands below assume the project as the governed-value tutorial leaves it, with no access
+policy of its own. [Control caller access](../control-who-can-request-evidence/) comes first in the
+navigation and adds `access/` policies to that same project. Once they exist, every preparation
+names its application, so add `--client service-router` to the `request prepare` command below if
+you completed that tutorial. Without it, preparation stops with
+`evidencectl: the active project requires a registered client selected with --client`.
+
 <QuickstartMeta
   outcome="Two unsafe changes are refused without producing trusted evidence."
   time="About 10 minutes"
@@ -178,11 +185,23 @@ unverified response body.
 
 ## Clean up
 
-Stop the local services:
+Stop the local services, then remove the stopped generation so the next tutorial starts from a
+clean project:
 
 ```sh
 evidencectl dev stop
+evidencectl dev clean
 ```
+
+```text
+Local Evidence stopped
+Removed stopped local Evidence state
+```
+
+This preserves your editable questions, derivations, keys, and the request artifacts under
+`.evidence/requests/`, which [Verify an assertion as a consumer](../verify-an-assertion-as-a-consumer/)
+reads. It also leaves `.evidence/failed-start`, where a start that never reached readiness keeps its
+logs, so a failure you have not read yet survives the cleanup.
 
 Return to the registry terminal and press `Ctrl+C`.
 
@@ -195,6 +214,7 @@ Return to the registry terminal and press `Ctrl+C`.
 
 ## Next
 
+- [Evidence authoring form reference](../../products/registry-evidence/authoring-form/)
 - [Connect an institution source](../connect-an-institution-source/)
 - [Configure Evidence Gateway](../../configure/evidence/)
 - [Review the Evidence Gateway security model](../../security/evidence/)

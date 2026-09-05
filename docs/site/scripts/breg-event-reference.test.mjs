@@ -9,7 +9,10 @@ const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8');
 const configuration = JSON.parse(read('../src/data/generated/breg-configuration.json'));
 const tables = parse(read('../src/data/breg-events.yaml'));
 const page = read('../src/content/docs/reference/breg-api.mdx');
-const operateGuide = read('../src/content/docs/operate/breg.mdx');
+// Webhook binding is an operator task with a page of its own, beside the
+// deploy page, so the declaration side (configure) and the reference both
+// point a reader at that page rather than at a section of the deploy page.
+const webhookGuide = read('../src/content/docs/operate/breg-webhooks.mdx');
 const configurationGuide = read('../src/content/docs/configure/breg.mdx');
 
 test('event fields reuse the complete module schema selection without changing definitions', () => {
@@ -71,11 +74,11 @@ test('header lookup covers the exact platform event request header inventory', (
 });
 
 test('webhook setup and contract lookup have separate connected pages', () => {
-  assert.match(operateGuide, /doc_type: how-to/);
-  assert.match(operateGuide, /bregctl webhook replay/);
-  assert.match(operateGuide, /\.\.\/\.\.\/reference\/breg-api\//);
+  assert.match(webhookGuide, /doc_type: how-to/);
+  assert.match(webhookGuide, /bregctl webhook replay/);
+  assert.match(webhookGuide, /\.\.\/\.\.\/reference\/breg-api\//);
   assert.match(page, /doc_type: reference/);
-  assert.match(page, /\.\.\/\.\.\/operate\/breg\//);
+  assert.match(page, /\.\.\/\.\.\/operate\/breg-webhooks\//);
   assert.doesNotMatch(page, /```sh/);
-  assert.match(configurationGuide, /\.\.\/\.\.\/operate\/breg\//);
+  assert.match(configurationGuide, /\.\.\/\.\.\/operate\/breg-webhooks\//);
 });

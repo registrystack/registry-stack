@@ -54,6 +54,11 @@ test('keeps Relay outside the Evidence Gateway product boundary', () => {
     'utf8',
   );
   assert.match(architecture, /Relay-protected API as a fixed HTTP source/);
+  // Base Registry Engine is the second product a deployment may put behind the
+  // same source contract, and it sits outside the Evidence Gateway boundary for
+  // the same reason Relay does.
+  assert.match(architecture, /authenticated Base\s+Registry Engine route/);
+  assert.match(architecture, /neither\s+becomes part of the Evidence Gateway product boundary/);
 
   const boundaryViolations = [
     /Evidence Gateway (?:requires|depends on) Registry Relay/i,

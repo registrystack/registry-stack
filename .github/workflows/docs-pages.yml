@@ -94,6 +94,24 @@ jobs:
             echo "docs_sha256=$(jq -er .docs_sha256 "${RUNNER_TEMP}/resolved-docs-release.json")"
           } >> "${GITHUB_OUTPUT}"
 
+      - name: Gate the released docset selector on the published release
+        env:
+          PUBLISHED_RELEASES: ${{ runner.temp }}/published-releases.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          # docsets.yaml names the release the version banner, the archive
+          # indexable flag, and the canonical selector point a reader at. The
+          # manifest status the offline gate reads is written by hand, so
+          # check those claims against the release list this job already
+          # fetched. Only overclaims fail: a selector naming a release nobody
+          # can fetch, and a docset advertising released availability ahead of
+          # the newest published release. Release preparation never moves the
+          # selector, so it still names the previous release while this job
+          # deploys the release it received above.
+          release/scripts/registry-release validate-docsets \
+            --published-releases "${PUBLISHED_RELEASES}"
+
       - name: Authenticate public release and checksum inventory
         env:
           GH_TOKEN: ${{ github.token }}

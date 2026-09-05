@@ -1,11 +1,11 @@
 ---
-title: Deploy and operate a registry
-description: Provision PostgreSQL, write the runtime configuration, test, sign, and activate a Base Registry Engine package, bind webhook receivers, and run the maintenance commands an active registry needs.
-status: draft
+title: Deploy a registry
+description: Install the Base Registry Engine runtime, provision PostgreSQL, write the runtime configuration, test, sign, and activate the first package, and expose metrics for a registry that is ready to serve.
+status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: unreviewed
+last_reviewed: "2026-09-04"
 doc_type: how-to
 persona:
   - operator
@@ -13,32 +13,44 @@ locale: en
 standards_referenced: []
 ---
 
-This guide takes a registry project that passes `check --production` from an empty PostgreSQL
-server to a serving Base Registry Engine process, then covers the work an active registry needs:
-successor packages, webhook receivers, history and request maintenance, and bulk data moves.
-Write the project first with [Author a registry project](../../configure/breg/).
+You have a project that passes `bregctl check --production`
+([Build a production candidate](../../tutorials/build-a-breg-production-candidate/) gets you there)
+and want it serving. At the end of this page a `breg` process serves a signed package against
+PostgreSQL, answers `GET /ready`, and exposes its metrics to your scraper.
+
+This page covers the deploy phase only: from an empty PostgreSQL server to the first activated
+package. The sibling pages take over once the registry serves:
+[Bind webhook receivers](../breg-webhooks/) for the destinations the project declares,
+[Change an active registry](../breg-changes/) for successor packages,
+[Retain, erase, and audit](../breg-retention/) for history and the audit journal, and
+[Move data in bulk](../breg-data/) for imports and exports.
 
 Three roles take part. The author prepares a package from the project. A signer approves the exact
 package bytes with a key the deployment trusts. The operator, holding the migration credential,
 activates the signed package and runs the server. One person may hold all three roles on a pilot;
-the commands stay the same.
-
-Every command reads `--help`. Paths given to `--runtime-config`, `--credentials`, `--output`, and
-`--package` must be absolute.
+the commands stay the same. Every command reads `--help`. Paths given to `--runtime-config`,
+`--credentials`, `--output`, and `--package` must be absolute.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, TestArgs, PackageArgs, ApplyArgs, and DoctorArgs;
     products/breg/scripts/test-adopter-workflow.sh. */}
 
 ## Obtain the runtime
 
-Install `breg` and `bregctl` from the release assets:
+Install `breg` and `bregctl` from the release assets of the pinned tag, so the tool that packages
+and the runtime that serves carry the same version, and so the binary a deployment tested is the
+binary it runs:
 
 ```sh
-curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/breg-install.sh | bash
+curl -fsSL https://github.com/registrystack/registry-stack/releases/download/v0.26.1/breg-v0.26.1-install.sh | bash
 bregctl --version
 ```
 
-The installer supports Linux amd64, Linux arm64, and macOS on Apple Silicon, and refuses any other
+```text
+bregctl 0.26.1
+```
+
+The installer accepts the platforms in
+[platform support](../../explanation/known-limitations/#platform-support), and refuses any other
 platform rather than guessing. It verifies both downloaded binaries against the release `SHA256SUMS`
 before anything reaches the install directory, and installs both or neither. It does not verify
 release authenticity. The signed checksum chain that does, and the checks behind it, are recorded in
@@ -48,26 +60,27 @@ the installer before you run it on a host you operate. For a higher-assurance in
 for the pinned tag, then rerun the installer with `BREG_ASSET_DIR` pointing at the verified
 directory. `BREG_INSTALL_DIR` selects the install directory; the default is `~/.local/bin`.
 
-Testing, packaging, activation, and serving must use one release: the `bregctl` that packages and
-the `breg` that serves carry the same tag, and `--version` on each prints it. The installer keeps
-the pair together, so reinstalling replaces both.
+Testing, packaging, activation, and serving must use one release: `--version` on each binary
+prints it, and the installer keeps the pair together, so reinstalling replaces both. The release
+also publishes `breg-install.sh` as a movable alias of the pinned installer.
 
-The release publishes the installer as `breg-v0.26.1-install.sh`, with `breg-install.sh` as the
-movable alias, and the binaries as `breg-v0.26.1-linux-amd64`, `breg-v0.26.1-linux-arm64`,
-`breg-v0.26.1-macos-arm64`, `bregctl-v0.26.1-linux-amd64`, `bregctl-v0.26.1-linux-arm64`, and
-`bregctl-v0.26.1-macos-arm64`.
-
-The container image is `ghcr.io/registrystack/breg:v0.26.1`, built on distroless nonroot. Its
+The container image is `ghcr.io/registrystack/breg:v0.26.1`, built on distroless nonroot for
+`linux/amd64` only; see [platform support](../../explanation/known-limitations/#platform-support)
+for the rest of the artifact matrix. Its
 entrypoint is `/usr/local/bin/breg`, its default arguments are `--config /etc/breg/runtime.yaml`,
-and it exposes port 8080. The image carries no shell, no writable directory, and no healthcheck
-subcommand: the audit journal lives in PostgreSQL, the runtime configuration and the files it names
-are mounted read-only under `/etc/breg`, and the orchestrator probes `GET /health` or
-`GET /healthz` over HTTP for liveness while readiness stays with `GET /ready`, as
-[Activate and serve](#activate-and-serve) records. The release workflow records each promoted
-image digest in the release manifest; pin that digest instead of the movable tag.
+and it exposes port 8080. The image carries no shell, no writable directory, no healthcheck
+subcommand, and no `bregctl`: the audit journal lives in PostgreSQL, the runtime configuration and
+the files it names are mounted read-only under `/etc/breg`, and the orchestrator probes
+`GET /health` or `GET /healthz` over HTTP for liveness while readiness stays with `GET /ready`, as
+[Activate and serve](#activate-and-serve) records. Because the image carries no `bregctl`,
+activation always happens from a separate host, and the container's own runtime document differs
+from that host's; see [Serve the container image](#serve-the-container-image). The release
+manifest published beside the binaries, `registry-stack-v0.26.1-release-manifest.json`, records
+the promoted digest of each image; pin that digest instead of the movable tag.
 
 {/* Evidence: crates/registry-breg/install.sh; release/docker/Dockerfile.breg;
-    crates/registry-breg/src/api/mod.rs. */}
+    release/scripts/build-release-image.sh;
+    crates/registry-breg/src/api/mod.rs; release/VERIFY.md. */}
 
 ## Provision PostgreSQL
 
@@ -84,8 +97,11 @@ CREATE ROLE registry_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
   NOINHERIT NOBYPASSRLS PASSWORD '<runtime-password>';
 ```
 
-Create two databases with the same shape: the serving database, and an empty schema-test database
-that `test` may fill and drop. In each database, as an administrator:
+Create two databases with the same shape: the serving database, and a schema-test database for
+`test`. The five managed schemas in the schema-test database must be empty when `test` starts, and
+`test` fills them without cleaning up after itself, so drop and recreate that database before every
+run; a run against a database that still holds the previous run's objects refuses with
+`schema-test database is not clean`. In each database, as an administrator:
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS btree_gist;
@@ -121,20 +137,22 @@ GRANT USAGE ON SCHEMA registry_spatial_ext
   TO registry_migration, registry_runtime, registry_runtime__spatial_bbox;
 ```
 
-The quickstart under `products/breg/quickstart/` writes exactly these statements for a
-local container, so its generated `database/` directory is a working reference.
+The launcher behind [Create and query your first registry](../../tutorials/first-breg/) writes
+exactly these statements for its local container, so a quickstart run's generated `database/`
+directory is a working reference.
 
 {/* Evidence: products/breg/quickstart/support/quickstart.py, _initialize_sql();
-    crates/registry-breg/src/postgres/schema.rs;
+    crates/registry-breg/src/postgres/schema.rs, refuse_existing_managed_objects() and
+    prepare_schema_test_database_with_connections();
     crates/registry-breg/src/postgres/roles.rs. */}
 
 ## Write the runtime configuration
 
 The runtime file binds one package to one database, one token issuer, and one listener, plus an
 optional private metrics listener. It is a deployment artifact: keep it with the operator, outside
-the authoring project, and never put a credential in it. Values such as `secret:file/<name>` resolve to owner-only files under the file
-provider root; `secret:env/<NAME>` reads an environment variable when `secretProviders.environment`
-is declared.
+the authoring project, and never put a credential in it. Values such as `secret:file/<name>`
+resolve to owner-only files under the file provider root; `secret:env/<NAME>` reads an environment
+variable when `secretProviders.environment` is declared.
 
 ```yaml
 apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
@@ -199,26 +217,63 @@ configured prefix and never derive their authority from request headers.
 | `secretProviders` | The file root (owner-only files) and, when declared, the environment provider. |
 | `database` | Secret references for the runtime and migration connection URLs, pool bounds, and the two role names the package's policies are written for. |
 | `package` | The activated package directory, the trust anchor, the source revision the project declares as `package.sourceRevision`, and the active revision and sequence. |
-| `authentication` | The OpenID Connect verifier and the claim names that carry Registry authority. |
+| `authentication` | The OpenID Connect verifier and the names of the claims that carry the caller's principal and purpose. |
 | `audit` and `cursor` | The key that chains the audit journal and the secret that signs pagination cursors. Loss of either key invalidates existing chains or cursors. |
-| `eventDestinations` and `eventDelivery` | One binding per webhook destination the package declares, and payload retention. |
+| `eventDestinations` and `eventDelivery` | One binding per webhook destination the package declares, and payload retention; see [Bind webhook receivers](../breg-webhooks/). |
 | `operationalTimeouts` | Optional HTTP request, record lock, migration lock, migration statement, and shutdown grace bounds. |
 | `metricsListener` | Optional second binding, private to the operator, that serves `GET /metrics`; see [Scrape metrics](#scrape-metrics). |
 
-`leewayMilliseconds` must be a whole number of seconds and at most 300000. Static keys under
-`jwksSource: {kind: static, documentRef: ...}` load at startup; rotate them through a
-configuration change and restart. With `kind: discovery`, the runtime reads the issuer's discovery
-document and caches its JWKS under the optional `jwksCache` bounds.
+`leewayMilliseconds` must be a whole number of seconds and at most 300000. Static keys load at
+startup; rotate them through a configuration change and restart:
+
+```yaml
+jwksSource:
+  kind: static
+  documentRef: secret:file/<jwks-document>
+```
+
+With `kind: discovery`, the runtime reads the issuer's discovery document and caches its JWKS
+under the optional `jwksCache` bounds.
 
 {/* Evidence: crates/registry-breg/src/runtime_config.rs, RuntimeConfig;
     crates/registry-breg/tests/runtime_config.rs;
     crates/registry-platform-config/src/secrets.rs, SecretReference;
     products/breg/generated/runtime/runtime.schema.json. */}
 
-### What a token must carry
+### Create the secret files
 
-Base Registry Engine verifies a bearer access token before it reads any claim. Configure the issuer so
-that every token for this deployment satisfies the table. Fixture claims from `journeys.yaml`
+Create the files the example references as the user that runs `breg` and the operator commands,
+because the resolver refuses a file owned by anyone else. Each must be a regular file with mode
+`0400` or `0600` and no other link or symbolic link to it, and its name starts with a lowercase
+letter and uses lowercase letters, digits, `.`, `_`, and `-`. The bytes are used exactly as
+written, neither trimmed nor decoded, so write them without a trailing newline:
+
+```sh
+install -d -m 0700 /etc/breg/secrets
+(umask 077; openssl rand -hex 32 | tr -d '\n' > /etc/breg/secrets/audit-key)
+(umask 077; openssl rand -hex 32 | tr -d '\n' > /etc/breg/secrets/cursor-key)
+(umask 077; printf '%s' 'postgresql://registry_runtime:<runtime-password>@db.example.org:5432/registry' \
+  > /etc/breg/secrets/runtime-database-url)
+(umask 077; printf '%s' 'postgresql://registry_migration:<migration-password>@db.example.org:5432/registry' \
+  > /etc/breg/secrets/migration-database-url)
+```
+
+The audit key and the cursor secret each need at least 32 bytes; 64 hexadecimal characters
+satisfy both. Percent-encode a password that carries reserved characters. The user in each URL
+must equal the role named under `database.roles`, and the runtime requires TLS on both connections
+itself, so the URL needs no `sslmode` parameter and a server without TLS refuses the connection.
+
+{/* Evidence: crates/registry-platform-config/src/secrets.rs, read_secret_file(),
+    validate_file_metadata(), and valid_file_name();
+    crates/registry-platform-audit/src/lib.rs, MIN_AUDIT_SECRET_BYTES;
+    crates/registry-breg/src/cursor.rs, ROOT_SECRET_MIN_BYTES;
+    crates/registry-breg/src/runtime_config.rs, database_connection_config_for();
+    crates/registry-breg/src/postgres/config.rs, require_tls_config(). */}
+
+## What a token must carry
+
+Base Registry Engine verifies a bearer access token before it reads any claim. Configure the issuer
+so that every token for this deployment satisfies the table. Fixture claims from `journeys.yaml`
 are never accepted by a running server.
 
 | Token part | Requirement |
@@ -233,7 +288,7 @@ are never accepted by a running server.
 | purpose claim | The claim named by `authorityClaims.purpose` is required when the profile lists `requiredPurposes`. |
 
 Deployments without an identity provider can run [Registry Mint](../../configure/mint/) as the
-issuer. Its demo key material scripts also generate the secrets this page references.
+issuer.
 
 {/* Evidence: crates/registry-breg/src/auth.rs;
     crates/registry-breg/tests/http_auth.rs;
@@ -258,13 +313,18 @@ kind: SchemaTestCredentials
 bindings:
   - journeyId: record-lifecycle
     stepId: create-record
-    credential: {type: bearer, tokenRef: secret:file/schema-test-token}
+    credential:
+      type: bearer
+      tokenRef: secret:file/schema-test-token
   - journeyId: record-lifecycle
     stepId: get-record
-    credential: {type: bearer, tokenRef: secret:file/schema-test-token}
+    credential:
+      type: bearer
+      tokenRef: secret:file/schema-test-token
   - journeyId: record-lifecycle
     stepId: list-records
-    credential: {type: anonymous}
+    credential:
+      type: anonymous
 ```
 
 Then run the test with the signature policy the package will carry:
@@ -301,8 +361,9 @@ bregctl --format json package ./my-registry \
 
 The schema fingerprint comes from the test receipt; `--schema-fingerprint` states it explicitly
 when you want the command to fail on any other value. The report's `state` is
-`awaiting_signatures` and `build-1/signing-input.json` holds the exact bytes to sign. The command never accepts a private key. Your signer produces a detached Ed25519
-signature over those bytes, for example with OpenSSL, and returns a signature document:
+`awaiting_signatures` and `build-1/signing-input.json` holds the exact bytes to sign. The command
+never accepts a private key. Your signer produces a detached Ed25519 signature over those bytes,
+for example with OpenSSL, and returns a signature document:
 
 ```sh
 openssl pkeyutl -sign -rawin -inkey registry-signer-2026.pem \
@@ -371,23 +432,101 @@ breg --config /etc/breg/runtime.yaml
 trust anchor and identity, and reports the registry id, version, and revision plus inventory
 counts. It does not say whether the database is on that package; the `apply` report and readiness
 do. `doctor` opens every startup dependency without binding the listener: the runtime file, the
-package, the database connection and its readiness, the audit and cursor keys, OIDC key
-material, event destination bindings, and the listener address. Start the process and check
+package, the database connection and its readiness, the audit key, the cursor key, the OIDC
+verifier's key material, the event destination bindings, and the authentication profile, the claim
+mapping, the accepted algorithms, and the audience against the package this runtime serves. It
+names the first dependency that refuses and stops there; a run that reaches the end lists every
+dependency it checked:
+
+```text
+doctor succeeded
+checked runtimeConfig: pass
+checked package: pass
+checked database: pass
+checked audit: pass
+checked cursor: pass
+checked authentication.oidc: pass
+checked eventDestinations: pass
+checked authentication: pass
+```
+
+```json
+{
+  "ok": true,
+  "command": "doctor",
+  "checked": [
+    "runtimeConfig",
+    "package",
+    "database",
+    "audit",
+    "cursor",
+    "authentication.oidc",
+    "eventDestinations",
+    "authentication"
+  ]
+}
+```
+
+Start the process and check
 `GET /ready` before admitting traffic; `GET /health` reports liveness only.
 
 Retain the project sources, module locks, generated files, test receipt, signature documents, and
 runtime file for each activation. Store secrets separately.
 
 {/* Evidence: crates/registry-bregctl/src/apply_lifecycle.rs;
-    crates/registry-bregctl/src/doctor.rs;
-    crates/registry-bregctl/src/lib.rs, VerifyArgs and verify();
+    crates/registry-bregctl/src/doctor.rs, startup_diagnostic();
+    crates/registry-bregctl/src/lib.rs, VerifyArgs, verify(), write_doctor_success(), and
+    doctor_success_output_is_stable_in_human_and_machine_formats();
     crates/registry-breg/src/api/mod.rs;
     crates/registry-breg/src/startup.rs. */}
 
+## Serve the container image
+
+The release image carries the `breg` binary alone, so the runtime document you activated with is
+not the one the container serves: activation runs on the operator host that holds the migration
+credential and `bregctl`, and the container only serves the package that host already activated.
+Write a second runtime document for the container, changing exactly five things from the host's:
+`listener.bind`, `secretProviders.file.root`, `package.root`, `package.trustAnchorPath`, and the
+database hostname the resolved connection URL names, because the container mounts its own paths
+and reaches the database over its own network.
+
+```yaml
+listener:
+  bind: 0.0.0.0:8080
+secretProviders:
+  file:
+    root: /etc/breg/secrets
+package:
+  root: /var/lib/breg/package
+  trustAnchorPath: /etc/breg/package-trust-anchor.json
+```
+
+Nothing restricts `listener.bind` to a loopback or private address the way `metricsListener.bind`
+is restricted, so the container can bind `0.0.0.0` and accept traffic from outside its network
+namespace; a host process that only ever serves `127.0.0.1` has no reason to. Mount the four
+inputs the image needs, all read-only, and publish the listener port:
+
+```sh
+docker run --rm \
+  -p 8080:8080 \
+  -v /srv/registry/container/runtime.yaml:/etc/breg/runtime.yaml:ro \
+  -v /var/lib/breg/build-1/package:/var/lib/breg/package:ro \
+  -v /etc/breg/package-trust-anchor.json:/etc/breg/package-trust-anchor.json:ro \
+  -v /etc/breg/container-secrets:/etc/breg/secrets:ro \
+  ghcr.io/registrystack/breg:v0.26.1
+```
+
+Run `bregctl verify` and `bregctl doctor` against this exact runtime document from a host that
+reaches the same database and the same mounted package before you rely on the container's
+`GET /ready`.
+
+{/* Evidence: crates/registry-breg/src/runtime_config.rs, ListenerConfig and MetricsListenerConfig;
+    release/docker/Dockerfile.breg. */}
+
 ## Scrape metrics
 
-The Registry listener never serves metrics. To expose them, add a second listener that only the
-operator's network can reach:
+The listener that serves the registry API never serves metrics. To expose them, add a second
+listener that only the operator's network can reach:
 
 ```yaml
 metricsListener:
@@ -413,23 +552,20 @@ scraper's network boundary rather than a public one.
 without bound, and no label carries a principal, a token, or a record value. Pool states are read
 from the connection pool at scrape time.
 
-`breg_anonymous_refusals_total` counts requests that presented no credential and were
-refused before admission: a profile the caller cannot hold, a route it cannot see, an absent scope
-or purpose, or a query the route cannot parse. `reason` is one of nine fixed values,
+`breg_anonymous_refusals_total` counts requests that presented no credential and were refused
+before admission: a profile the caller cannot hold, a route it cannot see, an absent scope or
+purpose, or a query the route cannot parse. `reason` is one of nine fixed values,
 `read_request_invalid`, `read_concealed`, `read_refused`, `revision_request_invalid`,
 `revision_concealed`, `revision_refused`, `mutation_concealed`, `mutation_refused`, and
 `action_refused`, derived from the refusal itself rather than from anything the request carried.
-These refusals are counted here rather than appended to the hash-chained audit journal, because a
-caller with no principal names nobody the journal could hold accountable, and an unauthenticated
-client that could append would grow the journal without bound and serialize every audited write
-behind its head lock. Refusals of an authenticated principal are journaled exactly as before, and
-so is every admitted request. Alert on a sharp rise in this counter the way you would on a rise in
+These refusals are counted rather than journaled, because a caller with no principal names nobody
+the journal could hold accountable; refusals of an authenticated principal are journaled, and so
+is every admitted request. Alert on a sharp rise in this counter the way you would on a rise in
 `client_error` responses: it is the signal the journal no longer carries.
 
-An admitted anonymous read is not a lighter-weight request: it writes the same pre-I/O audit
-envelope as any admitted request, before any I/O runs. The runtime enforces no request-rate limit
-of its own, so a registry that admits anonymous reads should sit behind an upstream rate limit to
-bound that traffic.
+An admitted anonymous read writes the same pre-I/O audit envelope as any admitted request, and the
+runtime enforces no request-rate limit of its own, so put a registry that admits anonymous reads
+behind an upstream rate limit.
 
 {/* Evidence: crates/registry-breg/src/metrics.rs, AnonymousRefusalReason;
     crates/registry-breg/src/api/mod.rs, anonymous_refusal();
@@ -438,469 +574,31 @@ bound that traffic.
     crates/registry-breg/src/runtime_config.rs, MetricsListenerConfig;
     crates/registry-breg/src/startup.rs. */}
 
-## Change an active registry
-
-A successor package goes through the same test, package, sign, and apply sequence with the active
-package as its baseline. Start by comparing the edited project with the active package:
-
-```sh
-bregctl --format json diff ./my-registry \
-  --runtime-config /etc/breg/runtime.yaml
-```
-
-`--package <directory>` in place of `--runtime-config` takes a closed package directory as the
-baseline and checks only its integrity, so a signer can review a candidate without runtime
-credentials or activation authority; the report labels that baseline `integrity_only` rather than
-`runtime_bound`.
-
-The diff lists model, access, and route changes with their change codes and, for access changes,
-their direction: a scope, purpose, row-boundary, field, count, history, or export change is marked
-as widening or narrowing, and mixed changes are marked for review. Set `package.sequence` in
-`registry.yaml` to the next sequence. `registry.version` is bound to the database for its
-lifetime: a package that changes it can only initialize a new database.
-
-Pass the active runtime file as `--baseline-runtime-config` to both `test` and `package`. A change
-the migration planner classifies as additive, such as a new optional field or a widened grant,
-needs no further evidence. When `test` or `package` reports `migration.review.required`, prepare a
-reviewed migration directory and pass it to both commands as `--reviewed-migrations`:
-
-```text
-reviewed-migrations/
-  modules/<module-id>/migrations/<migration-id>/
-    descriptor.json
-    rehearsal.json
-    steps/<step-id>.sql             when the descriptor declares SQL steps
-    assertions/<assertion-id>.sql   when the descriptor declares assertions
-    fixtures/<fixture-id>.jsonl     when the rehearsal references fixtures
-    backup.json                     for destructive changes
-```
-
-The descriptor names the change class, the exact change codes and targets from `diff --format
-json`, timeouts, recovery mode, and its evidence paths. The rehearsal receipt binds the prior
-package and schema, the descriptor and SQL hashes, the measured target schema, and the timeout
-and recovery proofs. Your rehearsal process produces that evidence against the exact candidate;
-the command line validates it and does not generate it. JSON artifacts use canonical JSON: sorted
-keys, no extra whitespace. Keep only referenced files in the directory; symbolic links and
-unrelated files are refused. A metadata-only change can declare empty steps and assertions and
-still needs rehearsal evidence. A field added as required is created without its constraint, your
-reviewed steps backfill it, and the plan constrains the column afterwards.
-
-```sh
-bregctl --format json test ./my-registry \
-  --baseline-runtime-config /etc/breg/runtime.yaml \
-  --reviewed-migrations ./reviewed-migrations \
-  --runtime-config /srv/registry/runtime-test.yaml \
-  --credentials /srv/registry/schema-test-credentials.yaml \
-  --database-id civil-registry-db-1 \
-  --signature-threshold 1 --signature-key-id registry-signer-2026 \
-  --output /srv/registry/schema-test-receipt-2.json
-```
-
-Package and sign as before, then activate. For a successor, the runtime file given to `apply`
-still names the active package; the target comes from `--package`. A destructive change also
-needs its reviewed backup artifact, bound by its descriptor path:
-
-```sh
-bregctl --format json apply \
-  --runtime-config /etc/breg/runtime.yaml \
-  --package /srv/registry/build-2/package \
-  --backup modules/core/migrations/0002/backup.json=/srv/registry/backups/0002.dump
-```
-
-After a successful activation, update the runtime file to the successor's package directory,
-revision, and sequence, run `verify`, and restart the server. Editing the runtime file does not
-change the active process. If any source, reviewed artifact, baseline, or signature-policy input
-changes, repeat the test and the signing. For `migration.review.refused`, check the change
-coverage and artifact hashes; for `migration.review.fingerprint_mismatch`, rehearse the exact
-candidate again. Reviewed artifacts cannot authorize a change the planner classifies as
-unsupported.
-
-:::caution[A failed activation pins its target]
-Activation enters maintenance and may change persistent data. If `apply` fails after maintenance
-begins, readiness stays unavailable, a restart does not repair it, and the target stays pinned: no
-other successor can activate until that target is resolved. Resolving the reported cause and
-retrying the same target package is the ordinary answer. When it is not available, `migration
-reconcile` reports what the database actually holds and names the one transition that is safe. Do
-not run generated SQL by hand or edit migration state. Take a backup before every `apply`.
-:::
-
-`migration reconcile --runtime-config <file> --package <dir> --operator-reference <ref>` assesses a
-pinned Registry and changes nothing without `--execute`. It takes the same exclusive migration lock
-an activation takes, so it never reads a half-applied package, and it compares the live managed
-catalog against both the pinned target's expected catalog and the active package's using the
-verification an activation performs. It reports exactly one outcome:
-
-| Outcome | What the database holds | Next move |
-| --- | --- | --- |
-| `ready` | Nothing is pinned. | Nothing to reconcile. |
-| `in_progress` | Another session holds the migration lock. | Wait for that activation to finish, then assess again. |
-| `completable` | Every durable step of the pinned target succeeded and the catalog is exactly the target's. Only the activation transition is missing. | Rerun with `--execute` to finish the activation. |
-| `revertible` | The pinned target reached no durable step and the catalog is still exactly the active package's. | Rerun with `--execute` to abandon the target. |
-| `unresolvable` | The catalog matches neither package, or a reviewed migration committed steps only the same target can finish. | Restore the pre-activation backup. The report names the catalog invariant that differs. |
-
-`--execute` performs only the transition the assessment named, refuses every other outcome, and
-records the transition in the audit chain inside that transition's own transaction. Completing an
-activation writes the same ledger, history baseline, and postconditions a successful `apply` writes,
-so update the runtime file and restart as you would after any activation. Abandoning a target clears
-the pin and leaves the active revision untouched, and it retires that target revision: the abandoned
-package keeps its failed ledger row, so a later attempt needs a newly built package revision.
-
-`migration explain --runtime-config <file>` describes the configured package's migration plan
-without executing it; it does not report live database status. New schema fingerprints identify
-columns by name, so a fresh installation and an in-place upgrade match even when PostgreSQL stores
-columns in a different order. A package measured with the updated algorithm needs the updated
-server binary, and earlier packages keep verifying under their recorded rules.
-
-{/* Evidence: crates/registry-bregctl/src/lib.rs, DiffArgs, PackageCandidateArgs, and MigrationCommand;
-    crates/registry-bregctl/src/reviewed_migrations.rs;
-    crates/registry-breg/src/migration_plan.rs;
-    crates/registry-breg/src/migration.rs, apply_verified_package();
-    crates/registry-breg/src/migration_reconcile.rs;
-    crates/registry-bregctl/src/reconcile_lifecycle.rs;
-    crates/registry-breg/src/package.rs;
-    crates/registry-breg/src/postgres/interlock.rs;
-    crates/registry-breg/src/postgres/catalog.rs, CatalogFingerprintVersion;
-    crates/registry-breg/tests/postgres_migration.rs;
-    crates/registry-bregctl/tests/cli/reviewed_migrations.rs;
-    products/breg/scripts/test-adopter-workflow.sh. */}
-
-## Bind webhook receivers
-
-Every event with a `webhook` in the project names a destination id. The package refuses to
-activate until the runtime file binds each of them, and it refuses extra bindings. Destination
-URLs and secret references belong in the runtime file, never in a module:
-
-```yaml
-eventDestinations:
-  record-receiver:
-    origin: https://receiver.example.org
-    path: /events
-    networkProfile: productionHttps
-    dnsFamily: dualStackStrict
-    allowedPrivateCidrs: []
-    hmacSha256KeyRef: secret:file/record-webhook-key
-    classificationCeiling: restricted
-    deliveryCeilings:
-      attemptTimeoutMilliseconds: 1000
-      maximumAttempts: 3
-eventDelivery:
-  payloadRetentionDays: 7
-```
-
-The destination's `classificationCeiling` must cover the event's derived classification; a binding
-cannot add fields to a payload. Generate the shared HMAC-SHA-256 key inside the secret root and
-provision the same bytes to the receiver through its own secret store:
-
-```sh
-uv run --quiet crates/registry-mint/demo/support/key_material.py secret-hex \
-  --out /etc/breg/secrets/record-webhook-key
-```
-
-For a receiver on a private network, list the intended canonical ranges in `allowedPrivateCidrs`.
-Use `dnsFamily: ipv4Only` only on an IPv4-only network. Optional `tls.caBundleRef` and
-`tls.clientIdentityRef` name PEM secrets for a private certificate authority and mutual TLS.
-`networkProfile: loopbackDevelopmentHttp` exists for local development only. A binding may tighten
-the compiled ceilings, five attempts with a five-second timeout each unless the module says
-otherwise, and never widen them; the example tightens both. Automatic retries keep the event id
-and idempotency key. Any `2xx` acknowledges delivery; redirects, timeouts, and other responses
-follow the bounded retry policy. Activation refuses a rebinding that would leave retained pending
-or dead-lettered deliveries without the binding they were captured under.
-
-Your receiver verifies `X-Registry-Signature` against the exact request bytes and checks
-`X-Registry-Delivery-Time` for freshness before acting. The
-[API reference](../../reference/breg-api/#events-and-webhooks) defines the request
-shape and the signing input byte order, and `webhook sample <project> --event <id>` prints a
-request with a placeholder signature for building the verifier. Deduplicate retries by
-`Idempotency-Key`, use the record revision to order events, and acknowledge only after durably
-recording acceptance.
-
-Inspect pending, dead-lettered, and expired deliveries, then replay a dead letter after fixing the
-receiver:
-
-```sh
-bregctl --format json webhook list \
-  --runtime-config /etc/breg/runtime.yaml --limit 50
-
-bregctl webhook replay \
-  --runtime-config /etc/breg/runtime.yaml \
-  --event-id "<eventId>" --delivery-id "<deliveryId>" \
-  --expected-generation "<generation>"
-```
-
-The list carries delivery metadata and no record values. A delivery that exhausts its attempts
-becomes a dead letter with `replayEligible: true` while its payload is retained. Successful
-delivery erases the payload, and retained payloads expire after `payloadRetentionDays`, which
-defaults to 7 and is capped at 30. An empty list is not proof of success: in-flight attempts and
-completed deliveries are excluded, so confirm effects from the receiver's own record. Replay
-keeps the event id and issues a new generation and idempotency key; if the receiver's earlier
-effect is uncertain, check its state before replaying.
-
-Operator commands connect to PostgreSQL directly. When the database uses a private certificate
-authority, set `SSL_CERT_FILE` to its PEM bundle for each command.
-
-{/* Evidence: crates/registry-breg/src/event_destination.rs, RawEventDestinationConfig;
-    crates/registry-breg/src/runtime_config.rs;
-    crates/registry-breg/src/webhook.rs;
-    crates/registry-breg/src/outbox.rs;
-    crates/registry-bregctl/src/webhook_lifecycle.rs;
-    crates/registry-bregctl/src/lib.rs, WebhookListArgs and WebhookReplayArgs;
-    crates/registry-mint/demo/support/key_material.py. */}
-
-## Erase retained history
-
-The migration authority can erase the retained revisions of one record up to a revision number.
-This is irreversible maintenance, not an API permission, and it does not remove the current
-record. Apply the institution's live-data removal policy separately.
-
-:::danger[History erasure is irreversible]
-Confirm the record and the approved revision boundary before running the command, and account for
-backups, saved exports, and copies already delivered to consumers. A saved snapshot reference
-cannot restore erased bytes. There is no dry run.
-:::
-
-Write an owner-only JSON request file (mode `0600`) so identifiers and reasons never appear in
-process arguments:
-
-```json
-{
-  "entityId": "membership-record",
-  "recordId": "00000000-0000-4000-8000-000000000001",
-  "eraseThroughRevision": 2,
-  "operatorReference": "approved-maintenance-001",
-  "reason": "approved-retention-request"
-}
-```
-
-```sh
-bregctl history erase \
-  --runtime-config /etc/breg/runtime.yaml \
-  --request-file /srv/registry/private/erasure.json
-```
-
-One transaction erases at most 10,000 revisions, scrubs affected correction context and retained
-outbox payloads, and replaces affected cached idempotency responses with refusal tombstones, so a
-retried mutation key cannot replay an erased body. The result and the audit record carry counts,
-not values. Snapshot references at or after the earliest erased commit become unavailable,
-including every later snapshot; erasing baseline data makes all snapshot coverage unavailable.
-Nothing re-baselines the registry on its own: run `history rebaseline` when snapshot reads of
-current state must work again. Live reads and writes continue.
-
-{/* Evidence: crates/registry-breg/src/history_erasure.rs;
-    crates/registry-bregctl/src/history_erasure_lifecycle.rs;
-    crates/registry-breg/tests/postgres_history_erasure.rs;
-    products/breg/scripts/test-historical-workflow.sh. */}
-
-## Restore snapshot coverage after an erasure
-
-After an erasure, a snapshot reference for current state is refused until the migration authority
-re-establishes a covered position. `history rebaseline` is that command, and it runs under the
-same interlock as the erasure: the configured migration role, bounded timeouts, the exclusive
-registry lock, a ready registry, and one chained audit record.
-
-Write an owner-only JSON request file (mode `0600`) carrying the operator reference alone:
-
-```json
-{
-  "operatorReference": "approved-maintenance-002"
-}
-```
-
-```sh
-bregctl history rebaseline \
-  --runtime-config /etc/breg/runtime.yaml \
-  --request-file /srv/registry/private/rebaseline.json
-```
-
-One transaction proves the retained journal head of every live row still reproduces that row,
-installs one baseline commit at the head, and moves the coverage baseline to it. It restores
-nothing that was erased: references taken before the new baseline stay unavailable, because the
-bytes they named are gone. Take a fresh reference afterwards. The command refuses when coverage
-is already complete, when the registry is not ready, when a retained journal head is not indexed
-by a commit, and when a live row has no retained journal head that reproduces it. The result and
-the audit record carry counts and positions, not values.
-
-That one transaction verifies at most 1,000 live rows, and a registry holding more is refused
-with `history.rebaseline.live_rows.budget_exceeded`. The limit is fixed and the refusal is not
-retryable: a registry above it cannot restore snapshot coverage with this command, so treat the
-code as a report that the erasure left coverage unrecoverable rather than as a transient failure.
-
-`history.rebaseline.live_rows.unverified` reports one live row that its journal head does not
-reproduce, and names neither the entity nor the record, because operator refusals here carry no
-values. It stops at the first entity whose live rows and journal heads do not line up, and inside
-an entity at the first record identifier whose values differ, so a run that gets further has
-already proved every earlier entity. To find the row, read the revisions of the records you
-suspect with `GET /v1/records/{route}/{recordId}/revisions`, or compare live rows with their
-journal heads directly under the migration role you already hold. The usual cause is a live row
-that changed outside the server's write path, so the journal never recorded the change.
-
-{/* Evidence: crates/registry-breg/src/history_rebaseline.rs;
-    crates/registry-bregctl/src/history_rebaseline_lifecycle.rs;
-    crates/registry-breg/tests/postgres_history_rebaseline.rs. */}
-
-## Erase change-request detail
-
-Change-request proposals and application receipts keep their own retention. A request entity
-whose `changeRequest.retention.mode` is `operator_erase` allows the operator to erase the payload
-detail of one proposal version while keeping its value-free lifecycle rows; the default `retain`
-mode refuses erasure. List the retained rows, count what one erasure would remove, then erase:
-
-```sh
-bregctl --format json request-retention list \
-  --runtime-config /etc/breg/runtime.yaml \
-  --request-entity placement-correction-request --limit 50
-
-bregctl --format json request-retention dry-run \
-  --runtime-config /etc/breg/runtime.yaml \
-  --request-entity placement-correction-request \
-  --request-id "<requestId>" --proposal-version 3
-
-bregctl --format json request-retention erase \
-  --runtime-config /etc/breg/runtime.yaml \
-  --request-entity placement-correction-request \
-  --request-id "<requestId>" --proposal-version 3
-```
-
-Each list row reports the request state, whether the version is current or pinned, its retention
-mode, `eligibleForErasure`, and whether detail is already erased. The dry run and the erasure
-report counts of proposal snapshots, target snapshots, idempotency results, request revision
-snapshots, outbox payloads, and intake rows. Erasing record history does not erase these rows,
-and erasing these rows does not touch record history.
-
-{/* Evidence: crates/registry-breg/src/request_retention.rs;
-    crates/registry-bregctl/src/request_retention.rs;
-    crates/registry-bregctl/src/lib.rs, RequestRetentionCommand. */}
-
-## Keep the audit journal
-
-Every write path appends one hash-chained audit record, and the journal keeps its own head. The
-`audit` commands prove that chain, take a portable copy of it, and retire its oldest part under a
-retention boundary. They read envelope bytes, hashes, envelope identifiers, and timestamps only,
-so no record value reaches the report or a refusal.
-
-```sh
-bregctl --format json audit verify \
-  --runtime-config /etc/breg/runtime.yaml
-
-bregctl --format json audit export \
-  --runtime-config /etc/breg/runtime.yaml \
-  --output /srv/registry/private/audit-journal.jsonl
-```
-
-`verify` walks the chain from the recorded head backwards through the recorded links, never by
-timestamp, so a clock skew or an out-of-order insert cannot change what the journal claims. It
-runs in one repeatable-read read-only transaction that also compares the head and the total row
-count, and reports the record count with the first previous hash, the last hash, and the head
-hash. `export` verifies the same way while it writes, and emits one envelope per line in chain
-order. The destination must be an absolute path that holds no file; the command creates it with
-owner-only permissions and removes it again when the export does not finish, so a partial copy is
-never left behind. Verification proves the retained journal links and matches the head; it cannot
-prove the journal is complete, because a pruned prefix is gone and the earliest retained record's
-previous hash is the only trace of it.
-
-`prune` removes the longest run of records at the start of the chain whose creation time precedes
-one RFC 3339 boundary. It stops at the first retained record, so a gap can never open in the
-middle, and it refuses a boundary later than the database transaction time. Take an export first,
-count what the boundary would remove, then remove it:
-
-:::danger[Pruning the journal is irreversible]
-Pruned records leave no copy behind. Export the journal and store it under the institution's
-retention policy before running a prune without `--dry-run`, and confirm the approved boundary.
-:::
-
-```sh
-bregctl --format json audit prune \
-  --runtime-config /etc/breg/runtime.yaml \
-  --before 2026-01-01T00:00:00Z --dry-run
-
-bregctl --format json audit prune \
-  --runtime-config /etc/breg/runtime.yaml \
-  --before 2026-01-01T00:00:00Z
-```
-
-The report names whether the run was a dry run, how many records it removed and retained, the
-hash the retained chain now starts from, and the first retained envelope. A prune runs on the
-migration connection under the exclusive registry lock with the head row locked, so no writer can
-append and no second operator can prune while the prefix is being decided; the runtime role keeps
-its insert-only grant and cannot delete a record. Every prune that removes anything appends one
-retention record to the journal, so the chain states what left it.
-
-{/* Evidence: crates/registry-breg/src/audit_tooling.rs;
-    crates/registry-bregctl/src/audit_lifecycle.rs;
-    crates/registry-breg/tests/postgres_audit_tooling.rs;
-    crates/registry-bregctl/tests/audit.rs. */}
-
-## Move data in bulk
-
-`data import` and `data export` drive the ordinary authenticated batch and list routes, so every
-row passes the same grants, validation, and audit as an interactive client. They need the package
-directory, the server URL, and a file holding one bearer token and nothing else. Each import line
-is one JSON object naming the operation and the record data:
-
-```json
-{"operation": "create", "data": {"code": "AA", "label": "First"}}
-```
-
-```sh
-bregctl data validate \
-  --package /srv/registry/build-1/package \
-  --entity record --profile operator --operation create \
-  --input /srv/registry/import/records.jsonl
-
-bregctl data import \
-  --package /srv/registry/build-1/package \
-  --breg-url https://registry.example.org \
-  --access-token-file /srv/registry/private/import-token \
-  --entity record --profile operator --operation create \
-  --input /srv/registry/import/records.jsonl \
-  --checkpoint /srv/registry/import/records.checkpoint --max-chunks 20
-
-bregctl data export \
-  --package /srv/registry/build-1/package \
-  --breg-url https://registry.example.org \
-  --access-token-file /srv/registry/private/export-token \
-  --entity record --profile operator --field code --field label \
-  --output /srv/registry/export/records.jsonl \
-  --checkpoint /srv/registry/export/records.checkpoint --max-pages 50
-```
-
-`data validate` checks every line against the compiled plan without a network. An import commits
-one bounded chunk at a time and records progress in the checkpoint file beside a sidecar the
-command owns, so a rerun with the same checkpoint resumes after the last committed chunk and never
-re-sends a committed one. An export appends one bounded page at a time, then records the output
-length, digest, record count, and server cursor in its checkpoint. A rerun validates the entire
-existing output against that checkpoint before requesting the next server-validated cursor. Do not
-edit either file. `--max-chunks` and `--max-pages` bound one operator run.
-
-{/* Evidence: crates/registry-breg/src/data.rs;
-    crates/registry-bregctl/src/data_lifecycle.rs;
-    crates/registry-bregctl/src/lib.rs, DataCommand;
-    crates/registry-bregctl/tests/cli.rs. */}
-
 ## Troubleshooting
 
 | Symptom | Next move |
 | --- | --- |
 | `test` refuses the runtime file | Compare it with the serving file: same identity, schema-test database references, an empty package root, and a placeholder revision. |
+| A secret reference is refused | The file under the secret root must be a regular file owned by the running user, with mode `0400` or `0600`, one link, and no symbolic link, and its name must follow the naming rule in [Create the secret files](#create-the-secret-files). |
 | `package` refuses the receipt | The receipt binds sources, baseline, fingerprint, and signature policy. Rerun `test` for the exact candidate. |
 | `apply --initial` reports a binding error | The runtime file must already name the target package's revision and sequence one. |
-| `apply` fails after maintenance begins | Read the report, fix the cause, and retry the same target. If that is not available, run `migration reconcile` to assess the pinned target, execute the transition it names, and restore the pre-activation backup only when it reports `unresolvable`. |
 | `doctor` reports `startup.oidc.refused` | Check the issuer, discovery reachability or the static JWKS document, the algorithm, and the leeway bound. |
 | The runtime file is refused with `runtime_config.invalid_metrics_listener` | `metricsListener.bind` must be a loopback or private address with a non-zero port, distinct from `listener.bind`. |
 | Every token is refused | Compare the token's header and claims with the token table; a list-valued `aud` or a missing principal claim refuses the token. |
-| A webhook never fires | Confirm the destination is bound, the receiver returns `2xx`, and the event's condition matched; use `webhook list` for dead letters. |
-| Replay is refused | Refresh the list and check the generation, `replayEligible`, payload expiry, and the destination binding. |
-| A saved snapshot returns `503 source.unavailable` | Retained history no longer covers it, after an erasure or an incompatible successor. Take a fresh reference. |
-| A fresh snapshot reference is refused after an erasure | Coverage ends before the erased commit. Run `history rebaseline` to cover the current state again; earlier references stay unavailable. It verifies at most 1,000 live rows, and refuses a larger registry outright. |
-| `history rebaseline` reports `history.rebaseline.live_rows.unverified` | A live row and its journal head disagree, and the refusal names no record. Read the revisions of the records you suspect, or compare live rows with their journal heads under the migration role. |
-| `request-retention erase` is refused | The request entity's retention mode is `retain`, or the version is pinned. |
-| `audit verify` reports `audit.chain.broken` or `audit.head.mismatch` | The journal no longer links to its head. Export what is still reachable, keep the database as it is, and treat it as an integrity incident. |
-| `audit prune` reports `audit.boundary.future` | `--before` is later than the database transaction time. Choose a boundary in the past. |
-| `audit export` is refused with `audit.operation.refused` | The runtime configuration path or `--output` is relative, the destination already holds a file, or the database is unreachable. |
 | An operator command cannot reach PostgreSQL | Check the migration URL secret, the role names, and `SSL_CERT_FILE` for a private authority. |
 
 ## Next
 
-- [Author a registry project](../../configure/breg/) for the model, access, and journey files.
-- [Base Registry Engine API](../../reference/breg-api/) for the routes, problem codes, and webhook contract.
-- [Configuration reference](../../reference/breg-configuration/) for every runtime key.
-- [Build a registry with Base Registry Engine](../../explanation/configuration-defined-registry/) for the product boundary.
+- [Bind webhook receivers](../breg-webhooks/) when the project declares events, because the
+  package refuses to activate until every destination is bound.
+- [Change an active registry](../breg-changes/) for the successor package, its diff, and its
+  migration evidence.
+- [Retain, erase, and audit](../breg-retention/) for the maintenance commands that erase history
+  and prove the audit journal.
+- [Harden a production deployment](../../security/hardening-checklist/) for the controls around
+  the listener, the secret root, and the migration credential.
+- [Evidence deployment targets](https://github.com/registrystack/registry-stack/tree/v0.26.1/products/evidence/reference/deployment-targets)
+  and the
+  [Evidence Compose adapter](https://github.com/registrystack/registry-stack/blob/v0.26.1/docker/compose/docker-compose.yaml)
+  cover Evidence and Registry Mint deployment shapes, not Base Registry Engine; read them when this
+  deployment also runs Evidence or Mint alongside the registry.

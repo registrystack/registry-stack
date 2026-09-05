@@ -1,5 +1,5 @@
 current: latest
-released: v0.25.0
+released: v0.26.1
 published_archive_limit: 3
 docsets:
   - id: latest
@@ -27,24 +27,24 @@ docsets:
     label: v0.26.1
     path: /v/0.26.1/
     status: archived
-    availability: candidate
+    availability: released
     source: registry-stack-v0.26.1
     repo_docs_source: monorepo
     published_at: 2026-09-04
-    description: Registry Stack v0.26.1 beta-38 candidate documentation set with unified client packages.
+    description: Released Registry Stack v0.26.1 beta-38 documentation set with unified client packages.
     products:
       registry-stack:
         version: v0.26.1
-        ref: v0.26.1
+        ref: 48e4b1cfd92d26eec42784ac2a626b787de3f396
       registry-relay:
         version: v0.26.1
-        ref: v0.26.1
+        ref: 48e4b1cfd92d26eec42784ac2a626b787de3f396
       registry-manifest:
         version: v0.26.1
-        ref: v0.26.1
+        ref: 48e4b1cfd92d26eec42784ac2a626b787de3f396
       registry-evidence:
         version: v0.26.1
-        ref: v0.26.1
+        ref: 48e4b1cfd92d26eec42784ac2a626b787de3f396
   - id: v0.26.0
     label: v0.26.0
     path: /v/0.26.0/

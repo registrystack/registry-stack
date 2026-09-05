@@ -6,21 +6,24 @@ selection. A returned selection is inert public metadata. The application must
 apply its own trust policy before calling the selected Evidence or Relay
 endpoint.
 
-Starting with Registry Stack v0.23.0, install the exact client version that
-matches the Discovery deployment:
+This crate publishes through the unified `@registrystack/client` package.
+Install the exact client version that matches the Discovery deployment, and use
+its `discovery` namespace:
 
 ```sh
-npm install "@registrystack/discovery-client@<version>"
+npm install "@registrystack/client@<version>"
 ```
 
 The root package selects the native package for Linux amd64 with glibc, Linux
 arm64 with glibc, or macOS arm64. Linux packages require glibc rather than
-musl, so Alpine Linux is not supported.
-
-Published npm installations select a separately published native package for
-macOS arm64, Linux arm64 glibc, or Linux x64 glibc. The root package contains
-the JavaScript API only, so normal installs do not download an unused native
+musl, so Alpine Linux is not supported. The root package contains the
+JavaScript API only, so normal installs do not download an unused native
 binary.
+
+Registry Stack v0.23.0 through v0.26.0 published this binding on its own, as
+`@registrystack/discovery-client`. Those versions stay published and unchanged,
+and no later version joins them: from v0.26.1 the maintained Node.js client is
+`@registrystack/client`.
 
 ```js
 const {
@@ -30,8 +33,8 @@ const {
   selectEvidenceAlternative,
   selectEvidenceService,
   validateSelectionStructure,
-} = require('@registrystack/discovery-client');
-const { EvidenceClient } = require('@registrystack/evidence-client');
+} = require('@registrystack/client').discovery;
+const { EvidenceClient } = require('@registrystack/client').evidence;
 
 // These exact pins are application configuration. They are not copied from
 // Discovery metadata and do not define a Discovery-owned trust-store schema.

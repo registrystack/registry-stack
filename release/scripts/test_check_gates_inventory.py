@@ -846,6 +846,11 @@ class GateInventoryTest(unittest.TestCase):
             proof.index(platform_link),
             proof.index("node smoke-registry-client-package.js"),
         )
+        self.assertIn("node smoke-registry-client-package.mjs", proof)
+        self.assertLess(
+            proof.index("node smoke-registry-client-package.js"),
+            proof.index("node smoke-registry-client-package.mjs"),
+        )
         self.assertNotIn(
             '"${smoke}/node_modules/@registrystack/client-${{ matrix.napi_platform }}"',
             proof,
@@ -880,8 +885,26 @@ class GateInventoryTest(unittest.TestCase):
                 "Release Linux Node client helper invocation",
             ),
             (
-                '--requirement "${GITHUB_WORKSPACE}/release/requirements/maturin-1.9.6.txt"',
-                '--requirement "${GITHUB_WORKSPACE}/release/requirements/unpinned.txt"',
+                # The Evidence tutorial job installs maturin from the same
+                # pinned requirements file, so this mutation names the step
+                # that owns the Linux Node client copy and drops only that
+                # one.
+                "      - name: Install pinned Linux client build tools\n"
+                "        shell: bash\n"
+                "        run: |\n"
+                "          set -euo pipefail\n"
+                "          rustup toolchain install 1.95.0 --profile minimal\n"
+                '          python3 -m venv "${RUNNER_TEMP}/maturin"\n'
+                '          "${RUNNER_TEMP}/maturin/bin/pip" install --quiet \\\n'
+                "            --require-hashes --only-binary=:all: \\\n"
+                '            --requirement "${GITHUB_WORKSPACE}/release/requirements/maturin-1.9.6.txt"',
+                "      - name: Install pinned Linux client build tools\n"
+                "        shell: bash\n"
+                "        run: |\n"
+                "          set -euo pipefail\n"
+                "          rustup toolchain install 1.95.0 --profile minimal\n"
+                '          python3 -m venv "${RUNNER_TEMP}/maturin"\n'
+                '          "${RUNNER_TEMP}/maturin/bin/pip" install --quiet maturin',
                 "Release Linux Node client pinned tools",
             ),
             (
@@ -889,10 +912,15 @@ class GateInventoryTest(unittest.TestCase):
                 "      - disabled-linux-node-clients",
                 "Release Linux Node client CI aggregate",
             ),
+            (
+                '(cd "${smoke}" && node smoke-registry-client-package.mjs)',
+                '(cd "${smoke}" && true)',
+                "Unified Node client ESM entry point smoke",
+            ),
         )
         for snippet, replacement, gate in mutations:
             with self.subTest(gate=gate):
-                text = self.workflow.replace(snippet, replacement, 1)
+                text = self.workflow.replace(snippet, replacement)
                 self.assertIn(gate, self.module.missing_gates(text))
 
     def test_missing_debian13_image_contract_is_reported(self) -> None:
@@ -1092,6 +1120,53 @@ class GateInventoryTest(unittest.TestCase):
             "cargo run --locked --profile ci -p registry-manifest-cli -- skip-profile-validation",
         )
         self.assertIn("Manifest profile validation", self.module.missing_gates(text))
+
+    def test_missing_breg_tutorial_gates_are_reported(self) -> None:
+        for snippet, replacement, gate in (
+            (
+                "bash docs/site/scripts/check-breg-tutorial.sh",
+                "true # Base Registry Engine tutorial replay disabled",
+                "Base Registry Engine tutorial replay",
+            ),
+            (
+                "run: npm run check:tutorial:breg:dry-run",
+                "run: true # Base Registry Engine tutorial dry run disabled",
+                "Base Registry Engine tutorial command drift",
+            ),
+        ):
+            with self.subTest(gate=gate):
+                text = self.workflow.replace(snippet, replacement, 1)
+                self.assertIn(gate, self.module.missing_gates(text))
+
+    def test_missing_breg_tutorial_path_filter_is_reported(self) -> None:
+        classifier = self.classifier.replace(
+            '"docs/site/scripts/check-breg-tutorial.sh",',
+            '"docs/site/scripts/unrouted-breg-tutorial.sh",',
+        )
+        self.assertIn(
+            "Base Registry Engine tutorial path filter",
+            self.module.missing_gates(self.workflow, classifier),
+        )
+
+    def test_missing_released_docset_selector_gate_is_reported(self) -> None:
+        policy_texts = self.module.policy_file_texts(
+            ROOT,
+            self.module.RELEASE_SECURITY_POLICY_PATHS,
+        )
+        docs_pages_path = ".github/workflows/docs-pages.yml"
+        policy_texts[docs_pages_path] = policy_texts[docs_pages_path].replace(
+            "          release/scripts/registry-release validate-docsets \\\n"
+            '            --published-releases "${PUBLISHED_RELEASES}"\n',
+            "          true # released docset selector gate disabled\n",
+            1,
+        )
+        self.assertIn(
+            "Released docset selector gated on the published release",
+            self.module.workflow_policy_violations(
+                policy_texts,
+                required=self.module.REQUIRED_RELEASE_SECURITY_GATES,
+            ),
+        )
 
     def test_missing_release_docset_validation_is_reported(self) -> None:
         text = self.workflow.replace(

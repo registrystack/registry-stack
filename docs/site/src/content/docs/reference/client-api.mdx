@@ -1,0 +1,931 @@
+---
+title: Registry Stack client API reference
+description: Construction, operations, outcomes, and errors for the Registry Discovery, Evidence Gateway, Registry Relay, and Base Registry Engine namespaces of the unified Registry Stack client.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-05"
+doc_type: reference
+locale: en
+standards_referenced:
+  - openapi
+  - sdmx
+---
+
+One package carries every maintained Registry Stack client API: `@registrystack/client` on npm and
+`registry-stack-client` on PyPI. It holds four namespaces, one per product: `discovery` for Registry
+Discovery, `evidence` for Evidence Gateway, `relay` for Registry Relay, and `breg` for Base Registry
+Engine (BReg). Each namespace keeps its own routes, authentication, errors, and verification rules,
+because those contracts differ. Relay and BReg share only the neutral `registry-record` types they
+decode Registry Record responses into.
+
+Rust is the canonical implementation. The Python and Node packages are thin bindings over it: they
+convert native values, construct the Rust client, run one method, and map the validated result or
+error. They implement no Python or JavaScript HTTP, route, authentication, Problem, redirect, retry,
+cache, or pagination policy.
+
+## Availability and compatibility
+
+Registry Stack is pre-1.0 Beta software. Keep a client on the same Registry Stack release as the
+deployment it calls unless a release note states a wider compatibility range.
+
+The unified packages are published beginning with Registry Stack v0.26.1. Releases through v0.26.0
+carry no Base Registry Engine client package and no unified package; they distribute one standalone
+package per product instead. Python requires version 3.10 or later and the wheels use the Python
+3.10 stable ABI (`abi3-py310`), so a later Python imports the same file. Node requires version 22.12
+or later. Both packages select a native build for Linux amd64 with glibc, Linux arm64 with glibc, or
+macOS arm64, and require glibc 2.17 or newer on Linux. The version-specific GitHub Release retains
+the exact wheel and npm tarballs for an offline install.
+
+The Rust crates have `publish = false`, stay source-only in the Registry Stack workspace, and are
+not published to crates.io.
+
+## Install a client
+
+Read the version from the deployment's binary rather than typing it, then install that exact
+version:
+
+```sh
+python -m pip install "registry-stack-client==<version>"
+```
+
+```sh
+npm install "@registrystack/client@<version>"
+```
+
+The distribution installs as `registry-stack-client` and imports as `registry_client`. The two
+spellings differ, so `import registry_stack_client` raises `ModuleNotFoundError`.
+
+A TypeScript consumer also needs the Node type definitions, and must name them. The published
+declarations use `Buffer`, a Node.js global, and TypeScript 6 does not load installed `@types`
+packages on its own, so a project compiling against the declarations reports `TS2591` on every use
+of `Buffer` until it has both installed the package and listed it in `compilerOptions.types`:
+
+```sh
+npm install --save-dev "@types/node"
+```
+
+```json
+{
+  "compilerOptions": {
+    "types": ["node"]
+  }
+}
+```
+
+The package does not declare that dependency itself, because a JavaScript consumer does not need it.
+
+A Rust application takes the source crate from the matching release tag. `registry-stack-client` is
+the facade that re-exports the four product clients under `breg`, `discovery`, `evidence`, and
+`relay` modules; a single-product application can depend on that product's crate directly instead.
+
+```toml
+[dependencies]
+registry-stack-client = { git = "https://github.com/registrystack/registry-stack", tag = "v<version>" }
+```
+
+{/* Evidence: crates/registry-stack-client-node/package.json, crates/registry-stack-client-node/README.md,
+    crates/registry-stack-client-py/README.md, crates/registry-stack-client/Cargo.toml,
+    release/scripts/assemble-registry-client-wheel.py */}
+
+## One import, four namespaces
+
+```python
+from registry_client import breg, discovery, evidence, relay
+```
+
+```js
+const { breg, discovery, evidence, relay } = require('@registrystack/client');
+```
+
+```rust
+use registry_stack_client::{breg, discovery, evidence, relay};
+```
+
+Import only the namespaces an application uses. Nothing crosses a namespace: a Relay error is never
+a BReg error, and a Discovery selection is inert metadata that grants no access to either.
+
+{/* Evidence: crates/registry-stack-client-node/index.d.ts,
+    crates/registry-stack-client-py/python/registry_client/__init__.py,
+    crates/registry-stack-client/src/lib.rs */}
+
+## What every client shares
+
+The naming convention is fixed across the bindings:
+
+- Rust methods that perform an exchange are asynchronous.
+- Python uses the Rust method and option names in snake case, takes options as keyword arguments,
+  and is synchronous. Each method releases the global interpreter lock while a private Tokio runtime
+  performs the exchange, so other Python threads keep running. Nothing here crosses into `asyncio`.
+- Node uses the camel case form, takes options as one object, and returns a promise from every
+  method that performs an exchange. A method that performs none returns its value directly.
+- Reads return language-native values: dicts, lists, and `bytes` in Python; plain objects, arrays,
+  and `Buffer` in Node. No wrapper type is needed to read a result.
+- Timeouts are seconds in Python and milliseconds in Node. `trusted_root_certificates` accepts a PEM
+  bundle as `bytes` in Python; `trustedRootCertificates` accepts it as a string in Node, except in
+  the Discovery namespace, where it is a `Buffer`.
+
+A method that sends an already-prepared request performs at most one service exchange. A configured
+private-key-JWT provider can make a separate token-endpoint exchange when it needs to acquire or
+refresh a bearer. No client follows redirects, reads ambient proxy configuration, retries an
+exchange, fetches referenced schemas, or advances pagination on its own.
+
+The Evidence client's profile-driven methods are the exception. `request`, `prepare_progressive`,
+`contracts_candidate`, and `refresh_metadata` assemble or refresh a cached service snapshot first,
+which can cost a protected-resource metadata fetch, an authorization-server metadata fetch, and, for
+the `https-discovery` and `local-loopback-discovery` trust profiles, a service JWKS fetch. `request`,
+`prepare_progressive`, and `contracts_candidate` also fetch the published definitions catalog when
+the profile's contracts are `published` rather than a reviewed file. A cached, unexpired snapshot
+skips all of it.
+
+Base URLs may carry a deployment prefix. HTTPS is required except for loopback HTTP, and the URL
+cannot contain credentials, a query, a fragment, or ambiguous empty path segments.
+
+## Registry Discovery
+
+The Discovery client searches a published index, resolves a requirement to Evidence Types, and
+records an inert exact selection. It is not a trust broker: a selection carries catalog metadata and
+proves nothing about origin authenticity, catalog currentness, authorization, or adopter trust.
+Endpoint trust and the call that follows stay with the relying application.
+
+### Construct a Discovery client
+
+```rust
+use registry_discovery_client::{DiscoveryClient, DiscoveryClientConfig};
+use url::Url;
+
+let config = DiscoveryClientConfig::new(Url::parse("https://discovery.example.invalid/")?);
+let client = DiscoveryClient::new(config)?;
+```
+
+```python
+from registry_client import discovery
+
+client = discovery.DiscoveryClient(
+    base_url="https://discovery.example.invalid/",
+    request_timeout_seconds=30,
+    connect_timeout_seconds=10,
+    maximum_response_bytes=8 * 1024 * 1024,
+)
+```
+
+```js
+const { discovery } = require('@registrystack/client');
+
+const client = new discovery.DiscoveryClient({
+  baseUrl: 'https://discovery.example.invalid/',
+  requestTimeoutMilliseconds: 30_000,
+  connectTimeoutMilliseconds: 10_000,
+  maximumResponseBytes: 8 * 1024 * 1024,
+});
+```
+
+Node also accepts the base URL as a bare string. The client sends no credentials: a Discovery index
+is public by construction, so there is no authorization option to set.
+
+`DiscoveryClientConfig` provides `with_request_timeout`, `with_connect_timeout`,
+`with_maximum_response_bytes`, and `with_trusted_root_certificates`.
+
+### Discovery operations
+
+| Operation | Rust | Python | Node |
+| --- | --- | --- | --- |
+| Resolve a requirement to Evidence Types | `resolve_evidence_types` | `resolve_evidence_types` | `resolveEvidenceTypes` |
+| Search the catalog | `search_services` | `search_services` | `searchServices` |
+| Search Evidence services | `search_evidence_services` | `search_evidence_services` | `searchEvidenceServices` |
+| Search Relay services | `search_relay_services` | `search_relay_services` | `searchRelayServices` |
+
+Only those four operations reach the network. Every selection below is local and offline.
+
+### Selections
+
+A search returns `ServiceSearchResponse`, holding a `catalog_revision` and the matched
+`ServiceRecord` items. Selecting turns exactly one record into a selection bound to the capability
+that matched it.
+
+| Selection | Rust | Python and Node |
+| --- | --- | --- |
+| One record by identifier and capability | `response.select_exact(request)` | `select_exact` and `selectExact` |
+| One Evidence Gateway service | `response.select_evidence(request)` | `select_evidence_service` and `selectEvidenceService` |
+| One Relay service | `response.select_relay(request)` | `select_relay_service` and `selectRelayService` |
+| One Evidence Type mapping alternative | `response.select_alternative(id)` | `select_evidence_alternative` and `selectEvidenceAlternative` |
+
+Rust supplies the selections as extension traits on the response, `ServiceSearchSelectionExt` and
+`EvidenceTypeResolveSelectionExt`. Python and Node expose the same four both as client methods and
+as module functions, so an application that stored a response can select from it without holding a
+client.
+
+Three local operations act on a stored selection in Python and Node:
+
+- `validate_selection_structure` and `validateSelectionStructure` check closed shape and capability
+  binding, and nothing else. `validate_selection` and `validateSelection` are deprecated aliases
+  kept for compatibility; the operation is structural, not trust.
+- `accept_selection` and `acceptSelection` apply an adopter-owned local policy callback and return
+  an `AcceptedServiceSelection` carrying `endpoint_url` or `endpointUrl`. A callback that returns
+  false raises kind `local_acceptance_refused`.
+- `renew_unchanged_selection` and `renewUnchangedSelection` return a freshly reselected service only
+  when its trust-relevant semantics are unchanged, and raise kind `selection_changed` otherwise. The
+  current selection must come from a new online lookup.
+
+Rust names the same three `validate_service_selection_structure`, `accept_service_selection`, and
+`renew_unchanged_service_selection`.
+
+### Discovery error contract
+
+Python raises `discovery.DiscoveryClientError` and Node throws the same named class. Both carry
+`kind` plus `status`, `problem`, and the transport subcategory (`transport_kind` in Python,
+`transportKind` in Node) when the failure carries them. `kind` is one of `configuration`, `query`,
+`no_matching_service`, `ambiguous_selection`, `no_matching_alternative`, `ambiguous_alternative`,
+`capability_mismatch`, `local_acceptance_refused`, `selection_changed`, `transport`, `problem`,
+`protocol`, and `client`. Rust returns the matching `DiscoveryClientError` variants.
+
+{/* Evidence: crates/registry-stack-client-node/discovery/client.d.ts,
+    crates/registry-discovery-client-py/python/registry_discovery_client/__init__.pyi,
+    crates/registry-discovery-client/src/client.rs,
+    crates/registry-discovery-client/src/selection.rs,
+    crates/registry-discovery-client/src/error.rs */}
+
+## Evidence Gateway
+
+The Evidence client requests minimum-disclosure assertions over the public Evidence HTTP contract
+and verifies every response. Verification is the point of the client: a client built directly with
+`EvidenceClientConfig::new`, or read `from_profile` with the `pinned-jwks` trust profile, verifies
+against only a key set the caller pinned out of band; the deployment's own published key set is
+never fetched to judge a response it also produced. A profile using the default `https-discovery`
+trust (or `local-loopback-discovery`) instead fetches that published key set itself before verifying
+against it.
+
+### Construct an Evidence client
+
+`trusted_jwks` and `revoked_key_ids` are mandatory trust inputs pinned out of band. A key set or
+revoked-key list the verifier could never use is refused at construction.
+
+```rust
+use std::sync::Arc;
+use registry_evidence_client::{EvidenceClient, EvidenceClientConfig, StaticToken};
+use url::Url;
+
+let config = EvidenceClientConfig::new(
+    Url::parse("https://evidence.example.invalid/")?,
+    Arc::new(StaticToken::new(token)?),
+    trusted_jwks,
+    Vec::new(),
+);
+let client = EvidenceClient::new(config)?;
+```
+
+```python
+from registry_client import evidence
+
+client = evidence.EvidenceClient(
+    base_url="https://evidence.example.invalid/",
+    trusted_jwks=trusted_jwks,
+    revoked_key_ids=[],
+    token=token,
+    request_timeout_seconds=30,
+    connect_timeout_seconds=10,
+)
+```
+
+```js
+const { evidence } = require('@registrystack/client');
+
+const client = new evidence.EvidenceClient({
+  baseUrl: 'https://evidence.example.invalid/',
+  trustedJwks: trustedJwks,
+  revokedKeyIds: [],
+  token: { static: token },
+  requestTimeoutMs: 30_000,
+  connectTimeoutMs: 10_000,
+});
+```
+
+`maxResponseBytes` and `max_response_bytes` bound the signed response `send` reads.
+`maxMetadataBytes` and `max_metadata_bytes` bound the documents `discover` and `fetch_jwks` read,
+which are neither signed nor verified, and are a separate decision. `user_agent` and `userAgent`
+replace the default; `trusted_root_certificates` and `trustedRootCertificates` add trust roots for
+the deployment.
+
+### Token configurations
+
+`token` names exactly one credential source. A configuration naming two is refused, so merging two
+authentication settings cannot silently pick one. The two bindings spell the choice differently, and
+this is the one place in the package where they do:
+
+| Source | Python | Node |
+| --- | --- | --- |
+| A fixed bearer, sent unchanged | the bearer as a plain string | `{ static: token }` |
+| A private-key-JWT client-credentials exchange | `{"private_key_jwt": {...}}` | `{ privateKeyJwt: {...} }` |
+
+A Python `token` that is neither a string nor an object carrying exactly the one key
+`private_key_jwt` is refused at construction with kind `configuration`. Note that this differs from
+the `authorization` option of the Relay and BReg namespaces, which name the static case explicitly
+in both languages.
+
+The private-key-JWT configuration requires `token_endpoint`, `client_id`, and `client_key` (Node:
+`tokenEndpoint`, `clientId`, `clientKey`). Its optional members in Python are `audience`,
+`assertion_lifetime_seconds`, `refresh_margin_seconds`, `request_timeout_seconds`,
+`connect_timeout_seconds`, and `user_agent`. Node takes the same six in camel case, with
+`requestTimeoutMs` and `connectTimeoutMs` for the timeouts, and adds string-valued
+`trustedRootCertificates` for the token endpoint. Python has no nested trust anchor for the token
+endpoint: its top-level `trusted_root_certificates` crosses as genuine `bytes` and the nested
+configuration crosses as JSON, which carries no byte values. `client_key` holds the private half; it
+stays in the process and reaches nothing but the token endpoint. Rust passes an
+`Arc<dyn TokenProvider>` instead, and can implement a custom provider.
+
+The built-in exchange sends only `grant_type`, `client_assertion_type`, and `client_assertion`. It
+sends no scope, no RFC 8707 resource, no body `client_id`, and no deployment-defined form member.
+Use a pre-acquired short-lived static bearer when an issuer requires those members.
+
+### Read a client from a profile
+
+`from_profile` and `fromProfile` read an application-owned Evidence client profile, which carries
+the base URL, a trust configuration, a contracts configuration, and the credential configuration in
+one file; each is a reference to material, never the material itself. The profile is the owner-only
+JSON document `evidencectl client profile create --output` writes. The trust configuration decides
+whether the deployment's published key set is fetched: the default `https-discovery` trust (and
+`local-loopback-discovery`) fetches and verifies against it, while `pinned-jwks` instead points to a
+reviewed local key set file, so nothing is fetched. The optional second argument is a private JWK
+held in memory, for an application that reads its key from a secret manager rather than from disk.
+It is never retained by the wrapper, and profile paths and file-backed secrets are redacted from
+every error.
+
+```python
+client = evidence.EvidenceClient.from_profile("evidence-client.json")
+```
+
+```js
+const client = evidence.EvidenceClient.fromProfile('evidence-client.json');
+```
+
+Rust names the same entry points `EvidenceClient::from_profile`,
+`EvidenceClient::from_profile_with_key`, `EvidenceClient::from_profile_path`, and
+`EvidenceClient::from_profile_path_with_key`.
+
+### Prepare, send, and verify
+
+The three-step path closes what an application expects before anything is sent, spends that
+expectation on one exchange, and judges the bytes that come back:
+
+| Step | Rust and Python | Node | Returns |
+| --- | --- | --- | --- |
+| Close the expectations and generate a nonce | `prepare(spec)` | `prepare(spec)` | `PreparedEvidenceRequest` |
+| Send the prepared request | `send(prepared)` | `send(prepared)` | `RawEvidenceResponse` |
+| Verify the response against the request | `verify(prepared, response)` | `verify(prepared, response)` | `VerifiedEvidence` |
+| Send and verify in one call | `request_and_verify(prepared)` | `requestAndVerify(prepared)` | `VerifiedEvidence` |
+| Verify at a stated instant | `verify_as_of(prepared, response, at)` | `verifyAsOf(prepared, response, atMillis)` | `VerifiedEvidence` |
+| Read the published definitions | `discover()` | `discover()` | The definitions document |
+| Read the published key set | `fetch_jwks()` | `fetchJwks()` | A JWKS document |
+| Refresh cached deployment metadata | `refresh_metadata()` | `refreshMetadata()` | Nothing |
+
+`prepare` performs no input or output. The request it returns is good for exactly one exchange:
+spend it with `send` or `request_and_verify`. Python takes the instant for `verify_as_of` as Unix
+seconds; Node takes `asOfMillis` as Unix milliseconds.
+
+The batch forms take the same shape one level up: `prepare_batch`, `send_batch`, `verify_batch`,
+`request_and_verify_batch`, and `verify_batch_as_of` (camel case in Node). A verified batch carries
+`items`, each `{"status": "available", "verified": ...}` or `{"status": "not_available"}` (Node:
+`notAvailable`). `SdJwtVcBatchResponse` reads the issuance envelope answering a request that
+presented several holder keys: `credentials` in the order the request presented them, `count`, and
+`credential_for_holder_key(index)` or `credentialForHolderKey(index)`. Reading the envelope judges
+nothing; each credential is verified individually.
+
+A `VerifiedEvidence` carries `evidence` (the verified payload, field for field), the trace
+identifier, and `pinned_subject_expectations` or `pinnedSubjectExpectations`. Persist those bindings
+after a first-use acceptance and pass them back in the next request specification. Python spells the
+specification member `subject_expectations`, taking either `"accept_first_use"` or the sequence of
+role bindings itself. Node spells it `subjectExpectations`, taking either `'acceptFirstUse'` or
+`{ pinned: [...] }`.
+
+### One-call requests and progressive results
+
+`request` is the short path for an application configured from a profile: it names a requirement and
+its selectors, and the client resolves the definition, prepares, sends, and verifies in one call.
+
+```python
+result = client.request("adult-status", person_id="person-123")
+print(result.values)
+```
+
+```js
+const result = await client.request({
+  requirement: 'adult-status',
+  selectors: { personId: 'person-123' },
+});
+console.log(result.values);
+```
+
+Python takes the requirement positionally and the selectors as keyword arguments, with
+`response_format`, `subjects`, and `binding_receipt` as named options. Node takes one
+`AudienceScopedRequest` object with `requirement`, `responseFormat`, `selectors`, `subjects`, and
+`bindingReceipt`. Use `subjects` when a request has several roles, or when a selector field needs a
+name the option map reserves.
+
+The result is one of two variants, discriminated by the response format closed before the request
+was sent:
+
+| `responseFormat` | Node type | Python type | Payload member |
+| --- | --- | --- | --- |
+| `signed-jws` | `ProgressiveVerifiedAssertion` | `VerifiedAssertion` | `assertion`, the signed bytes; `credential` is null |
+| `sd-jwt-vc` | `ProgressiveVerifiedAudienceScopedCredential` | `VerifiedAudienceScopedCredential` | `credential`, the serialized credential; `assertion` is null |
+
+Both variants carry `evidence`, `values`, `value`, the trace identifier, and `subject_continuity` or
+`subjectContinuity`. Continuity has a `status` of `first_use` or `matched` (Node: `firstUse` or
+`matched`) and an opaque `receipt`. The receipt is the application's to keep: nothing in the package
+persists one. Pass a retained receipt back as `binding_receipt` or `bindingReceipt` to assert that
+the next answer describes the same subject. Python serializes one with
+`SubjectBindingReceipt.to_json` and reads it back with `SubjectBindingReceipt.from_json`.
+
+### Trace identifiers
+
+`RawEvidenceResponse`, `VerifiedEvidence`, and every progressive result carry the validated W3C
+trace identifier for the exchange, as `trace_id` in Python and `traceId` in Node. It is `None` or
+`null` when the response carried none. It is support correlation only: it is not an Evidence audit
+operation identity, and it is not a substitute for the deployment's audit record.
+
+### Evidence error contract
+
+Python raises one of eight subclasses of `evidence.EvidenceClientError`, so an application can catch
+the category it handles and let the rest propagate. Node throws `evidence.EvidenceClientError` with
+`kind` carrying the same eight values.
+
+| Kind | Python class | Meaning |
+| --- | --- | --- |
+| `configuration` | `ConfigurationError` | The construction inputs or the request specification were refused, or a prepared request had already spent its single send |
+| `nonce` | `NonceError` | The request nonce could not be generated |
+| `token` | `TokenError` | The configured credential source could not supply a bearer |
+| `transport` | `TransportError` | The exchange failed below HTTP |
+| `denied` | `DeniedError` | Evidence refused the request |
+| `not_available` | `NotAvailableError` | The source could not answer the request |
+| `protocol` | `ProtocolError` | The response violated the contract |
+| `verification` | `VerificationError` | The response did not satisfy the pinned verification |
+
+`kind` is always present. The rest are present only when the underlying failure carries them:
+`status` on `denied`, `protocol`, and a `token` failure whose token subcategory is `protocol`;
+`code` on `denied`, `protocol`, `verification`, and a `token` failure whose token subcategory is
+`refused`; the trace identifier on `denied`, `not_available`, and `protocol`; the retry delay on
+`denied` and `protocol`; the transport subcategory on `transport` and a `token` failure whose token
+subcategory is `transport`; and the token subcategory on every `token` failure. Python spells them
+`status`, `code`, `trace_id`, `retry_after_seconds`, `transport_kind`, and `token_kind`; Node spells
+them `status`, `code`, `traceId`, `retryAfterSeconds`, `transportKind`, and `tokenKind`.
+
+{/* Evidence: crates/registry-stack-client-node/evidence/client.d.ts,
+    crates/registry-stack-client-node/evidence/index.d.ts,
+    crates/registry-evidence-client-py/python/registry_evidence_client/__init__.pyi,
+    crates/registry-evidence-client/src/client.rs,
+    crates/registry-evidence-client/src/config.rs,
+    crates/registry-evidence-client/src/profile.rs, EvidenceClientProfile::from_file, TrustProfile */}
+
+## Registry Relay
+
+The Relay clients cover the fixed Relay V2 HTTP surface without importing a deployment's record,
+selector, filter, artifact, or SDMX schemas.
+
+### Construct a Relay client
+
+```rust
+use registry_relay_client::{RelayClient, RelayClientConfig};
+use url::Url;
+
+let config = RelayClientConfig::new(
+    Url::parse("https://relay.example.invalid/institution-a")?,
+);
+let client = RelayClient::new(config)?;
+```
+
+```python
+from registry_client import relay
+
+client = relay.RelayClient(
+    base_url="https://relay.example.invalid/institution-a",
+    request_timeout_seconds=30,
+    connect_timeout_seconds=10,
+    max_response_bytes=8 * 1024 * 1024,
+)
+```
+
+```js
+const { relay } = require('@registrystack/client');
+
+const client = new relay.RelayClient({
+  baseUrl: 'https://relay.example.invalid/institution-a',
+  requestTimeoutMilliseconds: 30_000,
+  connectTimeoutMilliseconds: 10_000,
+  maxResponseBytes: 8 * 1024 * 1024,
+});
+```
+
+`RelayClientConfig` also provides `with_token_provider`, `with_request_timeout`,
+`with_connect_timeout`, `with_max_response_bytes`, `with_user_agent`, and
+`with_trusted_root_certificates`.
+
+### Relay authentication
+
+Authentication is optional. Probes and OpenAPI never ask a configured token provider for a token and
+never send authorization. Other methods attach a bearer when a provider is configured and Relay
+accepts credentials for that operation.
+
+The supported modes are:
+
+- No bearer: omit `with_token_provider` in Rust or `authorization` in Python and Node.
+- Static bearer: pass `Arc::new(StaticToken::new(token)?)` to `with_token_provider` in Rust,
+  `authorization={"static": token}` in Python, or `authorization: { static: token }` in Node.
+- Private-key JWT: pass `PrivateKeyJwt` as a `TokenProvider` in Rust,
+  `authorization={"private_key_jwt": config}` in Python, or
+  `authorization: { privateKeyJwt: config }` in Node.
+- Custom provider: implement the public `TokenProvider` trait in Rust. Python and Node do not expose
+  custom token providers.
+
+The private-key-JWT configuration names its required members `token_endpoint`, `client_id`, and
+`client_key`. Its optional members are `audience`, `assertion_lifetime_seconds`,
+`refresh_margin_seconds`, `request_timeout_seconds`, `connect_timeout_seconds`, `user_agent`, and
+byte-valued `trusted_root_certificates`. Node wraps the configuration as `{ privateKeyJwt: {...} }`,
+names its required members `tokenEndpoint`, `clientId`, and `clientKey`, spells the timeouts
+`requestTimeoutMilliseconds` and `connectTimeoutMilliseconds`, and takes string-valued
+`trustedRootCertificates`. Rust constructs `PrivateKeyJwtConfig`, builds `PrivateKeyJwt`, and passes
+it through `with_token_provider`. Relay and token-endpoint certificate bundles are independent.
+
+The built-in token exchange sends only `grant_type`, `client_assertion_type`, and
+`client_assertion`, exactly as the Evidence one does.
+
+### Relay operations
+
+| Operation | Rust | Python | Node |
+| --- | --- | --- | --- |
+| Process probes | `health`, `ready` | `health`, `ready` | `health`, `ready` |
+| Discovery documents | `openapi`, `service_metadata` | `openapi`, `service_metadata` | `openapi`, `serviceMetadata` |
+| Resource discovery | `resources`, `continue_resources`, `resource` | `resources`, `continue_resources`, `resource` | `resources`, `continueResources`, `resource` |
+| Record list and search | `list_records`, `search_records`, `continue_collection` | `list_records`, `search`, `continue_list_records`, `continue_search` | `listRecords`, `search`, `continueListRecords`, `continueSearch` |
+| Record read | `read_record` | `read_record` | `readRecord` |
+| Governed lookup | `lookup_record` | `lookup` | `lookup` |
+| Generated artifact | `artifact` | `artifact` | `artifact` |
+| SDMX documents | `sdmx_data`, `sdmx_structure` | `sdmx_data`, `sdmx_structure` | `sdmxData`, `sdmxStructure` |
+
+### Relay request arguments
+
+The table uses the wire-level fact name. Python spells multiword keyword arguments in snake case,
+such as `page_size`, `access_profile`, and `dimension_at_observation`. Node places optional request
+facts in an options object and uses camel case, such as `pageSize`, `accessProfile`, and
+`dimensionAtObservation`. Rust uses the request types named in the final column.
+
+`health` and `ready` take no arguments.
+
+| Operation | Required arguments | Optional arguments | Rust request type |
+| --- | --- | --- | --- |
+| OpenAPI, service metadata | None | ETag | `Option<&StrongEtag>` |
+| Resource list | None | Page size from 1 through 100; ETag | `ResourceListRequest` |
+| Resource detail | Resource identifier | ETag | Resource identifier as `&str` |
+| Resource continuation | Complete resource continuation | ETag | `ResourceContinuation` |
+| Record list | Resource identifier | Page size, record options, filters, ETag | `ListRequest` |
+| Record search | Resource identifier, search identifier, bbox | Page size, record options, ETag | `SearchRequest` |
+| Record or search continuation | Complete matching continuation | ETag | `CollectionContinuation` |
+| Record read | Resource and record identifiers | Record options; ETag | `RecordOptions` |
+| Governed lookup | Resource and lookup identifiers; selectors | Record options; ETag | `LookupRequest` |
+| Artifact | Artifact identifier | ETag | Identifier as `&str` |
+| SDMX data | Agency, resource, three-part version | Key, constraints, offset, limit, dimension at observation, format, ETag | `SdmxDataRequest` |
+| SDMX structure | Kind, agency, resource, three-part version | ETag | `SdmxStructureRequest` |
+
+`RecordOptions` contains fields, access profile, and record format. `ListRequest` adds a positive
+page size and a string-to-string filter mapping. `SearchRequest::new` requires a `BoundingBox`
+ordered as `[west, south, east, north]` and can add a positive page size. Python passes list filters
+to `list_records` and requires the bbox keyword on `search`. Node uses `ListOptions` for
+`listRecords` and `SearchOptions`, whose `bbox` member is required, for `search`.
+
+Input record formats are `json`, `json-ld`, `geojson`, and `json-fg` in Python and Node. Rust uses
+`RecordFormat::Json`, `JsonLd`, `GeoJsonRfc7946`, or `JsonFg`.
+
+A lookup selector mapping must contain at least one named string, signed integer, or boolean value.
+Python supplies it as `selectors` and Node as the third `lookup` argument. Rust builds it with one or
+more `LookupRequest::selector` calls.
+
+SDMX data format is `json` or `csv`. The optional constraints are a string-to-string component
+mapping. Python passes all SDMX data facts as arguments to `sdmx_data`; Node passes one
+`SdmxDataRequest` object; Rust constructs `SdmxDataRequest::new(agency, resource, version)` and uses
+its builders. SDMX structure kind is `dataflow` or `datastructure` in Python and Node, and
+`SdmxStructureKind::Dataflow` or `DataStructure` in Rust. Every SDMX version has the exact `x.y.z`
+form.
+
+Every conditional Rust method takes an optional final `&StrongEtag`. Python exposes `etag` as the
+last optional keyword. Node exposes it as the final optional argument after any options or request
+object. Continuation methods accept only the matching complete continuation and optional ETag.
+
+### Relay response outcomes
+
+Process probes return complete responses only. Cacheable operations return one of two outcomes:
+
+- Rust returns `Conditional::Complete(Complete<T>)` or `Conditional::NotModified(NotModified)`.
+- Python returns a mapping with `kind: "complete"`, `value`, `trace_id`, and nullable `etag`, or
+  `kind: "not_modified"`, `etag`, and `trace_id`.
+- Node returns an object with `kind: 'complete'`, `value`, `traceId`, and an `etag` that can be
+  omitted, or `kind: 'notModified'`, `etag`, and `traceId`.
+
+Deployment-defined `domainData` stays dynamic. Python returns nested mappings, lists, and scalars,
+and Node returns plain JSON values for that field. Both binding declarations type the fixed service,
+capability, resource, Record envelope, page, trace, and ETag structures that surround it. Rust owns
+the matching fixed models around the dynamic JSON field.
+
+### Relay continuations
+
+Resource discovery returns this complete continuation projection:
+
+```json
+{
+  "cursor": "<opaque-cursor>"
+}
+```
+
+A record-list continuation has this shape:
+
+```json
+{
+  "route": {
+    "kind": "records",
+    "resource": "<resource>"
+  },
+  "cursor": "<opaque-cursor>",
+  "format": "json",
+  "accessProfile": "<access-profile>"
+}
+```
+
+A search continuation changes `route` to include `kind: "search"` and its exact `search` identifier.
+`accessProfile` is absent when the first request did not select one. `format` is one of `json`,
+`json-ld`, `geojson-rfc7946`, or `json-fg`.
+
+Pass the complete returned projection unchanged to the matching continuation method. Python and Node
+reject a continuation handed to the wrong route-specific method. Rust exposes one typed
+`continue_collection` method and follows the route carried by that continuation. A continuation binds
+the opaque cursor to its resource or search route, representation format, and optional access
+profile. It intentionally does not carry first-page fields, filters, bounding box, or page size. The
+clients reject raw cursor strings, extra members, and attempts to combine a cursor with first-page
+choices.
+
+### Conditional cache contract
+
+A complete cacheable response can carry a validated strong ETag. It has exactly one quoted,
+lowercase SHA-256 value. Pass it through the method's ETag argument to send `If-None-Match`.
+
+A valid `304 Not Modified` response has an empty body, echoes the requested ETag, and carries the
+same strictly validated trace context as a complete response. Reuse a stored body only when it was
+stored with that exact ETag. The clients do not retain bodies or issue conditional requests on their
+own.
+
+### Raw documents
+
+OpenAPI, generated artifacts, SDMX data, and SDMX structures remain raw protocol documents:
+
+| Language | Complete raw response |
+| --- | --- |
+| Rust | `RawDocument` with `media_type()` and `as_bytes()` |
+| Python | `body: bytes` and `media_type: str` |
+| Node | `body: Buffer` and `mediaType: string` |
+
+The client validates exact OpenAPI and SDMX media types before returning bytes. An artifact can
+declare any single syntactically valid media type, which the client preserves. Every raw method
+enforces its body bound. The client does not interpret deployment-defined artifacts or SDMX
+payloads. SDMX versions use the exact `x.y.z` form.
+
+### Relay error contract
+
+Rust returns `RelayClientError` variants for configuration, invalid request, token, transport, Relay
+Problem, and protocol failures. Python raises `relay.RelayClientError` with snake-case attributes.
+Node throws the same named class with camel-case attributes.
+
+| Meaning | Python | Node |
+| --- | --- | --- |
+| Closed failure category | `kind` | `kind` |
+| Registered Problem code | `code` | `code` |
+| Public HTTP status | `status` | `status` |
+| Validated trace identifier | `trace_id` | `traceId` |
+| Bounded `429` delay | `retry_after_seconds` | `retryAfterSeconds` |
+| Transport subcategory | `transport_kind` | `transportKind` |
+| Token subcategory | `token_kind` | `tokenKind` |
+
+Optional error attributes are absent or `None` when the failure does not carry that fact. A Relay
+Problem is accepted only when its exact six-member document, registered code and status, response
+media type, and header and body trace agree. Only a registered `429` Problem can expose a numeric
+`Retry-After` from 1 through 60 seconds.
+
+Errors retain fixed local reasons, public status and Problem codes, validated trace identifiers, and
+bounded retry guidance. They do not expose credentials, JWKs, selectors, filters, response bodies,
+header values, URLs, or underlying HTTP error chains.
+
+{/* Evidence: crates/registry-stack-client-node/relay/client.d.ts,
+    crates/registry-relay-client-py/python/registry_relay_client/__init__.pyi,
+    crates/registry-relay-client/src/client.rs, crates/registry-relay-client/src/error.rs */}
+
+## Base Registry Engine
+
+The BReg client owns BReg routes, query types, Problems, entity tags, capability bindings, and
+lifecycle actions. It is a separate client and a separate transport from Relay; the two share only
+the neutral `registry-record` DTOs for strict Registry Record response decoding.
+
+### Construct a BReg client
+
+```rust
+use registry_breg_client::{BaseRegistryClient, BaseRegistryClientConfig};
+use url::Url;
+
+let config = BaseRegistryClientConfig::new(
+    Url::parse("https://breg.example.invalid/institution-a")?,
+);
+let client = BaseRegistryClient::new(config)?;
+```
+
+```python
+from registry_client import breg
+
+client = breg.BaseRegistryClient(
+    base_url="https://breg.example.invalid/institution-a",
+    authorization={"static": token},
+    request_timeout_seconds=30,
+    connect_timeout_seconds=10,
+    max_response_bytes=8 * 1024 * 1024,
+)
+```
+
+```js
+const { breg } = require('@registrystack/client');
+
+const client = new breg.BaseRegistryClient({
+  baseUrl: 'https://breg.example.invalid/institution-a',
+  authorization: { static: token },
+  requestTimeoutMilliseconds: 30_000,
+  connectTimeoutMilliseconds: 10_000,
+  maxResponseBytes: 8 * 1024 * 1024,
+});
+```
+
+`BaseRegistryClientConfig` provides `with_token_provider`, `with_request_timeout`,
+`with_connect_timeout`, `with_max_response_bytes`, `with_user_agent`, and
+`with_trusted_root_certificates`. Health and readiness never acquire or send a bearer. Other
+operations attach one token when a provider is configured.
+
+`authorization` is optional; a client without it reaches only the probes and whatever the deployment
+serves anonymously. It takes the same two shapes and the same member names as the Relay
+authorization above, and any other shape is refused at construction with kind `configuration`.
+
+Write and lifecycle authority stays opaque. `BRegCreateBinding`, `BRegPatchBinding`, and
+`BRegLifecycleAuthority` are selected from `BRegMetadata`, passed back to the client, and expose
+nothing. A promoted `BRegLifecycleAction` exposes read-only `operation`, `stage`, `href`, `body`, and
+`review`, and only the client can execute it.
+
+### BReg read operations
+
+| Operation | Rust and Python | Node | Rust returns |
+| --- | --- | --- | --- |
+| Liveness and readiness probes | `health()`, `ready()` | `health()`, `ready()` | `BRegComplete<BRegProbeStatus>` |
+| Caller-filtered documents | `openapi(access_profile)`, `registry_metadata(access_profile)` | `openapi(accessProfile)`, `registryMetadata(accessProfile)` | `BRegComplete<BRegRawDocument>` |
+| Parsed registry metadata | `registry_contract(access_profile)` | `registryContract(accessProfile)` | `BRegComplete<BRegMetadata>` |
+| Entity schema | `entity_schema(entity_identifier, access_profile)` | `entitySchema(entityIdentifier, accessProfile)` | `BRegComplete<BRegRawDocument>` |
+| Record read | `get_record(entity_route, record_identifier, options)` | `getRecord(entityRoute, recordIdentifier, options)` | `BRegComplete<RegistryRecordSingleResponse>` |
+| Record list | `list_records(entity_route, request)` | `listRecords(entityRoute, options)` | `BRegComplete<BRegPage<RegistryRecordCollectionResponse>>` |
+| List continuation | `continue_list(continuation)` | `continueList(continuation)` | `BRegComplete<BRegPage<RegistryRecordCollectionResponse>>` |
+| Lookup | `lookup_record(entity_route, request)` | `lookupRecord(entityRoute, selector, values, options)` | `BRegComplete<RegistryRecordSingleResponse>` |
+
+`BRegResponseMetadata::trace_id()` is always present. A record read carries a `BRegEtag`; probes,
+discovery documents, lists, and lookups do not. A direct patch requires an ETag from a fresh read
+through the same route and access profile.
+
+`BRegContinuation` binds an opaque skip token to the entity route, representation, and optional
+access profile. Its validated projection contains no `$select`, `$filter`, `$orderby`, `$top`, or
+`$count` setters, so callers cannot combine a continuation with first-page options.
+
+In Python, `get_record`, `list_records`, and `lookup_record` take their options as keyword arguments:
+`select`, `access_profile`, and `format` (`json` or `json-ld`), plus `top`, `filter`, `orderby`, and
+`count` for a list. `lookup_record(entity_route, selector, values=None, ...)` names the selector and
+its values directly. Node takes the same options as an object with `select`, `accessProfile`,
+`format`, `top`, `filter`, `orderby`, and `count`.
+
+A Python outcome is a dict and a Node outcome is an object. Both carry `kind` (`complete`), `value`,
+the trace identifier (`trace_id` in Python, `traceId` in Node), and `etag` and `location` when the
+response carried them. A member the response did not carry is `None` in Python and absent in Node. A
+raw document carries `body` (`bytes` or `Buffer`) and `media_type` or `mediaType` in place of
+`value`. A list outcome adds `continuation`, a dict or object holding the route, skip token,
+representation, optional access profile, and the registry, dataset, and entity type identifiers; pass
+it unchanged to `continue_list` or `continueList`.
+
+`registry_contract` and `registryContract` return `BRegMetadata` itself rather than an outcome. It
+exposes `registry_identifier`, `registry_version`, `registry_revision`, `trace_id`, and `etag` (camel
+case in Node) beside the selection methods below.
+
+### Capability bindings
+
+`registry_contract` parses caller-filtered Registry Metadata into `BRegMetadata` and binds the
+metadata to the client's exact origin. `select_direct_write` returns `BRegDirectWrite::Create` or
+`BRegDirectWrite::Patch` only when the operation, route, request contract, capabilities, registry,
+dataset, entity, profile, revision, and origin match the supported shape. `select_lifecycle` returns
+one `BRegLifecycleAuthority` for the matching entity and profile.
+
+A mismatch returns `BRegMetadataSelectionError`. The error carries a closed reason kind and no
+response-controlled values.
+
+The bindings split the direct write selection by operation.
+`select_create(operation_identifier, expected_profile)` returns a `BRegCreateBinding`,
+`select_patch(operation_identifier, expected_profile)` returns a `BRegPatchBinding`, and
+`select_lifecycle(entity_identifier, expected_profile)` returns a `BRegLifecycleAuthority` (Node:
+`selectCreate`, `selectPatch`, `selectLifecycle`). A mismatch raises the client error with kind
+`metadata_selection` and a code from `not_found`, `unbound_source`, `profile_mismatch`,
+`unsupported_operation`, `required_capability`, and `contract_mismatch`.
+
+### Writes
+
+`BRegCreateRequest::new(data)` and `BRegPatchRequest::builder()` validate API field names,
+I-JSON-safe values, nesting depth, operation count, and encoded body size before HTTP I/O. A patch
+operation serializes under `/data/<field>`.
+
+`BRegIdempotencyKey::parse(value)` accepts 1 to 256 visible ASCII bytes except comma and semicolon.
+The client never creates a key or retries a mutation. A retry after an unknown outcome must reuse the
+same binding, body, precondition, representation, and key.
+
+`create_record` sends the selected create operation and requires a `201` response whose `Location`
+matches the created record. `patch_record` sends the selected patch operation with `If-Match` and
+requires a `200` response without `Location`.
+
+The bindings take the same inputs as plain values. Python:
+`create_record(binding, data, idempotency_key, *, format="json")` and
+`patch_record(binding, record_identifier, etag, operations, idempotency_key, *, format="json")`.
+Node: `createRecord(binding, data, idempotencyKey, format)` and
+`patchRecord(binding, recordIdentifier, etag, operations, idempotencyKey, format)`. `data` maps API
+field names to I-JSON values. Each patch operation is `{"op": "add" | "replace" | "test", "field":
+..., "value": ...}` or `{"op": "remove", "field": ...}`. Node checks every input before conversion:
+plain objects and arrays only, at most 128 levels, 100,000 nodes, and 4 MiB of string data. Python
+converts dicts, lists, tuples, and JSON scalars. An input either binding cannot convert, and any
+value the Rust validation refuses, raises kind `invalid_request` before an exchange.
+
+### Lifecycle actions
+
+Change-request records carry a BReg-owned `request` extension. `lifecycle_actions` promotes only the
+actor-bound actions from a fresh record against a matching `BRegLifecycleAuthority`.
+`execute_lifecycle_action` sends the promoted href, body, ETag, and caller-supplied idempotency key.
+
+`BRegLifecycleOperation` contains `SubmitRequest`, `ApproveRequest`, `RejectRequest`,
+`RequestRevision`, `ReviseRequest`, `CancelRequest`, and `ApplyRequest`. Refetch the record after a
+success or refusal before choosing the next operation. Lifecycle ETags are not record ETags.
+
+Python `lifecycle_actions(authority, record, *, format="json")` returns a sequence of
+`BRegLifecycleAction`; Node `lifecycleActions(authority, record, format)` returns an array and
+performs no exchange. `record` is the `value` of a fresh record read. An action's `operation` is the
+snake case operation name, such as `submit_request`; `stage` and `review` are `None` or `null` when
+absent. A promotion whose authority does not conform, or whose action is not bound to that authority
+and record, raises kind `lifecycle_promotion` with code `authority` or `binding`.
+`execute_lifecycle_action(action, idempotency_key)` and
+`executeLifecycleAction(action, idempotencyKey)` return the receipt as an outcome.
+
+### BReg error contract
+
+`BaseRegistryClientError` is distinct from `RelayClientError`. Its public accessors expose only the
+fixed error kind, status, registered BReg Problem code, validated trace identifier, and bounded
+transport or token category.
+
+A Problem is accepted only when its closed members, code, status, title, detail, type URI, and header
+and body trace match. Unknown Problem codes and malformed responses fail closed as
+`BRegProtocolFailure`. Request, metadata, ETag, idempotency-key, and lifecycle validation errors do
+not retain response-controlled values.
+
+Python raises `breg.BaseRegistryClientError`, an `Exception` whose message is `str(error)` and whose
+attributes are `kind`, `code`, `plan_refusal`, `status`, `trace_id`, `transport_kind`, and
+`token_kind`; an absent member is `None`. Node rejects with `breg.BaseRegistryClientError`, an
+`Error` with `kind` and the optional `code`, `planRefusal`, `status`, `traceId`, `transportKind`, and
+`tokenKind`; an absent member is undefined.
+
+`kind` is one of:
+
+| Kind | Meaning | Members set |
+| --- | --- | --- |
+| `configuration` | The construction inputs were refused | none |
+| `invalid_request` | An input was refused before any exchange | none |
+| `token` | The private-key JWT provider could not supply a bearer | `token_kind`, plus `transport_kind`, `code`, or `status` depending on how the token endpoint failed |
+| `transport` | The exchange failed below HTTP | `transport_kind` |
+| `problem` | The registry answered with an accepted Problem | `status`, `code`, `trace_id`, and `plan_refusal` when the code is a request-plan refusal |
+| `protocol` | The response violated the contract | `status`, `code` (`header_bounds`, `trace_context`, `media_type`, `body`, `problem`, `entity_tag`, `profile_link`, `location`, `cache_policy`, `status`, or `protocol`), and `trace_id` when one was validated |
+| `metadata_selection` | A binding could not be selected from the metadata | `code` |
+| `lifecycle_promotion` | The authority did not conform, or an action was not bound to it and the record | `code` (`authority` or `binding`) |
+| `client` | Any other client-side failure | none |
+
+{/* Evidence: crates/registry-stack-client-node/breg/client.d.ts,
+    crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi,
+    crates/registry-breg-client-py/src/lib.rs, crates/registry-breg-client-node/src/lib.rs,
+    crates/registry-breg-client-node/client.js, crates/registry-breg-client/src/error.rs */}
+
+## Shared implementation boundary
+
+The canonical Rust clients own product-neutral outbound policy, bearer acquisition, prefix-safe route
+construction, bounded reads, OAuth response decoding, trace validation, and Problem validation.
+Product-specific request models and fixed route semantics stay in each product client.
+Deployment-defined data stays dynamic at the SDK boundary.
+
+## Related reference
+
+- [Query a registry from Python and Node](../../tutorials/query-breg-client/) for a worked BReg run
+  against the quickstart.
+- [Query a Relay with Python](../../tutorials/query-relay-client/) for a worked Relay run.
+- [Request evidence from an application](../../tutorials/request-evidence-from-an-application/) for a
+  worked Evidence run.
+- [Base Registry Engine API reference](../breg-api/) for the BReg HTTP and Problem contracts.
+- [Instance API references](../apis/) for the deployment-generated Relay OpenAPI boundary.
+- [Relayctl command reference](../relayctl/) for Relay project authoring and package commands.
+- [Errors and status codes](../errors/) for the wider Registry Stack error vocabulary.
+- [Control access per profile](../../configure/breg-access/) for the profiles and capability bindings
+  a BReg selection matches against.

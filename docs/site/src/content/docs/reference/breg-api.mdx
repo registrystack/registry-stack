@@ -22,13 +22,14 @@ import EventReferenceTable from '../../../components/EventReferenceTable.astro';
 import configuration from '../../../data/generated/breg-configuration.json';
 import { eventConfiguration } from '../../../lib/breg-event-reference.mjs';
 
-Lookup reference for the HTTP API a compiled Base Registry Engine package serves and for the events
-it emits. Every registry serves the same route shapes; the entity routes, fields, profiles, and
+Lookup reference for the HTTP API a compiled Base Registry Engine (BReg) package serves and for the
+events it emits. Every registry serves the same route shapes; the entity routes, fields, profiles, and
 actions come from your project. The contract is not a frozen compatibility promise.
 
 For the authoring grammar, use [author a registry project](../../configure/breg/).
-For deployment, receivers, and recovery, use
-[deploy and operate a registry](../../operate/breg/).
+For deployment and recovery, use [deploy a registry](../../operate/breg/).
+For receivers, delivery, and replay, use
+[bind webhook receivers](../../operate/breg-webhooks/).
 For every YAML key, use the [configuration reference](../breg-configuration/).
 A running server publishes its own OpenAPI document at `/openapi.json`; the schemas there are
 the exact ones its package compiled.
@@ -130,12 +131,14 @@ rules, with an optional field spelled as `anyOf` of the type and `null`.
 
 ## Collections and paging
 
-A collection read returns the matching envelopes as `items`, a `pageInfo` object, and the same
-`meta` as a single record:
+A collection read returns the matching records as `items`, a `pageInfo` object, and the same
+`meta` as a single record. Only a single-record response wraps the record in `data`; a collection
+member carries `recordIdentifier`, `revisionIdentifier`, and `domainData` directly, so the field
+path is `items[0].domainData`, not `items[0].data.domainData`:
 
 ```json
 {
-  "items": [{"data": {"recordIdentifier": "…", "revisionIdentifier": "1", "domainData": {}}}],
+  "items": [{"recordIdentifier": "…", "revisionIdentifier": "1", "domainData": {}}],
   "pageInfo": {"nextCursor": "eyJ…"},
   "meta": {"registryIdentifier": "asset-registry", "datasetIdentifier": "asset-sites", "entityTypeIdentifier": "asset-site"}
 }
@@ -148,7 +151,9 @@ runtime `cursor.secretRef`, binds the whole original query, and expires after
 any of those checks returns `400 query.cursor_invalid`. With `$count`, the response carries the
 matching total beside the page.
 
-{/* Evidence: crates/registry-breg/src/query.rs, ParsedReadQueryMode;
+{/* Evidence: crates/registry-record/src/lib.rs, RegistryRecordCollectionResponse and RegistryRecord;
+    crates/registry-record/tests/contract.rs, product_extensions_are_preserved_at_every_open_level();
+    crates/registry-breg/src/query.rs, ParsedReadQueryMode;
     crates/registry-breg/src/api/mod.rs, cursor_invalid();
     crates/registry-breg/src/runtime_config.rs, CursorConfig. */}
 
@@ -573,8 +578,8 @@ operator replay. Receiving a lifecycle event grants no authority to approve or a
 ### Signature
 
 `X-Registry-Signature` is an HMAC-SHA-256 over the request, keyed with the exact bytes resolved
-by `hmacSha256KeyRef`, at least 32 bytes, neither trimmed nor hex-decoded. This is a Registry
-BReg format, not a CloudEvents signing standard.
+by `hmacSha256KeyRef`, at least 32 bytes, neither trimmed nor hex-decoded.
+This is a Base Registry Engine format, not a CloudEvents signing standard.
 
 The signing input starts with the ASCII bytes `breg-webhook-signature-v1`. Each later
 value is prefixed with its byte length as an unsigned 64-bit big-endian integer, in this order:
@@ -641,7 +646,9 @@ Command prefix `bregctl`; add `--format json` for a machine-readable report.
 
 <EventReferenceTable id="commands" />
 
-`list` and `replay` connect directly to PostgreSQL through the runtime configuration. The public
+`list` and `replay` connect directly to PostgreSQL through the runtime configuration, and
+[bind webhook receivers](../../operate/breg-webhooks/) is the operator procedure that runs them
+against a bound destination. The public
 record API has no outbox, payload, delivery, or replay endpoint. A replay needs a retained,
 unexpired dead letter and the matching generation and activated destination binding. The JSON
 result of `list` is a `deliveries` array whose entries carry these fields and no record values:
@@ -678,7 +685,8 @@ maintained data checked against that implementation.
 
 ## Next
 
-- [Deploy and operate a registry](../../operate/breg/) for runtime configuration, receivers, replay, and erasure.
+- [Deploy a registry](../../operate/breg/) for runtime configuration and erasure.
+- [Bind webhook receivers](../../operate/breg-webhooks/) for destinations, the signing key, and replay.
 - [Author a registry project](../../configure/breg/) for entities, profiles, change requests, and actions.
-- [Configuration reference](../breg-configuration/) for every project, module, and runtime key.
+- [Base Registry Engine configuration reference](../breg-configuration/) for every project, module, and runtime key.
 - [Create and query your first registry](../../tutorials/first-breg/) to see the envelope and headers in a running server.

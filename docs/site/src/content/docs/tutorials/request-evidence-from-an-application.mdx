@@ -34,7 +34,6 @@ program itself retained.
     'The completed first Evidence assertion tutorial',
     'Its adult-status project and materialized source mock, which you restart here',
     'Python 3.10 or later',
-    'A Rust toolchain and git, to build the client from source',
   ]}
 />
 
@@ -112,7 +111,7 @@ The application must decide which signing keys it accepts before any response ex
 from the project's own retained public signing key:
 
 ```sh
-evidencectl jwks --out trusted-issuer-keys.json secrets/signing-p256-public.jwk.json
+evidencectl jwks --output trusted-issuer-keys.json secrets/signing-p256-public.jwk.json
 ```
 
 ```text
@@ -125,43 +124,32 @@ client never fetches trust from a response or from a discovery document. See
 [Manage verifier trust and key rotation](../manage-evidence-verifier-trust/) for the production
 handling.
 
-## Build the Python client
+## Install the Python client
 
-The client is not published to a package index yet, so build the extension module from a checkout of
-the repository. Take the source at the version of the runtime you installed, not at the default
-branch. From inside the project directory:
-
-```sh
-installed="$(evidencectl --version | awk '{print $2}')"
-git clone --depth 1 --branch "v$installed" \
-  https://github.com/registrystack/registry-stack.git ../registry-stack
-cargo build --locked --manifest-path ../registry-stack/Cargo.toml \
-  -p registry-evidence-client-py --lib \
-  --features registry-evidence-client-py/extension-module
-```
-
-This project is pre-1.0, so its default branch may already carry request and response contract
-changes the installed runtime does not implement. Pinning the checkout to the installed version keeps
-the client and the deployment on one contract; a mismatch would surface as a discovery or
-verification failure that looks like a bug in your application. If the clone fails because that
-release does not carry the client yet, install a newer `evidencectl` and repeat the step. If you
-already have a checkout, point the two `../registry-stack` paths at it instead of cloning, after
-confirming its `version` in `Cargo.toml` matches `evidencectl --version`.
-
-Copy the compiled library into a directory the application imports from:
+The client is the `evidence` namespace of the maintained `registry-stack-client` package. Read the
+version from the runtime you installed rather than typing one, and install the client at that exact
+version. From inside the project directory:
 
 ```sh
-mkdir -p python-module
-case "$(uname -s)" in
-  Darwin) built=libregistry_evidence_client.dylib ;;
-  Linux) built=libregistry_evidence_client.so ;;
-esac
-cp "../registry-stack/target/debug/$built" python-module/registry_evidence_client.so
+version="$(evidencectl --version | awk '{print $2}')"
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install "registry-stack-client==${version}"
 ```
 
-Python imports an extension module from a plain `.so` name on both platforms. macOS and Linux are
-the platforms this build path covers. The build needs `python3` on `PATH`, because the binding
-configures itself against the interpreter it will be imported by.
+This project is pre-1.0, so a later client may already carry request and response contract changes
+the installed runtime does not implement. Pinning the install to the running version keeps the
+client and the deployment on one contract; a mismatch would surface as a discovery or verification
+failure that looks like a bug in your application. The package ships from Registry Stack v0.26.1, so
+if `pip` finds no matching version, install a v0.26.1 or later `evidencectl` and repeat the step.
+
+The package selects the native build for Linux amd64, Linux arm64, or macOS arm64; the release
+provides no other platform. Its wheel uses the Python 3.10 stable ABI, so later Python versions
+import the same file. The distribution installs as `registry-stack-client` and imports as
+`registry_client`.
+
+{/* Evidence: crates/registry-stack-client-py/README.md,
+    release/scripts/assemble-registry-client-packages.py */}
 
 ## Start the local services
 
@@ -214,12 +202,9 @@ review:
 ```sh
 python3 - <<'PY'
 import json
-import sys
 from pathlib import Path
 
-sys.path.insert(0, "python-module")
-
-from registry_evidence_client import EvidenceClient
+from registry_client.evidence import EvidenceClient
 
 client = EvidenceClient(
     base_url="http://127.0.0.1:8080",
@@ -472,9 +457,7 @@ import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, "python-module")
-
-from registry_evidence_client import (
+from registry_client.evidence import (
     DeniedError,
     EvidenceClient,
     EvidenceClientError,
@@ -722,4 +705,6 @@ Return to the source-mock terminal and press `Ctrl+C` to stop it.
   revocation
 - [Request an access token from your own code](../../configure/request-an-access-token/), for the
   token exchange without the client library
+- [Read the Registry Stack client API reference](../../reference/client-api/#evidence-gateway), for
+  every client operation, token configuration, and error kind
 - [Review the Evidence Gateway API](../../reference/apis/registry-evidence/)

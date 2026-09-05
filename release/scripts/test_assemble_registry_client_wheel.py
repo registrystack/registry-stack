@@ -114,6 +114,25 @@ class AssembleRegistryClientWheelTest(unittest.TestCase):
             recorded = {row[0] for row in rows}
             self.assertEqual(recorded, names)
 
+    def test_the_pypi_page_states_the_install_name_and_the_import_name(self) -> None:
+        result = self.run_assembler()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with zipfile.ZipFile(Path(result.stdout.strip())) as archive:
+            dist_info = f"registry_stack_client-{self.version}.dist-info"
+            metadata = archive.read(f"{dist_info}/METADATA").decode()
+        self.assertIn("Description-Content-Type: text/markdown\n", metadata)
+        _, _, description = metadata.partition("\n\n")
+        self.assertIn("pip install \"registry-stack-client", description)
+        self.assertIn("from registry_client import", description)
+        # The README wraps its lines, so compare against the unwrapped prose.
+        prose = " ".join(description.split())
+        self.assertIn(
+            "installs as `registry-stack-client` and imports as `registry_client`",
+            prose,
+        )
+        for product in PRODUCTS:
+            self.assertIn(f"`registry_client.{product}`", description)
+
     def test_unified_and_legacy_distributions_never_own_the_same_path(self) -> None:
         result = self.run_assembler()
         self.assertEqual(result.returncode, 0, result.stderr)

@@ -381,7 +381,7 @@ Local Evidence stopped
 ACCESS REFUSED requester=<pseudonym> reason=not_authorized
 ```
 
-The privacy-safe refusal event contains a requester pseudonym and the closed `not-authorized`
+The privacy-safe refusal event contains a requester pseudonym and the closed `not_authorized`
 reason. The event does not contain the rejected requirement, purpose, selector, authority, or
 response format. It also does not contain a client identifier or access token. The revoked-client
 preparation remains local and creates no Evidence Gateway audit event because no HTTP request was
@@ -416,6 +416,7 @@ Return to the registry terminal and press `Ctrl+C`.
 
 ## Next
 
+- [Evidence authoring form reference](../../products/registry-evidence/authoring-form/)
 - [See Evidence Gateway refuse unsafe requests](../refuse-unsafe-evidence-requests/)
 - [Configure Registry Mint](../../configure/mint/)
 - [Request an access token from application code](../../configure/request-an-access-token/)

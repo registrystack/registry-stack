@@ -1,0 +1,286 @@
+---
+title: Retain, erase, and audit
+description: Erase retained record history and change-request detail under an approved retention request, restore snapshot coverage after an erasure, and verify, export, and prune the hash-chained audit journal of a Base Registry Engine registry.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-04"
+doc_type: how-to
+persona:
+  - operator
+locale: en
+standards_referenced: []
+---
+
+You operate an active registry under an institutional retention policy, hold the migration
+credential, and need to erase retained history or change-request detail, restore snapshot coverage
+after an erasure, or prove, copy, and prune the audit journal. At the end of this page each of those
+maintenance actions has run once, under the interlock the migration authority uses, with a chained
+audit record and a report that carries counts rather than values. Three of the commands are
+irreversible: `history erase`, `request-retention erase`, and `audit prune` without `--dry-run`
+remove bytes that nothing restores, and the next section says exactly what each one destroys.
+
+## What cannot be undone
+
+| Command | Removes for good | Leaves in place |
+| --- | --- | --- |
+| `history erase` | The retained revisions of one record up to a revision number, the correction context and retained outbox payloads that referenced them, and the cached idempotency responses that could replay them. | The current record, every later revision, and the audit journal. |
+| `request-retention erase` | The payload detail of one change-request proposal version: proposal and target snapshots, idempotency results, request revision snapshots, outbox payloads, and intake rows. | The value-free lifecycle rows of that request, and record history. |
+| `audit prune` | The longest run of audit records at the start of the chain whose creation time precedes the boundary you give. | Every later record, and one retention record stating what left the chain. |
+
+`history rebaseline`, `request-retention list`, `request-retention dry-run`, `audit verify`, and
+`audit export` remove nothing: the rebaseline writes one baseline commit, the export creates one
+file, and the others only read. A saved export or a snapshot reference is not a way back either:
+an erased revision is gone from the registry, and a snapshot reference that named it can no longer
+be served.
+
+Every command on this page reads the runtime file and connects to PostgreSQL directly with the
+migration credential, and the erasures, the rebaseline, and the prune take the exclusive registry
+lock, so run them from the operator host while no activation is in progress. When the database
+uses a private certificate authority, set
+`SSL_CERT_FILE` to its PEM bundle for each command. Paths given to `--runtime-config`,
+`--request-file`, and `--output` must be absolute.
+
+{/* Evidence: crates/registry-breg/src/history_erasure.rs;
+    crates/registry-breg/src/request_retention.rs;
+    crates/registry-breg/src/audit_tooling.rs;
+    crates/registry-bregctl/src/lib.rs, HistoryCommand, RequestRetentionCommand, and AuditCommand;
+    products/breg/quickstart/run.sh. */}
+
+## Erase retained history
+
+The migration authority can erase the retained revisions of one record up to a revision number.
+This is irreversible maintenance, not an API permission, and it does not remove the current
+record. Apply the institution's live-data removal policy separately.
+
+Write an owner-only JSON request file (mode `0600`) so identifiers and reasons never appear in
+process arguments:
+
+```json
+{
+  "entityId": "membership-record",
+  "recordId": "00000000-0000-4000-8000-000000000001",
+  "eraseThroughRevision": 2,
+  "operatorReference": "approved-maintenance-001",
+  "reason": "approved-retention-request"
+}
+```
+
+:::danger[History erasure is irreversible]
+Confirm the record and the approved revision boundary before running the command, and account for
+backups, saved exports, and copies already delivered to consumers. A saved snapshot reference
+cannot restore erased bytes. There is no dry run. Erasing baseline data also makes snapshot
+coverage unavailable until [`history rebaseline`](#restore-snapshot-coverage-after-an-erasure)
+restores it, and that command refuses a registry holding more than 1,000 live rows: if this
+registry is at or near that size, confirm the rebaseline is possible before you erase, not after.
+:::
+
+```sh
+bregctl history erase \
+  --runtime-config /etc/breg/runtime.yaml \
+  --request-file /srv/registry/private/erasure.json
+```
+
+One transaction erases at most 10,000 revisions, scrubs affected correction context and retained
+outbox payloads, and replaces affected cached idempotency responses with refusal tombstones, so a
+retried mutation key cannot replay an erased body. The result and the audit record carry counts,
+not values. A refusal names its cause without naming the record, and a request file that is not
+owner-only is refused before any connection is opened. Snapshot references at or after the
+earliest erased commit become unavailable, including every later
+snapshot; erasing baseline data makes all snapshot coverage unavailable. Nothing re-baselines the
+registry on its own: run `history rebaseline` when snapshot reads of current state must work again.
+Live reads and writes continue.
+
+{/* Evidence: crates/registry-breg/src/history_erasure.rs;
+    crates/registry-bregctl/src/history_erasure_lifecycle.rs;
+    crates/registry-bregctl/src/lib.rs, HistoryEraseArgs;
+    crates/registry-breg/src/history_rebaseline.rs, MAX_REBASELINE_LIVE_ROWS;
+    crates/registry-breg/tests/postgres_history_erasure.rs;
+    products/breg/scripts/test-historical-workflow.sh. */}
+
+## Restore snapshot coverage after an erasure
+
+After an erasure, a snapshot reference for current state is refused until the migration authority
+re-establishes a covered position. `history rebaseline` is that command, and it runs under the
+same interlock as the erasure: the configured migration role, bounded timeouts, the exclusive
+registry lock, a ready registry, and one chained audit record.
+
+Write an owner-only JSON request file (mode `0600`) carrying the operator reference alone:
+
+```json
+{
+  "operatorReference": "approved-maintenance-002"
+}
+```
+
+```sh
+bregctl history rebaseline \
+  --runtime-config /etc/breg/runtime.yaml \
+  --request-file /srv/registry/private/rebaseline.json
+```
+
+One transaction proves the retained journal head of every live row still reproduces that row,
+installs one baseline commit at the head, and moves the coverage baseline to it. It restores
+nothing that was erased: references taken before the new baseline stay unavailable, because the
+bytes they named are gone. Take a fresh reference afterwards. The command refuses when coverage
+is already complete, when the registry is not ready, when a retained journal head is not indexed
+by a commit, and when a live row has no retained journal head that reproduces it. The result and
+the audit record carry counts and positions, not values.
+
+That one transaction verifies at most 1,000 live rows, and a registry holding more is refused
+with `history.rebaseline.live_rows.budget_exceeded`. The limit is fixed and the refusal is not
+retryable: a registry over that limit cannot restore snapshot coverage with this command, so
+treat the code as a report that the erasure left coverage unrecoverable rather than as a
+transient failure.
+
+`history.rebaseline.live_rows.unverified` reports one live row that its journal head does not
+reproduce, and names neither the entity nor the record, because operator refusals here carry no
+values. It stops at the first entity whose live rows and journal heads do not line up, and inside
+an entity at the first record identifier whose values differ, so a run that gets further has
+already proved every earlier entity. To find the row, read the revisions of the records you
+suspect with `GET /v1/records/{route}/{recordId}/revisions`, or compare live rows with their
+journal heads directly under the migration role you already hold. The usual cause is a live row
+that changed outside the server's write path, so the journal never recorded the change.
+
+{/* Evidence: crates/registry-breg/src/history_rebaseline.rs;
+    crates/registry-breg/src/history_migration.rs, MAX_HISTORY_MIGRATION_COMMIT_MEMBERS;
+    crates/registry-bregctl/src/history_rebaseline_lifecycle.rs;
+    crates/registry-bregctl/src/lib.rs, HistoryRebaselineArgs;
+    crates/registry-breg/tests/postgres_history_rebaseline.rs. */}
+
+## Erase change-request detail
+
+Change-request proposals and application receipts keep their own retention. A request entity
+whose `changeRequest.retention.mode` is `operator_erase` allows the operator to erase the payload
+detail of one proposal version while keeping its value-free lifecycle rows; the default `retain`
+mode refuses erasure. List the retained rows, then count what one erasure would remove:
+
+```sh
+bregctl --format json request-retention list \
+  --runtime-config /etc/breg/runtime.yaml \
+  --request-entity placement-correction-request --limit 50
+
+bregctl --format json request-retention dry-run \
+  --runtime-config /etc/breg/runtime.yaml \
+  --request-entity placement-correction-request \
+  --request-id "<requestId>" --proposal-version 3
+```
+
+Each list row reports the request state, whether the version is current or pinned, its retention
+mode, `eligibleForErasure`, and whether detail is already erased; a listing longer than `--limit`
+continues from the cursor it returns, passed as `--after-cursor`. The dry run reports the counts of
+proposal snapshots, target snapshots, idempotency results, request revision snapshots, outbox
+payloads, and intake rows that the erasure would remove, and changes nothing.
+
+:::danger[Erased request detail cannot be restored]
+Erase only a version the dry run counted and the retention request approves. The erasure keeps the
+lifecycle rows, so the request stays visible with its state, but the proposal and target values are
+gone from the registry.
+:::
+
+```sh
+bregctl --format json request-retention erase \
+  --runtime-config /etc/breg/runtime.yaml \
+  --request-entity placement-correction-request \
+  --request-id "<requestId>" --proposal-version 3
+```
+
+The erasure reports the same counts as the dry run. A refusal, `request_retention.operation.refused`,
+names the cause without values: the entity's retention mode is `retain`, or the version is pinned.
+Erasing record history does not erase these rows, and erasing these rows does not touch record
+history.
+
+{/* Evidence: crates/registry-breg/src/request_retention.rs;
+    crates/registry-bregctl/src/request_retention.rs;
+    crates/registry-bregctl/src/lib.rs, RequestRetentionCommand, RequestRetentionListArgs,
+    and RequestRetentionExactArgs. */}
+
+## Keep the audit journal
+
+Every write path appends one hash-chained audit record, and the journal keeps its own head. The
+`audit` commands prove that chain, take a portable copy of it, and retire its oldest part under a
+retention boundary. They read envelope bytes, hashes, envelope identifiers, and timestamps only,
+so no record value reaches the report or a refusal.
+
+```sh
+bregctl --format json audit verify \
+  --runtime-config /etc/breg/runtime.yaml
+
+bregctl --format json audit export \
+  --runtime-config /etc/breg/runtime.yaml \
+  --output /srv/registry/private/audit-journal.jsonl
+```
+
+`verify` walks the chain from the recorded head backwards through the recorded links, never by
+timestamp, so a clock skew or an out-of-order insert cannot change what the journal claims. It
+runs in one repeatable-read read-only transaction that also compares the head and the total row
+count, and reports the record count with the first previous hash, the last hash, and the head
+hash. A chain that no longer links reports `audit.chain.broken`; a head row that does not match the
+chain reports `audit.head.mismatch`. `export` verifies the same way while it writes, and emits one
+envelope per line in chain order. The destination must be an absolute path that holds no file; the
+command creates it with owner-only permissions and removes it again when the export does not
+finish, so a partial copy is never left behind. Verification proves the retained journal links and
+matches the head; it cannot prove the journal is complete, because a pruned prefix is gone and the
+earliest retained record's previous hash is the only trace of it.
+
+`prune` removes the longest run of records at the start of the chain whose creation time precedes
+one RFC 3339 boundary. It stops at the first retained record, so a gap can never open in the
+middle, and it refuses a boundary later than the database transaction time. Take an export first,
+then count what the boundary would remove:
+
+```sh
+bregctl --format json audit prune \
+  --runtime-config /etc/breg/runtime.yaml \
+  --before 2026-01-01T00:00:00Z --dry-run
+```
+
+:::danger[Pruning the journal is irreversible]
+Pruned records leave no copy behind. Export the journal and store it under the institution's
+retention policy before running a prune without `--dry-run`, and confirm the approved boundary
+against the dry run's counts.
+:::
+
+```sh
+bregctl --format json audit prune \
+  --runtime-config /etc/breg/runtime.yaml \
+  --before 2026-01-01T00:00:00Z
+```
+
+The report names whether the run was a dry run, how many records it removed and retained, the
+hash the retained chain now starts from, and the first retained envelope. A prune runs on the
+migration connection under the exclusive registry lock with the head row locked, so no writer can
+append and no second operator can prune while the prefix is being decided; the runtime role keeps
+its insert-only grant and cannot delete a record. Every prune that removes anything appends one
+retention record to the journal, so the chain states what left it.
+
+{/* Evidence: crates/registry-breg/src/audit_tooling.rs;
+    crates/registry-bregctl/src/audit_lifecycle.rs;
+    crates/registry-bregctl/src/lib.rs, AuditVerifyArgs, AuditExportArgs, and AuditPruneArgs;
+    crates/registry-breg/tests/postgres_audit_tooling.rs;
+    crates/registry-bregctl/tests/audit.rs. */}
+
+## Troubleshooting
+
+| Symptom | Next move |
+| --- | --- |
+| A saved snapshot returns `503 source.unavailable` | Retained history no longer covers it, after an erasure or an incompatible successor. Take a fresh reference. |
+| A fresh snapshot reference is refused after an erasure | Coverage ends before the erased commit. Run `history rebaseline` to cover the current state again; earlier references stay unavailable. It verifies at most 1,000 live rows, and refuses a larger registry outright. |
+| `history rebaseline` reports `history.rebaseline.live_rows.unverified` | A live row and its journal head disagree, and the refusal names no record. Read the revisions of the records you suspect, or compare live rows with their journal heads under the migration role. |
+| `history.erase.request_file.refused` or `history.rebaseline.request_file.refused` | The request file must be an absolute path to an owner-only regular file, not a symbolic link, holding the documented fields and nothing else. |
+| `request-retention erase` is refused | The request entity's retention mode is `retain`, or the version is pinned. Run the dry run for the exact version first. |
+| `audit verify` reports `audit.chain.broken` or `audit.head.mismatch` | The journal no longer links to its head. Export what is still reachable, keep the database as it is, and treat it as an integrity incident. |
+| `audit prune` reports `audit.boundary.future` | `--before` is later than the database transaction time. Choose a boundary in the past. |
+| `audit export` is refused with `audit.operation.refused` | The runtime configuration path or `--output` is relative, the destination already holds a file, or the database is unreachable. |
+| An operator command cannot reach PostgreSQL | Check the migration URL secret, the role names, and `SSL_CERT_FILE` for a private authority. |
+
+## Next
+
+- [Retention and persistent state](../retention-and-persistent-state/) for the retention
+  procedures of the other Registry Stack runtimes.
+- [Harden a production deployment](../../security/hardening-checklist/) for the controls around
+  the migration credential and the secret root these commands rely on.
+- [Security overview](../../security/) for how audit integrity and data minimization fit the
+  stack's security model.
+- [Change an active registry](../breg-changes/) for the backup every activation needs and the
+  audit records reconciliation writes.
