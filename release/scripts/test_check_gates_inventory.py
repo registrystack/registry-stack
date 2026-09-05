@@ -885,8 +885,26 @@ class GateInventoryTest(unittest.TestCase):
                 "Release Linux Node client helper invocation",
             ),
             (
-                '--requirement "${GITHUB_WORKSPACE}/release/requirements/maturin-1.9.6.txt"',
-                '--requirement "${GITHUB_WORKSPACE}/release/requirements/unpinned.txt"',
+                # The Evidence tutorial job installs maturin from the same
+                # pinned requirements file, so this mutation names the step
+                # that owns the Linux Node client copy and drops only that
+                # one.
+                "      - name: Install pinned Linux client build tools\n"
+                "        shell: bash\n"
+                "        run: |\n"
+                "          set -euo pipefail\n"
+                "          rustup toolchain install 1.95.0 --profile minimal\n"
+                '          python3 -m venv "${RUNNER_TEMP}/maturin"\n'
+                '          "${RUNNER_TEMP}/maturin/bin/pip" install --quiet \\\n'
+                "            --require-hashes --only-binary=:all: \\\n"
+                '            --requirement "${GITHUB_WORKSPACE}/release/requirements/maturin-1.9.6.txt"',
+                "      - name: Install pinned Linux client build tools\n"
+                "        shell: bash\n"
+                "        run: |\n"
+                "          set -euo pipefail\n"
+                "          rustup toolchain install 1.95.0 --profile minimal\n"
+                '          python3 -m venv "${RUNNER_TEMP}/maturin"\n'
+                '          "${RUNNER_TEMP}/maturin/bin/pip" install --quiet maturin',
                 "Release Linux Node client pinned tools",
             ),
             (
