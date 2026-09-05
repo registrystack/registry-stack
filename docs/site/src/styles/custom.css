@@ -25,9 +25,13 @@
      light theme is unchanged; the dark override below repoints them. --bg is
      the page canvas, --surface is raised chrome (search, dialogs, right TOC),
      --ink-rule is the strong masthead/footer/section rule (heavier than the
-     --rule hairline so it survives on a dark canvas). */
+     --rule hairline so it survives on a dark canvas). --diagram-surface stays
+     fixed in both themes: the SVG diagrams under public/images/ bake in a
+     light-only ink palette on a transparent canvas, so their backing surface
+     must not flip dark or the baked-in ink becomes low-contrast. */
   --registry-bg: #ffffff;
   --registry-surface: #ffffff;
+  --registry-diagram-surface: #ffffff;
   --registry-ink-rule: var(--registry-ink);
   --registry-preview-border: #c2cce0;
   --__sl-font: 'Public Sans', system-ui, sans-serif;
@@ -125,6 +129,14 @@ body {
 .sl-markdown-content iframe {
   border: 1px solid var(--registry-rule);
   background: var(--registry-surface);
+}
+
+/* Diagram SVGs bake in a light-only ink palette on a transparent canvas
+   (see the --diagram-surface note above), so pin their backing surface
+   instead of following the theme like the generic rule above. */
+.content-panel img[src$='.svg'],
+.sl-markdown-content img[src$='.svg'] {
+  background: var(--registry-diagram-surface);
 }
 
 .registry-header {
