@@ -34,7 +34,7 @@ class _MissingRecordHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 (stdlib handler method name)
         body = json.dumps(
             {
-                "type": "urn:breg:problem:resource.not_found",
+                "type": "https://id.registrystack.org/problems/registry-breg/resource/not_found",
                 "title": "Not Found",
                 "status": 404,
                 "detail": "The requested resource was not found.",

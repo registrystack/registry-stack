@@ -3854,3 +3854,91 @@ async fn workspace_temporal_capabilities_and_no_store_cover_success_and_refusal(
         assert!(response.headers().contains_key("traceparent"));
     }
 }
+
+/// Every public refusal names a problem type on the shared Registry Stack
+/// identifier host, so an adopter can resolve the type it was handed. A dot in
+/// the code separates path segments under the product prefix.
+#[tokio::test]
+async fn public_refusals_name_a_resolvable_problem_type() {
+    let not_ready = Harness::new(false);
+    assert_problem_type(
+        not_ready.send(Method::GET, "/ready", None).await,
+        "runtime.not_ready",
+    )
+    .await;
+
+    let harness = Harness::new(true);
+    assert_problem_type(
+        harness.send(Method::GET, "/missing", None).await,
+        "resource.not_found",
+    )
+    .await;
+    assert_problem_type(
+        harness
+            .send(
+                Method::GET,
+                "/v1/records/cases?$filter=label%20approximately%20'a'",
+                None,
+            )
+            .await,
+        "query.invalid",
+    )
+    .await;
+
+    let unavailable = Harness::new(true);
+    unavailable
+        .records
+        .refusal_fails
+        .store(true, Ordering::SeqCst);
+    assert_problem_type(
+        unavailable
+            .send(
+                Method::GET,
+                "/v1/records/cases?$filter=label%20eq",
+                Some(caseworker_claims("case-management")),
+            )
+            .await,
+        "source.unavailable",
+    )
+    .await;
+
+    let lookup = Harness::from_project(LOOKUP_PATH_PROJECT, true);
+    let operator_claims = Some(caseworker_claims("case-management"));
+    assert_problem_type(
+        lookup
+            .send_json(
+                Method::POST,
+                "/v1/records/households:lookup?accessProfile=operator",
+                operator_claims.clone(),
+                json!({"selector": "by-local-reference"}),
+            )
+            .await,
+        "request.invalid",
+    )
+    .await;
+    assert_problem_type(
+        lookup
+            .send_json(
+                Method::POST,
+                "/v1/records/households:lookup?accessProfile=operator",
+                operator_claims,
+                json!({"selector": "missing-canary", "values": {"householdCode": "7"}}),
+            )
+            .await,
+        "lookup.unresolved",
+    )
+    .await;
+}
+
+async fn assert_problem_type(response: axum::response::Response, code: &str) {
+    let body = body_json(response).await;
+    assert_eq!(body["code"], code);
+    assert_eq!(
+        body["type"],
+        format!(
+            "https://id.registrystack.org/problems/registry-breg/{}",
+            code.replace('.', "/")
+        ),
+        "{code}"
+    );
+}
