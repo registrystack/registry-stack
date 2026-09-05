@@ -6,7 +6,7 @@
 //! binding from the runtime configuration, and delegates all database mutation
 //! to `registry_breg::history_erasure`.
 
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::Read as _;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
@@ -23,6 +23,8 @@ use registry_breg::runtime_config::{load_runtime_config, RuntimeConfigError};
 use registry_platform_canonical_json::parse_json_strict;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+use crate::safe_path::SafeEntry;
 
 const MAX_ERASURE_REQUEST_BYTES: u64 = 16 * 1024;
 
@@ -211,24 +213,13 @@ fn read_owner_only_request_file(path: &Path) -> Result<Vec<u8>, HistoryErasureLi
 }
 
 fn open_request_file(path: &Path) -> Result<File, HistoryErasureLifecycleError> {
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-
-        options.custom_flags(request_file_no_follow_flags());
-    }
-    options
-        .open(path)
+    // Descriptor-relative resolution refuses a symbolic link at every
+    // component. `O_NOFOLLOW` alone would only have covered the last one, so an
+    // ancestor swapped after any check could still redirect this open.
+    SafeEntry::resolve(path)
+        .map_err(|_| HistoryErasureLifecycleError::RequestFile)?
+        .open_read()
         .map_err(|_| HistoryErasureLifecycleError::RequestFile)
-}
-
-#[cfg(unix)]
-fn request_file_no_follow_flags() -> i32 {
-    // Do not block on a FIFO before the opened-descriptor file-type check.
-    (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NONBLOCK)
-        .bits() as i32
 }
 
 #[cfg(test)]
@@ -319,5 +310,32 @@ mod tests {
         ));
 
         std::fs::remove_dir_all(&root).expect("test directory is removed");
+    }
+
+    /// Deterministic ancestor-swap regression for the request file input this
+    /// module owns.
+    #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+    mod ancestor_swap {
+        use super::*;
+        use crate::safe_path::race_fixture::race_tree;
+
+        #[test]
+        fn a_request_file_read_after_an_ancestor_swap_reads_only_the_named_file() {
+            let tree = race_tree();
+            let named = tree.named("request.json");
+            std::fs::write(&named, b"genuine").unwrap();
+            std::fs::write(tree.outside("request.json"), b"decoy").unwrap();
+
+            let guard = tree.arm();
+            let mut file = open_request_file(&named).unwrap();
+            drop(guard);
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes).unwrap();
+
+            assert_eq!(bytes, b"genuine");
+            // The window is real: the same pathname now reaches the tree the
+            // operator never named.
+            assert_eq!(std::fs::read(&named).unwrap(), b"decoy");
+        }
     }
 }

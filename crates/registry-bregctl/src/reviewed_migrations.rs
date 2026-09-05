@@ -3,7 +3,6 @@
 //! Package validation remains the authority for SQL, coverage, and evidence.
 
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::Path;
 
 use registry_breg::migration_plan::{
@@ -119,15 +118,18 @@ fn capture_directory(
     files: &mut BTreeMap<String, Vec<u8>>,
     budget: &mut CaptureBudget,
 ) -> Result<(), Diagnostic> {
-    let directory = root.join(relative);
-    super::validate_directory(&directory, "migration.review.path").map_err(|_| {
-        refusal(
-            "migration.review.path",
-            "reviewedMigrations",
-            "migration directories must not contain symbolic links",
-        )
-    })?;
-    let entries = fs::read_dir(&directory).map_err(|_| {
+    // The held descriptor is what the listing below reads, so replacing a
+    // component of the operator's reviewed-migrations path after this check
+    // cannot substitute another directory's inventory.
+    let directory = super::validate_directory(&root.join(relative), "migration.review.path")
+        .map_err(|_| {
+            refusal(
+                "migration.review.path",
+                "reviewedMigrations",
+                "migration directories must not contain symbolic links",
+            )
+        })?;
+    let entries = directory.read_entries().map_err(|_| {
         refusal(
             "migration.review.unavailable",
             "reviewedMigrations",
@@ -143,15 +145,7 @@ fn capture_directory(
                 "the reviewed artifact inventory exceeds package bounds",
             ));
         }
-        let entry = entry.map_err(|_| {
-            refusal(
-                "migration.review.unavailable",
-                "reviewedMigrations",
-                "a reviewed artifact cannot be read",
-            )
-        })?;
-        let name = entry.file_name();
-        let name = name.to_str().ok_or_else(|| {
+        let name = entry.name.to_str().ok_or_else(|| {
             refusal(
                 "migration.review.path",
                 "reviewedMigrations",
@@ -163,14 +157,7 @@ fn capture_directory(
         } else {
             format!("{relative}/{name}")
         };
-        let kind = entry.file_type().map_err(|_| {
-            refusal(
-                "migration.review.unavailable",
-                "reviewedMigrations",
-                "a reviewed artifact cannot be inspected",
-            )
-        })?;
-        if kind.is_dir() {
+        if entry.is_dir {
             // The deepest accepted file is modules/<module>/migrations/<id>/fixtures/<id>.jsonl.
             if path.split('/').count() > 5 {
                 return Err(refusal(
@@ -182,7 +169,7 @@ fn capture_directory(
             capture_directory(root, &path, files, budget)?;
             continue;
         }
-        if !kind.is_file() || reviewed_artifact_kind(&path).is_none() {
+        if !entry.is_file || reviewed_artifact_kind(&path).is_none() {
             return Err(refusal("migration.review.path", "reviewedMigrations", "only regular reviewed migration artifacts in the package layout are accepted; remove unrelated files and symbolic links"));
         }
         if files.len() >= MAX_PACKAGE_FILES {
@@ -207,4 +194,38 @@ fn capture_directory(
 
 fn refusal(code: &str, path: &str, message: &str) -> Diagnostic {
     super::diagnostic(code, path, message)
+}
+
+/// Deterministic ancestor-swap regression for the reviewed-migrations input
+/// this module owns. Capture resolves each nested directory and file again from
+/// the operator's root, so a swap that lands mid-capture refuses rather than
+/// silently inventorying a tree the operator never named.
+#[cfg(all(test, any(target_os = "linux", target_vendor = "apple")))]
+mod tests {
+    use super::*;
+    use crate::safe_path::race_fixture::race_tree;
+
+    #[test]
+    fn a_capture_after_an_ancestor_swap_never_inventories_outside_the_named_tree() {
+        let tree = race_tree();
+        std::fs::create_dir_all(tree.named("modules/core/migrations/0001")).unwrap();
+        std::fs::write(
+            tree.named("modules/core/migrations/0001/up.sql"),
+            b"genuine",
+        )
+        .unwrap();
+        std::fs::create_dir_all(tree.outside("modules/core/migrations/0001")).unwrap();
+        std::fs::write(
+            tree.outside("modules/core/migrations/0001/up.sql"),
+            b"decoy",
+        )
+        .unwrap();
+
+        let guard = tree.arm();
+        let refused = capture(&tree.named_directory())
+            .expect_err("a resolution that would traverse the swapped ancestor is refused");
+        drop(guard);
+
+        assert_eq!(refused.code, "migration.review.path");
+    }
 }

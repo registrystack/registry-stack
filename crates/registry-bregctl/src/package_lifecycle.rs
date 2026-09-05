@@ -2,7 +2,6 @@
 //! Deterministic package signing-input and publication orchestration.
 
 use std::collections::BTreeMap;
-use std::fs::{self, File};
 use std::io::Read;
 use std::path::Path;
 
@@ -15,6 +14,8 @@ use registry_breg::package::{
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+
+use crate::safe_path::SafeEntry;
 
 const SIGNING_INPUT_PATH: &str = "signing-input.json";
 const TEST_RECEIPT_PATH: &str = "schema-test-receipt.json";
@@ -362,17 +363,24 @@ fn read_bounded_regular_with_bound(
     if path.as_os_str().is_empty() || super::has_parent_component(path) {
         return Err(PackageLifecycleError::Output);
     }
-    super::ensure_no_symlink_components(path, "package.input.invalid", "package")
-        .map_err(|_| PackageLifecycleError::Output)?;
-    let metadata = fs::symlink_metadata(path).map_err(|_| PackageLifecycleError::Output)?;
-    if metadata.file_type().is_symlink()
-        || !metadata.is_file()
-        || metadata.len() == 0
-        || metadata.len() > bound
-    {
+    let entry = SafeEntry::resolve(path).map_err(|_| PackageLifecycleError::Output)?;
+    let stat = entry.stat().map_err(|_| PackageLifecycleError::Output)?;
+    if stat.is_symlink() || !stat.is_file() || stat.len() == 0 || stat.len() > bound {
         return Err(PackageLifecycleError::Output);
     }
-    fs::read(path).map_err(|_| PackageLifecycleError::Output)
+    // The descriptor is opened through the resolved parent with `O_NOFOLLOW`,
+    // so the bytes read below are the entry just inspected.
+    let file = entry
+        .open_read()
+        .map_err(|_| PackageLifecycleError::Output)?;
+    let mut bytes = Vec::new();
+    file.take(bound.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|_| PackageLifecycleError::Output)?;
+    if bytes.is_empty() || bytes.len() as u64 > bound {
+        return Err(PackageLifecycleError::Output);
+    }
+    Ok(bytes)
 }
 
 fn read_test_receipt(path: &Path) -> Result<Vec<u8>, PackageLifecycleError> {
@@ -381,39 +389,38 @@ fn read_test_receipt(path: &Path) -> Result<Vec<u8>, PackageLifecycleError> {
             "the schema-test receipt path must be absolute and must not contain a parent component",
         ));
     }
-    super::ensure_no_symlink_components(path, "package.test_receipt.refused", "testReceipt")
-        .map_err(|_| {
+    let entry = SafeEntry::resolve(path).map_err(|error| {
+        if error.is_not_found() {
+            PackageLifecycleError::TestReceiptMissing
+        } else {
             receipt_refused("the schema-test receipt path must not traverse a symbolic link")
-        })?;
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
+        }
+    })?;
+    let stat = match entry.stat() {
+        Ok(stat) => stat,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Err(PackageLifecycleError::TestReceiptMissing)
         }
         Err(_) => return Err(receipt_refused("the schema-test receipt is not readable")),
     };
-    if metadata.file_type().is_symlink()
-        || !metadata.is_file()
-        || metadata.len() == 0
-        || metadata.len() > MAX_TEST_RECEIPT_BYTES
+    if stat.is_symlink()
+        || !stat.is_file()
+        || stat.len() == 0
+        || stat.len() > MAX_TEST_RECEIPT_BYTES
     {
         return Err(receipt_refused(&format!(
             "the schema-test receipt must be a regular file of 1 to {MAX_TEST_RECEIPT_BYTES} bytes"
         )));
     }
-    let file =
-        File::open(path).map_err(|_| receipt_refused("the schema-test receipt is not readable"))?;
+    // The descriptor comes from the resolved parent with `O_NOFOLLOW`, so it is
+    // the entry just inspected and needs no re-verification by pathname.
+    let file = entry
+        .open_read()
+        .map_err(|_| receipt_refused("the schema-test receipt is not readable"))?;
     let opened = file
         .metadata()
         .map_err(|_| receipt_refused("the schema-test receipt is not readable"))?;
-    let after = fs::symlink_metadata(path)
-        .map_err(|_| receipt_refused("the schema-test receipt is not readable"))?;
-    if after.file_type().is_symlink()
-        || !opened.is_file()
-        || !super::same_file_metadata(&metadata, &opened)
-        || !super::same_file_metadata(&opened, &after)
-        || opened.len() > MAX_TEST_RECEIPT_BYTES
-    {
+    if !opened.is_file() || opened.len() > MAX_TEST_RECEIPT_BYTES {
         return Err(receipt_refused(
             "the schema-test receipt changed while it was being read",
         ));
@@ -461,6 +468,31 @@ mod tests {
         ] {
             let parsed = serde_json::from_slice::<SignatureDocument>(refused);
             assert!(parsed.is_err() || parsed.is_ok_and(|document| document.signatures.is_empty()));
+        }
+    }
+
+    /// Deterministic ancestor-swap regression for the schema-test receipt input
+    /// this module owns.
+    #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+    mod ancestor_swap {
+        use super::*;
+        use crate::safe_path::race_fixture::race_tree;
+
+        #[test]
+        fn a_receipt_read_after_an_ancestor_swap_reads_only_the_named_file() {
+            let tree = race_tree();
+            let named = tree.named("schema-test-receipt.json");
+            std::fs::write(&named, b"genuine").unwrap();
+            std::fs::write(tree.outside("schema-test-receipt.json"), b"decoy").unwrap();
+
+            let guard = tree.arm();
+            let bytes = read_test_receipt(&named).unwrap();
+            drop(guard);
+
+            assert_eq!(bytes, b"genuine");
+            // The window is real: the same pathname now reaches the tree the
+            // operator never named.
+            assert_eq!(std::fs::read(&named).unwrap(), b"decoy");
         }
     }
 }
