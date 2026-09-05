@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Tamper-evident audit envelopes, async sinks, and redaction helpers.
 
+mod persistent_root;
+pub use persistent_root::{require_audit_under, PersistentRootFault};
+
 #[cfg(unix)]
 mod segmented_jsonl;
 #[cfg(unix)]
