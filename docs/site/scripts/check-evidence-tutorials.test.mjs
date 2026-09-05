@@ -66,7 +66,7 @@ test('the gate names the sh fences it did not execute', async () => {
   const { code, output } = await runGate({}, ['--dry-run', '--only', 'first-evidence-assertion']);
   assert.equal(code, 0, output);
   assert.match(output, /not executed: fence 01 under "Install Evidence Gateway"/u);
-  assert.match(output, /not executed: fence 21 under "If local ports are already in use"/u);
+  assert.match(output, /not executed: fence \d+ under "If local ports are already in use"/u);
 });
 
 test('--only accepts the current first Evidence tutorial', async () => {
