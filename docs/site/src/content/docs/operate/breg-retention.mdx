@@ -70,7 +70,10 @@ process arguments:
 :::danger[History erasure is irreversible]
 Confirm the record and the approved revision boundary before running the command, and account for
 backups, saved exports, and copies already delivered to consumers. A saved snapshot reference
-cannot restore erased bytes. There is no dry run.
+cannot restore erased bytes. There is no dry run. Erasing baseline data also makes snapshot
+coverage unavailable until [`history rebaseline`](#restore-snapshot-coverage-after-an-erasure)
+restores it, and that command refuses a registry holding more than 1,000 live rows: if this
+registry is at or near that size, confirm the rebaseline is possible before you erase, not after.
 :::
 
 ```sh
@@ -92,6 +95,7 @@ Live reads and writes continue.
 {/* Evidence: crates/registry-breg/src/history_erasure.rs;
     crates/registry-bregctl/src/history_erasure_lifecycle.rs;
     crates/registry-bregctl/src/lib.rs, HistoryEraseArgs;
+    crates/registry-breg/src/history_rebaseline.rs, MAX_REBASELINE_LIVE_ROWS;
     crates/registry-breg/tests/postgres_history_erasure.rs;
     products/breg/scripts/test-historical-workflow.sh. */}
 
