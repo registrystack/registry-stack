@@ -103,6 +103,13 @@ async function restoreDownloadedBundle({
   }
 }
 
+// This gitignored cache is only ever written by an earlier `--bootstrap` run
+// (see bootstrapArchive below). Matches only the outer bundle digest check in
+// inspectArchiveBundle, not a metadata or tree-digest mismatch discovered after
+// that check passes, which would instead indicate a genuinely broken bundle.
+const localBundleDigestMismatchPattern =
+  /^archive bundle .+ digest [0-9a-f]{64} does not match lock [0-9a-f]{64}$/;
+
 async function restoreLocalBundle({ docsRoot, docset, lockEntry }) {
   const bundlePath = localArchiveBundlePath(docsRoot, docset);
   try {
@@ -114,15 +121,28 @@ async function restoreLocalBundle({ docsRoot, docset, lockEntry }) {
     if (error?.code === 'ENOENT') return false;
     throw error;
   }
-  await restoreArchiveBundle({
-    docsRoot,
-    bundlePath,
-    docset,
-    expectedBundleSha256: lockEntry.bundle_sha256,
-    expectedRootTreeSha256: lockEntry.root_tree_sha256,
-    expectedTreeSha256: lockEntry.tree_sha256,
-    expectedVersionTreeSha256: lockEntry.version_tree_sha256,
-  });
+  try {
+    await restoreArchiveBundle({
+      docsRoot,
+      bundlePath,
+      docset,
+      expectedBundleSha256: lockEntry.bundle_sha256,
+      expectedRootTreeSha256: lockEntry.root_tree_sha256,
+      expectedTreeSha256: lockEntry.tree_sha256,
+      expectedVersionTreeSha256: lockEntry.version_tree_sha256,
+    });
+  } catch (error) {
+    if (!localBundleDigestMismatchPattern.test(error.message)) throw error;
+    // A digest mismatch here means that bootstrap run's working tree no longer
+    // matches the published release, not that the published archive was
+    // tampered with. Ignore the stale entry and restore from the published
+    // bundle instead.
+    console.warn(
+      `ignoring stale local archive bundle cache: ${error.message} (${bundlePath}); ` +
+        'restoring from the published bundle instead. Delete this file to clear the warning.',
+    );
+    return false;
+  }
   return true;
 }
 
