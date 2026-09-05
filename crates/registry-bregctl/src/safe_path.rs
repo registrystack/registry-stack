@@ -265,8 +265,6 @@ mod descriptor {
             renameat(&self.fd, from, &self.fd, to).map_err(io::Error::from)
         }
 
-        /// Rename within this directory, refusing to replace an existing
-        /// destination. This is the atomic no-clobber publication step.
         /// Rename an entry out of this directory into `destination`, replacing
         /// an existing entry there. Both ends are descriptors, so neither side
         /// can be redirected by a path change.
@@ -279,6 +277,8 @@ mod descriptor {
             renameat(&self.fd, from, &destination.fd, to).map_err(io::Error::from)
         }
 
+        /// Rename within this directory, refusing to replace an existing
+        /// destination. This is the atomic no-clobber publication step.
         pub(crate) fn publish(&self, from: &OsStr, to: &OsStr) -> io::Result<()> {
             renameat_with(&self.fd, from, &self.fd, to, RenameFlags::NOREPLACE)
                 .map_err(io::Error::from)
