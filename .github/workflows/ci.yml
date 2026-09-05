@@ -128,6 +128,9 @@ jobs:
       - name: Check Debian 13 image contract
         run: python3 release/scripts/check-debian13-images.py
 
+      - name: Test GNU libc floor
+        run: python3 -m unittest release/scripts/test_glibc_floor.py
+
       - name: Test Debian 13 image contract
         run: python3 -m unittest release/scripts/test_check_debian13_images.py
 
