@@ -197,6 +197,36 @@ test('the application tutorial replays the Python client from this checkout', as
   assert.match(branch, /person-456 is_adult=False/u);
 });
 
+// The tutorial installs the one maintained client distribution, so the gate
+// has to import that same distribution: a per-product extension module would
+// prove a package no reader can install, and would leave the namespaces the
+// tutorial imports unexercised.
+test('the application replay imports the assembled client package', async () => {
+  const source = await readFile(gate, 'utf8');
+  const step = source.match(/\nemit_python_client_step\(\) \{\n[\s\S]*?\n\}\n/u)?.[0];
+  assert.ok(step, 'the client step must exist');
+  // The replay userland carries unzip and no installer, so the package is
+  // unpacked onto the import path rather than installed.
+  assert.match(step, /unzip/u);
+  assert.match(step, /PYTHONPATH/u);
+  assert.match(source, /REGISTRY_CLIENT_PY_WHEEL/u);
+  assert.doesNotMatch(source, /EVIDENCE_CLIENT_PY_LIB/u);
+  assert.doesNotMatch(source, /registry_evidence_client\.so/u);
+});
+
+// The gate cannot assemble the package itself: assembling needs a build
+// toolchain the replay userland does not carry. Refusing early, by name, is
+// what keeps that from surfacing as an import error twenty steps in.
+test('the gate refuses a client package it cannot use', async () => {
+  const source = await readFile(gate, 'utf8');
+  const prepare = source.match(/\nprepare_python_client\(\) \{\n[\s\S]*?\n\}\n/u)?.[0];
+  assert.ok(prepare, 'the client preparation must exist');
+  assert.match(prepare, /!= \/\*/u, 'the path must be required to be absolute');
+  assert.match(prepare, /must be absolute/u);
+  assert.match(prepare, /-f "\$REGISTRY_CLIENT_PY_WHEEL"/u);
+  assert.match(prepare, /assemble-registry-client-packages/u);
+});
+
 test('the caller-access replay expects the privacy-safe refusal audit line', async () => {
   const source = await readFile(gate, 'utf8');
   const branch = source.match(
