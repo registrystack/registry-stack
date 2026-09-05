@@ -320,17 +320,18 @@ Use a pre-acquired short-lived static bearer when an issuer requires those membe
 ### Read a client from a profile
 
 `from_profile` and `fromProfile` read an application-owned Evidence client profile, which carries
-the base URL, the pinned key set, and the credential configuration in one file. The optional second
+the base URL, the pinned key set, and the credential configuration in one file. The profile is the
+owner-only JSON document `evidencectl client profile create --out` writes. The optional second
 argument is a private JWK held in memory, for an application that reads its key from a secret
 manager rather than from disk. It is never retained by the wrapper, and profile paths and
 file-backed secrets are redacted from every error.
 
 ```python
-client = evidence.EvidenceClient.from_profile("evidence-client.yaml")
+client = evidence.EvidenceClient.from_profile("evidence-client.json")
 ```
 
 ```js
-const client = evidence.EvidenceClient.fromProfile('evidence-client.yaml');
+const client = evidence.EvidenceClient.fromProfile('evidence-client.json');
 ```
 
 Rust names the same entry points `EvidenceClient::from_profile`,
@@ -448,7 +449,8 @@ them `status`, `code`, `traceId`, `retryAfterSeconds`, `transportKind`, and `tok
     crates/registry-stack-client-node/evidence/index.d.ts,
     crates/registry-evidence-client-py/python/registry_evidence_client/__init__.pyi,
     crates/registry-evidence-client/src/client.rs,
-    crates/registry-evidence-client/src/config.rs */}
+    crates/registry-evidence-client/src/config.rs,
+    crates/registry-evidence-client/src/profile.rs, EvidenceClientProfile::from_file */}
 
 ## Registry Relay
 
