@@ -180,6 +180,12 @@ else
     clients=(discovery "${clients[@]}")
   fi
 fi
+
+gh api \
+  "repos/registrystack/registry-stack/contents/release/scripts/client_registry.py?ref=${tag}" \
+  --jq .content \
+  | base64 --decode > client_registry.py
+
 for client in "${clients[@]}"; do
   if [[ "${client}" == stack ]]; then
     stem="registrystack-client"
@@ -191,11 +197,18 @@ for client in "${clients[@]}"; do
     "${stem}-linux-arm64-gnu-${version}.tgz" \
     "${stem}-linux-x64-gnu-${version}.tgz" \
     "${stem}-${version}.tgz"; do
-    test "$(python3 release/scripts/client_registry.py npm-state \
-      --tarball "${tarball}")" = present
+    npm_state="$(python3 client_registry.py npm-state --tarball "${tarball}")"
+    if [[ "${npm_state}" != present ]]; then
+      echo "missing npm package: ${tarball}" >&2
+      exit 1
+    fi
   done
-  test "$(python3 release/scripts/client_registry.py pypi-state \
-    --directory . --version "${version}" --client "${client}")" = present
+  pypi_state="$(python3 client_registry.py pypi-state \
+    --directory . --version "${version}" --client "${client}")"
+  if [[ "${pypi_state}" != present ]]; then
+    echo "missing pypi package: ${client} ${version}" >&2
+    exit 1
+  fi
 done
 ```
 
