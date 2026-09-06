@@ -199,7 +199,25 @@ not silently accept a floating-point representation or a numeric-looking string.
 Overlapping alternatives remain separate named profiles; there is one lookup and
 no fallback. Returned identity fields may then be discarded so the fixed FactSet
 contains only the facts reused by question derivations. Missing, mismatched or
-uncertain identity stops evaluation without a signed negative concept.
+uncertain identity stops evaluation without a signed negative concept; a
+generated adapter reports it by throwing `source_protocol_error`.
+
+The extraction adapter is the enforcement point for that comparison. A source
+exporter emits it for every alternative it exports, from the selector fields the
+provider already grants. Rust enforces the entry-point contract around it and
+nothing inside it: exactly one `extract` with two or three parameters, the
+refusal to pair `extract/3` with `batch`, the fresh authorized selector subset
+handed to the script, and the fixed FactSet validation of what comes back. It
+does not inspect which fields an adapter compared, so an `extract/3` that
+ignores its selectors loads and compiles, and the assertions it produces are
+signed.
+
+An author writing `extract/3` by hand therefore carries the comparison as an
+obligation: check every identity field of each named profile the source accepts,
+by `type_of` and exact value, before any `match`, and fail the evaluation rather
+than returning facts when one does not agree. Prove it in the source's own
+adapter fixtures with a returned record whose identity differs from the selected
+profile's values in value and in scalar type.
 
 Existing adapters and question-level identity checks continue to work without
 this optional signature. Import/export and named connections are independent
