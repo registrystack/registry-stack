@@ -7,6 +7,7 @@ use std::time::Duration;
 use deadpool_postgres::{Client, Transaction};
 use registry_platform_canonical_json::canonicalize_json;
 use serde_json::{json, Value};
+use tokio_postgres::types::Type;
 use uuid::Uuid;
 
 use crate::contract::{BoundaryOperator, Operation};
@@ -2185,27 +2186,30 @@ pub async fn begin_record_transaction<'a>(
     let timeout_millis = i32::try_from(lock_timeout.as_millis()).map_err(|_| {
         PostgresKernelError::Configuration("record lock timeout is outside PostgreSQL bounds")
     })?;
+    // These fixed statements have known parameter types. Sending their parse,
+    // bind and execution together avoids a separate prepare round trip while
+    // every gate still executes in order with fresh transaction-local values.
     transaction
-        .execute(
+        .execute_typed(
             "SELECT set_config('lock_timeout', $1::text, true)",
-            &[&format!("{timeout_millis}ms")],
+            &[(&format!("{timeout_millis}ms"), Type::TEXT)],
         )
         .await?;
     // Date and timestamp casts, ordering and rendering all read the session
     // time zone. Pin it so a record or history answer never depends on the
     // deployment's database default.
     transaction
-        .execute("SELECT set_config('TimeZone', 'UTC', true)", &[])
+        .execute_typed("SELECT set_config('TimeZone', 'UTC', true)", &[])
         .await?;
     transaction
-        .execute(
+        .execute_typed(
             "SELECT pg_advisory_xact_lock_shared($1)",
-            &[&lock_key.get()],
+            &[(&lock_key.get(), Type::INT8)],
         )
         .await
         .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
     let state = transaction
-        .query_opt(
+        .query_typed_opt(
             "SELECT package_id, environment, instance_id, database_id,
                     active_package_revision, schema_fingerprint, package_sequence,
                     maintenance_status
@@ -2227,18 +2231,18 @@ pub async fn begin_record_transaction<'a>(
         return Err(PostgresKernelError::RegistryUnavailable);
     }
     transaction
-        .execute(
+        .execute_typed(
             "SELECT set_config('registry.principal', $1, true),
                     set_config('registry.access_profile', $2, true),
                     set_config('registry.purpose', $3, true),
                     set_config('registry.row_boundaries', $4, true),
                     set_config('registry.active_package_revision', $5, true)",
             &[
-                &claims.principal.as_deref().unwrap_or(""),
-                &claims.access_profile,
-                &claims.purpose.as_deref().unwrap_or(""),
-                &claims.canonical_row_boundaries,
-                &expected.package_revision,
+                (&claims.principal.as_deref().unwrap_or(""), Type::TEXT),
+                (&claims.access_profile, Type::TEXT),
+                (&claims.purpose.as_deref().unwrap_or(""), Type::TEXT),
+                (&claims.canonical_row_boundaries, Type::TEXT),
+                (&expected.package_revision, Type::TEXT),
             ],
         )
         .await?;

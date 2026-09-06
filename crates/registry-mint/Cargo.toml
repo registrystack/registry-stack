@@ -12,6 +12,10 @@ publish = false
 name = "mint"
 path = "src/main.rs"
 
+[[bench]]
+name = "replay_cache"
+harness = false
+
 [lints]
 workspace = true
 

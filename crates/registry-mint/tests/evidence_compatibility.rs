@@ -561,6 +561,17 @@ async fn an_assertion_cannot_be_presented_twice() {
     let replayed = http.post("/token").form(&token_form(&assertion)).await;
     assert_eq!(replayed.status_code(), 401);
     assert_eq!(replayed.json::<Value>(), json!({"error": "invalid_client"}));
+
+    deployment
+        .service
+        .reload_clients()
+        .expect("reload the same client registry");
+    let replayed_after_reload = http.post("/token").form(&token_form(&assertion)).await;
+    assert_eq!(replayed_after_reload.status_code(), 401);
+    assert_eq!(
+        replayed_after_reload.json::<Value>(),
+        json!({"error": "invalid_client"})
+    );
 }
 
 #[tokio::test]

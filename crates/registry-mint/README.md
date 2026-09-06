@@ -506,6 +506,17 @@ CA.
 cargo test --locked -p registry-mint
 ```
 
+Measure the replay cache with synthetic namespaced assertion identifiers:
+
+```bash
+cargo bench --locked -p registry-mint --bench replay_cache
+```
+
+The benchmark covers insertion, duplicate rejection, saturation, and cohort
+or staggered expiry at 1,024, the default 8,192, and 100,000 entries. It reports
+five samples per case without a timing gate. These are cache costs; token
+endpoint throughput also includes authentication, signing, and durable audit.
+
 `tests/evidence_compatibility.rs` is the test that justifies the crate: it
 drives the real router over a real on-disk deployment and feeds the minted
 token to Evidence's own authenticator. `tests/delegated_subject_binding.rs`
