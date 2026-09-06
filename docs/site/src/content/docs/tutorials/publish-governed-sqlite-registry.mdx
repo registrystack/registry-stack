@@ -669,7 +669,6 @@ follows to the generated schema, vocabulary, and JSON-LD context:
     "revisionIdentifier": "3",
     "lifecycleState": "ACTIVE",
     "recordedAt": "2026-02-11T09:00:00Z",
-    "registryIdentifier": "urn:example:registry:businesses",
     "authorityIdentifier": "urn:example:authority:registrar",
     "domainData": {
       "legalName": "Aurora Freight Cooperative",
@@ -681,7 +680,10 @@ follows to the generated schema, vocabulary, and JSON-LD context:
     "disclosureProfile": "public",
     "selectedFields": ["legalName", "legalForm"],
     "contractRevision": "sha256:<contract-revision>",
-    "sourceRevision": {"profile": "snapshot", "status": "versioned", "value": "sha256:<digest>"}
+    "sourceRevision": {"profile": "snapshot", "status": "versioned", "value": "sha256:<digest>"},
+    "registryIdentifier": "urn:example:registry:businesses",
+    "datasetIdentifier": "businesses",
+    "entityTypeIdentifier": "business"
   }
 }
 ```
