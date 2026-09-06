@@ -55,6 +55,14 @@ const LOCAL_AUDIENCE: &str = "registry-evidence-local";
 const LOCAL_SIGNING_PRIVATE_FILENAME: &str = "signing-p256-private-jwk";
 const LOCAL_SIGNING_PUBLIC_FILENAME: &str = "signing-p256-public.jwk.json";
 const AUTHORITY_PROFILE_ID: &str = "local-caller";
+/// The largest number of authority grants one generated profile may carry.
+///
+/// `products/evidence/contracts/bundle.schema.yaml` bounds
+/// `authorityProfiles.*.grants` at this many entries and the runtime refuses a
+/// bundle past it when it loads. Questions each hold their own selector
+/// alternatives well under the bound, so only the profile they are gathered
+/// into can exceed it.
+const MAX_PROFILE_AUTHORITY_GRANTS: usize = 128;
 const LOCAL_CALLER_EVIDENCE_AUDIENCE: &str = "urn:registrystack:evidence:local:caller";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1173,7 +1181,7 @@ fn compile_plan_with_connections(
             authored,
         )?);
     }
-    prune_unused_source_alternatives(&mut questions);
+    prune_unused_source_alternatives(&mut questions)?;
     let access_policies = inputs.access_policies;
     match profile {
         CompileProfile::Local {
@@ -1182,7 +1190,7 @@ fn compile_plan_with_connections(
             active_public_jwk,
         } => {
             let mut bundle =
-                render_local_bundle(&questions, &access_policies, ports, &active_public_jwk_file);
+                render_local_bundle(&questions, &access_policies, ports, &active_public_jwk_file)?;
             if source_connections
                 .as_object()
                 .is_some_and(|connections| !connections.is_empty())
@@ -1208,7 +1216,7 @@ fn compile_plan_with_connections(
     }
 }
 
-fn prune_unused_source_alternatives(questions: &mut [QuestionPlan]) {
+fn prune_unused_source_alternatives(questions: &mut [QuestionPlan]) -> Result<()> {
     let mut reached = BTreeMap::<String, BTreeSet<(String, String)>>::new();
     for question in questions.iter() {
         let profiles = reached.entry(question.source_id.clone()).or_default();
@@ -1231,7 +1239,7 @@ fn prune_unused_source_alternatives(questions: &mut [QuestionPlan]) {
             .and_then(Value::as_array_mut)
         {
             for input in inputs {
-                let role = input["role"].as_str().unwrap_or_default().to_owned();
+                let role = selector_input_role(input)?.to_owned();
                 if let Some(alternatives) = input["alternatives"].as_array_mut() {
                     alternatives.retain(|alternative| {
                         alternative["profile"].as_str().is_some_and(|profile| {
@@ -1242,6 +1250,7 @@ fn prune_unused_source_alternatives(questions: &mut [QuestionPlan]) {
             }
         }
     }
+    Ok(())
 }
 
 /// Copy only the connection-owned slots into ordinary source configuration.
@@ -1807,10 +1816,7 @@ fn compile_referenced_subjects(
         });
     }
     for input in source_selector_inputs(source)? {
-        let role = input
-            .get("role")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("source selector input has no role"))?;
+        let role = selector_input_role(input)?;
         if compiled
             .iter()
             .filter(|subject| subject.role == role && subject.source)
@@ -1821,6 +1827,17 @@ fn compile_referenced_subjects(
         }
     }
     Ok(compiled)
+}
+
+/// The role one source selector input binds.
+///
+/// A role that is not a string is refused by name rather than read as an empty
+/// one, so no caller compares against a role no source declares.
+fn selector_input_role(input: &Value) -> Result<&str> {
+    input
+        .get("role")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("source selectorInputs entry must name a string `role`"))
 }
 
 fn source_selector_inputs(source: &Value) -> Result<&Vec<Value>> {
@@ -2977,7 +2994,7 @@ fn render_local_bundle(
     access_policies: &[AuthoredAccessPolicy],
     ports: LocalServicePorts,
     active_public_jwk_file: &str,
-) -> Value {
+) -> Result<Value> {
     let mint_origin = ports.mint_origin();
     let selector_profiles = questions
         .iter()
@@ -2990,44 +3007,26 @@ fn render_local_bundle(
         .map(|question| (question.source_id.clone(), question.source_value.clone()))
         .collect::<Map<_, _>>();
     let authority_profiles = if access_policies.is_empty() {
-        let grants = questions
-            .iter()
-            .flat_map(|question| question.grants.clone())
-            .collect::<Vec<_>>();
         Map::from_iter([(
             AUTHORITY_PROFILE_ID.to_owned(),
-            json!({
-                "kind": "explicit-request",
-                "requesterTags": [AUTHORITY_PROFILE_ID],
-                "grants": grants,
-            }),
+            render_authority_profile(AUTHORITY_PROFILE_ID, questions.iter())?,
         )])
     } else {
         access_policies
             .iter()
             .map(|policy| {
-                let grants = policy
-                    .questions
-                    .iter()
-                    .flat_map(|question_id| {
-                        questions
-                            .iter()
-                            .find(|question| question.question_id == *question_id)
-                            .expect("access policy questions were validated")
-                            .grants
-                            .clone()
-                    })
-                    .collect::<Vec<_>>();
-                (
+                let covered = policy.questions.iter().map(|question_id| {
+                    questions
+                        .iter()
+                        .find(|question| question.question_id == *question_id)
+                        .expect("access policy questions were validated")
+                });
+                Ok((
                     policy.requester_tag.clone(),
-                    json!({
-                        "kind": "explicit-request",
-                        "requesterTags": [policy.requester_tag],
-                        "grants": grants,
-                    }),
-                )
+                    render_authority_profile(&policy.requester_tag, covered)?,
+                ))
             })
-            .collect::<Map<_, _>>()
+            .collect::<Result<Map<_, _>>>()?
     };
     let requirements = questions
         .iter()
@@ -3040,7 +3039,7 @@ fn render_local_bundle(
         .into_iter()
         .map(QuestionResponseFormat::as_str)
         .collect::<Vec<_>>();
-    json!({
+    Ok(json!({
         "version": 1,
         "assuranceProfile": "local",
         "service": {
@@ -3101,7 +3100,36 @@ fn render_local_bundle(
         "sources": sources,
         "authorityProfiles": authority_profiles,
         "requirements": requirements,
-    })
+    }))
+}
+
+/// Gather the grants of the questions one generated profile covers, refusing
+/// here rather than leaving the runtime to refuse the loaded bundle.
+///
+/// A refusal names the questions so the author knows whose selector
+/// alternatives to reduce.
+fn render_authority_profile<'a>(
+    requester_tag: &str,
+    covered: impl Iterator<Item = &'a QuestionPlan>,
+) -> Result<Value> {
+    let mut grants = Vec::new();
+    let mut question_ids = Vec::new();
+    for question in covered {
+        grants.extend(question.grants.iter().cloned());
+        question_ids.push(question.question_id.as_str());
+    }
+    if grants.len() > MAX_PROFILE_AUTHORITY_GRANTS {
+        bail!(
+            "authority profile `{requester_tag}` would carry {} authority grants, more than the {MAX_PROFILE_AUTHORITY_GRANTS} one profile may hold; reduce the selector alternatives of {}",
+            grants.len(),
+            question_ids.join(", ")
+        );
+    }
+    Ok(json!({
+        "kind": "explicit-request",
+        "requesterTags": [requester_tag],
+        "grants": grants,
+    }))
 }
 
 fn render_production_bundle(questions: &[QuestionPlan], mut governance: Value) -> Result<Value> {
@@ -6511,6 +6539,138 @@ factSchema: schemas/family-facts.schema.yaml
         assert_eq!(
             line,
             "evidencectl: failed to restore owner write on /staging/bundle: sealed generation: reading /staging/bundle"
+        );
+    }
+
+    #[test]
+    fn generated_profile_grants_stay_under_the_bound_the_runtime_enforces() {
+        fn selector_profiles(
+            fixture: &Fixture,
+            role: &str,
+            field: &str,
+            count: usize,
+        ) -> Vec<String> {
+            (0..count)
+                .map(|index| {
+                    let profile = format!("{role}-alt-{index:02}-v1");
+                    fs::write(
+                        fixture.project.join(format!("selectors/{profile}.yaml")),
+                        format!("maximumAggregateBytes: 200\nfields:\n  {field}:\n    type: string\n    minimumBytes: 1\n    maximumBytes: 200\n"),
+                    )
+                    .expect("selector profile");
+                    profile
+                })
+                .collect()
+        }
+
+        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+        let referenced =
+            write_referenced_people_project(&fixture, "authentication: {kind: none}\n");
+        let people = selector_profiles(&fixture, "person", "person_id", 16);
+        let guardians = selector_profiles(&fixture, "guardian", "guardian_id", 5);
+
+        let source_path = fixture.project.join("sources/people.yaml");
+        let mut source: Value = serde_norway::from_slice(&fs::read(&source_path).unwrap()).unwrap();
+        let request = source["request"].as_object_mut().unwrap();
+        request.remove("pathTemplate");
+        request.remove("pathBindings");
+        request.insert("path".to_owned(), json!("/lookup"));
+        request.insert(
+            "selectorInputs".to_owned(),
+            json!([
+                {
+                    "role": "person",
+                    "alternatives": people
+                        .iter()
+                        .map(|profile| json!({"profile": profile, "fields": ["person_id"]}))
+                        .collect::<Vec<_>>(),
+                },
+                {
+                    "role": "guardian",
+                    "alternatives": guardians
+                        .iter()
+                        .map(|profile| json!({"profile": profile, "fields": ["guardian_id"]}))
+                        .collect::<Vec<_>>(),
+                },
+            ]),
+        );
+        fs::write(&source_path, serde_norway::to_string(&source).unwrap()).unwrap();
+
+        let subjects = json!([
+            {"role": "person", "profiles": people, "derivation": true},
+            {"role": "guardian", "profiles": guardians, "derivation": true},
+        ]);
+        let mut adult: Value = serde_norway::from_str(&referenced).unwrap();
+        let object = adult.as_object_mut().unwrap();
+        object.remove("subject");
+        object.insert("subjects".to_owned(), subjects.clone());
+        fs::write(
+            fixture.project.join("questions/adult-status.yaml"),
+            serde_norway::to_string(&adult).unwrap(),
+        )
+        .unwrap();
+        let mut bracket: Value = serde_norway::from_str(AGE_BRACKET_QUESTION).unwrap();
+        let object = bracket.as_object_mut().unwrap();
+        object.remove("subject");
+        object.insert("source".to_owned(), json!({"ref": "people"}));
+        object.insert("subjects".to_owned(), subjects);
+        fixture.add_question(
+            &serde_norway::to_string(&bracket).unwrap(),
+            AGE_BRACKET_ANSWER,
+        );
+
+        let Err(error) =
+            compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+        else {
+            panic!("160 grants exceed what one profile may carry");
+        };
+
+        let reported = error.to_string();
+        assert!(reported.contains("160 authority grants"), "{reported}");
+        assert!(reported.contains(AUTHORITY_PROFILE_ID), "{reported}");
+        assert!(reported.contains("adult-status"), "{reported}");
+        assert!(reported.contains("age-bracket"), "{reported}");
+    }
+
+    /// The generated bound is a restatement of the published bundle contract,
+    /// which the runtime enforces. Pin the two together so a contract change
+    /// cannot leave evidencectl refusing what the runtime accepts or accepting
+    /// what it refuses.
+    #[test]
+    fn the_generated_grant_bound_matches_the_published_bundle_contract() {
+        let contract = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../products/evidence/contracts/bundle.schema.yaml"
+        );
+        let schema: Value = serde_norway::from_slice(
+            &fs::read(contract).expect("the published bundle contract is readable"),
+        )
+        .expect("the published bundle contract parses");
+        assert_eq!(
+            schema["$defs"]["authority-profile"]["properties"]["grants"]["maxItems"].as_u64(),
+            Some(MAX_PROFILE_AUTHORITY_GRANTS as u64)
+        );
+    }
+
+    #[test]
+    fn a_selector_input_role_that_is_not_a_string_is_refused_by_name() {
+        assert_eq!(
+            selector_input_role(&json!({"role": "person"})).expect("a string role reads"),
+            "person"
+        );
+        let Err(error) = selector_input_role(&json!({"role": 7})) else {
+            panic!("a numeric role is refused");
+        };
+        assert_eq!(
+            error.to_string(),
+            "source selectorInputs entry must name a string `role`"
+        );
+        let Err(error) = selector_input_role(&json!({})) else {
+            panic!("a missing role is refused");
+        };
+        assert_eq!(
+            error.to_string(),
+            "source selectorInputs entry must name a string `role`"
         );
     }
 
