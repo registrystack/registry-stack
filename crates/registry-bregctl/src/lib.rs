@@ -39,6 +39,7 @@ use serde_json::{json, Value};
 mod apply_lifecycle;
 mod audit_lifecycle;
 mod data_lifecycle;
+mod dev;
 mod doctor;
 mod history_erasure_lifecycle;
 mod history_rebaseline_lifecycle;
@@ -119,6 +120,10 @@ enum Command {
     Project(ProjectArgs),
     /// Write selected compiler artifacts to a new directory.
     Generate(GenerateArgs),
+    /// Start or stop this project's retained local development services.
+    Dev(dev::DevArgs),
+    #[command(name = "__dev-supervisor", hide = true)]
+    DevSupervisor(dev::SupervisorArgs),
     /// Explain compiled model, access, route, or event inventories.
     Explain(ExplainArgs),
     /// Compare an authoring candidate with a rederived closed package.
@@ -238,6 +243,25 @@ struct GenerateArgs {
     /// New directory that will receive exactly the generated artifact inventory.
     #[arg(long, value_name = "DIRECTORY")]
     output: PathBuf,
+
+    /// Existing registry lookup access profile (evidence-source only).
+    #[arg(long)]
+    access_profile: Option<String>,
+    /// Compiled entity to export (evidence-source only).
+    #[arg(long)]
+    entity: Option<String>,
+    /// Exact lookup alternatives; repeat to expose several selectors.
+    #[arg(long = "selector", value_delimiter = ',')]
+    selectors: Vec<String>,
+    /// Explicit readable fact fields, separated by commas.
+    #[arg(long, value_delimiter = ',')]
+    fields: Vec<String>,
+    /// Stable source identity inside the Evidence authoring project.
+    #[arg(long)]
+    source_id: Option<String>,
+    /// Logical connection that the Evidence operator configures separately.
+    #[arg(long)]
+    connection: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -772,6 +796,7 @@ enum ArtifactSelector {
     Manifest,
     Metadata,
     Sql,
+    EvidenceSource,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, ValueEnum)]
@@ -1444,6 +1469,36 @@ where
 
     let format = cli.format;
     let result = match cli.command {
+        Command::Dev(args) => {
+            return match dev::run(args) {
+                Ok(report) => write_result(
+                    serde_json::to_writer_pretty(&mut *stdout, &report)
+                        .map_err(io::Error::other)
+                        .and_then(|()| writeln!(stdout)),
+                    stderr,
+                ),
+                Err(error) => write_failure(
+                    &source_failure(
+                        "dev",
+                        diagnostic("dev.failed", "dev", &format!("{error:#}")),
+                        DiagnosticArtifact::CommandArguments,
+                        SuggestedAction::CorrectCommandUsage,
+                    ),
+                    format,
+                    stdout,
+                    stderr,
+                ),
+            };
+        }
+        Command::DevSupervisor(args) => {
+            return match dev::run_supervisor(args) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    let _ = writeln!(stderr, "{error:#}");
+                    ExitCode::from(OPERATIONAL_FAILURE_EXIT)
+                }
+            };
+        }
         Command::Init(args) => init(&args.destination),
         Command::Check(args) => check(&args.project, profile(args.production)).and_then(|report| {
             if args.deny_findings && !report.findings.is_empty() {
@@ -1471,12 +1526,7 @@ where
                 };
             }
         },
-        Command::Generate(args) => generate(
-            args.artifact,
-            &args.project,
-            profile(args.production),
-            &args.output,
-        ),
+        Command::Generate(args) => generate_requested(&args),
         Command::Explain(args) => explain(
             args.subject,
             &args.project,
@@ -3957,6 +4007,84 @@ fn project_lock(project_path: &Path, check_only: bool) -> Result<SuccessReport, 
     })
 }
 
+fn generate_requested(args: &GenerateArgs) -> Result<SuccessReport, FailureReport> {
+    let fail = |message: &str| {
+        source_failure(
+            "generate",
+            diagnostic("evidence_source.arguments", "arguments", message),
+            DiagnosticArtifact::CommandArguments,
+            SuggestedAction::CorrectCommandUsage,
+        )
+    };
+    if args.artifact != ArtifactSelector::EvidenceSource {
+        if args.access_profile.is_some()
+            || args.entity.is_some()
+            || !args.selectors.is_empty()
+            || !args.fields.is_empty()
+            || args.source_id.is_some()
+            || args.connection.is_some()
+        {
+            return Err(fail(
+                "source selection flags apply only to generate evidence-source",
+            ));
+        }
+        return generate(
+            args.artifact,
+            &args.project,
+            profile(args.production),
+            &args.output,
+        );
+    }
+    let required = |value: &Option<String>, flag: &str| {
+        value
+            .clone()
+            .ok_or_else(|| fail(&format!("generate evidence-source requires {flag}")))
+    };
+    let options = registry_breg::evidence_source::EvidenceSourceOptions {
+        access_profile: required(&args.access_profile, "--access-profile")?,
+        entity: required(&args.entity, "--entity")?,
+        selectors: args.selectors.clone(),
+        fields: args.fields.clone(),
+        source_id: required(&args.source_id, "--source-id")?,
+        connection: required(&args.connection, "--connection")?,
+    };
+    let profile = profile(args.production);
+    let compiled = compile(&args.project, profile, "generate")?;
+    let export = registry_breg::evidence_source::export_evidence_source(&compiled, &options)
+        .map_err(|diagnostic| {
+            source_failure(
+                "generate",
+                diagnostic,
+                DiagnosticArtifact::RegistryProject,
+                SuggestedAction::CorrectAuthoringSource,
+            )
+        })?;
+    write_artifacts(&args.output, &export.artifacts).map_err(|diagnostic| {
+        source_failure(
+            "generate",
+            diagnostic,
+            DiagnosticArtifact::GeneratedArtifacts,
+            SuggestedAction::RetryArtifactGeneration,
+        )
+    })?;
+    Ok(SuccessReport {
+        ok: true,
+        command: "generate",
+        profile,
+        revision: compiled.revision().to_owned(),
+        findings: compiler_findings(&compiled),
+        artifacts: export
+            .artifacts
+            .iter()
+            .map(|artifact| artifact_report(&artifact.path, &artifact.media_type, &artifact.bytes))
+            .collect(),
+        explanation: Some(
+            json!({"sourceId":options.source_id,"connection":options.connection,"behaviorRevision":export.behavior_revision,"selectorProfiles":export.selector_profiles,"additionalIdentityFields":export.identity_fields}),
+        ),
+        next_steps: vec![],
+    })
+}
+
 fn generate(
     selector: ArtifactSelector,
     project_path: &Path,
@@ -5882,6 +6010,7 @@ impl ArtifactSelector {
             ArtifactSelector::Manifest => path.starts_with("generated/manifest/"),
             ArtifactSelector::Metadata => path == "generated/metadata/registry.json",
             ArtifactSelector::Sql => path == "generated/postgres/schema.sql",
+            ArtifactSelector::EvidenceSource => false,
         }
     }
 

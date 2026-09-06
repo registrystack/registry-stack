@@ -3458,7 +3458,12 @@ dependencies = [
 name = "registry-bregctl"
 version = "0.26.1"
 dependencies = [
+ "anyhow",
+ "base64",
  "clap",
+ "getrandom 0.4.3",
+ "p256",
+ "rcgen",
  "registry-breg",
  "registry-platform-buildinfo",
  "registry-platform-canonical-json",
@@ -3470,6 +3475,7 @@ dependencies = [
  "serde_json",
  "serde_norway",
  "sha2 0.11.0",
+ "signal-hook",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
